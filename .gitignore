@@ -1,0 +1,33 @@
+# dependencies
+backend/vendor/
+frontend/node_modules/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# laravel
+backend/storage/logs/*.log
+backend/storage/framework/cache/data/*
+backend/storage/framework/sessions/*
+backend/storage/framework/views/*
+backend/bootstrap/cache/*.php
+!backend/bootstrap/cache/.gitignore
+!backend/storage/**/.gitignore
+
+# build / ide
+frontend/dist/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# local data / samples (opcjonalnie duże)
+Cenniki/
+samples/
+.cursor/

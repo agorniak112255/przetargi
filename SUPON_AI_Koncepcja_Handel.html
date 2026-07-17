@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SUPON AI — Dział Handlowy</title>
+<style>
+:root{--navy:#1f2937;--accent:#2563eb;--ok:#0a8f3d;--warn:#d48806;--bg:#edf1f5}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Segoe UI",system-ui,Arial,sans-serif;background:var(--bg);color:#1e293b}
+.app{display:flex;min-height:100vh}
+.sidebar{width:240px;flex-shrink:0;background:var(--navy);color:#fff;display:flex;flex-direction:column}
+.logo{padding:18px;font-size:22px;font-weight:700;border-bottom:1px solid #334155}
+.logo small{display:block;font-size:11px;font-weight:400;opacity:.75;margin-top:4px}
+.menu{flex:1;overflow-y:auto}
+.menu button{display:block;width:100%;text-align:left;padding:12px 18px;color:#e2e8f0;background:none;border:0;border-bottom:1px solid #334155;font-size:13px;cursor:pointer;font-family:inherit}
+.menu button:hover,.menu button.active{background:#334155;color:#fff}
+.menu button.active{border-left:3px solid #60a5fa;padding-left:15px}
+.shell{flex:1;display:flex;flex-direction:column;min-width:0}
+.appbar{background:#fff;border-bottom:1px solid #ddd;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+.appbar h1{margin:0;font-size:17px}
+.appbar .sub{font-size:12px;color:#64748b;margin-top:2px}
+.content{flex:1;padding:20px;overflow:auto}
+.view{display:none}
+.view.active{display:block}
+.card{background:#fff;border-radius:10px;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,.07);margin-bottom:16px}
+.card h2{margin:0 0 12px;font-size:15px}
+.grid2{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{padding:8px;border-bottom:1px solid #e8ecf0;text-align:left;vertical-align:top}
+th{background:#f4f6f8}
+tr.click{cursor:pointer}
+tr.click:hover td{background:#f8fafc}
+.ok{color:var(--ok);font-weight:600}
+.warn{color:var(--warn);font-weight:600}
+.muted{color:#64748b;font-size:11px}
+.btn{display:inline-block;padding:6px 12px;background:var(--accent);color:#fff;border:0;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit}
+.btn.ghost{background:#e2e8f0;color:#334155}
+.btn.sm{padding:4px 8px;font-size:11px}
+.tag{display:inline-block;background:#e7f0ff;color:#1d4ed8;border-radius:6px;padding:2px 7px;margin:2px;font-size:11px}
+.tag.green{background:#dcfce7;color:#166534}
+.kpi{background:#fff;border-radius:10px;padding:14px;text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.06)}
+.kpi b{display:block;font-size:20px;color:var(--accent)}
+.kpi span{font-size:11px;color:#64748b}
+.bar{height:14px;background:#e2e8f0;border-radius:20px;overflow:hidden;margin:8px 0}
+.bar span{display:block;height:100%;background:var(--accent);width:78%}
+.pipeline{display:flex;flex-wrap:wrap;gap:4px;font-size:10px;margin:10px 0}
+.pipeline span{background:#f1f5f9;padding:4px 8px;border-radius:4px}
+.pipeline span.done{background:#dcfce7}
+.pipeline span.cur{background:#dbeafe;font-weight:600}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid #e2e8f0;padding-bottom:8px}
+.tabs button{background:#f1f5f9;border:0;padding:8px 12px;border-radius:6px 6px 0 0;font-size:12px;cursor:pointer;font-family:inherit;color:#475569}
+.tabs button.active{background:#dbeafe;color:#1d4ed8;font-weight:600}
+.subview{display:none}
+.subview.active{display:block}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+.toolbar input,.toolbar select{padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px}
+.chat{max-width:720px}
+.chat-msg{padding:10px 12px;border-radius:8px;margin-bottom:8px;font-size:13px;max-width:90%}
+.chat-msg.user{background:#dbeafe;margin-left:auto}
+.chat-msg.ai{background:#f1f5f9}
+.chat-input{display:flex;gap:8px;margin-top:12px}
+.chat-input input{flex:1;padding:10px;border:1px solid #cbd5e1;border-radius:8px}
+.product-hero{display:grid;grid-template-columns:120px 1fr;gap:16px}
+.product-hero .ph{background:#f1f5f9;border-radius:8px;height:100px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#64748b}
+.sub-group{margin-bottom:16px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#fff}
+.sub-group-head{padding:12px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;font-size:12px;line-height:1.5}
+.sub-group-head .main-line{font-weight:600;font-size:13px;color:#0f172a;margin-top:4px}
+.sub-group .sub-wrap{padding:0 8px 8px}
+.sub-group .subtable th{background:#fafafa;font-size:11px}
+.badge-main{display:inline-block;background:#1e3a5f;color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;vertical-align:middle;margin-right:6px}
+.badge-sub{display:inline-block;background:#e2e8f0;color:#475569;font-size:10px;padding:2px 7px;border-radius:4px;margin-right:4px}
+.flow-hint{font-size:12px;color:#64748b;margin:0 0 14px;padding:10px 12px;background:#f1f5f9;border-radius:8px;border-left:3px solid var(--accent)}
+.help-lead{font-size:14px;line-height:1.65;margin:0 0 16px}
+.help-nav{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
+.help-nav button{background:#fff;border:1px solid #cbd5e1;padding:8px 12px;border-radius:8px;font-size:12px;cursor:pointer;font-family:inherit}
+.help-nav button.active{background:#dbeafe;border-color:#93c5fd;color:#1d4ed8;font-weight:600}
+.help-panel{display:none}
+.help-panel.active{display:block}
+.help-flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:16px 0;padding:16px;background:#f8fafc;border-radius:12px;justify-content:center}
+.help-step{background:#fff;border:2px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:11px;text-align:center;min-width:72px;max-width:100px;line-height:1.35}
+.help-step strong{display:block;font-size:12px;color:#0f172a;margin-bottom:4px}
+.help-step.ai{border-color:#93c5fd;background:#eff6ff}
+.help-step.you{border-color:#86efac;background:#f0fdf4}
+.help-arrow{color:#94a3b8;font-size:18px;font-weight:700}
+.help-roles{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin:14px 0}
+.help-role{background:linear-gradient(180deg,#fff,#f8fafc);border:1px solid #e2e8f0;border-radius:10px;padding:12px;font-size:12px}
+.help-role b{display:block;font-size:13px;margin-bottom:6px;color:#1e3a5f}
+.help-tree{display:flex;flex-direction:column;align-items:center;margin:20px 0;padding:20px;background:#f8fafc;border-radius:12px}
+.help-tree-main{background:#1e3a5f;color:#fff;padding:14px 24px;border-radius:10px;font-weight:600;font-size:13px;text-align:center;max-width:320px}
+.help-tree-line{width:2px;height:20px;background:#cbd5e1}
+.help-tree-branches{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:640px}
+.help-tree-sub{background:#fff;border:2px dashed #94a3b8;padding:10px 14px;border-radius:8px;font-size:11px;text-align:center;min-width:120px}
+.help-compare{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.help-compare-box{padding:16px;border-radius:12px;font-size:13px;line-height:1.5}
+.help-compare-box.bad{background:#fef2f2;border:1px solid #fecaca}
+.help-compare-box.good{background:#f0fdf4;border:1px solid #bbf7d0}
+.help-chart{display:flex;align-items:flex-end;gap:12px;height:140px;padding:16px;background:#fff;border-radius:10px;border:1px solid #e2e8f0;margin:12px 0}
+.help-bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:10px;color:#64748b}
+.help-bar i{display:block;width:100%;border-radius:6px 6px 0 0;background:var(--accent);min-height:8px}
+.help-bar i.gray{background:#cbd5e1}
+.help-map{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:12px}
+.help-map div{padding:10px;background:#f1f5f9;border-radius:8px;border-left:3px solid var(--accent)}
+.help-faq details{margin-bottom:8px;font-size:13px}
+.help-faq summary{cursor:pointer;font-weight:600;padding:8px 0}
+@media(max-width:1000px){.grid2,.grid4,.help-compare{grid-template-columns:1fr}.app{flex-direction:column}.sidebar{width:100%}}
+</style>
+</head>
+<body>
+<div class="app">
+
+<aside class="sidebar">
+<div class="logo">SUPON AI<small>Arek · Handlowiec</small></div>
+<nav class="menu" id="mainNav">
+<button type="button" class="active" data-view="dashboard">Dashboard</button>
+<button type="button" data-view="przetargi">Przetargi</button>
+<button type="button" data-view="import">Import dokumentów</button>
+<button type="button" data-view="produkty">Produkty</button>
+<button type="button" data-view="zamienniki">Zamienniki</button>
+<button type="button" data-view="cenniki">Cenniki producentów</button>
+<button type="button" data-view="klienci">Klienci</button>
+<button type="button" data-view="raporty">Raporty</button>
+<button type="button" data-view="copilot">AI Copilot</button>
+<button type="button" data-view="pomoc">Pomoc</button>
+<button type="button" data-view="admin">Administracja</button>
+</nav>
+</aside>
+
+<div class="shell">
+<header class="appbar" id="appbar">
+<div>
+<h1 id="appbarTitle">Dashboard</h1>
+<div class="sub" id="appbarSub">Witaj, Arek · 3 aktywne przetargi · marża średnia 17,8%</div>
+</div>
+<div id="appbarTags"></div>
+</header>
+
+<main class="content">
+
+<!-- DASHBOARD -->
+<section class="view active" id="view-dashboard" data-title="Dashboard" data-sub="Widgety handlowca · pipeline AI · zadania">
+<div class="grid4">
+<div class="kpi"><b>3</b><span>Moje przetargi</span></div>
+<div class="kpi"><b>287 400 zł</b><span>Wartość ofert</span></div>
+<div class="kpi"><b>18,4%</b><span>Marża PRZ/2026/0147</span></div>
+<div class="kpi"><b>2</b><span>Zadania dziś</span></div>
+</div>
+<div class="grid2">
+<div class="card">
+<h2>AI Pipeline — ostatni import (PRZ/2026/0147)</h2>
+<div class="pipeline">
+<span class="done">Mail</span><span class="done">Import</span><span class="done">OCR</span><span class="done">SIWZ</span><span class="done">Pozycje</span><span class="done">Dopasowanie</span><span class="cur">Zamienniki</span><span>Kalkulacja</span><span>Akceptacja</span><span>Excel/PDF</span>
+</div>
+<div class="bar"><span></span></div>
+<p><strong>78%</strong> · etap zamienniki · <button type="button" class="btn sm" data-goto="przetargi" data-open-tender="1">Otwórz przetarg</button></p>
+</div>
+<div class="card">
+<h2>Moje zadania</h2>
+<table>
+<tr><th>Zadanie</th><th>Termin</th></tr>
+<tr><td>Wycena poz. 38 — rękawice kriogeniczne</td><td class="warn">Dziś</td></tr>
+<tr><td>Akceptacja zamiennika POWERFIT → poz. 3</td><td>26.02</td></tr>
+<tr><td>Komentarz Justyny — Ansell 53-001 stan mag.</td><td>27.02</td></tr>
+</table>
+</div>
+</div>
+<div class="card">
+<h2>Ostatnie importy · cenniki do odświeżenia</h2>
+<table>
+<tr><th>Data</th><th>Źródło</th><th>Projekt</th><th>Rekordy</th></tr>
+<tr><td>10.02.2026 09:14</td><td>E-mail</td><td>PRZ/2026/0147</td><td>42 poz.</td></tr>
+<tr><td>08.02.2026</td><td>SharePoint</td><td>Cennik Lebon Q1</td><td>1 240 poz.</td></tr>
+<tr><td>05.02.2026</td><td>FTP Ansell</td><td>—</td><td class="warn">Wymaga importu</td></tr>
+</table>
+</div>
+</section>
+
+<!-- PRZETARGI LIST -->
+<section class="view" id="view-przetargi" data-title="Przetargi" data-sub="Lista · Kanban · Kalendarz · Archiwum (demo: lista)">
+<div class="toolbar">
+<button type="button" class="btn ghost sm active">Lista</button>
+<button type="button" class="btn ghost sm" disabled>Kanban</button>
+<button type="button" class="btn ghost sm" disabled>Kalendarz</button>
+<button type="button" class="btn ghost sm" disabled>Archiwum</button>
+<input type="search" placeholder="Szukaj klienta, numeru…" style="margin-left:auto">
+</div>
+<div class="card" id="przetargiListPanel">
+<table>
+<tr><th>Numer</th><th>Klient</th><th>Termin</th><th>Wartość</th><th>Poz.</th><th>Status</th><th>AI %</th><th>Opiekun</th><th>Aktywność</th></tr>
+<tr class="click" data-open-tender="1">
+<td>PRZ/2026/0147</td><td>Zakład Produkcji Metali</td><td>28.02.2026</td><td>186 420 zł</td><td>42</td><td class="warn">Wycena</td><td>94%</td><td>Arek</td><td>10.02 11:02</td>
+</tr>
+<tr class="click" data-open-tender="0">
+<td>PRZ/2026/0132</td><td>Sanitex Sp. z o.o.</td><td>15.03.2026</td><td>92 100 zł</td><td>18</td><td class="ok">Akceptacja KM</td><td>91%</td><td>Arek</td><td>09.02</td>
+</tr>
+<tr class="click" data-open-tender="0">
+<td>PRZ/2026/0098</td><td>MPWiK Rzeszów</td><td>05.02.2026</td><td>41 800 zł</td><td>9</td><td>Archiwum</td><td>88%</td><td>Justyna</td><td>04.02</td>
+</tr>
+</table>
+</div>
+
+<div class="card" id="przetargiDetailPanel" style="display:none">
+<div class="toolbar">
+<button type="button" class="btn ghost sm" id="btnBackList">← Lista przetargów</button>
+<span class="tag green">PRZ/2026/0147</span>
+<span class="tag">Wycena handlowca</span>
+<span class="tag">AI 94%</span>
+</div>
+<p class="muted">Zakład Produkcji Metali · Pakiet rękawic ochronnych · termin 28.02.2026 · Wojtek: import SIWZ</p>
+
+<nav class="tabs" id="tenderTabs">
+<button type="button" class="active" data-tab="dokumenty">Dokumenty</button>
+<button type="button" data-tab="pozycje">Pozycje</button>
+<button type="button" data-tab="produkty">Produkty</button>
+<button type="button" data-tab="zamienniki">Zamienniki</button>
+<button type="button" data-tab="ai">AI</button>
+<button type="button" data-tab="historia">Historia</button>
+<button type="button" data-tab="komentarze">Komentarze</button>
+<button type="button" data-tab="oferta">Oferta</button>
+<button type="button" data-tab="logi">Logi</button>
+</nav>
+
+<div class="subview active" data-tab-panel="dokumenty">
+<table>
+<tr><th>Plik</th><th>Typ</th><th>Import</th><th>Autor</th></tr>
+<tr><td>SIWZ_rękawice_2026.pdf</td><td>PDF</td><td>10.02.2026</td><td>Wojtek</td></tr>
+<tr><td>Formularz_ofertowy.xlsx</td><td>XLSX</td><td>10.02.2026</td><td>Wojtek</td></tr>
+<tr><td>Załącznik_normy.docx</td><td>DOCX</td><td>10.02.2026</td><td>Wojtek</td></tr>
+</table>
+</div>
+
+<div class="subview" data-tab-panel="pozycje">
+<table>
+<tr><th>Lp</th><th>Wymaganie SIWZ</th><th>Produkt główny</th><th>Kod</th><th>AI</th><th>Zam.</th><th>Ilość</th></tr>
+<tr><td>3</td><td>Antyprzecięciowe PU, EN 388</td><td><span class="badge-main">GŁÓWNY</span> Lebon POWERCUT/WH</td><td>ARĘKGLOMJ713</td><td class="ok">97%</td><td>3</td><td>2 400</td></tr>
+<tr><td>7</td><td>Ocieplane −10 °C, EN 511</td><td><span class="badge-main">GŁÓWNY</span> Rostaing WINTERPRO</td><td>ARKROSTWITERPRO</td><td class="ok">96%</td><td>0</td><td>600</td></tr>
+<tr><td>11</td><td>Monterskie kozia skóra</td><td><span class="badge-main">GŁÓWNY</span> RS ECO TEC</td><td>ARĘKTALLIN253</td><td class="ok">99%</td><td>1</td><td>1 200</td></tr>
+<tr><td>15</td><td>Barierowe chemikalia EN 374</td><td><span class="badge-main">GŁÓWNY</span> Ansell AlphaTec 53-001</td><td>ARĘK53001</td><td class="ok">98%</td><td>2</td><td>360</td></tr>
+<tr><td>18</td><td>Montażowe, prace suche</td><td><span class="badge-main">GŁÓWNY</span> Lebon EASYFIT</td><td>Lebon Easyfit</td><td class="ok">95%</td><td>0</td><td>5 000</td></tr>
+<tr><td>22</td><td>Do olejów</td><td><span class="badge-main">GŁÓWNY</span> Lebon MAXITOUCH/DA</td><td>ARĘKLEMAXTOU</td><td class="ok">94%</td><td>0</td><td>1 800</td></tr>
+<tr><td>26</td><td>Antyprzecięciowe premium</td><td><span class="badge-main">GŁÓWNY</span> uvex UNIDUR 6641</td><td>ARĘKAWUNIDUR</td><td class="ok">96%</td><td>0</td><td>800</td></tr>
+<tr><td>31</td><td>ESD EN 16350</td><td><span class="badge-main">GŁÓWNY</span> uvex UNIPUR CARBON ESD</td><td>ARĘKCARBON/10</td><td class="ok">97%</td><td>0</td><td>480</td></tr>
+<tr><td>38</td><td>Kriogeniczne długie</td><td><span class="badge-main">GŁÓWNY</span> Rostaing CRIO (prop.)</td><td>ARKROSTCRIO</td><td class="warn">Decyzja</td><td>0</td><td>24</td></tr>
+</table>
+<p class="muted">Dane produktów: supon.rzeszow.pl/210-rekawice-ochronne</p>
+</div>
+
+<div class="subview" data-tab-panel="produkty">
+<p>Produkty przypisane do pozycji — skrót kartoteki.</p>
+<table>
+<tr><th>Kod</th><th>Nazwa</th><th>Producent</th><th>Cena netto sklep</th><th>Stan</th><th>Poz.</th></tr>
+<tr><td>ARĘKGLOMJ713</td><td>POWERCUT/WH</td><td>Lebon</td><td>21,99</td><td>840</td><td>3</td></tr>
+<tr><td>ARĘK53001</td><td>AlphaTec 53-001</td><td>Ansell</td><td>56,00</td><td>96</td><td>15</td></tr>
+<tr><td>ARĘKAWUNIDUR</td><td>UNIDUR 6641</td><td>uvex</td><td>45,00</td><td>318</td><td>26</td></tr>
+</table>
+</div>
+
+<div class="subview" data-tab-panel="zamienniki">
+<p class="flow-hint"><strong>Kolejność systemu:</strong> (1) dopasowanie SIWZ → <strong>produkt główny</strong> na pozycji · (2) AI generuje <strong>zamienniki tego produktu</strong> (co zamienia, nie lista kategorii).</p>
+
+<div class="sub-group">
+<div class="sub-group-head">
+<span class="muted">Poz. 3 · SIWZ: antyprzecięciowe PU, EN 388</span>
+<div class="main-line"><span class="badge-main">PRODUKT GŁÓWNY</span> Lebon POWERCUT/WH · ARĘKGLOMJ713 · dopasowanie 97%</div>
+</div>
+<div class="sub-wrap">
+<table class="subtable">
+<tr><th></th><th>Zamiennik (zamienia produkt główny)</th><th>Kod</th><th>Typ</th><th>AI</th><th>Status</th></tr>
+<tr><td><span class="badge-sub">↳</span></td><td>Lebon POWERFIT PU</td><td>ARĘKPOWERFIT</td><td>Preferowany</td><td>96%</td><td class="warn">Krzysiek</td></tr>
+<tr><td><span class="badge-sub">↳</span></td><td>uvex UNIDUR 6641</td><td>ARĘKAWUNIDUR</td><td>Premium</td><td>94%</td><td>Opcja</td></tr>
+<tr><td><span class="badge-sub">↳</span></td><td>Mapa KRYTECH 532 (zarękawki)</td><td>ARĘK532</td><td>Awaryjny</td><td>88%</td><td>Brak M na mag.</td></tr>
+</table>
+</div>
+</div>
+
+<div class="sub-group">
+<div class="sub-group-head">
+<span class="muted">Poz. 11 · SIWZ: monterskie, kozia skóra</span>
+<div class="main-line"><span class="badge-main">PRODUKT GŁÓWNY</span> RS ECO TEC · ARĘKTALLIN253 · dopasowanie 99%</div>
+</div>
+<div class="sub-wrap">
+<table class="subtable">
+<tr><th></th><th>Zamiennik (zamienia produkt główny)</th><th>Kod</th><th>Typ</th><th>AI</th><th>Status</th></tr>
+<tr><td><span class="badge-sub">↳</span></td><td>RS Comfotec</td><td>ARĘKCOMFOTEC</td><td>Tańszy</td><td>82%</td><td class="warn">Arek — weryf. norm</td></tr>
+</table>
+</div>
+</div>
+
+<div class="sub-group">
+<div class="sub-group-head">
+<span class="muted">Poz. 15 · SIWZ: barierowe, EN 374</span>
+<div class="main-line"><span class="badge-main">PRODUKT GŁÓWNY</span> Ansell AlphaTec 53-001 · ARĘK53001 · dopasowanie 98%</div>
+</div>
+<div class="sub-wrap">
+<table class="subtable">
+<tr><th></th><th>Zamiennik (zamienia produkt główny)</th><th>Kod</th><th>Typ</th><th>AI</th><th>Status</th></tr>
+<tr><td><span class="badge-sub">↳</span></td><td>Ansell AlphaTec 29-500</td><td>ARKNEOTOP128</td><td>Awaryjny</td><td>88%</td><td class="ok">Krzysiek</td></tr>
+<tr><td><span class="badge-sub">↳</span></td><td>Lebon MAXITOUCH/DA</td><td>ARĘKLEMAXTOU</td><td>Preferowany</td><td>79%</td><td class="warn">Inna klasa — odrzuć</td></tr>
+</table>
+</div>
+</div>
+<p class="muted">Pozycje bez wierszy poniżej: produkt główny wytypowany, brak proponowanych zamienników (lub etap AI jeszcze nie uruchomiony).</p>
+</div>
+
+<div class="subview" data-tab-panel="ai">
+<p><strong>Poz. 3:</strong> Główny — Lebon POWERCUT/WH (97% do SIWZ, EN 388). Ewentualnie pod spodem POWERFIT, UNIDUR lub KRYTECH 532 — każdy jako zamiana tego kodu, nie „inna rękawica z listy”.</p>
+<p><strong>Oszczędność:</strong> 8 pozycji do optymalizacji · szac. 14 200 zł.</p>
+<p><strong>Risk:</strong> poz. 38 kriogeniczne — brak kodu w SIWZ, propozycja CRIO 279 netto.</p>
+</div>
+
+<div class="subview" data-tab-panel="historia">
+<table>
+<tr><th>Czas</th><th>Użytkownik</th><th>Zdarzenie</th></tr>
+<tr><td>10.02 11:02</td><td>Arek</td><td>Zmiana ceny oferty poz. 3 → 16,90</td></tr>
+<tr><td>10.02 09:45</td><td>System AI</td><td>Dopasowanie 38/42 pozycji</td></tr>
+<tr><td>10.02 09:14</td><td>Wojtek</td><td>Import SIWZ.pdf</td></tr>
+</table>
+</div>
+
+<div class="subview" data-tab-panel="komentarze">
+<table>
+<tr><th>Kto</th><th>Treść</th><th>Data</th></tr>
+<tr><td>Justyna</td><td>Ansell 53-001 — potwierdzić lead time (stan 96)</td><td>10.02</td></tr>
+<tr><td>Arek</td><td>CRIO — dzwonię do Rostaing ws. cert. EN</td><td>10.02</td></tr>
+</table>
+</div>
+
+<div class="subview" data-tab-panel="oferta">
+<h3 style="margin:0 0 10px;font-size:14px">Wycena — fragment</h3>
+<table>
+<tr><th>Kod</th><th>Zakup</th><th>Oferta</th><th>Marża</th><th>Wartość linii</th></tr>
+<tr><td>ARĘKGLOMJ713</td><td>13,63</td><td>16,90</td><td>19,5%</td><td>40 560 zł</td></tr>
+<tr><td>ARĘK53001</td><td>38,08</td><td>46,00</td><td>17,2%</td><td>16 560 zł</td></tr>
+<tr><td>ARĘKAWUNIDUR</td><td>28,80</td><td>34,50</td><td>16,5%</td><td>27 600 zł</td></tr>
+</table>
+<p><strong>Suma demo (9 poz.):</strong> oferta netto ≈ 186 420 zł · marża projektu 18,4%</p>
+<button type="button" class="btn sm">Generuj Excel</button>
+<button type="button" class="btn sm ghost">Generuj PDF</button>
+</div>
+
+<div class="subview" data-tab-panel="logi">
+<table>
+<tr><th>Etap pipeline</th><th>Status</th><th>Czas</th><th>Retry</th></tr>
+<tr><td>OCR</td><td class="ok">OK</td><td>2:14</td><td><button class="btn sm ghost">Ponów</button></td></tr>
+<tr><td>Analiza SIWZ</td><td class="ok">OK</td><td>1:08</td><td><button class="btn sm ghost">Ponów</button></td></tr>
+<tr><td>Zamienniki</td><td class="warn">W toku</td><td>—</td><td><button class="btn sm ghost">Ponów</button></td></tr>
+</table>
+</div>
+</div>
+</section>
+
+<!-- IMPORT -->
+<section class="view" id="view-import" data-title="Import dokumentów" data-sub="PDF · XLSX · DOCX · ZIP · mail · SharePoint · FTP">
+<div class="toolbar">
+<button type="button" class="btn">+ Nowy import</button>
+<select><option>Wszystkie źródła</option><option>E-mail</option><option>Dysk</option><option>SharePoint</option><option>FTP</option></select>
+</div>
+<div class="card">
+<table>
+<tr><th>ID</th><th>Data</th><th>Źródło</th><th>Pliki</th><th>Autor</th><th>Rekordy</th><th>Błędy</th><th>Projekt</th></tr>
+<tr><td>IMP-8821</td><td>10.02.2026 09:14</td><td>E-mail</td><td>SIWZ.pdf, Formularz.xlsx</td><td>Wojtek</td><td>42</td><td class="ok">0</td><td>PRZ/2026/0147</td></tr>
+<tr><td>IMP-8790</td><td>08.02.2026</td><td>SharePoint</td><td>Lebon_Q1_2026.xlsx</td><td>Artur</td><td>1240</td><td class="ok">0</td><td>Cennik</td></tr>
+<tr><td>IMP-8755</td><td>05.02.2026</td><td>FTP</td><td>ansell_price.zip</td><td>System</td><td>—</td><td class="warn">2</td><td>—</td></tr>
+</table>
+</div>
+<div class="card">
+<h2>Proces po imporcie (PRZ/2026/0147)</h2>
+<p>OCR → analiza → embeddingi → projekt przetargu. Każdy import: autor, data, wersja, liczba rekordów, log błędów.</p>
+</div>
+</section>
+
+<!-- PRODUKTY -->
+<section class="view" id="view-produkty" data-title="Produkty" data-sub="Baza Supon · 356 pozycji w kategorii rękawice (demo filtr)">
+<div class="toolbar">
+<input type="search" placeholder="Szukaj kod, EAN, nazwa…" value="POWERCUT">
+<select><option>Rękawice ochronne</option><option>Antyprzecięciowe</option><option>Chemoodporne</option></select>
+<select><option>Marka: wszystkie</option><option>Lebon</option><option>Ansell</option><option>uvex</option></select>
+</div>
+<div class="grid2">
+<div class="card">
+<table>
+<tr><th>Kod</th><th>Nazwa</th><th>Producent</th><th>Netto</th><th>Normy</th></tr>
+<tr class="click" data-product="1"><td>ARĘKGLOMJ713</td><td>POWERCUT/WH PU</td><td>Lebon</td><td>21,99</td><td>EN 388</td></tr>
+<tr><td>ARĘKPOWERFIT</td><td>POWERFIT PU</td><td>Lebon</td><td>19,99</td><td>EN 388</td></tr>
+<tr><td>ARĘK53001</td><td>AlphaTec 53-001</td><td>Ansell</td><td>56,00</td><td>EN 374</td></tr>
+<tr><td>ARĘKAWUNIDUR</td><td>UNIDUR 6641</td><td>uvex</td><td>45,00</td><td>EN 388</td></tr>
+<tr><td>ARKROSTCRIO</td><td>CRIO długie</td><td>Rostaing</td><td>279,00</td><td>—</td></tr>
+</table>
+<p class="muted">Ceny netto ze sklepu supon.rzeszow.pl</p>
+</div>
+<div class="card" id="productCard">
+<h2>Karta produktu</h2>
+<div class="product-hero">
+<div class="ph">Zdjęcie produktu</div>
+<div>
+<p><strong>Lebon POWERCUT/WH</strong> · ARĘKGLOMJ713</p>
+<p class="muted">Antyprzecięciowe · powłoka poliuretan</p>
+<p>Cena katalogowa netto: <strong>21,99 zł</strong> · Rabat prod. (demo): 38% · Zakup: 13,63 zł</p>
+<p>Normy: EN 388 · Stan mag.: 840 · Historia ofert: 4</p>
+<p style="margin-top:10px"><span class="badge-main">PRODUKT GŁÓWNY</span> w pozycji przetargu — zamienniki poniżej.</p>
+<h3 style="font-size:13px;margin:14px 0 8px">Zamienniki (zamieniają ten produkt główny)</h3>
+<table class="subtable">
+<tr><th>Kod</th><th>Nazwa</th><th>Typ</th><th>AI</th><th>Netto</th></tr>
+<tr><td>ARĘKPOWERFIT</td><td>POWERFIT PU</td><td>Preferowany</td><td>96%</td><td>19,99</td></tr>
+<tr><td>ARĘKAWUNIDUR</td><td>UNIDUR 6641</td><td>Premium</td><td>94%</td><td>45,00</td></tr>
+</table>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- ZAMIENNIKI -->
+<section class="view" id="view-zamienniki" data-title="Zamienniki" data-sub="Relacja: produkt główny → zamienniki (co zamienia)">
+<p class="flow-hint">Najpierw <strong>produkt główny</strong> (dopasowany do SIWZ lub wybrany ręcznie). Dopiero potem lista <strong>zamienników tego kodu</strong> — nie płaska lista kategorii.</p>
+<div class="toolbar">
+<input type="search" placeholder="Szukaj produktu głównego…">
+<select><option>PRZ/2026/0147</option><option>Wszystkie przetargi</option></select>
+</div>
+
+<div class="sub-group">
+<div class="sub-group-head">
+<div class="main-line"><span class="badge-main">PRODUKT GŁÓWNY</span> Lebon POWERCUT/WH · ARĘKGLOMJ713</div>
+<span class="muted">Poz. 3 · globalna baza zamienników</span>
+</div>
+<div class="sub-wrap">
+<table class="subtable">
+<tr><th>Zamiennik</th><th>Kod</th><th>Typ</th><th>Param.</th><th>Normy</th><th>Powód</th><th>Zatw.</th></tr>
+<tr><td>Lebon POWERFIT PU</td><td>ARĘKPOWERFIT</td><td>Preferowany</td><td>96%</td><td>Tak</td><td>Ta sama klasa PU / EN 388</td><td class="warn">Oczekuje</td></tr>
+<tr><td>uvex UNIDUR 6641</td><td>ARĘKAWUNIDUR</td><td>Premium</td><td>94%</td><td>Tak</td><td>Wyższa odp. na przecięcie</td><td>—</td></tr>
+<tr><td>Mapa KRYTECH 532</td><td>ARĘK532</td><td>Awaryjny</td><td>88%</td><td>Częściowo</td><td>Brak M na mag.</td><td>—</td></tr>
+</table>
+</div>
+</div>
+
+<div class="sub-group">
+<div class="sub-group-head">
+<div class="main-line"><span class="badge-main">PRODUKT GŁÓWNY</span> RS ECO TEC · ARĘKTALLIN253</div>
+<span class="muted">Poz. 11</span>
+</div>
+<div class="sub-wrap">
+<table class="subtable">
+<tr><th>Zamiennik</th><th>Kod</th><th>Typ</th><th>Param.</th><th>Normy</th><th>Powód</th><th>Zatw.</th></tr>
+<tr><td>RS Comfotec</td><td>ARĘKCOMFOTEC</td><td>Tańszy</td><td>82%</td><td>Częściowo</td><td>Niższa cena, podobna skóra</td><td class="warn">Arek</td></tr>
+</table>
+</div>
+</div>
+
+<div class="sub-group">
+<div class="sub-group-head">
+<div class="main-line"><span class="badge-main">PRODUKT GŁÓWNY</span> Ansell AlphaTec 53-001 · ARĘK53001</div>
+<span class="muted">Poz. 15</span>
+</div>
+<div class="sub-wrap">
+<table class="subtable">
+<tr><th>Zamiennik</th><th>Kod</th><th>Typ</th><th>Param.</th><th>Normy</th><th>Powód</th><th>Zatw.</th></tr>
+<tr><td>Ansell AlphaTec 29-500</td><td>ARKNEOTOP128</td><td>Awaryjny</td><td>88%</td><td>EN 374</td><td>Brak stanu 53-001</td><td class="ok">Krzysiek</td></tr>
+</table>
+</div>
+</div>
+</section>
+
+<!-- CENNIKI -->
+<section class="view" id="view-cenniki" data-title="Cenniki producentów" data-sub="Wersje · diff cen · import automatyczny">
+<div class="card">
+<table>
+<tr><th>Producent</th><th>Wersja</th><th>Data</th><th>Pozycje</th><th>Δ ceny</th><th>Nowe</th><th>Usunięte</th><th>Źródło</th></tr>
+<tr><td>Lebon</td><td>Q1/2026</td><td>08.02.2026</td><td>1 240</td><td>18</td><td>6</td><td>1</td><td>SharePoint</td></tr>
+<tr><td>Ansell</td><td>02/2026</td><td class="warn">—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>FTP (błąd)</td></tr>
+<tr><td>uvex</td><td>01/2026</td><td>15.01.2026</td><td>890</td><td>4</td><td>2</td><td>0</td><td>API</td></tr>
+<tr><td>Delta Plus</td><td>12/2025</td><td>20.12.2025</td><td>2 100</td><td>31</td><td>12</td><td>3</td><td>Udział sieciowy</td></tr>
+</table>
+</div>
+</section>
+
+<!-- KLIENCI -->
+<section class="view" id="view-klienci" data-title="Klienci" data-sub="Kontrahenci · przetargi · kontakt">
+<div class="card">
+<table>
+<tr><th>Nazwa</th><th>NIP</th><th>Miasto</th><th>Aktywne przetargi</th><th>Ostatnia oferta</th><th>Opiekun</th></tr>
+<tr><td>Zakład Produkcji Metali Sp. z o.o.</td><td>813-xxx-xx-xx</td><td>Rzeszów</td><td>1</td><td>10.02.2026</td><td>Arek</td></tr>
+<tr><td>Sanitex Sp. z o.o.</td><td>517-xxx-xx-xx</td><td>Stalowa Wola</td><td>1</td><td>09.02.2026</td><td>Arek</td></tr>
+<tr><td>MPWiK Rzeszów</td><td>813-xxx-xx-xx</td><td>Rzeszów</td><td>0</td><td>04.02.2026</td><td>Justyna</td></tr>
+</table>
+</div>
+</section>
+
+<!-- RAPORTY -->
+<section class="view" id="view-raporty" data-title="Raporty" data-sub="Marża · skuteczność AI · produkty w ofertach">
+<div class="grid2">
+<div class="card">
+<h2>Marża wg handlowca (Q1 demo)</h2>
+<table>
+<tr><th>Handlowiec</th><th>Oferty</th><th>Śr. marża</th><th>Wartość</th></tr>
+<tr><td>Arek</td><td>5</td><td>18,1%</td><td>512 000 zł</td></tr>
+<tr><td>Justyna</td><td>4</td><td>17,4%</td><td>388 000 zł</td></tr>
+</table>
+</div>
+<div class="card">
+<h2>Top produkty w przetargach (rękawice)</h2>
+<table>
+<tr><th>Kod</th><th>Razy w ofercie</th></tr>
+<tr><td>ARĘKGLOMJ713</td><td>12</td></tr>
+<tr><td>ARĘK53001</td><td>9</td></tr>
+<tr><td>Lebon Easyfit</td><td>8</td></tr>
+</table>
+</div>
+</div>
+</section>
+
+<!-- COPILOT -->
+<section class="view" id="view-copilot" data-title="AI Copilot" data-sub="Kontekst: PRZ/2026/0147 · rękawice ochronne">
+<div class="card chat">
+<div class="chat-msg user">Poz. 3 — klient chce antyprzecięciowe PU, EN 388. Co mamy sensownego z Lebona / reszty bazy?</div>
+<div class="chat-msg ai">Najlepiej pasuje <strong>Lebon POWERCUT/WH</strong> (ARĘKGLOMJ713) — opis z SIWZ i EN 388 zgadzają się w ok. 97%. To produkt główny do tej linii.<br><br>Jeśli trzeba obniżyć cenę albo klient akceptuje zamiennik: <strong>POWERFIT</strong> (preferowany, ~96% dopasowania) albo <strong>uvex UNIDUR</strong>, gdy chcemy mocniejszą odporność na przecięcie. Zamienniki dotyczą wyłącznie tego głównego kodu — nie „czegokolwiek z PU”.</div>
+<div class="chat-msg user">Poz. 15 — 360 par AlphaTec 53-001, a na stanie mamy 96. Jak to ogarnąć?</div>
+<div class="chat-msg ai">Przy takiej ilości na magazynie nie domkniemy — brakuje ok. <strong>264 par</strong>. Opcje: domówienie u Ansella (sprawdź termin u Justyny) albo <strong>AlphaTec 29-500</strong> — u nas wpisany jako zamiennik awaryjny do 53-001, Krzysiek go już zatwierdził. To zamiana konkretnego kodu z pozycji, nie dowolna rękawica chemoodporna z katalogu.</div>
+<div class="chat-input">
+<input type="text" placeholder="Pytanie o przetarg, produkt, normę…" value="">
+<button type="button" class="btn">Wyślij</button>
+</div>
+</div>
+</section>
+
+<!-- POMOC -->
+<section class="view" id="view-pomoc" data-title="Pomoc" data-sub="Jak działa SUPON AI — prosto, krok po kroku">
+<nav class="help-nav" id="helpNav">
+<button type="button" class="active" data-help="start">Od czego zacząć</button>
+<button type="button" data-help="proces">Cały proces</button>
+<button type="button" data-help="role">Kto co robi</button>
+<button type="button" data-help="glowny">Produkt główny i zamienniki</button>
+<button type="button" data-help="moduly">Menu — co gdzie</button>
+<button type="button" data-help="handel">Dla handlowca</button>
+<button type="button" data-help="faq">FAQ</button>
+</nav>
+
+<div class="help-panel active" data-help-panel="start">
+<div class="card">
+<h2>Co to w ogóle jest?</h2>
+<p class="help-lead"><strong>SUPON AI</strong> to jeden system zamiast dziesiątek plików Excel, PDF-ów i maili. Wrzucasz dokumenty od klienta (przetarg / zapytanie), a program <strong>czyta wymagania</strong>, <strong>szuka produktów w bazie Supon</strong>, <strong>liczy ceny</strong> i pomaga złożyć ofertę. <em>Ty nadal decydujesz</em> — AI tylko przyspiesza i podpowiada.</p>
+<div class="help-compare">
+<div class="help-compare-box bad">
+<strong>Bez systemu</strong><br>
+Otwierasz SIWZ → szukasz ręcznie w sklepie i cennikach → kopiujesz kody → liczysz marżę w Excelu → ryzyko pomyłki w normie lub kodzie.<br><br>
+<strong>Czas:</strong> wiele godzin.
+</div>
+<div class="help-compare-box good">
+<strong>Z SUPON AI</strong><br>
+Import → AI rozpoznaje pozycje → proponuje <strong>produkt główny</strong> → ewentualnie zamienniki → wycena w projekcie → akceptacje → Excel/PDF.<br><br>
+<strong>Czas:</strong> kilkanaście minut + Twoja weryfikacja.
+</div>
+</div>
+<div class="help-chart" aria-label="Porównanie czasu">
+<div class="help-bar"><i style="height:120px" class="gray"></i>ręcznie ~6 h</div>
+<div class="help-bar"><i style="height:28px"></i>z AI ~14 min</div>
+</div>
+<p class="muted">Wykres poglądowy — pokazuje ideę skrócenia czasu, nie gwarant produkcyjny.</p>
+</div>
+</div>
+
+<div class="help-panel" data-help-panel="proces">
+<div class="card">
+<h2>Cała droga oferty — jak na taśmie</h2>
+<p class="help-lead">Każdy krok w <strong>AI Pipeline</strong> (Dashboard) ma status, czas i log. Można ponowić etap, gdy coś poszło nie tak.</p>
+<div class="help-flow">
+<div class="help-step"><strong>1</strong>Mail / pliki</div>
+<span class="help-arrow">→</span>
+<div class="help-step"><strong>2</strong>Import</div>
+<span class="help-arrow">→</span>
+<div class="help-step ai"><strong>3</strong>OCR + czytanie PDF</div>
+<span class="help-arrow">→</span>
+<div class="help-step ai"><strong>4</strong>Analiza SIWZ</div>
+<span class="help-arrow">→</span>
+<div class="help-step ai"><strong>5</strong>Pozycje przetargu</div>
+<span class="help-arrow">→</span>
+<div class="help-step ai"><strong>6</strong>Dopasowanie produktu głównego</div>
+<span class="help-arrow">→</span>
+<div class="help-step ai"><strong>7</strong>Zamienniki</div>
+<span class="help-arrow">→</span>
+<div class="help-step you"><strong>8</strong>Wycena (Ty)</div>
+<span class="help-arrow">→</span>
+<div class="help-step you"><strong>9</strong>Akceptacje</div>
+<span class="help-arrow">→</span>
+<div class="help-step"><strong>10</strong>Excel / PDF</div>
+</div>
+<p><span class="tag">Niebieskie</span> = głównie automat / AI &nbsp; <span class="tag green">Zielone</span> = decyzje ludzi (handlowiec, kierownik, dyrektor)</p>
+<svg viewBox="0 0 640 120" style="width:100%;max-width:640px;height:auto;margin-top:12px" aria-hidden="true">
+<rect x="10" y="40" width="100" height="40" rx="8" fill="#e2e8f0"/>
+<text x="60" y="65" text-anchor="middle" font-size="11" fill="#334155">Dokumenty klienta</text>
+<path d="M110 60 H140" stroke="#94a3b8" stroke-width="2" marker-end="url(#arr)"/>
+<rect x="140" y="40" width="100" height="40" rx="8" fill="#dbeafe"/>
+<text x="190" y="65" text-anchor="middle" font-size="11" fill="#1e40af">Baza Supon + AI</text>
+<path d="M240 60 H270" stroke="#94a3b8" stroke-width="2"/>
+<rect x="270" y="40" width="100" height="40" rx="8" fill="#dcfce7"/>
+<text x="320" y="65" text-anchor="middle" font-size="11" fill="#166534">Oferta</text>
+<path d="M370 60 H400" stroke="#94a3b8" stroke-width="2"/>
+<rect x="400" y="40" width="120" height="40" rx="8" fill="#fef3c7"/>
+<text x="460" y="65" text-anchor="middle" font-size="11" fill="#92400e">Klient / przetarg</text>
+<defs><marker id="arr" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#94a3b8"/></marker></defs>
+</svg>
+</div>
+</div>
+
+<div class="help-panel" data-help-panel="role">
+<div class="card">
+<h2>Kto za co odpowiada</h2>
+<p class="help-lead">System ma role — każdy widzi swoje zadania. Handlowiec nie konfiguruje serwera; IT nie wycenia oferty za Ciebie.</p>
+<div class="help-roles">
+<div class="help-role"><b>Wojtek · Przetargi</b>Tworzy projekt, importuje SIWZ, pierwszy kontakt z klientem.</div>
+<div class="help-role"><b>Arek / Justyna · Handel</b>Produkt główny, ceny, marża, komentarze, producenci.</div>
+<div class="help-role"><b>Krzysiek · Kierownik</b>Kontrola jakości, <strong>akceptacja zamienników</strong>.</div>
+<div class="help-role"><b>Tomek · Dyrektor</b>Rentowność, finalna akceptacja oferty.</div>
+<div class="help-role"><b>Artur · IT</b>Cenniki, integracje, AI, użytkownicy.</div>
+</div>
+<svg viewBox="0 0 400 200" style="width:100%;max-width:400px;margin-top:8px">
+<circle cx="200" cy="100" r="45" fill="#2563eb"/>
+<text x="200" y="98" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold">Projekt</text>
+<text x="200" y="112" text-anchor="middle" fill="#fff" font-size="9">przetargu</text>
+<line x1="200" y1="55" x2="200" y2="25" stroke="#64748b"/>
+<text x="200" y="18" text-anchor="middle" font-size="10">Wojtek: import</text>
+<line x1="240" y1="85" x2="310" y2="50" stroke="#64748b"/>
+<text x="320" y="48" font-size="10">Handlowiec</text>
+<line x1="240" y1="115" x2="310" y2="150" stroke="#64748b"/>
+<text x="320" y="158" font-size="10">Kierownik</text>
+<line x1="160" y1="115" x2="90" y2="150" stroke="#64748b"/>
+<text x="50" y="158" font-size="10">Dyrektor</text>
+</svg>
+</div>
+</div>
+
+<div class="help-panel" data-help-panel="glowny">
+<div class="card">
+<h2>Produkt główny → dopiero potem zamienniki</h2>
+<p class="help-lead">To najważniejsza zasada: <strong>zamiennik zawsze zastępuje konkretny produkt główny</strong>, który system wytypował do wiersza w SIWZ. To nie jest „lista podobnych rękawic z kategorii”.</p>
+<div class="help-tree">
+<div class="help-tree-main">PRODUKT GŁÓWNY<br>np. Lebon POWERCUT/WH · ARĘKGLOMJ713<br><span style="font-weight:400;font-size:11px;opacity:.9">Poz. 3 w przetargu · dopasowanie 97%</span></div>
+<div class="help-tree-line"></div>
+<div class="help-tree-branches">
+<div class="help-tree-sub"><strong>Preferowany</strong><br>POWERFIT</div>
+<div class="help-tree-sub"><strong>Premium</strong><br>uvex UNIDUR</div>
+<div class="help-tree-sub"><strong>Tańszy</strong><br>tylko jeśli normy OK</div>
+<div class="help-tree-sub"><strong>Awaryjny</strong><br>brak na magazynie</div>
+</div>
+</div>
+<p>Typy zamienników: <span class="tag">preferowany</span> <span class="tag">tańszy</span> <span class="tag">premium</span> <span class="tag">awaryjny</span> — każdy z oceną AI (%), normami i powodem. Kierownik zatwierdza ryzykowne zmiany.</p>
+</div>
+</div>
+
+<div class="help-panel" data-help-panel="moduly">
+<div class="card">
+<h2>Menu po lewej — gdzie czego szukać</h2>
+<div class="help-map">
+<div><strong>Dashboard</strong> — podsumowanie, pipeline AI, Twoje zadania.</div>
+<div><strong>Przetargi</strong> — lista projektów; w środku zakładki: pozycje, wycena, zamienniki.</div>
+<div><strong>Import</strong> — skąd wzięły się pliki (mail, FTP, SharePoint…).</div>
+<div><strong>Produkty</strong> — katalog jak w sklepie + ceny hurt / magazyn.</div>
+<div><strong>Zamienniki</strong> — drzewa: główny → co może go zastąpić.</div>
+<div><strong>Cenniki</strong> — wersje cen producentów (Lebon, Ansell…).</div>
+<div><strong>Klienci</strong> — firmy i powiązane przetargi.</div>
+<div><strong>Raporty</strong> — marże, statystyki (głównie zarząd).</div>
+<div><strong>AI Copilot</strong> — pytania w języku naturalnym o <em>ten</em> przetarg.</div>
+<div><strong>Pomoc</strong> — ten ekran.</div>
+</div>
+</div>
+</div>
+
+<div class="help-panel" data-help-panel="handel">
+<div class="card">
+<h2>Typowy dzień handlowca w systemie</h2>
+<ol class="help-lead" style="padding-left:20px">
+<li>Wejdź w <strong>Dashboard</strong> — sprawdź zadania i status AI.</li>
+<li>Otwórz <strong>Przetargi</strong> → swój projekt (np. PRZ/2026/0147).</li>
+<li>Zakładka <strong>Pozycje</strong> — sprawdź produkt główny przy każdym wierszu SIWZ; popraw, jeśli AI się pomyliło.</li>
+<li>Zakładka <strong>Zamienniki</strong> — pod każdym głównym wybierz lub odrzuć propozycje.</li>
+<li>Zakładka <strong>Oferta</strong> — marża, ceny; komentarz dla kierownika.</li>
+<li>Po akceptacji Krzyszka i Tomka — generuj Excel/PDF.</li>
+</ol>
+<p class="flow-hint">Masz wątpliwość co do normy (EN 388, EN 374…)? Zapytaj <strong>AI Copilot</strong> w kontekście tego przetargu — odpowiedź odnosi się do konkretnych pozycji, nie ogólnie do „rękawic”.</p>
+</div>
+</div>
+
+<div class="help-panel" data-help-panel="faq">
+<div class="card help-faq">
+<h2>Najczęstsze pytania</h2>
+<details open>
+<summary>Czy AI składa ofertę za mnie?</summary>
+<p>Nie. AI proponuje dopasowania i liczy wstępnie — <strong>Ty, kierownik i dyrektor</strong> zatwierdzacie ofertę. System zapisuje historię — widać, kto co zmienił.</p>
+</details>
+<details>
+<summary>Skąd biorą się ceny?</summary>
+<p>Z <strong>cenników producentów</strong> (rabaty) oraz katalogu Supon. Cena w sklepie internetowym to punkt odniesienia; oferta przetargowa liczy się według ustawionych marż i aktualnego cennika w systemie.</p>
+</details>
+<details>
+<summary>Co jeśli AI źle dopasuje produkt?</summary>
+<p>W pozycji wybierasz inny kod ręcznie z bazy <strong>Produkty</strong>. Zamienniki przeliczą się dla nowego produktu głównego.</p>
+</details>
+<details>
+<summary>Czym różni się „Pozycje” od „Zamienniki”?</summary>
+<p><strong>Pozycje</strong> = wiersze od klienta + wybrany produkt główny. <strong>Zamienniki</strong> = alternatywy zamieniające ten główny (tańsze, lepsze, awaryjne).</p>
+</details>
+<details>
+<summary>Kto klika „Generuj Excel”?</summary>
+<p>Zwykle handlowiec po akceptacjach — w zakładce <strong>Oferta</strong> w przetargu. Plik trafia do archiwum projektu.</p>
+</details>
+</div>
+<p class="muted">Specyfikacja: SUPON AI Tom 01 v0.2 · pytania techniczne: Artur (IT)</p>
+</div>
+
+</section>
+
+<!-- ADMIN -->
+<section class="view" id="view-admin" data-title="Administracja" data-sub="Widok skrócony — pełna konfiguracja: IT (Artur)">
+<div class="card">
+<p class="muted">Handlowiec: brak edycji użytkowników i integracji. Podgląd statusu:</p>
+<table>
+<tr><th>Moduł</th><th>Status</th></tr>
+<tr><td>Import FTP Ansell</td><td class="warn">Błąd ostatniego run</td></tr>
+<tr><td>Model AI / RAG</td><td class="ok">Aktywny</td></tr>
+<tr><td>Sync cennik Lebon</td><td class="ok">08.02.2026</td></tr>
+</table>
+</div>
+</section>
+
+</main>
+</div>
+</div>
+
+<script>
+(function(){
+var views=document.querySelectorAll('.view');
+var nav=document.getElementById('mainNav');
+var titleEl=document.getElementById('appbarTitle');
+var subEl=document.getElementById('appbarSub');
+var listPanel=document.getElementById('przetargiListPanel');
+var detailPanel=document.getElementById('przetargiDetailPanel');
+var btnBack=document.getElementById('btnBackList');
+
+function showView(id){
+views.forEach(function(v){v.classList.toggle('active',v.id==='view-'+id);});
+nav.querySelectorAll('button').forEach(function(b){
+b.classList.toggle('active',b.getAttribute('data-view')===id);
+});
+var v=document.getElementById('view-'+id);
+if(v){
+titleEl.textContent=v.getAttribute('data-title')||id;
+subEl.textContent=v.getAttribute('data-sub')||'';
+}
+if(id!=='przetargi'){
+listPanel.style.display='';
+detailPanel.style.display='none';
+}
+}
+
+function openTenderDetail(){
+listPanel.style.display='none';
+detailPanel.style.display='';
+showView('przetargi');
+setTenderTab('pozycje');
+}
+
+function setTenderTab(tab){
+document.querySelectorAll('#tenderTabs button').forEach(function(b){
+b.classList.toggle('active',b.getAttribute('data-tab')===tab);
+});
+document.querySelectorAll('[data-tab-panel]').forEach(function(p){
+p.classList.toggle('active',p.getAttribute('data-tab-panel')===tab);
+});
+}
+
+nav.addEventListener('click',function(e){
+var btn=e.target.closest('button[data-view]');
+if(btn)showView(btn.getAttribute('data-view'));
+});
+
+document.querySelectorAll('[data-goto]').forEach(function(el){
+el.addEventListener('click',function(){
+var v=el.getAttribute('data-goto');
+if(el.getAttribute('data-open-tender'))openTenderDetail();
+else showView(v);
+});
+});
+
+document.querySelectorAll('[data-open-tender]').forEach(function(row){
+row.addEventListener('click',function(){
+if(row.getAttribute('data-open-tender')==='1')openTenderDetail();
+});
+});
+
+btnBack.addEventListener('click',function(){
+listPanel.style.display='';
+detailPanel.style.display='none';
+});
+
+document.getElementById('tenderTabs').addEventListener('click',function(e){
+var t=e.target.closest('button[data-tab]');
+if(t)setTenderTab(t.getAttribute('data-tab'));
+});
+
+var helpNav=document.getElementById('helpNav');
+if(helpNav){
+helpNav.addEventListener('click',function(e){
+var h=e.target.closest('button[data-help]');
+if(!h)return;
+var id=h.getAttribute('data-help');
+helpNav.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',b===h);});
+document.querySelectorAll('.help-panel').forEach(function(p){
+p.classList.toggle('active',p.getAttribute('data-help-panel')===id);
+});
+});
+}
+
+showView('dashboard');
+})();
+</script>
+</body>
+</html>

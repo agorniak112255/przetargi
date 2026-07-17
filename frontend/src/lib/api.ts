@@ -1,0 +1,109 @@
+// W dev: proxy Vite (/api → :8000). W prod: pełny URL lub względny /api.
+const API_URL = import.meta.env.VITE_API_URL ?? '/api'
+
+function token(): string | null {
+  return localStorage.getItem('supon_token')
+}
+
+export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers)
+  headers.set('Accept', 'application/json')
+  if (options.body && !(options.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
+  }
+  const t = token()
+  if (t) {
+    headers.set('Authorization', `Bearer ${t}`)
+  }
+
+  const res = await fetch(`${API_URL}${path}`, { ...options, headers })
+  const text = await res.text()
+  let body: Record<string, unknown> = {}
+  if (text) {
+    try {
+      body = JSON.parse(text) as Record<string, unknown>
+    } catch {
+      throw new Error(
+        res.ok
+          ? 'Odpowiedź serwera jest uszkodzona lub zbyt duża (JSON). Spróbuj ponownie — dla XLSX użyj analizy AI (mapowanie) albo Import prosty.'
+          : `Błąd API ${res.status}: niepoprawna odpowiedź serwera.`,
+      )
+    }
+  }
+  if (!res.ok) {
+    const errors = body.errors as Record<string, string[]> | undefined
+    const msg =
+      (typeof body.message === 'string' ? body.message : null) ??
+      (errors ? Object.values(errors).flat().join(' ') : null) ??
+      `Błąd API ${res.status}`
+    throw new Error(String(msg))
+  }
+  return body as T
+}
+
+export type User = { id: number; name: string; email: string; role: string }
+
+export type Tender = {
+  id: number
+  number: string
+  title: string
+  status: string
+  ai_percent: number
+  offer_value_net: string | null
+  margin_percent: string | null
+  deadline: string | null
+  last_activity_at: string | null
+  items_count?: number
+  client?: { id: number; name: string }
+  owner?: { id: number; name: string }
+}
+
+export type Product = {
+  id: number
+  sku: string
+  name: string
+  manufacturer: string
+  category: string | null
+  norms: string | null
+  catalog_price_net: string
+  purchase_price: string
+  discount_percent?: string
+  currency?: string | null
+  stock: number
+  pack_qty?: number | null
+  packaging?: string | null
+  substitutes_count?: number
+}
+
+export type Substitute = {
+  id: number
+  type: string
+  match_percent: number
+  reason: string | null
+  approval_status: string
+  main_product?: Product
+  substitute_product?: Product
+}
+
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const headers = new Headers({ Accept: '*/*' })
+  const t = token()
+  if (t) headers.set('Authorization', `Bearer ${t}`)
+
+  const res = await fetch(`${API_URL}${path}`, { headers })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.message ?? `Błąd pobierania ${res.status}`)
+  }
+
+  const blob = await res.blob()
+  const cd = res.headers.get('Content-Disposition')
+  const match = cd?.match(/filename="?([^"]+)"?/)
+  const name = match?.[1] ?? fallbackName
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}
