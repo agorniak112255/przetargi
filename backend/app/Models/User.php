@@ -10,11 +10,14 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
+use Spatie\Permission\Traits\HasRoles;
 
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasApiTokens, HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, HasRoles, Notifiable;
+
+    protected string $guard_name = 'web';
 
     /**
      * @var list<string>
@@ -45,5 +48,29 @@ class User extends Authenticatable
     public function ownedTenders(): HasMany
     {
         return $this->hasMany(Tender::class, 'owner_id');
+    }
+
+    /**
+     * @return array{id: int, name: string, email: string, role: string, roles: list<string>, permissions: list<string>}
+     */
+    public function toAuthArray(): array
+    {
+        $roles = $this->getRoleNames()->values()->all();
+        $primaryRole = $roles[0] ?? $this->role ?? 'handlowiec';
+
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'email' => $this->email,
+            'role' => $primaryRole,
+            'roles' => $roles,
+            'permissions' => $this->getAllPermissions()->pluck('name')->values()->all(),
+        ];
+    }
+
+    public function syncPrimaryRole(string $roleName): void
+    {
+        $this->syncRoles([$roleName]);
+        $this->forceFill(['role' => $roleName])->save();
     }
 }

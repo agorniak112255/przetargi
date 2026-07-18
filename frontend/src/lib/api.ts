@@ -41,7 +41,22 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return body as T
 }
 
-export type User = { id: number; name: string; email: string; role: string }
+export type User = {
+  id: number
+  name: string
+  email: string
+  role: string
+  roles: string[]
+  permissions: string[]
+}
+
+export function can(user: User | null | undefined, permission: string): boolean {
+  return Boolean(user?.permissions?.includes(permission))
+}
+
+export function canAny(user: User | null | undefined, permissions: string[]): boolean {
+  return permissions.some((p) => can(user, p))
+}
 
 export type Tender = {
   id: number
@@ -64,6 +79,7 @@ export type Product = {
   name: string
   manufacturer: string
   category: string | null
+  assortment_group_id?: number | null
   norms: string | null
   catalog_price_net: string
   purchase_price: string
@@ -77,12 +93,17 @@ export type Product = {
 
 export type Substitute = {
   id: number
+  main_product_id?: number
+  substitute_product_id?: number
   type: string
   match_percent: number
+  norms_ok?: boolean
+  certs_ok?: boolean
   reason: string | null
   approval_status: string
   main_product?: Product
   substitute_product?: Product
+  approver?: { id: number; name: string } | null
 }
 
 export async function downloadFile(path: string, fallbackName: string): Promise<void> {

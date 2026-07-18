@@ -33,13 +33,16 @@ class AuthController extends Controller
 
         return response()->json([
             'token' => $token,
-            'user' => $user,
+            'user' => $user->toAuthArray(),
         ]);
     }
 
     public function me(Request $request): JsonResponse
     {
-        return response()->json($request->user());
+        /** @var User $user */
+        $user = $request->user();
+
+        return response()->json($user->toAuthArray());
     }
 
     public function logout(Request $request): JsonResponse

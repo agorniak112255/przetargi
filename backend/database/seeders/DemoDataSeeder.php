@@ -21,31 +21,37 @@ class DemoDataSeeder extends Seeder
             ['email' => 'arek@supon.local'],
             ['name' => 'Arek', 'password' => Hash::make('password'), 'role' => 'handlowiec']
         );
+        $arek->syncPrimaryRole('handlowiec');
 
         $justyna = User::query()->updateOrCreate(
             ['email' => 'justyna@supon.local'],
             ['name' => 'Justyna', 'password' => Hash::make('password'), 'role' => 'handlowiec']
         );
+        $justyna->syncPrimaryRole('handlowiec');
 
         $krzysiek = User::query()->updateOrCreate(
             ['email' => 'krzysiek@supon.local'],
             ['name' => 'Krzysiek', 'password' => Hash::make('password'), 'role' => 'kierownik']
         );
+        $krzysiek->syncPrimaryRole('kierownik');
 
-        User::query()->updateOrCreate(
+        $wojtek = User::query()->updateOrCreate(
             ['email' => 'wojtek@supon.local'],
             ['name' => 'Wojtek', 'password' => Hash::make('password'), 'role' => 'przetargi']
         );
+        $wojtek->syncPrimaryRole('przetargi');
 
-        User::query()->updateOrCreate(
+        $tomek = User::query()->updateOrCreate(
             ['email' => 'tomek@supon.local'],
             ['name' => 'Tomek', 'password' => Hash::make('password'), 'role' => 'dyrektor']
         );
+        $tomek->syncPrimaryRole('dyrektor');
 
-        User::query()->updateOrCreate(
+        $artur = User::query()->updateOrCreate(
             ['email' => 'artur@supon.local'],
             ['name' => 'Artur', 'password' => Hash::make('password'), 'role' => 'admin']
         );
+        $artur->syncPrimaryRole('admin');
 
         $client = Client::query()->updateOrCreate(
             ['name' => 'Zakład Produkcji Metali Sp. z o.o.'],
