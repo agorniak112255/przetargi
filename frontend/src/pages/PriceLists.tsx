@@ -100,8 +100,24 @@ type ProductRow = {
   discount_percent: number
   purchase_price: number
   currency?: string | null
+  category?: string | null
   pack_qty?: number | null
   packaging?: string | null
+}
+
+type AssortmentGroupRow = {
+  name: string
+  product_count: number
+  discount_percent: number
+  id?: number | null
+}
+
+type AssortmentGroupsSummary = {
+  has_grouping: boolean
+  detected: AssortmentGroupRow[]
+  ungrouped_count: number
+  existing: Array<{ id: number; name: string; discount_percent: number; is_global: boolean }>
+  global_discount_percent: number
 }
 
 const CURRENCIES = ['PLN', 'EUR', 'USD', 'GBP', 'CHF', 'CZK', 'SEK', 'NOK', 'DKK'] as const
@@ -129,6 +145,7 @@ type Analysis = {
   errors_count: number
   model: string
   meta?: { manufacturer: string; version: string; source: string }
+  assortment_groups?: AssortmentGroupsSummary
 }
 
 /** Szybka podpowiedź z nazwy pliku (docelowo serwer i tak zweryfikuje). */
@@ -198,7 +215,91 @@ export function PriceLists() {
   )
   const [historyCache, setHistoryCache] = useState<Record<number, PriceList>>({})
   const [historyDetailsLoading, setHistoryDetailsLoading] = useState<number | null>(null)
+  const [groupRows, setGroupRows] = useState<AssortmentGroupRow[]>([])
+  const [defaultDiscount, setDefaultDiscount] = useState('0')
+  const [ungroupedFallback, setUngroupedFallback] = useState('')
+  const [newGroupName, setNewGroupName] = useState('')
   const progressTimer = useRef<number | null>(null)
+
+  function initGroupsFromAnalysis(res: Analysis) {
+    const summary = res.assortment_groups
+    if (!summary) {
+      setGroupRows([])
+      setDefaultDiscount('0')
+      setUngroupedFallback('')
+      return
+    }
+    const fromDetected = summary.detected.map((g) => ({ ...g }))
+    const detectedNames = new Set(fromDetected.map((g) => g.name))
+    for (const ex of summary.existing) {
+      if (ex.is_global || detectedNames.has(ex.name)) continue
+      fromDetected.push({
+        name: ex.name,
+        product_count: 0,
+        discount_percent: ex.discount_percent,
+        id: ex.id,
+      })
+    }
+    setGroupRows(fromDetected)
+    setDefaultDiscount(
+      summary.global_discount_percent > 0 ? String(summary.global_discount_percent) : '',
+    )
+    setUngroupedFallback('')
+    setNewGroupName('')
+  }
+
+  function buildGroupOptions() {
+    if (groupRows.length > 0) {
+      return {
+        groups: groupRows.map((g) => ({
+          name: g.name,
+          discount_percent: Number(g.discount_percent) || 0,
+        })),
+        ungrouped_group: ungroupedFallback.trim() || null,
+        default_discount: null as number | null,
+        product_assignments: Object.fromEntries(
+          (analysis?.products ?? analysis?.preview ?? [])
+            .filter((p) => p.category && p.category.trim() !== '')
+            .map((p) => [p.sku, p.category!.trim()]),
+        ),
+      }
+    }
+    const global =
+      defaultDiscount.trim() === '' ? null : Number(defaultDiscount)
+    return {
+      groups: [] as Array<{ name: string; discount_percent: number }>,
+      ungrouped_group: null as string | null,
+      default_discount: global === null || Number.isNaN(global) ? null : global,
+      product_assignments: {} as Record<string, string>,
+    }
+  }
+
+  function canConfirmImport(): string | null {
+    if (groupRows.length === 0) return null
+    const ungrouped = analysis?.assortment_groups?.ungrouped_count ?? 0
+    if (ungrouped > 0 && !ungroupedFallback.trim()) {
+      return `Brak grupy dla ${ungrouped} pozycji — wskaż grupę domyślną albo dodaj kategorię w cenniku.`
+    }
+    if (ungroupedFallback.trim() && !groupRows.some((g) => g.name === ungroupedFallback.trim())) {
+      return 'Grupa domyślna musi istnieć na liście grup (dodaj ją ręcznie, jeśli trzeba).'
+    }
+    return null
+  }
+
+  function addManualGroup() {
+    const name = newGroupName.trim()
+    if (!name) return
+    if (groupRows.some((g) => g.name.toLowerCase() === name.toLowerCase())) {
+      setErr('Taka grupa już jest na liście.')
+      return
+    }
+    setGroupRows((prev) => [
+      ...prev,
+      { name, product_count: 0, discount_percent: 0 },
+    ])
+    setNewGroupName('')
+    setErr('')
+  }
 
   async function ensureHistoryDetails(row: PriceList): Promise<PriceList> {
     if (historyCache[row.id]) return historyCache[row.id]
@@ -509,21 +610,27 @@ export function PriceLists() {
       const defaultCur = res.mapping?.currency ?? 'PLN'
       const withCurrency = (list: ProductRow[] | undefined) =>
         (list ?? []).map((p) => ({ ...p, currency: p.currency ?? defaultCur }))
-      setAnalysis({
+      const next: Analysis = {
         ...res,
         products: withCurrency(res.products),
         preview: withCurrency(res.preview),
-      })
+      }
+      setAnalysis(next)
+      initGroupsFromAnalysis(next)
       const detectedManuf =
         res.meta?.manufacturer ?? res.mapping?.manufacturer_detected ?? null
       if (detectedManuf) setManufacturer(detectedManuf)
       if (res.meta?.version) setVersion(res.meta.version)
+      const groupsHint = res.assortment_groups?.has_grouping
+        ? ` · grupy asortymentowe: ${res.assortment_groups.detected.length}`
+        : ' · brak grup — upust na cały cennik'
       setMsg(
         `AI (${res.model}): znaleziono ${res.products_found} produktów do importu` +
           ` (przeskanowano ${res.rows_total} wierszy, pominięto ${res.skipped}).` +
           ` Poniżej przykłady ${res.preview.length} z ${res.products_found}.` +
           (detectedManuf ? ` · producent: ${detectedManuf}` : '') +
-          (res.meta?.version ? ` · wersja: ${res.meta.version}` : ''),
+          (res.meta?.version ? ` · wersja: ${res.meta.version}` : '') +
+          groupsHint,
       )
       finishProgress(true)
     } catch (ex) {
@@ -544,6 +651,11 @@ export function PriceLists() {
       setErr('Najpierw uruchom „Analizuj AI”.')
       return
     }
+    const groupErr = canConfirmImport()
+    if (groupErr) {
+      setErr(groupErr)
+      return
+    }
     setBusy(true)
     startProgress('import')
     setErr('')
@@ -559,12 +671,14 @@ export function PriceLists() {
       if (!isSpreadsheet && analysis.products && analysis.products.length > 0) {
         fd.append('products', JSON.stringify(analysis.products))
       }
+      fd.append('group_options', JSON.stringify(buildGroupOptions()))
 
       const res = await api<ImportResult>('/price-lists/import', { method: 'POST', body: fd })
 
       applyImportResult(res, 'Import AI OK')
       setFile(null)
       setAnalysis(null)
+      setGroupRows([])
       await load()
       finishProgress(true)
     } catch (ex) {
@@ -591,6 +705,9 @@ export function PriceLists() {
     setMsg('')
     try {
       const fd = buildFormData()
+      if (groupRows.length > 0 || defaultDiscount !== '') {
+        fd.append('group_options', JSON.stringify(buildGroupOptions()))
+      }
       const res = await api<ImportResult>('/price-lists/import', { method: 'POST', body: fd })
 
       applyImportResult(res, 'Import OK')
@@ -610,8 +727,9 @@ export function PriceLists() {
       <h1 className="mb-2 text-xl font-semibold">Cenniki producentów</h1>
       <p className="mb-4 text-xs text-slate-500">
         Importujemy: <strong>nazwa</strong>, <strong>symbol/kod</strong>, <strong>cena</strong>,{' '}
-        <strong>upust/marża</strong>, <strong>ilość w opak./kartonie</strong>, <strong>opakowanie</strong>.
-        Duże PDF (nawet 30+ MB) analizowane tekstowo w częściach — może potrwać kilka minut. API:{' '}
+        <strong>grupa/klasa asortymentowa</strong>, <strong>upust/marża</strong>,{' '}
+        <strong>ilość w opak./kartonie</strong>, <strong>opakowanie</strong>.
+        Po analizie ustawiasz upusty na grupach (albo jeden na cały cennik). Duże PDF mogą trwać kilka minut. API:{' '}
         <Link className="text-blue-600" to="/ai-settings">
           Ustawienia AI
         </Link>
@@ -815,6 +933,139 @@ export function PriceLists() {
               </tbody>
             </table>
           )}
+
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+            <h3 className="mb-1 text-sm font-semibold text-amber-950">
+              Upusty przy potwierdzeniu importu
+            </h3>
+            <p className="mb-3 text-[11px] text-amber-900/80">
+              Grupy biorą się z kolumny kategoria/klasa/grupa w cenniku. Możesz dodać grupy ręcznie.
+              Przy grupowaniu każdy towar musi mieć grupę; bez grup — jeden upust na cały cennik /
+              producenta.
+            </p>
+
+            {groupRows.length > 0 ? (
+              <>
+                <table className="mb-2 w-full text-left">
+                  <thead>
+                    <tr className="border-b border-amber-200 bg-amber-100/50">
+                      <th className="p-2">Grupa asortymentowa</th>
+                      <th className="p-2">Pozycji w pliku</th>
+                      <th className="p-2">Upust %</th>
+                      <th className="p-2" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupRows.map((g) => (
+                      <tr key={g.name} className="border-b border-amber-100">
+                        <td className="p-2 font-medium">{g.name}</td>
+                        <td className="p-2">{g.product_count}</td>
+                        <td className="p-2">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={0.01}
+                            className="w-24 rounded border border-slate-300 bg-white px-2 py-1"
+                            value={g.discount_percent}
+                            onChange={(e) => {
+                              const v = Number(e.target.value)
+                              setGroupRows((prev) =>
+                                prev.map((row) =>
+                                  row.name === g.name
+                                    ? { ...row, discount_percent: Number.isFinite(v) ? v : 0 }
+                                    : row,
+                                ),
+                              )
+                            }}
+                          />
+                        </td>
+                        <td className="p-2 text-right">
+                          {g.product_count === 0 && (
+                            <button
+                              type="button"
+                              className="text-red-600 underline"
+                              onClick={() =>
+                                setGroupRows((prev) => prev.filter((row) => row.name !== g.name))
+                              }
+                            >
+                              Usuń
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {(analysis.assortment_groups?.ungrouped_count ?? 0) > 0 && (
+                  <label className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-amber-950">
+                    Pozycje bez grupy ({analysis.assortment_groups?.ungrouped_count}) przypisz do
+                    <select
+                      className="rounded border border-slate-300 bg-white px-2 py-1"
+                      value={ungroupedFallback}
+                      onChange={(e) => setUngroupedFallback(e.target.value)}
+                    >
+                      <option value="">— wybierz —</option>
+                      {groupRows.map((g) => (
+                        <option key={g.name} value={g.name}>
+                          {g.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </>
+            ) : (
+              <label className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-amber-950">
+                Upust na cały cennik / firmę (%)
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.01}
+                  className="w-24 rounded border border-slate-300 bg-white px-2 py-1"
+                  value={defaultDiscount}
+                  onChange={(e) => setDefaultDiscount(e.target.value)}
+                  placeholder="z pliku"
+                />
+                <span className="text-amber-800/70">puste = zostaw upusty z pliku</span>
+              </label>
+            )}
+
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <label className="text-[11px] text-amber-950">
+                Dodaj grupę ręcznie
+                <input
+                  className="mt-1 block w-56 rounded border border-slate-300 bg-white px-2 py-1"
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  placeholder="np. Rękawice ochronne"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      addManualGroup()
+                    }
+                  }}
+                />
+              </label>
+              <button type="button" className={btnSecondary} onClick={addManualGroup}>
+                Dodaj grupę
+              </button>
+              {groupRows.length > 0 && (
+                <button
+                  type="button"
+                  className={btnSecondary}
+                  onClick={() => {
+                    setGroupRows([])
+                    setUngroupedFallback('')
+                  }}
+                >
+                  Bez grup (upust globalny)
+                </button>
+              )}
+            </div>
+          </div>
+
           <h3 className="mb-1 font-semibold">
             Podgląd (przykłady {analysis.preview.length} z {analysis.products_found})
           </h3>
@@ -823,6 +1074,7 @@ export function PriceLists() {
               <tr className="border-b bg-slate-50">
                 <th className="p-2">Symbol / kod</th>
                 <th className="p-2">Nazwa (Opis)</th>
+                <th className="p-2">Grupa</th>
                 <th className="p-2">Cena katalogowa</th>
                 <th className="p-2">Waluta</th>
                 <th className="p-2">Upust %</th>
@@ -832,44 +1084,89 @@ export function PriceLists() {
               </tr>
             </thead>
             <tbody>
-              {analysis.preview.map((p) => (
-                <tr key={p.sku} className="border-b">
-                  <td className="p-2 font-medium">{p.sku}</td>
-                  <td className="p-2">{p.name}</td>
-                  <td className="p-2">{p.catalog_price_net}</td>
-                  <td className="p-2">
-                    <select
-                      className="rounded border border-slate-300 bg-white px-1.5 py-0.5"
-                      value={p.currency ?? analysis.mapping?.currency ?? 'PLN'}
-                      onChange={(e) => {
-                        const cur = e.target.value
-                        setAnalysis((prev) => {
-                          if (!prev) return prev
-                          const patch = (list: ProductRow[] | undefined) =>
-                            (list ?? []).map((row) =>
-                              row.sku === p.sku ? { ...row, currency: cur } : row,
-                            )
-                          return {
-                            ...prev,
-                            preview: patch(prev.preview),
-                            products: patch(prev.products?.length ? prev.products : prev.preview),
-                          }
-                        })
-                      }}
-                    >
-                      {CURRENCIES.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="p-2">{p.discount_percent}%</td>
-                  <td className="p-2 font-medium text-slate-800">{p.purchase_price}</td>
-                  <td className="p-2">{p.pack_qty ?? '—'}</td>
-                  <td className="p-2">{p.packaging ?? '—'}</td>
-                </tr>
-              ))}
+              {analysis.preview.map((p) => {
+                const groupDiscount = groupRows.find((g) => g.name === (p.category ?? ''))
+                  ?.discount_percent
+                const globalParsed =
+                  defaultDiscount.trim() === '' ? null : Number(defaultDiscount)
+                const effectiveDiscount =
+                  groupRows.length > 0
+                    ? (groupDiscount ?? (globalParsed ?? 0))
+                    : (globalParsed ?? p.discount_percent)
+                const effectivePurchase = Number(
+                  (p.catalog_price_net * (1 - effectiveDiscount / 100)).toFixed(2),
+                )
+                return (
+                  <tr key={p.sku} className="border-b">
+                    <td className="p-2 font-medium">{p.sku}</td>
+                    <td className="p-2">{p.name}</td>
+                    <td className="p-2">
+                      {groupRows.length > 0 ? (
+                        <select
+                          className="max-w-[10rem] rounded border border-slate-300 bg-white px-1.5 py-0.5"
+                          value={p.category ?? ''}
+                          onChange={(e) => {
+                            const cat = e.target.value || null
+                            setAnalysis((prev) => {
+                              if (!prev) return prev
+                              const patch = (list: ProductRow[] | undefined) =>
+                                (list ?? []).map((row) =>
+                                  row.sku === p.sku ? { ...row, category: cat } : row,
+                                )
+                              return {
+                                ...prev,
+                                preview: patch(prev.preview),
+                                products: patch(prev.products?.length ? prev.products : prev.preview),
+                              }
+                            })
+                          }}
+                        >
+                          <option value="">—</option>
+                          {groupRows.map((g) => (
+                            <option key={g.name} value={g.name}>
+                              {g.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        (p.category ?? '—')
+                      )}
+                    </td>
+                    <td className="p-2">{p.catalog_price_net}</td>
+                    <td className="p-2">
+                      <select
+                        className="rounded border border-slate-300 bg-white px-1.5 py-0.5"
+                        value={p.currency ?? analysis.mapping?.currency ?? 'PLN'}
+                        onChange={(e) => {
+                          const cur = e.target.value
+                          setAnalysis((prev) => {
+                            if (!prev) return prev
+                            const patch = (list: ProductRow[] | undefined) =>
+                              (list ?? []).map((row) =>
+                                row.sku === p.sku ? { ...row, currency: cur } : row,
+                              )
+                            return {
+                              ...prev,
+                              preview: patch(prev.preview),
+                              products: patch(prev.products?.length ? prev.products : prev.preview),
+                            }
+                          })
+                        }}
+                      >
+                        {CURRENCIES.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="p-2">{effectiveDiscount}%</td>
+                    <td className="p-2 font-medium text-slate-800">{effectivePurchase}</td>
+                    <td className="p-2">{p.pack_qty ?? '—'}</td>
+                    <td className="p-2">{p.packaging ?? '—'}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

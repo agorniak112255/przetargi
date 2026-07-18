@@ -138,6 +138,11 @@ final class PriceListAiAnalyzer
         );
         $mapping['manufacturer_detected'] = $meta['manufacturer'];
 
+        $assortmentGroups = app(AssortmentGroupService::class)->summarize(
+            $allProducts,
+            $meta['manufacturer'],
+        );
+
         // Duże XLSX: NIE zwracamy pełnej listy produktów w JSON (psuje odpowiedź HTTP).
         // Import idzie przez mapping na serwerze.
         return [
@@ -149,6 +154,7 @@ final class PriceListAiAnalyzer
             'rows_total' => $stats['rows_total'],
             'skipped' => $stats['skipped'],
             'errors_count' => $stats['errors_count'],
+            'assortment_groups' => $assortmentGroups,
             'sample' => [
                 'sheets' => array_map(
                     static fn (array $s): array => [
@@ -552,6 +558,11 @@ PROMPT;
             ? array_slice($products, 0, $maxProductsPayload)
             : $products;
 
+        $assortmentGroups = app(AssortmentGroupService::class)->summarize(
+            $products,
+            $meta['manufacturer'],
+        );
+
         return [
             'source' => $source,
             'mapping' => [
@@ -566,6 +577,7 @@ PROMPT;
             'rows_total' => count($products),
             'skipped' => 0,
             'errors_count' => 0,
+            'assortment_groups' => $assortmentGroups,
             'sample' => $sample,
             'model' => $model,
             'products_truncated' => count($products) > $maxProductsPayload,

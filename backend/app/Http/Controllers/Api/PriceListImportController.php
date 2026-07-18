@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\Ai\AiSettingsService;
+use App\Services\AssortmentGroupService;
 use App\Services\PriceListAiAnalyzer;
 use App\Services\PriceListImportService;
 use App\Services\PriceListMetaDetector;
@@ -25,6 +26,7 @@ class PriceListImportController extends Controller
         private readonly PriceListAiAnalyzer $analyzer,
         private readonly AiSettingsService $aiSettings,
         private readonly PriceListMetaDetector $metaDetector,
+        private readonly AssortmentGroupService $assortmentGroups,
     ) {}
 
     public function store(Request $request): JsonResponse
@@ -37,6 +39,7 @@ class PriceListImportController extends Controller
             'use_ai' => ['sometimes', 'boolean'],
             'mapping' => ['nullable'],
             'products' => ['nullable'],
+            'group_options' => ['nullable'],
         ]);
 
         /** @var UploadedFile $file */
@@ -46,6 +49,7 @@ class PriceListImportController extends Controller
         $useAi = $request->boolean('use_ai');
         $mapping = $this->decodeJsonField($request->input('mapping'));
         $products = $this->decodeJsonField($request->input('products'));
+        $groupOptions = $this->decodeGroupOptions($request->input('group_options'));
         $productsList = is_array($products) ? ($products['products'] ?? $products) : null;
         if (! is_array($productsList)) {
             $productsList = null;
@@ -95,6 +99,7 @@ class PriceListImportController extends Controller
                 $request->user(),
                 $productsList,
                 $data['category'] ?? null,
+                $groupOptions,
             );
         } elseif ($mapping !== null) {
             $result = $this->importer->importWithMapping(
@@ -104,6 +109,7 @@ class PriceListImportController extends Controller
                 $request->user(),
                 $mapping,
                 $data['category'] ?? null,
+                $groupOptions,
             );
         } elseif ($isPdf) {
             throw ValidationException::withMessages([
@@ -135,6 +141,7 @@ class PriceListImportController extends Controller
                         $request->user(),
                         $analysis['products'] ?? [],
                         $data['category'] ?? null,
+                        $groupOptions,
                     );
                 } else {
                     $result = $this->importer->importWithMapping(
@@ -144,6 +151,7 @@ class PriceListImportController extends Controller
                         $request->user(),
                         $analysis['mapping'],
                         $data['category'] ?? null,
+                        $groupOptions,
                     );
                     $mapping = $analysis['mapping'];
                 }
@@ -159,6 +167,7 @@ class PriceListImportController extends Controller
                 $version,
                 $request->user(),
                 $data['category'] ?? null,
+                $groupOptions,
             );
         }
 
@@ -219,7 +228,82 @@ class PriceListImportController extends Controller
             ]);
         }
 
+        if (! isset($result['assortment_groups']) || ! is_array($result['assortment_groups'])) {
+            $metaManufacturer = is_string($result['meta']['manufacturer'] ?? null)
+                ? (string) $result['meta']['manufacturer']
+                : (is_string($result['mapping']['manufacturer_detected'] ?? null)
+                    ? (string) $result['mapping']['manufacturer_detected']
+                    : ((string) ($fromFile['manufacturer'] ?? 'Nieznany')));
+            $productsForGroups = is_array($result['products'] ?? null) && $result['products'] !== []
+                ? $result['products']
+                : (is_array($result['preview'] ?? null) ? $result['preview'] : []);
+            $result['assortment_groups'] = $this->assortmentGroups->summarize(
+                $productsForGroups,
+                $metaManufacturer !== '' ? $metaManufacturer : 'Nieznany',
+            );
+        }
+
         return response()->json($result);
+    }
+
+    /**
+     * @return array{
+     *     groups: list<array{name: string, discount_percent: float}>,
+     *     default_discount: float|null,
+     *     ungrouped_group: string|null,
+     *     product_assignments: array<string, string>
+     * }|null
+     */
+    private function decodeGroupOptions(mixed $raw): ?array
+    {
+        $decoded = $this->decodeJsonField($raw);
+        if ($decoded === null) {
+            return null;
+        }
+
+        $groups = [];
+        if (is_array($decoded['groups'] ?? null)) {
+            foreach ($decoded['groups'] as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+                $name = trim((string) ($row['name'] ?? ''));
+                if ($name === '') {
+                    continue;
+                }
+                $groups[] = [
+                    'name' => $name,
+                    'discount_percent' => is_numeric($row['discount_percent'] ?? null)
+                        ? (float) $row['discount_percent']
+                        : 0.0,
+                ];
+            }
+        }
+
+        $assignments = [];
+        if (is_array($decoded['product_assignments'] ?? null)) {
+            foreach ($decoded['product_assignments'] as $sku => $groupName) {
+                $skuKey = trim((string) $sku);
+                $group = trim((string) $groupName);
+                if ($skuKey !== '' && $group !== '') {
+                    $assignments[$skuKey] = $group;
+                }
+            }
+        }
+
+        $ungrouped = isset($decoded['ungrouped_group'])
+            ? trim((string) $decoded['ungrouped_group'])
+            : '';
+        $default = isset($decoded['default_discount']) && is_numeric($decoded['default_discount'])
+            ? (float) $decoded['default_discount']
+            : null;
+
+        return [
+            'groups' => $groups,
+            'default_discount' => $default,
+            'ungrouped_group' => $ungrouped !== '' ? $ungrouped : null,
+            'product_assignments' => $assignments,
+        ];
     }
 
     /**

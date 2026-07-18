@@ -113,7 +113,10 @@ final class SpreadsheetMappingHeuristic
                     'opakowanie', 'packaging', 'jednostka',
                 ]),
                 'ean' => $this->findCol($labels, ['ean', 'barcode', 'kod kresk']),
-                'category' => $this->findCol($labels, ['kategoria', 'category', 'grupa', 'skupina']),
+                'category' => $this->findCol($labels, [
+                    'kategoria', 'category', 'grupa asortymentowa', 'klasa asortymentowa',
+                    'klasa', 'grupa', 'asortyment', 'skupina',
+                ]),
                 'currency' => $this->findCol($labels, ['waluta', 'currency']),
             ];
 

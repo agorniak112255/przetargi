@@ -15,9 +15,11 @@ final class PriceListImportService
 {
     public function __construct(
         private readonly CurrencyDetector $currencyDetector,
+        private readonly AssortmentGroupService $assortmentGroups,
     ) {}
 
     /**
+     * @param  array<string, mixed>|null  $groupOptions
      * @return array{price_list: PriceList, created: int, updated: int, skipped: int, errors: list<string>}
      */
     public function import(
@@ -26,6 +28,7 @@ final class PriceListImportService
         string $version,
         User $user,
         ?string $defaultCategory = null,
+        ?array $groupOptions = null,
     ): array {
         $path = $file->getRealPath();
         if ($path === false) {
@@ -50,12 +53,19 @@ final class PriceListImportService
             );
         }
 
+        $collected = $this->collectFromSimpleRows(array_slice($rows, 1), $map, $defaultCategory, $manufacturer);
+        try {
+            $collected = $this->applyGroupOptions($collected, $manufacturer, $groupOptions);
+        } catch (\InvalidArgumentException $e) {
+            return $this->emptyResult($e->getMessage());
+        }
+
         return $this->persistImport(
             $file,
             $manufacturer,
             $version,
             $user,
-            $this->collectFromSimpleRows(array_slice($rows, 1), $map, $defaultCategory, $manufacturer),
+            $collected,
         );
     }
 
@@ -66,6 +76,7 @@ final class PriceListImportService
      *     notes?: string,
      *     sheets: list<array<string, mixed>>
      * }  $mapping
+     * @param  array<string, mixed>|null  $groupOptions
      * @return array{price_list: PriceList|null, created: int, updated: int, skipped: int, errors: list<string>}
      */
     public function importWithMapping(
@@ -75,6 +86,7 @@ final class PriceListImportService
         User $user,
         array $mapping,
         ?string $defaultCategory = null,
+        ?array $groupOptions = null,
     ): array {
         $path = $file->getRealPath();
         if ($path === false) {
@@ -82,12 +94,18 @@ final class PriceListImportService
         }
 
         $collected = $this->collectFromMapping($path, $mapping, $defaultCategory, $manufacturer);
+        try {
+            $collected = $this->applyGroupOptions($collected, $manufacturer, $groupOptions);
+        } catch (\InvalidArgumentException $e) {
+            return $this->emptyResult($e->getMessage());
+        }
 
         return $this->persistImport($file, $manufacturer, $version, $user, $collected);
     }
 
     /**
      * @param  list<array<string, mixed>>  $products
+     * @param  array<string, mixed>|null  $groupOptions
      * @return array{price_list: PriceList|null, created: int, updated: int, skipped: int, errors: list<string>}
      */
     public function importFromProducts(
@@ -97,6 +115,7 @@ final class PriceListImportService
         User $user,
         array $products,
         ?string $defaultCategory = null,
+        ?array $groupOptions = null,
     ): array {
         $normalized = [];
         $skipped = 0;
@@ -168,13 +187,52 @@ final class PriceListImportService
             return $this->emptyResult('Brak poprawnych pozycji do importu z PDF/AI.');
         }
 
-        return $this->persistImport($file, $manufacturer, $version, $user, [
+        $collected = [
             'products' => $normalized,
             'skipped' => $skipped,
             'errors' => $errors,
             'skipped_details' => $skippedDetails,
             'rows_total' => count($products),
-        ]);
+        ];
+        try {
+            $collected = $this->applyGroupOptions($collected, $manufacturer, $groupOptions);
+        } catch (\InvalidArgumentException $e) {
+            return $this->emptyResult($e->getMessage());
+        }
+
+        return $this->persistImport($file, $manufacturer, $version, $user, $collected);
+    }
+
+    /**
+     * @param  array{
+     *     products: list<array<string, mixed>>,
+     *     skipped: int,
+     *     errors: list<string>,
+     *     rows_total: int,
+     *     skipped_details?: list<array<string, mixed>>
+     * }  $collected
+     * @param  array<string, mixed>|null  $groupOptions
+     * @return array{
+     *     products: list<array<string, mixed>>,
+     *     skipped: int,
+     *     errors: list<string>,
+     *     rows_total: int,
+     *     skipped_details?: list<array<string, mixed>>
+     * }
+     */
+    private function applyGroupOptions(array $collected, string $manufacturer, ?array $groupOptions): array
+    {
+        if ($groupOptions === null || $groupOptions === []) {
+            return $collected;
+        }
+
+        $collected['products'] = $this->assortmentGroups->applyToProducts(
+            $collected['products'],
+            $manufacturer,
+            $groupOptions,
+        );
+
+        return $collected;
     }
 
     /**
@@ -351,6 +409,40 @@ final class PriceListImportService
                 'name' => null,
             ]);
         }
+
+        return array_slice($out, 0, 100);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $details
+     * @return list<array<string, mixed>>
+     */
+    private function finalizeSkippedDetails(
+        array $details,
+        int $emptySkips,
+        int $headerSkips,
+        int $skippedTotal,
+    ): array {
+        $out = $details;
+        if ($emptySkips > 0) {
+            array_unshift($out, [
+                'reason' => 'Puste wiersze / sekcje bez ceny: '.$emptySkips,
+                'row' => null,
+                'sheet' => null,
+                'sku' => null,
+                'name' => null,
+            ]);
+        }
+        if ($headerSkips > 0) {
+            array_unshift($out, [
+                'reason' => 'Pominięte wiersze nagłówków: '.$headerSkips,
+                'row' => null,
+                'sheet' => null,
+                'sku' => null,
+                'name' => null,
+            ]);
+        }
+        unset($skippedTotal);
 
         return array_slice($out, 0, 100);
     }
@@ -729,7 +821,10 @@ final class PriceListImportService
             'discount' => ['upust', 'rabat', 'discount', 'marża', 'marza', 'mraza'],
             'purchase' => ['zakup', 'cena_zakupu', 'purchase', 'koszt', 'po upuście', 'po upust'],
             'ean' => ['ean', 'barcode'],
-            'category' => ['kategoria', 'category', 'grupa'],
+            'category' => [
+                'kategoria', 'category', 'grupa asortymentowa', 'klasa asortymentowa',
+                'klasa', 'grupa', 'asortyment',
+            ],
             'norms' => ['norma', 'normy', 'en ', 'standard'],
             'pack_qty' => [
                 'ilość szt', 'ilosc szt', 'szt. w', 'szt w', 'w kart', 'w opak',

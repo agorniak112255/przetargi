@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Product extends Model
@@ -15,6 +16,7 @@ class Product extends Model
         'manufacturer',
         'ean',
         'category',
+        'assortment_group_id',
         'description',
         'norms',
         'catalog_price_net',
@@ -34,6 +36,11 @@ class Product extends Model
             'purchase_price' => 'decimal:2',
             'pack_qty' => 'integer',
         ];
+    }
+
+    public function assortmentGroup(): BelongsTo
+    {
+        return $this->belongsTo(AssortmentGroup::class);
     }
 
     public function substitutes(): HasMany
