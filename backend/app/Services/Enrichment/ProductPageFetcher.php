@@ -422,35 +422,54 @@ final class ProductPageFetcher
      */
     private function extractDocumentUrls(string $html, string $pageUrl, string $skuNorm): array
     {
+        /** @var list<array{href: string, label: string}> $raw */
         $raw = [];
+        if (preg_match_all('#<a\b[^>]*href=["\']([^"\']+\.pdf[^"\']*)["\'][^>]*>(.*?)</a>#is', $html, $m, PREG_SET_ORDER)) {
+            foreach ($m as $row) {
+                $raw[] = [
+                    'href' => html_entity_decode((string) ($row[1] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+                    'label' => mb_strtolower(trim(strip_tags((string) ($row[2] ?? '')))),
+                ];
+            }
+        }
         if (preg_match_all('#href=["\']([^"\']+\.pdf[^"\']*)["\']#i', $html, $m)) {
             foreach ($m[1] as $href) {
-                $raw[] = html_entity_decode((string) $href, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                $raw[] = [
+                    'href' => html_entity_decode((string) $href, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+                    'label' => '',
+                ];
             }
         }
         if (preg_match_all('#https?://[^"\'\s<>]+\.pdf(?:\?[^"\'\s<>]*)?#i', $html, $m)) {
             foreach ($m[0] as $href) {
-                $raw[] = (string) $href;
+                $raw[] = ['href' => (string) $href, 'label' => ''];
             }
         }
 
         $out = [];
         $skuTokens = $this->skuTokens($skuNorm);
-        foreach ($raw as $src) {
-            $abs = $this->absolutize($src, $pageUrl);
+        foreach ($raw as $item) {
+            $abs = $this->absolutize($item['href'], $pageUrl);
             if ($abs === null || ! ProductDocumentDownloader::looksLikePdfUrl($abs)) {
                 continue;
             }
             $meta = mb_strtolower(urldecode($abs));
-            $matched = $skuNorm !== '' && str_contains($meta, $skuNorm);
+            $label = $item['label'];
+            $hay = $meta.' '.$label;
+
+            $matched = $skuNorm !== '' && str_contains($hay, mb_strtolower($skuNorm));
             foreach ($skuTokens as $token) {
-                if (str_contains($meta, $token)) {
+                if (str_contains($hay, $token)) {
                     $matched = true;
                     break;
                 }
             }
             // „CLIC UP” → plik …CLIC_UP….pdf
             if (! $matched && $this->hayMentionsNameTokens($meta, $skuNorm)) {
+                $matched = true;
+            }
+            // na karcie produktu: „deklaracja / certyfikat / DoC” bez SKU w nazwie pliku
+            if (! $matched && $this->looksLikeCertificateDocument($hay)) {
                 $matched = true;
             }
             if (! $matched) {
@@ -460,6 +479,22 @@ final class ProductPageFetcher
         }
 
         return array_values(array_unique($out));
+    }
+
+    private function looksLikeCertificateDocument(string $hay): bool
+    {
+        foreach ([
+            'deklarac', 'declaration', 'conformity', 'certyfik', 'certificate',
+            'datasheet', 'karta-katalog', 'karta_katalog', 'karta produktu',
+            'doc_', '_doc', '/doc/', 'doctype', 'ue-type', 'eu-type',
+            'examination', 'attestation', 'swiadectw', 'świadectw',
+        ] as $needle) {
+            if (str_contains($hay, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

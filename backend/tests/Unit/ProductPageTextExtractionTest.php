@@ -36,4 +36,24 @@ HTML;
         $this->assertStringNotContainsString('Do koszyka', $text);
         $this->assertStringNotContainsString('Odstąpienie od umowy', $text);
     }
+
+    public function test_extracts_certificate_pdf_by_link_label_without_sku_in_url(): void
+    {
+        $html = <<<'HTML'
+<html><body>
+<a href="/files/uvex-glove-doc.pdf">Deklaracja zgodności UE</a>
+<a href="/files/random-brochure.pdf">Broszura marketingowa</a>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractDocumentUrls');
+        $method->setAccessible(true);
+        /** @var list<string> $docs */
+        $docs = $method->invoke($fetcher, $html, 'https://shop.example.com/produkt/c300', '60549');
+
+        $this->assertCount(1, $docs);
+        $this->assertStringContainsString('uvex-glove-doc.pdf', $docs[0]);
+    }
 }
