@@ -1,11 +1,11 @@
-<IfModule mod_rewrite.c>
+﻿<IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes
     </IfModule>
 
     RewriteEngine On
 
-    # Błędny URL (stary path) → kanoniczny
+    # Bledny URL (stary path) -> kanoniczny
     RewriteRule ^backend/public/?$ / [R=302,L,NE]
 
     # Handle Authorization Header
@@ -21,13 +21,13 @@
     RewriteCond %{REQUEST_URI} (.+)/$
     RewriteRule ^ %1 [L,R=301]
 
-    # Istniejące pliki (assets, index.html, index.php)
+    # Istniejace pliki (assets, index.html, index.php)
     RewriteCond %{REQUEST_FILENAME} -f [OR]
     RewriteCond %{REQUEST_FILENAME} -d
     RewriteRule ^ - [L]
 
-    # --- API → Laravel ---
-    # XAMPP: Alias /Przetargi → backend/public (nie używać RewriteBase /)
+    # --- API -> Laravel ---
+    # XAMPP: Alias /Przetargi -> backend/public (nie uzywac RewriteBase /)
     RewriteCond %{REQUEST_URI} ^/Przetargi/api
     RewriteRule ^api(?:/.*)?$ /Przetargi/index.php [L,END]
 
