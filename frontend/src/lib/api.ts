@@ -73,6 +73,14 @@ export type Tender = {
   owner?: { id: number; name: string }
 }
 
+export type ProductImage = {
+  id: number
+  url: string
+  source_url: string | null
+  is_primary: boolean
+  sort_order: number
+}
+
 export type Product = {
   id: number
   sku: string
@@ -80,6 +88,7 @@ export type Product = {
   manufacturer: string
   category: string | null
   assortment_group_id?: number | null
+  description?: string | null
   norms: string | null
   catalog_price_net: string
   purchase_price: string
@@ -89,6 +98,38 @@ export type Product = {
   pack_qty?: number | null
   packaging?: string | null
   substitutes_count?: number
+  enrichment_status?: 'none' | 'queued' | 'running' | 'done' | 'failed'
+  enriched_at?: string | null
+  enrichment_error?: string | null
+  enrichment_payload?: {
+    features?: string[]
+    specs?: string[]
+    norms?: string[]
+    certificates?: string[]
+    materials?: string[]
+    use_cases?: string[]
+    source_urls?: string[]
+    confidence?: number
+  } | null
+  images?: ProductImage[]
+  images_count?: number
+  ai_match_percent?: number
+  ai_match_reason?: string | null
+}
+
+export type EnrichmentBatch = {
+  id: number
+  scope: string
+  scope_id: number
+  total: number
+  done: number
+  failed: number
+  status: string
+  force: boolean
+  progress_percent: number
+  current_sku?: string | null
+  current_name?: string | null
+  message?: string | null
 }
 
 export type Substitute = {

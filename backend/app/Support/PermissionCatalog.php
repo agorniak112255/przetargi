@@ -27,6 +27,7 @@ final class PermissionCatalog
         'products.view',
         'price_lists.view',
         'price_lists.import',
+        'price_lists.delete',
         'clients.view',
         'clients.manage',
         'ai_settings.manage',
@@ -91,6 +92,7 @@ final class PermissionCatalog
             'products.view',
             'price_lists.view',
             'price_lists.import',
+            'price_lists.delete',
             'clients.view',
             'clients.manage',
         ];
@@ -150,6 +152,7 @@ final class PermissionCatalog
             ['products.view', 'Produkty — podgląd', 'Dostęp do katalogu produktów i listy zamienników.', 'Produkty i cenniki'],
             ['price_lists.view', 'Cenniki — podgląd', 'Może przeglądać zaimportowane cenniki producentów.', 'Produkty i cenniki'],
             ['price_lists.import', 'Cenniki — import', 'Może analizować i importować nowe cenniki.', 'Produkty i cenniki'],
+            ['price_lists.delete', 'Cenniki — usuwanie', 'Może usuwać import cennika wraz z produktami wyłącznie z tego importu.', 'Produkty i cenniki'],
             ['clients.view', 'Klienci — podgląd', 'Może przeglądać listę klientów.', 'Klienci'],
             ['clients.manage', 'Klienci — edycja', 'Może dodawać i edytować klientów.', 'Klienci'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],

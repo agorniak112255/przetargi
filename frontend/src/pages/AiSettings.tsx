@@ -8,14 +8,21 @@ type AiSettings = {
   model: string
   timeout_seconds: number
   temperature: number
+  web_search_enabled: boolean
+  search_fallback: string
   has_api_key: boolean
+  has_tavily_api_key: boolean
   source: string
   api_key_masked: string | null
+  tavily_api_key_masked: string | null
 }
 
 export function AiSettingsPage() {
   const [cfg, setCfg] = useState<AiSettings | null>(null)
   const [apiKey, setApiKey] = useState('')
+  const [tavilyKey, setTavilyKey] = useState('')
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [showTavilyKey, setShowTavilyKey] = useState(false)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -42,9 +49,14 @@ export function AiSettingsPage() {
         model: cfg.model,
         timeout_seconds: cfg.timeout_seconds,
         temperature: cfg.temperature,
+        web_search_enabled: cfg.web_search_enabled,
+        search_fallback: cfg.search_fallback,
       }
       if (apiKey.trim() !== '') {
         body.api_key = apiKey.trim()
+      }
+      if (tavilyKey.trim() !== '') {
+        body.tavily_api_key = tavilyKey.trim()
       }
       const saved = await api<AiSettings>('/ai-settings', {
         method: 'PUT',
@@ -52,6 +64,7 @@ export function AiSettingsPage() {
       })
       setCfg(saved)
       setApiKey('')
+      setTavilyKey('')
       setMsg('Zapisano konfigurację AI.')
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd zapisu')
@@ -87,7 +100,11 @@ export function AiSettingsPage() {
       <p className="mb-4 text-xs text-slate-500">
         Konfiguracja API zgodnego z OpenAI (OpenAI, Groq, Azure, vLLM, Ollama proxy). Źródło:{' '}
         <code>{cfg.source}</code>
-        {cfg.has_api_key ? ` · klucz: ${cfg.api_key_masked}` : ' · brak klucza'}.
+        {cfg.has_api_key ? ` · klucz: ${cfg.api_key_masked}` : ' · brak klucza'}
+        {cfg.has_tavily_api_key
+          ? ` · Tavily: ${cfg.tavily_api_key_masked}`
+          : ' · brak klucza Tavily'}
+        .
       </p>
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
@@ -135,13 +152,21 @@ export function AiSettingsPage() {
         <label className="block text-xs">
           Klucz API {cfg.has_api_key ? '(zostaw puste, by nie zmieniać)' : '*'}
           <input
-            type="password"
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+            type={showApiKey ? 'text' : 'password'}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder={cfg.has_api_key ? '••••••••' : 'sk-…'}
             autoComplete="off"
           />
+          <span className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
+            <input
+              type="checkbox"
+              checked={showApiKey}
+              onChange={(e) => setShowApiKey(e.target.checked)}
+            />
+            Pokaż klucz
+          </span>
         </label>
 
         <div className="grid gap-3 sm:grid-cols-2">
@@ -167,6 +192,42 @@ export function AiSettingsPage() {
               value={cfg.temperature}
               onChange={(e) => setCfg({ ...cfg, temperature: Number(e.target.value) })}
             />
+          </label>
+        </div>
+
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
+          <p className="text-xs font-semibold text-slate-700">Wyszukiwanie opisów produktów (tanio)</p>
+          <p className="text-[11px] text-slate-500">
+            Domyślnie: Tavily → krótki skrót tanim modelem → cache po SKU. Drogi AI web search tylko
+            jako awaria.
+          </p>
+          <label className="block text-xs">
+            Klucz Tavily *{' '}
+            {cfg.has_tavily_api_key ? '(zostaw puste, by nie zmieniać)' : '(wymagany do pobierania)'}
+            <input
+              type={showTavilyKey ? 'text' : 'password'}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
+              value={tavilyKey}
+              onChange={(e) => setTavilyKey(e.target.value)}
+              placeholder={cfg.has_tavily_api_key ? '••••••••' : 'tvly-…'}
+              autoComplete="off"
+            />
+            <span className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
+              <input
+                type="checkbox"
+                checked={showTavilyKey}
+                onChange={(e) => setShowTavilyKey(e.target.checked)}
+              />
+              Pokaż klucz
+            </span>
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={cfg.web_search_enabled ?? false}
+              onChange={(e) => setCfg({ ...cfg, web_search_enabled: e.target.checked })}
+            />
+            Drogi fallback: AI web search (OpenRouter Responses) — tylko gdy Tavily zawiedzie
           </label>
         </div>
 

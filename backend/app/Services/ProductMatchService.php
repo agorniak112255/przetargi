@@ -85,8 +85,17 @@ final class ProductMatchService
         $best = null;
 
         foreach ($products as $product) {
+            $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+            $extra = implode(' ', [
+                (string) ($product->description ?? ''),
+                implode(' ', is_array($payload['features'] ?? null) ? $payload['features'] : []),
+                implode(' ', is_array($payload['use_cases'] ?? null) ? $payload['use_cases'] : []),
+                implode(' ', is_array($payload['materials'] ?? null) ? $payload['materials'] : []),
+                implode(' ', is_array($payload['norms'] ?? null) ? $payload['norms'] : []),
+            ]);
             $hay = $this->normalize(
-                $product->name.' '.$product->sku.' '.$product->manufacturer.' '.($product->norms ?? '').' '.($product->category ?? '')
+                $product->name.' '.$product->sku.' '.$product->manufacturer.' '
+                .($product->norms ?? '').' '.($product->category ?? '').' '.$extra
             );
             $score = $this->score($req, $reqTokens, $hay, $product);
             if ($best === null || $score > $best['score']) {

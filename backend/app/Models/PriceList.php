@@ -23,6 +23,7 @@ class PriceList extends Model
         'price_changes',
         'updated_products',
         'skipped_details',
+        'product_ids',
     ];
 
     protected function casts(): array
@@ -32,6 +33,7 @@ class PriceList extends Model
             'price_changes' => 'array',
             'updated_products' => 'array',
             'skipped_details' => 'array',
+            'product_ids' => 'array',
         ];
     }
 

@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
-final class OpenAiCompatibleClient
+class OpenAiCompatibleClient
 {
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -130,9 +130,10 @@ final class OpenAiCompatibleClient
      * @param  list<array{role: string, content: mixed}>  $messages
      * @return array<string, mixed>
      */
-    public function chatJson(array $messages, ?float $temperature = null): array
+    public function chatJson(array $messages, ?float $temperature = null, ?int $maxTokens = null): array
     {
-        $result = $this->chat($messages, $temperature);
+        $extra = $maxTokens !== null ? ['max_tokens' => max(256, $maxTokens)] : null;
+        $result = $this->chat($messages, $temperature, true, $extra);
 
         try {
             return $this->jsonParser->parse($result['content']);
@@ -150,6 +151,152 @@ final class OpenAiCompatibleClient
 
             return $this->jsonParser->parse($repair['content']);
         }
+    }
+
+    /**
+     * OpenAI Responses API z narzędziem web_search (gdy provider wspiera).
+     *
+     * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
+     */
+    public function responsesWithWebSearch(string $prompt, int $timeoutSeconds = 25): array
+    {
+        $cfg = $this->settings->resolve();
+        if (! $cfg['enabled']) {
+            throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
+        }
+        if (! $cfg['has_api_key'] || $cfg['api_key'] === null) {
+            throw new RuntimeException('Brak klucza API AI. Uzupełnij go w Ustawieniach AI.');
+        }
+
+        $url = $cfg['base_url'].'/responses';
+        $payload = [
+            'model' => $cfg['model'],
+            'tools' => [
+                ['type' => 'web_search'],
+            ],
+            'input' => $prompt,
+            // OpenRouter: domyślne 65k tokenów często kończy się HTTP 402 przy niskim saldzie
+            'max_output_tokens' => 1500,
+        ];
+
+        try {
+            $response = Http::withToken($cfg['api_key'])
+                ->acceptJson()
+                ->withHeaders([
+                    'HTTP-Referer' => config('app.url', 'http://localhost'),
+                    'X-Title' => 'SUPON AI',
+                ])
+                ->timeout(max(10, $timeoutSeconds))
+                ->connectTimeout(10)
+                ->post($url, $payload);
+        } catch (ConnectionException $e) {
+            throw new RuntimeException('Nie można połączyć z API AI (web search): '.$e->getMessage(), 0, $e);
+        }
+
+        if (! $response->successful()) {
+            $body = $response->json();
+            $detail = is_array($body)
+                ? (string) data_get($body, 'error.message', $response->body())
+                : $response->body();
+            throw new RuntimeException('Web search AI HTTP '.$response->status().': '.$detail);
+        }
+
+        $data = $response->json();
+        $content = $this->extractResponsesContent($data);
+        if ($content === '') {
+            throw new RuntimeException('Web search AI zwróciło pustą odpowiedź.');
+        }
+
+        return [
+            'content' => $content,
+            'model' => (string) data_get($data, 'model', $cfg['model']),
+            'citations' => $this->extractResponsesCitations($data),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $payload
+     */
+    private function extractResponsesContent(mixed $payload): string
+    {
+        $outputText = data_get($payload, 'output_text');
+        if (is_string($outputText) && trim($outputText) !== '') {
+            return trim($outputText);
+        }
+
+        $parts = [];
+        $output = data_get($payload, 'output', []);
+        if (! is_array($output)) {
+            return '';
+        }
+
+        foreach ($output as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $content = $item['content'] ?? null;
+            if (! is_array($content)) {
+                continue;
+            }
+            foreach ($content as $block) {
+                if (! is_array($block)) {
+                    continue;
+                }
+                $text = $block['text'] ?? null;
+                if (is_string($text) && $text !== '') {
+                    $parts[] = $text;
+                }
+            }
+        }
+
+        return trim(implode("\n", $parts));
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $payload
+     * @return list<array{url: string, title: string}>
+     */
+    private function extractResponsesCitations(mixed $payload): array
+    {
+        $citations = [];
+        $output = data_get($payload, 'output', []);
+        if (! is_array($output)) {
+            return [];
+        }
+
+        foreach ($output as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $content = $item['content'] ?? null;
+            if (! is_array($content)) {
+                continue;
+            }
+            foreach ($content as $block) {
+                if (! is_array($block)) {
+                    continue;
+                }
+                $annotations = $block['annotations'] ?? [];
+                if (! is_array($annotations)) {
+                    continue;
+                }
+                foreach ($annotations as $annotation) {
+                    if (! is_array($annotation)) {
+                        continue;
+                    }
+                    $url = (string) ($annotation['url'] ?? '');
+                    if ($url === '') {
+                        continue;
+                    }
+                    $citations[] = [
+                        'url' => $url,
+                        'title' => (string) ($annotation['title'] ?? $url),
+                    ];
+                }
+            }
+        }
+
+        return $citations;
     }
 
     /**

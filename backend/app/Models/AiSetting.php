@@ -16,6 +16,9 @@ class AiSetting extends Model
         'model',
         'timeout_seconds',
         'temperature',
+        'web_search_enabled',
+        'tavily_api_key',
+        'search_fallback',
     ];
 
     protected function casts(): array
@@ -23,8 +26,10 @@ class AiSetting extends Model
         return [
             'enabled' => 'boolean',
             'api_key' => 'encrypted',
+            'tavily_api_key' => 'encrypted',
             'timeout_seconds' => 'integer',
             'temperature' => 'float',
+            'web_search_enabled' => 'boolean',
         ];
     }
 }

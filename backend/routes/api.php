@@ -10,7 +10,9 @@ use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\PriceListController;
 use App\Http\Controllers\Api\PriceListImportController;
+use App\Http\Controllers\Api\ProductAiSearchController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\ProductEnrichmentController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\TenderConditionController;
 use App\Http\Controllers\Api\TenderController;
@@ -52,7 +54,14 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::patch('/tenders/{tender}/items/{item}', [TenderItemController::class, 'update'])->middleware('permission:tenders.edit_offer');
 
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
+    Route::post('/products/ai-search', ProductAiSearchController::class)->middleware('permission:products.view');
+    Route::post('/products/enrich', [ProductEnrichmentController::class, 'enrichProducts'])
+        ->middleware('permission:price_lists.import');
     Route::get('/products/{product}', [ProductController::class, 'show'])->middleware('permission:products.view');
+    Route::post('/products/{product}/enrich', [ProductEnrichmentController::class, 'enrichProduct'])
+        ->middleware('permission:price_lists.import');
+    Route::get('/product-enrichment-batches/{batch}', [ProductEnrichmentController::class, 'showBatch'])
+        ->middleware('permission:price_lists.import|products.view');
 
     Route::get('/substitutes', [ProductSubstituteController::class, 'index'])->middleware('permission:products.view');
     Route::get('/products/{product}/substitutes', [ProductSubstituteController::class, 'byMain'])->middleware('permission:products.view');
@@ -67,8 +76,12 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     Route::get('/price-lists', [PriceListController::class, 'index'])->middleware('permission:price_lists.view');
     Route::get('/price-lists/{priceList}', [PriceListController::class, 'show'])->middleware('permission:price_lists.view');
+    Route::delete('/price-lists/{priceList}', [PriceListController::class, 'destroy'])
+        ->middleware('permission:price_lists.delete');
     Route::post('/price-lists/analyze', [PriceListImportController::class, 'analyze'])->middleware('permission:price_lists.import');
     Route::post('/price-lists/import', [PriceListImportController::class, 'store'])->middleware('permission:price_lists.import');
+    Route::post('/price-lists/{priceList}/enrich', [ProductEnrichmentController::class, 'enrichPriceList'])
+        ->middleware('permission:price_lists.import');
 
     Route::get('/ai-settings', [AiSettingsController::class, 'show'])->middleware('permission:ai_settings.manage');
     Route::put('/ai-settings', [AiSettingsController::class, 'update'])->middleware('permission:ai_settings.manage');

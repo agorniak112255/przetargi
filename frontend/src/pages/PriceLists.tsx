@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../lib/api'
+import { useAuth } from '../auth'
+import { api, can, type EnrichmentBatch } from '../lib/api'
 
 type ProgressMode = 'analyze' | 'import' | null
 
@@ -80,6 +81,7 @@ type PriceList = {
   price_changes?: PriceChange[] | null
   updated_products?: UpdatedProduct[] | null
   skipped_details?: SkippedDetail[] | null
+  product_ids?: number[] | null
   created_at: string
   importer?: { name: string }
 }
@@ -195,7 +197,12 @@ const btnSecondary =
   'inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50'
 
 export function PriceLists() {
+  const { user } = useAuth()
+  const canEnrich = can(user, 'price_lists.import')
+  const canDelete = can(user, 'price_lists.delete')
+  const historyColSpan = 9 + (canEnrich ? 1 : 0) + (canDelete ? 1 : 0)
   const [rows, setRows] = useState<PriceList[]>([])
+  const [deleteBusyId, setDeleteBusyId] = useState<number | null>(null)
   const [manufacturer, setManufacturer] = useState('')
   const [version, setVersion] = useState('')
   const [category, setCategory] = useState('')
@@ -219,7 +226,78 @@ export function PriceLists() {
   const [defaultDiscount, setDefaultDiscount] = useState('0')
   const [ungroupedFallback, setUngroupedFallback] = useState('')
   const [newGroupName, setNewGroupName] = useState('')
+  const [enrichBatches, setEnrichBatches] = useState<Record<number, EnrichmentBatch>>({})
+  const [enrichBusyId, setEnrichBusyId] = useState<number | null>(null)
   const progressTimer = useRef<number | null>(null)
+
+  useEffect(() => {
+    const active = Object.values(enrichBatches).filter(
+      (b) => b.status === 'queued' || b.status === 'running',
+    )
+    if (active.length === 0) return
+    const t = window.setInterval(() => {
+      void Promise.all(
+        active.map((b) => api<EnrichmentBatch>(`/product-enrichment-batches/${b.id}`)),
+      ).then((fresh) => {
+        setEnrichBatches((prev) => {
+          const next = { ...prev }
+          for (const b of fresh) {
+            next[b.scope_id] = b
+          }
+          return next
+        })
+      })
+    }, 2500)
+    return () => window.clearInterval(t)
+  }, [enrichBatches])
+
+  async function deletePriceList(row: PriceList) {
+    const count = (row.product_ids ?? historyCache[row.id]?.product_ids ?? []).length
+    const ok = window.confirm(
+      `Usunąć cennik ${row.manufacturer} / ${row.version}?\n\n` +
+        `Zostaną usunięte produkty powiązane wyłącznie z tym importem` +
+        (count > 0 ? ` (do ${count} pozycji).` : '.') +
+        `\nProdukty występujące też w innych cennikach zostaną zachowane.\n\nTej operacji nie można cofnąć.`,
+    )
+    if (!ok) return
+    setDeleteBusyId(row.id)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>(`/price-lists/${row.id}`, { method: 'DELETE' })
+      setMsg(res.message)
+      setRows((prev) => prev.filter((r) => r.id !== row.id))
+      setHistoryCache((prev) => {
+        const next = { ...prev }
+        delete next[row.id]
+        return next
+      })
+      if (expandedHistory?.id === row.id) setExpandedHistory(null)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd usuwania cennika')
+    } finally {
+      setDeleteBusyId(null)
+    }
+  }
+
+  async function enrichPriceList(row: PriceList, force = false) {
+    setEnrichBusyId(row.id)
+    setErr('')
+    try {
+      const res = await api<{ batch: EnrichmentBatch }>(`/price-lists/${row.id}/enrich`, {
+        method: 'POST',
+        body: JSON.stringify({ force }),
+      })
+      setEnrichBatches((prev) => ({ ...prev, [row.id]: res.batch }))
+      setMsg(
+        `Wzbogacanie cennika „${row.manufacturer} / ${row.version}”: ${res.batch.total} produktów w kolejce.`,
+      )
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd wzbogacania')
+    } finally {
+      setEnrichBusyId(null)
+    }
+  }
 
   function initGroupsFromAnalysis(res: Analysis) {
     const summary = res.assortment_groups
@@ -1181,6 +1259,35 @@ export function PriceLists() {
         </div>
       )}
 
+      {Object.values(enrichBatches).some(
+        (b) => b.status === 'queued' || b.status === 'running',
+      ) && (
+        <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900">
+          {Object.values(enrichBatches)
+            .filter((b) => b.status === 'queued' || b.status === 'running')
+            .map((b) => (
+              <div key={b.id} className="mb-2 last:mb-0">
+                <p className="font-semibold">
+                  Pobieranie opisów/zdjęć — {b.done + b.failed}/{b.total} (
+                  {b.progress_percent}%)
+                </p>
+                <div className="mt-1 h-2 overflow-hidden rounded bg-blue-100">
+                  <div
+                    className="h-full animate-pulse bg-blue-500 transition-all"
+                    style={{ width: `${Math.max(6, b.progress_percent)}%` }}
+                  />
+                </div>
+                <p className="mt-1 text-blue-800">
+                  {b.current_sku
+                    ? `Teraz: ${b.current_sku}${b.current_name ? ` — ${b.current_name}` : ''}`
+                    : 'Startuję worker kolejki…'}
+                  {b.message ? ` · ${b.message}` : ''}
+                </p>
+              </div>
+            ))}
+        </div>
+      )}
+
       <div className="rounded-xl bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold">Historia importów</h2>
         <p className="mb-2 text-[11px] text-slate-500">
@@ -1198,12 +1305,16 @@ export function PriceLists() {
               <th className="p-2">Zmiany cen</th>
               <th className="p-2">Skip</th>
               <th className="p-2">Kto</th>
+              {canEnrich && <th className="p-2">Opisy/zdjęcia</th>}
+              {canDelete && <th className="p-2">Akcja</th>}
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
               const cached = historyCache[r.id] ?? r
               const kind = expandedHistory?.id === r.id ? expandedHistory.kind : null
+              const enrichBatch = enrichBatches[r.id]
+              const productCount = (r.product_ids ?? cached.product_ids ?? []).length
               return (
               <Fragment key={r.id}>
                 <tr className="border-b">
@@ -1222,6 +1333,72 @@ export function PriceLists() {
                     {historyCountButton(r, 'skips', r.rows_skipped, 'text-slate-700')}
                   </td>
                   <td className="p-2">{r.importer?.name ?? '—'}</td>
+                  {canEnrich && (
+                    <td className="p-2 min-w-[9rem]">
+                      <button
+                        type="button"
+                        disabled={
+                          enrichBusyId === r.id ||
+                          productCount === 0 ||
+                          enrichBatch?.status === 'queued' ||
+                          enrichBatch?.status === 'running'
+                        }
+                        onClick={() => void enrichPriceList(r)}
+                        className="rounded border border-slate-300 px-2 py-1 text-[11px] disabled:opacity-50"
+                        title={
+                          productCount === 0
+                            ? 'Brak product_ids (stary import)'
+                            : `Wzbogać ${productCount} produktów`
+                        }
+                      >
+                        {enrichBusyId === r.id
+                          ? 'Start…'
+                          : enrichBatch &&
+                              (enrichBatch.status === 'queued' || enrichBatch.status === 'running')
+                            ? `${enrichBatch.done + enrichBatch.failed}/${enrichBatch.total}`
+                            : enrichBatch?.status === 'done'
+                              ? `Gotowe (${enrichBatch.done})`
+                              : enrichBatch?.status === 'failed'
+                                ? 'Błąd'
+                                : 'Wzbogać'}
+                      </button>
+                      {enrichBatch &&
+                        (enrichBatch.status === 'queued' || enrichBatch.status === 'running') && (
+                          <div className="mt-1 w-36">
+                            <div className="h-1.5 overflow-hidden rounded bg-slate-200">
+                              <div
+                                className="h-full bg-blue-500 transition-all duration-500"
+                                style={{
+                                  width: `${Math.max(4, enrichBatch.progress_percent)}%`,
+                                }}
+                              />
+                            </div>
+                            <p className="mt-0.5 truncate text-[10px] text-slate-500" title={enrichBatch.message ?? ''}>
+                              {enrichBatch.current_sku
+                                ? `${enrichBatch.current_sku}`
+                                : enrichBatch.status === 'queued'
+                                  ? 'W kolejce…'
+                                  : 'Przetwarzam…'}
+                              {enrichBatch.done > 0 || enrichBatch.failed > 0
+                                ? ` · OK ${enrichBatch.done}${enrichBatch.failed ? ` / err ${enrichBatch.failed}` : ''}`
+                                : ''}
+                            </p>
+                          </div>
+                        )}
+                    </td>
+                  )}
+                  {canDelete && (
+                    <td className="p-2">
+                      <button
+                        type="button"
+                        disabled={deleteBusyId === r.id}
+                        onClick={() => void deletePriceList(r)}
+                        className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50 disabled:opacity-50"
+                      >
+                        {deleteBusyId === r.id ? 'Usuwam…' : 'Usuń'}
+                      </button>
+                    </td>
+                  )}
                 </tr>
                 {kind && (
                   <tr
@@ -1233,7 +1410,7 @@ export function PriceLists() {
                           : 'bg-slate-50'
                     }`}
                   >
-                    <td colSpan={9} className="p-3">
+                    <td colSpan={historyColSpan} className="p-3">
                       <p className="mb-2 font-semibold text-slate-700">
                         {kind === 'prices'
                           ? 'Zmiany cen'
@@ -1270,7 +1447,7 @@ export function PriceLists() {
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="p-3 text-slate-400">
+                <td colSpan={historyColSpan} className="p-3 text-slate-400">
                   Brak importów — wgraj pierwszy cennik.
                 </td>
               </tr>

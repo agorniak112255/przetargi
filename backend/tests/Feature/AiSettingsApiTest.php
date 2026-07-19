@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\User;
+use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -15,9 +16,9 @@ final class AiSettingsApiTest extends TestCase
 
     public function test_can_read_and_update_ai_settings(): void
     {
-        Sanctum::actingAs(User::factory()->create([
-            'role' => 'admin',
-        ]));
+        $this->seed(RolesAndPermissionsSeeder::class);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
         $this->getJson('/api/ai-settings')
             ->assertOk()

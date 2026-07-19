@@ -288,8 +288,9 @@ final class PriceListImportService
         $updated = 0;
         $priceChanges = [];
         $updatedProducts = [];
+        $productIds = [];
 
-        DB::transaction(function () use ($collected, &$created, &$updated, &$priceChanges, &$updatedProducts): void {
+        DB::transaction(function () use ($collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds): void {
             foreach ($collected['products'] as $payload) {
                 $sku = (string) $payload['sku'];
                 unset($payload['sku']);
@@ -302,14 +303,17 @@ final class PriceListImportService
                     }
                     $updatedProducts[] = $this->summarizeUpdate($existing, $payload, $sku, $change !== null);
                     $existing->update($payload);
+                    $productIds[] = (int) $existing->id;
                     $updated++;
                 } else {
-                    Product::query()->create(['sku' => $sku, ...$payload]);
+                    $createdProduct = Product::query()->create(['sku' => $sku, ...$payload]);
+                    $productIds[] = (int) $createdProduct->id;
                     $created++;
                 }
             }
         });
 
+        $productIds = array_values(array_unique($productIds));
 
         // największe zmiany % najpierw
         usort($priceChanges, static fn (array $a, array $b): int => abs($b['catalog_pct']) <=> abs($a['catalog_pct']));
@@ -332,6 +336,7 @@ final class PriceListImportService
             'price_changes' => array_slice($priceChanges, 0, 100),
             'updated_products' => array_slice($updatedProducts, 0, 100),
             'skipped_details' => $skippedDetails,
+            'product_ids' => $productIds,
         ]);
 
         return [
@@ -344,6 +349,7 @@ final class PriceListImportService
             'price_changes' => array_slice($priceChanges, 0, 100),
             'updated_products' => array_slice($updatedProducts, 0, 100),
             'skipped_details' => $skippedDetails,
+            'product_ids' => $productIds,
         ];
     }
 
@@ -897,6 +903,7 @@ final class PriceListImportService
             'price_changes' => [],
             'updated_products' => [],
             'skipped_details' => [],
+            'product_ids' => [],
         ];
     }
 }

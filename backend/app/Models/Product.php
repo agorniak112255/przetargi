@@ -10,6 +10,16 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Product extends Model
 {
+    public const ENRICHMENT_NONE = 'none';
+
+    public const ENRICHMENT_QUEUED = 'queued';
+
+    public const ENRICHMENT_RUNNING = 'running';
+
+    public const ENRICHMENT_DONE = 'done';
+
+    public const ENRICHMENT_FAILED = 'failed';
+
     protected $fillable = [
         'sku',
         'name',
@@ -18,6 +28,10 @@ class Product extends Model
         'category',
         'assortment_group_id',
         'description',
+        'enrichment_status',
+        'enriched_at',
+        'enrichment_error',
+        'enrichment_payload',
         'norms',
         'catalog_price_net',
         'discount_percent',
@@ -35,6 +49,8 @@ class Product extends Model
             'discount_percent' => 'decimal:2',
             'purchase_price' => 'decimal:2',
             'pack_qty' => 'integer',
+            'enriched_at' => 'datetime',
+            'enrichment_payload' => 'array',
         ];
     }
 
@@ -46,5 +62,10 @@ class Product extends Model
     public function substitutes(): HasMany
     {
         return $this->hasMany(ProductSubstitute::class, 'main_product_id');
+    }
+
+    public function images(): HasMany
+    {
+        return $this->hasMany(ProductImage::class)->orderBy('sort_order');
     }
 }

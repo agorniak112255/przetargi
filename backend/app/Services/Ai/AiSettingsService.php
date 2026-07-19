@@ -17,7 +17,11 @@ final class AiSettingsService
      *     model: string,
      *     timeout_seconds: int,
      *     temperature: float,
+     *     web_search_enabled: bool,
+     *     tavily_api_key: ?string,
+     *     search_fallback: string,
      *     has_api_key: bool,
+     *     has_tavily_api_key: bool,
      *     source: string
      * }
      */
@@ -26,6 +30,7 @@ final class AiSettingsService
         $row = AiSetting::query()->first();
         if ($row !== null) {
             $key = $row->api_key;
+            $tavily = $row->tavily_api_key;
 
             return [
                 'enabled' => (bool) $row->enabled,
@@ -35,13 +40,19 @@ final class AiSettingsService
                 'model' => (string) $row->model,
                 'timeout_seconds' => (int) $row->timeout_seconds,
                 'temperature' => (float) $row->temperature,
+                'web_search_enabled' => (bool) ($row->web_search_enabled ?? true),
+                'tavily_api_key' => $tavily !== null && $tavily !== '' ? (string) $tavily : null,
+                'search_fallback' => (string) ($row->search_fallback ?: 'tavily'),
                 'has_api_key' => $key !== null && $key !== '',
+                'has_tavily_api_key' => $tavily !== null && $tavily !== '',
                 'source' => 'database',
             ];
         }
 
         $key = config('ai.api_key');
         $key = is_string($key) && $key !== '' ? $key : null;
+        $tavily = config('ai.tavily_api_key');
+        $tavily = is_string($tavily) && $tavily !== '' ? $tavily : null;
 
         return [
             'enabled' => (bool) config('ai.enabled'),
@@ -51,7 +62,11 @@ final class AiSettingsService
             'model' => (string) config('ai.model'),
             'timeout_seconds' => (int) config('ai.timeout_seconds'),
             'temperature' => (float) config('ai.temperature'),
+            'web_search_enabled' => (bool) config('ai.web_search_enabled', true),
+            'tavily_api_key' => $tavily,
+            'search_fallback' => (string) config('ai.search_fallback', 'tavily'),
             'has_api_key' => $key !== null,
+            'has_tavily_api_key' => $tavily !== null,
             'source' => 'env',
         ];
     }
@@ -64,21 +79,18 @@ final class AiSettingsService
      *     model: string,
      *     timeout_seconds: int,
      *     temperature: float,
+     *     web_search_enabled: bool,
+     *     search_fallback: string,
      *     has_api_key: bool,
+     *     has_tavily_api_key: bool,
      *     source: string,
-     *     api_key_masked: ?string
+     *     api_key_masked: ?string,
+     *     tavily_api_key_masked: ?string
      * }
      */
     public function publicView(): array
     {
         $cfg = $this->resolve();
-        $masked = null;
-        if ($cfg['has_api_key'] && is_string($cfg['api_key'])) {
-            $len = strlen($cfg['api_key']);
-            $masked = $len <= 8
-                ? str_repeat('*', $len)
-                : substr($cfg['api_key'], 0, 3).str_repeat('*', max(4, $len - 7)).substr($cfg['api_key'], -4);
-        }
 
         return [
             'enabled' => $cfg['enabled'],
@@ -87,9 +99,13 @@ final class AiSettingsService
             'model' => $cfg['model'],
             'timeout_seconds' => $cfg['timeout_seconds'],
             'temperature' => $cfg['temperature'],
+            'web_search_enabled' => $cfg['web_search_enabled'],
+            'search_fallback' => $cfg['search_fallback'],
             'has_api_key' => $cfg['has_api_key'],
+            'has_tavily_api_key' => $cfg['has_tavily_api_key'],
             'source' => $cfg['source'],
-            'api_key_masked' => $masked,
+            'api_key_masked' => $this->maskKey($cfg['api_key']),
+            'tavily_api_key_masked' => $this->maskKey($cfg['tavily_api_key']),
         ];
     }
 
@@ -101,7 +117,10 @@ final class AiSettingsService
      *     api_key?: ?string,
      *     model?: string,
      *     timeout_seconds?: int,
-     *     temperature?: float
+     *     temperature?: float,
+     *     web_search_enabled?: bool,
+     *     tavily_api_key?: ?string,
+     *     search_fallback?: string
      * }  $data
      */
     public function update(array $data): AiSetting
@@ -113,23 +132,27 @@ final class AiSettingsService
             'model' => 'gpt-4o-mini',
             'timeout_seconds' => 90,
             'temperature' => 0.1,
+            'web_search_enabled' => false,
+            'search_fallback' => 'tavily',
         ]);
 
-        foreach (['enabled', 'provider', 'base_url', 'model', 'timeout_seconds', 'temperature'] as $field) {
+        foreach ([
+            'enabled',
+            'provider',
+            'base_url',
+            'model',
+            'timeout_seconds',
+            'temperature',
+            'web_search_enabled',
+            'search_fallback',
+        ] as $field) {
             if (array_key_exists($field, $data)) {
                 $row->{$field} = $data[$field];
             }
         }
 
-        if (array_key_exists('api_key', $data)) {
-            $incoming = $data['api_key'];
-            if (is_string($incoming) && trim($incoming) !== '' && ! str_contains($incoming, '*')) {
-                $row->api_key = trim($incoming);
-            }
-            if ($incoming === null || $incoming === '') {
-                $row->api_key = null;
-            }
-        }
+        $this->applySecret($row, 'api_key', $data);
+        $this->applySecret($row, 'tavily_api_key', $data);
 
         $row->base_url = rtrim((string) $row->base_url, '/');
         $row->save();
@@ -145,5 +168,35 @@ final class AiSettingsService
             && $cfg['has_api_key']
             && $cfg['base_url'] !== ''
             && $cfg['model'] !== '';
+    }
+
+    private function maskKey(?string $key): ?string
+    {
+        if ($key === null || $key === '') {
+            return null;
+        }
+        $len = strlen($key);
+
+        return $len <= 8
+            ? str_repeat('*', $len)
+            : substr($key, 0, 3).str_repeat('*', max(4, $len - 7)).substr($key, -4);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function applySecret(AiSetting $row, string $field, array $data): void
+    {
+        if (! array_key_exists($field, $data)) {
+            return;
+        }
+
+        $incoming = $data[$field];
+        if (is_string($incoming) && trim($incoming) !== '' && ! str_contains($incoming, '*')) {
+            $row->{$field} = trim($incoming);
+        }
+        if ($incoming === null || $incoming === '') {
+            $row->{$field} = null;
+        }
     }
 }

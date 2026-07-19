@@ -34,6 +34,9 @@ class AiSettingsController extends Controller
             'model' => ['sometimes', 'string', 'max:120'],
             'timeout_seconds' => ['sometimes', 'integer', 'min:10', 'max:300'],
             'temperature' => ['sometimes', 'numeric', 'min:0', 'max:2'],
+            'web_search_enabled' => ['sometimes', 'boolean'],
+            'tavily_api_key' => ['nullable', 'string', 'max:500'],
+            'search_fallback' => ['sometimes', 'string', 'in:tavily,none'],
         ]);
 
         $this->settings->update($data);
