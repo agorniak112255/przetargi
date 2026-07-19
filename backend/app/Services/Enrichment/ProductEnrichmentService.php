@@ -836,7 +836,11 @@ final class ProductEnrichmentService
         }
         $hay = mb_strtolower(urldecode($url));
         $sku = mb_strtolower(trim((string) $product->sku));
-        if ($sku !== '' && preg_match('/(?<![0-9])'.preg_quote($sku, '/').'(?![0-9])/u', $hay)) {
+        // dokładny kod albo prefiks (uvex: SKU 60549 w URL …6054907…)
+        if ($sku !== '' && (
+            preg_match('/(?<![0-9])'.preg_quote($sku, '/').'(?![0-9])/u', $hay)
+            || (preg_match('/^\d{4,}$/', $sku) === 1 && preg_match('/(?<![0-9])'.preg_quote($sku, '/').'\d*/u', $hay))
+        )) {
             return true;
         }
         // uvex / ATG: art. 60549 często jako 60549_ / 60549- w nazwie pliku

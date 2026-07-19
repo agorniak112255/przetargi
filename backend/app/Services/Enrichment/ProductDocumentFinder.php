@@ -32,7 +32,8 @@ final class ProductDocumentFinder
         }
 
         $queries = $this->buildQueries($product, $domains);
-        $found = [];
+        // znane wzorce CDN (np. uvex datasheet) — zanim Tavily; 404 odpada przy download
+        $found = $this->guessKnownCdnDocuments($product);
 
         foreach (array_slice($queries, 0, 5) as $query) {
             $cacheKey = 'enrich_docs_v6:'.hash('sha256', $query.'|'.implode(',', $domains));
@@ -78,6 +79,31 @@ final class ProductDocumentFinder
         }
 
         return array_values(array_unique($found));
+    }
+
+    /**
+     * Bezpośrednie URL PDF u producenta (gdy sklepy nie hostują certyfikatów).
+     *
+     * @return list<string>
+     */
+    private function guessKnownCdnDocuments(Product $product): array
+    {
+        $sku = trim((string) $product->sku);
+        if ($sku === '' || preg_match('/^\d{4,8}$/', $sku) !== 1) {
+            return [];
+        }
+
+        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        if ($brand === '' || (! str_contains($brand, 'uvex') && ! str_contains((string) $product->manufacturer, 'uvex'))) {
+            return [];
+        }
+
+        $urls = [];
+        foreach (['EN', 'DE', 'PL'] as $lang) {
+            $urls[] = 'https://d3nan4w00fsv2d.cloudfront.net/DATASHEET/'.$sku.'_PDB_'.$lang.'.pdf';
+        }
+
+        return $urls;
     }
 
     /**

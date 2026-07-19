@@ -27,6 +27,9 @@ return [
             'www.uvex-safety.de',
             'media.uvex.de',
             'uvex.de',
+            // CDN kart katalogowych / datasheetów
+            'd3nan4w00fsv2d.cloudfront.net',
+            'd3rbxgeqn1ye9j.cloudfront.net',
         ],
         '3m' => ['3m.com', 'www.3m.com'],
         'honeywell' => ['honeywell.com', 'www.honeywell.com', 'sps.honeywell.com'],
