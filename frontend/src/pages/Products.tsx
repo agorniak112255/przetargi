@@ -97,6 +97,8 @@ export function Products() {
   const canEnrich = can(user, 'price_lists.import')
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
+  const [manufacturer, setManufacturer] = useState('')
+  const [manufacturers, setManufacturers] = useState<string[]>([])
   const [aiQuery, setAiQuery] = useState('')
   const [aiMode, setAiMode] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
@@ -123,6 +125,12 @@ export function Products() {
   }, [q])
 
   useEffect(() => {
+    void api<{ data: string[] }>('/products/manufacturers')
+      .then((res) => setManufacturers(res.data ?? []))
+      .catch(() => setManufacturers([]))
+  }, [])
+
+  useEffect(() => {
     if (!descModal && !imageModal) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -142,6 +150,7 @@ export function Products() {
       dir,
     })
     if (debouncedQ) params.set('q', debouncedQ)
+    if (manufacturer) params.set('manufacturer', manufacturer)
     return params
   }
 
@@ -164,8 +173,8 @@ export function Products() {
         /* ignore */
       })
       .finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q
-  }, [debouncedQ, page, sort, dir, aiMode])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer
+  }, [debouncedQ, manufacturer, page, sort, dir, aiMode])
 
   async function runAiSearch() {
     const query = aiQuery.trim()
@@ -365,6 +374,23 @@ export function Products() {
               </button>
             </>
           )}
+          <select
+            className="rounded border border-slate-300 px-3 py-2 text-sm"
+            value={manufacturer}
+            disabled={aiMode}
+            onChange={(e) => {
+              setManufacturer(e.target.value)
+              setPage(1)
+            }}
+            title="Filtr producenta"
+          >
+            <option value="">Wszyscy producenci</option>
+            {manufacturers.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
           <input
             className="w-full max-w-md rounded border border-slate-300 px-3 py-2 text-sm"
             placeholder="Szukaj kod, nazwa, producent…"

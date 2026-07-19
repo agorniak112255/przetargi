@@ -67,6 +67,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::patch('/tenders/{tender}/items/{item}', [TenderItemController::class, 'update'])->middleware('permission:tenders.edit_offer');
 
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
+    Route::get('/products/manufacturers', [ProductController::class, 'manufacturers'])->middleware('permission:products.view');
     Route::post('/products/ai-search', ProductAiSearchController::class)->middleware('permission:products.view');
     Route::post('/products/enrich', [ProductEnrichmentController::class, 'enrichProducts'])
         ->middleware('permission:price_lists.import');

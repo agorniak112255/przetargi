@@ -57,6 +57,10 @@ class ProductController extends Controller
             $query->where('category', $request->string('category'));
         }
 
+        if ($request->filled('manufacturer')) {
+            $query->where('manufacturer', (string) $request->string('manufacturer'));
+        }
+
         $allowedSort = [
             'sku' => 'sku',
             'name' => 'name',
@@ -114,6 +118,20 @@ class ProductController extends Controller
         });
 
         return response()->json($page);
+    }
+
+    public function manufacturers(): JsonResponse
+    {
+        $list = Product::query()
+            ->whereNotNull('manufacturer')
+            ->where('manufacturer', '!=', '')
+            ->distinct()
+            ->orderBy('manufacturer')
+            ->pluck('manufacturer')
+            ->values()
+            ->all();
+
+        return response()->json(['data' => $list]);
     }
 
     public function show(Product $product): JsonResponse
