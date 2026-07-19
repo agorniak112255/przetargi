@@ -175,15 +175,19 @@ final class ProductPageFetcher
             $variants[] = str_replace(' ', '', $sm[1]);
         }
         $hay = mb_strtolower($url.' '.$title.' '.$text);
+        $hayCompact = preg_replace('/[^a-z0-9]+/i', '', $hay) ?? $hay;
         foreach ($variants as $variant) {
             if ($variant !== '' && str_contains($hay, $variant)) {
                 return true;
             }
-            $compact = preg_replace('/[^a-z0-9]/i', '', $variant) ?? $variant;
-            $hayCompact = preg_replace('/[^a-z0-9]/i', '', $hay) ?? $hay;
+            $compact = preg_replace('/[^a-z0-9]+/i', '', $variant) ?? $variant;
             if ($compact !== '' && strlen($compact) >= 4 && str_contains($hayCompact, $compact)) {
                 return true;
             }
+        }
+        // PROS-101-S1-MAX ≈ URL …pros-101s-34… / tytuł „PROS 101/S”
+        if ($this->pageMentionsBrandModelSku($hay, $hayCompact, $skuNorm)) {
+            return true;
         }
         if (! preg_match('/\b(\d{1,2}-\d{3})\b/', $skuNorm, $m)) {
             // nazwa handlowa (CLIC UP, BOLT UP…) — tokeny w URL/tekście
@@ -582,9 +586,31 @@ final class ProductPageFetcher
             }
         }
 
-        if (preg_match('#property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $m)
-            || preg_match('#content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']#i', $html, $m)) {
-            $rawUrls[] = $m[1];
+        /** @var list<string> $trustedUrls og:image / JSON-LD — galeria karty, nie wymaga SKU w nazwie pliku */
+        $trustedUrls = [];
+        if (preg_match_all('#property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $m)
+            || preg_match_all('#content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']#i', $html, $m)) {
+            foreach ($m[1] as $u) {
+                $rawUrls[] = $u;
+                $trustedUrls[] = $u;
+            }
+        }
+        // JSON-LD Product.image (PrestaShop / sklepy)
+        if (preg_match_all('#"image"\s*:\s*\[([^\]]+)\]#is', $html, $blocks)) {
+            foreach ($blocks[1] as $block) {
+                if (preg_match_all('#https?://[^"\'\s]+#i', (string) $block, $um)) {
+                    foreach ($um[0] as $u) {
+                        $rawUrls[] = $u;
+                        $trustedUrls[] = $u;
+                    }
+                }
+            }
+        }
+        if (preg_match_all('#"image"\s*:\s*"(https?://[^"]+)"#i', $html, $m)) {
+            foreach ($m[1] as $u) {
+                $rawUrls[] = $u;
+                $trustedUrls[] = $u;
+            }
         }
 
         // Magento / JSON galeria (często escaped \/ )
@@ -596,6 +622,15 @@ final class ProductPageFetcher
         if (preg_match_all('#https?://[^"\'\s<>]+/media/catalog/product/[^"\'\s<>]+\.(?:jpe?g|png|webp)#i', $html, $m)) {
             foreach ($m[0] as $u) {
                 $rawUrls[] = $u;
+            }
+        }
+        // PrestaShop: /34818-large_default/nazwa.jpg
+        if (preg_match_all('#https?://[^"\'\s<>]+/\d+-(?:large_default|medium_default|home_default|pdt_\d+)/[^"\'\s<>]+\.(?:jpe?g|png|webp)#i', $html, $m)) {
+            foreach ($m[0] as $u) {
+                $rawUrls[] = $u;
+                if (str_contains(mb_strtolower($u), 'large_default')) {
+                    $trustedUrls[] = $u;
+                }
             }
         }
 
@@ -610,6 +645,14 @@ final class ProductPageFetcher
         }
 
         $skuTokens = $this->skuTokens($skuNorm);
+        $trustedAbs = [];
+        foreach ($trustedUrls as $t) {
+            $a = $this->absolutize(trim((string) $t), $pageUrl);
+            if ($a !== null) {
+                $trustedAbs[mb_strtolower($a)] = true;
+            }
+        }
+        $pageHost = mb_strtolower((string) (parse_url($pageUrl, PHP_URL_HOST) ?? ''));
 
         $candidates = [];
         foreach ($rawUrls as $src) {
@@ -627,8 +670,17 @@ final class ProductPageFetcher
                 && (((int) $wm[1] < 400) || ((int) $wm[2] < 400))) {
                 continue;
             }
+            // PrestaShop miniatury kolorów / thumbs
+            if (preg_match('#/\d+-(small_default|cart_default|pdt_180)/#i', $meta)) {
+                continue;
+            }
             $score = 5;
             $skuInUrl = false;
+            $trusted = isset($trustedAbs[$meta]);
+            if ($trusted) {
+                $score += 100;
+                $skuInUrl = true;
+            }
             if ($skuNorm !== '' && str_contains($meta, $skuNorm)) {
                 $score += 120;
                 $skuInUrl = true;
@@ -640,6 +692,11 @@ final class ProductPageFetcher
                     break;
                 }
             }
+            // PROS-101… ↔ …pros-101s-34…
+            if (! $skuInUrl && $this->pageMentionsBrandModelSku($meta, preg_replace('/[^a-z0-9]+/i', '', $meta) ?? $meta, $skuNorm)) {
+                $score += 70;
+                $skuInUrl = true;
+            }
             // Inny kod art. — na karcie z dwoma kodami (9-003B/7-003B) galeria może mieć jeden z nich
             $pageHasOurCore = $skuTokens !== [] && $this->containsArtCode(mb_strtolower($pageUrl), $skuTokens[0] ?? '');
             if (! $pageHasOurCore && $this->urlLooksLikeWrongSku($meta, $skuNorm, $skuTokens)) {
@@ -648,6 +705,14 @@ final class ProductPageFetcher
             if (str_contains($meta, 'pim/products') || str_contains($meta, 'product_detail') || str_contains($meta, 'media/catalog/product') || str_contains($meta, 'zdjecia-safety') || str_contains($meta, 'trzewiki') || str_contains($meta, 'polbuty')) {
                 $score += 50;
                 $skuInUrl = true;
+            }
+            // PrestaShop galeria produktu
+            if (preg_match('#/\d+-(large_default|medium_default|home_default|pdt_\d+)/#i', $meta)) {
+                $score += 85;
+                $skuInUrl = true;
+            }
+            if (str_contains($meta, 'large_default')) {
+                $score += 40;
             }
             if (str_contains($meta, 'product_detail_large') || str_contains($meta, '_hr.')) {
                 $score += 40;
@@ -658,11 +723,17 @@ final class ProductPageFetcher
             if (str_contains($meta, 'thumb') || str_contains($meta, 'thumbnail') || str_ends_with($meta, '.gif') || str_contains($meta, '.gif?')) {
                 $score -= 60;
             }
-            if (str_contains($meta, 'logo') || str_contains($meta, 'fav') || str_contains($meta, 'piktogram') || str_contains($meta, 'social-media')) {
+            if (str_contains($meta, 'logo') || str_contains($meta, 'fav') || str_contains($meta, 'piktogram') || str_contains($meta, 'social-media') || str_contains($meta, 'manufacturer-logo') || str_contains($meta, '/img/m/')) {
                 continue;
             }
-            // Bez śladu SKU w URL — słaby kandydat (często related products)
-            if (! $skuInUrl && ! $pageHasOurCore) {
+            // ten sam host co karta + slug produktu w nazwie pliku
+            $imgHost = mb_strtolower((string) (parse_url($abs, PHP_URL_HOST) ?? ''));
+            if ($pageHost !== '' && $imgHost === $pageHost && $this->imageSlugOverlapsPage($meta, mb_strtolower($pageUrl))) {
+                $score += 45;
+                $skuInUrl = true;
+            }
+            // Bez śladu SKU / zaufanego źródła — słaby kandydat (related products)
+            if (! $skuInUrl && ! $pageHasOurCore && ! $trusted) {
                 $score -= 50;
             }
             if ($score > 0) {
@@ -799,8 +870,69 @@ final class ProductPageFetcher
         if (preg_match('/\b(\d{4,})\b/', $skuNorm, $m)) {
             $tokens[] = $m[1];
         }
+        // PROS-101-S1-MAX → 101
+        if (preg_match('/(?:^|[\-_])(\d{2,4})(?:[\-_]|$)/', $skuNorm, $m)) {
+            $tokens[] = $m[1];
+        }
 
         return array_values(array_unique(array_filter($tokens)));
+    }
+
+    /**
+     * SKU „PROS-101-S1-MAX” vs strona „pros 101/S” / „pros-101s-34”.
+     */
+    private function pageMentionsBrandModelSku(string $hay, string $hayCompact, string $skuNorm): bool
+    {
+        $parts = preg_split('/[\s\-_\/]+/u', mb_strtolower(trim($skuNorm))) ?: [];
+        $parts = array_values(array_filter($parts, static fn (string $p): bool => mb_strlen($p) >= 2));
+        if (count($parts) < 2) {
+            return false;
+        }
+        $brand = null;
+        $model = null;
+        foreach ($parts as $part) {
+            if ($brand === null && preg_match('/^[a-z]{2,}$/u', $part) === 1) {
+                $brand = $part;
+            }
+            if ($model === null && preg_match('/^\d{2,4}[a-z]?$/u', $part) === 1) {
+                $model = $part;
+            }
+        }
+        if ($brand === null || $model === null) {
+            return false;
+        }
+        $modelDigits = preg_replace('/\D+/u', '', $model) ?? $model;
+        $hasBrand = str_contains($hay, $brand) || str_contains($hayCompact, $brand);
+        $hasModel = str_contains($hay, $model)
+            || ($modelDigits !== '' && (
+                preg_match('/(?<![0-9])'.preg_quote($modelDigits, '/').'(?![0-9])/u', $hay) === 1
+                || str_contains($hayCompact, $modelDigits)
+            ));
+
+        return $hasBrand && $hasModel;
+    }
+
+    private function imageSlugOverlapsPage(string $imageUrl, string $pageUrl): bool
+    {
+        $imgPath = (string) (parse_url($imageUrl, PHP_URL_PATH) ?? '');
+        $pagePath = (string) (parse_url($pageUrl, PHP_URL_PATH) ?? '');
+        $imgBase = mb_strtolower((string) pathinfo($imgPath, PATHINFO_FILENAME));
+        $pageBase = mb_strtolower(basename($pagePath));
+        if ($imgBase === '' || $pageBase === '') {
+            return false;
+        }
+        $imgBits = array_values(array_filter(
+            preg_split('/[\s\-_]+/u', $imgBase) ?: [],
+            static fn (string $w): bool => mb_strlen($w) >= 4
+        ));
+        $hits = 0;
+        foreach ($imgBits as $bit) {
+            if (str_contains($pageBase, $bit)) {
+                $hits++;
+            }
+        }
+
+        return $hits >= 2;
     }
 
     /**

@@ -102,12 +102,19 @@ final class ProductImageDownloader
         $url = preg_replace('/-(\d{2,4})x(\d{2,4})(\.(jpe?g|png|webp))$/i', '$3', $url) ?? $url;
         // Demar: foto_2_s.jpg / _m.jpg → foto_2.jpg
         $url = preg_replace('/_([sm])(\.(jpe?g|png|webp))$/i', '$2', $url) ?? $url;
+        // PrestaShop: medium/home → large_default
+        $url = preg_replace(
+            '#/(\d+)-(?:medium_default|home_default|pdt_\d+|small_default)/#i',
+            '/$1-large_default/',
+            $url
+        ) ?? $url;
 
         $response = Http::timeout(12)
             ->connectTimeout(4)
             ->withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 'Accept' => 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+                'Referer' => $this->refererFor($url),
             ])
             ->withOptions(['allow_redirects' => true])
             ->get($url);
@@ -169,5 +176,13 @@ final class ProductImageDownloader
             'sort_order' => $sortOrder,
             'checksum' => $checksum,
         ]);
+    }
+
+    private function refererFor(string $url): string
+    {
+        $scheme = parse_url($url, PHP_URL_SCHEME) ?: 'https';
+        $host = parse_url($url, PHP_URL_HOST);
+
+        return is_string($host) && $host !== '' ? $scheme.'://'.$host.'/' : 'https://www.google.com/';
     }
 }

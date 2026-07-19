@@ -57,6 +57,42 @@ HTML;
         $this->assertStringContainsString('uvex-glove-doc.pdf', $docs[0]);
     }
 
+    public function test_extracts_prestashop_og_image_for_brand_model_sku(): void
+    {
+        $html = <<<'HTML'
+<html><head>
+<meta property="og:image" content="https://bogarobhp.pl/34818-large_default/kurtka-przeciwdeszczowa-pros-101s-34-aj-group-niebieska.jpg"/>
+</head><body>
+<img src="https://bogarobhp.pl/34818-medium_default/kurtka-przeciwdeszczowa-pros-101s-34-aj-group-niebieska.jpg"/>
+<img src="https://bogarobhp.pl/img/bogaro-logo-1640085971.jpg" class="logo"/>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $pageMethod = $ref->getMethod('pageMentionsSku');
+        $pageMethod->setAccessible(true);
+        $imgMethod = $ref->getMethod('extractImageUrls');
+        $imgMethod->setAccessible(true);
+
+        $pageUrl = 'https://bogarobhp.pl/kurtki-przeciwdeszczowe-robocze/kurtka-przeciwdeszczowa-pros-101s-34-aj-group-niebieska';
+        $this->assertTrue($pageMethod->invoke(
+            $fetcher,
+            $pageUrl,
+            'Kurtka przeciwdeszczowa PROS 101/S',
+            'Kurtka PROS 101/S',
+            'pros-101-s1-max'
+        ));
+
+        /** @var list<string> $imgs */
+        $imgs = $imgMethod->invoke($fetcher, $html, $pageUrl, 'pros-101-s1-max');
+        $this->assertNotEmpty($imgs);
+        $this->assertTrue(collect($imgs)->contains(
+            fn (string $u): bool => str_contains($u, '34818') && str_contains($u, '.jpg')
+        ));
+        $this->assertFalse(collect($imgs)->contains(fn (string $u): bool => str_contains($u, 'logo')));
+    }
+
     public function test_manufacturer_page_keeps_product_pdfs_and_skips_csr(): void
     {
         $html = <<<'HTML'
