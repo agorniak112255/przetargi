@@ -36,6 +36,7 @@ return [
         'portwest' => ['portwest.com', 'www.portwest.com'],
         'coverguard' => ['coverguard.com', 'www.coverguard.com'],
         'singer' => ['singer.fr', 'www.singer.fr'],
+        'pros' => ['pros.pl', 'www.pros.pl'],
     ],
 
     /*
@@ -52,6 +53,8 @@ return [
         'bogarobhp.pl',
         'demar24.pl',
         'roboczystyl.pl',
+        'pros.pl',
+        'www.pros.pl',
     ],
 
     /*
@@ -78,5 +81,7 @@ return [
         'www.demar.com.pl',
         'demar24.pl',
         'roboczystyl.pl',
+        'pros.pl',
+        'www.pros.pl',
     ],
 ];
