@@ -4,10 +4,10 @@
     </IfModule>
 
     RewriteEngine On
-    RewriteBase /Przetargi/
+    RewriteBase /
 
     # Błędny URL (stary path) → kanoniczny
-    RewriteRule ^backend/public/?$ /Przetargi/ [R=302,L,NE]
+    RewriteRule ^backend/public/?$ / [R=302,L,NE]
 
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .

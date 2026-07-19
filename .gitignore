@@ -6,9 +6,13 @@ frontend/node_modules/
 .env
 .env.*
 !.env.example
+!.env.production
 backend/.env
 backend/.env.*
 !backend/.env.example
+frontend/.env
+frontend/.env.xampp
+!frontend/.env.production
 
 # laravel
 backend/storage/logs/*.log
