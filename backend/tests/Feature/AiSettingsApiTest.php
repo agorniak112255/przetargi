@@ -33,16 +33,25 @@ final class AiSettingsApiTest extends TestCase
             'api_key' => 'sk-test-key-1234567890',
             'timeout_seconds' => 60,
             'temperature' => 0.2,
+            'vector_enabled' => true,
+            'qdrant_url' => 'http://127.0.0.1:6333',
+            'qdrant_collection' => 'products',
+            'embedding_model' => 'text-embedding-3-small',
         ])->assertOk()
             ->assertJsonPath('enabled', true)
             ->assertJsonPath('has_api_key', true)
             ->assertJsonPath('model', 'gpt-4o-mini')
-            ->assertJsonPath('enrichment_model', 'openai/gpt-4o-mini');
+            ->assertJsonPath('enrichment_model', 'openai/gpt-4o-mini')
+            ->assertJsonPath('vector_enabled', true)
+            ->assertJsonPath('qdrant_url', 'http://127.0.0.1:6333')
+            ->assertJsonPath('embedding_model', 'text-embedding-3-small');
 
         $this->getJson('/api/ai-settings')
             ->assertOk()
             ->assertJsonPath('source', 'database')
             ->assertJsonPath('enrichment_model', 'openai/gpt-4o-mini')
-            ->assertJsonMissingPath('api_key');
+            ->assertJsonPath('vector_enabled', true)
+            ->assertJsonMissingPath('api_key')
+            ->assertJsonMissingPath('qdrant_api_key');
     }
 }

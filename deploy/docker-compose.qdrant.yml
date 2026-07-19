@@ -1,0 +1,17 @@
+# Qdrant — wektorowa baza do RAG (katalog + SIWZ).
+# Start: docker compose -f deploy/docker-compose.qdrant.yml up -d
+# UI/API: http://127.0.0.1:6333/dashboard
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+
+volumes:
+  qdrant_data:

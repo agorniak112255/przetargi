@@ -16,4 +16,13 @@ return [
     'web_search_enabled' => (bool) env('AI_WEB_SEARCH_ENABLED', false),
     'tavily_api_key' => env('AI_TAVILY_API_KEY'),
     'search_fallback' => env('AI_SEARCH_FALLBACK', 'tavily'),
+
+    // RAG / Qdrant
+    'vector_enabled' => (bool) env('AI_VECTOR_ENABLED', false),
+    'qdrant_url' => env('AI_QDRANT_URL', 'http://127.0.0.1:6333'),
+    'qdrant_api_key' => env('AI_QDRANT_API_KEY'),
+    'qdrant_collection' => env('AI_QDRANT_COLLECTION', 'products'),
+    'embedding_model' => env('AI_EMBEDDING_MODEL', 'text-embedding-3-small'),
+    'embedding_base_url' => env('AI_EMBEDDING_BASE_URL'),
+    'embedding_api_key' => env('AI_EMBEDDING_API_KEY'),
 ];

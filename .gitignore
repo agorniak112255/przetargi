@@ -36,3 +36,4 @@ Cenniki/
 samples/
 .cursor/
 deploy/dumps/
+deploy/qdrant/

@@ -13,6 +13,8 @@ npm run build:xampp
 
 Po zmianach w Apache (`deploy/httpd-supon.conf` / vhost) zrestartuj Apache w panelu XAMPP.
 
+**RAG / Qdrant:** `docker compose -f deploy/docker-compose.qdrant.yml up -d` — szczegóły w `deploy/README-qdrant.md`.
+
 **Login demo:** `arek@supon.local` / `password` (admin: `artur@supon.local`)
 
 ## Start deweloperski (Vite + artisan)

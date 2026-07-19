@@ -32,6 +32,8 @@ class Product extends Model
         'enriched_at',
         'enrichment_error',
         'enrichment_payload',
+        'embedding_synced_at',
+        'embedding_hash',
         'norms',
         'catalog_price_net',
         'discount_percent',
@@ -50,6 +52,7 @@ class Product extends Model
             'purchase_price' => 'decimal:2',
             'pack_qty' => 'integer',
             'enriched_at' => 'datetime',
+            'embedding_synced_at' => 'datetime',
             'enrichment_payload' => 'array',
         ];
     }

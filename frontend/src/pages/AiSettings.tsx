@@ -11,17 +11,28 @@ type AiSettings = {
   temperature: number
   web_search_enabled: boolean
   search_fallback: string
+  vector_enabled: boolean
+  qdrant_url: string | null
+  qdrant_collection: string | null
+  embedding_model: string | null
+  embedding_base_url: string | null
   has_api_key: boolean
   has_tavily_api_key: boolean
+  has_qdrant_api_key: boolean
+  has_embedding_api_key: boolean
   source: string
   api_key_masked: string | null
   tavily_api_key_masked: string | null
+  qdrant_api_key_masked: string | null
+  embedding_api_key_masked: string | null
 }
 
 export function AiSettingsPage() {
   const [cfg, setCfg] = useState<AiSettings | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [tavilyKey, setTavilyKey] = useState('')
+  const [qdrantKey, setQdrantKey] = useState('')
+  const [embeddingKey, setEmbeddingKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [showTavilyKey, setShowTavilyKey] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -29,7 +40,13 @@ export function AiSettingsPage() {
   const [err, setErr] = useState('')
 
   async function load() {
-    setCfg(await api<AiSettings>('/ai-settings'))
+    setErr('')
+    try {
+      setCfg(await api<AiSettings>('/ai-settings'))
+    } catch (ex) {
+      setCfg(null)
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać ustawień AI')
+    }
   }
 
   useEffect(() => {
@@ -53,12 +70,23 @@ export function AiSettingsPage() {
         temperature: cfg.temperature,
         web_search_enabled: cfg.web_search_enabled,
         search_fallback: cfg.search_fallback,
+        vector_enabled: cfg.vector_enabled,
+        qdrant_url: cfg.qdrant_url?.trim() || null,
+        qdrant_collection: cfg.qdrant_collection?.trim() || 'products',
+        embedding_model: cfg.embedding_model?.trim() || null,
+        embedding_base_url: cfg.embedding_base_url?.trim() || null,
       }
       if (apiKey.trim() !== '') {
         body.api_key = apiKey.trim()
       }
       if (tavilyKey.trim() !== '') {
         body.tavily_api_key = tavilyKey.trim()
+      }
+      if (qdrantKey.trim() !== '') {
+        body.qdrant_api_key = qdrantKey.trim()
+      }
+      if (embeddingKey.trim() !== '') {
+        body.embedding_api_key = embeddingKey.trim()
       }
       const saved = await api<AiSettings>('/ai-settings', {
         method: 'PUT',
@@ -67,6 +95,8 @@ export function AiSettingsPage() {
       setCfg(saved)
       setApiKey('')
       setTavilyKey('')
+      setQdrantKey('')
+      setEmbeddingKey('')
       setMsg('Zapisano konfigurację AI.')
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd zapisu')
@@ -92,8 +122,43 @@ export function AiSettingsPage() {
     }
   }
 
+  async function onTestVector() {
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ ok: boolean; message: string }>('/ai-settings/test-vector', {
+        method: 'POST',
+        body: '{}',
+      })
+      setMsg(res.message)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Test wektorowy nieudany')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (!cfg) {
-    return <p className="text-sm text-slate-500">Ładowanie ustawień AI…</p>
+    return (
+      <div>
+        <h1 className="mb-2 text-xl font-semibold">Ustawienia AI</h1>
+        {err ? (
+          <div className="space-y-2">
+            <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>
+            <button
+              type="button"
+              className="rounded border border-slate-300 px-3 py-1.5 text-xs"
+              onClick={() => void load()}
+            >
+              Spróbuj ponownie
+            </button>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">Ładowanie ustawień AI…</p>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -248,7 +313,90 @@ export function AiSettingsPage() {
           </label>
         </div>
 
-        <div className="flex gap-2 pt-1">
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
+          <p className="text-xs font-semibold text-slate-700">Wyszukiwanie wektorowe (RAG)</p>
+          <p className="text-[11px] text-slate-500">
+            Qdrant + embeddingi OpenAI-compatible. Prefilter katalogu AI i kandydaci SIWZ. Gdy
+            wyłączone lub błąd — fallback do SQL LIKE. Po włączeniu: reindex{' '}
+            <code>php artisan products:reindex-embeddings</code>.
+          </p>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={cfg.vector_enabled ?? false}
+              onChange={(e) => setCfg({ ...cfg, vector_enabled: e.target.checked })}
+            />
+            Włącz wyszukiwanie wektorowe
+          </label>
+          <label className="block text-xs">
+            Qdrant URL
+            <input
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.qdrant_url ?? ''}
+              onChange={(e) => setCfg({ ...cfg, qdrant_url: e.target.value || null })}
+              placeholder="http://127.0.0.1:6333"
+            />
+          </label>
+          <label className="block text-xs">
+            Kolekcja
+            <input
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.qdrant_collection ?? 'products'}
+              onChange={(e) => setCfg({ ...cfg, qdrant_collection: e.target.value || 'products' })}
+              placeholder="products"
+            />
+          </label>
+          <label className="block text-xs">
+            Klucz Qdrant (opcjonalnie){' '}
+            {cfg.has_qdrant_api_key ? '(zostaw puste, by nie zmieniać)' : ''}
+            <input
+              type="password"
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
+              value={qdrantKey}
+              onChange={(e) => setQdrantKey(e.target.value)}
+              placeholder={cfg.has_qdrant_api_key ? '••••••••' : ''}
+              autoComplete="off"
+            />
+          </label>
+          <label className="block text-xs">
+            Model embeddings
+            <input
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.embedding_model ?? ''}
+              onChange={(e) => setCfg({ ...cfg, embedding_model: e.target.value || null })}
+              placeholder="text-embedding-3-small"
+              list="ai-embedding-models"
+            />
+            <datalist id="ai-embedding-models">
+              <option value="text-embedding-3-small" />
+              <option value="text-embedding-3-large" />
+              <option value="text-embedding-ada-002" />
+            </datalist>
+          </label>
+          <label className="block text-xs">
+            Embedding base URL (puste = ten sam co chat)
+            <input
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.embedding_base_url ?? ''}
+              onChange={(e) => setCfg({ ...cfg, embedding_base_url: e.target.value || null })}
+              placeholder={cfg.base_url || 'https://api.openai.com/v1'}
+            />
+          </label>
+          <label className="block text-xs">
+            Embedding API key (puste = klucz chatu){' '}
+            {cfg.has_embedding_api_key ? '(zostaw puste, by nie zmieniać)' : ''}
+            <input
+              type="password"
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
+              value={embeddingKey}
+              onChange={(e) => setEmbeddingKey(e.target.value)}
+              placeholder={cfg.has_embedding_api_key ? '••••••••' : ''}
+              autoComplete="off"
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap gap-2 pt-1">
           <button
             type="submit"
             disabled={busy}
@@ -263,6 +411,14 @@ export function AiSettingsPage() {
             className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
           >
             Test połączenia
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void onTestVector()}
+            className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
+          >
+            Test Qdrant / embeddings
           </button>
         </div>
       </form>

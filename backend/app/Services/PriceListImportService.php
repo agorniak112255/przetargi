@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
@@ -352,6 +353,10 @@ final class PriceListImportService
                     'purchase_price' => $product->purchase_price,
                     'source' => 'price_list_import',
                 ]);
+            }
+
+            foreach ($productIds as $productId) {
+                ReindexProductEmbeddingJob::dispatch($productId);
             }
         }
 

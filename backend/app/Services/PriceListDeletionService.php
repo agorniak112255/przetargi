@@ -9,12 +9,17 @@ use App\Models\Product;
 use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use App\Models\User;
+use App\Services\Vector\ProductEmbeddingIndexer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 final class PriceListDeletionService
 {
+    public function __construct(
+        private readonly ProductEmbeddingIndexer $embeddings,
+    ) {}
+
     /**
      * Usuwa cennik oraz produkty, które nie występują w innych importach.
      *
@@ -41,6 +46,9 @@ final class PriceListDeletionService
             if ($toDelete !== []) {
                 $this->deleteProductFiles($toDelete);
                 $this->deleteEnrichmentCaches($toDelete);
+                foreach ($toDelete as $productId) {
+                    $this->embeddings->delete($productId);
+                }
                 Product::query()->whereIn('id', $toDelete)->delete();
             }
 

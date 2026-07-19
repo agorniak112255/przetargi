@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Jobs\EnrichProductJob;
+use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
@@ -386,6 +387,8 @@ final class ProductEnrichmentService
                     : null,
             ]);
 
+            ReindexProductEmbeddingJob::dispatch($product->id, true);
+
             $this->storeSkuCache(
                 $product,
                 $description,
@@ -493,6 +496,8 @@ final class ProductEnrichmentService
             'enriched_at' => now(),
             'enrichment_error' => null,
         ]);
+
+        ReindexProductEmbeddingJob::dispatch($product->id, true);
 
         Log::info('Product enrichment from SKU cache', [
             'product_id' => $product->id,

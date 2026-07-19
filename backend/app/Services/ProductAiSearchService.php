@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Vector\ProductVectorSearch;
 use Illuminate\Support\Collection;
 use RuntimeException;
 
@@ -13,6 +14,7 @@ final class ProductAiSearchService
 {
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
+        private readonly ProductVectorSearch $vectorSearch,
     ) {}
 
     /**
@@ -44,7 +46,7 @@ final class ProductAiSearchService
             ];
         }
 
-        $ranked = $this->rankWithLlm($query, $candidates->take(20)->values(), $limit);
+        $ranked = $this->rankCandidates($query, $candidates->take(20)->values(), $limit);
 
         // awaryjnie: gdy model nic nie zwróci — top po heurystyce prefiltra
         if ($ranked === []) {
@@ -63,6 +65,29 @@ final class ProductAiSearchService
             'products' => $ranked,
             'facets' => $facets,
         ];
+    }
+
+    /**
+     * Ranking LLM na zadanym zestawie produktów (np. po Qdrant).
+     *
+     * @param  Collection<int, Product>  $candidates
+     * @return list<array<string, mixed>>
+     */
+    public function rankCandidates(string $query, Collection $candidates, int $limit = 5): array
+    {
+        if ($candidates->isEmpty()) {
+            return [];
+        }
+
+        return $this->rankWithLlm($query, $candidates->values(), max(1, min(80, $limit)));
+    }
+
+    /**
+     * @return array{keywords: list<string>, chemicals: list<string>, norms: list<string>, product_type: string}
+     */
+    public function extractFacetsForQuery(string $query): array
+    {
+        return $this->extractFacetsHeuristic($query);
     }
 
     /**
@@ -148,6 +173,11 @@ final class ProductAiSearchService
      */
     private function prefilter(string $query, array $facets, int $limit): Collection
     {
+        $vectorHits = $this->prefilterVector($query, $facets, max($limit, 80));
+        if ($vectorHits->isNotEmpty()) {
+            return $vectorHits->take($limit)->values();
+        }
+
         $terms = $this->expandSearchTerms($facets);
         if ($terms === []) {
             return collect();
@@ -256,6 +286,177 @@ final class ProductAiSearchService
             ->values();
 
         return $ranked;
+    }
+
+    /**
+     * @param  array{keywords: list<string>, chemicals: list<string>, norms: list<string>, product_type: string}  $facets
+     * @return Collection<int, Product>
+     */
+    private function prefilterVector(string $query, array $facets, int $limit): Collection
+    {
+        if (! $this->vectorSearch->enabled()) {
+            return collect();
+        }
+
+        // więcej kandydatów — potem filtr asortymentu/chemii
+        $hits = $this->vectorSearch->similar($query, max($limit * 2, 120));
+        if ($hits === []) {
+            return collect();
+        }
+
+        $ids = array_values(array_unique(array_map(
+            static fn (array $h): int => (int) $h['id'],
+            $hits
+        )));
+        $scoreById = [];
+        foreach ($hits as $hit) {
+            $id = (int) ($hit['id'] ?? 0);
+            if ($id > 0 && ! isset($scoreById[$id])) {
+                $scoreById[$id] = (float) ($hit['score'] ?? 0);
+            }
+        }
+
+        $byId = Product::query()
+            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
+            ->withCount(['substitutes', 'images'])
+            ->whereIn('id', $ids)
+            ->get()
+            ->keyBy('id');
+
+        $ordered = collect();
+        foreach ($ids as $id) {
+            if ($byId->has($id)) {
+                $ordered->push($byId->get($id));
+            }
+        }
+
+        return $this->filterVectorCandidates($ordered, $facets, $scoreById, $limit);
+    }
+
+    /**
+     * Filtruje wyniki wektorowe jak ścieżka LIKE: typ asortymentu + sygnały chemiczne.
+     *
+     * @param  Collection<int, Product>  $products
+     * @param  array{keywords: list<string>, chemicals: list<string>, norms: list<string>, product_type: string}  $facets
+     * @param  array<int, float>  $scoreById
+     * @return Collection<int, Product>
+     */
+    public function filterVectorCandidates(
+        Collection $products,
+        array $facets,
+        array $scoreById = [],
+        int $limit = 40,
+    ): Collection {
+        $type = $facets['product_type'] ?? '';
+        $hasChem = ($facets['chemicals'] ?? []) !== [];
+        $terms = $this->expandSearchTerms($facets);
+
+        $ranked = $products
+            ->map(function (Product $p) use ($type, $hasChem, $terms, $scoreById): ?array {
+                $hay = $this->productHaystack($p);
+                if (! $this->matchesAssortmentType($hay, $type)) {
+                    return null;
+                }
+                if ($hasChem && ($type === 'rękawice' || $type === '') && ! $this->hasChemicalSignal($hay)) {
+                    return null;
+                }
+
+                $hits = 0;
+                foreach ($terms as $term) {
+                    if (str_contains($hay, $this->ascii(mb_strtolower($term)))) {
+                        $hits++;
+                    }
+                }
+                if ($type === 'rękawice' && (str_contains($hay, 'rekaw') || str_contains($hay, 'glove') || str_contains($hay, 'gauntlet'))) {
+                    $hits += 2;
+                }
+                if ($hasChem && $this->hasChemicalSignal($hay)) {
+                    $hits += 3;
+                }
+
+                $vectorScore = $scoreById[$p->id] ?? 0.0;
+
+                return [
+                    'product' => $p,
+                    'hits' => $hits,
+                    'vector' => $vectorScore,
+                ];
+            })
+            ->filter()
+            ->sort(function (array $a, array $b): int {
+                if ($a['hits'] !== $b['hits']) {
+                    return $b['hits'] <=> $a['hits'];
+                }
+
+                return $b['vector'] <=> $a['vector'];
+            })
+            ->take(max(1, $limit))
+            ->pluck('product')
+            ->values();
+
+        return $ranked;
+    }
+
+    private function productHaystack(Product $product): string
+    {
+        return $this->ascii(mb_strtolower(implode(' ', [
+            (string) $product->name,
+            (string) $product->category,
+            (string) ($product->norms ?? ''),
+            (string) ($product->description ?? ''),
+            (string) ($product->manufacturer ?? ''),
+            json_encode($product->enrichment_payload ?? [], JSON_UNESCAPED_UNICODE) ?: '',
+        ])));
+    }
+
+    private function matchesAssortmentType(string $hay, string $type): bool
+    {
+        if ($type === '') {
+            return true;
+        }
+
+        if ($type === 'rękawice') {
+            $isGlove = str_contains($hay, 'rekaw')
+                || str_contains($hay, 'glove')
+                || str_contains($hay, 'gauntlet')
+                || str_contains($hay, 'mitt');
+            if (! $isGlove) {
+                return false;
+            }
+            // odrzuć oczywiste obuwie
+            if ((str_contains($hay, 'obuwie') || str_contains($hay, 'trzewik') || preg_match('/\bs3\b/', $hay) === 1)
+                && ! str_contains($hay, 'rekaw') && ! str_contains($hay, 'glove')) {
+                return false;
+            }
+
+            return true;
+        }
+
+        if ($type === 'buty' || $type === 'obuwie') {
+            return str_contains($hay, 'obuwie')
+                || str_contains($hay, 'but')
+                || str_contains($hay, 'trzewik')
+                || preg_match('/\bs[123]\b/', $hay) === 1;
+        }
+
+        // pozostałe typy — luźne dopasowanie tokenu
+        return str_contains($hay, $this->ascii($type));
+    }
+
+    private function hasChemicalSignal(string $hay): bool
+    {
+        foreach ([
+            'chemic', 'nitryl', 'nitrile', 'en 374', 'en374', 'lateks', 'latex',
+            'alphatec', 'olejoodporn', 'kwasoodporn', 'kwas', 'rozpuszczal',
+            'chemical', 'pvc', 'neopren', 'neoprene', 'butyl', 'viton',
+            'rubiflex', 'maxidry', 'gauntlet', 'solvent', 'acid',
+        ] as $signal) {
+            if (str_contains($hay, $this->ascii($signal))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

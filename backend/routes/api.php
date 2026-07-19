@@ -102,6 +102,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::get('/ai-settings', [AiSettingsController::class, 'show'])->middleware('permission:ai_settings.manage');
     Route::put('/ai-settings', [AiSettingsController::class, 'update'])->middleware('permission:ai_settings.manage');
     Route::post('/ai-settings/test', [AiSettingsController::class, 'test'])->middleware('permission:ai_settings.manage');
+    Route::post('/ai-settings/test-vector', [AiSettingsController::class, 'testVector'])->middleware('permission:ai_settings.manage');
 
     Route::middleware('permission:admin.access')->prefix('admin')->group(function (): void {
         Route::get('/users', [AdminUserController::class, 'index'])->middleware('permission:admin.users.manage');

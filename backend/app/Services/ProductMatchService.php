@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Vector\ProductVectorSearch;
 use Illuminate\Support\Collection;
 use Throwable;
 
@@ -27,6 +28,7 @@ final class ProductMatchService
         private readonly TenderPricingService $pricing,
         private readonly ProductAiSearchService $aiSearch,
         private readonly AiSettingsService $aiSettings,
+        private readonly ProductVectorSearch $vectorSearch,
     ) {}
 
     /**
@@ -545,7 +547,7 @@ final class ProductMatchService
         }
 
         $aiReason = null;
-        if (($pick['source'] ?? '') === 'ai') {
+        if (in_array($pick['source'] ?? '', ['ai', 'vector'], true)) {
             foreach ($aiCandidates as $cand) {
                 if ((int) $cand['id'] === (int) $pick['product']->id && is_string($cand['reason'] ?? null)) {
                     $aiReason = $cand['reason'];
@@ -624,7 +626,7 @@ final class ProductMatchService
                 return [
                     'product' => $product,
                     'score' => $topAi['score'],
-                    'source' => 'ai',
+                    'source' => (string) ($topAi['source'] ?? 'ai'),
                 ];
             }
         }
@@ -643,13 +645,85 @@ final class ProductMatchService
 
         try {
             @set_time_limit(120);
+
+            if ($this->vectorSearch->enabled()) {
+                $vectorOut = $this->aiTopCandidatesFromVector($requirement, $limit);
+                if ($vectorOut !== []) {
+                    return $vectorOut;
+                }
+            }
+
             $result = $this->aiSearch->search($requirement, $limit);
         } catch (Throwable) {
             return [];
         }
 
+        return $this->mapAiSearchRows($result['products'] ?? [], $limit, 'ai');
+    }
+
+    /**
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
+     */
+    private function aiTopCandidatesFromVector(string $requirement, int $limit): array
+    {
+        $hits = $this->vectorSearch->similar($requirement, 80);
+        if ($hits === []) {
+            return [];
+        }
+
+        $ids = array_values(array_unique(array_map(
+            static fn (array $h): int => (int) $h['id'],
+            $hits
+        )));
+        $scoreById = [];
+        foreach ($hits as $hit) {
+            $id = (int) ($hit['id'] ?? 0);
+            if ($id > 0 && ! isset($scoreById[$id])) {
+                $scoreById[$id] = (float) ($hit['score'] ?? 0);
+            }
+        }
+
+        $byId = Product::query()
+            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
+            ->withCount(['substitutes', 'images'])
+            ->whereIn('id', $ids)
+            ->get()
+            ->keyBy('id');
+
+        $ordered = collect();
+        foreach ($ids as $id) {
+            if ($byId->has($id)) {
+                $ordered->push($byId->get($id));
+            }
+        }
+
+        if ($ordered->isEmpty()) {
+            return [];
+        }
+
+        // ten sam filtr asortymentu/chemii co w katalogu AI
+        $facets = $this->aiSearch->extractFacetsForQuery($requirement);
+        $filtered = $this->aiSearch->filterVectorCandidates($ordered, $facets, $scoreById, 20);
+        if ($filtered->isEmpty()) {
+            return [];
+        }
+
+        $ranked = $this->aiSearch->rankCandidates($requirement, $filtered->values(), $limit);
+        if ($ranked === []) {
+            return [];
+        }
+
+        return $this->mapAiSearchRows($ranked, $limit, 'vector');
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
+     */
+    private function mapAiSearchRows(array $rows, int $limit, string $source): array
+    {
         $out = [];
-        foreach ($result['products'] as $row) {
+        foreach ($rows as $row) {
             $id = (int) ($row['id'] ?? 0);
             if ($id <= 0) {
                 continue;
@@ -660,7 +734,7 @@ final class ProductMatchService
                 'name' => (string) ($row['name'] ?? ''),
                 'score' => (int) ($row['ai_match_percent'] ?? 0),
                 'reason' => is_string($row['ai_match_reason'] ?? null) ? $row['ai_match_reason'] : null,
-                'source' => 'ai',
+                'source' => $source,
             ];
             if (count($out) >= $limit) {
                 break;
@@ -723,8 +797,14 @@ final class ProductMatchService
         $reasons = $explained['reasons'];
         if ($aiReason !== null && $aiReason !== '') {
             array_unshift($reasons, [
-                'code' => 'ai',
+                'code' => $source === 'vector' ? 'vector' : 'ai',
                 'label' => $aiReason,
+                'points' => $score,
+            ]);
+        } elseif ($source === 'vector') {
+            array_unshift($reasons, [
+                'code' => 'vector',
+                'label' => 'Dopasowanie wektorowe + AI',
                 'points' => $score,
             ]);
         }

@@ -20,6 +20,13 @@ class AiSetting extends Model
         'web_search_enabled',
         'tavily_api_key',
         'search_fallback',
+        'vector_enabled',
+        'qdrant_url',
+        'qdrant_api_key',
+        'qdrant_collection',
+        'embedding_model',
+        'embedding_base_url',
+        'embedding_api_key',
     ];
 
     protected function casts(): array
@@ -28,9 +35,12 @@ class AiSetting extends Model
             'enabled' => 'boolean',
             'api_key' => 'encrypted',
             'tavily_api_key' => 'encrypted',
+            'qdrant_api_key' => 'encrypted',
+            'embedding_api_key' => 'encrypted',
             'timeout_seconds' => 'integer',
             'temperature' => 'float',
             'web_search_enabled' => 'boolean',
+            'vector_enabled' => 'boolean',
         ];
     }
 }
