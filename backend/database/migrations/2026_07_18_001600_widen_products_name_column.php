@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -12,11 +13,19 @@ return new class extends Migration
     {
         // indeks na name (utf8mb4) nie zmieści VARCHAR(1000) — prefix 191
         try {
-            Schema::table('products', function ($table): void {
+            Schema::table('products', function (Blueprint $table): void {
                 $table->dropIndex(['name']);
             });
         } catch (\Throwable) {
             // indeks mógł nie istnieć
+        }
+
+        if (Schema::getConnection()->getDriverName() === 'sqlite') {
+            Schema::table('products', function (Blueprint $table): void {
+                $table->string('name', 1000)->nullable(false)->change();
+            });
+
+            return;
         }
 
         DB::statement('ALTER TABLE `products` MODIFY `name` VARCHAR(1000) NOT NULL');
@@ -31,20 +40,27 @@ return new class extends Migration
     public function down(): void
     {
         try {
-            Schema::table('products', function ($table): void {
+            Schema::table('products', function (Blueprint $table): void {
                 $table->dropIndex('products_name_index');
             });
         } catch (\Throwable) {
         }
 
+        if (Schema::getConnection()->getDriverName() === 'sqlite') {
+            Schema::table('products', function (Blueprint $table): void {
+                $table->string('name', 255)->nullable(false)->change();
+            });
+
+            return;
+        }
+
         DB::statement('ALTER TABLE `products` MODIFY `name` VARCHAR(255) NOT NULL');
 
         try {
-            Schema::table('products', function ($table): void {
+            Schema::table('products', function (Blueprint $table): void {
                 $table->index('name');
             });
         } catch (\Throwable) {
         }
     }
 };
-

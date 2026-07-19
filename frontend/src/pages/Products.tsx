@@ -45,6 +45,12 @@ function hasDescription(p: Product): boolean {
   return Boolean(p.description && p.description.trim() !== '')
 }
 
+function descriptionProse(text: string | null | undefined): string {
+  if (!text) return ''
+  const cut = text.search(/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/)
+  return cut >= 0 ? text.slice(0, cut).trim() : text
+}
+
 type SortKey =
   | 'sku'
   | 'name'
@@ -55,8 +61,6 @@ type SortKey =
   | 'description'
   | 'images_count'
   | 'enrichment_status'
-  | 'stock'
-  | 'substitutes_count'
 
 function SortTh({
   label,
@@ -104,6 +108,7 @@ export function Products() {
   const [enrichBusy, setEnrichBusy] = useState(false)
   const [enrichRowId, setEnrichRowId] = useState<number | null>(null)
   const [batch, setBatch] = useState<EnrichmentBatch | null>(null)
+  const [selected, setSelected] = useState<Record<number, boolean>>({})
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [descModal, setDescModal] = useState<Product | null>(null)
@@ -244,6 +249,7 @@ export function Products() {
       })
       setBatch(res.batch)
       setMsg(`W kolejce: ${res.batch.total} produktów (opisy i zdjęcia).`)
+      setSelected({})
       setResult(await api<Page>(`/products?${buildParams()}`))
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd wzbogacania')
@@ -251,6 +257,30 @@ export function Products() {
       setEnrichBusy(false)
       setEnrichRowId(null)
     }
+  }
+
+  function toggleSelected(id: number) {
+    setSelected((prev) => {
+      const next = { ...prev }
+      if (next[id]) delete next[id]
+      else next[id] = true
+      return next
+    })
+  }
+
+  function toggleSelectAllVisible() {
+    const ids = (result?.data ?? []).map((p) => p.id)
+    if (ids.length === 0) return
+    const allOn = ids.every((id) => selected[id])
+    setSelected((prev) => {
+      const next = { ...prev }
+      if (allOn) {
+        for (const id of ids) delete next[id]
+      } else {
+        for (const id of ids) next[id] = true
+      }
+      return next
+    })
   }
 
   async function enrichOne(p: Product, force = false) {
@@ -278,7 +308,13 @@ export function Products() {
   const pendingVisible = (result?.data ?? []).filter(
     (p) => (p.enrichment_status ?? 'none') !== 'done',
   )
+  const selectedIds = Object.keys(selected)
+    .map(Number)
+    .filter((id) => selected[id])
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selected[id])
   const batchActive = batch?.status === 'queued' || batch?.status === 'running'
+  const tableCols = 9 + (aiMode ? 1 : 0) + (canEnrich ? 2 : 0)
 
   return (
     <div>
@@ -302,21 +338,30 @@ export function Products() {
             <>
               <button
                 type="button"
-                disabled={enrichBusy || batchActive || pendingVisible.length === 0}
-                onClick={() => void enrichIds(pendingVisible.map((p) => p.id))}
+                disabled={enrichBusy || batchActive || selectedIds.length === 0}
+                onClick={() => void enrichIds(selectedIds)}
                 className="rounded bg-blue-600 px-3 py-2 text-xs text-white disabled:opacity-50"
-                title="Pobierz opisy i zdjęcia dla widocznych produktów bez danych"
+                title="Pobierz opisy i zdjęcia dla zaznaczonych produktów"
               >
-                Pobierz opisy (widoczne)
+                Pobierz zaznaczone{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
               </button>
               <button
                 type="button"
-                disabled={enrichBusy || batchActive || visibleIds.length === 0}
-                onClick={() => void enrichIds(visibleIds, true)}
+                disabled={enrichBusy || batchActive || selectedIds.length === 0}
+                onClick={() => void enrichIds(selectedIds, true)}
                 className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
-                title="Wymusza ponowne pobranie dla wszystkich widocznych"
+                title="Wymusza ponowne pobranie dla zaznaczonych"
               >
-                Pobierz ponownie
+                Ponów zaznaczone
+              </button>
+              <button
+                type="button"
+                disabled={enrichBusy || batchActive || pendingVisible.length === 0}
+                onClick={() => void enrichIds(pendingVisible.map((p) => p.id))}
+                className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
+                title="Pobierz opisy dla widocznych bez danych"
+              >
+                Pobierz widoczne bez opisu
               </button>
             </>
           )}
@@ -397,6 +442,17 @@ export function Products() {
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50">
+              {canEnrich && (
+                <th className="p-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    title="Zaznacz / odznacz widoczne"
+                    aria-label="Zaznacz wszystkie widoczne"
+                  />
+                </th>
+              )}
               {aiMode && <th className="p-2">Dopasowanie</th>}
               <SortTh label="Kod" col="sku" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Nazwa" col="name" sort={sort} dir={dir} onSort={onSort} />
@@ -407,8 +463,6 @@ export function Products() {
               <SortTh label="Opis" col="description" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Zdjęcia" col="images_count" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Status AI" col="enrichment_status" sort={sort} dir={dir} onSort={onSort} />
-              <SortTh label="Stan" col="stock" sort={sort} dir={dir} onSort={onSort} />
-              <SortTh label="Zam." col="substitutes_count" sort={sort} dir={dir} onSort={onSort} />
               {canEnrich && <th className="p-2">Akcja</th>}
             </tr>
           </thead>
@@ -416,7 +470,17 @@ export function Products() {
             {(result?.data ?? []).map((p) => {
               const status = p.enrichment_status ?? 'none'
               return (
-                <tr key={p.id} className="border-b">
+                <tr key={p.id} className={`border-b ${selected[p.id] ? 'bg-blue-50/40' : ''}`}>
+                  {canEnrich && (
+                    <td className="p-2">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selected[p.id])}
+                        onChange={() => toggleSelected(p.id)}
+                        aria-label={`Zaznacz ${p.sku}`}
+                      />
+                    </td>
+                  )}
                   {aiMode && (
                     <td className="p-2">
                       <span
@@ -490,8 +554,6 @@ export function Products() {
                       {STATUS_LABEL[status] ?? status}
                     </span>
                   </td>
-                  <td className="p-2">{p.stock}</td>
-                  <td className="p-2">{p.substitutes_count ?? 0}</td>
                   {canEnrich && (
                     <td className="p-2">
                       <button
@@ -518,7 +580,7 @@ export function Products() {
             })}
             {result && result.data.length === 0 && (
               <tr>
-                <td colSpan={(canEnrich ? 12 : 11) + (aiMode ? 1 : 0)} className="p-4 text-slate-400">
+                <td colSpan={tableCols} className="p-4 text-slate-400">
                   {aiMode
                     ? 'AI nie znalazło pasujących produktów (wzbogać opisy lub doprecyzuj wymaganie).'
                     : 'Brak produktów dla tego wyszukiwania.'}
@@ -555,8 +617,27 @@ export function Products() {
                 </button>
               </div>
               <p className="whitespace-pre-wrap text-sm text-slate-700">
-                {descModal.description}
+                {descriptionProse(descModal.description)}
               </p>
+              {[
+                ['Specyfikacja', descModal.enrichment_payload?.specs],
+                ['Cechy', descModal.enrichment_payload?.features],
+                ['Materiały', descModal.enrichment_payload?.materials],
+                ['Normy', descModal.enrichment_payload?.norms],
+                ['Certyfikaty', descModal.enrichment_payload?.certificates],
+                ['Zastosowanie', descModal.enrichment_payload?.use_cases],
+              ].map(([title, items]) =>
+                Array.isArray(items) && items.length > 0 ? (
+                  <div key={String(title)} className="mt-3">
+                    <p className="mb-1 text-xs font-semibold text-slate-700">{title}</p>
+                    <ul className="list-disc pl-5 text-xs text-slate-600">
+                      {items.map((f) => (
+                        <li key={f}>{f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null,
+              )}
             </div>
           </div>
         )}

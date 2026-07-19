@@ -21,6 +21,7 @@ final class TenderDocumentImportService
         private readonly TenderDocumentTextExtractor $extractor,
         private readonly TenderDocumentAiAnalyzer $analyzer,
         private readonly TenderSpreadsheetItemExtractor $spreadsheetItems,
+        private readonly TenderDocxItemExtractor $docxItems,
         private readonly TenderPricingService $pricing,
     ) {}
 
@@ -60,14 +61,23 @@ final class TenderDocumentImportService
 
         $document = null;
         $diskPath = null;
-        if ($mode === 'full') {
+        // DOCX zawsze zapisuj (szablon oferty); full = archiwum każdego formatu
+        $persistFile = $mode === 'full' || in_array($ext, ['docx', 'doc'], true);
+        if ($persistFile) {
             $diskPath = $file->store("tender-documents/{$tender->id}", 'local');
         }
 
         $sheetItems = null;
+        $useAiMap = $mode === 'ai' || $mode === 'full';
         if (in_array('items', $targets, true) && in_array($ext, ['xlsx', 'xls', 'csv'], true)) {
-            $useAiMap = $mode === 'ai' || $mode === 'full';
             $sheet = $this->spreadsheetItems->extract($tmp, $useAiMap);
+            if ($sheet !== null && $sheet['items'] !== []) {
+                $sheetItems = $sheet['items'];
+                $mappingNotes = $sheet['notes'].' Kolumny: '.json_encode($sheet['column_map'], JSON_UNESCAPED_UNICODE);
+            }
+        }
+        if ($sheetItems === null && in_array('items', $targets, true) && $ext === 'docx') {
+            $sheet = $this->docxItems->extract($tmp, $useAiMap);
             if ($sheet !== null && $sheet['items'] !== []) {
                 $sheetItems = $sheet['items'];
                 $mappingNotes = $sheet['notes'].' Kolumny: '.json_encode($sheet['column_map'], JSON_UNESCAPED_UNICODE);
@@ -109,8 +119,8 @@ final class TenderDocumentImportService
             array_slice($parsed['conditions'], 0, 400),
         );
 
-        // Archiwum pliku tylko w trybie pełnym — AI/prosty to wyłącznie podgląd do zatwierdzenia.
-        if ($mode === 'full') {
+        // Archiwum: tryb pełny albo zawsze Word (szablon oferty DOCX).
+        if ($persistFile) {
             $document = TenderDocument::query()->create([
                 'tender_id' => $tender->id,
                 'uploaded_by' => $user->id,
@@ -187,10 +197,16 @@ final class TenderDocumentImportService
         );
         $conditions = array_map(static fn (array $r) => $r + ['selected' => true], $parsed['conditions']);
 
-        if ($document->disk_path && in_array((string) $document->extension, ['xlsx', 'xls', 'csv'], true)
-            && in_array('items', $targets, true)) {
+        if ($document->disk_path && in_array('items', $targets, true)) {
             $abs = Storage::disk('local')->path($document->disk_path);
-            $sheet = $this->spreadsheetItems->extract($abs, $mode === 'ai' || $mode === 'full');
+            $ext = (string) $document->extension;
+            $useAi = $mode === 'ai' || $mode === 'full';
+            $sheet = null;
+            if (in_array($ext, ['xlsx', 'xls', 'csv'], true)) {
+                $sheet = $this->spreadsheetItems->extract($abs, $useAi);
+            } elseif ($ext === 'docx') {
+                $sheet = $this->docxItems->extract($abs, $useAi);
+            }
             if ($sheet !== null && $sheet['items'] !== []) {
                 $items = array_map(
                     fn (array $r) => $this->normalizePreviewItem($r) + ['selected' => true],

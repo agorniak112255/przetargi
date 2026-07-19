@@ -2,22 +2,31 @@
 
 Solid stack: **Laravel 12 API** (`backend/`) + **React + TypeScript + Vite + Tailwind** (`frontend/`).
 
-## Start lokalny
+## XAMPP (zalecane)
+
+Adres: **http://localhost/Przetargi/**
 
 ```bash
-# API (SQLite out of the box)
+cd frontend
+npm run build:xampp
+```
+
+Po zmianach w Apache (`deploy/httpd-supon.conf` / vhost) zrestartuj Apache w panelu XAMPP.
+
+**Login demo:** `arek@supon.local` / `password` (admin: `artur@supon.local`)
+
+## Start deweloperski (Vite + artisan)
+
+```bash
 cd backend
 php artisan serve
 
-# Frontend (drugi terminal)
 cd frontend
 npm run dev
 ```
 
 - Frontend: http://localhost:5173  
-- API: http://127.0.0.1:8000/api  
-
-**Login demo:** `arek@supon.local` / `password`
+- API: http://127.0.0.1:8000/api
 
 ## Co jest zrobione
 

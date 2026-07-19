@@ -24,6 +24,30 @@ final class ProductImageDownloader
     ];
 
     /**
+     * Odrzuca URL karty produktu (HTML) — wcześniej SKU w ścieżce dawało fałszywy „hit”.
+     */
+    public static function looksLikeImageUrl(string $url): bool
+    {
+        if (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://')) {
+            return false;
+        }
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        if ($path === '' || str_ends_with($path, '/')) {
+            return false;
+        }
+        // .png.webp / .jpg?itok=...
+        if (preg_match('/\.(jpe?g|png|webp|gif|avif|bmp)(\.(webp|avif))?(\?|$)/i', $path) === 1) {
+            return true;
+        }
+        // typowe CDN / media / Drupal files
+        if (preg_match('#/(media|images?|img|cdn|static|uploads|assets|product[-_]?images?|sites/default/files|pim/products)/#i', $path) === 1) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * @param  list<string>  $urls
      * @return list<ProductImage>
      */
@@ -37,6 +61,15 @@ final class ProductImageDownloader
                 break;
             }
             if (! is_string($url) || ! str_starts_with($url, 'http')) {
+                continue;
+            }
+            if (! self::looksLikeImageUrl($url)) {
+                Log::info('Product image download skipped', [
+                    'product_id' => $product->id,
+                    'url' => $url,
+                    'error' => 'URL nie wygląda na plik obrazka',
+                ]);
+
                 continue;
             }
 
@@ -65,7 +98,13 @@ final class ProductImageDownloader
 
     private function downloadOne(Product $product, string $url, int $sortOrder): ?ProductImage
     {
-        $response = Http::timeout(30)
+        // WP: foo-80x80.jpg → spróbuj pełnego foo.jpg
+        $url = preg_replace('/-(\d{2,4})x(\d{2,4})(\.(jpe?g|png|webp))$/i', '$3', $url) ?? $url;
+        // Demar: foto_2_s.jpg / _m.jpg → foto_2.jpg
+        $url = preg_replace('/_([sm])(\.(jpe?g|png|webp))$/i', '$2', $url) ?? $url;
+
+        $response = Http::timeout(12)
+            ->connectTimeout(4)
             ->withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 'Accept' => 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
@@ -74,22 +113,39 @@ final class ProductImageDownloader
             ->get($url);
 
         if (! $response->successful()) {
-            return null;
+            throw new \RuntimeException('HTTP '.$response->status());
         }
 
         $bytes = $response->body();
-        if ($bytes === '' || strlen($bytes) > self::MAX_BYTES) {
-            return null;
+        $size = strlen($bytes);
+        if ($bytes === '' || $size > self::MAX_BYTES) {
+            throw new \RuntimeException('Pusty lub zbyt duży plik');
         }
 
         $mime = (string) ($response->header('Content-Type') ?: '');
         $mime = strtolower(trim(explode(';', $mime)[0] ?? ''));
+        if (str_contains($mime, 'text/html') || str_contains($mime, 'application/json')) {
+            throw new \RuntimeException('Odpowiedź nie jest obrazem ('.$mime.')');
+        }
         if ($mime === '' || ! isset(self::ALLOWED_MIME[$mime])) {
             $finfo = new \finfo(FILEINFO_MIME_TYPE);
             $mime = strtolower((string) $finfo->buffer($bytes));
         }
         if (! isset(self::ALLOWED_MIME[$mime])) {
-            return null;
+            throw new \RuntimeException('Niedozwolony typ MIME: '.$mime);
+        }
+        // GIF loadery Magento; zdjęcia produktów prawie zawsze JPG/PNG/WebP
+        if ($mime === 'image/gif' && $size < 80_000) {
+            throw new \RuntimeException('Pominięto mały GIF (loader/spinner)');
+        }
+        $dim = @getimagesizefromstring($bytes);
+        if (is_array($dim)) {
+            $w = (int) ($dim[0] ?? 0);
+            $h = (int) ($dim[1] ?? 0);
+            // miniatury WP (-80x80) i placeholdery — za małe na kartę produktu
+            if ($w > 0 && $h > 0 && ($w < 200 || $h < 200)) {
+                throw new \RuntimeException("Obrazek za mały ({$w}x{$h}) — miniatura/placeholder");
+            }
         }
 
         $checksum = hash('sha256', $bytes);

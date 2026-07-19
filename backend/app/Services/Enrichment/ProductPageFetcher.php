@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -13,59 +15,87 @@ final class ProductPageFetcher
      * @param  list<array{url: string, title?: string, snippet?: string}>  $results
      * @return array{
      *     pages: list<array{url: string, text: string}>,
-     *     image_urls: list<string>
+     *     image_urls: list<string>,
+     *     document_urls: list<string>
      * }
      */
-    public function fetch(array $results, string $sku, int $maxPages = 3): array
+    public function fetch(array $results, string $sku, int $maxPages = 2): array
     {
-        $ranked = $this->rankResults($results, $sku);
+        $ranked = array_slice($this->rankResults($results, $sku), 0, max(1, $maxPages));
+        $skuNorm = mb_strtolower(trim($sku));
+        $documents = [];
+        foreach ($results as $row) {
+            $u = (string) ($row['url'] ?? '');
+            if (ProductDocumentDownloader::looksLikePdfUrl($u)) {
+                $documents[] = $u;
+            }
+        }
+
+        $htmlRows = [];
+        foreach ($ranked as $row) {
+            if (! ProductDocumentDownloader::looksLikePdfUrl((string) ($row['url'] ?? ''))) {
+                $htmlRows[] = $row;
+            }
+        }
+
+        $responses = [];
+        try {
+            $responses = Http::pool(function (Pool $pool) use ($htmlRows) {
+                foreach ($htmlRows as $i => $row) {
+                    $pool->as((string) $i)
+                        ->timeout(10)
+                        ->connectTimeout(4)
+                        ->withHeaders([
+                            'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.3)',
+                            'Accept' => 'text/html,application/xhtml+xml',
+                        ])
+                        ->get($row['url']);
+                }
+            });
+        } catch (Throwable) {
+            $responses = [];
+        }
+
         $pages = [];
         $images = [];
-        $skuNorm = mb_strtolower(trim($sku));
 
-        foreach (array_slice($ranked, 0, $maxPages) as $row) {
+        foreach ($htmlRows as $i => $row) {
             $url = $row['url'];
-            try {
-                $response = Http::timeout(20)
-                    ->withHeaders([
-                        'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.2)',
-                        'Accept' => 'text/html,application/xhtml+xml',
-                    ])
-                    ->get($url);
-                if (! $response->successful()) {
-                    $snippet = trim((string) ($row['snippet'] ?? ''));
-                    if ($snippet !== '') {
-                        $pages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 4000)];
-                    }
+            $response = $responses[(string) $i] ?? null;
+            $ok = $response instanceof Response && $response->successful();
 
-                    continue;
-                }
-
-                $html = $response->body();
-                $text = $this->htmlToText($html);
-                $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, (string) ($row['title'] ?? ''), $skuNorm);
-
-                if ($text !== '') {
-                    $pages[] = ['url' => $url, 'text' => mb_substr($text, 0, 8000)];
-                }
-
-                // Zdjęcie TYLKO ze stron, które wyglądają na kartę tego SKU
-                if ($pageLooksLikeProduct) {
-                    foreach ($this->extractImageUrls($html, $url, $skuNorm) as $img) {
-                        $images[] = $img;
-                    }
-                }
-            } catch (Throwable) {
+            if (! $ok) {
                 $snippet = trim((string) ($row['snippet'] ?? ''));
                 if ($snippet !== '') {
-                    $pages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 4000)];
+                    $pages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
                 }
+
+                continue;
+            }
+
+            $html = $response->body();
+            $text = $this->extractProductPageText($html, $skuNorm);
+            $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, (string) ($row['title'] ?? ''), $skuNorm);
+
+            if ($text !== '') {
+                $pages[] = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
+            }
+
+            if ($pageLooksLikeProduct) {
+                foreach ($this->extractImageUrls($html, $url, $skuNorm) as $img) {
+                    $images[] = $img;
+                }
+            }
+            // PDF z list deklaracji: nazwa produktu bywa tylko w href, nie w tekście strony
+            foreach ($this->extractDocumentUrls($html, $url, $skuNorm) as $doc) {
+                $documents[] = $doc;
             }
         }
 
         return [
             'pages' => $pages,
             'image_urls' => array_values(array_unique($images)),
+            'document_urls' => array_values(array_unique($documents)),
         ];
     }
 
@@ -99,17 +129,33 @@ final class ProductPageFetcher
         if ($skuNorm !== '' && str_contains($hay, $skuNorm)) {
             $score += 50;
         }
-        if ($skuCompact !== '' && str_contains(preg_replace('/[^a-z0-9]/i', '', $hay) ?? '', $skuCompact)) {
+        $hayCompact = preg_replace('/[^a-z0-9]/i', '', $hay) ?? $hay;
+        if ($skuCompact !== '' && str_contains($hayCompact, $skuCompact)) {
             $score += 30;
         }
-        if (preg_match('#/(produkt|product|p)/#i', $url)) {
-            $score += 20;
+        if (preg_match('/\b(\d{1,2}-\d{3})\b/', $skuNorm, $m)) {
+            $core = $m[1];
+            if (str_contains($url, $core) || str_contains($url, str_replace('-', '', $core))) {
+                $score += 80;
+            }
+            if (str_contains($title, $core)) {
+                $score += 30;
+            }
         }
-        if (preg_match('#/\d{2,}-[\w\-]+#i', $url)) {
+        if (str_contains($url, 'product') || str_contains($url, 'produkt') || str_contains($url, '/sklep/')) {
             $score += 10;
         }
-        if (preg_match('#/(kategoria|category|content|o-firmie|blog|244-|190-)#i', $url)) {
-            $score -= 40;
+        if (preg_match('#/(category|manufacturer|kategoria|producent|catalog)/#', $url)) {
+            $score -= 50;
+        }
+        if (str_contains($url, 'atg') || str_contains($url, 'ansell') || str_contains($url, 'delta') || str_contains($url, 'demar')) {
+            $score += 15;
+        }
+        if (str_contains($url, 'demar24') || str_contains($url, 'roboczystyl') || str_contains($url, 'gama-bhp') || str_contains($url, 'sklepzbhp')) {
+            $score += 25;
+        }
+        if (str_contains($url, 'ceneo.pl') || str_contains($url, 'allegro.pl')) {
+            $score -= 20;
         }
 
         return $score;
@@ -120,25 +166,300 @@ final class ProductPageFetcher
         if ($skuNorm === '') {
             return false;
         }
-
+        // „7-003 b 6060” → też „7-003 b” / „7-003b”
+        $variants = [$skuNorm];
+        if (preg_match('/^(\d{1,2}-\d{3}(?:\s+[a-z])?)/u', $skuNorm, $sm)) {
+            $variants[] = $sm[1];
+            $variants[] = str_replace(' ', '', $sm[1]);
+        }
         $hay = mb_strtolower($url.' '.$title.' '.$text);
-        if (str_contains($hay, $skuNorm)) {
+        foreach ($variants as $variant) {
+            if ($variant !== '' && str_contains($hay, $variant)) {
+                return true;
+            }
+            $compact = preg_replace('/[^a-z0-9]/i', '', $variant) ?? $variant;
+            $hayCompact = preg_replace('/[^a-z0-9]/i', '', $hay) ?? $hay;
+            if ($compact !== '' && strlen($compact) >= 4 && str_contains($hayCompact, $compact)) {
+                return true;
+            }
+        }
+        if (! preg_match('/\b(\d{1,2}-\d{3})\b/', $skuNorm, $m)) {
+            // nazwa handlowa (CLIC UP, BOLT UP…) — tokeny w URL/tekście
+            return $this->hayMentionsNameTokens($hay, $skuNorm);
+        }
+        $core = $m[1];
+        if (! $this->containsArtCode($hay, $core)) {
+            return false;
+        }
+        $parts = preg_split('/[\s\-·\/]+/u', $skuNorm) ?: [];
+        $extras = [];
+        foreach ($parts as $part) {
+            $part = trim($part);
+            if ($part === '' || $part === $core) {
+                continue;
+            }
+            // litery/normy; wariant „B” (1 znak) też
+            if (preg_match('/^[a-z][a-z0-9]*$/i', $part) === 1) {
+                $extras[] = mb_strtolower($part);
+            }
+        }
+        if ($extras === []) {
             return true;
         }
+        $hayCompact = preg_replace('/[^a-z0-9]/i', '', $hay) ?? $hay;
+        $hits = 0;
+        foreach ($extras as $token) {
+            if (str_contains($hay, $token) || str_contains($hayCompact, $token)) {
+                $hits++;
+            }
+        }
 
-        $compactSku = preg_replace('/[^a-z0-9]/i', '', $skuNorm) ?? $skuNorm;
-        $compactHay = preg_replace('/[^a-z0-9]/i', '', $hay) ?? $hay;
+        return $hits >= max(1, (int) ceil(count($extras) * 0.5));
+    }
 
-        return $compactSku !== '' && str_contains($compactHay, $compactSku);
+    /**
+     * Tylko treść produktu — bez menu, koszyka, logowania, zwrotów, breadcrumbów.
+     */
+    private function extractProductPageText(string $html, string $skuNorm): string
+    {
+        $chunks = [];
+
+        $ogDesc = $this->extractOgDescription($html);
+        if ($ogDesc !== '' && ! $this->looksLikeShopChrome($ogDesc)) {
+            $chunks[] = $ogDesc;
+        }
+
+        foreach ($this->extractMetaProductFields($html) as $field) {
+            if ($field !== '' && ! $this->looksLikeShopChrome($field)) {
+                $chunks[] = $field;
+            }
+        }
+
+        $focused = $this->extractFocusedHtmlBlocks($html);
+        if ($focused !== '') {
+            $chunks[] = $focused;
+        } else {
+            $chunks[] = $this->htmlToText($this->stripShopChromeHtml($html));
+        }
+
+        $text = trim(implode("\n\n", array_filter($chunks)));
+        $text = $this->stripShopChromePhrases($text);
+        $text = $this->keepProductRelevantParagraphs($text, $skuNorm);
+
+        return mb_substr(trim($text), 0, 5000);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractMetaProductFields(string $html): array
+    {
+        $out = [];
+        if (preg_match('#name=["\']description["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $m)
+            || preg_match('#content=["\']([^"\']+)["\'][^>]*name=["\']description["\']#i', $html, $m)) {
+            $out[] = trim(html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+        // JSON-LD Product
+        if (preg_match_all('#<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>#is', $html, $blocks)) {
+            foreach ($blocks[1] as $json) {
+                $data = json_decode(trim((string) $json), true);
+                if (! is_array($data)) {
+                    continue;
+                }
+                $nodes = isset($data['@graph']) && is_array($data['@graph']) ? $data['@graph'] : [$data];
+                foreach ($nodes as $node) {
+                    if (! is_array($node)) {
+                        continue;
+                    }
+                    $type = $node['@type'] ?? '';
+                    $types = is_array($type) ? $type : [$type];
+                    if (! in_array('Product', $types, true) && ! in_array('ProductGroup', $types, true)) {
+                        continue;
+                    }
+                    foreach (['description', 'name', 'sku', 'brand', 'material', 'category'] as $key) {
+                        $val = $node[$key] ?? null;
+                        if (is_string($val) && trim($val) !== '') {
+                            $out[] = trim($val);
+                        } elseif (is_array($val) && isset($val['name']) && is_string($val['name'])) {
+                            $out[] = trim($val['name']);
+                        }
+                    }
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    private function extractFocusedHtmlBlocks(string $html): string
+    {
+        $patterns = [
+            '#<(?:div|section|article)[^>]*(?:id|class)=["\'][^"\']*(?:product[-_ ]?desc|opis[-_ ]?produkt|short[-_ ]?desc|full[-_ ]?desc|product[-_ ]?detail|tab[-_ ]?description|description|specyfik|cechy|parametr)[^"\']*["\'][^>]*>(.*?)</(?:div|section|article)>#is',
+            '#<div[^>]*itemprop=["\']description["\'][^>]*>(.*?)</div>#is',
+            '#<(?:p|div)[^>]*itemprop=["\']description["\'][^>]*>(.*?)</(?:p|div)>#is',
+        ];
+        $parts = [];
+        foreach ($patterns as $pattern) {
+            if (preg_match_all($pattern, $html, $m)) {
+                foreach ($m[1] as $block) {
+                    $t = $this->htmlToText((string) $block);
+                    if (mb_strlen($t) >= 40 && ! $this->looksLikeShopChrome($t)) {
+                        $parts[] = $t;
+                    }
+                }
+            }
+        }
+
+        return trim(implode("\n\n", array_slice(array_unique($parts), 0, 6)));
+    }
+
+    private function stripShopChromeHtml(string $html): string
+    {
+        $html = preg_replace('#<(script|style|noscript|svg|iframe)[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+        $html = preg_replace('#<(nav|header|footer|aside|form|button)[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+        // typowe bloki sklepu
+        $html = preg_replace(
+            '#<(?:div|section|ul|li)[^>]*(?:id|class)=["\'][^"\']*(?:menu|navbar|breadcrumb|koszyk|cart|login|rejestr|footer|header|cookie|popup|modal|obserwowan|wishlist|porown|shipping|wysylk|platnosc|zwrot|regulamin|polityka)[^"\']*["\'][^>]*>.*?</(?:div|section|ul|li)>#is',
+            ' ',
+            $html
+        ) ?? $html;
+
+        return $html;
     }
 
     private function htmlToText(string $html): string
     {
         $html = preg_replace('#<(script|style|noscript)[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
-        $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
+        $text = strip_tags($html);
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
+        $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
 
         return trim($text);
+    }
+
+    private function stripShopChromePhrases(string $text): string
+    {
+        $patterns = [
+            '/\b(logowanie|zaloguj się|rejestracja|zarejestruj się|twoje konto|obserwowane|dodaj do koszyka|do koszyka|realizuj zamówienie|złóż zamówienie|suma:\s*[\d,\.]+\s*zł)\b/iu',
+            '/\b(wyszukiwanie zaawansowane|jesteś tutaj|strona główna|sprawdź status zamówienia|sposoby płatności|prowizje|regulamin|polityka prywatności|odstąpienie od umowy)\b/iu',
+            '/\b(łatwy zwrot|14\s*dni|kupuj i sprawdź|bez stresu i obaw|cena w punktach|kup za punkty|dodaj do porównania|dodaj do obserwowanych|powiadom mnie o dostępności)\b/iu',
+            '/\b(sprawdź czasy i koszty wysyłki|wysyłka\s*:|dostępność\s*:|produkt dostępny w bardzo dużej ilości|nasza cena|cena katalogowa)\b/iu',
+            '/\b(tel\.?\s*\d[\d\s]+|e-?mail\s*\S+@\S+)\b/iu',
+            '/\|\s*/u',
+        ];
+        foreach ($patterns as $pattern) {
+            $text = preg_replace($pattern, ' ', $text) ?? $text;
+        }
+        $text = preg_replace('/[ \t]{2,}/u', ' ', $text) ?? $text;
+        $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
+
+        return trim($text);
+    }
+
+    private function keepProductRelevantParagraphs(string $text, string $skuNorm): string
+    {
+        $parts = preg_split('/\n{2,}/u', $text) ?: [$text];
+        $kept = [];
+        foreach ($parts as $part) {
+            $part = trim((string) $part);
+            if ($part === '' || mb_strlen($part) < 25) {
+                continue;
+            }
+            if ($this->looksLikeShopChrome($part)) {
+                continue;
+            }
+            $low = mb_strtolower($part);
+            $productish = (bool) preg_match(
+                '#(trzewik|p[oó]łbut|obuwie|buty|rękaw|ochron|norm|en\s*\d|iso|s3|s1|src|hro|o1|podnosek|podeszw|skór|nitryl|producent|przeznacz|materiał|cholewka|wkładka|kalosz|winter|gloss|clic)#iu',
+                $low
+            );
+            $mentionsSku = $skuNorm !== '' && (
+                str_contains($low, mb_strtolower($skuNorm))
+                || $this->hayMentionsNameTokens($low, mb_strtolower($skuNorm))
+            );
+            if ($productish || $mentionsSku || mb_strlen($part) >= 120) {
+                $kept[] = $part;
+            }
+        }
+        if ($kept === []) {
+            // ostatnia deska: wyczyść cały tekst ze śmieci i skróć
+            $flat = $this->stripShopChromePhrases(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
+
+            return mb_substr($flat, 0, 2000);
+        }
+
+        return implode("\n\n", array_slice($kept, 0, 12));
+    }
+
+    private function looksLikeShopChrome(string $text): bool
+    {
+        $low = mb_strtolower($text);
+        $hits = 0;
+        foreach ([
+            'logowanie', 'rejestracja', 'do koszyka', 'obserwowane', 'realizuj zamówienie',
+            'polityka prywatności', 'odstąpienie od umowy', 'łatwy zwrot', 'kup za punkty',
+            'wyszukiwanie zaawansowane', 'jesteś tutaj', 'sprawdź status zamówienia',
+            'sposoby płatności', 'dodano do koszyka',
+        ] as $needle) {
+            if (str_contains($low, $needle)) {
+                $hits++;
+            }
+        }
+        if ($hits >= 2) {
+            return true;
+        }
+        // sam slogan sklepu / koszyk
+        if ($hits >= 1 && mb_strlen(trim($text)) < 160) {
+            return true;
+        }
+
+        return (bool) preg_match('/^\s*(0,00\s*zł|suma:)/iu', $text);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractDocumentUrls(string $html, string $pageUrl, string $skuNorm): array
+    {
+        $raw = [];
+        if (preg_match_all('#href=["\']([^"\']+\.pdf[^"\']*)["\']#i', $html, $m)) {
+            foreach ($m[1] as $href) {
+                $raw[] = html_entity_decode((string) $href, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            }
+        }
+        if (preg_match_all('#https?://[^"\'\s<>]+\.pdf(?:\?[^"\'\s<>]*)?#i', $html, $m)) {
+            foreach ($m[0] as $href) {
+                $raw[] = (string) $href;
+            }
+        }
+
+        $out = [];
+        $skuTokens = $this->skuTokens($skuNorm);
+        foreach ($raw as $src) {
+            $abs = $this->absolutize($src, $pageUrl);
+            if ($abs === null || ! ProductDocumentDownloader::looksLikePdfUrl($abs)) {
+                continue;
+            }
+            $meta = mb_strtolower(urldecode($abs));
+            $matched = $skuNorm !== '' && str_contains($meta, $skuNorm);
+            foreach ($skuTokens as $token) {
+                if (str_contains($meta, $token)) {
+                    $matched = true;
+                    break;
+                }
+            }
+            // „CLIC UP” → plik …CLIC_UP….pdf
+            if (! $matched && $this->hayMentionsNameTokens($meta, $skuNorm)) {
+                $matched = true;
+            }
+            if (! $matched) {
+                continue;
+            }
+            $out[] = $abs;
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**
@@ -146,61 +467,118 @@ final class ProductPageFetcher
      */
     private function extractImageUrls(string $html, string $pageUrl, string $skuNorm): array
     {
-        $candidates = [];
+        $rawUrls = [];
 
-        // 1) img z SKU w src/alt — najlepsze
         if (preg_match_all('#<img\b[^>]*>#i', $html, $imgTags)) {
             foreach ($imgTags[0] as $tag) {
                 if (! is_string($tag)) {
                     continue;
                 }
-                $src = null;
-                if (preg_match('#\bsrc=["\']([^"\']+)["\']#i', $tag, $m)) {
-                    $src = $m[1];
-                } elseif (preg_match('#\bdata-src=["\']([^"\']+)["\']#i', $tag, $m)) {
-                    $src = $m[1];
+                foreach (['src', 'data-src', 'data-lazy-src'] as $attr) {
+                    if (preg_match('#\b'.$attr.'=["\']([^"\']+)["\']#i', $tag, $m)) {
+                        $rawUrls[] = $m[1];
+                    }
                 }
-                if (! is_string($src) || $src === '') {
-                    continue;
-                }
-                $alt = '';
-                if (preg_match('#\balt=["\']([^"\']*)["\']#i', $tag, $am)) {
-                    $alt = $am[1];
-                }
-                $abs = $this->absolutize($src, $pageUrl);
-                if ($abs === null || $this->isJunkImageUrl($abs)) {
-                    continue;
-                }
-                $meta = mb_strtolower($abs.' '.$alt);
-                $score = 0;
-                if ($skuNorm !== '' && str_contains($meta, $skuNorm)) {
-                    $score += 100;
-                }
-                if (str_contains($meta, 'maxi') || str_contains($meta, 'rekaw') || str_contains($meta, 'glove') || str_contains($meta, 'handschuh')) {
-                    $score += 40;
-                }
-                if (str_contains($meta, 'product') || str_contains($meta, 'katalog')) {
-                    $score += 10;
-                }
-                if ($score > 0) {
-                    $candidates[] = ['url' => $abs, 'score' => $score];
+                if (preg_match('#\bsrcset=["\']([^"\']+)["\']#i', $tag, $m)) {
+                    foreach ($this->parseSrcset($m[1]) as $u) {
+                        $rawUrls[] = $u;
+                    }
                 }
             }
         }
 
-        // 2) og:image ze strony karty (wywołujemy extract tylko gdy pageMentionsSku) — akceptuj
+        if (preg_match_all('#srcset=["\']([^"\']+)["\']#i', $html, $sets)) {
+            foreach ($sets[1] as $set) {
+                foreach ($this->parseSrcset($set) as $u) {
+                    $rawUrls[] = $u;
+                }
+            }
+        }
+
         if (preg_match('#property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $m)
             || preg_match('#content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']#i', $html, $m)) {
-            $abs = $this->absolutize($m[1], $pageUrl);
-            if ($abs !== null && ! $this->isJunkImageUrl($abs)) {
-                $meta = mb_strtolower($abs);
-                $score = 45; // strona już przeszła filtr SKU
-                if ($skuNorm !== '' && str_contains($meta, $skuNorm)) {
+            $rawUrls[] = $m[1];
+        }
+
+        // Magento / JSON galeria (często escaped \/ )
+        if (preg_match_all('#https?:\\\\?/\\\\?/[^"\'\s<>]+/(?:media/catalog/product|media/wysiwyg)/[^"\'\s<>]+\.(?:jpe?g|png|webp)#i', $html, $m)) {
+            foreach ($m[0] as $u) {
+                $rawUrls[] = str_replace('\\/', '/', $u);
+            }
+        }
+        if (preg_match_all('#https?://[^"\'\s<>]+/media/catalog/product/[^"\'\s<>]+\.(?:jpe?g|png|webp)#i', $html, $m)) {
+            foreach ($m[0] as $u) {
+                $rawUrls[] = $u;
+            }
+        }
+
+        if ($skuNorm !== '' && preg_match_all(
+            '#(/[^"\'\s<>]*'.preg_quote($skuNorm, '#').'[^"\'\s<>]*\.(?:jpe?g|png|webp|gif)(?:\.webp)?)#i',
+            $html,
+            $m
+        )) {
+            foreach ($m[1] as $path) {
+                $rawUrls[] = $path;
+            }
+        }
+
+        $skuTokens = $this->skuTokens($skuNorm);
+
+        $candidates = [];
+        foreach ($rawUrls as $src) {
+            if (! is_string($src) || $src === '') {
+                continue;
+            }
+            $src = trim(explode(' ', trim($src))[0] ?? '');
+            $abs = $this->absolutize($src, $pageUrl);
+            if ($abs === null || $this->isJunkImageUrl($abs) || ! ProductImageDownloader::looksLikeImageUrl($abs)) {
+                continue;
+            }
+            $meta = mb_strtolower($abs);
+            // WordPress thumbs: -80x80, -150x150…
+            if (preg_match('/-(\d{2,4})x(\d{2,4})\.(jpe?g|png|webp)(\?|$)/i', $meta, $wm)
+                && (((int) $wm[1] < 400) || ((int) $wm[2] < 400))) {
+                continue;
+            }
+            $score = 5;
+            $skuInUrl = false;
+            if ($skuNorm !== '' && str_contains($meta, $skuNorm)) {
+                $score += 120;
+                $skuInUrl = true;
+            }
+            foreach ($skuTokens as $token) {
+                if (str_contains($meta, $token)) {
                     $score += 80;
+                    $skuInUrl = true;
+                    break;
                 }
-                if (str_contains($meta, 'maxi') || str_contains($meta, 'rekaw') || str_contains($meta, 'glove')) {
-                    $score += 30;
-                }
+            }
+            // Inny kod art. — na karcie z dwoma kodami (9-003B/7-003B) galeria może mieć jeden z nich
+            $pageHasOurCore = $skuTokens !== [] && $this->containsArtCode(mb_strtolower($pageUrl), $skuTokens[0] ?? '');
+            if (! $pageHasOurCore && $this->urlLooksLikeWrongSku($meta, $skuNorm, $skuTokens)) {
+                continue;
+            }
+            if (str_contains($meta, 'pim/products') || str_contains($meta, 'product_detail') || str_contains($meta, 'media/catalog/product') || str_contains($meta, 'zdjecia-safety') || str_contains($meta, 'trzewiki') || str_contains($meta, 'polbuty')) {
+                $score += 50;
+                $skuInUrl = true;
+            }
+            if (str_contains($meta, 'product_detail_large') || str_contains($meta, '_hr.')) {
+                $score += 40;
+            }
+            if (preg_match('/_[sm]\.(jpe?g|png|webp)(\?|$)/i', $meta)) {
+                $score -= 25; // miniatury Demar _s/_m
+            }
+            if (str_contains($meta, 'thumb') || str_contains($meta, 'thumbnail') || str_ends_with($meta, '.gif') || str_contains($meta, '.gif?')) {
+                $score -= 60;
+            }
+            if (str_contains($meta, 'logo') || str_contains($meta, 'fav') || str_contains($meta, 'piktogram') || str_contains($meta, 'social-media')) {
+                continue;
+            }
+            // Bez śladu SKU w URL — słaby kandydat (często related products)
+            if (! $skuInUrl && ! $pageHasOurCore) {
+                $score -= 50;
+            }
+            if ($score > 0) {
                 $candidates[] = ['url' => $abs, 'score' => $score];
             }
         }
@@ -215,6 +593,26 @@ final class ProductPageFetcher
         return array_slice(array_values(array_unique($out)), 0, 3);
     }
 
+    /**
+     * @return list<string>
+     */
+    private function parseSrcset(string $srcset): array
+    {
+        $out = [];
+        foreach (explode(',', $srcset) as $part) {
+            $part = trim($part);
+            if ($part === '') {
+                continue;
+            }
+            $url = trim(explode(' ', $part)[0] ?? '');
+            if ($url !== '') {
+                $out[] = $url;
+            }
+        }
+
+        return $out;
+    }
+
     private function isJunkImageUrl(string $url): bool
     {
         $u = mb_strtolower($url);
@@ -222,10 +620,122 @@ final class ProductPageFetcher
             'logo', 'icon', 'sprite', 'favicon', 'banner', 'payment',
             'dhl', 'inpost', 'poczta', 'ups', 'fedex', 'dpd', 'gls',
             'cart', 'koszyk', 'wallet', 'payu', 'przelewy', 'blik',
-            'shoe', 'buty', 'ochronki', 'ochraniacz', 'bachior', 'bootie',
-            'cover', 'nakladki', 'folie-na', 'placeholder', 'blank', 'pixel',
+            'ochronki na buty', 'shoe-cover', 'shoe_cover', 'nakladki', 'folie-na',
+            'placeholder', 'blank', 'pixel', 'bg_environment', 'environment_oily', '.svg',
+            // placeholdery Magento / lazy-load
+            'loader', 'spinner', 'loading', 'preloader', 'ajax-loader', 'load.gif',
+            'loading.gif', 'loader-1', 'loader-2', 'progress.gif',
+            'related', 'upsell', 'crosssell', 'widget',
+            'piktogram', 'social-media', 'logo-social', 'btn-youtube', '/_icons/',
         ] as $needle) {
             if (str_contains($u, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function extractOgDescription(string $html): string
+    {
+        if (preg_match('#property=["\']og:description["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $m)
+            || preg_match('#content=["\']([^"\']+)["\'][^>]*property=["\']og:description["\']#i', $html, $m)) {
+            return trim(html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+
+        return '';
+    }
+
+    private function containsArtCode(string $hay, string $core): bool
+    {
+        $core = mb_strtolower(trim($core));
+        if ($core === '') {
+            return false;
+        }
+        if (preg_match('/(?<![0-9])'.preg_quote($core, '/').'(?![0-9])/u', $hay) === 1) {
+            return true;
+        }
+        $compact = str_replace('-', '', $core);
+
+        return preg_match('/(?<![0-9])'.preg_quote($compact, '/').'(?![0-9])/u', $hay) === 1;
+    }
+
+    private function hayMentionsNameTokens(string $hay, string $skuNorm): bool
+    {
+        $parts = preg_split('/[\s\-·\/_]+/u', mb_strtolower(trim($skuNorm))) ?: [];
+        $tokens = [];
+        foreach ($parts as $part) {
+            $part = trim($part);
+            if ($part !== '' && mb_strlen($part) >= 2) {
+                $tokens[] = $part;
+            }
+        }
+        if ($tokens === []) {
+            return false;
+        }
+        $normSet = ['s1', 's2', 's3', 'src', 'hro', 'o1', 'o2', 'fo', 'ci', 'hi', 'wr', 'an'];
+        $nameTokens = array_values(array_filter($tokens, static fn (string $t): bool => ! in_array($t, $normSet, true)));
+        $normTokens = array_values(array_filter($tokens, static fn (string $t): bool => in_array($t, $normSet, true)));
+        if ($nameTokens === []) {
+            $nameTokens = $tokens;
+            $normTokens = [];
+        }
+        $hayCompact = preg_replace('/[^a-z0-9]+/i', '', $hay) ?? $hay;
+        foreach ($nameTokens as $token) {
+            if (! str_contains($hay, $token) && ! str_contains($hayCompact, $token)) {
+                return false;
+            }
+        }
+        if ($normTokens === []) {
+            return true;
+        }
+        $hits = 0;
+        foreach ($normTokens as $token) {
+            if (str_contains($hay, $token) || str_contains($hayCompact, $token)) {
+                $hits++;
+            }
+        }
+
+        return $hits >= max(1, (int) ceil(count($normTokens) * 0.5));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function skuTokens(string $skuNorm): array
+    {
+        $tokens = [];
+        if (preg_match('/\d{1,2}-\d{3}/', $skuNorm, $m)) {
+            $tokens[] = $m[0]; // 9-084
+            $tokens[] = str_replace('-', '', $m[0]); // 9084
+        }
+        if (preg_match('/\b(\d{4,})\b/', $skuNorm, $m)) {
+            $tokens[] = $m[1];
+        }
+
+        return array_values(array_unique(array_filter($tokens)));
+    }
+
+    /**
+     * @param  list<string>  $skuTokens
+     */
+    private function urlLooksLikeWrongSku(string $urlMeta, string $skuNorm, array $skuTokens): bool
+    {
+        if ($skuTokens === []) {
+            return false;
+        }
+        if (! preg_match_all('/\b(\d{1,2}-\d{3})\b/', $urlMeta, $m)) {
+            return false;
+        }
+        foreach ($m[1] as $found) {
+            $ok = false;
+            foreach ($skuTokens as $token) {
+                if ($found === $token || str_replace('-', '', $found) === $token) {
+                    $ok = true;
+                    break;
+                }
+            }
+            if (! $ok && ! str_contains($skuNorm, $found)) {
                 return true;
             }
         }
@@ -240,24 +750,25 @@ final class ProductPageFetcher
             return null;
         }
         if (str_starts_with($url, '//')) {
-            return 'https:'.$url;
+            $url = 'https:'.$url;
         }
         if (str_starts_with($url, 'http://') || str_starts_with($url, 'https://')) {
             return $url;
         }
-
         $parts = parse_url($base);
         if (! is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
             return null;
         }
         $origin = $parts['scheme'].'://'.$parts['host'];
+        if (! empty($parts['port'])) {
+            $origin .= ':'.$parts['port'];
+        }
         if (str_starts_with($url, '/')) {
             return $origin.$url;
         }
+        $path = $parts['path'] ?? '/';
+        $dir = preg_replace('#/[^/]*$#', '/', $path) ?? '/';
 
-        $path = (string) ($parts['path'] ?? '/');
-        $dir = rtrim(str_replace('\\', '/', dirname($path)), '/');
-
-        return $origin.$dir.'/'.$url;
+        return $origin.$dir.$url;
     }
 }

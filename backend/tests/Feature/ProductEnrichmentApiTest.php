@@ -34,27 +34,57 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->seed(RolesAndPermissionsSeeder::class);
     }
 
-    public function test_enqueue_product_enrichment_creates_batch_and_job(): void
+    public function test_single_product_enrichment_runs_synchronously(): void
     {
         Queue::fake();
+        Storage::fake('public');
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
         $product = $this->makeProduct();
 
-        $this->postJson("/api/products/{$product->id}/enrich")
-            ->assertStatus(202)
-            ->assertJsonPath('batch.total', 1)
-            ->assertJsonPath('batch.scope', 'product')
-            ->assertJsonPath('product_id', $product->id);
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [[
+                    'url' => 'https://example.com/product/'.$product->sku,
+                    'title' => 'Karta',
+                    'snippet' => 'RÄ™kawice '.$product->sku,
+                ]],
+                'errors' => [],
+            ]);
+        $this->app->instance(HybridWebSearchService::class, $search);
 
-        $this->assertDatabaseHas('products', [
-            'id' => $product->id,
-            'enrichment_status' => Product::ENRICHMENT_QUEUED,
+        $llm = $this->mockLlmWithSanitize([
+            'description' => 'Rękawice nitrylowe do pracy w przemyśle. Spełniają normy EN 388 i chronią przed ścieraniem. Przeznaczone do montażu oraz prac precyzyjnych w warunkach suchych. Trwała powłoka nitrylowa zwiększa żywotność przy codziennym użytkowaniu.',
+            'features' => ['nitryl'],
+            'specs' => ['Długość: 30 cm'],
+            'norms' => ['EN 388'],
+            'certificates' => [],
+            'materials' => ['nitryl'],
+            'use_cases' => ['montaż'],
+            'image_urls' => ['https://cdn.example.com/glove-'.$product->sku.'.jpg'],
+            'source_urls' => ['https://example.com/product/'.$product->sku],
+            'confidence' => 0.9,
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        Http::fake([
+            'https://example.com/*' => Http::response(
+                '<html><body>'.$product->sku.' <img src="https://cdn.example.com/glove-'.$product->sku.'.jpg" alt="'.$product->sku.'"></body></html>',
+                200
+            ),
+            'https://cdn.example.com/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
         ]);
 
-        Queue::assertPushed(EnrichProductJob::class, function (EnrichProductJob $job) use ($product): bool {
-            return $job->productId === $product->id && $job->force === false;
-        });
+        $this->postJson("/api/products/{$product->id}/enrich")
+            ->assertOk()
+            ->assertJsonPath('batch.total', 1)
+            ->assertJsonPath('batch.status', ProductEnrichmentBatch::STATUS_DONE)
+            ->assertJsonPath('images_count', 1)
+            ->assertJsonPath('product.enrichment_status', Product::ENRICHMENT_DONE);
+
+        Queue::assertNothingPushed();
     }
 
     public function test_skip_done_product_without_force(): void
@@ -75,9 +105,10 @@ final class ProductEnrichmentApiTest extends TestCase
         Queue::assertNothingPushed();
     }
 
-    public function test_force_reenqueues_done_product(): void
+    public function test_force_sync_reenriches_done_product(): void
     {
         Queue::fake();
+        Storage::fake('public');
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
         $product = $this->makeProduct([
@@ -86,10 +117,47 @@ final class ProductEnrichmentApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
-        $this->postJson("/api/products/{$product->id}/enrich", ['force' => true])
-            ->assertStatus(202);
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [[
+                    'url' => 'https://example.com/product/'.$product->sku,
+                    'title' => 'Karta',
+                    'snippet' => $product->sku,
+                ]],
+                'errors' => [],
+            ]);
+        $this->app->instance(HybridWebSearchService::class, $search);
 
-        Queue::assertPushed(EnrichProductJob::class, fn (EnrichProductJob $job): bool => $job->force === true);
+        $llm = $this->mockLlmWithSanitize([
+            'description' => 'Nowy opis po force. Spełnia normy EN 388 i chroni dłonie przy montażu. Trwała powłoka nitrylowa do codziennej pracy w zakładzie produkcyjnym oraz warsztacie.',
+            'features' => [],
+            'specs' => [],
+            'norms' => ['EN 388'],
+            'certificates' => [],
+            'materials' => ['nitryl'],
+            'use_cases' => ['montaż'],
+            'image_urls' => ['https://cdn.example.com/g.jpg'],
+            'source_urls' => ['https://example.com/product/'.$product->sku],
+            'confidence' => 0.8,
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        Http::fake([
+            'https://example.com/*' => Http::response('<html>'.$product->sku.' <img src="https://cdn.example.com/g.jpg"></html>', 200),
+            'https://cdn.example.com/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
+        ]);
+
+        $this->postJson("/api/products/{$product->id}/enrich", ['force' => true])
+            ->assertOk()
+            ->assertJsonPath('product.enrichment_status', Product::ENRICHMENT_DONE)
+            ->assertJsonPath('images_count', 1);
+
+        $product->refresh();
+        $this->assertStringContainsString('Nowy opis po force', (string) $product->description);
+
+        Queue::assertNothingPushed();
     }
 
     public function test_enqueue_price_list_enrichment(): void
@@ -142,6 +210,10 @@ final class ProductEnrichmentApiTest extends TestCase
             ->assertJsonPath('id', $batch->id)
             ->assertJsonPath('progress_percent', 50)
             ->assertJsonPath('done', 1);
+
+        $this->getJson('/api/product-enrichment-batches/active')
+            ->assertOk()
+            ->assertJsonFragment(['id' => $batch->id, 'status' => 'running']);
     }
 
     public function test_handlowiec_cannot_enrich(): void
@@ -212,7 +284,10 @@ final class ProductEnrichmentApiTest extends TestCase
         $service = new ProductEnrichmentService(
             $search,
             app(\App\Services\Enrichment\ProductImageDownloader::class),
+            app(\App\Services\Enrichment\ProductDocumentDownloader::class),
             app(\App\Services\Enrichment\ProductPageFetcher::class),
+            app(\App\Services\Enrichment\ProductDocumentFinder::class),
+            app(\App\Services\Enrichment\ManufacturerDomainResolver::class),
             $llm,
         );
 
@@ -236,7 +311,7 @@ final class ProductEnrichmentApiTest extends TestCase
             ->andReturn([
                 'results' => [
                     [
-                        'url' => 'https://example.com/product/'.$product->sku,
+                        'url' => 'https://www.ansell.com/product/'.$product->sku,
                         'title' => 'Karta',
                         'snippet' => 'Rękawice ochronne nitrylowe EN 388',
                     ],
@@ -244,39 +319,51 @@ final class ProductEnrichmentApiTest extends TestCase
                 'errors' => [],
             ]);
 
-        $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')
-            ->once()
-            ->andReturn([
-                'description' => 'Rękawice nitrylowe do pracy w przemyśle. Spełniają normy EN 388.',
-                'features' => ['nitryl', 'antypoślizgowe'],
-                'specs' => ['Długość: 30 cm'],
-                'norms' => ['EN 388'],
-                'certificates' => ['CE'],
-                'materials' => ['nitryl'],
-                'use_cases' => ['montaż'],
-                'image_urls' => ['https://cdn.example.com/glove-'.$product->sku.'.jpg'],
-                'source_urls' => ['https://example.com/product/'.$product->sku],
-                'confidence' => 0.9,
-            ]);
+        $richDescription = 'Rękawice nitrylowe do pracy w przemyśle. Spełniają normy EN 388 i chronią przed ścieraniem. '
+            .'Przeznaczone do montażu oraz prac precyzyjnych w warunkach suchych. '
+            .'Trwała powłoka nitrylowa zwiększa żywotność przy codziennym użytkowaniu w zakładzie.';
+
+        $llm = $this->mockLlmWithSanitize([
+            'description' => $richDescription,
+            'features' => ['nitryl', 'antypoślizgowe'],
+            'specs' => ['Długość: 30 cm'],
+            'norms' => ['EN 388'],
+            'certificates' => ['CE'],
+            'materials' => ['nitryl'],
+            'use_cases' => ['montaż'],
+            'image_urls' => ['https://cdn.example.com/glove-'.$product->sku.'.jpg'],
+            'document_urls' => ['https://www.ansell.com/docs/cert-'.$product->sku.'.pdf'],
+            'source_urls' => ['https://www.ansell.com/product/'.$product->sku],
+            'confidence' => 0.9,
+        ]);
+
+        $pdf = "%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n";
 
         Http::fake([
-            'https://example.com/*' => Http::response(
-                '<html><body>Rękawice '.$product->sku.' EN 388 <img src="https://cdn.example.com/glove-'.$product->sku.'.jpg" alt="glove '.$product->sku.'"></body></html>',
+            'https://www.ansell.com/docs/*' => Http::response(
+                $pdf,
                 200,
-                ['Content-Type' => 'text/html']
+                ['Content-Type' => 'application/pdf']
             ),
             'https://cdn.example.com/*' => Http::response(
                 $this->tinyJpeg(),
                 200,
                 ['Content-Type' => 'image/jpeg']
             ),
+            'https://www.ansell.com/*' => Http::response(
+                '<html><body>Rękawice '.$product->sku.' EN 388 <img src="https://cdn.example.com/glove-'.$product->sku.'.jpg" alt="glove '.$product->sku.'"><a href="https://www.ansell.com/docs/cert-'.$product->sku.'.pdf">CE</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
         ]);
 
         $service = new ProductEnrichmentService(
             $search,
             app(\App\Services\Enrichment\ProductImageDownloader::class),
+            app(\App\Services\Enrichment\ProductDocumentDownloader::class),
             app(\App\Services\Enrichment\ProductPageFetcher::class),
+            app(\App\Services\Enrichment\ProductDocumentFinder::class),
+            app(\App\Services\Enrichment\ManufacturerDomainResolver::class),
             $llm,
         );
 
@@ -285,10 +372,10 @@ final class ProductEnrichmentApiTest extends TestCase
         $product->refresh();
         $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
         $this->assertStringContainsString('Rękawice nitrylowe', (string) $product->description);
-        $this->assertStringContainsString('Specyfikacja', (string) $product->description);
         $this->assertIsArray($product->enrichment_payload);
         $this->assertSame(['nitryl', 'antypoślizgowe'], $product->enrichment_payload['features'] ?? null);
         $this->assertSame(1, ProductImage::query()->where('product_id', $product->id)->count());
+        $this->assertSame(1, \App\Models\ProductDocument::query()->where('product_id', $product->id)->count());
     }
 
     public function test_ai_settings_accept_web_search_fields(): void
@@ -316,6 +403,43 @@ final class ProductEnrichmentApiTest extends TestCase
     }
 
     /**
+     * sanitizePagesWithLlm + extractWithLlm (kolejność wywołań chatJson).
+     *
+     * @param  array<string, mixed>  $extractPayload
+     */
+    private function mockLlmWithSanitize(array $extractPayload): OpenAiCompatibleClient
+    {
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->atLeast()
+            ->once()
+            ->andReturnUsing(function (array $messages) use ($extractPayload): array {
+                $system = (string) ($messages[0]['content'] ?? '');
+                if (str_contains($system, 'filtrem treści')) {
+                    $user = (string) ($messages[1]['content'] ?? '');
+                    $pages = [];
+                    if (preg_match_all('#"url"\s*:\s*"(https?://[^"]+)"#', $user, $m)) {
+                        foreach ($m[1] as $url) {
+                            $pages[] = [
+                                'url' => $url,
+                                'text' => 'Produkt BHP. Norma EN 388. Przeznaczony do pracy ochronnej.',
+                            ];
+                        }
+                    }
+
+                    return ['pages' => $pages !== [] ? $pages : [[
+                        'url' => 'https://example.com/p',
+                        'text' => 'Produkt BHP. Norma EN 388.',
+                    ]]];
+                }
+
+                return $extractPayload;
+            });
+
+        return $llm;
+    }
+
+    /**
      * @param  array<string, mixed>  $overrides
      */
     private function makeProduct(array $overrides = []): Product
@@ -333,7 +457,19 @@ final class ProductEnrichmentApiTest extends TestCase
 
     private function tinyJpeg(): string
     {
-        // 1x1 JPEG
+        // >= 80x80 â€” downloader odrzuca placeholdery mniejsze niĹĽ 80 px
+        if (function_exists('imagecreatetruecolor')) {
+            $img = imagecreatetruecolor(220, 220);
+            $bg = imagecolorallocate($img, 40, 120, 200);
+            imagefill($img, 0, 0, $bg);
+            ob_start();
+            imagejpeg($img, null, 85);
+            imagedestroy($img);
+            $bytes = ob_get_clean();
+
+            return is_string($bytes) ? $bytes : '';
+        }
+
         return base64_decode(
             '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAGfAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQIBAT8Bf//Z'
         ) ?: '';

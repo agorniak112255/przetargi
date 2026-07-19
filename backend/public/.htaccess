@@ -4,6 +4,10 @@
     </IfModule>
 
     RewriteEngine On
+    RewriteBase /Przetargi/
+
+    # Błędny URL (stary path) → kanoniczny
+    RewriteRule ^backend/public/?$ /Przetargi/ [R=302,L,NE]
 
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
@@ -18,8 +22,16 @@
     RewriteCond %{REQUEST_URI} (.+)/$
     RewriteRule ^ %1 [L,R=301]
 
-    # Send Requests To Front Controller...
-    RewriteCond %{REQUEST_FILENAME} !-d
-    RewriteCond %{REQUEST_FILENAME} !-f
-    RewriteRule ^ index.php [L]
+    # Istniejące pliki (assets, index.html, index.php)
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # API → Laravel
+    RewriteRule ^api(?:/.*)?$ index.php [L,END]
+
+    # SPA (React Router)
+    RewriteRule ^ index.html [L,END]
 </IfModule>
+
+DirectoryIndex index.html index.php

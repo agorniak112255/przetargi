@@ -17,18 +17,20 @@ class DashboardController extends Controller
     {
         $user = $request->user();
 
+        $scopeOwn = ! $user->can('tenders.view_all');
+
         $myTenders = Tender::query()
-            ->when($user->role === 'handlowiec', fn ($q) => $q->where('owner_id', $user->id))
+            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
             ->whereNotIn('status', ['archived'])
             ->count();
 
         $offerValue = (float) Tender::query()
-            ->when($user->role === 'handlowiec', fn ($q) => $q->where('owner_id', $user->id))
+            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
             ->whereNotIn('status', ['archived'])
             ->sum('offer_value_net');
 
         $avgMargin = (float) Tender::query()
-            ->when($user->role === 'handlowiec', fn ($q) => $q->where('owner_id', $user->id))
+            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
             ->whereNotNull('margin_percent')
             ->avg('margin_percent');
 
@@ -41,6 +43,7 @@ class DashboardController extends Controller
                 ->where('approval_status', 'oczekuje')
                 ->count(),
             'recent_tenders' => Tender::query()
+                ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
                 ->with(['client:id,name', 'owner:id,name'])
                 ->latest('last_activity_at')
                 ->limit(5)

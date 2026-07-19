@@ -6,12 +6,27 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Models\Tender;
+use App\Models\TenderItem;
+use App\Services\Ai\AiSettingsService;
 use Illuminate\Support\Collection;
+use Throwable;
 
 final class ProductMatchService
 {
+    /** Minimalny wynik dopasowania, poniżej którego nie proponujemy produktu. */
+    public const MIN_MATCH_SCORE = 65;
+
+    /** Tokeny zbyt ogólne — nie podbijają score overlap. */
+    private const STOPWORDS = [
+        'rekawice', 'rekawica', 'ochronne', 'ochronna', 'ochronny', 'robocze', 'robocza',
+        'produkt', 'art', 'kat', 'para', 'par', 'szt', 'sztuk', 'the', 'and', 'for',
+        'with', 'bez', 'oraz', 'typ', 'model', 'kolor', 'rozmiar',
+    ];
+
     public function __construct(
         private readonly TenderPricingService $pricing,
+        private readonly ProductAiSearchService $aiSearch,
+        private readonly AiSettingsService $aiSettings,
     ) {}
 
     /**
@@ -24,33 +39,32 @@ final class ProductMatchService
         $skipped = 0;
         $scores = [];
 
+        // onlyEmpty: puste + stare słabe propozycje (< progu) — żeby nie zostawały buty przy 34%
         $items = $tender->items()->when(
             $onlyEmpty,
-            fn ($q) => $q->whereNull('main_product_id')
+            fn ($q) => $q->where(function ($q) {
+                $q->whereNull('main_product_id')
+                    ->orWhereNull('ai_match_percent')
+                    ->orWhere('ai_match_percent', '<', self::MIN_MATCH_SCORE);
+            })
         )->get();
 
         foreach ($items as $item) {
-            $best = $this->bestMatch($item->requirement, $products);
-            if ($best === null || $best['score'] < 35) {
+            $pick = $this->resolveBestPick($item->requirement, $products);
+            if ($pick === null) {
+                $item->main_product_id = null;
                 $item->status = 'brak';
-                $item->ai_match_percent = $best['score'] ?? 0;
+                $item->ai_match_percent = $this->bestScoreHint($item->requirement, $products);
                 $item->save();
+                $this->pricing->recalculateItemMargin($item);
                 $skipped++;
 
                 continue;
             }
 
-            $item->main_product_id = $best['product']->id;
-            $item->ai_match_percent = $best['score'];
-            $item->status = 'matched';
-            if ($item->offer_price === null) {
-                $item->offer_price = round((float) $best['product']->purchase_price * 1.18, 2);
-            }
-            $item->save();
-            $item->load('mainProduct');
-            $this->pricing->recalculateItemMargin($item);
+            $this->applyProduct($item, $pick['product'], $pick['score']);
             $matched++;
-            $scores[] = $best['score'];
+            $scores[] = $pick['score'];
         }
 
         $allScores = $tender->items()->whereNotNull('ai_match_percent')->pluck('ai_match_percent');
@@ -81,23 +95,32 @@ final class ProductMatchService
     public function bestMatch(string $requirement, Collection $products): ?array
     {
         $req = $this->normalize($requirement);
-        $reqTokens = $this->tokens($req);
+        $reqTokens = $this->significantTokens($req);
+        $reqCodes = $this->codeCandidates($requirement);
         $best = null;
 
         foreach ($products as $product) {
             $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+            $materials = is_array($payload['materials'] ?? null) ? $payload['materials'] : [];
+            $features = is_array($payload['features'] ?? null) ? $payload['features'] : [];
+            $useCases = is_array($payload['use_cases'] ?? null) ? $payload['use_cases'] : [];
+            $normsPayload = is_array($payload['norms'] ?? null) ? $payload['norms'] : [];
+
             $extra = implode(' ', [
                 (string) ($product->description ?? ''),
-                implode(' ', is_array($payload['features'] ?? null) ? $payload['features'] : []),
-                implode(' ', is_array($payload['use_cases'] ?? null) ? $payload['use_cases'] : []),
-                implode(' ', is_array($payload['materials'] ?? null) ? $payload['materials'] : []),
-                implode(' ', is_array($payload['norms'] ?? null) ? $payload['norms'] : []),
+                implode(' ', $features),
+                implode(' ', $useCases),
+                implode(' ', $materials),
+                implode(' ', $normsPayload),
             ]);
             $hay = $this->normalize(
                 $product->name.' '.$product->sku.' '.$product->manufacturer.' '
                 .($product->norms ?? '').' '.($product->category ?? '').' '.$extra
             );
-            $score = $this->score($req, $reqTokens, $hay, $product);
+            if (! $this->assortmentsCompatible($req, $hay, $product)) {
+                continue;
+            }
+            $score = $this->score($req, $reqTokens, $reqCodes, $hay, $product, $materials);
             if ($best === null || $score > $best['score']) {
                 $best = ['product' => $product, 'score' => $score];
             }
@@ -107,72 +130,272 @@ final class ProductMatchService
     }
 
     /**
-     * @param  list<string>  $reqTokens
+     * Rękawice ≠ obuwie (S3/SRC) itd. — bez wspólnej kategorii wynik = pominięcie.
      */
-    private function score(string $req, array $reqTokens, string $hay, Product $product): int
+    private function assortmentsCompatible(string $req, string $hay, Product $product): bool
     {
+        $prodText = $hay.' '.$this->normalize((string) ($product->category ?? ''))
+            .' '.$this->normalize((string) ($product->name ?? ''));
+        $reqFamily = $this->detectAssortmentFamily($req);
+        $prodFamily = $this->detectAssortmentFamily($prodText);
+
+        if ($reqFamily === null || $prodFamily === null) {
+            return true;
+        }
+
+        return $reqFamily === $prodFamily;
+    }
+
+    private function detectAssortmentFamily(string $text): ?string
+    {
+        if (preg_match('/\b(rekawic|glove|handschuh)\w*/u', $text) === 1) {
+            return 'gloves';
+        }
+        // normy/klasy typowe dla obuwia BHP
+        if (preg_match(
+            '/\b(trzewik|polbut|sandal|obuwie|buty|butow|footwear|podeszw|podnosek'
+            .'|\bs1p?\b|\bs3\b|\bsb\b|\bob\b|src|hro)\b/u',
+            $text
+        ) === 1) {
+            return 'footwear';
+        }
+        if (preg_match('/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell)\w*/u', $text) === 1) {
+            return 'apparel';
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  list<string>  $reqTokens
+     * @param  list<string>  $reqCodes
+     * @param  list<string>  $materials
+     */
+    private function score(
+        string $req,
+        array $reqTokens,
+        array $reqCodes,
+        string $hay,
+        Product $product,
+        array $materials,
+    ): int {
         $score = 0;
+        $skuHit = $this->skuMatchScore($req, $reqCodes, $product);
+        $score += $skuHit;
 
-        $skuNorm = $this->normalize($product->sku);
-        $skuCompact = preg_replace('/\s+/', '', $skuNorm) ?? $skuNorm;
-        $reqCompact = preg_replace('/\s+/', '', $req) ?? $req;
-
-        // dokładny / częściowy kod produktu w SIWZ
-        if ($skuCompact !== '' && (str_contains($reqCompact, $skuCompact) || str_contains($req, $skuNorm))) {
-            $score += 70;
-        } elseif ($skuCompact !== '' && mb_strlen($skuCompact) >= 4) {
-            foreach ($this->codeCandidates($req) as $code) {
-                if ($code === $skuCompact || str_contains($skuCompact, $code) || str_contains($code, $skuCompact)) {
-                    $score += 55;
-                    break;
-                }
-            }
+        // bez sensownego SKU — dopasowanie po wymaganiach / materiale / marce / kodzie w opisie
+        $score += $this->materialRequirementScore($req, $hay, $materials);
+        $score += $this->brandModelScore($reqTokens, $hay, $product);
+        if ($skuHit === 0) {
+            $score += $this->modelCodeInTextScore($reqCodes, $hay);
         }
 
         $nameNorm = $this->normalize($product->name);
-        if ($nameNorm !== '' && (str_contains($req, $nameNorm) || str_contains($nameNorm, $req))) {
+        if ($nameNorm !== '' && mb_strlen($nameNorm) >= 5
+            && (str_contains($req, $nameNorm) || str_contains($nameNorm, $req))) {
             $score += 35;
         }
 
         if (preg_match_all('/en\s*[\d]+/i', $req, $m)) {
             foreach ($m[0] as $norm) {
-                $n = preg_replace('/\s+/', '', mb_strtolower($norm));
-                $pn = preg_replace('/\s+/', '', mb_strtolower((string) $product->norms));
-                if ($pn !== '' && str_contains($pn, $n)) {
-                    $score += 25;
+                $n = preg_replace('/\s+/', '', mb_strtolower($norm)) ?? '';
+                $pn = preg_replace('/\s+/', '', mb_strtolower((string) $product->norms)) ?? '';
+                if ($n !== '' && $pn !== '' && str_contains($pn, $n)) {
+                    $score += 20;
                 }
             }
         }
 
-        $keywords = [
-            'antyprzecieciow' => ['antyprzecieciowe', 'cut', 'powercut', 'powerfit', 'unidur', 'krytech'],
-            'chemoodporn' => ['chemoodporne', 'alphatec', 'chemic', 'barierow'],
-            'ocieplan' => ['ocieplane', 'winter', 'thermo', 'zimn'],
-            'skorzan' => ['skorzane', 'koz', 'eco tec', 'comfotec'],
-            'esd' => ['esd', 'carbon', 'elektrostat'],
-            'kriogen' => ['kriogeniczne', 'crio', 'cryo'],
-            'pu' => ['poliuretan', ' pu ', 'powlek'],
-            'montaz' => ['montersk', 'montaz'],
-        ];
-
-        foreach ($keywords as $inReq => $inProduct) {
-            if (str_contains($req, $inReq)) {
-                foreach ($inProduct as $hint) {
-                    if (str_contains($hay, $this->normalize($hint))) {
-                        $score += 12;
-                    }
-                }
-            }
-        }
-
-        $hayTokens = $this->tokens($hay);
+        $hayTokens = $this->significantTokens($hay);
         $overlap = count(array_intersect($reqTokens, $hayTokens));
-        $score += min(40, $overlap * 8);
+        // overlap tylko jako drobny bonus — nie może sam „przepchnąć” ponad próg
+        $score += min(16, $overlap * 4);
 
-        similar_text($req, $hay, $pct);
-        $score += (int) round($pct * 0.25);
+        // similar_text na długim opisie zawyża wynik — ograniczamy mocno
+        if ($skuHit === 0) {
+            similar_text($req, mb_substr($hay, 0, 220), $pct);
+            $score += (int) round($pct * 0.12);
+        }
 
         return min(99, $score);
+    }
+
+    /**
+     * 1) dokładny SKU w SIWZ, 2) mocny kod modelowy — bez „600” ⊂ „60028”.
+     *
+     * @param  list<string>  $reqCodes
+     */
+    private function skuMatchScore(string $req, array $reqCodes, Product $product): int
+    {
+        $skuNorm = $this->normalize($product->sku);
+        $skuCompact = preg_replace('/\s+/', '', $skuNorm) ?? $skuNorm;
+        if ($skuCompact === '') {
+            return 0;
+        }
+
+        $reqCompact = preg_replace('/\s+/', '', $req) ?? $req;
+
+        // pełny SKU jako ciąg w wymaganiu
+        if (str_contains($reqCompact, $skuCompact) || preg_match(
+            '/(^|[^a-z0-9])'.preg_quote($skuCompact, '/').'([^a-z0-9]|$)/u',
+            $reqCompact
+        ) === 1) {
+            return 85;
+        }
+
+        foreach ($reqCodes as $code) {
+            if ($this->codesMatch($skuCompact, $code)) {
+                return mb_strlen($code) >= 5 ? 80 : 70;
+            }
+        }
+
+        return 0;
+    }
+
+    private function codesMatch(string $skuCompact, string $code): bool
+    {
+        if ($code === '' || $skuCompact === '') {
+            return false;
+        }
+        if ($code === $skuCompact) {
+            return true;
+        }
+
+        // czysto cyfrowe krótkie fragmenty (np. 600) NIGDY nie pasują do dłuższego SKU
+        if (ctype_digit($code)) {
+            if (mb_strlen($code) < 5) {
+                return false;
+            }
+
+            // dłuższy kod numeryczny: tylko równość lub pełne ograniczone wystąpienie
+            return $code === $skuCompact;
+        }
+
+        // alfanumeryczny model (RNITZ, RDR…): równość lub SKU zaczyna/kończy się kodem przy podobnej długości
+        if (mb_strlen($code) < 4) {
+            return false;
+        }
+        if ($skuCompact === $code) {
+            return true;
+        }
+        if (str_starts_with($skuCompact, $code) || str_ends_with($skuCompact, $code)) {
+            return abs(mb_strlen($skuCompact) - mb_strlen($code)) <= 2;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<string>  $materials
+     */
+    private function materialRequirementScore(string $req, string $hay, array $materials): int
+    {
+        $score = 0;
+        $materialHints = [
+            'nitryl' => ['nitryl', 'nitrile', 'nbr', 'rnitz'],
+            'lateks' => ['lateks', 'latex'],
+            'skorz' => ['skorz', 'leather', 'koz'],
+            'poliuretan' => ['poliuretan', ' polyurethane', ' pu ', 'powlek'],
+            'neopren' => ['neopren', 'neoprene'],
+            'pvc' => [' pvc', 'pcv'],
+            'sciagacz' => ['sciagacz', 'sciagaczem', 'cuff', 'sciag'],
+            'powlek' => ['powlek', 'coated'],
+            'ocieplan' => ['ocieplan', 'winter', 'thermo', 'zimow'],
+            'antyprzecieciow' => ['antyprzecieciow', 'cut', 'powercut', 'krytech', 'unidur'],
+            'chemoodporn' => ['chemoodporn', 'alphatec', 'chemic'],
+        ];
+
+        $matNorm = $this->normalize(implode(' ', $materials));
+
+        foreach ($materialHints as $inReq => $inProduct) {
+            if (! str_contains($req, $inReq) && ! $this->reqHasAny($req, $inProduct)) {
+                continue;
+            }
+            foreach ($inProduct as $hint) {
+                $h = $this->normalize(trim($hint));
+                if ($h === '') {
+                    continue;
+                }
+                if (str_contains($hay, $h) || ($matNorm !== '' && str_contains($matNorm, $h))) {
+                    $score += 18;
+                    break;
+                }
+            }
+        }
+
+        return min(54, $score);
+    }
+
+    /**
+     * @param  list<string>  $needles
+     */
+    private function reqHasAny(string $req, array $needles): bool
+    {
+        foreach ($needles as $n) {
+            $h = $this->normalize(trim($n));
+            if ($h !== '' && str_contains($req, $h)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Marka / model z SIWZ w nazwie, producencie lub (dla kodów) w opisie.
+     *
+     * @param  list<string>  $reqTokens
+     */
+    private function brandModelScore(array $reqTokens, string $hay, Product $product): int
+    {
+        $score = 0;
+        $manuf = $this->normalize($product->manufacturer);
+        $name = $this->normalize($product->name);
+        $sku = $this->normalize($product->sku);
+
+        foreach ($reqTokens as $token) {
+            if (mb_strlen($token) < 4 || in_array($token, self::STOPWORDS, true)) {
+                continue;
+            }
+            if ($manuf !== '' && str_contains($manuf, $token)) {
+                $score += 28;
+                continue;
+            }
+            if ($name !== '' && str_contains($name, $token)) {
+                $score += 26;
+                continue;
+            }
+            if ($sku !== '' && str_contains($sku, $token)) {
+                $score += 30;
+                continue;
+            }
+            // w opisie tylko tokeny „kodowe” (litery+cyfry) — nie ogólne słowa typu safety/szare
+            if (preg_match('/[a-z]/', $token) === 1 && preg_match('/\d/', $token) === 1 && str_contains($hay, $token)) {
+                $score += 24;
+            }
+        }
+
+        return min(50, $score);
+    }
+
+    /**
+     * Kod modelowy z SIWZ (RNITZ, REJS…) występuje w nazwie/opisie produktu.
+     *
+     * @param  list<string>  $reqCodes
+     */
+    private function modelCodeInTextScore(array $reqCodes, string $hay): int
+    {
+        $score = 0;
+        foreach ($reqCodes as $code) {
+            if (ctype_digit($code) || mb_strlen($code) < 4) {
+                continue;
+            }
+            if (str_contains($hay, $code)) {
+                $score += 34;
+            }
+        }
+
+        return min(40, $score);
     }
 
     private function normalize(string $s): string
@@ -197,13 +420,42 @@ final class ProductMatchService
     /**
      * @return list<string>
      */
+    private function significantTokens(string $s): array
+    {
+        return array_values(array_filter(
+            $this->tokens($s),
+            static fn (string $t): bool => ! in_array($t, self::STOPWORDS, true)
+        ));
+    }
+
+    /**
+     * Kody z SIWZ: SKU z cyfrą oraz krótkie kody WIELKIMI literami (RNITZ, REJS).
+     * Pomija gołe 2–4 cyfry (rozmiary, „600”).
+     *
+     * @return list<string>
+     */
     private function codeCandidates(string $req): array
     {
         $out = [];
-        if (preg_match_all('/\b[a-z0-9][a-z0-9\-\/]{2,}\b/i', $req, $m)) {
+
+        // kody z cyfrą (34-274, PK600, 60028…)
+        if (preg_match_all('/\b[A-Za-z]{0,6}\d[A-Za-z0-9\-\/]{1,}\b/', $req, $m)) {
             foreach ($m[0] as $raw) {
                 $c = preg_replace('/\s+/', '', $this->normalize($raw)) ?? '';
-                if (mb_strlen($c) >= 3 && preg_match('/\d/', $c)) {
+                if ($c === '' || (ctype_digit($c) && mb_strlen($c) < 5)) {
+                    continue;
+                }
+                if (mb_strlen($c) >= 4) {
+                    $out[] = $c;
+                }
+            }
+        }
+
+        // modele WIELKIMI literami z oryginału SIWZ (RNITZ, REJS, RDR)
+        if (preg_match_all('/\b[A-Z]{3,10}\b/u', $req, $m2)) {
+            foreach ($m2[0] as $raw) {
+                $c = $this->normalize($raw);
+                if ($c !== '' && ! in_array($c, self::STOPWORDS, true)) {
                     $out[] = $c;
                 }
             }
@@ -213,11 +465,11 @@ final class ProductMatchService
     }
 
     /**
-     * Dopasuj jedną pozycję (np. przycisk AI w wierszu).
+     * Dopasuj jedną pozycję: źródło heurystyczne + top 5 z modelu AI.
      *
-     * @return array{matched: bool, score: int, product_id: ?int, product?: array<string, mixed>}
+     * @return array<string, mixed>
      */
-    public function matchItem(\App\Models\TenderItem $item, bool $force = false): array
+    public function matchItem(TenderItem $item, bool $force = false): array
     {
         // zapisana pozycja z produktem — nie nadpisuj przy ponownym wejściu / kliku
         if (! $force && $item->main_product_id !== null) {
@@ -235,41 +487,66 @@ final class ProductMatchService
                 ] : null,
                 'offer_price' => $item->offer_price,
                 'skipped_existing' => true,
+                'sources' => [
+                    'heuristic' => null,
+                    'ai' => [],
+                ],
+                'candidates' => [],
             ];
         }
 
         $products = Product::query()->get();
-        $best = $this->bestMatch($item->requirement, $products);
-        if ($best === null || $best['score'] < 30) {
+        $heuristic = $this->bestMatch($item->requirement, $products);
+        $aiCandidates = $this->aiTopCandidates($item->requirement, 5);
+
+        $sources = [
+            'heuristic' => $heuristic === null ? null : [
+                'score' => $heuristic['score'],
+                'product' => [
+                    'id' => $heuristic['product']->id,
+                    'sku' => $heuristic['product']->sku,
+                    'name' => $heuristic['product']->name,
+                ],
+            ],
+            'ai' => $aiCandidates,
+        ];
+
+        $candidates = $this->mergeCandidates($heuristic, $aiCandidates);
+        $pick = $this->pickAuto($heuristic, $aiCandidates, $products);
+
+        if ($pick === null) {
+            $bestScore = max(
+                $heuristic['score'] ?? 0,
+                $aiCandidates[0]['score'] ?? 0,
+            );
+            $item->main_product_id = null;
             $item->status = 'brak';
-            $item->ai_match_percent = $best['score'] ?? 0;
+            $item->ai_match_percent = $bestScore;
             $item->save();
+            $this->pricing->recalculateItemMargin($item);
 
             return [
                 'matched' => false,
-                'score' => $best['score'] ?? 0,
+                'score' => $bestScore,
                 'product_id' => null,
+                'offer_price' => $item->offer_price,
+                'sources' => $sources,
+                'candidates' => $candidates,
             ];
         }
 
-        $item->main_product_id = $best['product']->id;
-        $item->ai_match_percent = $best['score'];
-        $item->status = 'matched';
-        if ($item->offer_price === null) {
-            $item->offer_price = round((float) $best['product']->purchase_price * 1.18, 2);
-        }
-        $item->save();
+        $this->applyProduct($item, $pick['product'], $pick['score']);
         $item->load(['mainProduct', 'tender']);
-        $this->pricing->recalculateItemMargin($item);
         if ($item->tender !== null) {
             $this->pricing->recalculateTenderTotals($item->tender);
         }
 
-        $p = $best['product'];
+        $p = $pick['product'];
 
         return [
             'matched' => true,
-            'score' => $best['score'],
+            'score' => $pick['score'],
+            'source' => $pick['source'],
             'product_id' => $p->id,
             'product' => [
                 'id' => $p->id,
@@ -277,6 +554,154 @@ final class ProductMatchService
                 'name' => $p->name,
             ],
             'offer_price' => $item->offer_price,
+            'sources' => $sources,
+            'candidates' => $candidates,
         ];
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return array{product: Product, score: int, source: string}|null
+     */
+    private function resolveBestPick(string $requirement, Collection $products): ?array
+    {
+        $heuristic = $this->bestMatch($requirement, $products);
+        if ($heuristic !== null && $heuristic['score'] >= self::MIN_MATCH_SCORE) {
+            return [
+                'product' => $heuristic['product'],
+                'score' => $heuristic['score'],
+                'source' => 'heuristic',
+            ];
+        }
+
+        // drugie źródło: model AI (top 5) — tylko gdy heurystyka nie pewna
+        $aiCandidates = $this->aiTopCandidates($requirement, 5);
+
+        return $this->pickAuto($heuristic, $aiCandidates, $products);
+    }
+
+    /**
+     * @param  array{product: Product, score: int}|null  $heuristic
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     * @param  Collection<int, Product>  $products
+     * @return array{product: Product, score: int, source: string}|null
+     */
+    private function pickAuto(?array $heuristic, array $aiCandidates, Collection $products): ?array
+    {
+        if ($heuristic !== null && $heuristic['score'] >= self::MIN_MATCH_SCORE) {
+            return [
+                'product' => $heuristic['product'],
+                'score' => $heuristic['score'],
+                'source' => 'heuristic',
+            ];
+        }
+
+        $topAi = $aiCandidates[0] ?? null;
+        if ($topAi !== null && $topAi['score'] >= self::MIN_MATCH_SCORE) {
+            $product = $products->firstWhere('id', $topAi['id'])
+                ?? Product::query()->find($topAi['id']);
+            if ($product instanceof Product) {
+                return [
+                    'product' => $product,
+                    'score' => $topAi['score'],
+                    'source' => 'ai',
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
+     */
+    private function aiTopCandidates(string $requirement, int $limit = 5): array
+    {
+        if (! $this->aiSettings->isReady()) {
+            return [];
+        }
+
+        try {
+            @set_time_limit(120);
+            $result = $this->aiSearch->search($requirement, $limit);
+        } catch (Throwable) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($result['products'] as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            if ($id <= 0) {
+                continue;
+            }
+            $out[] = [
+                'id' => $id,
+                'sku' => (string) ($row['sku'] ?? ''),
+                'name' => (string) ($row['name'] ?? ''),
+                'score' => (int) ($row['ai_match_percent'] ?? 0),
+                'reason' => is_string($row['ai_match_reason'] ?? null) ? $row['ai_match_reason'] : null,
+                'source' => 'ai',
+            ];
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array{product: Product, score: int}|null  $heuristic
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
+     */
+    private function mergeCandidates(?array $heuristic, array $aiCandidates): array
+    {
+        $byId = [];
+        if ($heuristic !== null) {
+            $p = $heuristic['product'];
+            $byId[$p->id] = [
+                'id' => $p->id,
+                'sku' => $p->sku,
+                'name' => $p->name,
+                'score' => $heuristic['score'],
+                'reason' => 'Dopasowanie heurystyczne (SKU / nazwa / materiał)',
+                'source' => 'heuristic',
+            ];
+        }
+        foreach ($aiCandidates as $row) {
+            $id = $row['id'];
+            if (! isset($byId[$id]) || $row['score'] > $byId[$id]['score']) {
+                $byId[$id] = $row;
+            }
+        }
+
+        $list = array_values($byId);
+        usort($list, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+
+        return array_slice($list, 0, 5);
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     */
+    private function bestScoreHint(string $requirement, Collection $products): int
+    {
+        $heuristic = $this->bestMatch($requirement, $products);
+
+        return (int) ($heuristic['score'] ?? 0);
+    }
+
+    private function applyProduct(TenderItem $item, Product $product, int $score): void
+    {
+        $item->main_product_id = $product->id;
+        $item->ai_match_percent = $score;
+        $item->status = 'matched';
+        if ($item->offer_price === null) {
+            $item->offer_price = round((float) $product->purchase_price * 1.18, 2);
+        }
+        $item->save();
+        $item->load('mainProduct');
+        $this->pricing->recalculateItemMargin($item);
     }
 }

@@ -19,6 +19,13 @@ const STATUS_LABEL: Record<string, string> = {
   failed: 'Błąd',
 }
 
+/** Opis tekstowy bez list — listy są osobno z enrichment_payload. */
+function descriptionProse(text: string | null | undefined): string {
+  if (!text) return ''
+  const cut = text.search(/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/)
+  return cut >= 0 ? text.slice(0, cut).trim() : text
+}
+
 export function ProductDetail() {
   const { id } = useParams()
   const { user } = useAuth()
@@ -65,12 +72,22 @@ export function ProductDetail() {
     setBusy(true)
     setErr('')
     try {
-      const res = await api<{ batch: EnrichmentBatch }>(`/products/${id}/enrich`, {
-        method: 'POST',
-        body: JSON.stringify({ force }),
-      })
+      const res = await api<{ batch: EnrichmentBatch; product?: Detail; images_count?: number }>(
+        `/products/${id}/enrich`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ force }),
+        },
+      )
       setBatch(res.batch)
-      await load()
+      if (res.product) {
+        setP(res.product)
+      } else {
+        await load()
+      }
+      if ((res.images_count ?? res.product?.images?.length ?? 0) === 0) {
+        setErr('Opis pobrany, ale nie udało się zapisać zdjęcia. Spróbuj ponownie za chwilę.')
+      }
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd enrichmentu')
     } finally {
@@ -81,6 +98,7 @@ export function ProductDetail() {
   if (!p) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
   const status = p.enrichment_status ?? 'none'
+  const prose = descriptionProse(p.description)
 
   return (
     <div>
@@ -103,21 +121,15 @@ export function ProductDetail() {
             <button
               type="button"
               disabled={busy || status === 'queued' || status === 'running'}
-              onClick={() => void enrich(false)}
+              onClick={() => void enrich(status === 'done' || status === 'failed')}
               className="rounded bg-blue-600 px-3 py-2 text-xs text-white disabled:opacity-50"
             >
-              {busy ? 'Startuję…' : 'Pobierz opis i zdjęcia'}
+              {busy
+                ? 'Startuję…'
+                : status === 'done'
+                  ? 'Pobierz ponownie'
+                  : 'Pobierz opis i zdjęcia'}
             </button>
-            {status === 'done' && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void enrich(true)}
-                className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
-              >
-                Pobierz ponownie
-              </button>
-            )}
           </div>
         )}
       </div>
@@ -144,10 +156,13 @@ export function ProductDetail() {
         </div>
       </div>
 
-      {(p.description || (p.images && p.images.length > 0) || p.enrichment_payload) && (
+      {(p.description ||
+        (p.images && p.images.length > 0) ||
+        (p.documents && p.documents.length > 0) ||
+        p.enrichment_payload) && (
         <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
           <h2 className="mb-2 text-sm font-semibold">Opis i zdjęcia</h2>
-          {p.images && p.images.length > 0 && (
+          {p.images && p.images.length > 0 ? (
             <div className="mb-3 flex flex-wrap gap-2">
               {p.images.map((img) => (
                 <button
@@ -161,13 +176,20 @@ export function ProductDetail() {
                     src={img.url}
                     alt={p.name}
                     className="h-32 w-32 object-contain"
+                    onError={(e) => {
+                      const el = e.currentTarget
+                      el.style.display = 'none'
+                      setErr(`Nie można wyświetlić zdjęcia (${img.url}). Sprawdź storage:link / Apache.`)
+                    }}
                   />
                 </button>
               ))}
             </div>
-          )}
-          {p.description && (
-            <p className="mb-3 whitespace-pre-wrap text-sm text-slate-700">{p.description}</p>
+          ) : p.enrichment_status === 'done' ? (
+            <p className="mb-3 text-xs text-amber-700">Brak zapisanego zdjęcia — użyj „Pobierz ponownie”.</p>
+          ) : null}
+          {prose && (
+            <p className="mb-3 whitespace-pre-wrap text-sm text-slate-700">{prose}</p>
           )}
           {[
             ['Specyfikacja', p.enrichment_payload?.specs],
@@ -187,6 +209,35 @@ export function ProductDetail() {
                 </ul>
               </div>
             ) : null,
+          )}
+          {p.documents && p.documents.length > 0 && (
+            <div className="mb-3">
+              <p className="mb-1 text-xs font-semibold text-slate-700">Pliki PDF</p>
+              <ul className="space-y-1 text-xs text-slate-600">
+                {p.documents.map((doc) => (
+                  <li key={doc.id}>
+                    <a
+                      href={doc.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-blue-600 hover:underline"
+                    >
+                      {doc.title || 'Dokument.pdf'}
+                    </a>
+                    <span className="ml-1 text-slate-400">
+                      (
+                      {doc.kind === 'certificate'
+                        ? 'certyfikat'
+                        : doc.kind === 'datasheet'
+                          ? 'karta'
+                          : 'PDF'}
+                      {doc.size_bytes ? ` · ${Math.max(1, Math.round(doc.size_bytes / 1024))} KB` : ''}
+                      )
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           {p.enrichment_payload?.source_urls && p.enrichment_payload.source_urls.length > 0 && (
             <p className="text-[11px] text-slate-400">

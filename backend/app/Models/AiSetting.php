@@ -14,6 +14,7 @@ class AiSetting extends Model
         'base_url',
         'api_key',
         'model',
+        'enrichment_model',
         'timeout_seconds',
         'temperature',
         'web_search_enabled',

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type Product } from '../lib/api'
+import { ProductPreviewModal } from './ProductPreviewModal'
 
 type MiniProduct = { id: number; sku: string; name: string; manufacturer?: string | null }
 
@@ -35,6 +36,7 @@ export function ProductSearchSelect({
   const [q, setQ] = useState('')
   const [remote, setRemote] = useState<Product[]>([])
   const [searching, setSearching] = useState(false)
+  const [previewId, setPreviewId] = useState<number | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -117,9 +119,22 @@ export function ProductSearchSelect({
         }}
       />
       {selected && !open && (
-        <p className="mt-0.5 truncate text-[10px] text-slate-600" title={labelOf(selected)}>
-          {labelOf(selected)}
-        </p>
+        <button
+          type="button"
+          className="mt-1 flex w-full max-w-full items-start gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left shadow-sm transition hover:border-sky-400 hover:bg-sky-100"
+          title="Kliknij, aby zobaczyć szczegóły produktu"
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setPreviewId(selected.id)
+          }}
+        >
+          <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
+          <span className="min-w-0">
+            <span className="block truncate text-[11px] font-medium text-sky-900">{selected.sku}</span>
+            <span className="block truncate text-[10px] text-slate-600">{selected.name}</span>
+          </span>
+        </button>
       )}
       {hint && <p className="mt-0.5 text-[10px] text-violet-700">{hint}</p>}
       {open && !disabled && (
@@ -164,6 +179,7 @@ export function ProductSearchSelect({
           )}
         </ul>
       )}
+      <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
     </div>
   )
 }

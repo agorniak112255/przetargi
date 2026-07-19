@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { ProductAiMatchModal } from '../components/ProductAiMatchModal'
+import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
 
@@ -475,15 +477,15 @@ export function TenderDetail() {
     }
   }
 
-  async function exportOffer(kind: 'excel' | 'pdf') {
+  async function exportOffer(kind: 'excel' | 'pdf' | 'docx') {
     setErr('')
     setBusy(true)
     try {
-      await downloadFile(
-        `/tenders/${id}/export/${kind}`,
-        `oferta.${kind === 'excel' ? 'xlsx' : 'pdf'}`,
+      const ext = kind === 'excel' ? 'xlsx' : kind
+      await downloadFile(`/tenders/${id}/export/${kind}`, `oferta.${ext}`)
+      setMsg(
+        kind === 'excel' ? 'Pobrano Excel.' : kind === 'pdf' ? 'Pobrano PDF.' : 'Pobrano uzupełniony formularz DOCX.',
       )
-      setMsg(kind === 'excel' ? 'Pobrano Excel.' : 'Pobrano PDF.')
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd eksportu')
     } finally {
@@ -494,7 +496,7 @@ export function TenderDetail() {
   if (!data) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
   const { tender, substitutes_by_main, can_edit, next_statuses } = data
-  const canApproveSub = ['kierownik', 'admin', 'dyrektor'].includes(user?.role ?? '')
+  const canApproveSub = Boolean(user?.permissions?.includes('substitutes.approve'))
 
   return (
     <div>
@@ -539,6 +541,15 @@ export function TenderDetail() {
             className="rounded bg-emerald-800 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
           >
             PDF
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void exportOffer('docx')}
+            title="Wypełnia wgrany formularz ofertowy DOCX cenami z oferty"
+            className="rounded bg-sky-700 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
+          >
+            DOCX
           </button>
         </div>
       </div>
@@ -596,10 +607,8 @@ export function TenderDetail() {
                     products={products}
                     canEdit={can_edit}
                     busy={busy}
-                    tenderId={id!}
                     onSave={saveItem}
                     onDraftChange={registerItemDraft}
-                    onMatched={() => void load()}
                   />
                 ))}
               </tbody>
@@ -689,7 +698,7 @@ export function TenderDetail() {
           <div className="rounded-xl bg-white p-4 shadow-sm">
             <h2 className="mb-2 text-sm font-semibold">Import dokumentu SIWZ</h2>
             <p className="mb-3 text-xs text-slate-500">
-              PDF, Excel (xlsx/xls/csv), Word (doc/docx) → pozycje i/lub warunki.
+              PDF, Excel (xlsx/xls/csv), Word (doc/docx) → pozycje i/lub warunki. Word jest zapisywany jako szablon oferty (przycisk DOCX).
             </p>
             <div className="mb-3 flex flex-wrap gap-4 text-xs">
               <label className="flex items-center gap-1">
@@ -1167,8 +1176,7 @@ export function TenderDetail() {
               )}
             </div>
             <p className="mt-3 text-[11px] text-slate-400">
-              Zalogowany: {user?.name} ({user?.role}). Do zatwierdzenia oferty: dyrektor (
-              tomek@supon.local). Zamienniki: krzysiek@supon.local.
+              Zalogowany: {user?.name} ({user?.role}). Przejścia statusów zależą od uprawnień roli.
             </p>
           </div>
           <div className="rounded-xl bg-white p-4 shadow-sm">
@@ -1212,19 +1220,15 @@ function ItemRow({
   products,
   canEdit,
   busy,
-  tenderId,
   onSave,
   onDraftChange,
-  onMatched,
 }: {
   item: Item
   products: Product[]
   canEdit: boolean
   busy: boolean
-  tenderId: string
   onSave: (id: number, patch: Record<string, unknown>) => Promise<void>
   onDraftChange: (itemId: number, draft: ItemDraft) => void
-  onMatched: () => void
 }) {
   const [productId, setProductId] = useState<string>(itemProductId(item))
   const [picked, setPicked] = useState<{ id: number; sku: string; name: string } | null>(
@@ -1235,7 +1239,8 @@ function ItemRow({
   const [qty, setQty] = useState(String(item.quantity))
   const [price, setPrice] = useState(item.offer_price ?? '')
   const [matchHint, setMatchHint] = useState('')
-  const [matching, setMatching] = useState(false)
+  const [previewId, setPreviewId] = useState<number | null>(null)
+  const [aiModalOpen, setAiModalOpen] = useState(false)
 
   useEffect(() => {
     setProductId(itemProductId(item))
@@ -1255,33 +1260,6 @@ function ItemRow({
       offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
     })
   }, [item.id, productId, qty, price, onDraftChange])
-
-  async function matchAi() {
-    setMatching(true)
-    setMatchHint('Dopasowuję…')
-    try {
-      const res = await api<{
-        matched: boolean
-        score: number
-        product_id: number | null
-        product?: { id: number; sku: string; name: string }
-        offer_price?: string | number | null
-      }>(`/tenders/${tenderId}/items/${item.id}/match`, { method: 'POST' })
-      if (res.matched && res.product) {
-        setProductId(String(res.product.id))
-        setPicked(res.product)
-        if (res.offer_price != null) setPrice(String(res.offer_price))
-        setMatchHint(`AI: ${res.product.sku} (${res.score}%)`)
-        onMatched()
-      } else {
-        setMatchHint(`Brak pewnego dopasowania (${res.score}%)`)
-      }
-    } catch (e) {
-      setMatchHint(e instanceof Error ? e.message : 'Błąd AI')
-    } finally {
-      setMatching(false)
-    }
-  }
 
   const selectedProduct =
     picked && String(picked.id) === productId
@@ -1304,7 +1282,7 @@ function ItemRow({
                 products={products}
                 value={productId}
                 selectedProduct={selectedProduct}
-                disabled={busy || matching}
+                disabled={busy}
                 onChange={(id, product) => {
                   setProductId(id)
                   setPicked(product ?? null)
@@ -1312,27 +1290,62 @@ function ItemRow({
                 }}
                 hint={
                   matchHint ||
-                  (!hasSavedProduct && item.ai_match_percent != null
-                    ? `Wynik AI: ${item.ai_match_percent}%`
+                  (item.ai_match_percent != null
+                    ? hasSavedProduct
+                      ? `Dopasowanie AI: ${item.ai_match_percent}%`
+                      : `Wynik AI: ${item.ai_match_percent}%`
                     : undefined)
                 }
               />
-              {!hasSavedProduct && (
-                <button
-                  type="button"
-                  title="Dopasuj AI po nazwie/kodzie z SIWZ"
-                  disabled={busy || matching}
-                  onClick={() => void matchAi()}
-                  className="shrink-0 rounded bg-violet-600 px-2 py-1 text-[10px] text-white hover:bg-violet-700 disabled:opacity-50"
-                >
-                  AI
-                </button>
-              )}
+              <button
+                type="button"
+                title="Otwórz wyszukiwanie AI (własne zapytanie → top 5)"
+                disabled={busy}
+                onClick={() => setAiModalOpen(true)}
+                className="shrink-0 rounded bg-violet-600 px-2 py-1 text-[10px] text-white hover:bg-violet-700 disabled:opacity-50"
+              >
+                AI
+              </button>
             </div>
+            <ProductAiMatchModal
+              open={aiModalOpen}
+              initialQuery={item.requirement}
+              onClose={() => setAiModalOpen(false)}
+              onSelect={(p) => {
+                setProductId(String(p.id))
+                setPicked({ id: p.id, sku: p.sku, name: p.name })
+                setMatchHint(`AI: ${p.sku} (${p.score}%)`)
+                setAiModalOpen(false)
+              }}
+            />
           </div>
         ) : (
           <span>
-            {item.main_product ? `${item.main_product.name} (${item.main_product.sku})` : '—'}
+            {item.main_product ? (
+              <button
+                type="button"
+                className="flex w-full max-w-[280px] items-start gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left shadow-sm transition hover:border-sky-400 hover:bg-sky-100"
+                onClick={() => setPreviewId(item.main_product!.id)}
+              >
+                <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
+                <span className="min-w-0">
+                  <span className="block truncate text-[11px] font-medium text-sky-900">
+                    {item.main_product.sku}
+                  </span>
+                  <span className="block truncate text-[10px] text-slate-600">
+                    {item.main_product.name}
+                  </span>
+                  {item.ai_match_percent != null && (
+                    <span className="mt-0.5 block text-[10px] text-violet-700">
+                      Dopasowanie AI: {item.ai_match_percent}%
+                    </span>
+                  )}
+                </span>
+              </button>
+            ) : (
+              '—'
+            )}
+            <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
           </span>
         )}
       </td>
@@ -1363,7 +1376,7 @@ function ItemRow({
         {canEdit && (
           <button
             type="button"
-            disabled={busy || matching}
+            disabled={busy}
             className="rounded bg-blue-600 px-2 py-1 text-[10px] text-white disabled:opacity-50"
             onClick={() =>
               void onSave(item.id, {

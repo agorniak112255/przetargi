@@ -29,17 +29,20 @@ final class AiSettingsApiTest extends TestCase
             'enabled' => true,
             'base_url' => 'https://api.openai.com/v1',
             'model' => 'gpt-4o-mini',
+            'enrichment_model' => 'openai/gpt-4o-mini',
             'api_key' => 'sk-test-key-1234567890',
             'timeout_seconds' => 60,
             'temperature' => 0.2,
         ])->assertOk()
             ->assertJsonPath('enabled', true)
             ->assertJsonPath('has_api_key', true)
-            ->assertJsonPath('model', 'gpt-4o-mini');
+            ->assertJsonPath('model', 'gpt-4o-mini')
+            ->assertJsonPath('enrichment_model', 'openai/gpt-4o-mini');
 
         $this->getJson('/api/ai-settings')
             ->assertOk()
             ->assertJsonPath('source', 'database')
+            ->assertJsonPath('enrichment_model', 'openai/gpt-4o-mini')
             ->assertJsonMissingPath('api_key');
     }
 }

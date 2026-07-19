@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Tender;
 use App\Models\TenderStatusHistory;
 use App\Models\User;
+use App\Support\PermissionCatalog;
 use Illuminate\Validation\ValidationException;
 
 final class TenderWorkflowService
@@ -23,21 +24,22 @@ final class TenderWorkflowService
         'archiwum' => [],
     ];
 
-    /** @var array<string, list<string>> */
-    private const ROLE_CAN_SET = [
-        'wycena' => ['handlowiec', 'przetargi', 'kierownik', 'admin'],
-        'akceptacja_km' => ['handlowiec', 'kierownik', 'admin'],
-        'akceptacja_dyrektor' => ['kierownik', 'admin'],
-        'zatwierdzona' => ['dyrektor', 'admin'],
-        'exported' => ['handlowiec', 'kierownik', 'admin', 'dyrektor'],
-        'archiwum' => ['kierownik', 'admin', 'dyrektor'],
-        'odrzucony' => ['kierownik', 'dyrektor', 'admin'],
-        'draft' => ['handlowiec', 'przetargi', 'kierownik', 'admin'],
-    ];
-
     public function canEditOffer(Tender $tender): bool
     {
         return in_array($tender->status, ['draft', 'wycena'], true);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function nextStatusesFor(Tender $tender, User $user): array
+    {
+        $candidates = self::TRANSITIONS[$tender->status] ?? [];
+
+        return array_values(array_filter(
+            $candidates,
+            static fn (string $status): bool => $user->can(PermissionCatalog::transitionPermission($status))
+        ));
     }
 
     public function transition(Tender $tender, string $toStatus, User $user, ?string $note = null): Tender
@@ -51,21 +53,10 @@ final class TenderWorkflowService
             ]);
         }
 
-        $roles = self::ROLE_CAN_SET[$toStatus] ?? [];
-        if (! in_array($user->role, $roles, true)) {
+        if (! $user->can(PermissionCatalog::transitionPermission($toStatus))) {
             throw ValidationException::withMessages([
                 'status' => ['Brak uprawnień do tej zmiany statusu.'],
             ]);
-        }
-
-        if ($toStatus === 'akceptacja_km' && $from === 'wycena') {
-            $pending = $tender->items()
-                ->whereNotNull('main_product_id')
-                ->get()
-                ->pluck('main_product_id');
-
-            // optional soft check - no hard block
-            unset($pending);
         }
 
         $tender->status = $toStatus;
@@ -80,6 +71,6 @@ final class TenderWorkflowService
             'note' => $note,
         ]);
 
-        return $tender->fresh(['statusHistories.user']);
+        return $tender->fresh();
     }
 }

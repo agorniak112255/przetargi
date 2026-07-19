@@ -25,8 +25,13 @@ class ProductEnrichmentController extends Controller
             'force' => ['sometimes', 'boolean'],
         ]);
 
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(120);
+        }
+
         try {
-            $batch = $this->enrichment->enqueueProduct(
+            // Jedna sztuka — synchronicznie (bez ryzyka starego queue:work)
+            $batch = $this->enrichment->enrichProductSync(
                 $product,
                 $request->user(),
                 (bool) ($data['force'] ?? false),
@@ -35,10 +40,38 @@ class ProductEnrichmentController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
+        $product->refresh()->load([
+            'images',
+            'documents',
+            'substitutes.substituteProduct:id,sku,name,manufacturer,catalog_price_net',
+            'substitutes.approver:id,name',
+        ]);
+
+        $payload = $product->toArray();
+        $payload['images'] = $product->images->map(static fn ($img): array => [
+            'id' => $img->id,
+            'url' => $img->url(),
+            'source_url' => $img->source_url,
+            'is_primary' => $img->is_primary,
+            'sort_order' => $img->sort_order,
+        ])->values()->all();
+        $payload['documents'] = $product->documents->map(static fn ($doc): array => [
+            'id' => $doc->id,
+            'url' => $doc->url(),
+            'source_url' => $doc->source_url,
+            'title' => $doc->title,
+            'kind' => $doc->kind,
+            'size_bytes' => $doc->size_bytes,
+            'sort_order' => $doc->sort_order,
+        ])->values()->all();
+
         return response()->json([
             'batch' => $this->batchPayload($batch),
             'product_id' => $product->id,
-        ], 202);
+            'product' => $payload,
+            'images_count' => count($payload['images']),
+            'documents_count' => count($payload['documents']),
+        ]);
     }
 
     public function enrichPriceList(Request $request, PriceList $priceList): JsonResponse
@@ -84,6 +117,22 @@ class ProductEnrichmentController extends Controller
         return response()->json([
             'batch' => $this->batchPayload($batch),
         ], 202);
+    }
+
+    public function activeBatches(): JsonResponse
+    {
+        $batches = ProductEnrichmentBatch::query()
+            ->whereIn('status', [
+                ProductEnrichmentBatch::STATUS_QUEUED,
+                ProductEnrichmentBatch::STATUS_RUNNING,
+            ])
+            ->orderByDesc('id')
+            ->limit(50)
+            ->get();
+
+        return response()->json(
+            $batches->map(fn (ProductEnrichmentBatch $batch): array => $this->batchPayload($batch))->values()->all()
+        );
     }
 
     public function showBatch(ProductEnrichmentBatch $batch): JsonResponse

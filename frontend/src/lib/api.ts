@@ -81,6 +81,16 @@ export type ProductImage = {
   sort_order: number
 }
 
+export type ProductDocument = {
+  id: number
+  url: string
+  source_url?: string | null
+  title?: string | null
+  kind?: string
+  size_bytes?: number
+  sort_order?: number
+}
+
 export type Product = {
   id: number
   sku: string
@@ -113,6 +123,8 @@ export type Product = {
   } | null
   images?: ProductImage[]
   images_count?: number
+  documents?: ProductDocument[]
+  documents_count?: number
   ai_match_percent?: number
   ai_match_reason?: string | null
 }

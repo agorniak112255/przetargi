@@ -34,6 +34,12 @@ class ProductImage extends Model
 
     public function url(): string
     {
-        return Storage::disk('public')->url($this->path);
+        // Ścieżka względna do Alias /Przetargi (nie zależ od hosta localhost vs 127.0.0.1)
+        $basePath = rtrim((string) (parse_url((string) config('app.url'), PHP_URL_PATH) ?: ''), '/');
+        if ($basePath === '' || $basePath === '/') {
+            return Storage::disk('public')->url($this->path);
+        }
+
+        return $basePath.'/storage/'.ltrim($this->path, '/');
     }
 }

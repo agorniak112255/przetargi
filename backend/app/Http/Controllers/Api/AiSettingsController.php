@@ -32,6 +32,7 @@ class AiSettingsController extends Controller
             'base_url' => ['sometimes', 'url', 'max:255'],
             'api_key' => ['nullable', 'string', 'max:500'],
             'model' => ['sometimes', 'string', 'max:120'],
+            'enrichment_model' => ['nullable', 'string', 'max:120'],
             'timeout_seconds' => ['sometimes', 'integer', 'min:10', 'max:300'],
             'temperature' => ['sometimes', 'numeric', 'min:0', 'max:2'],
             'web_search_enabled' => ['sometimes', 'boolean'],

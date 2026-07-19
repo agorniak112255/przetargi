@@ -82,6 +82,10 @@ type PriceList = {
   updated_products?: UpdatedProduct[] | null
   skipped_details?: SkippedDetail[] | null
   product_ids?: number[] | null
+  enrichment_done?: number
+  enrichment_failed?: number
+  enrichment_total?: number
+  enrichment_last_error?: string | null
   created_at: string
   importer?: { name: string }
 }
@@ -231,6 +235,31 @@ export function PriceLists() {
   const progressTimer = useRef<number | null>(null)
 
   useEffect(() => {
+    void api<EnrichmentBatch[]>('/product-enrichment-batches/active')
+      .then((list) => {
+        const next: Record<number, EnrichmentBatch> = {}
+        for (const b of list) {
+          if (b.scope === 'price_list' && b.scope_id != null) {
+            next[b.scope_id] = b
+          }
+        }
+        if (Object.keys(next).length === 0) return
+        setEnrichBatches((prev) => ({ ...prev, ...next }))
+        const first = Object.values(next)[0]
+        if (first) {
+          setMsg(
+            `Pobieranie w tle trwa: ${first.done + first.failed}/${first.total}` +
+              (first.current_sku ? ` (teraz: ${first.current_sku})` : '') +
+              '. Możesz zamknąć stronę — postęp wróci po odświeżeniu.',
+          )
+        }
+      })
+      .catch(() => {
+        /* brak uprawnień / sieć — ignoruj */
+      })
+  }, [])
+
+  useEffect(() => {
     const active = Object.values(enrichBatches).filter(
       (b) => b.status === 'queued' || b.status === 'running',
     )
@@ -246,6 +275,7 @@ export function PriceLists() {
           }
           return next
         })
+        void load()
       })
     }, 2500)
     return () => window.clearInterval(t)
@@ -290,7 +320,7 @@ export function PriceLists() {
       })
       setEnrichBatches((prev) => ({ ...prev, [row.id]: res.batch }))
       setMsg(
-        `Wzbogacanie cennika „${row.manufacturer} / ${row.version}”: ${res.batch.total} produktów w kolejce.`,
+        `Pobieranie opisów/zdjęć dla „${row.manufacturer} / ${row.version}”: ${res.batch.total} produktów w kolejce.`,
       )
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd wzbogacania')
@@ -1314,7 +1344,13 @@ export function PriceLists() {
               const cached = historyCache[r.id] ?? r
               const kind = expandedHistory?.id === r.id ? expandedHistory.kind : null
               const enrichBatch = enrichBatches[r.id]
-              const productCount = (r.product_ids ?? cached.product_ids ?? []).length
+              const productCount =
+                r.enrichment_total ?? (r.product_ids ?? cached.product_ids ?? []).length
+              const enrichDone = r.enrichment_done ?? 0
+              const enrichFailed = r.enrichment_failed ?? 0
+              const batchActive =
+                enrichBatch?.status === 'queued' || enrichBatch?.status === 'running'
+              const missing = Math.max(0, productCount - enrichDone)
               return (
               <Fragment key={r.id}>
                 <tr className="border-b">
@@ -1335,35 +1371,60 @@ export function PriceLists() {
                   <td className="p-2">{r.importer?.name ?? '—'}</td>
                   {canEnrich && (
                     <td className="p-2 min-w-[9rem]">
+                      <p
+                        className={
+                          'mb-1 text-[11px] tabular-nums ' +
+                          (productCount > 0 && enrichDone >= productCount
+                            ? 'font-medium text-green-700'
+                            : enrichDone > 0
+                              ? 'text-slate-700'
+                              : 'text-slate-400')
+                        }
+                        title="Produkty z pobranym opisem / wszystkie z tego importu"
+                      >
+                        {productCount > 0 ? `${enrichDone}/${productCount}` : '—'}
+                        {enrichFailed > 0 ? (
+                          <span className="text-red-600"> · err {enrichFailed}</span>
+                        ) : null}
+                      </p>
+                      {enrichFailed > 0 && r.enrichment_last_error && (
+                        <p
+                          className="mb-1 max-w-[14rem] truncate text-[10px] text-red-600"
+                          title={r.enrichment_last_error}
+                        >
+                          {r.enrichment_last_error.replace(/^Błąd:\s*/i, '')}
+                        </p>
+                      )}
                       <button
                         type="button"
                         disabled={
                           enrichBusyId === r.id ||
                           productCount === 0 ||
-                          enrichBatch?.status === 'queued' ||
-                          enrichBatch?.status === 'running'
+                          batchActive
                         }
-                        onClick={() => void enrichPriceList(r)}
+                        onClick={() => void enrichPriceList(r, false)}
                         className="rounded border border-slate-300 px-2 py-1 text-[11px] disabled:opacity-50"
                         title={
                           productCount === 0
                             ? 'Brak product_ids (stary import)'
-                            : `Wzbogać ${productCount} produktów`
+                            : enrichFailed > 0
+                              ? `Ponów nieudane (${enrichFailed}). ${r.enrichment_last_error ?? ''}`
+                              : `Pobierz opisy/zdjęcia dla ${missing || productCount} produktów`
                         }
                       >
                         {enrichBusyId === r.id
                           ? 'Start…'
-                          : enrichBatch &&
-                              (enrichBatch.status === 'queued' || enrichBatch.status === 'running')
+                          : batchActive
                             ? `${enrichBatch.done + enrichBatch.failed}/${enrichBatch.total}`
-                            : enrichBatch?.status === 'done'
-                              ? `Gotowe (${enrichBatch.done})`
-                              : enrichBatch?.status === 'failed'
-                                ? 'Błąd'
-                                : 'Wzbogać'}
+                            : enrichFailed > 0
+                              ? `Ponów err (${enrichFailed})`
+                              : enrichDone >= productCount && productCount > 0
+                                ? 'Pobierz ponownie'
+                                : missing > 0 && enrichDone > 0
+                                  ? `Pobierz brak (${missing})`
+                                  : 'Pobierz'}
                       </button>
-                      {enrichBatch &&
-                        (enrichBatch.status === 'queued' || enrichBatch.status === 'running') && (
+                      {batchActive && enrichBatch && (
                           <div className="mt-1 w-36">
                             <div className="h-1.5 overflow-hidden rounded bg-slate-200">
                               <div

@@ -1,19 +1,34 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { can, canAny } from '../lib/api'
 
-const links = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/tenders', label: 'Przetargi' },
-  { to: '/products', label: 'Produkty' },
-  { to: '/price-lists', label: 'Cenniki' },
-  { to: '/substitutes', label: 'Zamienniki' },
-  { to: '/clients', label: 'Klienci' },
-  { to: '/ai-settings', label: 'Ustawienia AI' },
+type NavLinkItem = {
+  to: string
+  label: string
+  permission?: string
+  anyOf?: string[]
+}
+
+const links: NavLinkItem[] = [
+  { to: '/', label: 'Dashboard', permission: 'dashboard.view' },
+  { to: '/tenders', label: 'Przetargi', anyOf: ['tenders.view_own', 'tenders.view_all'] },
+  { to: '/products', label: 'Produkty', permission: 'products.view' },
+  { to: '/price-lists', label: 'Cenniki', permission: 'price_lists.view' },
+  { to: '/substitutes', label: 'Zamienniki', permission: 'products.view' },
+  { to: '/clients', label: 'Klienci', permission: 'clients.view' },
+  { to: '/ai-settings', label: 'Ustawienia AI', permission: 'ai_settings.manage' },
+  { to: '/admin', label: 'Administracja', permission: 'admin.access' },
   { to: '/help', label: 'Pomoc' },
 ]
 
 export function Layout() {
   const { user, logout } = useAuth()
+
+  const visible = links.filter((l) => {
+    if (l.permission) return can(user, l.permission)
+    if (l.anyOf) return canAny(user, l.anyOf)
+    return true
+  })
 
   return (
     <div className="flex min-h-screen">
@@ -25,11 +40,11 @@ export function Layout() {
           </small>
         </div>
         <nav>
-          {links.map((l) => (
+          {visible.map((l) => (
             <NavLink
               key={l.to}
               to={l.to}
-              end={l.to === '/'}
+              end={l.to === '/' || l.to === '/admin'}
               className={({ isActive }) =>
                 `block border-b border-slate-700 px-4 py-3 text-sm ${
                   isActive ? 'border-l-4 border-l-sky-400 bg-slate-700 pl-3' : 'hover:bg-slate-700'

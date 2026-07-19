@@ -55,7 +55,8 @@ class TenderMatchController extends Controller
             abort(404);
         }
 
-        $result = $this->matcher->matchItem($item);
+        $force = $request->boolean('force', false);
+        $result = $this->matcher->matchItem($item, $force);
 
         return response()->json($result);
     }

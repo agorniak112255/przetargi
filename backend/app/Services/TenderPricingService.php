@@ -30,7 +30,15 @@ final class TenderPricingService
 
         $offer = (float) $item->offer_price;
         $purchase = (float) $product->purchase_price;
-        $item->margin_percent = round((($offer - $purchase) / $offer) * 100, 2);
+        if ($offer <= 0) {
+            $item->margin_percent = null;
+            $item->save();
+
+            return;
+        }
+
+        // decimal(8,2): ±999999.99 — clamp na wypadek ekstremalnych cen
+        $item->margin_percent = max(-999999.99, min(999999.99, round((($offer - $purchase) / $offer) * 100, 2)));
         $item->save();
     }
 
@@ -53,7 +61,9 @@ final class TenderPricingService
         }
 
         $tender->offer_value_net = round($value, 2);
-        $tender->margin_percent = $value > 0 ? round($weightedMargin / $value, 2) : null;
+        $tender->margin_percent = $value > 0
+            ? max(-999999.99, min(999999.99, round($weightedMargin / $value, 2)))
+            : null;
         $tender->last_activity_at = now();
         $tender->save();
     }

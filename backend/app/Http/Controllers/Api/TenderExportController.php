@@ -6,14 +6,22 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Tender;
+use App\Services\TenderDocxOfferFiller;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use RuntimeException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class TenderExportController extends Controller
 {
+    public function __construct(
+        private readonly TenderDocxOfferFiller $docxFiller,
+    ) {}
+
     public function excel(Tender $tender): StreamedResponse
     {
         $tender->load(['client', 'items.mainProduct', 'owner']);
@@ -70,5 +78,20 @@ class TenderExportController extends Controller
         $filename = str_replace('/', '-', $tender->number).'_oferta.pdf';
 
         return $pdf->download($filename);
+    }
+
+    public function docx(Tender $tender): BinaryFileResponse|JsonResponse
+    {
+        try {
+            $path = $this->docxFiller->fill($tender);
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $filename = str_replace('/', '-', $tender->number).'_oferta.docx';
+
+        return response()->download($path, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ])->deleteFileAfterSend(true);
     }
 }

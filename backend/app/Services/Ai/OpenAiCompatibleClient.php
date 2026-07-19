@@ -130,10 +130,16 @@ class OpenAiCompatibleClient
      * @param  list<array{role: string, content: mixed}>  $messages
      * @return array<string, mixed>
      */
-    public function chatJson(array $messages, ?float $temperature = null, ?int $maxTokens = null): array
+    public function chatJson(array $messages, ?float $temperature = null, ?int $maxTokens = null, ?string $model = null): array
     {
-        $extra = $maxTokens !== null ? ['max_tokens' => max(256, $maxTokens)] : null;
-        $result = $this->chat($messages, $temperature, true, $extra);
+        $extra = [];
+        if ($maxTokens !== null) {
+            $extra['max_tokens'] = max(256, $maxTokens);
+        }
+        if ($model !== null && trim($model) !== '') {
+            $extra['model'] = trim($model);
+        }
+        $result = $this->chat($messages, $temperature, true, $extra !== [] ? $extra : null);
 
         try {
             return $this->jsonParser->parse($result['content']);
@@ -147,10 +153,16 @@ class OpenAiCompatibleClient
                     'role' => 'user',
                     'content' => "Popraw poniższy tekst do walidnego JSON:\n\n".$result['content'],
                 ],
-            ], 0.0);
+            ], 0.0, true, $extra !== [] ? $extra : null);
 
             return $this->jsonParser->parse($repair['content']);
         }
+    }
+
+    /** Opisy produktów / filtr chrome — używa taniego modelu z ustawień. */
+    public function chatJsonEnrichment(array $messages, ?float $temperature = null, ?int $maxTokens = null): array
+    {
+        return $this->chatJson($messages, $temperature, $maxTokens, $this->settings->enrichmentModel());
     }
 
     /**

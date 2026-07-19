@@ -6,6 +6,7 @@ type AiSettings = {
   provider: string
   base_url: string
   model: string
+  enrichment_model: string | null
   timeout_seconds: number
   temperature: number
   web_search_enabled: boolean
@@ -47,6 +48,7 @@ export function AiSettingsPage() {
         provider: cfg.provider,
         base_url: cfg.base_url,
         model: cfg.model,
+        enrichment_model: cfg.enrichment_model?.trim() || null,
         timeout_seconds: cfg.timeout_seconds,
         temperature: cfg.temperature,
         web_search_enabled: cfg.web_search_enabled,
@@ -198,9 +200,24 @@ export function AiSettingsPage() {
         <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
           <p className="text-xs font-semibold text-slate-700">Wyszukiwanie opisów produktów (tanio)</p>
           <p className="text-[11px] text-slate-500">
-            Domyślnie: Tavily → krótki skrót tanim modelem → cache po SKU. Drogi AI web search tylko
-            jako awaria.
+            Domyślnie: Tavily → filtr/opis tanim modelem → cache po SKU. Puste pole = model główny z
+            góry. Drogi AI web search tylko jako awaria.
           </p>
+          <label className="block text-xs">
+            Tani model (opisy produktów)
+            <input
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.enrichment_model ?? ''}
+              onChange={(e) => setCfg({ ...cfg, enrichment_model: e.target.value || null })}
+              placeholder={cfg.model || 'np. openai/gpt-4o-mini'}
+              list="ai-enrichment-models"
+            />
+            <datalist id="ai-enrichment-models">
+              <option value="openai/gpt-4o-mini" />
+              <option value="google/gemini-2.0-flash-001" />
+              <option value="meta-llama/llama-3.3-70b-instruct" />
+            </datalist>
+          </label>
           <label className="block text-xs">
             Klucz Tavily *{' '}
             {cfg.has_tavily_api_key ? '(zostaw puste, by nie zmieniać)' : '(wymagany do pobierania)'}

@@ -23,7 +23,7 @@ class TenderController extends Controller
             ->with(['client:id,name', 'owner:id,name'])
             ->withCount('items');
 
-        if ($request->user()->role === 'handlowiec') {
+        if (! $request->user()->can('tenders.view_all')) {
             $query->where('owner_id', $request->user()->id);
         }
 
@@ -118,7 +118,7 @@ class TenderController extends Controller
             'tender' => $tender,
             'substitutes_by_main' => $substitutes,
             'can_edit' => $this->workflow->canEditOffer($tender),
-            'next_statuses' => $this->nextStatusesFor($tender, $request),
+            'next_statuses' => $this->workflow->nextStatusesFor($tender, $request->user()),
         ]);
     }
 
@@ -144,43 +144,7 @@ class TenderController extends Controller
                 'statusHistories.user:id,name,role',
             ]),
             'can_edit' => $this->workflow->canEditOffer($tender),
-            'next_statuses' => $this->nextStatusesFor($tender, $request),
+            'next_statuses' => $this->workflow->nextStatusesFor($tender, $request->user()),
         ]);
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function nextStatusesFor(Tender $tender, Request $request): array
-    {
-        $map = [
-            'draft' => ['wycena'],
-            'wycena' => ['akceptacja_km', 'draft'],
-            'akceptacja_km' => ['akceptacja_dyrektor', 'wycena', 'odrzucony'],
-            'akceptacja_dyrektor' => ['zatwierdzona', 'wycena', 'odrzucony'],
-            'zatwierdzona' => ['exported', 'archiwum'],
-            'exported' => ['archiwum'],
-            'odrzucony' => ['wycena'],
-            'archiwum' => [],
-        ];
-
-        $roleMap = [
-            'wycena' => ['handlowiec', 'przetargi', 'kierownik', 'admin'],
-            'akceptacja_km' => ['handlowiec', 'kierownik', 'admin'],
-            'akceptacja_dyrektor' => ['kierownik', 'admin'],
-            'zatwierdzona' => ['dyrektor', 'admin'],
-            'exported' => ['handlowiec', 'kierownik', 'admin', 'dyrektor'],
-            'archiwum' => ['kierownik', 'admin', 'dyrektor'],
-            'odrzucony' => ['kierownik', 'dyrektor', 'admin'],
-            'draft' => ['handlowiec', 'przetargi', 'kierownik', 'admin'],
-        ];
-
-        $role = $request->user()->role;
-        $candidates = $map[$tender->status] ?? [];
-
-        return array_values(array_filter(
-            $candidates,
-            static fn (string $s) => in_array($role, $roleMap[$s] ?? [], true)
-        ));
     }
 }

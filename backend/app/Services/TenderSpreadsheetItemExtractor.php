@@ -31,10 +31,7 @@ final class TenderSpreadsheetItemExtractor
     public function extract(string $path, bool $useAiMapping = true): ?array
     {
         $book = IOFactory::load($path);
-        $bestItems = [];
-        $bestMap = [];
-        $bestHeader = 1;
-        $bestNotes = '';
+        $best = null;
         $bestCount = 0;
 
         foreach ($book->getAllSheets() as $sheet) {
@@ -50,30 +47,48 @@ final class TenderSpreadsheetItemExtractor
                 );
             }
 
-            $detected = $this->detectMapping($normalized, $useAiMapping);
-            if ($detected === null) {
-                continue;
-            }
-
-            $items = $this->rowsToItems($normalized, $detected['header_row'], $detected['columns']);
-            if (count($items) > $bestCount) {
-                $bestCount = count($items);
-                $bestItems = $items;
-                $bestMap = $detected['columns'];
-                $bestHeader = $detected['header_row'];
-                $bestNotes = $detected['notes'];
+            $pack = $this->extractFromMatrix($normalized, $useAiMapping);
+            if ($pack !== null && count($pack['items']) > $bestCount) {
+                $bestCount = count($pack['items']);
+                $best = $pack;
             }
         }
 
-        if ($bestCount === 0) {
+        return $best;
+    }
+
+    /**
+     * Wspólna ścieżka dla XLSX i tabel DOCX.
+     *
+     * @param  list<list<string>>  $rows
+     * @return array{
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string}>,
+     *     column_map: array<string, int|null>,
+     *     header_row: int,
+     *     notes: string
+     * }|null
+     */
+    public function extractFromMatrix(array $rows, bool $useAiMapping = true): ?array
+    {
+        if ($rows === []) {
+            return null;
+        }
+
+        $detected = $this->detectMapping($rows, $useAiMapping);
+        if ($detected === null) {
+            return null;
+        }
+
+        $items = $this->rowsToItems($rows, $detected['header_row'], $detected['columns']);
+        if ($items === []) {
             return null;
         }
 
         return [
-            'items' => array_slice($bestItems, 0, 500),
-            'column_map' => $bestMap,
-            'header_row' => $bestHeader,
-            'notes' => $bestNotes,
+            'items' => array_slice($items, 0, 500),
+            'column_map' => $detected['columns'],
+            'header_row' => $detected['header_row'],
+            'notes' => $detected['notes'],
         ];
     }
 
@@ -150,10 +165,11 @@ final class TenderSpreadsheetItemExtractor
                 'kod', 'nr poz', 'pozycja nr', 'lp',
             ]),
             'name' => $this->findCol($labels, [
+                'przedmiot zamówienia', 'przedmiot zamowienia', 'przedmiot',
                 'name of article', 'name of product', 'nazwa artykułu', 'nazwa artykulu',
                 'nazwa produktu', 'nazwa towaru', 'opis produktu', 'asortyment',
-                'name of article', 'product name', 'article name', 'nazwa', 'name', 'opis', 'description', 'produkt',
-            ], exclude: ['project', 'client', 'klient', 'cena', 'price']),
+                'product name', 'article name', 'nazwa', 'name', 'opis', 'description', 'produkt',
+            ], exclude: ['project', 'client', 'klient', 'cena', 'price', 'podwykonawc']),
             'offer_price' => $this->findPreferredPriceCol($labels),
             'quantity' => $this->findCol($labels, [
                 'quantity', 'qty', 'ilość', 'ilosc', 'szt', 'amount', 'liczba',
@@ -174,8 +190,8 @@ final class TenderSpreadsheetItemExtractor
     private function findPreferredPriceCol(array $labels): ?int
     {
         $priority = [
-            'special price from', 'cena specjalna od', 'cena od', 'new price', 'nowa cena',
-            'cena oferty', 'offer price', 'cena jednostkowa', 'unit price',
+            'cena jednostkowa netto', 'cena jednostkowa', 'special price from', 'cena specjalna od',
+            'cena od', 'new price', 'nowa cena', 'cena oferty', 'offer price', 'unit price',
             'special price', 'cena specjalna', 'cena netto', 'cena', 'price',
         ];
         foreach ($priority as $needle) {
@@ -375,8 +391,14 @@ final class TenderSpreadsheetItemExtractor
             // pomiń wiersze-nagłówki
             $skuLower = mb_strtolower($sku);
             $nameLower = mb_strtolower($name);
-            if (in_array($skuLower, ['article', 'sku', 'kod'], true)
-                || in_array($nameLower, ['name of article', 'nazwa', 'name'], true)) {
+            if (in_array($skuLower, ['article', 'sku', 'kod', 'l.p.', 'lp'], true)
+                || in_array($nameLower, ['name of article', 'nazwa', 'name', 'przedmiot zamówienia'], true)
+                || str_starts_with($nameLower, 'suma')
+                || preg_match('/^\d+(\s*\(\d+\s*[x×]\s*\d+\))?$/u', $name) === 1) {
+                continue;
+            }
+            // wiersz numeracji kolumn: 1 | 2 | 3 | 4 | 5
+            if ($this->looksLikeColumnIndexRow($row)) {
                 continue;
             }
 
@@ -418,6 +440,25 @@ final class TenderSpreadsheetItemExtractor
         }
 
         return $items;
+    }
+
+    /**
+     * @param  list<string>  $row
+     */
+    private function looksLikeColumnIndexRow(array $row): bool
+    {
+        $nonEmpty = array_values(array_filter($row, static fn (string $c): bool => trim($c) !== ''));
+        if (count($nonEmpty) < 3) {
+            return false;
+        }
+        $numericish = 0;
+        foreach ($nonEmpty as $cell) {
+            if (preg_match('/^\d+(\s*\([^)]*\))?$/u', trim($cell)) === 1) {
+                $numericish++;
+            }
+        }
+
+        return $numericish >= max(3, (int) ceil(count($nonEmpty) * 0.7));
     }
 
     private function toFloat(mixed $value): ?float

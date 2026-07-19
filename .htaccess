@@ -1,0 +1,5 @@
+# Stary / bezpośredni URL do public → kanoniczny adres aplikacji
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^backend/public(/.*)?$ /Przetargi/ [R=302,L]
+</IfModule>

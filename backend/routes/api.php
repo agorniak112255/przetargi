@@ -50,6 +50,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::post('/tenders/{tender}/items/{item}/match', [TenderMatchController::class, 'matchItem'])->middleware('permission:tenders.edit_offer');
     Route::get('/tenders/{tender}/export/excel', [TenderExportController::class, 'excel'])->middleware('permission:tenders.export');
     Route::get('/tenders/{tender}/export/pdf', [TenderExportController::class, 'pdf'])->middleware('permission:tenders.export');
+    Route::get('/tenders/{tender}/export/docx', [TenderExportController::class, 'docx'])->middleware('permission:tenders.export');
     Route::post('/tenders/{tender}/items/bulk', [TenderItemController::class, 'bulkUpdate'])->middleware('permission:tenders.edit_offer');
     Route::patch('/tenders/{tender}/items/{item}', [TenderItemController::class, 'update'])->middleware('permission:tenders.edit_offer');
 
@@ -60,6 +61,8 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::get('/products/{product}', [ProductController::class, 'show'])->middleware('permission:products.view');
     Route::post('/products/{product}/enrich', [ProductEnrichmentController::class, 'enrichProduct'])
         ->middleware('permission:price_lists.import');
+    Route::get('/product-enrichment-batches/active', [ProductEnrichmentController::class, 'activeBatches'])
+        ->middleware('permission:price_lists.import|products.view');
     Route::get('/product-enrichment-batches/{batch}', [ProductEnrichmentController::class, 'showBatch'])
         ->middleware('permission:price_lists.import|products.view');
 

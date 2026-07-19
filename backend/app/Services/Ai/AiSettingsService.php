@@ -15,6 +15,7 @@ final class AiSettingsService
      *     base_url: string,
      *     api_key: ?string,
      *     model: string,
+     *     enrichment_model: ?string,
      *     timeout_seconds: int,
      *     temperature: float,
      *     web_search_enabled: bool,
@@ -38,6 +39,7 @@ final class AiSettingsService
                 'base_url' => rtrim((string) $row->base_url, '/'),
                 'api_key' => $key !== null && $key !== '' ? (string) $key : null,
                 'model' => (string) $row->model,
+                'enrichment_model' => $this->nullableString($row->enrichment_model ?? null),
                 'timeout_seconds' => (int) $row->timeout_seconds,
                 'temperature' => (float) $row->temperature,
                 'web_search_enabled' => (bool) ($row->web_search_enabled ?? true),
@@ -60,6 +62,7 @@ final class AiSettingsService
             'base_url' => rtrim((string) config('ai.base_url'), '/'),
             'api_key' => $key,
             'model' => (string) config('ai.model'),
+            'enrichment_model' => $this->nullableString(config('ai.enrichment_model')),
             'timeout_seconds' => (int) config('ai.timeout_seconds'),
             'temperature' => (float) config('ai.temperature'),
             'web_search_enabled' => (bool) config('ai.web_search_enabled', true),
@@ -77,6 +80,7 @@ final class AiSettingsService
      *     provider: string,
      *     base_url: string,
      *     model: string,
+     *     enrichment_model: ?string,
      *     timeout_seconds: int,
      *     temperature: float,
      *     web_search_enabled: bool,
@@ -97,6 +101,7 @@ final class AiSettingsService
             'provider' => $cfg['provider'],
             'base_url' => $cfg['base_url'],
             'model' => $cfg['model'],
+            'enrichment_model' => $cfg['enrichment_model'],
             'timeout_seconds' => $cfg['timeout_seconds'],
             'temperature' => $cfg['temperature'],
             'web_search_enabled' => $cfg['web_search_enabled'],
@@ -116,6 +121,7 @@ final class AiSettingsService
      *     base_url?: string,
      *     api_key?: ?string,
      *     model?: string,
+     *     enrichment_model?: ?string,
      *     timeout_seconds?: int,
      *     temperature?: float,
      *     web_search_enabled?: bool,
@@ -130,6 +136,7 @@ final class AiSettingsService
             'provider' => 'openai_compatible',
             'base_url' => 'https://api.openai.com/v1',
             'model' => 'gpt-4o-mini',
+            'enrichment_model' => null,
             'timeout_seconds' => 90,
             'temperature' => 0.1,
             'web_search_enabled' => false,
@@ -151,6 +158,10 @@ final class AiSettingsService
             }
         }
 
+        if (array_key_exists('enrichment_model', $data)) {
+            $row->enrichment_model = $this->nullableString($data['enrichment_model']);
+        }
+
         $this->applySecret($row, 'api_key', $data);
         $this->applySecret($row, 'tavily_api_key', $data);
 
@@ -168,6 +179,25 @@ final class AiSettingsService
             && $cfg['has_api_key']
             && $cfg['base_url'] !== ''
             && $cfg['model'] !== '';
+    }
+
+    /** Model do opisów produktów (tani); pusty enrichment_model → model główny. */
+    public function enrichmentModel(): string
+    {
+        $cfg = $this->resolve();
+        $cheap = trim((string) ($cfg['enrichment_model'] ?? ''));
+
+        return $cheap !== '' ? $cheap : (string) $cfg['model'];
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+        $v = trim($value);
+
+        return $v !== '' ? $v : null;
     }
 
     private function maskKey(?string $key): ?string

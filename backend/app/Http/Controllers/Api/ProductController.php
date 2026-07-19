@@ -32,8 +32,11 @@ class ProductController extends Controller
                 'enriched_at',
                 'enrichment_error',
             ])
-            ->withCount(['substitutes', 'images'])
-            ->with(['images' => static fn ($q) => $q->orderBy('sort_order')->orderBy('id')]);
+            ->withCount(['substitutes', 'images', 'documents'])
+            ->with([
+                'images' => static fn ($q) => $q->orderBy('sort_order')->orderBy('id'),
+                'documents' => static fn ($q) => $q->orderBy('sort_order')->orderBy('id'),
+            ]);
 
         if ($request->filled('q')) {
             $term = trim((string) $request->string('q'));
@@ -96,6 +99,15 @@ class ProductController extends Controller
                 'is_primary' => $img->is_primary,
                 'sort_order' => $img->sort_order,
             ])->values()->all();
+            $row['documents'] = $product->documents->map(static fn ($doc): array => [
+                'id' => $doc->id,
+                'url' => $doc->url(),
+                'source_url' => $doc->source_url,
+                'title' => $doc->title,
+                'kind' => $doc->kind,
+                'size_bytes' => $doc->size_bytes,
+                'sort_order' => $doc->sort_order,
+            ])->values()->all();
 
             return $row;
         });
@@ -109,6 +121,7 @@ class ProductController extends Controller
             'substitutes.substituteProduct:id,sku,name,manufacturer,catalog_price_net',
             'substitutes.approver:id,name',
             'images',
+            'documents',
         ]);
 
         $payload = $product->toArray();
@@ -118,6 +131,15 @@ class ProductController extends Controller
             'source_url' => $img->source_url,
             'is_primary' => $img->is_primary,
             'sort_order' => $img->sort_order,
+        ])->values()->all();
+        $payload['documents'] = $product->documents->map(static fn ($doc): array => [
+            'id' => $doc->id,
+            'url' => $doc->url(),
+            'source_url' => $doc->source_url,
+            'title' => $doc->title,
+            'kind' => $doc->kind,
+            'size_bytes' => $doc->size_bytes,
+            'sort_order' => $doc->sort_order,
         ])->values()->all();
 
         return response()->json($payload);

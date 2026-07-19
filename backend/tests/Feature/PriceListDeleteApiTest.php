@@ -91,4 +91,48 @@ final class PriceListDeleteApiTest extends TestCase
         $this->deleteJson("/api/price-lists/{$list->id}")->assertForbidden();
         $this->assertDatabaseHas('price_lists', ['id' => $list->id]);
     }
+
+    public function test_index_includes_enrichment_counts(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $done = Product::query()->create([
+            'sku' => 'DONE-1',
+            'name' => 'Z opisem',
+            'manufacturer' => 'ATG',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $pending = Product::query()->create([
+            'sku' => 'PEND-1',
+            'name' => 'Bez opisu',
+            'manufacturer' => 'ATG',
+            'catalog_price_net' => 11,
+            'purchase_price' => 6,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+
+        PriceList::query()->create([
+            'manufacturer' => 'ATG',
+            'version' => 'v-enrich',
+            'original_filename' => 'e.xlsx',
+            'rows_total' => 2,
+            'products_created' => 2,
+            'products_updated' => 0,
+            'rows_skipped' => 0,
+            'product_ids' => [$done->id, $pending->id],
+        ]);
+
+        $this->getJson('/api/price-lists')
+            ->assertOk()
+            ->assertJsonFragment([
+                'version' => 'v-enrich',
+                'enrichment_done' => 1,
+                'enrichment_failed' => 0,
+                'enrichment_total' => 2,
+            ]);
+    }
 }

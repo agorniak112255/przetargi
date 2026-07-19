@@ -8,6 +8,8 @@ return [
     'base_url' => rtrim((string) env('AI_BASE_URL', 'https://api.openai.com/v1'), '/'),
     'api_key' => env('AI_API_KEY'),
     'model' => env('AI_MODEL', 'gpt-4o-mini'),
+    // Opisy produktów / filtr chrome — pusty = ten sam co model główny
+    'enrichment_model' => env('AI_ENRICHMENT_MODEL'),
     'timeout_seconds' => (int) env('AI_TIMEOUT', 90),
     'temperature' => (float) env('AI_TEMPERATURE', 0.1),
     // Domyślnie WYŁĄCZONE — drogie. Główne źródło: Tavily.
