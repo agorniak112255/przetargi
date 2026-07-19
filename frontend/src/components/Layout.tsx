@@ -15,6 +15,7 @@ const links: NavLinkItem[] = [
   { to: '/products', label: 'Produkty', permission: 'products.view' },
   { to: '/price-lists', label: 'Cenniki', permission: 'price_lists.view' },
   { to: '/substitutes', label: 'Zamienniki', permission: 'products.view' },
+  { to: '/reports', label: 'Raporty', permission: 'reports.view' },
   { to: '/clients', label: 'Klienci', permission: 'clients.view' },
   { to: '/ai-settings', label: 'Ustawienia AI', permission: 'ai_settings.manage' },
   { to: '/admin', label: 'Administracja', permission: 'admin.access' },

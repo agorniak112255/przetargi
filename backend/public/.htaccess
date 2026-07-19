@@ -4,7 +4,6 @@
     </IfModule>
 
     RewriteEngine On
-    RewriteBase /
 
     # Błędny URL (stary path) → kanoniczny
     RewriteRule ^backend/public/?$ / [R=302,L,NE]
@@ -27,10 +26,20 @@
     RewriteCond %{REQUEST_FILENAME} -d
     RewriteRule ^ - [L]
 
-    # API → Laravel
+    # --- API → Laravel ---
+    # XAMPP: Alias /Przetargi → backend/public (nie używać RewriteBase /)
+    RewriteCond %{REQUEST_URI} ^/Przetargi/api
+    RewriteRule ^api(?:/.*)?$ /Przetargi/index.php [L,END]
+
+    # Produkcja: DocumentRoot = backend/public
+    RewriteCond %{REQUEST_URI} !^/Przetargi/
     RewriteRule ^api(?:/.*)?$ index.php [L,END]
 
-    # SPA (React Router)
+    # --- SPA (React Router) ---
+    RewriteCond %{REQUEST_URI} ^/Przetargi/
+    RewriteRule ^ /Przetargi/index.html [L,END]
+
+    RewriteCond %{REQUEST_URI} !^/Przetargi/
     RewriteRule ^ index.html [L,END]
 </IfModule>
 

@@ -37,3 +37,5 @@ ssh "${SshUser}@${SshHost}" "CONFIRM=TAK bash $remoteImport $RemoteDump"
 if ($LASTEXITCODE -ne 0) { throw "import na serwerze zakonczyl sie kodem $LASTEXITCODE" }
 
 Write-Host "OK - baza lokalna wgrana na serwer." -ForegroundColor Green
+Write-Host "Uwaga: zdjecia/dokumenty NIE sa w dumpie SQL. W razie braku obrazkow uruchom:" -ForegroundColor Yellow
+Write-Host "  .\deploy\storage-push.ps1" -ForegroundColor Yellow

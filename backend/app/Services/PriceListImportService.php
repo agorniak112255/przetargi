@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductPriceHistory;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -338,6 +339,21 @@ final class PriceListImportService
             'skipped_details' => $skippedDetails,
             'product_ids' => $productIds,
         ]);
+
+        if ($productIds !== []) {
+            $products = Product::query()
+                ->whereIn('id', $productIds)
+                ->get(['id', 'catalog_price_net', 'purchase_price']);
+            foreach ($products as $product) {
+                ProductPriceHistory::query()->create([
+                    'product_id' => $product->id,
+                    'price_list_id' => $priceList->id,
+                    'catalog_price_net' => $product->catalog_price_net,
+                    'purchase_price' => $product->purchase_price,
+                    'source' => 'price_list_import',
+                ]);
+            }
+        }
 
         return [
             'price_list' => $priceList->load('importer:id,name'),

@@ -55,6 +55,10 @@ final class ProductMatchService
                 $item->main_product_id = null;
                 $item->status = 'brak';
                 $item->ai_match_percent = $this->bestScoreHint($item->requirement, $products);
+                $item->ai_match_reasons = [
+                    ['code' => 'no_match', 'label' => 'Brak produktu powyżej progu '.self::MIN_MATCH_SCORE.'%', 'points' => 0],
+                ];
+                $item->match_source = null;
                 $item->save();
                 $this->pricing->recalculateItemMargin($item);
                 $skipped++;
@@ -62,7 +66,7 @@ final class ProductMatchService
                 continue;
             }
 
-            $this->applyProduct($item, $pick['product'], $pick['score']);
+            $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'] ?? 'heuristic');
             $matched++;
             $scores[] = $pick['score'];
         }
@@ -522,6 +526,10 @@ final class ProductMatchService
             $item->main_product_id = null;
             $item->status = 'brak';
             $item->ai_match_percent = $bestScore;
+            $item->ai_match_reasons = [
+                ['code' => 'no_match', 'label' => 'Brak produktu powyżej progu '.self::MIN_MATCH_SCORE.'%', 'points' => 0],
+            ];
+            $item->match_source = null;
             $item->save();
             $this->pricing->recalculateItemMargin($item);
 
@@ -532,10 +540,20 @@ final class ProductMatchService
                 'offer_price' => $item->offer_price,
                 'sources' => $sources,
                 'candidates' => $candidates,
+                'ai_match_reasons' => $item->ai_match_reasons,
             ];
         }
 
-        $this->applyProduct($item, $pick['product'], $pick['score']);
+        $aiReason = null;
+        if (($pick['source'] ?? '') === 'ai') {
+            foreach ($aiCandidates as $cand) {
+                if ((int) $cand['id'] === (int) $pick['product']->id && is_string($cand['reason'] ?? null)) {
+                    $aiReason = $cand['reason'];
+                    break;
+                }
+            }
+        }
+        $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason);
         $item->load(['mainProduct', 'tender']);
         if ($item->tender !== null) {
             $this->pricing->recalculateTenderTotals($item->tender);
@@ -556,6 +574,8 @@ final class ProductMatchService
             'offer_price' => $item->offer_price,
             'sources' => $sources,
             'candidates' => $candidates,
+            'ai_match_reasons' => $item->fresh()->ai_match_reasons,
+            'match_source' => $item->match_source,
         ];
     }
 
@@ -692,10 +712,27 @@ final class ProductMatchService
         return (int) ($heuristic['score'] ?? 0);
     }
 
-    private function applyProduct(TenderItem $item, Product $product, int $score): void
-    {
+    private function applyProduct(
+        TenderItem $item,
+        Product $product,
+        int $score,
+        ?string $source = 'heuristic',
+        ?string $aiReason = null,
+    ): void {
+        $explained = $this->explainMatch($item->requirement, $product);
+        $reasons = $explained['reasons'];
+        if ($aiReason !== null && $aiReason !== '') {
+            array_unshift($reasons, [
+                'code' => 'ai',
+                'label' => $aiReason,
+                'points' => $score,
+            ]);
+        }
+
         $item->main_product_id = $product->id;
         $item->ai_match_percent = $score;
+        $item->ai_match_reasons = $reasons;
+        $item->match_source = $source;
         $item->status = 'matched';
         if ($item->offer_price === null) {
             $item->offer_price = round((float) $product->purchase_price * 1.18, 2);
@@ -704,4 +741,117 @@ final class ProductMatchService
         $item->load('mainProduct');
         $this->pricing->recalculateItemMargin($item);
     }
+
+    /**
+     * @return array{score: int, reasons: list<array{code: string, label: string, points: int}>}
+     */
+    public function explainMatch(string $requirement, Product $product): array
+    {
+        $req = $this->normalize($requirement);
+        $reqTokens = $this->significantTokens($req);
+        $reqCodes = $this->codeCandidates($requirement);
+
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $materials = is_array($payload['materials'] ?? null) ? $payload['materials'] : [];
+        $features = is_array($payload['features'] ?? null) ? $payload['features'] : [];
+        $useCases = is_array($payload['use_cases'] ?? null) ? $payload['use_cases'] : [];
+        $normsPayload = is_array($payload['norms'] ?? null) ? $payload['norms'] : [];
+        $extra = implode(' ', [
+            (string) ($product->description ?? ''),
+            implode(' ', $features),
+            implode(' ', $useCases),
+            implode(' ', $materials),
+            implode(' ', $normsPayload),
+        ]);
+        $hay = $this->normalize(
+            $product->name.' '.$product->sku.' '.$product->manufacturer.' '
+            .($product->norms ?? '').' '.($product->category ?? '').' '.$extra
+        );
+
+        $reasons = [];
+        $score = 0;
+
+        if (! $this->assortmentsCompatible($req, $hay, $product)) {
+            $reqFamily = $this->detectAssortmentFamily($req) ?? '?';
+            $prodFamily = $this->detectAssortmentFamily($hay.' '.$this->normalize((string) ($product->category ?? ''))) ?? '?';
+            $reasons[] = [
+                'code' => 'asortyment_reject',
+                'label' => 'Konflikt asortymentu ('.$reqFamily.' vs '.$prodFamily.')',
+                'points' => 0,
+            ];
+
+            return ['score' => 0, 'reasons' => $reasons];
+        }
+
+        $skuHit = $this->skuMatchScore($req, $reqCodes, $product);
+        if ($skuHit > 0) {
+            $reasons[] = ['code' => 'sku', 'label' => 'Dopasowanie SKU / kodu modelu', 'points' => $skuHit];
+            $score += $skuHit;
+        }
+
+        $mat = $this->materialRequirementScore($req, $hay, $materials);
+        if ($mat > 0) {
+            $reasons[] = ['code' => 'material', 'label' => 'Materiał / wymaganie techniczne', 'points' => $mat];
+            $score += $mat;
+        }
+
+        $brand = $this->brandModelScore($reqTokens, $hay, $product);
+        if ($brand > 0) {
+            $reasons[] = ['code' => 'brand', 'label' => 'Marka / model', 'points' => $brand];
+            $score += $brand;
+        }
+
+        if ($skuHit === 0) {
+            $codePts = $this->modelCodeInTextScore($reqCodes, $hay);
+            if ($codePts > 0) {
+                $reasons[] = ['code' => 'model_code', 'label' => 'Kod modelu w opisie produktu', 'points' => $codePts];
+                $score += $codePts;
+            }
+        }
+
+        $nameNorm = $this->normalize($product->name);
+        if ($nameNorm !== '' && mb_strlen($nameNorm) >= 5
+            && (str_contains($req, $nameNorm) || str_contains($nameNorm, $req))) {
+            $reasons[] = ['code' => 'name', 'label' => 'Zgodność nazwy z SIWZ', 'points' => 35];
+            $score += 35;
+        }
+
+        $normPts = 0;
+        if (preg_match_all('/en\s*[\d]+/i', $req, $m)) {
+            foreach ($m[0] as $norm) {
+                $n = preg_replace('/\s+/', '', mb_strtolower($norm)) ?? '';
+                $pn = preg_replace('/\s+/', '', mb_strtolower((string) $product->norms)) ?? '';
+                if ($n !== '' && $pn !== '' && str_contains($pn, $n)) {
+                    $normPts += 20;
+                }
+            }
+        }
+        if ($normPts > 0) {
+            $reasons[] = ['code' => 'norma', 'label' => 'Zgodność normy EN', 'points' => $normPts];
+            $score += $normPts;
+        }
+
+        $hayTokens = $this->significantTokens($hay);
+        $overlap = count(array_intersect($reqTokens, $hayTokens));
+        $overlapPts = min(16, $overlap * 4);
+        if ($overlapPts > 0) {
+            $reasons[] = ['code' => 'overlap', 'label' => 'Wspólne słowa kluczowe ('.$overlap.')', 'points' => $overlapPts];
+            $score += $overlapPts;
+        }
+
+        if ($skuHit === 0) {
+            similar_text($req, mb_substr($hay, 0, 220), $pct);
+            $simPts = (int) round($pct * 0.12);
+            if ($simPts > 0) {
+                $reasons[] = ['code' => 'similar', 'label' => 'Podobieństwo tekstu', 'points' => $simPts];
+                $score += $simPts;
+            }
+        }
+
+        return [
+            'score' => min(99, $score),
+            'reasons' => $reasons,
+        ];
+    }
 }
+

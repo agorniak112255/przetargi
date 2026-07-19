@@ -35,10 +35,22 @@ export function ProductDetail() {
   const [err, setErr] = useState('')
   const [batch, setBatch] = useState<EnrichmentBatch | null>(null)
   const [imageModalUrl, setImageModalUrl] = useState<string | null>(null)
+  const [priceHistory, setPriceHistory] = useState<
+    {
+      id: number
+      catalog_price_net: string | null
+      purchase_price: string | null
+      source: string | null
+      created_at: string
+      price_list?: { manufacturer: string; version: string } | null
+    }[]
+  >([])
 
   const load = useCallback(async () => {
     if (!id) return
     setP(await api<Detail>(`/products/${id}`))
+    const hist = await api<{ data: typeof priceHistory }>(`/products/${id}/price-history`)
+    setPriceHistory(hist.data ?? [])
   }, [id])
 
   useEffect(() => {
@@ -147,6 +159,16 @@ export function ProductDetail() {
       <div className="mb-4 mt-4 grid gap-3 sm:grid-cols-3">
         <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
           Cena kat. netto: <b>{p.catalog_price_net} zł</b>
+          {p.price_change_percent != null && (
+            <span
+              className={`ml-2 text-xs ${
+                p.price_change_percent > 0 ? 'text-red-600' : 'text-emerald-600'
+              }`}
+            >
+              {p.price_change_percent > 0 ? '+' : ''}
+              {p.price_change_percent}% vs poprzedni cennik
+            </span>
+          )}
         </div>
         <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
           Zakup: <b>{p.purchase_price} zł</b>
@@ -155,6 +177,36 @@ export function ProductDetail() {
           Stan: <b>{p.stock}</b>
         </div>
       </div>
+
+      {priceHistory.length > 0 && (
+        <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold">Historia cen</h2>
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Data</th>
+                <th className="p-2">Kat. netto</th>
+                <th className="p-2">Zakup</th>
+                <th className="p-2">Źródło</th>
+              </tr>
+            </thead>
+            <tbody>
+              {priceHistory.map((h) => (
+                <tr key={h.id} className="border-b">
+                  <td className="p-2">{new Date(h.created_at).toLocaleString('pl-PL')}</td>
+                  <td className="p-2">{h.catalog_price_net ?? '—'} zł</td>
+                  <td className="p-2">{h.purchase_price ?? '—'} zł</td>
+                  <td className="p-2">
+                    {h.price_list
+                      ? `${h.price_list.manufacturer} ${h.price_list.version}`
+                      : h.source ?? '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {(p.description ||
         (p.images && p.images.length > 0) ||

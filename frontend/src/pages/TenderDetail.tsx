@@ -6,17 +6,58 @@ import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
 
+type MatchReason = { code: string; label: string; points: number }
+
 type Item = {
   id: number
   line_no: number
   requirement: string
   ai_match_percent: number | null
+  ai_match_reasons?: MatchReason[] | null
+  match_source?: string | null
   quantity: number
   offer_price: string | null
   margin_percent: string | null
   status: string
   main_product: Product | null
   main_product_id?: number | null
+}
+
+type Coverage = {
+  total: number
+  with_product: number
+  without_product: number
+  without_price: number
+  weak_match: number
+  low_margin: number
+  substitutes_pending: number
+  ready: boolean
+  blockers: string[]
+  item_ids: {
+    without_product: number[]
+    without_price: number[]
+    weak_match: number[]
+    low_margin: number[]
+  }
+  thresholds: { min_match_score: number; min_margin_percent: number }
+}
+
+type ActivityRow = {
+  id: number
+  action: string
+  meta?: Record<string, unknown> | null
+  created_at: string
+  user?: { name: string } | null
+  item?: { id: number; line_no: number } | null
+}
+
+type CommentRow = {
+  id: number
+  body: string
+  created_at: string
+  user?: { name: string; role?: string } | null
+  item?: { id: number; line_no: number } | null
+  tender_item_id?: number | null
 }
 
 function itemProductId(item: Item): string {
@@ -76,14 +117,27 @@ type Detail = {
     conditions?: Condition[]
     documents?: DocMeta[]
     title: string
+    owner_id?: number | null
     status_histories?: History[]
   }
   substitutes_by_main: Record<string, Substitute[]>
   can_edit: boolean
   next_statuses: string[]
+  coverage?: Coverage
 }
 
-const tabs = ['pozycje', 'warunki', 'dokumenty', 'zamienniki', 'oferta', 'workflow'] as const
+const tabs = [
+  'pozycje',
+  'warunki',
+  'dokumenty',
+  'zamienniki',
+  'oferta',
+  'komentarze',
+  'historia',
+  'workflow',
+] as const
+
+type CoverageFilter = keyof Coverage['item_ids'] | null
 
 const statusLabel: Record<string, string> = {
   draft: 'Szkic',
@@ -94,6 +148,60 @@ const statusLabel: Record<string, string> = {
   exported: 'Wyeksportowana',
   odrzucony: 'Odrzucony',
   archiwum: 'Archiwum',
+}
+
+const actionLabel: Record<string, string> = {
+  created: 'Utworzono przetarg',
+  updated: 'Zmieniono dane przetargu',
+  status_changed: 'Zmiana statusu',
+  item_updated: 'Zmiana pozycji',
+  item_bulk_updated: 'Zapis zbiorczy pozycji',
+  comment_added: 'Dodano komentarz',
+}
+
+function sameVal(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a == null && b == null) return true
+  if (typeof a === 'number' || typeof b === 'number') {
+    return Number(a) === Number(b)
+  }
+  return String(a ?? '') === String(b ?? '')
+}
+
+function formatActivityMeta(meta: Record<string, unknown> | null | undefined): string {
+  if (!meta) return '—'
+  const before = meta.before as Record<string, unknown> | undefined
+  const after = meta.after as Record<string, unknown> | undefined
+  if (before && after) {
+    const parts: string[] = []
+    for (const key of ['offer_price', 'quantity', 'main_product_id', 'ai_match_percent'] as const) {
+      if (!sameVal(before[key], after[key])) {
+        const labels: Record<string, string> = {
+          offer_price: 'cena',
+          quantity: 'ilość',
+          main_product_id: 'produkt',
+          ai_match_percent: 'AI %',
+        }
+        parts.push(`${labels[key] ?? key}: ${String(before[key] ?? '—')} → ${String(after[key] ?? '—')}`)
+      }
+    }
+    return parts.length > 0 ? parts.join('; ') : 'zapis bez zmiany wartości'
+  }
+  if (typeof meta.from === 'string' && typeof meta.to === 'string') {
+    return `${meta.from} → ${meta.to}${meta.note ? ` (${String(meta.note)})` : ''}`
+  }
+  return '—'
+}
+
+function activityHasRealChange(a: ActivityRow): boolean {
+  const meta = a.meta
+  if (!meta) return false
+  const before = meta.before as Record<string, unknown> | undefined
+  const after = meta.after as Record<string, unknown> | undefined
+  if (!before || !after) return a.action === 'status_changed' || a.action === 'comment_added'
+  return (['offer_price', 'quantity', 'main_product_id', 'ai_match_percent'] as const).some(
+    (k) => !sameVal(before[k], after[k]),
+  )
 }
 
 export function TenderDetail() {
@@ -119,16 +227,39 @@ export function TenderDetail() {
   const [newCondition, setNewCondition] = useState('')
   const [docStatus, setDocStatus] = useState('')
   const itemDraftsRef = useRef<Map<number, ItemDraft>>(new Map())
+  const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>(null)
+  const [transitionNote, setTransitionNote] = useState('')
+  const [activities, setActivities] = useState<ActivityRow[]>([])
+  const [comments, setComments] = useState<CommentRow[]>([])
+  const [commentBody, setCommentBody] = useState('')
+  const [commentItemId, setCommentItemId] = useState('')
+  const [deadlineEdit, setDeadlineEdit] = useState('')
 
   const load = useCallback(async () => {
     const d = await api<Detail>(`/tenders/${id}`)
     setData(d)
+    setDeadlineEdit(d.tender.deadline ? d.tender.deadline.slice(0, 10) : '')
+  }, [id])
+
+  const loadMeta = useCallback(async () => {
+    if (!id) return
+    try {
+      const [act, com] = await Promise.all([
+        api<{ data: ActivityRow[] }>(`/tenders/${id}/activities?per_page=50`),
+        api<{ data: CommentRow[] }>(`/tenders/${id}/comments`),
+      ])
+      setActivities(Array.isArray(act.data) ? act.data : [])
+      setComments(Array.isArray(com.data) ? com.data : [])
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Nie udało się wczytać historii/komentarzy')
+    }
   }, [id])
 
   useEffect(() => {
     void load()
+    void loadMeta()
     void api<{ data: Product[] }>('/products?per_page=100').then((p) => setProducts(p.data ?? []))
-  }, [load])
+  }, [load, loadMeta])
 
   const registerItemDraft = useCallback((itemId: number, draft: ItemDraft) => {
     itemDraftsRef.current.set(itemId, draft)
@@ -144,7 +275,8 @@ export function TenderDetail() {
         body: JSON.stringify(patch),
       })
       await load()
-      setMsg('Zapisano pozycję.')
+      await loadMeta()
+      setMsg('Zapisano pozycję — wpis w zakładce Historia.')
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zapisu')
     } finally {
@@ -170,7 +302,8 @@ export function TenderDetail() {
         body: JSON.stringify({ items }),
       })
       await load()
-      setMsg(`Zapisano całość: ${res.updated} pozycji.`)
+      await loadMeta()
+      setMsg(`Zapisano całość: ${res.updated} pozycji — zobacz zakładkę Historia.`)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zapisu całości')
     } finally {
@@ -421,16 +554,68 @@ export function TenderDetail() {
   async function transition(status: string) {
     setErr('')
     setMsg('')
+    const needsNote = status === 'odrzucony' || status === 'wycena'
+    if (needsNote && data?.tender.status.startsWith('akceptacja') && transitionNote.trim().length < 5) {
+      setErr('Wymagana notatka (min. 5 znaków) przy odrzuceniu lub cofnięciu z akceptacji.')
+      return
+    }
+    if (status === 'odrzucony' && transitionNote.trim().length < 5) {
+      setErr('Wymagana notatka (min. 5 znaków) przy odrzuceniu.')
+      return
+    }
     setBusy(true)
     try {
       await api(`/tenders/${id}/transition`, {
         method: 'POST',
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, note: transitionNote.trim() || null }),
       })
+      setTransitionNote('')
       await load()
+      await loadMeta()
       setMsg(`Status: ${statusLabel[status] ?? status}`)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd statusu')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveDeadline() {
+    setBusy(true)
+    setErr('')
+    try {
+      await api(`/tenders/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ deadline: deadlineEdit || null }),
+      })
+      await load()
+      await loadMeta()
+      setMsg('Zapisano termin.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd zapisu terminu')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function addComment() {
+    if (commentBody.trim().length < 2) return
+    setBusy(true)
+    setErr('')
+    try {
+      await api(`/tenders/${id}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({
+          body: commentBody.trim(),
+          tender_item_id: commentItemId ? Number(commentItemId) : null,
+        }),
+      })
+      setCommentBody('')
+      setCommentItemId('')
+      await loadMeta()
+      setMsg('Dodano komentarz.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd komentarza')
     } finally {
       setBusy(false)
     }
@@ -495,8 +680,13 @@ export function TenderDetail() {
 
   if (!data) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
-  const { tender, substitutes_by_main, can_edit, next_statuses } = data
+  const { tender, substitutes_by_main, can_edit, next_statuses, coverage } = data
   const canApproveSub = Boolean(user?.permissions?.includes('substitutes.approve'))
+  const canComment = Boolean(user?.permissions?.includes('tenders.comment'))
+  const filteredItems =
+    coverageFilter && coverage
+      ? tender.items.filter((it) => coverage.item_ids[coverageFilter].includes(it.id))
+      : tender.items
 
   return (
     <div>
@@ -508,9 +698,9 @@ export function TenderDetail() {
       </h1>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-slate-500">
-          {tender.client?.name} · <strong>{statusLabel[tender.status] ?? tender.status}</strong> · AI{' '}
-          {tender.ai_percent}% · marża {tender.margin_percent}% ·{' '}
-          {can_edit ? 'edycja włączona' : 'tylko podgląd'}
+          {tender.client?.name} · opiekun {tender.owner?.name ?? '—'} ·{' '}
+          <strong>{statusLabel[tender.status] ?? tender.status}</strong> · AI {tender.ai_percent}% · marża{' '}
+          {tender.margin_percent}% · {can_edit ? 'edycja włączona' : 'tylko podgląd'}
         </p>
         <div className="flex flex-wrap gap-1">
           {can_edit && (
@@ -557,19 +747,116 @@ export function TenderDetail() {
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
 
+      {coverage && (
+        <div
+          className={`mb-3 rounded-xl border p-3 text-xs ${
+            coverage.ready ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'
+          }`}
+        >
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <strong>
+              Pokrycie oferty:{' '}
+              {coverage.ready ? 'gotowa do akceptacji' : 'wymaga uzupełnienia'}
+            </strong>
+            <span className="text-slate-600">
+              {coverage.with_product}/{coverage.total} z produktem
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(
+              [
+                ['without_product', `Bez produktu (${coverage.without_product})`],
+                ['without_price', `Bez ceny (${coverage.without_price})`],
+                ['weak_match', `Słabe AI (${coverage.weak_match})`],
+                ['low_margin', `Niska marża (${coverage.low_margin})`],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                disabled={coverage[key] === 0}
+                onClick={() => {
+                  setCoverageFilter((f) => (f === key ? null : key))
+                  setTab('pozycje')
+                }}
+                className={`rounded px-2 py-1 ${
+                  coverageFilter === key
+                    ? 'bg-slate-800 text-white'
+                    : coverage[key] === 0
+                      ? 'bg-white/60 text-slate-400'
+                      : 'bg-white text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+            {coverage.substitutes_pending > 0 && (
+              <span className="rounded bg-violet-100 px-2 py-1 text-violet-800">
+                Zamienniki oczekujące: {coverage.substitutes_pending}
+              </span>
+            )}
+            {coverageFilter && (
+              <button
+                type="button"
+                className="rounded px-2 py-1 text-blue-700 underline"
+                onClick={() => setCoverageFilter(null)}
+              >
+                Wyczyść filtr
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="mb-3 flex flex-wrap items-end gap-2 rounded-xl bg-white p-3 text-xs shadow-sm">
+        <label>
+          Termin składania
+          <input
+            type="date"
+            className="mt-1 block rounded border border-slate-300 px-2 py-1"
+            value={deadlineEdit}
+            onChange={(e) => setDeadlineEdit(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void saveDeadline()}
+          className="rounded bg-slate-700 px-3 py-1.5 text-white disabled:opacity-50"
+        >
+          Zapisz termin
+        </button>
+        {tender.deadline &&
+          new Date(tender.deadline) <= new Date(Date.now() + 7 * 86400000) &&
+          new Date(tender.deadline) >= new Date(new Date().toDateString()) && (
+            <span className="rounded bg-red-100 px-2 py-1 font-medium text-red-700">
+              Deadline w ciągu 7 dni
+            </span>
+          )}
+      </div>
+
       <div className="mb-3 flex flex-wrap gap-1 border-b border-slate-200 pb-2">
-        {tabs.map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={`rounded-t px-3 py-2 text-xs capitalize ${
-              tab === t ? 'bg-sky-100 font-semibold text-blue-700' : 'bg-slate-100 text-slate-600'
-            }`}
-          >
-            {t}
-          </button>
-        ))}
+        {tabs.map((t) => {
+          const badge =
+            t === 'historia'
+              ? activities.length
+              : t === 'komentarze'
+                ? comments.length
+                : null
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={`rounded-t px-3 py-2 text-xs capitalize ${
+                tab === t ? 'bg-sky-100 font-semibold text-blue-700' : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              {t}
+              {badge != null && badge > 0 ? ` (${badge})` : ''}
+            </button>
+          )
+        })}
       </div>
 
       {tab === 'pozycje' && (
@@ -600,17 +887,45 @@ export function TenderDetail() {
                 </tr>
               </thead>
               <tbody>
-                {tender.items.map((item) => (
+                {filteredItems.map((item) => (
                   <ItemRow
                     key={item.id}
                     item={item}
                     products={products}
                     canEdit={can_edit}
+                    canComment={canComment}
                     busy={busy}
+                    comments={comments.filter((c) => c.tender_item_id === item.id)}
+                    itemActivities={activities.filter(
+                      (a) => a.item?.id === item.id && activityHasRealChange(a),
+                    )}
                     onSave={saveItem}
                     onDraftChange={registerItemDraft}
+                    onComment={async (itemId, body) => {
+                      setBusy(true)
+                      setErr('')
+                      try {
+                        await api(`/tenders/${id}/comments`, {
+                          method: 'POST',
+                          body: JSON.stringify({ body, tender_item_id: itemId }),
+                        })
+                        await loadMeta()
+                        setMsg('Dodano komentarz przy pozycji.')
+                      } catch (e) {
+                        setErr(e instanceof Error ? e.message : 'Błąd komentarza')
+                      } finally {
+                        setBusy(false)
+                      }
+                    }}
                   />
                 ))}
+                {filteredItems.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="p-3 text-slate-400">
+                      Brak pozycji dla wybranego filtra.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -1152,6 +1467,102 @@ export function TenderDetail() {
         </div>
       )}
 
+      {tab === 'komentarze' && (
+        <div className="space-y-3 rounded-xl bg-white p-4 shadow-sm text-xs">
+          <h2 className="text-sm font-semibold">Komentarze</h2>
+          {canComment ? (
+            <div className="flex flex-wrap items-end gap-2 border-b border-slate-100 pb-3">
+              <label className="flex-1 min-w-[200px]">
+                Treść
+                <textarea
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
+                  rows={2}
+                  value={commentBody}
+                  onChange={(e) => setCommentBody(e.target.value)}
+                />
+              </label>
+              <label>
+                Pozycja (opcjonalnie)
+                <select
+                  className="mt-1 block rounded border border-slate-300 px-2 py-1"
+                  value={commentItemId}
+                  onChange={(e) => setCommentItemId(e.target.value)}
+                >
+                  <option value="">Cały przetarg</option>
+                  {tender.items.map((it) => (
+                    <option key={it.id} value={it.id}>
+                      Lp {it.line_no}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void addComment()}
+                className="rounded bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
+              >
+                Dodaj
+              </button>
+            </div>
+          ) : (
+            <p className="text-slate-400">Brak uprawnienia do komentowania.</p>
+          )}
+          <ul className="space-y-2">
+            {comments.map((c) => (
+              <li key={c.id} className="rounded border border-slate-100 bg-slate-50 p-2">
+                <div className="mb-1 text-[11px] text-slate-500">
+                  {c.user?.name} · {new Date(c.created_at).toLocaleString('pl-PL')}
+                  {c.item ? ` · poz. ${c.item.line_no}` : ''}
+                </div>
+                <p className="whitespace-pre-wrap">{c.body}</p>
+              </li>
+            ))}
+            {comments.length === 0 && <li className="text-slate-400">Brak komentarzy.</li>}
+          </ul>
+        </div>
+      )}
+
+      {tab === 'historia' && (
+        <div className="rounded-xl bg-white p-4 shadow-sm text-xs">
+          <h2 className="mb-3 text-sm font-semibold">Historia zmian</h2>
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Kiedy</th>
+                <th className="p-2">Kto</th>
+                <th className="p-2">Akcja</th>
+                <th className="p-2">Szczegóły</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activities.map((a) => (
+                <tr key={a.id} className="border-b align-top">
+                  <td className="p-2 whitespace-nowrap">
+                    {new Date(a.created_at).toLocaleString('pl-PL')}
+                  </td>
+                  <td className="p-2">{a.user?.name ?? '—'}</td>
+                  <td className="p-2">
+                    {actionLabel[a.action] ?? a.action}
+                    {a.item ? ` (lp ${a.item.line_no})` : ''}
+                  </td>
+                  <td className="p-2 text-[11px] text-slate-600">
+                    {formatActivityMeta(a.meta)}
+                  </td>
+                </tr>
+              ))}
+              {activities.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="p-3 text-slate-400">
+                    Brak wpisów audytu. Zmień cenę/produkt i kliknij Zapisz przy pozycji.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {tab === 'workflow' && (
         <div className="space-y-4">
           <div className="rounded-xl bg-white p-4 shadow-sm">
@@ -1159,6 +1570,16 @@ export function TenderDetail() {
             <p className="mb-3 text-xs text-slate-500">
               Teraz: <strong>{statusLabel[tender.status] ?? tender.status}</strong>
             </p>
+            <label className="mb-3 block text-xs">
+              Notatka (wymagana przy odrzuceniu / cofnięciu z akceptacji)
+              <textarea
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
+                rows={2}
+                value={transitionNote}
+                onChange={(e) => setTransitionNote(e.target.value)}
+                placeholder="Uzasadnienie decyzji…"
+              />
+            </label>
             <div className="flex flex-wrap gap-2">
               {next_statuses.map((s) => (
                 <button
@@ -1187,6 +1608,7 @@ export function TenderDetail() {
                   <th className="p-2">Kiedy</th>
                   <th className="p-2">Kto</th>
                   <th className="p-2">Z → Do</th>
+                  <th className="p-2">Notatka</th>
                 </tr>
               </thead>
               <tbody>
@@ -1197,11 +1619,12 @@ export function TenderDetail() {
                     <td className="p-2">
                       {h.from_status ?? '—'} → {h.to_status}
                     </td>
+                    <td className="p-2">{h.note ?? '—'}</td>
                   </tr>
                 ))}
                 {(tender.status_histories ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={3} className="p-3 text-slate-400">
+                    <td colSpan={4} className="p-3 text-slate-400">
                       Brak historii.
                     </td>
                   </tr>
@@ -1219,16 +1642,24 @@ function ItemRow({
   item,
   products,
   canEdit,
+  canComment,
   busy,
+  comments,
+  itemActivities,
   onSave,
   onDraftChange,
+  onComment,
 }: {
   item: Item
   products: Product[]
   canEdit: boolean
+  canComment: boolean
   busy: boolean
+  comments: CommentRow[]
+  itemActivities: ActivityRow[]
   onSave: (id: number, patch: Record<string, unknown>) => Promise<void>
   onDraftChange: (itemId: number, draft: ItemDraft) => void
+  onComment: (itemId: number, body: string) => Promise<void>
 }) {
   const [productId, setProductId] = useState<string>(itemProductId(item))
   const [picked, setPicked] = useState<{ id: number; sku: string; name: string } | null>(
@@ -1241,6 +1672,11 @@ function ItemRow({
   const [matchHint, setMatchHint] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [aiModalOpen, setAiModalOpen] = useState(false)
+  const [pendingAiScore, setPendingAiScore] = useState<number | null>(null)
+  const [commentText, setCommentText] = useState('')
+  const [showComment, setShowComment] = useState(false)
+  const [showPriceHistory, setShowPriceHistory] = useState(false)
+  const hasChanges = itemActivities.length > 0
 
   useEffect(() => {
     setProductId(itemProductId(item))
@@ -1251,6 +1687,7 @@ function ItemRow({
     )
     setQty(String(item.quantity))
     setPrice(item.offer_price ?? '')
+    setPendingAiScore(null)
   }, [item])
 
   useEffect(() => {
@@ -1271,8 +1708,19 @@ function ItemRow({
   const hasSavedProduct = Boolean(selectedProduct || productId)
 
   return (
-    <tr className="border-b align-top">
-      <td className="p-2">{item.line_no}</td>
+    <>
+    <tr className={showComment ? 'align-top' : 'border-b align-top'}>
+      <td className="p-2">
+        <span className="inline-flex items-center gap-1">
+          {item.line_no}
+          {hasChanges && (
+            <span
+              title={`${itemActivities.length} zmian — kliknij cenę / hist.`}
+              className="inline-block h-2 w-2 rounded-full bg-amber-500"
+            />
+          )}
+        </span>
+      </td>
       <td className="p-2 max-w-[200px] text-[11px]">{item.requirement}</td>
       <td className="p-2">
         {canEdit ? (
@@ -1287,6 +1735,7 @@ function ItemRow({
                   setProductId(id)
                   setPicked(product ?? null)
                   setMatchHint('')
+                  setPendingAiScore(null)
                 }}
                 hint={
                   matchHint ||
@@ -1315,9 +1764,33 @@ function ItemRow({
                 setProductId(String(p.id))
                 setPicked({ id: p.id, sku: p.sku, name: p.name })
                 setMatchHint(`AI: ${p.sku} (${p.score}%)`)
+                setPendingAiScore(p.score)
                 setAiModalOpen(false)
               }}
             />
+            {hasSavedProduct && (
+              <details
+                open
+                className="max-w-[280px] rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] text-violet-900"
+              >
+                <summary className="cursor-pointer font-semibold">
+                  Uzasadnienie dopasowania
+                  {item.ai_match_percent != null ? ` (${item.ai_match_percent}%)` : ''}
+                </summary>
+                {(item.ai_match_reasons?.length ?? 0) > 0 ? (
+                  <ul className="mt-1 list-disc pl-4">
+                    {item.ai_match_reasons!.map((r, i) => (
+                      <li key={`${r.code}-${i}`}>
+                        {r.label}
+                        {r.points > 0 ? ` (+${r.points})` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-slate-500">Brak zapisanych powodów — odśwież stronę.</p>
+                )}
+              </details>
+            )}
           </div>
         ) : (
           <span>
@@ -1345,6 +1818,13 @@ function ItemRow({
             ) : (
               '—'
             )}
+            {(item.ai_match_reasons?.length ?? 0) > 0 && (
+              <ul className="mt-1 max-w-[280px] list-disc pl-4 text-[10px] text-slate-600">
+                {item.ai_match_reasons!.slice(0, 4).map((r, i) => (
+                  <li key={`${r.code}-${i}`}>{r.label}</li>
+                ))}
+              </ul>
+            )}
             <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
           </span>
         )}
@@ -1360,36 +1840,149 @@ function ItemRow({
           item.quantity
         )}
       </td>
-      <td className="p-2">
-        {canEdit ? (
-          <input
-            className="w-20 rounded border border-slate-300 px-1 py-1"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-          />
-        ) : (
-          (item.offer_price ?? '—')
-        )}
+      <td className="p-2 align-top">
+        <div className="flex w-max max-w-[16rem] flex-col gap-1">
+          <button
+            type="button"
+            title={hasChanges ? 'Kliknij — historia zmian ceny' : 'Brak zmian ceny'}
+            onClick={() => setShowPriceHistory((v) => !v)}
+            className={`flex min-w-[5.5rem] items-center gap-1 rounded border px-1.5 py-1 text-left text-xs ${
+              hasChanges
+                ? 'border-amber-400 bg-amber-50 text-amber-950 hover:bg-amber-100'
+                : 'border-transparent hover:border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            {canEdit ? (
+              <input
+                className="w-16 border-0 bg-transparent p-0 outline-none"
+                value={price}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setPrice(e.target.value)}
+              />
+            ) : (
+              <span>{item.offer_price ?? '—'}</span>
+            )}
+            {hasChanges && (
+              <span className="ml-auto text-[10px] font-semibold text-amber-700">●</span>
+            )}
+          </button>
+          {showPriceHistory && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-2 shadow-sm">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <strong className="text-[11px]">Historia ceny</strong>
+                <button
+                  type="button"
+                  className="text-[10px] text-slate-500 hover:underline"
+                  onClick={() => setShowPriceHistory(false)}
+                >
+                  zamknij
+                </button>
+              </div>
+              {itemActivities.length === 0 ? (
+                <p className="text-[11px] text-slate-400">Brak zapisanych zmian.</p>
+              ) : (
+                <ul className="max-h-40 space-y-1 overflow-y-auto text-[11px]">
+                  {itemActivities.map((a) => (
+                    <li key={a.id} className="rounded border border-amber-100 bg-white px-2 py-1">
+                      <div className="text-slate-500">
+                        {new Date(a.created_at).toLocaleString('pl-PL')}
+                        {a.user?.name ? ` · ${a.user.name}` : ''}
+                      </div>
+                      <div>{formatActivityMeta(a.meta)}</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
       </td>
       <td className="p-2">{item.margin_percent ?? '—'}%</td>
       <td className="p-2">
-        {canEdit && (
-          <button
-            type="button"
-            disabled={busy}
-            className="rounded bg-blue-600 px-2 py-1 text-[10px] text-white disabled:opacity-50"
-            onClick={() =>
-              void onSave(item.id, {
-                main_product_id: productId ? Number(productId) : null,
-                quantity: Number(qty) || 1,
-                offer_price: price === '' ? null : Number(price.replace(',', '.')),
-              })
-            }
-          >
-            Zapisz
-          </button>
-        )}
+        <div className="flex flex-col gap-1">
+          {canEdit && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-blue-600 px-2 py-1 text-[10px] text-white disabled:opacity-50"
+              onClick={() =>
+                void onSave(item.id, {
+                  main_product_id: productId ? Number(productId) : null,
+                  quantity: Number(qty) || 1,
+                  offer_price: price === '' ? null : Number(price.replace(',', '.')),
+                  ...(pendingAiScore != null
+                    ? {
+                        ai_match_percent: pendingAiScore,
+                        match_source: 'ai',
+                        ai_match_reasons: [
+                          {
+                            code: 'ai',
+                            label: 'Wybór z wyszukiwania AI',
+                            points: pendingAiScore,
+                          },
+                        ],
+                      }
+                    : {}),
+                })
+              }
+            >
+              Zapisz
+            </button>
+          )}
+          {canComment && (
+            <button
+              type="button"
+              className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-700 hover:bg-slate-50"
+              onClick={() => setShowComment((v) => !v)}
+            >
+              Komentarz{comments.length > 0 ? ` (${comments.length})` : ''}
+            </button>
+          )}
+        </div>
       </td>
     </tr>
+    {canComment && showComment && (
+      <tr className="border-b bg-slate-50/80">
+        <td colSpan={7} className="px-3 py-2 text-[11px]">
+          {comments.length > 0 && (
+            <ul className="mb-2 space-y-1">
+              {comments.slice(0, 5).map((c) => (
+                <li key={c.id} className="rounded border border-slate-200 bg-white px-2 py-1">
+                  <span className="text-slate-500">
+                    {c.user?.name} · {new Date(c.created_at).toLocaleString('pl-PL')}:{' '}
+                  </span>
+                  {c.body}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex flex-wrap items-end gap-2">
+            <textarea
+              className="min-w-[220px] flex-1 rounded border border-slate-300 px-2 py-1"
+              rows={2}
+              placeholder="Komentarz do tej pozycji…"
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+            />
+            <button
+              type="button"
+              disabled={busy || commentText.trim().length < 2}
+              className="rounded bg-slate-800 px-3 py-1.5 text-white disabled:opacity-50"
+              onClick={() => {
+                const body = commentText.trim()
+                if (body.length < 2) return
+                void onComment(item.id, body).then(() => {
+                  setCommentText('')
+                  setShowComment(false)
+                })
+              }}
+            >
+              Dodaj komentarz
+            </button>
+          </div>
+        </td>
+      </tr>
+    )}
+    </>
   )
 }

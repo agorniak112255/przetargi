@@ -62,5 +62,15 @@ class Tender extends Model
     {
         return $this->hasMany(TenderStatusHistory::class)->latest();
     }
+
+    public function activities(): HasMany
+    {
+        return $this->hasMany(TenderActivity::class)->latest('id');
+    }
+
+    public function comments(): HasMany
+    {
+        return $this->hasMany(TenderComment::class)->latest('id');
+    }
 }
 

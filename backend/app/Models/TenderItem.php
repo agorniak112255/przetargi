@@ -15,6 +15,8 @@ class TenderItem extends Model
         'requirement',
         'main_product_id',
         'ai_match_percent',
+        'ai_match_reasons',
+        'match_source',
         'quantity',
         'offer_price',
         'margin_percent',
@@ -26,6 +28,7 @@ class TenderItem extends Model
         return [
             'offer_price' => 'decimal:2',
             'margin_percent' => 'decimal:2',
+            'ai_match_reasons' => 'array',
         ];
     }
 

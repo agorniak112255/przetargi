@@ -16,23 +16,45 @@ class DashboardController extends Controller
     public function __invoke(Request $request): JsonResponse
     {
         $user = $request->user();
-
         $scopeOwn = ! $user->can('tenders.view_all');
 
         $myTenders = Tender::query()
             ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
-            ->whereNotIn('status', ['archived'])
+            ->whereNotIn('status', ['archiwum'])
             ->count();
 
         $offerValue = (float) Tender::query()
             ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
-            ->whereNotIn('status', ['archived'])
+            ->whereNotIn('status', ['archiwum'])
             ->sum('offer_value_net');
 
         $avgMargin = (float) Tender::query()
             ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
             ->whereNotNull('margin_percent')
             ->avg('margin_percent');
+
+        $approvalStatuses = [];
+        if ($user->can('tenders.transition.akceptacja_dyrektor')) {
+            $approvalStatuses[] = 'akceptacja_km';
+        }
+        if ($user->can('tenders.transition.zatwierdzona')) {
+            $approvalStatuses[] = 'akceptacja_dyrektor';
+        }
+
+        $pendingApproval = $approvalStatuses === []
+            ? 0
+            : Tender::query()
+                ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
+                ->whereIn('status', $approvalStatuses)
+                ->count();
+
+        $deadlineSoon = Tender::query()
+            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
+            ->whereNotNull('deadline')
+            ->whereDate('deadline', '<=', now()->addDays(7))
+            ->whereDate('deadline', '>=', now()->toDateString())
+            ->whereNotIn('status', ['archiwum', 'exported', 'odrzucony'])
+            ->count();
 
         return response()->json([
             'my_tenders' => $myTenders,
@@ -42,6 +64,8 @@ class DashboardController extends Controller
             'substitutes_pending' => ProductSubstitute::query()
                 ->where('approval_status', 'oczekuje')
                 ->count(),
+            'pending_my_approval' => $pendingApproval,
+            'deadline_soon' => $deadlineSoon,
             'recent_tenders' => Tender::query()
                 ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
                 ->with(['client:id,name', 'owner:id,name'])

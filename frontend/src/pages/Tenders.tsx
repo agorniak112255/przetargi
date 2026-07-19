@@ -1,11 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, type Tender } from '../lib/api'
 
 type Client = { id: number; name: string }
 
 export function Tenders() {
   const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  const filter = params.get('filter') ?? ''
   const [rows, setRows] = useState<Tender[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [open, setOpen] = useState(false)
@@ -16,8 +18,9 @@ export function Tenders() {
   const [busy, setBusy] = useState(false)
 
   async function load() {
+    const qs = filter ? `?filter=${encodeURIComponent(filter)}` : ''
     const [t, c] = await Promise.all([
-      api<Tender[]>('/tenders'),
+      api<Tender[]>(`/tenders${qs}`),
       api<Client[]>('/clients'),
     ])
     setRows(t)
@@ -27,7 +30,7 @@ export function Tenders() {
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [filter])
 
   async function onCreate(e: FormEvent) {
     e.preventDefault()
@@ -54,15 +57,30 @@ export function Tenders() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">Przetargi</h1>
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="rounded bg-blue-600 px-3 py-2 text-xs text-white hover:bg-blue-700"
-        >
-          + Nowy przetarg
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="rounded border border-slate-300 px-2 py-1.5 text-xs"
+            value={filter}
+            onChange={(e) => {
+              const v = e.target.value
+              if (v) setParams({ filter: v })
+              else setParams({})
+            }}
+          >
+            <option value="">Wszystkie</option>
+            <option value="mine">Moje</option>
+            <option value="deadline_soon">Deadline &lt; 7 dni</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="rounded bg-blue-600 px-3 py-2 text-xs text-white hover:bg-blue-700"
+          >
+            + Nowy przetarg
+          </button>
+        </div>
       </div>
 
       {open && (
@@ -138,7 +156,16 @@ export function Tenders() {
                   </Link>
                 </td>
                 <td className="p-2">{t.client?.name}</td>
-                <td className="p-2">{t.deadline ?? '—'}</td>
+                <td className="p-2">
+                  {t.deadline ?? '—'}
+                  {t.deadline &&
+                    new Date(t.deadline) <= new Date(Date.now() + 7 * 86400000) &&
+                    new Date(t.deadline) >= new Date(new Date().toDateString()) && (
+                      <span className="ml-1 font-semibold text-red-600" title="Termin w ciągu 7 dni">
+                        !
+                      </span>
+                    )}
+                </td>
                 <td className="p-2">
                   {t.offer_value_net
                     ? `${Number(t.offer_value_net).toLocaleString('pl-PL')} zł`

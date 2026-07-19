@@ -59,6 +59,17 @@ final class TenderWorkflowService
             ]);
         }
 
+        $noteRequired = $toStatus === 'odrzucony'
+            || (
+                in_array($from, ['akceptacja_km', 'akceptacja_dyrektor'], true)
+                && $toStatus === 'wycena'
+            );
+        if ($noteRequired && ($note === null || mb_strlen(trim($note)) < 5)) {
+            throw ValidationException::withMessages([
+                'note' => ['Wymagana notatka (min. 5 znaków) przy odrzuceniu lub cofnięciu z akceptacji.'],
+            ]);
+        }
+
         $tender->status = $toStatus;
         $tender->last_activity_at = now();
         $tender->save();

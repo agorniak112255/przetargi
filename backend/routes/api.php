@@ -14,8 +14,12 @@ use App\Http\Controllers\Api\ProductAiSearchController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
 use App\Http\Controllers\Api\ProductSubstituteController;
+use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\TenderActivityController;
+use App\Http\Controllers\Api\TenderCommentController;
 use App\Http\Controllers\Api\TenderConditionController;
 use App\Http\Controllers\Api\TenderController;
+use App\Http\Controllers\Api\TenderCoverageController;
 use App\Http\Controllers\Api\TenderDocumentController;
 use App\Http\Controllers\Api\TenderExportController;
 use App\Http\Controllers\Api\TenderImportController;
@@ -30,11 +34,19 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::get('/dashboard', DashboardController::class)->middleware('permission:dashboard.view');
+    Route::get('/reports/summary', [ReportController::class, 'summary'])->middleware('permission:reports.view');
+    Route::get('/reports/csv', [ReportController::class, 'csv'])->middleware('permission:reports.view');
 
     Route::get('/tenders', [TenderController::class, 'index'])->middleware('permission:tenders.view_own|tenders.view_all');
     Route::post('/tenders', [TenderController::class, 'store'])->middleware('permission:tenders.create');
     Route::get('/tenders/{tender}', [TenderController::class, 'show'])->middleware('permission:tenders.view_own|tenders.view_all');
+    Route::patch('/tenders/{tender}', [TenderController::class, 'update'])->middleware('permission:tenders.create|tenders.edit_offer');
     Route::post('/tenders/{tender}/transition', [TenderController::class, 'transition']);
+    Route::get('/tenders/{tender}/coverage', TenderCoverageController::class)->middleware('permission:tenders.view_own|tenders.view_all');
+    Route::get('/tenders/{tender}/activities', [TenderActivityController::class, 'index'])->middleware('permission:tenders.view_own|tenders.view_all');
+    Route::get('/tenders/{tender}/comments', [TenderCommentController::class, 'index'])->middleware('permission:tenders.view_own|tenders.view_all');
+    Route::post('/tenders/{tender}/comments', [TenderCommentController::class, 'store'])->middleware('permission:tenders.comment');
+    Route::delete('/tenders/{tender}/comments/{comment}', [TenderCommentController::class, 'destroy'])->middleware('permission:tenders.comment');
     Route::post('/tenders/{tender}/import', [TenderImportController::class, 'store'])->middleware('permission:tenders.import');
     Route::get('/tenders/{tender}/documents', [TenderDocumentController::class, 'index'])->middleware('permission:tenders.view_own|tenders.view_all');
     Route::post('/tenders/{tender}/documents/analyze', [TenderDocumentController::class, 'analyze'])->middleware('permission:tenders.import');
@@ -59,6 +71,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::post('/products/enrich', [ProductEnrichmentController::class, 'enrichProducts'])
         ->middleware('permission:price_lists.import');
     Route::get('/products/{product}', [ProductController::class, 'show'])->middleware('permission:products.view');
+    Route::get('/products/{product}/price-history', [ProductController::class, 'priceHistory'])->middleware('permission:products.view');
     Route::post('/products/{product}/enrich', [ProductEnrichmentController::class, 'enrichProduct'])
         ->middleware('permission:price_lists.import');
     Route::get('/product-enrichment-batches/active', [ProductEnrichmentController::class, 'activeBatches'])

@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Models\ProductPriceHistory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -142,6 +143,42 @@ class ProductController extends Controller
             'sort_order' => $doc->sort_order,
         ])->values()->all();
 
+        $history = ProductPriceHistory::query()
+            ->where('product_id', $product->id)
+            ->orderByDesc('id')
+            ->limit(2)
+            ->get();
+        $latest = $history->first();
+        $previous = $history->skip(1)->first();
+        $catalogChangePct = null;
+        if (
+            $latest !== null
+            && $previous !== null
+            && $previous->catalog_price_net !== null
+            && (float) $previous->catalog_price_net > 0
+            && $latest->catalog_price_net !== null
+        ) {
+            $catalogChangePct = round(
+                (((float) $latest->catalog_price_net - (float) $previous->catalog_price_net)
+                    / (float) $previous->catalog_price_net) * 100,
+                1
+            );
+        }
+        $payload['price_change_percent'] = $catalogChangePct;
+        $payload['price_history_latest_at'] = $latest?->created_at;
+
         return response()->json($payload);
+    }
+
+    public function priceHistory(Product $product): JsonResponse
+    {
+        $rows = ProductPriceHistory::query()
+            ->where('product_id', $product->id)
+            ->with('priceList:id,manufacturer,version,created_at')
+            ->orderByDesc('id')
+            ->limit(100)
+            ->get();
+
+        return response()->json(['data' => $rows]);
     }
 }

@@ -73,4 +73,9 @@ class Product extends Model
     {
         return $this->hasMany(ProductDocument::class)->orderBy('sort_order');
     }
+
+    public function priceHistory(): HasMany
+    {
+        return $this->hasMany(ProductPriceHistory::class)->latest('id');
+    }
 }

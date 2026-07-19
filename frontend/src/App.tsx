@@ -11,6 +11,7 @@ import { ProductDetail } from './pages/ProductDetail'
 import { AiSettingsPage } from './pages/AiSettings'
 import { PriceLists } from './pages/PriceLists'
 import { Products } from './pages/Products'
+import { Reports } from './pages/Reports'
 import { Substitutes } from './pages/Substitutes'
 import { TenderDetail } from './pages/TenderDetail'
 import { Tenders } from './pages/Tenders'
@@ -50,6 +51,15 @@ export default function App() {
           <Route path="products" element={<Products />} />
           <Route path="products/:id" element={<ProductDetail />} />
           <Route path="price-lists" element={<PriceLists />} />
+          <Route
+            path="reports"
+            element={
+              <PermissionGuard permission="reports.view">
+                <Reports />
+              </PermissionGuard>
+            }
+          />
+
           <Route
             path="ai-settings"
             element={

@@ -8,6 +8,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Tender;
 use App\Models\TenderItem;
+use App\Services\ProductMatchService;
+use App\Services\TenderActivityLogger;
 use App\Services\TenderPricingService;
 use App\Services\TenderWorkflowService;
 use Illuminate\Http\JsonResponse;
@@ -20,6 +22,8 @@ class TenderItemController extends Controller
     public function __construct(
         private readonly TenderPricingService $pricing,
         private readonly TenderWorkflowService $workflow,
+        private readonly TenderActivityLogger $activities,
+        private readonly ProductMatchService $matcher,
     ) {}
 
     public function bulkUpdate(Request $request, Tender $tender): JsonResponse
@@ -39,7 +43,7 @@ class TenderItemController extends Controller
         ]);
 
         $updated = 0;
-        DB::transaction(function () use ($tender, $data, &$updated): void {
+        DB::transaction(function () use ($tender, $data, $request, &$updated): void {
             foreach ($data['items'] as $row) {
                 $item = TenderItem::query()
                     ->where('tender_id', $tender->id)
@@ -48,6 +52,12 @@ class TenderItemController extends Controller
                 if ($item === null) {
                     continue;
                 }
+
+                $before = [
+                    'main_product_id' => $item->main_product_id,
+                    'quantity' => $item->quantity,
+                    'offer_price' => $item->offer_price,
+                ];
 
                 $item->main_product_id = $row['main_product_id'] ?? null;
                 $item->quantity = (int) $row['quantity'];
@@ -58,6 +68,14 @@ class TenderItemController extends Controller
                 $item->save();
                 $item->load('mainProduct');
                 $this->pricing->recalculateItemMargin($item);
+                $this->activities->log($tender, 'item_bulk_updated', $request->user(), $item, [
+                    'before' => $before,
+                    'after' => [
+                        'main_product_id' => $item->main_product_id,
+                        'quantity' => $item->quantity,
+                        'offer_price' => $item->offer_price,
+                    ],
+                ]);
                 $updated++;
             }
         });
@@ -90,16 +108,39 @@ class TenderItemController extends Controller
             'offer_price' => ['sometimes', 'nullable', 'numeric', 'min:0'],
             'requirement' => ['sometimes', 'string', 'max:2000'],
             'status' => ['sometimes', 'string', 'max:32'],
+            'ai_match_percent' => ['sometimes', 'nullable', 'integer', 'min:0', 'max:100'],
+            'ai_match_reasons' => ['sometimes', 'nullable', 'array'],
+            'match_source' => ['sometimes', 'nullable', 'string', 'max:32'],
         ]);
+
+        $before = [
+            'main_product_id' => $item->main_product_id,
+            'quantity' => $item->quantity,
+            'offer_price' => $item->offer_price,
+            'ai_match_percent' => $item->ai_match_percent,
+        ];
 
         if (array_key_exists('main_product_id', $data)) {
             $item->main_product_id = $data['main_product_id'];
             if ($data['main_product_id'] !== null && ! array_key_exists('offer_price', $data)) {
                 $product = Product::query()->find($data['main_product_id']);
                 if ($product !== null && (float) $product->purchase_price > 0) {
-                    // sugerowana oferta ~ +18% od zakupu
                     $item->offer_price = round((float) $product->purchase_price * 1.18, 2);
                 }
+                if (! array_key_exists('ai_match_reasons', $data) && $product !== null) {
+                    $explained = $this->matcher->explainMatch($item->requirement, $product);
+                    $item->ai_match_reasons = $explained['reasons'];
+                    if (! array_key_exists('ai_match_percent', $data)) {
+                        $item->ai_match_percent = $explained['score'];
+                    }
+                    if (! array_key_exists('match_source', $data)) {
+                        $item->match_source = 'manual';
+                    }
+                }
+            }
+            if ($data['main_product_id'] === null) {
+                $item->ai_match_reasons = null;
+                $item->match_source = null;
             }
         }
 
@@ -115,11 +156,31 @@ class TenderItemController extends Controller
         if (array_key_exists('status', $data)) {
             $item->status = $data['status'];
         }
+        if (array_key_exists('ai_match_percent', $data)) {
+            $item->ai_match_percent = $data['ai_match_percent'];
+        }
+        if (array_key_exists('ai_match_reasons', $data)) {
+            $item->ai_match_reasons = $data['ai_match_reasons'];
+        }
+        if (array_key_exists('match_source', $data)) {
+            $item->match_source = $data['match_source'];
+        }
 
         $item->save();
         $item->load('mainProduct');
         $this->pricing->recalculateItemMargin($item);
         $this->pricing->recalculateTenderTotals($tender->fresh());
+
+        $this->activities->log($tender, 'item_updated', $request->user(), $item, [
+            'before' => $before,
+            'after' => [
+                'main_product_id' => $item->main_product_id,
+                'quantity' => $item->quantity,
+                'offer_price' => $item->offer_price,
+                'ai_match_percent' => $item->ai_match_percent,
+                'match_source' => $item->match_source,
+            ],
+        ]);
 
         return response()->json($item->fresh('mainProduct'));
     }
