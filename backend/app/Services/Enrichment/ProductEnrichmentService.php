@@ -205,7 +205,14 @@ final class ProductEnrichmentService
 
             // najpierw strony producenta, potem sklepy (do opisu)
             $searchResults = $this->rankResultsForEnrichment($searchResults, $product);
-            $fetched = $this->pages->fetch($searchResults, (string) $product->sku, 3);
+            if ($this->manufacturers->domainsFor($product) === []) {
+                $this->manufacturers->discoverOfficialDomains($product);
+            }
+            $mfrDomains = $this->manufacturers->discoverFromResults(
+                $product,
+                array_column($searchResults, 'url')
+            );
+            $fetched = $this->pages->fetch($searchResults, (string) $product->sku, 3, $mfrDomains);
             $pageSnippets = $fetched['pages'];
             if ($pageSnippets === []) {
                 $pageSnippets = $this->fetchPageSnippets(array_slice($searchResults, 0, 3));
@@ -313,7 +320,8 @@ final class ProductEnrichmentService
                         array_slice($sourceUrls, 0, 2)
                     ),
                     (string) $product->sku,
-                    1
+                    1,
+                    $mfrDomains
                 );
                 $savedImages = $this->images->downloadMany(
                     $product,
@@ -354,7 +362,8 @@ final class ProductEnrichmentService
                 }
             }
             if ($docPages !== []) {
-                $docFetched = $this->pages->fetch($docPages, (string) $product->sku, 3);
+                // indeksy deklaracji / karty producenta — bierz PDF ze strony
+                $docFetched = $this->pages->fetch($docPages, (string) $product->sku, 3, $mfrDomains);
                 foreach ($docFetched['document_urls'] ?? [] as $url) {
                     $documentUrls[] = $url;
                 }
@@ -702,7 +711,8 @@ final class ProductEnrichmentService
         $imageUrls = [];
         $documentUrls = [];
         if ($extraResults !== []) {
-            $extraFetched = $this->pages->fetch($extraResults, (string) $product->sku, 3);
+            $extraMfr = $this->manufacturers->domainsFor($product);
+            $extraFetched = $this->pages->fetch($extraResults, (string) $product->sku, 3, $extraMfr);
             $extraPages = $this->sanitizePagesWithLlm($product, $extraFetched['pages']);
             foreach ($extraPages as $page) {
                 $pageSnippets[] = $page;

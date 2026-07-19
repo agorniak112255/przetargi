@@ -51,9 +51,37 @@ HTML;
         $method = $ref->getMethod('extractDocumentUrls');
         $method->setAccessible(true);
         /** @var list<string> $docs */
-        $docs = $method->invoke($fetcher, $html, 'https://shop.example.com/produkt/c300', '60549');
+        $docs = $method->invoke($fetcher, $html, 'https://shop.example.com/produkt/c300', '60549', false);
 
         $this->assertCount(1, $docs);
         $this->assertStringContainsString('uvex-glove-doc.pdf', $docs[0]);
+    }
+
+    public function test_manufacturer_page_keeps_product_pdfs_and_skips_csr(): void
+    {
+        $html = <<<'HTML'
+<html><body>
+<a href="https://cdn.example.com/DATASHEET/60549_PDB_EN.pdf">Data sheet</a>
+<a href="/files/product-info.pdf">Informacje o produkcie</a>
+<a href="/files/sustainability-report-2024.pdf">Sustainability report</a>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractDocumentUrls');
+        $method->setAccessible(true);
+        /** @var list<string> $docs */
+        $docs = $method->invoke(
+            $fetcher,
+            $html,
+            'https://www.uvex-safety.com/en/products/glove-60549/',
+            '60549',
+            true
+        );
+
+        $this->assertTrue(collect($docs)->contains(fn (string $u): bool => str_contains($u, '60549_PDB_EN.pdf')));
+        $this->assertTrue(collect($docs)->contains(fn (string $u): bool => str_contains($u, 'product-info.pdf')));
+        $this->assertFalse(collect($docs)->contains(fn (string $u): bool => str_contains($u, 'sustainability')));
     }
 }

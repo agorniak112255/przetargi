@@ -13,13 +13,14 @@ final class ProductPageFetcher
 {
     /**
      * @param  list<array{url: string, title?: string, snippet?: string}>  $results
+     * @param  list<string>  $manufacturerDomains  hosty producenta — wtedy bierzemy PDF ze strony (zwykle certyfikaty)
      * @return array{
      *     pages: list<array{url: string, text: string}>,
      *     image_urls: list<string>,
      *     document_urls: list<string>
      * }
      */
-    public function fetch(array $results, string $sku, int $maxPages = 2): array
+    public function fetch(array $results, string $sku, int $maxPages = 2, array $manufacturerDomains = []): array
     {
         $ranked = array_slice($this->rankResults($results, $sku), 0, max(1, $maxPages));
         $skuNorm = mb_strtolower(trim($sku));
@@ -86,8 +87,9 @@ final class ProductPageFetcher
                     $images[] = $img;
                 }
             }
-            // PDF z list deklaracji: nazwa produktu bywa tylko w href, nie w tekście strony
-            foreach ($this->extractDocumentUrls($html, $url, $skuNorm) as $doc) {
+            // PDF: na stronie producenta bierzemy dokumenty (certyfikaty/karty); w sklepie — tylko dopasowane
+            $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
+            foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer) as $doc) {
                 $documents[] = $doc;
             }
         }
@@ -420,7 +422,7 @@ final class ProductPageFetcher
     /**
      * @return list<string>
      */
-    private function extractDocumentUrls(string $html, string $pageUrl, string $skuNorm): array
+    private function extractDocumentUrls(string $html, string $pageUrl, string $skuNorm, bool $fromManufacturer = false): array
     {
         /** @var list<array{href: string, label: string}> $raw */
         $raw = [];
@@ -457,6 +459,10 @@ final class ProductPageFetcher
             $label = $item['label'];
             $hay = $meta.' '.$label;
 
+            if ($this->looksLikeJunkManufacturerPdf($hay)) {
+                continue;
+            }
+
             $matched = $skuNorm !== '' && str_contains($hay, mb_strtolower($skuNorm));
             foreach ($skuTokens as $token) {
                 if (str_contains($hay, $token)) {
@@ -472,6 +478,10 @@ final class ProductPageFetcher
             if (! $matched && $this->looksLikeCertificateDocument($hay)) {
                 $matched = true;
             }
+            // strona producenta: każdy sensowny PDF (zazwyczaj certyfikat / karta)
+            if (! $matched && $fromManufacturer) {
+                $matched = true;
+            }
             if (! $matched) {
                 continue;
             }
@@ -485,11 +495,53 @@ final class ProductPageFetcher
     {
         foreach ([
             'deklarac', 'declaration', 'conformity', 'certyfik', 'certificate',
-            'datasheet', 'karta-katalog', 'karta_katalog', 'karta produktu',
+            'datasheet', 'datenblatt', 'karta-katalog', 'karta_katalog', 'karta produktu',
             'doc_', '_doc', '/doc/', 'doctype', 'ue-type', 'eu-type',
-            'examination', 'attestation', 'swiadectw', 'świadectw',
+            'examination', 'attestation', 'swiadectw', 'świadectw', 'pdb_', '_pdb',
         ] as $needle) {
             if (str_contains($hay, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Raporty CSR / regulaminy — nie certyfikaty produktu. */
+    private function looksLikeJunkManufacturerPdf(string $hay): bool
+    {
+        foreach ([
+            'sustainability', 'nachhaltig', 'annual-report', 'jahresbericht',
+            'privacy', 'datenschutz', 'cookie', 'terms-of', 'agb', 'imprint',
+            'newsletter', 'press-release', 'investor', 'code-of-conduct',
+            'code_of_conduct', 'compliance-report',
+        ] as $needle) {
+            if (str_contains($hay, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<string>  $domains
+     */
+    private function hostMatchesDomains(string $url, array $domains): bool
+    {
+        if ($domains === []) {
+            return false;
+        }
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        if ($host === '') {
+            return false;
+        }
+        foreach ($domains as $domain) {
+            $d = mb_strtolower(trim($domain));
+            if ($d === '') {
+                continue;
+            }
+            if ($host === $d || str_ends_with($host, '.'.$d)) {
                 return true;
             }
         }
