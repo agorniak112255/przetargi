@@ -807,15 +807,26 @@ final class ProductEnrichmentService
         $urls = array_values(array_unique(array_filter($urls, static fn ($u): bool => is_string($u) && str_starts_with($u, 'http'))));
         $mfr = [];
         $skuHit = [];
+        $otherPdf = [];
         foreach ($urls as $url) {
             if ($this->manufacturers->isManufacturerUrl($url, $product, $domains)) {
                 $mfr[] = $url;
             } elseif ($this->pdfUrlMentionsProduct($url, $product)) {
                 $skuHit[] = $url;
+            } elseif (ProductDocumentDownloader::looksLikePdfUrl($url)) {
+                $otherPdf[] = $url;
             }
         }
 
-        return $mfr !== [] ? $mfr : $skuHit;
+        // producent → PDF z SKU w URL → dopiero potem pozostałe PDF (sklep/dystrybutor)
+        if ($mfr !== []) {
+            return $mfr;
+        }
+        if ($skuHit !== []) {
+            return $skuHit;
+        }
+
+        return $otherPdf;
     }
 
     private function pdfUrlMentionsProduct(string $url, Product $product): bool
@@ -828,9 +839,23 @@ final class ProductEnrichmentService
         if ($sku !== '' && preg_match('/(?<![0-9])'.preg_quote($sku, '/').'(?![0-9])/u', $hay)) {
             return true;
         }
+        // uvex / ATG: art. 60549 często jako 60549_ / 60549- w nazwie pliku
+        if ($sku !== '' && preg_match('/^\d{4,}$/', $sku)
+            && (str_contains($hay, $sku.'_') || str_contains($hay, $sku.'-') || str_contains($hay, '/'.$sku.'.'))) {
+            return true;
+        }
         $name = mb_strtolower(trim((string) $product->name));
         if ($name !== '' && preg_match('/\b(\d{1,2}-\d{3})\b/', $sku.' '.$name, $m)) {
             return (bool) preg_match('/(?<![0-9])'.preg_quote($m[1], '/').'(?![0-9])/u', $hay);
+        }
+        // nazwa handlowa w URL (np. c300-dry, c300dry)
+        $tokens = preg_split('/\s+/u', $name) ?: [];
+        $nameSlug = implode('-', array_filter(array_map(
+            static fn (string $t): string => (string) preg_replace('/[^a-z0-9]+/i', '', mb_strtolower($t)),
+            array_slice($tokens, 0, 3)
+        )));
+        if ($nameSlug !== '' && mb_strlen($nameSlug) >= 5 && str_contains($hay, $nameSlug)) {
+            return true;
         }
         $compact = preg_replace('/[^a-z0-9]+/i', '', $name) ?? '';
         $hayCompact = preg_replace('/[^a-z0-9]+/i', '', $hay) ?? '';

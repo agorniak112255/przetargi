@@ -35,7 +35,7 @@ final class ProductDocumentFinder
         $found = [];
 
         foreach (array_slice($queries, 0, 5) as $query) {
-            $cacheKey = 'enrich_docs_v5:'.hash('sha256', $query.'|'.implode(',', $domains));
+            $cacheKey = 'enrich_docs_v6:'.hash('sha256', $query.'|'.implode(',', $domains));
             $cached = Cache::get($cacheKey);
             if (is_array($cached)) {
                 foreach ($cached as $url) {
@@ -120,15 +120,25 @@ final class ProductDocumentFinder
         $sku = trim((string) $product->sku);
         $site = $domains !== [] ? 'site:'.preg_replace('/^www\./', '', $domains[0]) : '';
 
-        return array_values(array_unique(array_filter([
+        $queries = [
             // konkretny produkt → PDF
-            trim('"'.$sku.'" '.$mfr.' (declaration OR deklaracja OR certificate OR DoC) filetype:pdf '.$site),
+            trim('"'.$sku.'" '.$mfr.' (declaration OR deklaracja OR certificate OR DoC OR EU) filetype:pdf '.$site),
             trim(($nameCore !== '' ? '"'.$nameCore.'"' : '"'.$phrase.'"').' '.$mfr.' declaration of conformity OR deklaracja zgodności filetype:pdf '.$site),
             trim($sku.' '.$nameCore.' '.$mfr.' datasheet OR "declaration of conformity" OR certificate '.$site),
             // indeks deklaracji producenta (HTML) — potem wyciągamy PDF po SKU
             trim($mfr.' "declaration of conformity" OR deklaracje zgodności OR "declarations of conformity" downloads '.$site),
             trim($phrase.' '.$mfr.' PDS OR TDS filetype:pdf '.$site),
-        ])));
+        ];
+        // uvex / numeryczne art.: szukaj też po samym numerze na CDN / safety
+        if ($sku !== '' && preg_match('/^\d{4,}$/', $sku)) {
+            array_unshift(
+                $queries,
+                trim($sku.' '.$mfr.' (pdf OR declaration OR deklaracja OR certificate) '.$site),
+                trim($sku.' filetype:pdf '.$mfr),
+            );
+        }
+
+        return array_values(array_unique(array_filter($queries)));
     }
 
     private function nameCore(string $phrase): string
