@@ -41,9 +41,12 @@ fi
 
 echo "==> Import do bazy '$DB_DATABASE' (user: $DB_USERNAME)"
 echo "    Plik: $DUMP"
-read -r -p "Na pewno nadpisać bazę na SERWERZE? wpisz TAK: " confirm
+confirm="${CONFIRM:-}"
+if [[ -z "$confirm" ]]; then
+  read -r -p "Na pewno nadpisac baze na SERWERZE? wpisz TAK: " confirm
+fi
 if [[ "$confirm" != "TAK" ]]; then
-  echo "Anulowano."
+  echo "Anulowano. (ustaw CONFIRM=TAK aby pominac pytanie)"
   exit 1
 fi
 

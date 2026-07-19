@@ -1,5 +1,5 @@
 # Eksport lokalnej bazy MySQL (XAMPP) do pliku SQL.
-# Nie wysyła na serwer — tylko tworzy dump.
+# Nie wysyla na serwer - tylko tworzy dump.
 param(
     [string]$OutFile = ""
 )
@@ -21,14 +21,14 @@ if (-not (Test-Path $EnvFile)) {
 $db = Get-DotEnvValue $EnvFile "DB_DATABASE"
 $user = Get-DotEnvValue $EnvFile "DB_USERNAME"
 $pass = Get-DotEnvValue $EnvFile "DB_PASSWORD"
-$host = Get-DotEnvValue $EnvFile "DB_HOST"
-if (-not $host) { $host = "127.0.0.1" }
+$dbHost = Get-DotEnvValue $EnvFile "DB_HOST"
+if (-not $dbHost) { $dbHost = "127.0.0.1" }
 $port = Get-DotEnvValue $EnvFile "DB_PORT"
 if (-not $port) { $port = "3306" }
 
 $mysqldump = "c:\xampp\mysql\bin\mysqldump.exe"
 if (-not (Test-Path $mysqldump)) {
-    throw "Nie znaleziono $mysqldump — uruchom XAMPP MySQL."
+    throw "Nie znaleziono $mysqldump - uruchom XAMPP MySQL."
 }
 
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -40,29 +40,28 @@ if (-not $OutFile) {
 
 Write-Host "==> dump bazy '$db' -> $OutFile" -ForegroundColor Cyan
 
-$args = @(
-    "-h$host",
+$dumpArgs = @(
+    "-h$dbHost",
     "-P$port",
     "-u$user",
     "--single-transaction",
     "--routines",
     "--triggers",
     "--default-character-set=utf8mb4",
+    "--result-file=$OutFile",
     $db
 )
 if ($pass -ne "") {
-    $args = @("-p$pass") + $args
+    $dumpArgs = @("-p$pass") + $dumpArgs
 }
 
-# --result-file: bez BOM / przekłamań PowerShell przy pipe
-$args += @("--result-file=$OutFile")
-& $mysqldump @args
+& $mysqldump @dumpArgs
 if ($LASTEXITCODE -ne 0) {
-    throw "mysqldump zakończył się kodem $LASTEXITCODE"
+    throw "mysqldump zakonczyl sie kodem $LASTEXITCODE"
 }
 
 if (-not (Test-Path $OutFile) -or (Get-Item $OutFile).Length -lt 100) {
-    throw "Dump wygląda na pusty / nieudany: $OutFile"
+    throw "Dump wyglada na pusty / nieudany: $OutFile"
 }
 
 Write-Host "OK: $OutFile ($([math]::Round((Get-Item $OutFile).Length/1KB,1)) KB)" -ForegroundColor Green
