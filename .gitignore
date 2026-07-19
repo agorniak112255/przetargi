@@ -31,6 +31,10 @@ frontend/dist/
 .DS_Store
 Thumbs.db
 
+# Apache: lokalny XAMPP vs produkcja — szablony w deploy/htaccess.*
+backend/public/.htaccess
+
+
 # local data / samples (opcjonalnie duże)
 Cenniki/
 samples/

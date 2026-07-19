@@ -15,14 +15,7 @@ npm run build:prod
 
 Set-Location $Root
 
-# .htaccess pod domenę (nie /Przetargi/)
-$ht = "$Root\backend\public\.htaccess"
-if (Test-Path $ht) {
-    (Get-Content $ht -Raw) `
-        -replace 'RewriteBase /Przetargi/', 'RewriteBase /' `
-        -replace 'RewriteRule \^backend/public/\?\$ /Przetargi/', 'RewriteRule ^backend/public/?$ /' `
-        | Set-Content -NoNewline $ht -Encoding utf8
-}
+# .htaccess nie jest w git — lokalny XAMPP / serwer trzymają własne kopie (deploy/htaccess.*)
 
 if ($Commit) {
     Write-Host "==> git add + commit" -ForegroundColor Cyan
