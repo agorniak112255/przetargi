@@ -203,8 +203,7 @@ final class ProductEnrichmentService
                 );
             }
 
-            // najpierw strony producenta, potem sklepy (do opisu)
-            $searchResults = $this->rankResultsForEnrichment($searchResults, $product);
+            // Opis/zdjęcia ← sklepy; PDF/certyfikaty ← producent (osobne ścieżki).
             if ($this->manufacturers->domainsFor($product) === []) {
                 $this->manufacturers->discoverOfficialDomains($product);
             }
@@ -212,20 +211,40 @@ final class ProductEnrichmentService
                 $product,
                 array_column($searchResults, 'url')
             );
-            $fetched = $this->pages->fetch($searchResults, (string) $product->sku, 3, $mfrDomains);
+            $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
+            $fetched = $this->pages->fetch($descResults, (string) $product->sku, 3, []);
             $pageSnippets = $fetched['pages'];
             if ($pageSnippets === []) {
-                $pageSnippets = $this->fetchPageSnippets(array_slice($searchResults, 0, 3));
+                $pageSnippets = $this->fetchPageSnippets(array_slice($descResults, 0, 3));
             }
 
-            // wstępna analiza AI: wyrzuć chrome sklepu, zostaw fakty o produkcie
+            // Certyfikaty + fakty techniczne: osobny fetch producenta (nie mieszać rankingu opisu).
+            $mfrPageSnippets = [];
+            $mfrResults = $this->manufacturerSearchResults($searchResults, $product, $mfrDomains);
+            if ($mfrResults !== []) {
+                $mfrFetched = $this->pages->fetch($mfrResults, (string) $product->sku, 3, $mfrDomains);
+                foreach ($mfrFetched['document_urls'] as $url) {
+                    $fetched['document_urls'][] = $url;
+                }
+                foreach ($mfrFetched['image_urls'] as $url) {
+                    $fetched['image_urls'][] = $url;
+                }
+                $mfrPageSnippets = $mfrFetched['pages'];
+            }
+
+            // sklep → opis PL; producent → normy/materiały (doklejone do kontekstu LLM)
             $pageSnippets = $this->sanitizePagesWithLlm($product, $pageSnippets);
+            if ($mfrPageSnippets !== []) {
+                $mfrClean = $this->sanitizePagesWithLlm($product, $mfrPageSnippets);
+                $pageSnippets = $this->mergePageSnippets($pageSnippets, $mfrClean);
+            }
 
             $extracted = $this->extractWithLlm(
                 $product,
-                array_slice($searchResults, 0, 4),
-                array_slice($pageSnippets, 0, 3)
+                array_slice($descResults, 0, 4),
+                array_slice($pageSnippets, 0, 5)
             );
+            $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets);
 
             $description = $this->composeFullDescription($extracted);
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
@@ -237,18 +256,22 @@ final class ProductEnrichmentService
                 }
             }
 
-            // niepełny opis → doszukaj na kolejnych stronach (głównie sklepy)
+            // niepełny opis / puste listy → doszukaj na kolejnych sklepach
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)
-                || $this->looksLikeIncompleteDescription($description)) {
+                || $this->looksLikeIncompleteDescription($description)
+                || $this->looksLikeSparsePayload($extracted)) {
                 $supplement = $this->supplementDescriptionFromOtherSites(
                     $product,
-                    $searchResults,
+                    $descResults,
                     $pageSnippets,
                     $extracted,
                     $description
                 );
                 $description = $supplement['description'];
-                $extracted = $supplement['extracted'];
+                $extracted = $this->enrichStructuredFieldsFromPages(
+                    $supplement['extracted'],
+                    $supplement['pages']
+                );
                 $pageSnippets = $supplement['pages'];
                 foreach ($supplement['image_urls'] as $url) {
                     $fetched['image_urls'][] = $url;
@@ -284,8 +307,10 @@ final class ProductEnrichmentService
                 $sourceUrls = array_column(array_slice($pageSnippets, 0, 3), 'url');
             }
             if ($sourceUrls === []) {
-                $sourceUrls = array_column(array_slice($searchResults, 0, 3), 'url');
+                $sourceUrls = array_column(array_slice($descResults, 0, 3), 'url');
             }
+
+            $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
 
             $payload = [
                 'features' => $this->stringList($extracted['features'] ?? null),
@@ -321,7 +346,7 @@ final class ProductEnrichmentService
                     ),
                     (string) $product->sku,
                     1,
-                    $mfrDomains
+                    []
                 );
                 $savedImages = $this->images->downloadMany(
                     $product,
@@ -410,10 +435,14 @@ final class ProductEnrichmentService
                 'product_id' => $product->id,
                 'error' => $e->getMessage(),
             ]);
-            $product->update([
-                'enrichment_status' => Product::ENRICHMENT_FAILED,
-                'enrichment_error' => mb_substr($e->getMessage(), 0, 2000),
-            ]);
+            try {
+                $product->update([
+                    'enrichment_status' => Product::ENRICHMENT_FAILED,
+                    'enrichment_error' => mb_substr($e->getMessage(), 0, 2000),
+                ]);
+            } catch (Throwable) {
+                // np. padnięte MySQL — status może zostać "running"; UI pozwala odblokować
+            }
             throw $e;
         }
     }
@@ -648,19 +677,93 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Opis: sklepy / dystrybutorzy najpierw; producent na końcu (cienkie karty EN).
+     *
      * @param  list<array{url: string, title?: string, snippet?: string}>  $results
+     * @param  list<string>  $mfrDomains
      * @return list<array{url: string, title?: string, snippet?: string}>
      */
-    private function rankResultsForEnrichment(array $results, Product $product): array
+    private function rankResultsForDescription(array $results, Product $product, array $mfrDomains = []): array
     {
-        usort($results, function (array $a, array $b) use ($product): int {
-            $aMfr = $this->manufacturers->isManufacturerUrl((string) ($a['url'] ?? ''), $product) ? 1 : 0;
-            $bMfr = $this->manufacturers->isManufacturerUrl((string) ($b['url'] ?? ''), $product) ? 1 : 0;
+        $retailers = $this->retailerHostList();
 
-            return $bMfr <=> $aMfr;
+        usort($results, function (array $a, array $b) use ($product, $mfrDomains, $retailers): int {
+            return $this->descriptionSourceScore((string) ($b['url'] ?? ''), $product, $mfrDomains, $retailers)
+                <=> $this->descriptionSourceScore((string) ($a['url'] ?? ''), $product, $mfrDomains, $retailers);
         });
 
         return $results;
+    }
+
+    /**
+     * @param  list<string>  $mfrDomains
+     * @param  list<string>  $retailers
+     */
+    private function descriptionSourceScore(string $url, Product $product, array $mfrDomains, array $retailers): int
+    {
+        if ($url === '') {
+            return -100;
+        }
+        if ($this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
+            return 0;
+        }
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        foreach ($retailers as $retailer) {
+            if ($host === $retailer || str_ends_with($host, '.'.$retailer)) {
+                return 20;
+            }
+        }
+
+        return 10;
+    }
+
+    /**
+     * @param  list<array{url: string, title?: string, snippet?: string}>  $results
+     * @param  list<string>  $mfrDomains
+     * @return list<array{url: string, title?: string, snippet?: string}>
+     */
+    private function manufacturerSearchResults(array $results, Product $product, array $mfrDomains): array
+    {
+        $out = [];
+        foreach ($results as $row) {
+            $url = (string) ($row['url'] ?? '');
+            if ($url === '') {
+                continue;
+            }
+            // bezpośrednie PDF z SERP — do ścieżki dokumentów
+            if (ProductDocumentDownloader::looksLikePdfUrl($url)
+                || $this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
+                $out[] = $row;
+            }
+            if (count($out) >= 5) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    /** @return list<string> */
+    private function retailerHostList(): array
+    {
+        $raw = config('enrichment.retailer_domains', []);
+        if (! is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        foreach ($raw as $domain) {
+            if (! is_string($domain)) {
+                continue;
+            }
+            $h = mb_strtolower(trim(preg_replace('#^https?://#i', '', $domain) ?? $domain));
+            $h = rtrim(explode('/', $h)[0] ?? $h, '/');
+            $h = preg_replace('/^www\./', '', $h) ?? $h;
+            if ($h !== '') {
+                $out[] = $h;
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**
@@ -698,8 +801,8 @@ final class ProductEnrichmentService
             if ($u === '' || isset($used[$u])) {
                 continue;
             }
-            // preferuj sklepy / inne strony (nie te same co już mamy)
-            if ($this->manufacturers->isManufacturerUrl((string) ($row['url'] ?? ''), $product) && count($extraResults) >= 2) {
+            // uzupełnienie opisu wyłącznie ze sklepów — nie z karty producenta
+            if ($this->manufacturers->isManufacturerUrl((string) ($row['url'] ?? ''), $product)) {
                 continue;
             }
             $extraResults[] = $row;
@@ -711,8 +814,7 @@ final class ProductEnrichmentService
         $imageUrls = [];
         $documentUrls = [];
         if ($extraResults !== []) {
-            $extraMfr = $this->manufacturers->domainsFor($product);
-            $extraFetched = $this->pages->fetch($extraResults, (string) $product->sku, 3, $extraMfr);
+            $extraFetched = $this->pages->fetch($extraResults, (string) $product->sku, 3, []);
             $extraPages = $this->sanitizePagesWithLlm($product, $extraFetched['pages']);
             foreach ($extraPages as $page) {
                 $pageSnippets[] = $page;
@@ -774,16 +876,174 @@ final class ProductEnrichmentService
     private function looksLikeIncompleteDescription(string $description): bool
     {
         $d = trim($description);
-        if (mb_strlen($d) < 320) {
+        if (mb_strlen($d) < 420) {
             return true;
         }
         $low = mb_strtolower($d);
         $hasTech = (bool) preg_match(
-            '#(en\s*\d|iso\s*\d|norm|skór|skor|podeszw|podnosek|nitryl|lateks|kevlar|ochron|wodoodpor|antypośliz|src|hro|\bs1\b|\bs3\b|\bo1\b)#iu',
+            '#(en\s*\d|iso\s*\d|norm|skór|skor|podeszw|podnosek|nitryl|lateks|kevlar|dyneema|bamboo|ochron|wodoodpor|antypośliz|src|hro|\bs1\b|\bs3\b|\bo1\b)#iu',
+            $low
+        );
+        $hasPurpose = (bool) preg_match(
+            '#(przeznacz|zastosow|branż|montaż|przemysł|warsztat|budown|logist|spożyw|chemicz|cięcie|przecię)#iu',
             $low
         );
 
-        return ! $hasTech || substr_count($d, '.') < 2;
+        return ! $hasTech || ! $hasPurpose || substr_count($d, '.') < 3;
+    }
+
+    /**
+     * @param  array<string, mixed>  $extracted
+     */
+    private function looksLikeSparsePayload(array $extracted): bool
+    {
+        $norms = $this->stringList($extracted['norms'] ?? null);
+        $materials = $this->stringList($extracted['materials'] ?? null);
+        $useCases = $this->stringList($extracted['use_cases'] ?? null);
+        $features = $this->stringList($extracted['features'] ?? null);
+
+        $filled = 0;
+        foreach ([$norms, $materials, $useCases, $features] as $list) {
+            if ($list !== []) {
+                $filled++;
+            }
+        }
+
+        return $filled < 2;
+    }
+
+    /**
+     * @param  list<array{url: string, text: string}>  $primary
+     * @param  list<array{url: string, text: string}>  $extra
+     * @return list<array{url: string, text: string}>
+     */
+    private function mergePageSnippets(array $primary, array $extra): array
+    {
+        $seen = [];
+        $out = [];
+        foreach (array_merge($primary, $extra) as $page) {
+            $url = mb_strtolower(trim((string) ($page['url'] ?? '')));
+            $text = trim((string) ($page['text'] ?? ''));
+            if ($url === '' || $text === '' || isset($seen[$url])) {
+                continue;
+            }
+            $seen[$url] = true;
+            $out[] = ['url' => (string) $page['url'], 'text' => $text];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Uzupełnij puste listy z dosłownych faktów w tekście stron / opisu (bez zmyślania).
+     *
+     * @param  array<string, mixed>  $extracted
+     * @param  list<array{url: string, text: string}>  $pages
+     * @return array<string, mixed>
+     */
+    private function enrichStructuredFieldsFromPages(array $extracted, array $pages, string $description = ''): array
+    {
+        $hay = $description;
+        foreach ($pages as $page) {
+            $hay .= "\n".(string) ($page['text'] ?? '');
+        }
+        $hay = trim($hay);
+        if ($hay === '') {
+            return $extracted;
+        }
+
+        $norms = $this->stringList($extracted['norms'] ?? null);
+        if ($norms === []) {
+            $extracted['norms'] = $this->extractNormsFromText($hay);
+        }
+
+        $materials = $this->stringList($extracted['materials'] ?? null);
+        if ($materials === []) {
+            $extracted['materials'] = $this->extractMaterialsFromText($hay);
+        }
+
+        $useCases = $this->stringList($extracted['use_cases'] ?? null);
+        if ($useCases === []) {
+            $extracted['use_cases'] = $this->extractUseCasesFromText($hay);
+        }
+
+        return $extracted;
+    }
+
+    /** @return list<string> */
+    private function extractNormsFromText(string $text): array
+    {
+        $out = [];
+        if (preg_match_all(
+            '/\bEN(?:\s*ISO)?\s*\d{3,5}(?::\d{4})?(?:\s*[+\-]?\s*[A-Z0-9][A-Z0-9\sXx\/\-]{0,24})?/iu',
+            $text,
+            $m
+        )) {
+            foreach ($m[0] as $raw) {
+                $norm = trim(preg_replace('/\s+/u', ' ', (string) $raw) ?? (string) $raw);
+                $norm = rtrim($norm, '.,;:)');
+                if (mb_strlen($norm) >= 6) {
+                    $out[] = $norm;
+                }
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /** @return list<string> */
+    private function extractMaterialsFromText(string $text): array
+    {
+        $low = mb_strtolower($text);
+        $map = [
+            'wiskoza bambusowa' => ['wiskoza bambusowa', 'bamboo viscose', 'viscose bamboo'],
+            'Dyneema' => ['dyneema'],
+            'szkło' => ['szkło', 'glass fibre', 'glass fiber', 'włókno szklane'],
+            'poliamid' => ['poliamid', 'polyamide', 'nylon'],
+            'nitryl' => ['nitryl', 'nitrile'],
+            'lateks' => ['lateks', 'latex'],
+            'HPPE' => ['hppe'],
+            'poliuretan' => ['poliuretan', 'polyurethane', 'pu coating'],
+            'wysokowydajny winyl (HPV)' => ['hpv', 'high performance vinyl', 'wysokowydajny winyl'],
+            'skóra' => ['skóra licowa', 'skóra bydlęca', 'full grain'],
+        ];
+        $out = [];
+        foreach ($map as $label => $needles) {
+            foreach ($needles as $needle) {
+                if (str_contains($low, $needle)) {
+                    $out[] = $label;
+                    break;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /** @return list<string> */
+    private function extractUseCasesFromText(string $text): array
+    {
+        $low = mb_strtolower($text);
+        $map = [
+            'montaż precyzyjny' => ['montaż', 'assembly', 'precyzyj'],
+            'przemysł metalowy' => ['metalurg', 'metalow', 'metal industry', 'blachar'],
+            'budownictwo' => ['budown', 'construction', 'construction site'],
+            'logistyka i magazyn' => ['logist', 'magazyn', 'warehouse', 'handling'],
+            'przemysł szklarski' => ['szklar', 'glass industry'],
+            'prace z ryzykiem przecięcia' => ['przecię', 'cut resist', 'cięcie', 'cut protection'],
+            'warunki suche' => ['warunki suche', 'dry conditions', 'dry environments'],
+        ];
+        $out = [];
+        foreach ($map as $label => $needles) {
+            foreach ($needles as $needle) {
+                if (str_contains($low, $needle)) {
+                    $out[] = $label;
+                    break;
+                }
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -1083,17 +1343,31 @@ SYS,
             [
                 'role' => 'system',
                 'content' => <<<'SYS'
-Ekspert BHP. Wejście to już OCZYSZCZONE fakty o produkcie (bez chrome sklepu). Zwróć TYLKO JSON:
-{"description":"PL 4-8 zdań: przeznaczenie, budowa, normy, zastosowania","features":[],"specs":[],"norms":[],"certificates":[],"materials":[],"use_cases":[],"image_urls":["https://... tylko realny URL pliku obrazka"],"document_urls":["https://... tylko realny URL pliku PDF certyfikatu/karty"],"source_urls":[],"confidence":0.0}
-Napisz opis techniczny własnymi słowami na podstawie faktów. Nie kopiuj UI sklepu. Nie zmyślaj URL. Brak danych → description="".
+Jesteś ekspertem BHP/PPE. Wejście to OCZYSZCZONE fakty o produkcie (bez chrome sklepu). Zbierz PEŁNĄ specyfikację jak na karcie katalogowej.
+Zwróć WYŁĄCZNIE JSON:
+{
+  "description": "pełny opis PL: 1) przeznaczenie 2) budowa/materiały 3) właściwości użytkowe 4) normy/certyfikaty 5) zastosowania — min. 6–12 zdań",
+  "features": ["cechy i korzyści — min. 5 pozycji, gdy źródła na to pozwalają"],
+  "specs": ["parametr: wartość (nr art./SKU, typ, materiał wkładki, powłoka, opakowanie, rozmiary…)"],
+  "norms": ["EN … z poziomami, jeśli podane w źródłach", "EN ISO …"],
+  "certificates": ["certyfikaty, kat. PPE, CE"],
+  "materials": ["materiały / powłoki"],
+  "use_cases": ["zastosowania / branże / warunki pracy"],
+  "image_urls": ["https://… tylko realny URL zdjęcia produktu"],
+  "document_urls": ["https://… tylko realny URL PDF karty/certyfikatu"],
+  "source_urls": ["https://… karty produktu"],
+  "confidence": 0.0
+}
+WYPEŁNIJ tablice features/specs/norms/materials/use_cases, gdy fakty są w tekście — nie zostawiaj ich pustych „dla skrótu”.
+Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
 SYS,
             ],
             [
                 'role' => 'user',
-                'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}"
-                    ."\n\nWyniki:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}",
+                'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}\nEAN: ".($product->ean ?? '—')
+                    ."\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}",
             ],
-        ], 0.1, 2200);
+        ], 0.1, 3500);
     }
 
     /**

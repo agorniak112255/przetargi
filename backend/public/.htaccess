@@ -23,19 +23,19 @@
     RewriteCond %{REQUEST_FILENAME} -d
     RewriteRule ^ - [L]
 
-    # --- XAMPP: Alias /Przetargi -> backend/public ---
+    # --- XAMPP: Alias /Przetargi -> backend/public (END = bez petli rewrite) ---
     RewriteCond %{REQUEST_URI} ^/Przetargi/api
-    RewriteRule ^api(/.*)?$ /Przetargi/index.php [L]
+    RewriteRule ^api(/.*)?$ /Przetargi/index.php [L,END]
 
     RewriteCond %{REQUEST_URI} ^/Przetargi/
-    RewriteRule ^ /Przetargi/index.html [L]
+    RewriteRule ^ /Przetargi/index.html [L,END]
 
     # --- Produkcja: DocumentRoot = backend/public ---
     RewriteCond %{REQUEST_URI} !^/Przetargi/
-    RewriteRule ^api(/.*)?$ index.php [L]
+    RewriteRule ^api(/.*)?$ index.php [L,END]
 
     RewriteCond %{REQUEST_URI} !^/Przetargi/
-    RewriteRule ^ index.html [L]
+    RewriteRule ^ index.html [L,END]
 </IfModule>
 
 DirectoryIndex index.html index.php

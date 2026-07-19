@@ -84,7 +84,7 @@ final class ProductEnrichmentApiTest extends TestCase
             ->assertJsonPath('images_count', 1)
             ->assertJsonPath('product.enrichment_status', Product::ENRICHMENT_DONE);
 
-        Queue::assertNothingPushed();
+        Queue::assertNotPushed(EnrichProductJob::class);
     }
 
     public function test_skip_done_product_without_force(): void
@@ -157,7 +157,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $product->refresh();
         $this->assertStringContainsString('Nowy opis po force', (string) $product->description);
 
-        Queue::assertNothingPushed();
+        Queue::assertNotPushed(EnrichProductJob::class);
     }
 
     public function test_enqueue_price_list_enrichment(): void
@@ -306,13 +306,21 @@ final class ProductEnrichmentApiTest extends TestCase
         $product = $this->makeProduct();
 
         $search = Mockery::mock(HybridWebSearchService::class);
+        $shopUrl = 'https://bhp-sklep.com.pl/produkt/'.$product->sku;
+        $mfrUrl = 'https://www.ansell.com/product/'.$product->sku;
+
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn([
                 'results' => [
                     [
-                        'url' => 'https://www.ansell.com/product/'.$product->sku,
-                        'title' => 'Karta',
+                        'url' => $mfrUrl,
+                        'title' => 'Ansell official',
+                        'snippet' => 'Datasheet '.$product->sku,
+                    ],
+                    [
+                        'url' => $shopUrl,
+                        'title' => 'Karta sklep',
                         'snippet' => 'Rękawice ochronne nitrylowe EN 388',
                     ],
                 ],
@@ -332,14 +340,15 @@ final class ProductEnrichmentApiTest extends TestCase
             'materials' => ['nitryl'],
             'use_cases' => ['montaż'],
             'image_urls' => ['https://cdn.example.com/glove-'.$product->sku.'.jpg'],
-            'document_urls' => ['https://www.ansell.com/docs/cert-'.$product->sku.'.pdf'],
-            'source_urls' => ['https://www.ansell.com/product/'.$product->sku],
+            'document_urls' => [],
+            'source_urls' => [$shopUrl],
             'confidence' => 0.9,
         ]);
 
         $pdf = "%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n";
 
         Http::fake([
+            'https://api.tavily.com/*' => Http::response(['results' => []], 200),
             'https://www.ansell.com/docs/*' => Http::response(
                 $pdf,
                 200,
@@ -350,8 +359,16 @@ final class ProductEnrichmentApiTest extends TestCase
                 200,
                 ['Content-Type' => 'image/jpeg']
             ),
+            'https://bhp-sklep.com.pl/*' => Http::response(
+                '<html><body>Rękawice '.$product->sku.' EN 388 '
+                .'<img src="https://cdn.example.com/glove-'.$product->sku.'.jpg" alt="glove '.$product->sku.'">'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
             'https://www.ansell.com/*' => Http::response(
-                '<html><body>Rękawice '.$product->sku.' EN 388 <img src="https://cdn.example.com/glove-'.$product->sku.'.jpg" alt="glove '.$product->sku.'"><a href="https://www.ansell.com/docs/cert-'.$product->sku.'.pdf">CE</a></body></html>',
+                '<html><body>Rękawice '.$product->sku
+                .' <a href="https://www.ansell.com/docs/cert-'.$product->sku.'.pdf">Certificate PDF</a></body></html>',
                 200,
                 ['Content-Type' => 'text/html']
             ),
@@ -403,38 +420,42 @@ final class ProductEnrichmentApiTest extends TestCase
     }
 
     /**
-     * sanitizePagesWithLlm + extractWithLlm (kolejność wywołań chatJson).
+     * sanitizePagesWithLlm + extractWithLlm (chatJsonEnrichment).
      *
      * @param  array<string, mixed>  $extractPayload
      */
     private function mockLlmWithSanitize(array $extractPayload): OpenAiCompatibleClient
     {
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')
-            ->atLeast()
-            ->once()
-            ->andReturnUsing(function (array $messages) use ($extractPayload): array {
-                $system = (string) ($messages[0]['content'] ?? '');
-                if (str_contains($system, 'filtrem treści')) {
-                    $user = (string) ($messages[1]['content'] ?? '');
-                    $pages = [];
-                    if (preg_match_all('#"url"\s*:\s*"(https?://[^"]+)"#', $user, $m)) {
-                        foreach ($m[1] as $url) {
-                            $pages[] = [
-                                'url' => $url,
-                                'text' => 'Produkt BHP. Norma EN 388. Przeznaczony do pracy ochronnej.',
-                            ];
-                        }
+        $handler = function (array $messages) use ($extractPayload): array {
+            $system = (string) ($messages[0]['content'] ?? '');
+            if (str_contains($system, 'filtrem treści')) {
+                $user = (string) ($messages[1]['content'] ?? '');
+                $pages = [];
+                if (preg_match_all('#"url"\s*:\s*"(https?://[^"]+)"#', $user, $m)) {
+                    foreach ($m[1] as $url) {
+                        $pages[] = [
+                            'url' => $url,
+                            'text' => 'Produkt BHP. Norma EN 388. Przeznaczony do pracy ochronnej.',
+                        ];
                     }
-
-                    return ['pages' => $pages !== [] ? $pages : [[
-                        'url' => 'https://example.com/p',
-                        'text' => 'Produkt BHP. Norma EN 388.',
-                    ]]];
                 }
 
-                return $extractPayload;
-            });
+                return ['pages' => $pages !== [] ? $pages : [[
+                    'url' => 'https://example.com/p',
+                    'text' => 'Produkt BHP. Norma EN 388.',
+                ]]];
+            }
+
+            return $extractPayload;
+        };
+        $llm->shouldReceive('chatJsonEnrichment')
+            ->atLeast()
+            ->once()
+            ->andReturnUsing($handler);
+        $llm->shouldReceive('chatJson')
+            ->zeroOrMoreTimes()
+            ->andReturnUsing($handler);
 
         return $llm;
     }

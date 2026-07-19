@@ -132,15 +132,19 @@ export function ProductDetail() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={busy || status === 'queued' || status === 'running'}
-              onClick={() => void enrich(status === 'done' || status === 'failed')}
+              disabled={busy || status === 'queued'}
+              onClick={() =>
+                void enrich(status === 'done' || status === 'failed' || status === 'running')
+              }
               className="rounded bg-blue-600 px-3 py-2 text-xs text-white disabled:opacity-50"
             >
               {busy
                 ? 'Startuję…'
-                : status === 'done'
-                  ? 'Pobierz ponownie'
-                  : 'Pobierz opis i zdjęcia'}
+                : status === 'running'
+                  ? 'Odblokuj i pobierz ponownie'
+                  : status === 'done'
+                    ? 'Pobierz ponownie'
+                    : 'Pobierz opis i zdjęcia'}
             </button>
           </div>
         )}
@@ -174,7 +178,8 @@ export function ProductDetail() {
           Zakup: <b>{p.purchase_price} zł</b>
         </div>
         <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
-          Stan: <b>{p.stock}</b>
+          Upust:{' '}
+          <b>{p.discount_percent != null && p.discount_percent !== '' ? `${p.discount_percent}%` : '—'}</b>
         </div>
       </div>
 
