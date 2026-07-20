@@ -702,9 +702,13 @@ final class ProductPageFetcher
             if (! $pageHasOurCore && $this->urlLooksLikeWrongSku($meta, $skuNorm, $skuTokens)) {
                 continue;
             }
-            if (str_contains($meta, 'pim/products') || str_contains($meta, 'product_detail') || str_contains($meta, 'media/catalog/product') || str_contains($meta, 'zdjecia-safety') || str_contains($meta, 'trzewiki') || str_contains($meta, 'polbuty')) {
+            if (str_contains($meta, 'pim/products') || str_contains($meta, 'product_detail') || str_contains($meta, 'media/catalog/product') || str_contains($meta, 'shop-media') || str_contains($meta, 'zdjecia-safety') || str_contains($meta, 'trzewiki') || str_contains($meta, 'polbuty')) {
                 $score += 50;
                 $skuInUrl = true;
+            }
+            // menu / kafle nawigacji uvex (nie zdjęcie produktu)
+            if (str_contains($meta, 'menu-') || str_contains($meta, 'menue-') || str_contains($meta, '/01_menue') || str_contains($meta, 'favicon')) {
+                continue;
             }
             // PrestaShop galeria produktu
             if (preg_match('#/\d+-(large_default|medium_default|home_default|pdt_\d+)/#i', $meta)) {

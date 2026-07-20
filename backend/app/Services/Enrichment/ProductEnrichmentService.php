@@ -686,9 +686,12 @@ final class ProductEnrichmentService
             if (str_contains($u, 'glove') || str_contains($u, 'rekaw') || str_contains($u, 'maxi')) {
                 $score += 25;
             }
-            // Drupal/ATG PIM — prawdziwe pliki
-            if (str_contains($u, 'pim/products') || str_contains($u, 'sites/default/files') || str_contains($u, 'media/catalog/product')) {
+            // Drupal/ATG PIM / uvex shop-media — prawdziwe pliki
+            if (str_contains($u, 'pim/products') || str_contains($u, 'sites/default/files') || str_contains($u, 'media/catalog/product') || str_contains($u, 'shop-media')) {
                 $score += 90;
+            }
+            if (str_contains($u, 'menu-') || str_contains($u, 'menue-') || str_contains($u, 'favicon')) {
+                continue;
             }
             // typowe zmyślone ścieżki z LLM
             if (preg_match('#/images/products/#', $u) === 1 && ! str_contains($u, 'sites/default')) {

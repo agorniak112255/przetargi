@@ -20,6 +20,7 @@ final class ProductImageDownloader
         'image/jpeg' => 'jpg',
         'image/png' => 'png',
         'image/webp' => 'webp',
+        'image/avif' => 'avif',
         'image/gif' => 'gif',
     ];
 
@@ -31,6 +32,7 @@ final class ProductImageDownloader
         if (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://')) {
             return false;
         }
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
         if ($path === '' || str_ends_with($path, '/')) {
             return false;
@@ -39,8 +41,12 @@ final class ProductImageDownloader
         if (preg_match('/\.(jpe?g|png|webp|gif|avif|bmp)(\.(webp|avif))?(\?|$)/i', $path) === 1) {
             return true;
         }
-        // typowe CDN / media / Drupal files
-        if (preg_match('#/(media|images?|img|cdn|static|uploads|assets|product[-_]?images?|sites/default/files|pim/products)/#i', $path) === 1) {
+        // typowe CDN / media / Drupal / uvex shop-media (często bez rozszerzenia w path)
+        if (preg_match('#/(media|shop-media|fileadmin|images?|img|cdn|static|uploads|assets|product[-_]?images?|sites/default/files|pim/products)/#i', $path) === 1) {
+            return true;
+        }
+        // CloudFront / imgproxy uvex: /images/{hash}/w:992/h:992/...
+        if (str_contains($host, 'cloudfront.net') && preg_match('#^/images/[^/]+/#i', $path) === 1) {
             return true;
         }
 
@@ -113,7 +119,8 @@ final class ProductImageDownloader
             ->connectTimeout(4)
             ->withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept' => 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+                // Preferuj JPEG/WebP — część CDN (uvex) i tak zwróci AVIF; obsługujemy też AVIF.
+                'Accept' => 'image/jpeg,image/webp,image/png,image/avif,image/*,*/*;q=0.8',
                 'Referer' => $this->refererFor($url),
             ])
             ->withOptions(['allow_redirects' => true])
