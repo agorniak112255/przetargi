@@ -18,6 +18,8 @@ return [
     'search_fallback' => env('AI_SEARCH_FALLBACK', 'tavily'),
     // eco | balanced | full — zużycie kredytów Tavily przy opisach produktów
     'tavily_search_mode' => env('AI_TAVILY_SEARCH_MODE', 'balanced'),
+    // Max produktów do kolejki enrichmentu na jedno kliknięcie (cenniki / lista)
+    'enrichment_batch_limit' => (int) env('AI_ENRICHMENT_BATCH_LIMIT', 5),
 
     // RAG / Qdrant
     'vector_enabled' => (bool) env('AI_VECTOR_ENABLED', false),

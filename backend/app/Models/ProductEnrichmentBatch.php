@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Cache;
 
 class ProductEnrichmentBatch extends Model
 {
@@ -16,6 +17,8 @@ class ProductEnrichmentBatch extends Model
     public const STATUS_DONE = 'done';
 
     public const STATUS_FAILED = 'failed';
+
+    public const STATUS_CANCELLED = 'cancelled';
 
     public const SCOPE_PRODUCT = 'product';
 
@@ -52,8 +55,31 @@ class ProductEnrichmentBatch extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public static function cancelCacheKey(int $batchId): string
+    {
+        return 'enrich_batch_cancelled:'.$batchId;
+    }
+
+    public function isCancelled(): bool
+    {
+        if ($this->status === self::STATUS_CANCELLED) {
+            return true;
+        }
+
+        return Cache::has(self::cancelCacheKey((int) $this->id));
+    }
+
+    public function markCancelledFlag(): void
+    {
+        Cache::put(self::cancelCacheKey((int) $this->id), true, now()->addDay());
+    }
+
     public function refreshStatus(): void
     {
+        if ($this->status === self::STATUS_CANCELLED) {
+            return;
+        }
+
         $processed = $this->done + $this->failed;
         if ($processed >= $this->total && $this->total > 0) {
             $this->status = $this->failed >= $this->total && $this->done === 0

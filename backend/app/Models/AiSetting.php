@@ -21,6 +21,7 @@ class AiSetting extends Model
         'tavily_api_key',
         'search_fallback',
         'tavily_search_mode',
+        'enrichment_batch_limit',
         'vector_enabled',
         'qdrant_url',
         'qdrant_api_key',
@@ -41,6 +42,7 @@ class AiSetting extends Model
             'timeout_seconds' => 'integer',
             'temperature' => 'float',
             'web_search_enabled' => 'boolean',
+            'enrichment_batch_limit' => 'integer',
             'vector_enabled' => 'boolean',
         ];
     }

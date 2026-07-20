@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Enrichment\ProductEnrichmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,7 +18,15 @@ class ProductEnrichmentController extends Controller
 {
     public function __construct(
         private readonly ProductEnrichmentService $enrichment,
+        private readonly AiSettingsService $aiSettings,
     ) {}
+
+    public function limits(): JsonResponse
+    {
+        return response()->json([
+            'enrichment_batch_limit' => $this->aiSettings->enrichmentBatchLimit(),
+        ]);
+    }
 
     public function enrichProduct(Request $request, Product $product): JsonResponse
     {
@@ -138,6 +147,22 @@ class ProductEnrichmentController extends Controller
     public function showBatch(ProductEnrichmentBatch $batch): JsonResponse
     {
         return response()->json($this->batchPayload($batch));
+    }
+
+    public function cancelBatch(ProductEnrichmentBatch $batch): JsonResponse
+    {
+        try {
+            $result = $this->enrichment->cancelBatch($batch);
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => 'Batch zatrzymany.',
+            'batch' => $this->batchPayload($result['batch']),
+            'removed_jobs' => $result['removed_jobs'],
+            'marked_products' => $result['marked_products'],
+        ]);
     }
 
     /**

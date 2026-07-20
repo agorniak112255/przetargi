@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { api, can, type EnrichmentBatch } from '../lib/api'
 
 type ProgressMode = 'analyze' | 'import' | null
@@ -232,7 +233,24 @@ export function PriceLists() {
   const [newGroupName, setNewGroupName] = useState('')
   const [enrichBatches, setEnrichBatches] = useState<Record<number, EnrichmentBatch>>({})
   const [enrichBusyId, setEnrichBusyId] = useState<number | null>(null)
+  const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
+  const [enrichConfirm, setEnrichConfirm] = useState<{
+    row: PriceList
+    pending: number
+    force: boolean
+  } | null>(null)
+  const [enrichConfirmAck, setEnrichConfirmAck] = useState(false)
   const progressTimer = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!canEnrich) return
+    void api<{ enrichment_batch_limit: number }>('/product-enrichment/limits')
+      .then((res) => {
+        const n = Number(res.enrichment_batch_limit)
+        if (Number.isFinite(n) && n >= 1) setEnrichBatchLimit(Math.min(50, Math.floor(n)))
+      })
+      .catch(() => setEnrichBatchLimit(5))
+  }, [canEnrich])
 
   useEffect(() => {
     void api<EnrichmentBatch[]>('/product-enrichment-batches/active')
@@ -320,13 +338,22 @@ export function PriceLists() {
       })
       setEnrichBatches((prev) => ({ ...prev, [row.id]: res.batch }))
       setMsg(
-        `Pobieranie opisów/zdjęć dla „${row.manufacturer} / ${row.version}”: ${res.batch.total} produktów w kolejce.`,
+        res.batch.message ||
+          `Pobieranie opisów/zdjęć dla „${row.manufacturer} / ${row.version}”: ${res.batch.total} produktów w kolejce.`,
       )
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd wzbogacania')
     } finally {
       setEnrichBusyId(null)
     }
+  }
+
+  function openEnrichConfirm(row: PriceList, productCount: number, enrichDone: number) {
+    const pending = Math.max(0, productCount - enrichDone)
+    const force = pending === 0 && productCount > 0
+    const toQueue = force ? productCount : pending
+    setEnrichConfirmAck(false)
+    setEnrichConfirm({ row, pending: toQueue, force })
   }
 
   function initGroupsFromAnalysis(res: Analysis) {
@@ -846,6 +873,23 @@ export function PriceLists() {
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+
+      {canEnrich && (
+        <EnrichmentQueuePanel
+          onChanged={() => {
+            void load().catch(() => {})
+            void api<EnrichmentBatch[]>('/product-enrichment-batches/active')
+              .then((list) => {
+                const map: Record<number, EnrichmentBatch> = {}
+                for (const b of list) {
+                  if (b.scope === 'price_list' && b.scope_id) map[b.scope_id] = b
+                }
+                setEnrichBatches(map)
+              })
+              .catch(() => {})
+          }}
+        />
+      )}
 
       <div className="mb-4 rounded-xl bg-white p-4 shadow-sm text-sm">
         <h2 className="mb-3 font-semibold">Import cennika → baza produktów</h2>
@@ -1402,14 +1446,14 @@ export function PriceLists() {
                           productCount === 0 ||
                           batchActive
                         }
-                        onClick={() => void enrichPriceList(r, false)}
+                        onClick={() => openEnrichConfirm(r, productCount, enrichDone)}
                         className="rounded border border-slate-300 px-2 py-1 text-[11px] disabled:opacity-50"
                         title={
                           productCount === 0
                             ? 'Brak product_ids (stary import)'
                             : enrichFailed > 0
-                              ? `Ponów nieudane (${enrichFailed}). ${r.enrichment_last_error ?? ''}`
-                              : `Pobierz opisy/zdjęcia dla ${missing || productCount} produktów`
+                              ? `Ponów nieudane (${enrichFailed}), max ${enrichBatchLimit} naraz. ${r.enrichment_last_error ?? ''}`
+                              : `Pobierz opisy/zdjęcia — max ${enrichBatchLimit} naraz (Ustawienia AI)`
                         }
                       >
                         {enrichBusyId === r.id
@@ -1516,6 +1560,72 @@ export function PriceLists() {
           </tbody>
         </table>
       </div>
+
+      {enrichConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => {
+            setEnrichConfirm(null)
+            setEnrichConfirmAck(false)
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-xl bg-white p-4 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm font-semibold text-slate-800">
+              Pobierz opisy — {enrichConfirm.row.manufacturer} / {enrichConfirm.row.version}
+            </p>
+            <p className="mt-2 text-xs text-slate-600">
+              Do przetworzenia: <b>{enrichConfirm.pending}</b>
+              {enrichConfirm.pending > enrichBatchLimit
+                ? ` · do kolejki trafi max ${enrichBatchLimit} (limit z Ustawień AI)`
+                : ''}
+              . Operacja używa Tavily i AI — <b>generuje koszty</b>.
+            </p>
+            <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={enrichConfirmAck}
+                onChange={(e) => setEnrichConfirmAck(e.target.checked)}
+              />
+              <span>
+                Rozumiem koszty. Uruchom dla{' '}
+                {Math.min(enrichConfirm.pending, enrichBatchLimit)} produktów.
+              </span>
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded border border-slate-300 px-3 py-1.5 text-xs"
+                onClick={() => {
+                  setEnrichConfirm(null)
+                  setEnrichConfirmAck(false)
+                }}
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                disabled={!enrichConfirmAck || enrichBusyId === enrichConfirm.row.id}
+                className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+                onClick={() => {
+                  const row = enrichConfirm.row
+                  const force = enrichConfirm.force
+                  setEnrichConfirm(null)
+                  setEnrichConfirmAck(false)
+                  void enrichPriceList(row, force)
+                }}
+              >
+                Pobierz ({Math.min(enrichConfirm.pending, enrichBatchLimit)})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

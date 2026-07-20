@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use App\Exceptions\EnrichmentCancelledException;
 use App\Jobs\EnrichProductJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\PriceList;
@@ -11,9 +12,12 @@ use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentCache;
 use App\Models\User;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Throwable;
@@ -28,6 +32,7 @@ final class ProductEnrichmentService
         private readonly ProductDocumentFinder $documentFinder,
         private readonly ManufacturerDomainResolver $manufacturers,
         private readonly OpenAiCompatibleClient $llm,
+        private readonly AiSettingsService $aiSettings,
     ) {}
 
     /**
@@ -95,22 +100,41 @@ final class ProductEnrichmentService
         if (! $force) {
             $query->where('enrichment_status', '!=', Product::ENRICHMENT_DONE);
         }
-        $productIds = $query->pluck('id')->map(static fn ($id): int => (int) $id)->all();
+        // zachowaj kolejność z $ids
+        $eligible = $query->pluck('id')->map(static fn ($id): int => (int) $id)->all();
+        $eligibleSet = array_fill_keys($eligible, true);
+        $productIds = [];
+        foreach ($ids as $id) {
+            if (isset($eligibleSet[$id])) {
+                $productIds[] = $id;
+            }
+        }
 
         if ($productIds === []) {
             throw new RuntimeException('Brak produktów do wzbogacenia (wszystkie już mają dane).');
         }
 
+        $limit = $this->aiSettings->enrichmentBatchLimit();
+        $requested = count($productIds);
+        if ($requested > $limit) {
+            $productIds = array_slice($productIds, 0, $limit);
+        }
+
+        $queued = count($productIds);
+        $message = $requested > $limit
+            ? "W kolejce: {$queued}/{$requested} (limit {$limit} — Ustawienia AI)"
+            : 'W kolejce: '.$queued.' produktów';
+
         $batch = ProductEnrichmentBatch::query()->create([
             'scope' => $scope,
             'scope_id' => $scopeId > 0 ? $scopeId : ($user->id ?: 0),
-            'total' => count($productIds),
+            'total' => $queued,
             'done' => 0,
             'failed' => 0,
             'status' => ProductEnrichmentBatch::STATUS_QUEUED,
             'created_by' => $user->id,
             'force' => $force,
-            'message' => 'W kolejce: '.count($productIds).' produktów',
+            'message' => $message,
         ]);
 
         Product::query()->whereIn('id', $productIds)->update([
@@ -171,11 +195,13 @@ final class ProductEnrichmentService
         return $batch->refresh();
     }
 
-    public function enrichProduct(Product $product, bool $force = false): void
+    public function enrichProduct(Product $product, bool $force = false, ?int $batchId = null): void
     {
         if (! $force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
             return;
         }
+
+        $this->assertBatchNotCancelled($batchId);
 
         $product->update([
             'enrichment_status' => Product::ENRICHMENT_RUNNING,
@@ -192,6 +218,7 @@ final class ProductEnrichmentService
                 $this->clearProductDocuments($product);
             }
 
+            $this->assertBatchNotCancelled($batchId);
             $searchPack = $this->search->searchBothPhases($product);
             $searchResults = $searchPack['results'];
             if ($searchResults === []) {
@@ -231,6 +258,8 @@ final class ProductEnrichmentService
                 }
                 $mfrPageSnippets = $mfrFetched['pages'];
             }
+
+            $this->assertBatchNotCancelled($batchId);
 
             // sklep → opis PL; producent → normy/materiały (doklejone do kontekstu LLM)
             $pageSnippets = $this->sanitizePagesWithLlm($product, $pageSnippets);
@@ -376,6 +405,8 @@ final class ProductEnrichmentService
                     $documentUrls[] = $u;
                 }
             }
+            $this->assertBatchNotCancelled($batchId);
+
             // PDF tylko ze stron producenta (+ indeksy deklaracji)
             $docHits = $this->documentFinder->findDocumentUrls($product);
             $docPages = [];
@@ -1234,6 +1265,10 @@ final class ProductEnrichmentService
 
     public function markBatchItem(ProductEnrichmentBatch $batch, bool $success): void
     {
+        if ($batch->status === ProductEnrichmentBatch::STATUS_CANCELLED || $batch->isCancelled()) {
+            return;
+        }
+
         if ($success) {
             $batch->increment('done');
         } else {
@@ -1241,6 +1276,103 @@ final class ProductEnrichmentService
         }
         $batch->refresh();
         $batch->refreshStatus();
+    }
+
+    /**
+     * Natychmiastowe zatrzymanie batcha: flaga + usunięcie oczekujących jobów z kolejki.
+     *
+     * @return array{batch: ProductEnrichmentBatch, removed_jobs: int, marked_products: int}
+     */
+    public function cancelBatch(ProductEnrichmentBatch $batch): array
+    {
+        if (in_array($batch->status, [
+            ProductEnrichmentBatch::STATUS_DONE,
+            ProductEnrichmentBatch::STATUS_FAILED,
+            ProductEnrichmentBatch::STATUS_CANCELLED,
+        ], true)) {
+            throw new RuntimeException('Ten batch jest już zakończony.');
+        }
+
+        $batch->markCancelledFlag();
+
+        $removedJobs = 0;
+        $markedProducts = 0;
+
+        if (Schema::hasTable('jobs')) {
+            $needle = 's:7:"batchId";i:'.(int) $batch->id.';';
+            $rows = DB::table('jobs')
+                ->where('payload', 'like', '%'.$needle.'%')
+                ->orderBy('id')
+                ->get(['id', 'payload', 'reserved_at']);
+
+            foreach ($rows as $row) {
+                $productId = $this->productIdFromJobPayload((string) $row->payload);
+                if ($productId !== null && $row->reserved_at === null) {
+                    $updated = Product::query()
+                        ->where('id', $productId)
+                        ->whereIn('enrichment_status', [
+                            Product::ENRICHMENT_QUEUED,
+                            Product::ENRICHMENT_RUNNING,
+                            Product::ENRICHMENT_FAILED,
+                        ])
+                        ->where('enrichment_status', '!=', Product::ENRICHMENT_DONE)
+                        ->update([
+                            'enrichment_status' => Product::ENRICHMENT_FAILED,
+                            'enrichment_error' => 'Anulowano przez użytkownika',
+                        ]);
+                    $markedProducts += (int) $updated;
+                }
+
+                DB::table('jobs')->where('id', $row->id)->delete();
+                $removedJobs++;
+            }
+        }
+
+        $batch->refresh();
+        $processed = $batch->done + $batch->failed;
+        $remaining = max(0, $batch->total - $processed);
+        if ($remaining > 0) {
+            $batch->increment('failed', $remaining);
+            $batch->refresh();
+        }
+
+        $batch->update([
+            'status' => ProductEnrichmentBatch::STATUS_CANCELLED,
+            'message' => 'Anulowano · OK '.$batch->done.' / usunięto z kolejki '.$removedJobs,
+            'current_sku' => null,
+            'current_name' => null,
+        ]);
+
+        return [
+            'batch' => $batch->refresh(),
+            'removed_jobs' => $removedJobs,
+            'marked_products' => $markedProducts,
+        ];
+    }
+
+    public function assertBatchNotCancelled(?int $batchId): void
+    {
+        if ($batchId === null || $batchId <= 0) {
+            return;
+        }
+
+        if (cache()->has(ProductEnrichmentBatch::cancelCacheKey($batchId))) {
+            throw new EnrichmentCancelledException('Enrichment anulowany przez użytkownika.');
+        }
+
+        $status = ProductEnrichmentBatch::query()->whereKey($batchId)->value('status');
+        if ($status === ProductEnrichmentBatch::STATUS_CANCELLED) {
+            throw new EnrichmentCancelledException('Enrichment anulowany przez użytkownika.');
+        }
+    }
+
+    private function productIdFromJobPayload(string $payload): ?int
+    {
+        if (preg_match('/s:9:"productId";i:(\d+);/', $payload, $m) === 1) {
+            return (int) $m[1];
+        }
+
+        return null;
     }
 
     /**

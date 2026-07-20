@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Exceptions\EnrichmentCancelledException;
 use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
@@ -45,8 +46,16 @@ class EnrichProductJob implements ShouldQueue
             return;
         }
 
+        if ($batch->isCancelled()) {
+            $this->abandonCancelled($product);
+            $this->delete();
+
+            return;
+        }
+
         try {
             TavilyQuotaGuard::assertAllowed();
+            $enrichment->assertBatchNotCancelled($this->batchId);
 
             $batch->update([
                 'status' => ProductEnrichmentBatch::STATUS_RUNNING,
@@ -55,7 +64,16 @@ class EnrichProductJob implements ShouldQueue
                 'message' => 'Tavily + skrót AI (lub cache SKU)…',
             ]);
 
-            $enrichment->enrichProduct($product, $this->force);
+            $enrichment->enrichProduct($product, $this->force, $this->batchId);
+
+            $batch->refresh();
+            if ($batch->isCancelled()) {
+                $this->abandonCancelled($product);
+                $this->delete();
+
+                return;
+            }
+
             $enrichment->markBatchItem($batch, true);
 
             $batch->refresh();
@@ -65,22 +83,30 @@ class EnrichProductJob implements ShouldQueue
                 'current_sku' => $processed >= $batch->total ? null : $batch->current_sku,
                 'current_name' => $processed >= $batch->total ? null : $batch->current_name,
             ]);
+        } catch (EnrichmentCancelledException $e) {
+            $this->abandonCancelled($product);
+            $this->delete();
         } catch (TavilyQuotaExceededException $e) {
             TavilyQuotaGuard::block($e->getMessage());
             $this->recordItemFailure($product, $batch, $e->getMessage(), 'Limit Tavily — zatrzymano batch');
-            // bez ponowień — kolejne joby też odpadną na assertAllowed()
             $this->delete();
         }
     }
 
     public function failed(?Throwable $e): void
     {
-        if ($e instanceof TavilyQuotaExceededException) {
+        if ($e instanceof TavilyQuotaExceededException || $e instanceof EnrichmentCancelledException) {
             return;
         }
 
         $product = Product::query()->find($this->productId);
         $batch = ProductEnrichmentBatch::query()->find($this->batchId);
+        if ($batch !== null && $batch->isCancelled()) {
+            $this->abandonCancelled($product);
+
+            return;
+        }
+
         $message = $e?->getMessage() ?? 'Nieznany błąd enrichmentu';
         $this->recordItemFailure(
             $product,
@@ -88,6 +114,16 @@ class EnrichProductJob implements ShouldQueue
             $message,
             'Błąd: '.mb_substr($message, 0, 200),
         );
+    }
+
+    private function abandonCancelled(?Product $product): void
+    {
+        if ($product !== null && $product->enrichment_status !== Product::ENRICHMENT_DONE) {
+            $product->update([
+                'enrichment_status' => Product::ENRICHMENT_FAILED,
+                'enrichment_error' => 'Anulowano przez użytkownika',
+            ]);
+        }
     }
 
     private function recordItemFailure(
@@ -103,7 +139,7 @@ class EnrichProductJob implements ShouldQueue
             ]);
         }
 
-        if ($batch === null) {
+        if ($batch === null || $batch->isCancelled()) {
             return;
         }
 

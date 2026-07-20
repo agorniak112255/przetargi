@@ -27,6 +27,7 @@ final class AiSettingsService
      *     tavily_api_key: ?string,
      *     search_fallback: string,
      *     tavily_search_mode: string,
+     *     enrichment_batch_limit: int,
      *     vector_enabled: bool,
      *     qdrant_url: ?string,
      *     qdrant_api_key: ?string,
@@ -68,6 +69,11 @@ final class AiSettingsService
                         ? ($row->tavily_search_mode ?? null)
                         : null
                 ),
+                'enrichment_batch_limit' => $this->normalizeEnrichmentBatchLimit(
+                    Schema::hasColumn('ai_settings', 'enrichment_batch_limit')
+                        ? ($row->enrichment_batch_limit ?? null)
+                        : null
+                ),
                 'vector_enabled' => $hasVectorCols ? (bool) ($row->vector_enabled ?? false) : false,
                 'qdrant_url' => $hasVectorCols ? $this->nullableString($row->qdrant_url ?? null) : null,
                 'qdrant_api_key' => $qdrantKey !== null && $qdrantKey !== '' ? (string) $qdrantKey : null,
@@ -107,6 +113,7 @@ final class AiSettingsService
             'tavily_api_key' => $tavily,
             'search_fallback' => (string) config('ai.search_fallback', 'tavily'),
             'tavily_search_mode' => $this->normalizeTavilySearchMode(config('ai.tavily_search_mode')),
+            'enrichment_batch_limit' => $this->normalizeEnrichmentBatchLimit(config('ai.enrichment_batch_limit')),
             'vector_enabled' => (bool) config('ai.vector_enabled', false),
             'qdrant_url' => $this->nullableString(config('ai.qdrant_url')),
             'qdrant_api_key' => $qdrantKey,
@@ -140,6 +147,7 @@ final class AiSettingsService
             'web_search_enabled' => $cfg['web_search_enabled'],
             'search_fallback' => $cfg['search_fallback'],
             'tavily_search_mode' => $cfg['tavily_search_mode'],
+            'enrichment_batch_limit' => $cfg['enrichment_batch_limit'],
             'vector_enabled' => $cfg['vector_enabled'],
             'qdrant_url' => $cfg['qdrant_url'],
             'qdrant_collection' => $cfg['qdrant_collection'],
@@ -173,6 +181,7 @@ final class AiSettingsService
             'web_search_enabled' => false,
             'search_fallback' => 'tavily',
             'tavily_search_mode' => TavilySearchProfile::MODE_BALANCED,
+            'enrichment_batch_limit' => 5,
             'vector_enabled' => false,
             'qdrant_url' => 'http://127.0.0.1:6333',
             'qdrant_collection' => 'products',
@@ -205,6 +214,11 @@ final class AiSettingsService
 
         if (array_key_exists('tavily_search_mode', $data) && Schema::hasColumn('ai_settings', 'tavily_search_mode')) {
             $row->tavily_search_mode = $this->normalizeTavilySearchMode($data['tavily_search_mode']);
+        }
+
+        if (array_key_exists('enrichment_batch_limit', $data)
+            && Schema::hasColumn('ai_settings', 'enrichment_batch_limit')) {
+            $row->enrichment_batch_limit = $this->normalizeEnrichmentBatchLimit($data['enrichment_batch_limit']);
         }
 
         $this->applySecret($row, 'api_key', $data);
@@ -266,6 +280,13 @@ final class AiSettingsService
         return TavilySearchProfile::fromMode($cfg['tavily_search_mode'] ?? null);
     }
 
+    public function enrichmentBatchLimit(): int
+    {
+        $cfg = $this->resolve();
+
+        return $this->normalizeEnrichmentBatchLimit($cfg['enrichment_batch_limit'] ?? null);
+    }
+
     private function normalizeTavilySearchMode(mixed $value): string
     {
         $mode = is_string($value) ? strtolower(trim($value)) : '';
@@ -273,6 +294,13 @@ final class AiSettingsService
         return in_array($mode, TavilySearchProfile::MODES, true)
             ? $mode
             : TavilySearchProfile::MODE_BALANCED;
+    }
+
+    private function normalizeEnrichmentBatchLimit(mixed $value): int
+    {
+        $n = is_numeric($value) ? (int) $value : 5;
+
+        return max(1, min(50, $n));
     }
 
     private function nullableString(mixed $value): ?string

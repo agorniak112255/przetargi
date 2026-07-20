@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { api, can, type EnrichmentBatch, type Product } from '../lib/api'
 
@@ -110,6 +111,9 @@ export function Products() {
   const [err, setErr] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [imageModal, setImageModal] = useState<{ name: string; url: string } | null>(null)
+  const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
+  const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
+  const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -126,13 +130,27 @@ export function Products() {
   }, [])
 
   useEffect(() => {
-    if (!imageModal) return
+    if (!canEnrich) return
+    void api<{ enrichment_batch_limit: number }>('/product-enrichment/limits')
+      .then((res) => {
+        const n = Number(res.enrichment_batch_limit)
+        if (Number.isFinite(n) && n >= 1) setEnrichBatchLimit(Math.min(50, Math.floor(n)))
+      })
+      .catch(() => setEnrichBatchLimit(5))
+  }, [canEnrich])
+
+  useEffect(() => {
+    if (!imageModal && !visibleEnrichOpen) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setImageModal(null)
+      if (e.key === 'Escape') {
+        setImageModal(null)
+        setVisibleEnrichOpen(false)
+        setVisibleEnrichAck(false)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [imageModal])
+  }, [imageModal, visibleEnrichOpen])
 
   function buildParams(pageNum = page): URLSearchParams {
     const params = new URLSearchParams({
@@ -240,16 +258,22 @@ export function Products() {
 
   async function enrichIds(ids: number[], force = false) {
     if (ids.length === 0) return
+    const capped = ids.slice(0, enrichBatchLimit)
     setEnrichBusy(true)
     setErr('')
     setMsg('')
     try {
       const res = await api<{ batch: EnrichmentBatch }>('/products/enrich', {
         method: 'POST',
-        body: JSON.stringify({ product_ids: ids, force }),
+        body: JSON.stringify({ product_ids: capped, force }),
       })
       setBatch(res.batch)
-      setMsg(`W kolejce: ${res.batch.total} produktów (opisy i zdjęcia).`)
+      setMsg(
+        res.batch.message ||
+          (ids.length > enrichBatchLimit
+            ? `W kolejce: ${res.batch.total}/${ids.length} (limit ${enrichBatchLimit}).`
+            : `W kolejce: ${res.batch.total} produktów (opisy i zdjęcia).`),
+      )
       setSelected({})
       setResult(await api<Page>(`/products?${buildParams()}`))
     } catch (ex) {
@@ -319,6 +343,14 @@ export function Products() {
 
   return (
     <div>
+      {canEnrich && (
+        <EnrichmentQueuePanel
+          onChanged={() => {
+            setBatch(null)
+            void api<Page>(`/products?${buildParams()}`).then(setResult).catch(() => {})
+          }}
+        />
+      )}
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Produkty</h1>
@@ -358,11 +390,15 @@ export function Products() {
               <button
                 type="button"
                 disabled={enrichBusy || batchActive || pendingVisible.length === 0}
-                onClick={() => void enrichIds(pendingVisible.map((p) => p.id))}
+                onClick={() => {
+                  setVisibleEnrichAck(false)
+                  setVisibleEnrichOpen(true)
+                }}
                 className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
-                title="Pobierz opisy dla widocznych bez danych"
+                title={`Pobierz opisy dla widocznych bez danych (max ${enrichBatchLimit} naraz — Ustawienia AI)`}
               >
                 Pobierz widoczne bez opisu
+                {pendingVisible.length > 0 ? ` (${pendingVisible.length})` : ''}
               </button>
             </>
           )}
@@ -609,6 +645,80 @@ export function Products() {
         </table>
 
         <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
+
+        {visibleEnrichOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => {
+              setVisibleEnrichOpen(false)
+              setVisibleEnrichAck(false)
+            }}
+          >
+            <div
+              className="w-full max-w-md rounded-xl bg-white p-4 shadow-lg"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="text-sm font-semibold text-slate-800">Pobierz widoczne bez opisu</p>
+              <p className="mt-2 text-xs text-slate-600">
+                Widocznych bez opisu: <b>{pendingVisible.length}</b>
+                {pendingVisible.length > enrichBatchLimit
+                  ? ` · do kolejki trafi max ${enrichBatchLimit} (limit z Ustawień AI)`
+                  : ''}
+                . Operacja używa Tavily i modelu AI — <b>generuje koszty</b>.
+              </p>
+              <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={visibleEnrichAck}
+                  onChange={(e) => setVisibleEnrichAck(e.target.checked)}
+                />
+                <span>
+                  Rozumiem koszty. Uruchom dla{' '}
+                  {Math.min(pendingVisible.length, enrichBatchLimit)}{' '}
+                  {Math.min(pendingVisible.length, enrichBatchLimit) === 1
+                    ? 'produktu'
+                    : 'produktów'}
+                  .
+                </span>
+              </label>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-slate-300 px-3 py-1.5 text-xs"
+                  onClick={() => {
+                    setVisibleEnrichOpen(false)
+                    setVisibleEnrichAck(false)
+                  }}
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    enrichBusy ||
+                    batchActive ||
+                    pendingVisible.length === 0 ||
+                    !visibleEnrichAck
+                  }
+                  className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+                  onClick={() => {
+                    const ids = pendingVisible
+                      .slice(0, enrichBatchLimit)
+                      .map((p) => p.id)
+                    setVisibleEnrichOpen(false)
+                    setVisibleEnrichAck(false)
+                    void enrichIds(ids)
+                  }}
+                >
+                  Pobierz ({Math.min(pendingVisible.length, enrichBatchLimit)})
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {imageModal && (
           <div

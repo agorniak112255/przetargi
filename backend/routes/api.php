@@ -75,10 +75,14 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::get('/products/{product}/price-history', [ProductController::class, 'priceHistory'])->middleware('permission:products.view');
     Route::post('/products/{product}/enrich', [ProductEnrichmentController::class, 'enrichProduct'])
         ->middleware('permission:price_lists.import');
+    Route::get('/product-enrichment/limits', [ProductEnrichmentController::class, 'limits'])
+        ->middleware('permission:price_lists.import|products.view');
     Route::get('/product-enrichment-batches/active', [ProductEnrichmentController::class, 'activeBatches'])
         ->middleware('permission:price_lists.import|products.view');
     Route::get('/product-enrichment-batches/{batch}', [ProductEnrichmentController::class, 'showBatch'])
         ->middleware('permission:price_lists.import|products.view');
+    Route::post('/product-enrichment-batches/{batch}/cancel', [ProductEnrichmentController::class, 'cancelBatch'])
+        ->middleware('permission:price_lists.import');
 
     Route::get('/substitutes', [ProductSubstituteController::class, 'index'])->middleware('permission:products.view');
     Route::get('/products/{product}/substitutes', [ProductSubstituteController::class, 'byMain'])->middleware('permission:products.view');

@@ -12,6 +12,7 @@ type AiSettings = {
   web_search_enabled: boolean
   search_fallback: string
   tavily_search_mode: 'eco' | 'balanced' | 'full'
+  enrichment_batch_limit: number
   vector_enabled: boolean
   qdrant_url: string | null
   qdrant_collection: string | null
@@ -72,6 +73,7 @@ export function AiSettingsPage() {
         web_search_enabled: cfg.web_search_enabled,
         search_fallback: cfg.search_fallback,
         tavily_search_mode: cfg.tavily_search_mode || 'balanced',
+        enrichment_batch_limit: cfg.enrichment_batch_limit || 5,
         vector_enabled: cfg.vector_enabled,
         qdrant_url: cfg.qdrant_url?.trim() || null,
         qdrant_collection: cfg.qdrant_collection?.trim() || 'products',
@@ -323,6 +325,26 @@ export function AiSettingsPage() {
             </select>
             <span className="mt-1 block text-[11px] text-slate-500">
               Przy limicie planu (HTTP 432) batch się zatrzymuje i nie ponawia zapytań.
+            </span>
+          </label>
+          <label className="block text-xs">
+            Max produktów w kolejce enrichmentu (1–50)
+            <input
+              type="number"
+              min={1}
+              max={50}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.enrichment_batch_limit ?? 5}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  enrichment_batch_limit: Math.max(1, Math.min(50, Number(e.target.value) || 5)),
+                })
+              }
+            />
+            <span className="mt-1 block text-[11px] text-slate-500">
+              Limit na jedno kliknięcie: cenniki, „Pobierz widoczne bez opisu”, zaznaczone. Resztę
+              trzeba uruchomić kolejnymi batchami.
             </span>
           </label>
           <label className="flex items-center gap-2 text-xs">
