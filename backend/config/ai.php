@@ -16,6 +16,8 @@ return [
     'web_search_enabled' => (bool) env('AI_WEB_SEARCH_ENABLED', false),
     'tavily_api_key' => env('AI_TAVILY_API_KEY'),
     'search_fallback' => env('AI_SEARCH_FALLBACK', 'tavily'),
+    // eco | balanced | full — zużycie kredytów Tavily przy opisach produktów
+    'tavily_search_mode' => env('AI_TAVILY_SEARCH_MODE', 'balanced'),
 
     // RAG / Qdrant
     'vector_enabled' => (bool) env('AI_VECTOR_ENABLED', false),

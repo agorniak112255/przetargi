@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
 use Illuminate\Support\Facades\Cache;
@@ -32,11 +33,12 @@ final class ProductDocumentFinder
         }
 
         $queries = $this->buildQueries($product, $domains);
+        $profile = $this->settings->tavilySearchProfile();
         // znane wzorce CDN (np. uvex datasheet) — zanim Tavily; 404 odpada przy download
         $found = $this->guessKnownCdnDocuments($product);
 
-        foreach (array_slice($queries, 0, 5) as $query) {
-            $cacheKey = 'enrich_docs_v6:'.hash('sha256', $query.'|'.implode(',', $domains));
+        foreach (array_slice($queries, 0, $profile->docsMaxQueries) as $query) {
+            $cacheKey = 'enrich_docs_v7:'.hash('sha256', $profile->mode.'|'.$query.'|'.implode(',', $domains));
             $cached = Cache::get($cacheKey);
             if (is_array($cached)) {
                 foreach ($cached as $url) {
@@ -56,9 +58,11 @@ final class ProductDocumentFinder
                 if ($domains !== []) {
                     $results = $this->searchTavily($query, $domains);
                 }
-                if ($results === []) {
+                if ($results === [] && $profile->docsOpenWebFallback) {
                     $results = $this->searchTavily($query, []);
                 }
+            } catch (TavilyQuotaExceededException $e) {
+                throw $e;
             } catch (Throwable $e) {
                 Log::info('Document search failed', ['query' => $query, 'error' => $e->getMessage()]);
 
@@ -69,7 +73,7 @@ final class ProductDocumentFinder
 
             $isIndexQuery = (bool) preg_match('#\b(deklaracje|declarations? of conformity|certificate download|downloads)\b#iu', $query);
             $matched = $this->filterResults($results, $product, $domains, $isIndexQuery);
-            Cache::put($cacheKey, $matched, now()->addDays(7));
+            Cache::put($cacheKey, $matched, now()->addDays($profile->cacheDays));
             foreach ($matched as $url) {
                 $found[] = $url;
             }
@@ -231,17 +235,20 @@ final class ProductDocumentFinder
      */
     private function searchTavily(string $query, array $includeDomains = []): array
     {
+        TavilyQuotaGuard::assertAllowed();
+
         $cfg = $this->settings->resolve();
         $key = (string) ($cfg['tavily_api_key'] ?? '');
         if ($key === '') {
             return [];
         }
 
+        $profile = $this->settings->tavilySearchProfile();
         $body = [
             'query' => $query,
             'search_depth' => 'basic',
             'include_answer' => false,
-            'max_results' => 8,
+            'max_results' => min(8, max(3, $profile->maxResults + 1)),
         ];
         if ($includeDomains !== []) {
             $body['include_domains'] = array_values(array_unique($includeDomains));
@@ -252,9 +259,7 @@ final class ProductDocumentFinder
             ->withToken($key)
             ->post('https://api.tavily.com/search', $body);
 
-        if (! $response->successful()) {
-            throw new \RuntimeException('Tavily docs HTTP '.$response->status());
-        }
+        TavilyQuotaGuard::ensureSuccessful($response, 'Tavily docs');
 
         $results = [];
         foreach ($response->json('results') ?? [] as $row) {

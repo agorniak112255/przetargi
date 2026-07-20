@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
@@ -33,6 +34,7 @@ class HybridWebSearchService
     {
         $queries = $this->buildQueries($product, $phase);
         $cfg = $this->settings->resolve();
+        $profile = $this->settings->tavilySearchProfile();
         $errors = [];
         $mfrDomains = $this->manufacturers->domainsFor($product);
         $preferred = $phase === 'manufacturer' && $mfrDomains !== []
@@ -42,9 +44,9 @@ class HybridWebSearchService
         $seen = [];
         $provider = 'tavily';
 
-        // Do 4 zapytań (warianty SKU/marka/nazwa); stop po 2 dobrych trafieniach.
-        foreach (array_slice($queries, 0, 4) as $query) {
-            $cacheKey = 'enrich_search_v12:'.hash('sha256', $phase.'|'.$query);
+        // Limit zapytań i próg stopu zależą od trybu Tavily (Ustawienia AI).
+        foreach (array_slice($queries, 0, $profile->maxQueries) as $query) {
+            $cacheKey = 'enrich_search_v13:'.hash('sha256', $profile->mode.'|'.$phase.'|'.$query);
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
                 $packResults = $this->filterResultsByIdentity($cached['results'], $product);
@@ -54,7 +56,7 @@ class HybridWebSearchService
                 try {
                     // manufacturer → domeny producenta; industry → sklepy+katalogi; potem całe internety
                     if ($preferred !== []) {
-                        $pack = $this->searchViaTavily($query, $preferred);
+                        $pack = $this->searchViaTavily($query, $preferred, $profile);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
                         $packResults = array_values(array_filter(
                             $packResults,
@@ -62,17 +64,20 @@ class HybridWebSearchService
                         ));
                         $provider = $phase === 'manufacturer' ? 'tavily_manufacturer' : 'tavily_preferred';
                     }
-                    if ($packResults === [] && $phase === 'manufacturer' && $mfrDomains !== []) {
+                    if ($packResults === [] && $profile->retailerFallback
+                        && $phase === 'manufacturer' && $mfrDomains !== []) {
                         // brak na stronie producenta → sklepy (opis), nie PDF
-                        $pack = $this->searchViaTavily($query, $this->retailerDomains());
+                        $pack = $this->searchViaTavily($query, $this->retailerDomains(), $profile);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
                         $provider = 'tavily_retailer';
                     }
-                    if ($packResults === []) {
-                        $pack = $this->searchViaTavily($query, []);
+                    if ($packResults === [] && $profile->openWebFallback) {
+                        $pack = $this->searchViaTavily($query, [], $profile);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
                         $provider = 'tavily';
                     }
+                } catch (TavilyQuotaExceededException $e) {
+                    throw $e;
                 } catch (Throwable $e) {
                     $errors[] = $e->getMessage();
                 }
@@ -81,7 +86,7 @@ class HybridWebSearchService
                     Cache::put($cacheKey, [
                         'results' => $packResults,
                         'provider' => $provider,
-                    ], now()->addDays(7));
+                    ], now()->addDays($profile->cacheDays));
                 }
             }
 
@@ -94,7 +99,7 @@ class HybridWebSearchService
                 $merged[] = $row;
             }
 
-            if (count($merged) >= 2) {
+            if (count($merged) >= $profile->stopAfterResults) {
                 break;
             }
         }
@@ -140,11 +145,18 @@ class HybridWebSearchService
         $merged = [];
         $seen = [];
         $errors = [];
+        $profile = $this->settings->tavilySearchProfile();
 
-        // Zawsze obie fazy: producent (karta/PDF) + branża/sklepy (pełniejsze opisy).
+        // full: obie fazy zawsze; eco/balanced: druga faza tylko gdy pierwsza nic nie dała.
         foreach (['manufacturer', 'industry'] as $phase) {
+            if ($phase === 'industry' && ! $profile->bothPhasesAlways && $merged !== []) {
+                break;
+            }
+
             try {
                 $pack = $this->searchProduct($product, $phase);
+            } catch (TavilyQuotaExceededException $e) {
+                throw $e;
             } catch (Throwable $e) {
                 $errors[] = $phase.': '.$e->getMessage();
                 Log::warning('Product search phase failed', [
@@ -490,20 +502,26 @@ PROMPT;
      *     raw_content: ?string
      * }
      */
-    private function searchViaTavily(string $query, array $includeDomains = []): array
-    {
+    private function searchViaTavily(
+        string $query,
+        array $includeDomains = [],
+        ?TavilySearchProfile $profile = null,
+    ): array {
+        TavilyQuotaGuard::assertAllowed();
+
         $cfg = $this->settings->resolve();
         $key = $cfg['tavily_api_key'] ?? null;
         if (! is_string($key) || $key === '') {
             throw new RuntimeException('Brak klucza Tavily. Uzupełnij go w Ustawieniach AI.');
         }
 
+        $profile ??= $this->settings->tavilySearchProfile();
         $body = [
             'api_key' => $key,
             'query' => $query,
             'search_depth' => 'basic',
             'include_answer' => false,
-            'max_results' => 5,
+            'max_results' => $profile->maxResults,
         ];
         if ($includeDomains !== []) {
             $body['include_domains'] = $includeDomains;
@@ -514,9 +532,7 @@ PROMPT;
             ->connectTimeout(5)
             ->post('https://api.tavily.com/search', $body);
 
-        if (! $response->successful()) {
-            throw new RuntimeException('Tavily HTTP '.$response->status().': '.$response->body());
-        }
+        TavilyQuotaGuard::ensureSuccessful($response);
 
         $payload = $response->json();
         $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];

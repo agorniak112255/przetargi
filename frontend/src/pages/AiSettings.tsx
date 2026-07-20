@@ -11,6 +11,7 @@ type AiSettings = {
   temperature: number
   web_search_enabled: boolean
   search_fallback: string
+  tavily_search_mode: 'eco' | 'balanced' | 'full'
   vector_enabled: boolean
   qdrant_url: string | null
   qdrant_collection: string | null
@@ -70,6 +71,7 @@ export function AiSettingsPage() {
         temperature: cfg.temperature,
         web_search_enabled: cfg.web_search_enabled,
         search_fallback: cfg.search_fallback,
+        tavily_search_mode: cfg.tavily_search_mode || 'balanced',
         vector_enabled: cfg.vector_enabled,
         qdrant_url: cfg.qdrant_url?.trim() || null,
         qdrant_collection: cfg.qdrant_collection?.trim() || 'products',
@@ -301,6 +303,26 @@ export function AiSettingsPage() {
                 onChange={(e) => setShowTavilyKey(e.target.checked)}
               />
               Pokaż klucz
+            </span>
+          </label>
+          <label className="block text-xs">
+            Tryb wyszukiwania Tavily (zużycie kredytów)
+            <select
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.tavily_search_mode || 'balanced'}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  tavily_search_mode: e.target.value as 'eco' | 'balanced' | 'full',
+                })
+              }
+            >
+              <option value="eco">Oszczędny — 1 zapytanie, 1 faza (najmniej kredytów)</option>
+              <option value="balanced">Zbalansowany — stop po 1 wyniku, dłuższy cache (domyślny)</option>
+              <option value="full">Pełny — agresywne szukanie (dużo kredytów)</option>
+            </select>
+            <span className="mt-1 block text-[11px] text-slate-500">
+              Przy limicie planu (HTTP 432) batch się zatrzymuje i nie ponawia zapytań.
             </span>
           </label>
           <label className="flex items-center gap-2 text-xs">

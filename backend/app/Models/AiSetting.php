@@ -20,6 +20,7 @@ class AiSetting extends Model
         'web_search_enabled',
         'tavily_api_key',
         'search_fallback',
+        'tavily_search_mode',
         'vector_enabled',
         'qdrant_url',
         'qdrant_api_key',

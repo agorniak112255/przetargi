@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
 use Illuminate\Support\Facades\Cache;
@@ -63,6 +64,7 @@ final class ManufacturerDomainResolver
 
         $cacheKey = 'enrich_mfr_domains_v1:'.$brand;
         try {
+            TavilyQuotaGuard::assertAllowed();
             $cfg = $this->settings->resolve();
             $key = (string) ($cfg['tavily_api_key'] ?? '');
             if ($key === '') {
@@ -79,6 +81,14 @@ final class ManufacturerDomainResolver
                     'max_results' => 6,
                 ]);
             if (! $response->successful()) {
+                if ($response->status() === 432
+                    || str_contains(mb_strtolower($response->body()), 'usage limit')) {
+                    TavilyQuotaGuard::block($response->body());
+                    throw new TavilyQuotaExceededException(
+                        'Tavily HTTP '.$response->status().': limit planu Tavily wyczerpany.'
+                    );
+                }
+
                 return [];
             }
             $found = $this->discoverFromResults($product, $response->json('results') ?? []);
@@ -86,6 +96,8 @@ final class ManufacturerDomainResolver
             Log::info('Discovered manufacturer domains', ['brand' => $brand, 'domains' => $found]);
 
             return $found;
+        } catch (TavilyQuotaExceededException $e) {
+            throw $e;
         } catch (Throwable $e) {
             Log::info('Manufacturer domain discovery failed', ['brand' => $brand, 'error' => $e->getMessage()]);
 

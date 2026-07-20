@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Services\Ai;
 
 use App\Models\AiSetting;
+use App\Services\Enrichment\TavilyQuotaGuard;
+use App\Services\Enrichment\TavilySearchProfile;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
@@ -24,6 +26,7 @@ final class AiSettingsService
      *     web_search_enabled: bool,
      *     tavily_api_key: ?string,
      *     search_fallback: string,
+     *     tavily_search_mode: string,
      *     vector_enabled: bool,
      *     qdrant_url: ?string,
      *     qdrant_api_key: ?string,
@@ -60,6 +63,11 @@ final class AiSettingsService
                 'web_search_enabled' => (bool) ($row->web_search_enabled ?? true),
                 'tavily_api_key' => $tavily !== null && $tavily !== '' ? (string) $tavily : null,
                 'search_fallback' => (string) ($row->search_fallback ?: 'tavily'),
+                'tavily_search_mode' => $this->normalizeTavilySearchMode(
+                    Schema::hasColumn('ai_settings', 'tavily_search_mode')
+                        ? ($row->tavily_search_mode ?? null)
+                        : null
+                ),
                 'vector_enabled' => $hasVectorCols ? (bool) ($row->vector_enabled ?? false) : false,
                 'qdrant_url' => $hasVectorCols ? $this->nullableString($row->qdrant_url ?? null) : null,
                 'qdrant_api_key' => $qdrantKey !== null && $qdrantKey !== '' ? (string) $qdrantKey : null,
@@ -98,6 +106,7 @@ final class AiSettingsService
             'web_search_enabled' => (bool) config('ai.web_search_enabled', true),
             'tavily_api_key' => $tavily,
             'search_fallback' => (string) config('ai.search_fallback', 'tavily'),
+            'tavily_search_mode' => $this->normalizeTavilySearchMode(config('ai.tavily_search_mode')),
             'vector_enabled' => (bool) config('ai.vector_enabled', false),
             'qdrant_url' => $this->nullableString(config('ai.qdrant_url')),
             'qdrant_api_key' => $qdrantKey,
@@ -130,6 +139,7 @@ final class AiSettingsService
             'temperature' => $cfg['temperature'],
             'web_search_enabled' => $cfg['web_search_enabled'],
             'search_fallback' => $cfg['search_fallback'],
+            'tavily_search_mode' => $cfg['tavily_search_mode'],
             'vector_enabled' => $cfg['vector_enabled'],
             'qdrant_url' => $cfg['qdrant_url'],
             'qdrant_collection' => $cfg['qdrant_collection'],
@@ -162,6 +172,7 @@ final class AiSettingsService
             'temperature' => 0.1,
             'web_search_enabled' => false,
             'search_fallback' => 'tavily',
+            'tavily_search_mode' => TavilySearchProfile::MODE_BALANCED,
             'vector_enabled' => false,
             'qdrant_url' => 'http://127.0.0.1:6333',
             'qdrant_collection' => 'products',
@@ -192,10 +203,21 @@ final class AiSettingsService
             $row->enrichment_model = $this->nullableString($data['enrichment_model']);
         }
 
+        if (array_key_exists('tavily_search_mode', $data) && Schema::hasColumn('ai_settings', 'tavily_search_mode')) {
+            $row->tavily_search_mode = $this->normalizeTavilySearchMode($data['tavily_search_mode']);
+        }
+
         $this->applySecret($row, 'api_key', $data);
         $this->applySecret($row, 'tavily_api_key', $data);
         $this->applySecret($row, 'qdrant_api_key', $data);
         $this->applySecret($row, 'embedding_api_key', $data);
+
+        if (array_key_exists('tavily_api_key', $data)
+            && is_string($data['tavily_api_key'] ?? null)
+            && trim((string) $data['tavily_api_key']) !== ''
+            && ! str_contains((string) $data['tavily_api_key'], '*')) {
+            TavilyQuotaGuard::clear();
+        }
 
         $row->base_url = rtrim((string) $row->base_url, '/');
         if (is_string($row->embedding_base_url) && $row->embedding_base_url !== '') {
@@ -235,6 +257,22 @@ final class AiSettingsService
         $cheap = trim((string) ($cfg['enrichment_model'] ?? ''));
 
         return $cheap !== '' ? $cheap : (string) $cfg['model'];
+    }
+
+    public function tavilySearchProfile(): TavilySearchProfile
+    {
+        $cfg = $this->resolve();
+
+        return TavilySearchProfile::fromMode($cfg['tavily_search_mode'] ?? null);
+    }
+
+    private function normalizeTavilySearchMode(mixed $value): string
+    {
+        $mode = is_string($value) ? strtolower(trim($value)) : '';
+
+        return in_array($mode, TavilySearchProfile::MODES, true)
+            ? $mode
+            : TavilySearchProfile::MODE_BALANCED;
     }
 
     private function nullableString(mixed $value): ?string
