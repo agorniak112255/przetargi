@@ -45,8 +45,9 @@ class HybridWebSearchService
         $provider = 'tavily';
 
         // Limit zapytań i próg stopu zależą od trybu Tavily (Ustawienia AI).
+        $queryIndex = 0;
         foreach (array_slice($queries, 0, $profile->maxQueries) as $query) {
-            $cacheKey = 'enrich_search_v13:'.hash('sha256', $profile->mode.'|'.$phase.'|'.$query);
+            $cacheKey = 'enrich_search_v14:'.hash('sha256', $profile->mode.'|'.$phase.'|'.$query);
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
                 $packResults = $this->filterResultsByIdentity($cached['results'], $product);
@@ -54,8 +55,15 @@ class HybridWebSearchService
             } else {
                 $packResults = [];
                 try {
-                    // manufacturer → domeny producenta; industry → sklepy+katalogi; potem całe internety
-                    if ($preferred !== []) {
+                    // Pierwsze zapytanie (jak Google): najpierw całe internety — mniej spalone kredytów na pustych domenach.
+                    $openFirst = $queryIndex === 0 && $profile->openWebFallback;
+                    if ($openFirst) {
+                        $pack = $this->searchViaTavily($query, [], $profile);
+                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+                        $provider = 'tavily';
+                    }
+                    // manufacturer → domeny producenta; industry → sklepy+katalogi
+                    if ($packResults === [] && $preferred !== []) {
                         $pack = $this->searchViaTavily($query, $preferred, $profile);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
                         $packResults = array_values(array_filter(
@@ -71,7 +79,7 @@ class HybridWebSearchService
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
                         $provider = 'tavily_retailer';
                     }
-                    if ($packResults === [] && $profile->openWebFallback) {
+                    if ($packResults === [] && $profile->openWebFallback && ! $openFirst) {
                         $pack = $this->searchViaTavily($query, [], $profile);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
                         $provider = 'tavily';
@@ -102,6 +110,7 @@ class HybridWebSearchService
             if (count($merged) >= $profile->stopAfterResults) {
                 break;
             }
+            $queryIndex++;
         }
 
         if ($merged === [] && $cfg['web_search_enabled']) {

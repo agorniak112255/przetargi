@@ -82,27 +82,43 @@ final class ProductSearchIdentity
         $phaseHint = $phase === 'industry' ? 'karta produktu' : 'datasheet OR karta';
 
         $queries = [];
-        // 1) marka + kod bez prefiksu (PROS 1001) — typowy wynik Google
-        if ($brand !== '' && $bare !== '') {
-            $queries[] = trim($brand.' '.$bare.' '.$hint);
-            $queries[] = trim('"'.$bare.'" '.$brand.' '.$hint);
-        }
-        // 2) pełne SKU z cennika
+
+        // 1) Jak Google — najpierw czysty kod / marka+kod, BEZ sztucznego hintu kategorii
         if ($sku !== '') {
-            $queries[] = trim('"'.$sku.'" '.$brand.' '.$hint);
+            $queries[] = $sku;
+            $queries[] = '"'.$sku.'"';
         }
-        // 3) nazwa handlowa (gdy różna od SKU)
+        if ($brand !== '' && $bare !== '') {
+            $queries[] = trim($brand.' '.$bare);
+            if ($bare !== $sku) {
+                $queries[] = trim('"'.$bare.'" '.$brand);
+            }
+        }
         if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)
             && mb_strtolower($name) !== mb_strtolower($bare)) {
-            $queries[] = trim($brand.' '.$name.' '.$hint);
-        }
-        // 4) wariant model / art.
-        if ($bare !== '') {
-            $queries[] = trim($brand.' model '.$bare.' '.$hint);
-            $queries[] = trim($brand.' '.$bare.' '.$phaseHint);
+            $queries[] = trim($brand.' '.$name);
         }
 
-        return array_values(array_unique(array_filter($queries)));
+        // 2) Dopiero potem warianty z hintem (gdy nazwa sugeruje kategorię)
+        if ($hint !== '') {
+            if ($brand !== '' && $bare !== '') {
+                $queries[] = trim($brand.' '.$bare.' '.$hint);
+            }
+            if ($sku !== '') {
+                $queries[] = trim('"'.$sku.'" '.$brand.' '.$hint);
+            }
+        }
+
+        // 3) Datasheet / karta
+        if ($bare !== '') {
+            $queries[] = trim($brand.' '.$bare.' '.$phaseHint);
+            $queries[] = trim($brand.' model '.$bare);
+        }
+
+        return array_values(array_unique(array_filter(
+            $queries,
+            static fn (string $q): bool => trim($q) !== ''
+        )));
     }
 
     /**
@@ -213,21 +229,35 @@ final class ProductSearchIdentity
         return null;
     }
 
+    /**
+     * Opcjonalny dopisek kategorii — TYLKO gdy nazwa/SKU na to wskazuje.
+     * Sam producent (np. „PROS”) nie narzuca „ubranie wodoochronne”.
+     */
     private function productHint(Product $product): string
     {
-        $hay = mb_strtolower(
-            (string) $product->manufacturer.' '.(string) $product->name.' '.(string) $product->sku
-        );
-        if (preg_match('#(demar|befado|trzewik|p[oó]łbut|polbut|buty|obuwie|\bs1\b|\bs3\b|\bsrc\b|\bhro\b)#u', $hay)) {
+        $nameSku = mb_strtolower(trim((string) $product->name.' '.(string) $product->sku));
+        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+
+        if (preg_match(
+            '#(trzewik|p[oó]łbut|polbut|\bbuty\b|obuwie|\bs1\b|\bs3\b|\bsrc\b|\bhro\b|demar|befado)#u',
+            $nameSku
+        ) || preg_match('#(demar|befado)#u', $brand)) {
             return 'buty ochronne';
         }
-        if (preg_match('#(atg|glove|r[eę]kaw|maxiflex|maxicut|maxidry|ansell|uvex)#u', $hay)) {
+
+        if (preg_match('#(glove|r[eę]kaw|maxiflex|maxicut|maxidry)#u', $nameSku)
+            || preg_match('#^(atg|ansell)$#u', $brand)) {
             return 'rękawice';
         }
-        if (preg_match('#(pros|wodoochron|plavitex|kurtka|spodnie|ubranie|odzież|odziez)#u', $hay)) {
+
+        // Odzież wodoochronna — słowa z nazwy, NIE sama marka PROS
+        if (preg_match(
+            '#(wodoochron|plavitex|kurtka|spodnie|ubranie|odzież|odziez|płaszcz|plaszcz)#u',
+            $nameSku
+        )) {
             return 'ubranie wodoochronne';
         }
 
-        return 'BHP';
+        return '';
     }
 }

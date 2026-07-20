@@ -10,22 +10,37 @@ use Tests\TestCase;
 
 final class ProductSearchIdentityTest extends TestCase
 {
-    public function test_strips_brand_prefix_and_builds_queries(): void
+    public function test_strips_brand_prefix_and_builds_google_like_queries(): void
     {
         $id = new ProductSearchIdentity;
         $product = new Product([
-            'sku' => 'PROS-1001',
-            'name' => '1001',
+            'sku' => 'PROS-1007',
+            'name' => '1007',
             'manufacturer' => 'PROS',
         ]);
 
         $tokens = $id->matchTokens($product);
-        $this->assertContains('pros-1001', $tokens);
-        $this->assertContains('1001', $tokens);
+        $this->assertContains('pros-1007', $tokens);
+        $this->assertContains('1007', $tokens);
 
         $queries = $id->searchQueries($product, 'industry');
         $joined = implode(' | ', $queries);
-        $this->assertStringContainsString('PROS 1001', $joined);
+        $this->assertStringContainsString('PROS-1007', $joined);
+        $this->assertStringContainsString('PROS 1007', $joined);
+        // sama marka PROS nie dokłada fałszywego hintu kategorii
+        $this->assertStringNotContainsString('ubranie wodoochronne', $joined);
+    }
+
+    public function test_waterproof_name_still_gets_clothing_hint(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'PROS-1001',
+            'name' => 'Ubranie wodoochronne 1001',
+            'manufacturer' => 'PROS',
+        ]);
+
+        $joined = implode(' | ', $id->searchQueries($product, 'industry'));
         $this->assertStringContainsString('ubranie wodoochronne', $joined);
     }
 
@@ -79,5 +94,6 @@ final class ProductSearchIdentityTest extends TestCase
         ));
         $queries = $id->searchQueries($product, 'manufacturer');
         $this->assertNotEmpty($queries);
+        $this->assertStringContainsString('60549', implode(' | ', $queries));
     }
 }
