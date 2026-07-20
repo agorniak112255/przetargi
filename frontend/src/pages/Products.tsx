@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { api, can, type EnrichmentBatch, type Product } from '../lib/api'
 
 type Page = {
@@ -43,12 +44,6 @@ function pageNumbers(current: number, last: number): Array<number | '…'> {
 
 function hasDescription(p: Product): boolean {
   return Boolean(p.description && p.description.trim() !== '')
-}
-
-function descriptionProse(text: string | null | undefined): string {
-  if (!text) return ''
-  const cut = text.search(/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/)
-  return cut >= 0 ? text.slice(0, cut).trim() : text
 }
 
 type SortKey =
@@ -113,7 +108,7 @@ export function Products() {
   const [selected, setSelected] = useState<Record<number, boolean>>({})
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
-  const [descModal, setDescModal] = useState<Product | null>(null)
+  const [previewId, setPreviewId] = useState<number | null>(null)
   const [imageModal, setImageModal] = useState<{ name: string; url: string } | null>(null)
 
   useEffect(() => {
@@ -131,16 +126,13 @@ export function Products() {
   }, [])
 
   useEffect(() => {
-    if (!descModal && !imageModal) return
+    if (!imageModal) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setDescModal(null)
-        setImageModal(null)
-      }
+      if (e.key === 'Escape') setImageModal(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [descModal, imageModal])
+  }, [imageModal])
 
   function buildParams(pageNum = page): URLSearchParams {
     const params = new URLSearchParams({
@@ -540,7 +532,7 @@ export function Products() {
                     {hasDescription(p) ? (
                       <button
                         type="button"
-                        onClick={() => setDescModal(p)}
+                        onClick={() => setPreviewId(p.id)}
                         className="rounded border border-green-300 bg-green-50 px-2 py-1 text-[11px] text-green-800 hover:bg-green-100"
                       >
                         Opis
@@ -616,57 +608,7 @@ export function Products() {
           </tbody>
         </table>
 
-        {descModal && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-            role="dialog"
-            aria-modal="true"
-            onClick={() => setDescModal(null)}
-          >
-            <div
-              className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-xl bg-white p-4 shadow-lg"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold">{descModal.name}</p>
-                  <p className="text-xs text-slate-500">
-                    {descModal.sku} · {descModal.manufacturer}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDescModal(null)}
-                  className="rounded border border-slate-300 px-2 py-1 text-xs"
-                >
-                  Zamknij
-                </button>
-              </div>
-              <p className="whitespace-pre-wrap text-sm text-slate-700">
-                {descriptionProse(descModal.description)}
-              </p>
-              {[
-                ['Specyfikacja', descModal.enrichment_payload?.specs],
-                ['Cechy', descModal.enrichment_payload?.features],
-                ['Materiały', descModal.enrichment_payload?.materials],
-                ['Normy', descModal.enrichment_payload?.norms],
-                ['Certyfikaty', descModal.enrichment_payload?.certificates],
-                ['Zastosowanie', descModal.enrichment_payload?.use_cases],
-              ].map(([title, items]) =>
-                Array.isArray(items) && items.length > 0 ? (
-                  <div key={String(title)} className="mt-3">
-                    <p className="mb-1 text-xs font-semibold text-slate-700">{title}</p>
-                    <ul className="list-disc pl-5 text-xs text-slate-600">
-                      {items.map((f) => (
-                        <li key={f}>{f}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null,
-              )}
-            </div>
-          </div>
-        )}
+        <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
 
         {imageModal && (
           <div
