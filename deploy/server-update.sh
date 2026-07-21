@@ -20,6 +20,12 @@ if [[ -f "$HTACCESS" ]]; then
   echo "==> zachowano lokalny .htaccess"
 fi
 
+# Lokalne poprawki po poprzednim deployu (sed /Przetargi/) nie mogą blokować pull
+echo "==> reset lokalnych zmian w frontend build (poza .htaccess)"
+git restore --worktree --staged -- backend/public/index.html backend/public/assets 2>/dev/null \
+  || git checkout -- backend/public/index.html backend/public/assets 2>/dev/null \
+  || true
+
 echo "==> git pull"
 git pull --ff-only origin main
 
