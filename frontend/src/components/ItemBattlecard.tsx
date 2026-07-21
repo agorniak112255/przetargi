@@ -188,32 +188,36 @@ function ConfirmSubstituteModal({
       onClick={onCancel}
     >
       <div
-        className="w-full max-w-sm rounded-lg bg-white p-3 shadow-xl"
+        className="w-full max-w-md overflow-hidden rounded-lg bg-white p-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <p className="text-sm font-semibold text-slate-900">Zmienić produkt w ofercie?</p>
         <p className="mt-1 text-xs text-slate-600">
           Zamiennik zastąpi aktualną propozycję w tej pozycji.
         </p>
-        <div className="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-[11px]">
-          <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
+        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-2 text-[11px]">
+          <div className="min-w-0 overflow-hidden rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="text-[9px] font-semibold uppercase text-slate-500">Teraz</p>
-            <p className="font-mono text-slate-800">{current?.sku ?? '—'}</p>
-            <p className="truncate text-slate-600">
-              {current ? productDisplayName(current, 36) : 'brak'}
+            <p className="truncate font-mono text-slate-800">{current?.sku ?? '—'}</p>
+            <p className="mt-0.5 line-clamp-2 break-words text-slate-600">
+              {current ? productDisplayName(current, 48) : 'brak'}
             </p>
           </div>
-          <span className="text-slate-400">→</span>
-          <div className="rounded border border-sky-200 bg-sky-50 px-2 py-1.5">
+          <span className="self-center shrink-0 px-0.5 text-slate-400" aria-hidden>
+            →
+          </span>
+          <div className="min-w-0 overflow-hidden rounded border border-sky-200 bg-sky-50 px-2 py-1.5">
             <p className="text-[9px] font-semibold uppercase text-sky-700">Zamiennik</p>
-            <p className="font-mono text-slate-800">{next.sku}</p>
-            <p className="truncate text-slate-600">{productDisplayName(next, 36)}</p>
+            <p className="truncate font-mono text-slate-800">{next.sku}</p>
+            <p className="mt-0.5 line-clamp-2 break-words text-slate-600">
+              {productDisplayName(next, 48)}
+            </p>
             <p className="mt-0.5 font-semibold text-slate-800">
               {fmtPrice(next.purchase_price ?? next.catalog_price_net)} zł
             </p>
           </div>
         </div>
-        <div className="mt-3 flex justify-end gap-2">
+        <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
             disabled={busy}
