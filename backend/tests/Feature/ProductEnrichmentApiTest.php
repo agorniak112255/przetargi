@@ -535,6 +535,30 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame([$imageUrl], $selected);
     }
 
+    public function test_pick_primary_keeps_verified_candidate_without_sku_in_url(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'WH25T-00122-04',
+            'name' => '2500-WH PLUS CVRL HOOD SOCKS 122.L',
+            'manufacturer' => 'Ansell',
+        ]);
+        // RS Components: kod dystrybutora Y0428245 zamiast SKU Ansell w URL
+        $verifiedUrl = 'https://res.cloudinary.com/rsc/image/upload/c_pad,w_700/Y0428245-01.jpg';
+
+        $service = app(ProductEnrichmentService::class);
+        $method = new \ReflectionMethod($service, 'pickPrimaryImageUrls');
+        $picked = $method->invoke(
+            $service,
+            [$verifiedUrl],
+            [],
+            (string) $product->sku,
+            (string) $product->name,
+            $product,
+        );
+
+        $this->assertSame([$verifiedUrl], $picked);
+    }
+
     public function test_ai_settings_accept_web_search_fields(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

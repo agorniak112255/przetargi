@@ -787,9 +787,9 @@ final class ProductEnrichmentService
             if ($this->isJunkImageUrl($url) || ! ProductImageDownloader::looksLikeImageUrl($url)) {
                 continue;
             }
-            if ($product !== null && ! $this->identity->isTrustedPageImageUrl($url, $product)) {
-                continue;
-            }
+            // Kandydaci przeszli już ProductImageCandidateVerifier (SKU / zaufane
+            // strukturalne / AI Vision) — ponowny wymóg SKU w URL odrzucałby
+            // prawidłowe CDN-y dystrybutorów (np. RS z kodem Y…).
             $u = mb_strtolower($url);
             // miniatury WP (-80x80 …)
             if (preg_match('/-(\d{2,4})x(\d{2,4})\.(jpe?g|png|webp)(\?|$)/i', $u, $wm)
