@@ -29,6 +29,12 @@ function fmtPrice(v: number | null): string {
   return v.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function compareUrl(ids: number[]): string {
+  const params = new URLSearchParams()
+  ids.forEach((id) => params.append('ids[]', String(id)))
+  return `/products/compare?${params.toString()}`
+}
+
 export function CrossRefPanel({
   initialCode = '',
   autoRun = false,
@@ -40,7 +46,7 @@ export function CrossRefPanel({
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [result, setResult] = useState<CrossRefResponse | null>(null)
-  const [compareWith, setCompareWith] = useState<number | null>(null)
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
 
   async function run(override?: string) {
     const q = (override ?? code).trim()
@@ -55,7 +61,7 @@ export function CrossRefPanel({
         `/products/cross-ref?code=${encodeURIComponent(q)}&limit=12`,
       )
       setResult(res)
-      setCompareWith(null)
+      setSelectedIds(res.seed ? [res.seed.product_id] : [])
     } catch (e: unknown) {
       setResult(null)
       setErr(e instanceof Error ? e.message : 'Błąd cross-ref')
@@ -75,6 +81,21 @@ export function CrossRefPanel({
   }, [initialCode, autoRun])
 
   const seedId = result?.seed?.product_id
+  const selectedProducts = result
+    ? [result.seed, ...result.matches].filter(
+        (product): product is CrossRefProduct =>
+          product !== null && selectedIds.includes(product.product_id),
+      )
+    : []
+
+  function toggleProduct(productId: number) {
+    if (productId === seedId) return
+    setSelectedIds((current) => {
+      if (current.includes(productId)) return current.filter((id) => id !== productId)
+      if (current.length >= 5) return current
+      return [...current, productId]
+    })
+  }
 
   return (
     <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/40 p-3 shadow-sm">
@@ -120,6 +141,55 @@ export function CrossRefPanel({
               Brak dokładnego SKU „{result.code}” — wyniki na podstawie podobieństwa tekstu.
             </p>
           )}
+          <div className="rounded-lg border border-emerald-200 bg-white p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold text-slate-700">
+                  Wybrane do porównania: {selectedIds.length}/5
+                </p>
+                <p className="text-[10px] text-slate-500">
+                  Zaznacz od 2 do 5 produktów. Produkt bazowy jest dodany automatycznie.
+                </p>
+              </div>
+              {selectedIds.length >= 2 ? (
+                <Link
+                  to={compareUrl(selectedIds)}
+                  className="rounded bg-emerald-700 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-800"
+                >
+                  Porównaj zaznaczone ({selectedIds.length})
+                </Link>
+              ) : (
+                <span className="cursor-not-allowed rounded bg-slate-200 px-3 py-2 text-xs font-semibold text-slate-500">
+                  Wybierz jeszcze produkt
+                </span>
+              )}
+            </div>
+            {selectedProducts.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {selectedProducts.map((product) => (
+                  <span
+                    key={product.product_id}
+                    className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-900"
+                  >
+                    <b>{product.sku}</b>
+                    <span className="max-w-40 truncate">{product.manufacturer}</span>
+                    {product.product_id === seedId ? (
+                      <span className="text-emerald-600">baza</span>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={`Usuń ${product.sku} z porównania`}
+                        className="ml-0.5 font-bold text-rose-600 hover:text-rose-800"
+                        onClick={() => toggleProduct(product.product_id)}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
           {result.matches.length === 0 ? (
             <p className="text-xs text-slate-500">Brak ekwiwalentów powyżej progu podobieństwa.</p>
           ) : (
@@ -127,66 +197,58 @@ export function CrossRefPanel({
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b bg-slate-50">
+                    <th className="p-2 text-center">Wybierz</th>
                     <th className="p-2">%</th>
                     <th className="p-2">SKU</th>
                     <th className="p-2">Producent</th>
                     <th className="p-2">Nazwa</th>
                     <th className="p-2">Cena</th>
                     <th className="p-2">Atrybuty</th>
-                    <th className="p-2"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {result.matches.map((m) => (
-                    <tr key={m.product_id} className="border-b align-top">
-                      <td className="p-2 font-semibold text-violet-700">{m.match_percent}%</td>
-                      <td className="p-2">
-                        <Link to={`/products/${m.product_id}`} className="text-blue-600 hover:underline">
-                          {m.sku}
-                        </Link>
-                        {m.cross_brand && (
-                          <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] text-amber-800">
-                            inna marka
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-2">{m.manufacturer}</td>
-                      <td className="p-2 max-w-[14rem] truncate" title={m.name}>
-                        {m.name}
-                      </td>
-                      <td className="p-2 whitespace-nowrap">{fmtPrice(m.catalog_price_net)}</td>
-                      <td className="p-2 text-[10px] text-slate-500">
-                        {[m.attributes?.material, m.attributes?.klasa_ochrony, m.attributes?.poziomy_en388]
-                          .filter(Boolean)
-                          .join(' · ') || '—'}
-                      </td>
-                      <td className="p-2">
-                        {seedId ? (
-                          <Link
-                            to={`/products/compare?a=${seedId}&b=${m.product_id}`}
-                            className="text-[10px] font-semibold text-emerald-800 hover:underline"
-                          >
-                            Porównaj
+                  {result.matches.map((m) => {
+                    const checked = selectedIds.includes(m.product_id)
+                    const disabled = !checked && selectedIds.length >= 5
+                    return (
+                      <tr
+                        key={m.product_id}
+                        className={`border-b align-top ${checked ? 'bg-emerald-50/70' : ''}`}
+                      >
+                        <td className="p-2 text-center">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={disabled}
+                            aria-label={`Wybierz ${m.sku} do porównania`}
+                            onChange={() => toggleProduct(m.product_id)}
+                            className="h-4 w-4 rounded border-slate-300 text-emerald-700"
+                          />
+                        </td>
+                        <td className="p-2 font-semibold text-violet-700">{m.match_percent}%</td>
+                        <td className="p-2">
+                          <Link to={`/products/${m.product_id}`} className="text-blue-600 hover:underline">
+                            {m.sku}
                           </Link>
-                        ) : compareWith ? (
-                          <Link
-                            to={`/products/compare?a=${compareWith}&b=${m.product_id}`}
-                            className="text-[10px] font-semibold text-emerald-800 hover:underline"
-                          >
-                            Porównaj
-                          </Link>
-                        ) : (
-                          <button
-                            type="button"
-                            className="text-[10px] text-slate-600 hover:underline"
-                            onClick={() => setCompareWith(m.product_id)}
-                          >
-                            Wybierz jako A
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                          {m.cross_brand && (
+                            <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] text-amber-800">
+                              inna marka
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2">{m.manufacturer}</td>
+                        <td className="p-2 max-w-[14rem] truncate" title={m.name}>
+                          {m.name}
+                        </td>
+                        <td className="p-2 whitespace-nowrap">{fmtPrice(m.catalog_price_net)}</td>
+                        <td className="p-2 text-[10px] text-slate-500">
+                          {[m.attributes?.material, m.attributes?.klasa_ochrony, m.attributes?.poziomy_en388]
+                            .filter(Boolean)
+                            .join(' · ') || '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

@@ -436,6 +436,20 @@ final class ProductSearchIdentity
         return $this->hayMentionsProduct($url.' '.$title, $product);
     }
 
+    public function preferredLocaleUrl(string $url, Product $product): string
+    {
+        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        if (! str_contains($brand, 'ansell')) {
+            return $url;
+        }
+
+        return preg_replace(
+            '#^(https?://(?:www\.)?ansell\.com)/[a-z]{2}/[a-z]{2}/(?=products/)#i',
+            '$1/pl/pl/',
+            $url
+        ) ?? $url;
+    }
+
     public function shortBrand(string $manufacturer): string
     {
         $m = trim($manufacturer);

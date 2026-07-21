@@ -9,6 +9,7 @@ use App\Jobs\EnrichProductJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductDocument;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentCache;
 use App\Models\User;
@@ -337,7 +338,7 @@ final class ProductEnrichmentService
             $sourceUrls = [];
             foreach ($extracted['source_urls'] ?? [] as $url) {
                 if (is_string($url) && str_starts_with($url, 'http')) {
-                    $sourceUrls[] = $url;
+                    $sourceUrls[] = $this->identity->preferredLocaleUrl($url, $product);
                 }
             }
             if ($sourceUrls === []) {
@@ -522,6 +523,16 @@ final class ProductEnrichmentService
                     $savedDocs = $this->documents->downloadMany($product, $fallbackDocs, 3);
                 }
             }
+            foreach ($savedDocs as $document) {
+                if ($document->kind !== ProductDocument::KIND_CERTIFICATE) {
+                    continue;
+                }
+                $label = str_contains(mb_strtolower((string) $document->source_url), '/doc/')
+                    ? 'Deklaracja zgodności UE'
+                    : 'Certyfikat producenta';
+                $payload['certificates'][] = $label;
+            }
+            $payload['certificates'] = array_values(array_unique($payload['certificates']));
             $payload['document_urls'] = array_values(array_filter(array_map(
                 static fn ($d): ?string => is_string($d->source_url) ? $d->source_url : null,
                 $savedDocs

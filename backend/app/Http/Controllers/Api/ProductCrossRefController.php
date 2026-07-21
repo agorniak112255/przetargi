@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\CompareProductsRequest;
 use App\Models\Product;
 use App\Services\ProductCompareService;
 use App\Services\ProductCrossRefService;
@@ -33,23 +34,23 @@ class ProductCrossRefController extends Controller
         );
     }
 
-    public function compare(Request $request): JsonResponse
+    public function compare(CompareProductsRequest $request): JsonResponse
     {
-        $data = $request->validate([
-            'a' => ['required', 'integer', 'exists:products,id'],
-            'b' => ['required', 'integer', 'exists:products,id', 'different:a'],
-            'requirement' => ['sometimes', 'nullable', 'string', 'max:2000'],
-        ]);
-
-        $productA = Product::query()->findOrFail($data['a']);
-        $productB = Product::query()->findOrFail($data['b']);
-
-        return response()->json(
-            $this->compare->compare(
-                $productA,
-                $productB,
-                $data['requirement'] ?? null
-            )
+        $ids = $request->productIds();
+        $productsById = Product::query()
+            ->whereIn('id', $ids)
+            ->get()
+            ->keyBy('id');
+        $products = array_map(
+            static fn (int $id): Product => $productsById->get($id),
+            $ids
         );
+        $requirement = $request->validated('requirement');
+
+        $payload = count($products) === 2
+            ? $this->compare->compare($products[0], $products[1], $requirement)
+            : $this->compare->compareMany($products, $requirement);
+
+        return response()->json($payload);
     }
 }

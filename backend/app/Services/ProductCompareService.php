@@ -7,9 +7,7 @@ namespace App\Services;
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
 
-/**
- * Porównanie side-by-side produktu A vs B (opcjonalnie vs wymaganie SIWZ).
- */
+/** Porównanie side-by-side 2–5 produktów (opcjonalnie vs wymaganie SIWZ). */
 final class ProductCompareService
 {
     public function __construct(
@@ -28,35 +26,83 @@ final class ProductCompareService
      */
     public function compare(Product $a, Product $b, ?string $requirement = null): array
     {
+        $many = $this->compareMany([$a, $b], $requirement);
+        $winnerProductId = $many['summary']['winner_product_id'];
+        $winner = $many['summary']['tie']
+            ? 'tie'
+            : ($winnerProductId === $a->id ? 'a' : ($winnerProductId === $b->id ? 'b' : null));
+        $rows = array_map(static fn (array $row): array => $row + [
+            'a' => $row['values'][0] ?? null,
+            'b' => $row['values'][1] ?? null,
+        ], $many['rows']);
+
+        return [
+            'a' => $many['products'][0],
+            'b' => $many['products'][1],
+            'products' => $many['products'],
+            'requirement' => $many['requirement'],
+            'rows' => $rows,
+            'summary' => [
+                'a_score' => $many['products'][0]['siwz_score'],
+                'b_score' => $many['products'][1]['siwz_score'],
+                'winner' => $winner,
+                'winner_product_id' => $winnerProductId,
+                'tie' => $many['summary']['tie'],
+                'diffs' => $many['summary']['diffs'],
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<Product>  $products
+     * @return array{
+     *     products: list<array<string, mixed>>,
+     *     requirement: ?string,
+     *     rows: list<array{key: string, label: string, values: list<mixed>, requirement: mixed, match: string}>,
+     *     summary: array{winner_product_id: ?int, tie: bool, diffs: int}
+     * }
+     */
+    public function compareMany(array $products, ?string $requirement = null): array
+    {
+        if (count($products) < 2 || count($products) > 5) {
+            throw new \InvalidArgumentException('Porównanie wymaga od 2 do 5 produktów.');
+        }
+
         $requirement = $requirement !== null ? trim($requirement) : null;
         if ($requirement === '') {
             $requirement = null;
         }
 
-        $cardA = $this->card($a, $requirement);
-        $cardB = $this->card($b, $requirement);
+        $cards = array_values(array_map(
+            fn (Product $product): array => $this->card($product, $requirement),
+            $products
+        ));
 
         $rows = [
-            $this->row('sku', 'SKU', $cardA['sku'], $cardB['sku'], null),
-            $this->row('manufacturer', 'Producent', $cardA['manufacturer'], $cardB['manufacturer'], null),
-            $this->row('name', 'Nazwa', $cardA['name'], $cardB['name'], null),
-            $this->row('price', 'Cena katalogowa', $cardA['catalog_price_net'], $cardB['catalog_price_net'], null),
-            $this->row('kategoria_bhp', 'Kategoria BHP', $cardA['attributes']['kategoria_bhp'] ?? null, $cardB['attributes']['kategoria_bhp'] ?? null, $this->reqHint($requirement, 'kategoria')),
-            $this->row('material', 'Materiał', $cardA['attributes']['material'] ?? null, $cardB['attributes']['material'] ?? null, $this->reqHint($requirement, 'material')),
-            $this->row('klasa_ochrony', 'Klasa ochrony', $cardA['attributes']['klasa_ochrony'] ?? null, $cardB['attributes']['klasa_ochrony'] ?? null, $this->reqHint($requirement, 'klasa')),
-            $this->row('poziomy_en388', 'EN 388', $cardA['attributes']['poziomy_en388'] ?? null, $cardB['attributes']['poziomy_en388'] ?? null, $this->reqHint($requirement, 'en388')),
-            $this->row('normy_en', 'Normy EN', $this->joinList($cardA['attributes']['normy_en'] ?? []), $this->joinList($cardB['attributes']['normy_en'] ?? []), $this->reqHint($requirement, 'norma')),
-            $this->row('rozmiar', 'Rozmiar', $cardA['attributes']['rozmiar'] ?? null, $cardB['attributes']['rozmiar'] ?? null, null),
-            $this->row('kod_producenta', 'Kod producenta', $cardA['attributes']['kod_producenta'] ?? null, $cardB['attributes']['kod_producenta'] ?? null, null),
-            $this->row('stock', 'Stan', $cardA['stock'], $cardB['stock'], null),
+            $this->rowMany('sku', 'SKU', array_column($cards, 'sku'), null),
+            $this->rowMany('manufacturer', 'Producent', array_column($cards, 'manufacturer'), null),
+            $this->rowMany('name', 'Nazwa', array_column($cards, 'name'), null),
+            $this->rowMany('price', 'Cena katalogowa', array_column($cards, 'catalog_price_net'), null),
+            $this->attributeRow($cards, 'kategoria_bhp', 'Kategoria BHP', $this->reqHint($requirement, 'kategoria')),
+            $this->attributeRow($cards, 'material', 'Materiał', $this->reqHint($requirement, 'material')),
+            $this->attributeRow($cards, 'klasa_ochrony', 'Klasa ochrony', $this->reqHint($requirement, 'klasa')),
+            $this->attributeRow($cards, 'poziomy_en388', 'EN 388', $this->reqHint($requirement, 'en388')),
+            $this->rowMany(
+                'normy_en',
+                'Normy EN',
+                array_map(fn (array $card): ?string => $this->joinList($card['attributes']['normy_en'] ?? []), $cards),
+                $this->reqHint($requirement, 'norma')
+            ),
+            $this->attributeRow($cards, 'rozmiar', 'Rozmiar', null),
+            $this->attributeRow($cards, 'kod_producenta', 'Kod producenta', null),
+            $this->rowMany('stock', 'Stan', array_column($cards, 'stock'), null),
         ];
 
         if ($requirement !== null) {
-            $rows[] = $this->row(
+            $rows[] = $this->rowMany(
                 'match_siwz',
                 'Dopasowanie do SIWZ %',
-                $cardA['siwz_score'],
-                $cardB['siwz_score'],
+                array_column($cards, 'siwz_score'),
                 null,
             );
         }
@@ -68,26 +114,37 @@ final class ProductCompareService
             }
         }
 
-        $winner = null;
-        if ($requirement !== null && $cardA['siwz_score'] !== null && $cardB['siwz_score'] !== null) {
-            if ($cardA['siwz_score'] > $cardB['siwz_score']) {
-                $winner = 'a';
-            } elseif ($cardB['siwz_score'] > $cardA['siwz_score']) {
-                $winner = 'b';
-            } else {
-                $winner = 'tie';
+        $winnerProductId = null;
+        $tie = false;
+        if ($requirement !== null) {
+            $scores = array_values(array_filter(
+                array_map(
+                    static fn (array $card): ?array => $card['siwz_score'] !== null
+                        ? ['product_id' => $card['product_id'], 'score' => $card['siwz_score']]
+                        : null,
+                    $cards
+                )
+            ));
+            if ($scores !== []) {
+                $maxScore = max(array_column($scores, 'score'));
+                $winners = array_values(array_filter(
+                    $scores,
+                    static fn (array $score): bool => $score['score'] === $maxScore
+                ));
+                $tie = count($winners) > 1;
+                if (! $tie) {
+                    $winnerProductId = (int) $winners[0]['product_id'];
+                }
             }
         }
 
         return [
-            'a' => $cardA,
-            'b' => $cardB,
+            'products' => $cards,
             'requirement' => $requirement,
             'rows' => $rows,
             'summary' => [
-                'a_score' => $cardA['siwz_score'],
-                'b_score' => $cardB['siwz_score'],
-                'winner' => $winner,
+                'winner_product_id' => $winnerProductId,
+                'tie' => $tie,
                 'diffs' => $diffs,
             ],
         ];
@@ -120,24 +177,37 @@ final class ProductCompareService
     }
 
     /**
-     * @return array{key: string, label: string, a: mixed, b: mixed, requirement: mixed, match: string}
+     * @param  list<array<string, mixed>>  $cards
+     * @return array{key: string, label: string, values: list<mixed>, requirement: mixed, match: string}
      */
-    private function row(string $key, string $label, mixed $a, mixed $b, mixed $requirement): array
+    private function attributeRow(array $cards, string $key, string $label, mixed $requirement): array
     {
-        $normA = $this->normVal($a);
-        $normB = $this->normVal($b);
+        return $this->rowMany(
+            $key,
+            $label,
+            array_map(static fn (array $card): mixed => $card['attributes'][$key] ?? null, $cards),
+            $requirement
+        );
+    }
+
+    /**
+     * @param  list<mixed>  $values
+     * @return array{key: string, label: string, values: list<mixed>, requirement: mixed, match: string}
+     */
+    private function rowMany(string $key, string $label, array $values, mixed $requirement): array
+    {
+        $normalized = array_map(fn (mixed $value): string => $this->normVal($value), $values);
         $match = 'same';
-        if ($normA === '' && $normB === '') {
+        if (array_filter($normalized, static fn (string $value): bool => $value !== '') === []) {
             $match = 'empty';
-        } elseif ($normA !== $normB) {
+        } elseif (count(array_unique($normalized)) > 1) {
             $match = 'diff';
         }
 
         return [
             'key' => $key,
             'label' => $label,
-            'a' => $a,
-            'b' => $b,
+            'values' => array_values($values),
             'requirement' => $requirement,
             'match' => $match,
         ];

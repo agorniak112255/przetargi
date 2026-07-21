@@ -6,6 +6,7 @@ namespace App\Services\Enrichment;
 
 use App\Models\Product;
 use App\Models\ProductDocument;
+use Dompdf\Dompdf;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -15,6 +16,10 @@ use Throwable;
 final class ProductDocumentDownloader
 {
     private const MAX_BYTES = 15_000_000;
+
+    public function __construct(
+        private readonly BlockedPageReader $blockedPages = new BlockedPageReader(),
+    ) {}
 
     public static function looksLikePdfUrl(string $url): bool
     {
@@ -141,6 +146,10 @@ final class ProductDocumentDownloader
             ->get($url);
 
         if (! $response->successful()) {
+            $fallback = $this->downloadBlockedDocument($product, $url, $sortOrder);
+            if ($fallback !== null) {
+                return $fallback;
+            }
             throw new \RuntimeException('HTTP '.$response->status());
         }
 
@@ -155,7 +164,63 @@ final class ProductDocumentDownloader
             if ($fromHtml !== null && $fromHtml !== $url) {
                 return $this->downloadOne($product, $fromHtml, $sortOrder);
             }
+            $fallback = $this->downloadBlockedDocument($product, $url, $sortOrder);
+            if ($fallback !== null) {
+                return $fallback;
+            }
             throw new \RuntimeException('Plik nie wygląda na PDF');
+        }
+
+        return $this->storePdfBytes($product, $bytes, $url, $sortOrder);
+    }
+
+    private function downloadBlockedDocument(
+        Product $product,
+        string $url,
+        int $sortOrder,
+    ): ?ProductDocument {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        if (! str_contains($host, 'ansell.com')
+            || preg_match('#/(pds|doc|ukdoc)/#i', $path) !== 1) {
+            return null;
+        }
+
+        $imageBytes = $this->blockedPages->fetchScreenshot($url);
+        if ($imageBytes === null) {
+            return null;
+        }
+        $mime = str_starts_with($imageBytes, "\x89PNG") ? 'image/png' : 'image/jpeg';
+        $pdfBytes = $this->renderImageAsPdf($imageBytes, $mime);
+
+        return $this->storePdfBytes($product, $pdfBytes, $url, $sortOrder);
+    }
+
+    private function renderImageAsPdf(string $imageBytes, string $mime): string
+    {
+        $dompdf = new Dompdf;
+        $dompdf->setPaper('A4', 'portrait');
+        $dompdf->loadHtml(
+            '<!doctype html><html><head><meta charset="utf-8"><style>'
+            .'@page{margin:0}html,body{margin:0;padding:0}img{width:100%;height:auto;display:block}'
+            .'</style></head><body><img src="data:'.$mime.';base64,'
+            .base64_encode($imageBytes)
+            .'"></body></html>'
+        );
+        $dompdf->render();
+
+        return $dompdf->output();
+    }
+
+    private function storePdfBytes(
+        Product $product,
+        string $bytes,
+        string $sourceUrl,
+        int $sortOrder,
+    ): ProductDocument {
+        $size = strlen($bytes);
+        if (! str_starts_with($bytes, '%PDF') || $size === 0 || $size > self::MAX_BYTES) {
+            throw new \RuntimeException('Nie udało się utworzyć prawidłowego PDF');
         }
 
         $checksum = hash('sha256', $bytes);
@@ -170,13 +235,13 @@ final class ProductDocumentDownloader
         $relative = 'products/'.$product->id.'/docs/'.Str::lower(Str::random(16)).'.pdf';
         Storage::disk('public')->put($relative, $bytes);
 
-        $kind = $this->guessKind($url);
-        $title = $this->guessTitle($url, $kind);
+        $kind = $this->guessKind($sourceUrl);
+        $title = $this->guessTitle($sourceUrl, $kind);
 
         return ProductDocument::query()->create([
             'product_id' => $product->id,
             'path' => $relative,
-            'source_url' => mb_substr($url, 0, 2000),
+            'source_url' => mb_substr($sourceUrl, 0, 2000),
             'title' => $title,
             'kind' => $kind,
             'sort_order' => $sortOrder,
@@ -227,6 +292,16 @@ final class ProductDocumentDownloader
     private function guessTitle(string $url, string $kind): string
     {
         $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+        $pathLower = mb_strtolower($path);
+        if (str_contains($pathLower, '/ukdoc/')) {
+            return 'Deklaracja zgodności UK.pdf';
+        }
+        if (str_contains($pathLower, '/doc/')) {
+            return 'Deklaracja zgodności UE.pdf';
+        }
+        if (str_contains($pathLower, '/pds/')) {
+            return 'Karta produktu.pdf';
+        }
         $base = basename($path);
         $base = urldecode($base);
         if ($base !== '' && $base !== '/') {

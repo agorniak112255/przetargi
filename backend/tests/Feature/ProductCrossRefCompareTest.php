@@ -202,4 +202,32 @@ final class ProductCrossRefCompareTest extends TestCase
             ->assertJsonPath('summary.winner', 'a')
             ->assertJsonStructure(['rows', 'summary' => ['diffs', 'a_score', 'b_score']]);
     }
+
+    public function test_compare_accepts_between_two_and_five_distinct_products(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $products = collect(range(1, 6))->map(static fn (int $index): Product => Product::query()->create([
+            'sku' => 'MULTI-'.$index,
+            'name' => 'Produkt porównania '.$index,
+            'manufacturer' => 'Marka '.$index,
+            'category' => 'Rękawice',
+            'catalog_price_net' => 10 + $index,
+            'purchase_price' => 5 + $index,
+            'stock' => $index,
+        ]));
+
+        $threeIds = $products->take(3)->pluck('id')->all();
+        $this->getJson('/api/products/compare?'.http_build_query(['ids' => $threeIds]))
+            ->assertOk()
+            ->assertJsonCount(3, 'products')
+            ->assertJsonPath('products.0.sku', 'MULTI-1')
+            ->assertJsonCount(3, 'rows.0.values')
+            ->assertJsonStructure(['summary' => ['winner_product_id', 'tie', 'diffs']]);
+
+        $sixIds = $products->pluck('id')->all();
+        $this->getJson('/api/products/compare?'.http_build_query(['ids' => $sixIds]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['ids']);
+    }
 }

@@ -32,6 +32,7 @@ final class BlockedPageReader
                     'X-Return-Format' => 'screenshot',
                     'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
                 ])
+                ->withOptions(['allow_redirects' => true])
                 ->get('https://r.jina.ai/'.$url);
         } catch (Throwable $e) {
             Log::info('Blocked page screenshot failed', ['url' => $url, 'error' => $e->getMessage()]);

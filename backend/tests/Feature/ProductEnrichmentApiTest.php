@@ -8,12 +8,14 @@ use App\Jobs\EnrichProductJob;
 use App\Models\AiSetting;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductDocument;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\HybridWebSearchService;
+use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductEnrichmentService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -433,6 +435,46 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame('tvly-test-key-1234567890', $row->tavily_api_key);
     }
 
+    public function test_ansell_declaration_is_saved_when_direct_pdf_is_blocked(): void
+    {
+        if (! function_exists('imagecreatetruecolor')) {
+            $this->markTestSkipped('Test wymaga rozszerzenia GD.');
+        }
+
+        Storage::fake('public');
+        $product = $this->makeProduct([
+            'sku' => '065-06',
+            'name' => 'RINGERS R065',
+            'manufacturer' => 'Ansell',
+        ]);
+        $url = 'https://www.ansell.com/pl/pl/products/ringers-r065/doc/Go87cSZ9VhPOWkcvnKfw6Q';
+
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                $this->certificatePng(),
+                200,
+                ['Content-Type' => 'image/png']
+            ),
+            'https://www.ansell.com/*' => Http::response(
+                '<html>Incapsula</html>',
+                403,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $documents = app(ProductDocumentDownloader::class)->downloadMany($product, [$url], 1);
+
+        $this->assertCount(1, $documents);
+        $this->assertSame(ProductDocument::KIND_CERTIFICATE, $documents[0]->kind);
+        $this->assertSame('Deklaracja zgodności UE.pdf', $documents[0]->title);
+        $this->assertSame($url, $documents[0]->source_url);
+        Storage::disk('public')->assertExists($documents[0]->path);
+        $this->assertStringStartsWith(
+            '%PDF',
+            (string) Storage::disk('public')->get($documents[0]->path)
+        );
+    }
+
     /**
      * sanitizePagesWithLlm + extractWithLlm (chatJsonEnrichment).
      *
@@ -508,5 +550,27 @@ final class ProductEnrichmentApiTest extends TestCase
         return base64_decode(
             '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAGfAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQIBAT8Bf//Z'
         ) ?: '';
+    }
+
+    private function certificatePng(): string
+    {
+        $image = imagecreatetruecolor(1190, 1684);
+        $white = imagecolorallocate($image, 255, 255, 255);
+        imagefill($image, 0, 0, $white);
+        for ($y = 0; $y < 1684; $y += 4) {
+            $color = imagecolorallocate(
+                $image,
+                ($y * 17) % 230,
+                ($y * 29) % 230,
+                ($y * 43) % 230
+            );
+            imageline($image, 0, $y, 1189, $y, $color);
+        }
+        ob_start();
+        imagepng($image);
+        imagedestroy($image);
+        $bytes = ob_get_clean();
+
+        return is_string($bytes) ? $bytes : '';
     }
 }

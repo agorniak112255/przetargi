@@ -107,6 +107,24 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertSame('60497', $industryQueries[0]);
     }
 
+    public function test_ansell_product_source_uses_polish_locale(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '065-06',
+            'name' => 'RINGERS R065',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $this->assertSame(
+            'https://www.ansell.com/pl/pl/products/ringers-r065',
+            $id->preferredLocaleUrl(
+                'https://www.ansell.com/gb/en/products/ringers-r065',
+                $product
+            )
+        );
+    }
+
     public function test_rejects_weight_false_positive_1000g_for_sku_1000(): void
     {
         $id = new ProductSearchIdentity;

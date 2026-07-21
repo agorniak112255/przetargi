@@ -16,7 +16,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v16';
+    private const SEARCH_CACHE_VERSION = 'v17';
 
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -319,10 +319,10 @@ class HybridWebSearchService
             if (! is_array($row)) {
                 continue;
             }
+            $url = $this->identity->preferredLocaleUrl((string) ($row['url'] ?? ''), $product);
             $hay = mb_strtolower(
-                ($row['url'] ?? '').' '.($row['title'] ?? '').' '.($row['snippet'] ?? '')
+                $url.' '.($row['title'] ?? '').' '.($row['snippet'] ?? '')
             );
-            $url = (string) $row['url'];
             $title = (string) ($row['title'] ?? '');
 
             if (! $this->identity->hayMentionsProduct($hay, $product)) {
