@@ -112,6 +112,7 @@ export function ProductDetail() {
 
   const status = p.enrichment_status ?? 'none'
   const prose = descriptionProse(p.description)
+  const currency = p.currency?.trim() || 'PLN'
 
   return (
     <div>
@@ -181,7 +182,7 @@ export function ProductDetail() {
 
       <div className="mb-4 mt-4 grid gap-3 sm:grid-cols-3">
         <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
-          Cena kat. netto: <b>{p.catalog_price_net} zł</b>
+          Cena kat. netto: <b>{p.catalog_price_net} {currency}</b>
           {p.price_change_percent != null && (
             <span
               className={`ml-2 text-xs ${
@@ -194,7 +195,7 @@ export function ProductDetail() {
           )}
         </div>
         <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
-          Zakup: <b>{p.purchase_price} zł</b>
+          Zakup: <b>{p.purchase_price} {currency}</b>
         </div>
         <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
           Upust:{' '}
@@ -218,8 +219,12 @@ export function ProductDetail() {
               {priceHistory.map((h) => (
                 <tr key={h.id} className="border-b">
                   <td className="p-2">{new Date(h.created_at).toLocaleString('pl-PL')}</td>
-                  <td className="p-2">{h.catalog_price_net ?? '—'} zł</td>
-                  <td className="p-2">{h.purchase_price ?? '—'} zł</td>
+                  <td className="p-2">
+                    {h.catalog_price_net != null ? `${h.catalog_price_net} ${currency}` : '—'}
+                  </td>
+                  <td className="p-2">
+                    {h.purchase_price != null ? `${h.purchase_price} ${currency}` : '—'}
+                  </td>
                   <td className="p-2">
                     {h.price_list
                       ? `${h.price_list.manufacturer} ${h.price_list.version}`
