@@ -30,25 +30,38 @@ final class ProductImageCandidateVerifier
     ) {}
 
     /**
-     * Najpierw zachowuje kandydatów jednoznacznych po SKU, a zdjęcia z losową
-     * nazwą pliku dopuszcza wyłącznie po pozytywnej weryfikacji obrazu przez AI.
+     * Najpierw zachowuje kandydatów jednoznacznych po SKU lub wskazanych przez
+     * Product.image/og:image dopasowanej karty. Pozostałe ocenia AI Vision.
      *
      * @param  list<string>  $urls
      * @param  list<array{url: string, text: string}>  $pages
+     * @param  list<string>  $trustedUrls
      * @return list<string>
      */
-    public function select(Product $product, array $urls, array $pages, int $max = 1): array
-    {
+    public function select(
+        Product $product,
+        array $urls,
+        array $pages,
+        int $max = 1,
+        array $trustedUrls = [],
+    ): array {
         $max = max(1, min(5, $max));
         $urls = array_values(array_unique(array_filter(
             $urls,
             static fn (mixed $url): bool => is_string($url) && str_starts_with($url, 'http')
         )));
+        $trusted = [];
+        foreach ($trustedUrls as $url) {
+            if (is_string($url) && str_starts_with($url, 'http')) {
+                $trusted[mb_strtolower($url)] = true;
+            }
+        }
 
         $selected = [];
         $unverified = [];
         foreach ($urls as $url) {
-            if ($this->identity->imageUrlMentionsProduct($url, $product)) {
+            if ($this->identity->imageUrlMentionsProduct($url, $product)
+                || (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url))) {
                 $selected[] = $url;
                 if (count($selected) >= $max) {
                     return array_slice($selected, 0, $max);

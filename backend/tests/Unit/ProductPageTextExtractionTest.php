@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Services\Enrichment\ProductPageFetcher;
+use Illuminate\Support\Facades\Http;
 use ReflectionClass;
 use Tests\TestCase;
 
@@ -123,6 +124,31 @@ HTML;
             'https://urgent.pl/file/show/file/5ed0cac81fb5d/type/big/filename/1005_EU_1200.jpg',
             $images[0] ?? null
         );
+    }
+
+    public function test_marks_structured_product_image_as_trusted_for_matching_page(): void
+    {
+        $pageUrl = 'https://shop.example.com/product/ansell/wh25t-00122-04';
+        $imageUrl = 'https://res.cloudinary.com/rsc/image/upload/w_700/Y0428245-01.jpg';
+        Http::fake([
+            $pageUrl => Http::response(
+                '<html><body>Ansell WH25T-00122-04 AlphaTec 2500 Plus'
+                .'<script type="application/ld+json">'
+                .'{"@type":"Product","mpn":"WH25T-00122-04","image":["'.$imageUrl.'"]}'
+                .'</script><p>'.str_repeat('Opis produktu ochronnego. ', 50).'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Ansell WH25T-00122-04',
+            'snippet' => 'AlphaTec 2500 Plus',
+        ]], 'WH25T-00122-04', 1);
+
+        $this->assertContains($imageUrl, $result['image_urls']);
+        $this->assertSame([$imageUrl], $result['trusted_image_urls']);
     }
 
     public function test_manufacturer_page_keeps_product_pdfs_and_skips_csr(): void

@@ -508,6 +508,33 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame([$gloveUrl], $selected);
     }
 
+    public function test_structured_product_image_skips_ai_even_without_sku_in_url(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'WH25T-00122-04',
+            'name' => 'AlphaTec 2500 Plus',
+            'manufacturer' => 'Ansell',
+        ]);
+        $imageUrl = 'https://res.cloudinary.com/rsc/image/upload/w_700/Y0428245-01.jpg';
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJsonWithImages');
+        $verifier = new ProductImageCandidateVerifier(
+            app(ProductSearchIdentity::class),
+            $llm,
+        );
+
+        $selected = $verifier->select(
+            $product,
+            [$imageUrl],
+            [['url' => 'https://shop.example.com/product/wh25t-00122-04', 'text' => 'Ansell AlphaTec']],
+            1,
+            [$imageUrl]
+        );
+
+        $this->assertSame([$imageUrl], $selected);
+    }
+
     public function test_ai_settings_accept_web_search_fields(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

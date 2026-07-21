@@ -260,6 +260,9 @@ final class ProductEnrichmentService
                 foreach ($mfrFetched['image_urls'] as $url) {
                     $fetched['image_urls'][] = $url;
                 }
+                foreach ($mfrFetched['trusted_image_urls'] as $url) {
+                    $fetched['trusted_image_urls'][] = $url;
+                }
                 $mfrPageSnippets = $mfrFetched['pages'];
             }
 
@@ -309,6 +312,9 @@ final class ProductEnrichmentService
                 foreach ($supplement['image_urls'] as $url) {
                     $fetched['image_urls'][] = $url;
                 }
+                foreach ($supplement['trusted_image_urls'] as $url) {
+                    $fetched['trusted_image_urls'][] = $url;
+                }
                 foreach ($supplement['document_urls'] as $url) {
                     $fetched['document_urls'][] = $url;
                 }
@@ -326,7 +332,8 @@ final class ProductEnrichmentService
                 $product,
                 $fetched['image_urls'],
                 $pageSnippets,
-                3
+                3,
+                $fetched['trusted_image_urls']
             );
             foreach ($extracted['image_urls'] ?? [] as $url) {
                 if (is_string($url) && $this->identity->imageUrlMentionsProduct($url, $product)) {
@@ -421,7 +428,8 @@ final class ProductEnrichmentService
                     $product,
                     $retryPages['image_urls'],
                     $retryPages['pages'],
-                    3
+                    3,
+                    $retryPages['trusted_image_urls']
                 );
                 $savedImages = $this->images->downloadMany(
                     $product,
@@ -947,6 +955,7 @@ final class ProductEnrichmentService
      *     extracted: array<string, mixed>,
      *     pages: list<array{url: string, text: string}>,
      *     image_urls: list<string>,
+     *     trusted_image_urls: list<string>,
      *     document_urls: list<string>
      * }
      */
@@ -982,6 +991,7 @@ final class ProductEnrichmentService
         }
 
         $imageUrls = [];
+        $trustedImageUrls = [];
         $documentUrls = [];
         if ($extraResults !== []) {
             $extraFetched = $this->pages->fetch($extraResults, (string) $product->sku, 3, []);
@@ -991,6 +1001,9 @@ final class ProductEnrichmentService
             }
             foreach ($extraFetched['image_urls'] as $url) {
                 $imageUrls[] = $url;
+            }
+            foreach ($extraFetched['trusted_image_urls'] as $url) {
+                $trustedImageUrls[] = $url;
             }
             foreach ($extraFetched['document_urls'] as $url) {
                 $documentUrls[] = $url;
@@ -1022,6 +1035,7 @@ final class ProductEnrichmentService
             'extracted' => $extracted,
             'pages' => $pageSnippets,
             'image_urls' => $imageUrls,
+            'trusted_image_urls' => $trustedImageUrls,
             'document_urls' => $documentUrls,
         ];
     }

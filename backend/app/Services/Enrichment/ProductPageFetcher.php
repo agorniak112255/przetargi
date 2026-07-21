@@ -23,6 +23,7 @@ final class ProductPageFetcher
      * @return array{
      *     pages: list<array{url: string, text: string}>,
      *     image_urls: list<string>,
+     *     trusted_image_urls: list<string>,
      *     document_urls: list<string>
      * }
      */
@@ -75,6 +76,7 @@ final class ProductPageFetcher
 
         $pages = [];
         $images = [];
+        $trustedImages = [];
 
         foreach ($htmlRows as $i => $row) {
             $url = $row['url'];
@@ -128,6 +130,14 @@ final class ProductPageFetcher
                 foreach ($this->extractImageUrls($html, $url, $skuNorm) as $img) {
                     $images[] = $img;
                 }
+                foreach ($this->extractStructuredImageUrls($html) as $img) {
+                    $absolute = $this->absolutize($img, $url);
+                    if ($absolute !== null
+                        && ! $this->isJunkImageUrl($absolute)
+                        && ProductImageDownloader::looksLikeImageUrl($absolute)) {
+                        $trustedImages[] = $absolute;
+                    }
+                }
             }
             // PDF: na stronie producenta bierzemy dokumenty (certyfikaty/karty); w sklepie — tylko dopasowane
             $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
@@ -139,6 +149,7 @@ final class ProductPageFetcher
         return [
             'pages' => $pages,
             'image_urls' => array_values(array_unique($images)),
+            'trusted_image_urls' => array_values(array_unique($trustedImages)),
             'document_urls' => array_values(array_unique($documents)),
         ];
     }
@@ -673,30 +684,9 @@ final class ProductPageFetcher
         }
 
         /** @var list<string> $trustedUrls og:image / JSON-LD — galeria karty, nie wymaga SKU w nazwie pliku */
-        $trustedUrls = [];
-        if (preg_match_all('#property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $m)
-            || preg_match_all('#content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']#i', $html, $m)) {
-            foreach ($m[1] as $u) {
-                $rawUrls[] = $u;
-                $trustedUrls[] = $u;
-            }
-        }
-        // JSON-LD Product.image (PrestaShop / sklepy)
-        if (preg_match_all('#"image"\s*:\s*\[([^\]]+)\]#is', $html, $blocks)) {
-            foreach ($blocks[1] as $block) {
-                if (preg_match_all('#https?://[^"\'\s]+#i', (string) $block, $um)) {
-                    foreach ($um[0] as $u) {
-                        $rawUrls[] = $u;
-                        $trustedUrls[] = $u;
-                    }
-                }
-            }
-        }
-        if (preg_match_all('#"image"\s*:\s*"(https?://[^"]+)"#i', $html, $m)) {
-            foreach ($m[1] as $u) {
-                $rawUrls[] = $u;
-                $trustedUrls[] = $u;
-            }
+        $trustedUrls = $this->extractStructuredImageUrls($html);
+        foreach ($trustedUrls as $u) {
+            $rawUrls[] = $u;
         }
 
         // Ansell Sitecore: /-/media/.../065g_primary.ashx
@@ -876,6 +866,41 @@ final class ProductPageFetcher
         }
 
         return array_slice(array_values(array_unique($out)), 0, 6);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractStructuredImageUrls(string $html): array
+    {
+        $urls = [];
+        foreach ([
+            '#property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i',
+            '#content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']#i',
+        ] as $pattern) {
+            if (preg_match_all($pattern, $html, $matches)) {
+                foreach ($matches[1] as $url) {
+                    $urls[] = $url;
+                }
+            }
+        }
+
+        if (preg_match_all('#"image"\s*:\s*\[([^\]]+)\]#is', $html, $blocks)) {
+            foreach ($blocks[1] as $block) {
+                if (preg_match_all('#https?://[^"\'\s]+#i', (string) $block, $matches)) {
+                    foreach ($matches[0] as $url) {
+                        $urls[] = $url;
+                    }
+                }
+            }
+        }
+        if (preg_match_all('#"image"\s*:\s*"(https?://[^"]+)"#i', $html, $matches)) {
+            foreach ($matches[1] as $url) {
+                $urls[] = $url;
+            }
+        }
+
+        return array_values(array_unique($urls));
     }
 
     /**
