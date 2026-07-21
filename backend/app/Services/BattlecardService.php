@@ -194,11 +194,55 @@ final class BattlecardService
             'purchase_price' => $product->purchase_price !== null
                 ? (float) $product->purchase_price
                 : null,
+            'suggested_offer_price' => $product->purchase_price !== null && (float) $product->purchase_price > 0
+                ? round((float) $product->purchase_price * 1.18, 2)
+                : null,
             'stock' => (int) ($product->stock ?? 0),
             'match_percent' => $matchPercent,
             'match_source' => $matchSource,
             'reasons' => $reasons,
         ];
+    }
+
+    /**
+     * Najtańszy zamiennik (po upuście) tańszy o co najmniej $minSavePercent względem propozycji.
+     *
+     * @return array{product_id: int, sku: string, purchase_price: float, save_percent: float, match_percent: int}|null
+     */
+    public function bestCheaperSubstitute(TenderItem $item, float $minSavePercent = 3.0): ?array
+    {
+        $card = $this->forItem($item);
+        $ours = $card['ours'];
+        if ($ours === null) {
+            return null;
+        }
+        $ourPurchase = (float) ($ours['purchase_price'] ?? 0);
+        if ($ourPurchase <= 0) {
+            return null;
+        }
+
+        $best = null;
+        $bestPrice = $ourPurchase;
+        foreach ($card['substitutes'] as $sub) {
+            $price = (float) ($sub['purchase_price'] ?? 0);
+            if ($price <= 0 || $price >= $bestPrice) {
+                continue;
+            }
+            $save = ($ourPurchase - $price) / $ourPurchase * 100;
+            if ($save < $minSavePercent) {
+                continue;
+            }
+            $best = [
+                'product_id' => (int) $sub['product_id'],
+                'sku' => (string) $sub['sku'],
+                'purchase_price' => $price,
+                'save_percent' => round($save, 1),
+                'match_percent' => (int) ($sub['match_percent'] ?? 0),
+            ];
+            $bestPrice = $price;
+        }
+
+        return $best;
     }
 
     /**
@@ -222,10 +266,10 @@ final class BattlecardService
         $ourPrice = $ours['purchase_price'] ?? $ours['catalog_price_net'] ?? null;
         foreach ($card['substitutes'] as $sub) {
             $subPrice = $sub['purchase_price'] ?? $sub['catalog_price_net'] ?? null;
-            if ($ourPrice === null || $subPrice === null || (float) $subPrice <= 0) {
+            if ($ourPrice === null || $subPrice === null || (float) $subPrice <= 0 || (float) $ourPrice <= 0) {
                 continue;
             }
-            $diff = ((float) $ourPrice - (float) $subPrice) / (float) $subPrice * 100;
+            $diff = ((float) $ourPrice - (float) $subPrice) / (float) $ourPrice * 100;
             if ($diff >= 3) {
                 $highlights[] = sprintf(
                     'Zamiennik %s (%s) tańszy o ok. %.0f%% (po upuście).',

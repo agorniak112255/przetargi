@@ -67,4 +67,27 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertNotEmpty($attrs['normy_en']);
         $this->assertSame('4X42C', $attrs['poziomy_en388']);
     }
+
+    public function test_for_product_extracts_from_polish_description(): void
+    {
+        $product = Product::query()->create([
+            'sku' => '34-848',
+            'name' => 'KW Palm Coated',
+            'manufacturer' => 'ATG / Maxiflex',
+            'category' => null,
+            'description' => "Rękawica ochronna ATG z powłoką nitrylową.\n\nNormy:\n- EN 388:2016 + A1:2018 - 4131A\n- EN ISO 21420:2020",
+            'catalog_price_net' => 20,
+            'purchase_price' => 15,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+            'enrichment_payload' => null,
+        ]);
+
+        $attrs = (new BhpAttributeNormalizer)->forProduct($product);
+
+        $this->assertSame('rekawice', $attrs['kategoria_bhp']);
+        $this->assertSame('nitryl', $attrs['material']);
+        $this->assertNotEmpty($attrs['normy_en']);
+        $this->assertSame('4131A', $attrs['poziomy_en388']);
+    }
 }

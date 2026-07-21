@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Tender;
 use App\Services\TenderDocxOfferFiller;
+use App\Services\TenderOfferExportService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
@@ -20,11 +21,13 @@ class TenderExportController extends Controller
 {
     public function __construct(
         private readonly TenderDocxOfferFiller $docxFiller,
+        private readonly TenderOfferExportService $offerExport,
     ) {}
 
     public function excel(Tender $tender): StreamedResponse
     {
-        $tender->load(['client', 'items.mainProduct', 'owner']);
+        $rows = $this->offerExport->rows($tender);
+        $tender->loadMissing(['client', 'owner']);
 
         $sheet = new Spreadsheet();
         $sh = $sheet->getActiveSheet();
@@ -37,27 +40,67 @@ class TenderExportController extends Controller
             ['Marża %', $tender->margin_percent],
             ['Wartość netto', $tender->offer_value_net],
             [],
-            ['Lp', 'Wymaganie', 'SKU', 'Produkt', 'Ilość', 'Cena oferty', 'Marża %', 'Wartość'],
+            [
+                'Lp',
+                'Wymaganie SIWZ',
+                'SKU',
+                'Produkt (PL)',
+                'Nazwa cennik',
+                'Producent',
+                'Ilość',
+                'Zakup (po upuście)',
+                'Cena oferty',
+                'Marża %',
+                'Wartość',
+                'Match %',
+                'Źródło match',
+                'Uzasadnienie',
+                'Zamienniki SKU',
+                'Battlecard',
+            ],
         ], null, 'A1');
 
         $row = 9;
-        foreach ($tender->items as $item) {
-            $line = $item->offer_price !== null
-                ? (float) $item->offer_price * $item->quantity
-                : null;
+        foreach ($rows as $r) {
             $sh->fromArray([[
-                $item->line_no,
-                $item->requirement,
-                $item->mainProduct?->sku,
-                $item->mainProduct?->name,
-                $item->quantity,
-                $item->offer_price,
-                $item->margin_percent,
-                $line,
+                $r['line_no'],
+                $r['requirement'],
+                $r['sku'],
+                $r['product_name'],
+                $r['catalog_name'],
+                $r['manufacturer'],
+                $r['quantity'],
+                $r['purchase_price'],
+                $r['offer_price'],
+                $r['margin_percent'],
+                $r['line_value'],
+                $r['match_percent'],
+                $r['match_source'],
+                $r['match_reasons'],
+                $r['substitute_skus'],
+                $r['highlights'],
             ]], null, 'A'.$row);
             $row++;
         }
 
+        $bc = $sheet->createSheet();
+        $bc->setTitle('Battlecard');
+        $bc->fromArray([
+            ['Lp', 'SKU oferty', 'Match %', 'Zamienniki', 'Highlighty'],
+        ], null, 'A1');
+        $bcRow = 2;
+        foreach ($rows as $r) {
+            $bc->fromArray([[
+                $r['line_no'],
+                $r['sku'],
+                $r['match_percent'],
+                $r['substitute_skus'],
+                $r['highlights'],
+            ]], null, 'A'.$bcRow);
+            $bcRow++;
+        }
+
+        $sheet->setActiveSheetIndex(0);
         $filename = str_replace('/', '-', $tender->number).'_oferta.xlsx';
 
         return response()->streamDownload(function () use ($sheet): void {
@@ -69,11 +112,13 @@ class TenderExportController extends Controller
 
     public function pdf(Tender $tender): Response
     {
-        $tender->load(['client', 'items.mainProduct', 'owner']);
+        $rows = $this->offerExport->rows($tender);
+        $tender->loadMissing(['client', 'owner']);
 
         $pdf = Pdf::loadView('exports.offer', [
             'tender' => $tender,
-        ])->setPaper('a4', 'portrait');
+            'rows' => $rows,
+        ])->setPaper('a4', 'landscape');
 
         $filename = str_replace('/', '-', $tender->number).'_oferta.pdf';
 

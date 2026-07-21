@@ -57,17 +57,30 @@ final class BhpAttributeNormalizer
     public function forProduct(Product $product): array
     {
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $haystack = trim(implode("\n", array_filter([
+            (string) ($product->name ?? ''),
+            (string) ($product->description ?? ''),
+            (string) ($product->category ?? ''),
+            (string) ($product->norms ?? ''),
+        ])));
 
         return $this->normalize(
             is_array($payload['attributes'] ?? null) ? $payload['attributes'] : null,
             [
-                'materials' => $this->stringList($payload['materials'] ?? null),
-                'norms' => $this->stringList($payload['norms'] ?? null),
+                'materials' => array_values(array_unique(array_merge(
+                    $this->stringList($payload['materials'] ?? null),
+                    $this->detectMaterialsFromText($haystack),
+                ))),
+                'norms' => array_values(array_unique(array_merge(
+                    $this->stringList($payload['norms'] ?? null),
+                    $this->detectNormsFromText($haystack),
+                ))),
                 'specs' => $this->stringList($payload['specs'] ?? null),
                 'certificates' => $this->stringList($payload['certificates'] ?? null),
                 'category' => (string) ($product->category ?? ''),
                 'sku' => (string) ($product->sku ?? ''),
                 'name' => (string) ($product->name ?? ''),
+                'description' => (string) ($product->description ?? ''),
                 'norms_column' => (string) ($product->norms ?? ''),
             ]
         );
@@ -83,6 +96,7 @@ final class BhpAttributeNormalizer
      *     category?: string,
      *     sku?: string,
      *     name?: string,
+     *     description?: string,
      *     norms_column?: string
      * }  $context
      * @return array{
@@ -104,7 +118,10 @@ final class BhpAttributeNormalizer
         $out['kategoria_bhp'] = $this->normalizeKategoria(
             $this->nullableString($raw['kategoria_bhp'] ?? null)
             ?? $this->detectKategoria(
-                ($context['category'] ?? '').' '.($context['name'] ?? '').' '.($context['sku'] ?? '')
+                ($context['category'] ?? '').' '
+                .($context['name'] ?? '').' '
+                .($context['sku'] ?? '').' '
+                .($context['description'] ?? '')
             )
         );
 
@@ -132,23 +149,81 @@ final class BhpAttributeNormalizer
         )));
         $out['normy_en'] = $normy;
 
+        $descBlob = implode(' ', array_merge(
+            $normy,
+            $this->stringList($context['specs'] ?? null),
+            $this->stringList($context['certificates'] ?? null),
+            [$context['name'] ?? '', $context['description'] ?? ''],
+        ));
+
         $out['klasa_ochrony'] = $this->nullableString($raw['klasa_ochrony'] ?? null)
-            ?? $this->detectKlasa(
-                implode(' ', array_merge(
-                    $normy,
-                    $this->stringList($context['specs'] ?? null),
-                    $this->stringList($context['certificates'] ?? null),
-                    [$context['name'] ?? ''],
-                ))
-            );
+            ?? $this->detectKlasa($descBlob);
 
         $out['rozmiar'] = $this->nullableString($raw['rozmiar'] ?? null)
-            ?? $this->detectRozmiar(implode(' ', $this->stringList($context['specs'] ?? null)));
+            ?? $this->detectRozmiar(
+                implode(' ', $this->stringList($context['specs'] ?? null)).' '.($context['description'] ?? '')
+            );
 
         $out['poziomy_en388'] = $this->nullableString($raw['poziomy_en388'] ?? null)
-            ?? $this->detectEn388(implode(' ', $normy).' '.implode(' ', $this->stringList($context['specs'] ?? null)));
+            ?? $this->detectEn388($descBlob);
 
         return $out;
+    }
+
+    /** @return list<string> */
+    private function detectMaterialsFromText(string $text): array
+    {
+        if (trim($text) === '') {
+            return [];
+        }
+        $t = $this->normalizeText($text);
+        $found = [];
+        $map = [
+            'nitryl' => 'nitryl',
+            'nitrile' => 'nitryl',
+            'nbr' => 'nitryl',
+            'lateks' => 'lateks',
+            'latex' => 'lateks',
+            'nylon' => 'nylon',
+            'spandex' => 'spandex',
+            'hppe' => 'HPPE',
+            'poliuretan' => 'PU',
+            '\bpu\b' => 'PU',
+            'skora' => 'skóra',
+            'leather' => 'skóra',
+            'bawelna' => 'bawełna',
+            'cotton' => 'bawełna',
+            'neopren' => 'neopren',
+            'pvc' => 'PVC',
+        ];
+        foreach ($map as $needle => $label) {
+            $pattern = str_starts_with($needle, '\\') ? '/'.$needle.'/u' : '/\b'.preg_quote($needle, '/').'\w*/u';
+            if (preg_match($pattern, $t) === 1) {
+                $found[] = $label;
+            }
+        }
+
+        return array_values(array_unique($found));
+    }
+
+    /** @return list<string> */
+    private function detectNormsFromText(string $text): array
+    {
+        if (trim($text) === '') {
+            return [];
+        }
+        if (preg_match_all('/\bEN(?:\s*ISO)?\s*\d{3,5}(?::\s*\d{4})?(?:\s*\+\s*A\d+)?\b/iu', $text, $m) < 1) {
+            return [];
+        }
+        $out = [];
+        foreach ($m[0] as $raw) {
+            $norm = preg_replace('/\s+/', ' ', trim($raw));
+            if (is_string($norm) && $norm !== '') {
+                $out[] = $norm;
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**
@@ -250,9 +325,16 @@ final class BhpAttributeNormalizer
 
     private function detectEn388(string $text): ?string
     {
-        // EN 388:2016 4X42C — pomijamy rok normy, bierzemy poziomy (cyfry/X + opcjonalna litera)
-        if (preg_match('/EN\s*388(?::\s*\d{4})?\s*([0-9X]{3,5}[A-F]?)\b/iu', $text, $m) === 1) {
-            return mb_strtoupper($m[1]);
+        // EN 388:2016 + A1:2018 - 4131A / EN 388 4X42C
+        $patterns = [
+            '/EN\s*388(?::\d{4})?(?:\s*\+\s*A\d+(?::\d+)?)?\s*[-–]\s*([0-9X]{3,5}[A-F]?)\b/iu',
+            '/EN\s*388:\d{4}\s+([0-9X]{3,5}[A-F]?)\b/iu',
+            '/EN\s*388\s+([0-9X]{3,5}[A-F]?)\b/iu',
+        ];
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $text, $m) === 1) {
+                return mb_strtoupper($m[1]);
+            }
         }
 
         return null;

@@ -15,6 +15,25 @@ return [
             'atg-glovesolutions.com',
             'www.atg-glovesolutions.com',
         ],
+        // aliasy marek ATG w cennikach / nazwach
+        'maxiflex' => [
+            'atggloves.com',
+            'www.atggloves.com',
+            'atg-glovesolutions.com',
+            'www.atg-glovesolutions.com',
+        ],
+        'maxicut' => [
+            'atggloves.com',
+            'www.atggloves.com',
+            'atg-glovesolutions.com',
+            'www.atg-glovesolutions.com',
+        ],
+        'maxidry' => [
+            'atggloves.com',
+            'www.atggloves.com',
+            'atg-glovesolutions.com',
+            'www.atg-glovesolutions.com',
+        ],
         'ansell' => ['ansell.com', 'www.ansell.com'],
         'delta-plus' => ['delta-plus.com', 'www.delta-plus.com'],
         'delta' => ['delta-plus.com', 'www.delta-plus.com'],

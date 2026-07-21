@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import { productDisplayName } from '../lib/productLabel'
+import { productDisplayName, suggestedOfferPrice } from '../lib/productLabel'
 
 export type BattlecardProduct = {
   role: string
@@ -21,6 +21,7 @@ export type BattlecardProduct = {
   catalog_price_net: number | null
   offer_price: number | null
   purchase_price: number | null
+  suggested_offer_price?: number | null
   stock: number
   match_percent: number
   match_source?: string | null
@@ -68,7 +69,9 @@ function Col({
       </div>
     )
   }
-  const price = p.purchase_price ?? p.catalog_price_net
+  const purchase = p.purchase_price ?? p.catalog_price_net
+  const offerHint =
+    p.offer_price ?? p.suggested_offer_price ?? suggestedOfferPrice(p.purchase_price)
   const body = (
     <>
       <div className="flex items-center justify-between gap-1">
@@ -82,16 +85,21 @@ function Col({
         {productDisplayName(p, 48)}
       </p>
       <p className="mt-0.5 text-[10px] text-slate-500">{p.manufacturer || '—'}</p>
-      <p
-        className="mt-1 text-[11px] font-semibold text-slate-800"
-        title={
-          p.purchase_price != null
-            ? `Cennik po upuście${p.catalog_price_net != null ? ` (kat. ${fmtPrice(p.catalog_price_net)} zł)` : ''}`
-            : 'Cena katalogowa'
-        }
-      >
-        {fmtPrice(price)} zł
-      </p>
+      <div className="mt-1 space-y-0.5">
+        <p
+          className="text-[11px] font-semibold text-slate-800"
+          title={
+            p.purchase_price != null
+              ? `Cennik po upuście${p.catalog_price_net != null ? ` (kat. ${fmtPrice(p.catalog_price_net)} zł)` : ''}`
+              : 'Cena katalogowa'
+          }
+        >
+          Zakup: {fmtPrice(purchase)} zł
+        </p>
+        <p className="text-[10px] text-emerald-800" title="Cena w ofercie (zapisana lub zakup × 1,18)">
+          Oferta: {fmtPrice(offerHint)} zł
+        </p>
+      </div>
       {p.attributes?.material || p.attributes?.klasa_ochrony || p.attributes?.poziomy_en388 ? (
         <p className="mt-0.5 truncate text-[9px] text-slate-600">
           {[p.attributes.material, p.attributes.klasa_ochrony, p.attributes.poziomy_en388]

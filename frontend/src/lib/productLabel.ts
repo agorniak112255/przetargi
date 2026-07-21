@@ -1,6 +1,9 @@
-/** Słabe nazwy z cenników EN (np. Uncoated) — zamiast nich pokazujemy skrót opisu PL. */
-const WEAK_NAME =
+/** Słabe nazwy z cenników EN (np. Uncoated, KW Palm Coated). */
+const WEAK_EXACT =
   /^(uncoated|coated|liner|glove|gloves|nitrile|latex|foam|pu|pvc|nylon|hppe|cut|ultra|dry|wet|winter|summer|nitrile foam|pu coated|latex coated)$/i
+
+const WEAK_TOKEN =
+  /\b(uncoated|coated|liner|gloves?|nitrile|latex|foam|palm|micro-?foam|hppe|kw)\b/i
 
 type Named = {
   name?: string | null
@@ -11,7 +14,7 @@ type Named = {
 export function isWeakProductName(name: string, description?: string | null): boolean {
   const n = name.trim()
   if (n === '') return true
-  if (WEAK_NAME.test(n)) return true
+  if (WEAK_EXACT.test(n)) return true
 
   const desc = (description ?? '').trim()
   if (desc.length < 20) return false
@@ -20,8 +23,15 @@ export function isWeakProductName(name: string, description?: string | null): bo
   const hasPlName = /[ąćęłńóśźż]/i.test(n)
   if (hasPlName || !hasPlDesc) return false
 
-  // pojedyncze angielskie słowo z cennika (np. Uncoated)
-  return /^[a-z][a-z\-]*$/i.test(n) && n.length <= 20
+  // pojedyncze angielskie słowo (Uncoated)
+  if (/^[a-z][a-z\-]*$/i.test(n) && n.length <= 20) return true
+
+  // złożenia EN z cennika: „KW Palm Coated”, „KW 3/4 Coated - Yellow”
+  if (WEAK_TOKEN.test(n) && /^[a-z0-9][a-z0-9\s\-\/_.%°]*$/i.test(n) && n.length <= 48) {
+    return true
+  }
+
+  return false
 }
 
 function polishShortFromDescription(desc: string, maxLen: number): string {
@@ -32,9 +42,14 @@ function polishShortFromDescription(desc: string, maxLen: number): string {
   }
 
   const firstLine = desc.split(/\n+/)[0]?.trim() ?? ''
-  // „Rękawica … 58-917 to …” → część przed „to”
   const beforeTo = firstLine.match(/^(.+?)\s+to\s+/i)?.[1]?.trim()
-  let out = (beforeTo || firstLine.split(/(?<=[.!?])\s+/)[0] || firstLine).replace(/\s+/g, ' ')
+  const beforeZ = firstLine.match(/^(Rękawic\w+[^.]*?)(?:\s+z\s+)/i)?.[1]?.trim()
+  let out = (beforeTo || beforeZ || firstLine.split(/(?<=[.!?])\s+/)[0] || firstLine).replace(
+    /\s+/g,
+    ' ',
+  )
+  // usuń zbędny (SKU …) z nagłówka
+  out = out.replace(/\s*\(SKU\s+[^)]+\)\s*/gi, ' ').replace(/\s+/g, ' ').trim()
   if (out.length > maxLen) {
     out = `${out.slice(0, maxLen - 1).trimEnd()}…`
   }
@@ -55,4 +70,10 @@ export function productDisplayName(p: Named, maxLen = 72): string {
 
 export function productSelectLabel(p: { sku: string } & Named): string {
   return `${p.sku} · ${productDisplayName(p, 56)}`
+}
+
+/** Sugerowana cena oferty = zakup × narzut (jak przy ręcznej zmianie produktu). */
+export function suggestedOfferPrice(purchase: number | null | undefined, markup = 1.18): number | null {
+  if (purchase == null || Number.isNaN(Number(purchase)) || Number(purchase) <= 0) return null
+  return Math.round(Number(purchase) * markup * 100) / 100
 }

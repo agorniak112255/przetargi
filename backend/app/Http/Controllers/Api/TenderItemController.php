@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Tender;
 use App\Models\TenderItem;
+use App\Services\BattlecardService;
 use App\Services\ProductMatchService;
 use App\Services\TenderActivityLogger;
 use App\Services\TenderPricingService;
@@ -24,7 +25,113 @@ class TenderItemController extends Controller
         private readonly TenderWorkflowService $workflow,
         private readonly TenderActivityLogger $activities,
         private readonly ProductMatchService $matcher,
+        private readonly BattlecardService $battlecards,
     ) {}
+
+    /**
+     * Zastosuj najtańszy zamiennik (po upuście) na pozycjach, gdzie oszczędność ≥ próg.
+     */
+    public function applyCheaperSubstitutes(Request $request, Tender $tender): JsonResponse
+    {
+        if (! $this->workflow->canEditOffer($tender)) {
+            throw ValidationException::withMessages([
+                'tender' => ['Oferta zablokowana — status: '.$tender->status],
+            ]);
+        }
+
+        $data = $request->validate([
+            'min_save_percent' => ['sometimes', 'numeric', 'min:1', 'max:80'],
+            'dry_run' => ['sometimes', 'boolean'],
+        ]);
+        $minSave = (float) ($data['min_save_percent'] ?? 3);
+        $dryRun = (bool) ($data['dry_run'] ?? false);
+
+        $tender->load(['items.mainProduct']);
+        $applied = [];
+        $candidates = [];
+
+        foreach ($tender->items as $item) {
+            $pick = $this->battlecards->bestCheaperSubstitute($item, $minSave);
+            if ($pick === null) {
+                continue;
+            }
+            $fromSku = $item->mainProduct?->sku;
+            $candidates[] = [
+                'item_id' => $item->id,
+                'line_no' => $item->line_no,
+                'from_sku' => $fromSku,
+                'to_sku' => $pick['sku'],
+                'to_product_id' => $pick['product_id'],
+                'save_percent' => $pick['save_percent'],
+                'purchase_price' => $pick['purchase_price'],
+            ];
+
+            if ($dryRun) {
+                continue;
+            }
+
+            $before = [
+                'main_product_id' => $item->main_product_id,
+                'offer_price' => $item->offer_price,
+            ];
+            $product = Product::query()->find($pick['product_id']);
+            if ($product === null) {
+                continue;
+            }
+
+            $item->main_product_id = $product->id;
+            $item->offer_price = round((float) $product->purchase_price * 1.18, 2);
+            $item->status = 'matched';
+            $item->match_source = 'battlecard';
+            $item->ai_match_percent = $pick['match_percent'];
+            $item->ai_match_reasons = [
+                [
+                    'code' => 'battlecard_batch',
+                    'label' => sprintf(
+                        'Zastosowano tańszy zamiennik %s (−%.0f%% po upuście)',
+                        $pick['sku'],
+                        $pick['save_percent'],
+                    ),
+                    'points' => $pick['match_percent'],
+                ],
+            ];
+            $item->save();
+            $item->load('mainProduct');
+            $this->pricing->recalculateItemMargin($item);
+            $this->activities->log($tender, 'item_updated', $request->user(), $item, [
+                'before' => $before,
+                'after' => [
+                    'main_product_id' => $item->main_product_id,
+                    'offer_price' => $item->offer_price,
+                    'match_source' => $item->match_source,
+                ],
+                'batch' => 'cheaper_substitutes',
+            ]);
+            $applied[] = [
+                'item_id' => $item->id,
+                'line_no' => $item->line_no,
+                'from_sku' => $fromSku,
+                'to_sku' => $pick['sku'],
+                'save_percent' => $pick['save_percent'],
+                'offer_price' => $item->offer_price,
+            ];
+        }
+
+        if (! $dryRun && $applied !== []) {
+            $this->pricing->recalculateTenderTotals($tender->fresh());
+            $tender->last_activity_at = now();
+            $tender->save();
+        }
+
+        return response()->json([
+            'dry_run' => $dryRun,
+            'min_save_percent' => $minSave,
+            'candidates_count' => count($candidates),
+            'applied_count' => count($applied),
+            'candidates' => $candidates,
+            'applied' => $applied,
+        ]);
+    }
 
     public function bulkUpdate(Request $request, Tender $tender): JsonResponse
     {

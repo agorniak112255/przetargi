@@ -68,6 +68,8 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::get('/tenders/{tender}/export/pdf', [TenderExportController::class, 'pdf'])->middleware('permission:tenders.export');
     Route::get('/tenders/{tender}/export/docx', [TenderExportController::class, 'docx'])->middleware('permission:tenders.export');
     Route::post('/tenders/{tender}/items/bulk', [TenderItemController::class, 'bulkUpdate'])->middleware('permission:tenders.edit_offer');
+    Route::post('/tenders/{tender}/items/apply-cheaper-substitutes', [TenderItemController::class, 'applyCheaperSubstitutes'])
+        ->middleware('permission:tenders.edit_offer');
     Route::patch('/tenders/{tender}/items/{item}', [TenderItemController::class, 'update'])->middleware('permission:tenders.edit_offer');
 
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');

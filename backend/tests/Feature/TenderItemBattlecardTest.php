@@ -110,12 +110,97 @@ final class TenderItemBattlecardTest extends TestCase
             ->assertOk()
             ->assertJsonPath('battlecard.ours.sku', 'RNITZ-OURS')
             ->assertJsonPath('battlecard.ours.offer_price', 3.9)
+            ->assertJsonPath('battlecard.ours.suggested_offer_price', 2.36)
             ->assertJsonPath('battlecard.substitutes.0.sku', 'RNITZ-SUB')
             ->assertJsonPath('battlecard.competitors', []);
 
         $subs = $res->json('battlecard.substitutes');
         $this->assertCount(2, $subs);
         $this->assertContains($alt->sku, collect($subs)->pluck('sku')->all());
+    }
+
+    public function test_apply_cheaper_substitutes_dry_run_and_apply(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $ours = Product::query()->create([
+            'sku' => 'EXPENSIVE',
+            'name' => 'Rękawice drogie',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe drogie',
+            'catalog_price_net' => 10,
+            'purchase_price' => 10,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+        $cheap = Product::query()->create([
+            'sku' => 'CHEAP-SUB',
+            'name' => 'Rękawice tanie',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe tanie',
+            'catalog_price_net' => 5,
+            'purchase_price' => 5,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+        ProductSubstitute::query()->create([
+            'main_product_id' => $ours->id,
+            'substitute_product_id' => $cheap->id,
+            'type' => 'tanszy',
+            'match_percent' => 90,
+            'approval_status' => 'zatwierdzony',
+        ]);
+
+        $owner = User::factory()->create();
+        $client = Client::query()->create(['name' => 'Klient CHEAP']);
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/BC/CHEAP',
+            'title' => 'Tańsze',
+            'client_id' => $client->id,
+            'owner_id' => $owner->id,
+            'status' => 'wycena',
+            'ai_percent' => 50,
+            'last_activity_at' => now(),
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Rękawice robocze nitrylowe',
+            'main_product_id' => $ours->id,
+            'ai_match_percent' => 80,
+            'quantity' => 10,
+            'offer_price' => 12,
+            'status' => 'ok',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/items/apply-cheaper-substitutes", [
+            'dry_run' => true,
+            'min_save_percent' => 3,
+        ])
+            ->assertOk()
+            ->assertJsonPath('dry_run', true)
+            ->assertJsonPath('candidates_count', 1)
+            ->assertJsonPath('candidates.0.to_sku', 'CHEAP-SUB');
+
+        $this->assertSame($ours->id, $item->fresh()->main_product_id);
+
+        $this->postJson("/api/tenders/{$tender->id}/items/apply-cheaper-substitutes", [
+            'dry_run' => false,
+            'min_save_percent' => 3,
+        ])
+            ->assertOk()
+            ->assertJsonPath('applied_count', 1)
+            ->assertJsonPath('applied.0.to_sku', 'CHEAP-SUB');
+
+        $item->refresh();
+        $this->assertSame($cheap->id, $item->main_product_id);
+        $this->assertEquals(5.9, (float) $item->offer_price);
     }
 
     public function test_match_item_includes_battlecard(): void

@@ -236,6 +236,16 @@ export function TenderDetail() {
   const [commentBody, setCommentBody] = useState('')
   const [commentItemId, setCommentItemId] = useState('')
   const [deadlineEdit, setDeadlineEdit] = useState('')
+  const [cheaperPreview, setCheaperPreview] = useState<{
+    candidates: Array<{
+      item_id: number
+      line_no: number
+      from_sku: string | null
+      to_sku: string
+      save_percent: number
+      purchase_price: number
+    }>
+  } | null>(null)
 
   const load = useCallback(async () => {
     const d = await api<Detail>(`/tenders/${id}`)
@@ -308,6 +318,61 @@ export function TenderDetail() {
       setMsg(`Zapisano całość: ${res.updated} pozycji — zobacz zakładkę Historia.`)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zapisu całości')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function previewCheaperSubstitutes() {
+    setErr('')
+    setMsg('')
+    setBusy(true)
+    try {
+      const res = await api<{
+        candidates: Array<{
+          item_id: number
+          line_no: number
+          from_sku: string | null
+          to_sku: string
+          save_percent: number
+          purchase_price: number
+        }>
+        candidates_count: number
+      }>(`/tenders/${id}/items/apply-cheaper-substitutes`, {
+        method: 'POST',
+        body: JSON.stringify({ dry_run: true, min_save_percent: 3 }),
+      })
+      if ((res.candidates_count ?? 0) === 0) {
+        setMsg('Brak tańszych zamienników (≥3% po upuście) na pozycjach.')
+        setCheaperPreview(null)
+        return
+      }
+      setCheaperPreview({ candidates: res.candidates ?? [] })
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd podglądu zamienników')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function applyCheaperSubstitutes() {
+    setErr('')
+    setMsg('')
+    setBusy(true)
+    try {
+      const res = await api<{ applied_count: number }>(
+        `/tenders/${id}/items/apply-cheaper-substitutes`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ dry_run: false, min_save_percent: 3 }),
+        },
+      )
+      setCheaperPreview(null)
+      await load()
+      await loadMeta()
+      setMsg(`Zastosowano tańsze zamienniki na ${res.applied_count} pozycjach.`)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd zastosowania zamienników')
     } finally {
       setBusy(false)
     }
@@ -716,6 +781,15 @@ export function TenderDetail() {
               >
                 Dopasuj AI (puste)
               </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void previewCheaperSubstitutes()}
+                title="Podgląd i zastosowanie najtańszych zamienników z battlecard (≥3% taniej po upuście)"
+                className="rounded bg-sky-600 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
+              >
+                Tańsze zamienniki
+              </button>
             </>
           )}
           <button
@@ -746,6 +820,43 @@ export function TenderDetail() {
         </div>
       </div>
 
+      {cheaperPreview && (
+        <div className="mb-3 rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-slate-800">
+          <p className="font-semibold text-sky-900">
+            Zastosować tańsze zamienniki na {cheaperPreview.candidates.length} pozycjach?
+          </p>
+          <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+            {cheaperPreview.candidates.map((c) => (
+              <li key={c.item_id} className="font-mono text-[11px]">
+                Poz. {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku} (−{c.save_percent}% · zakup{' '}
+                {Number(c.purchase_price).toLocaleString('pl-PL', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}{' '}
+                zł)
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setCheaperPreview(null)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] disabled:opacity-50"
+            >
+              Anuluj
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void applyCheaperSubstitutes()}
+              className="rounded bg-sky-700 px-2 py-1 text-[11px] text-white disabled:opacity-50"
+            >
+              Tak, zastosuj
+            </button>
+          </div>
+        </div>
+      )}
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
 
