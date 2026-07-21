@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use GuzzleHttp\Cookie\CookieJar;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -52,8 +53,14 @@ final class ProductPageFetcher
                         ->timeout(10)
                         ->connectTimeout(4)
                         ->withHeaders([
-                            'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.3)',
+                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                .'AppleWebKit/537.36 (KHTML, like Gecko) '
+                                .'Chrome/124.0.0.0 Safari/537.36',
                             'Accept' => 'text/html,application/xhtml+xml',
+                        ])
+                        ->withOptions([
+                            'allow_redirects' => true,
+                            'cookies' => new CookieJar,
                         ])
                         ->get($row['url']);
                 }
@@ -651,6 +658,17 @@ final class ProductPageFetcher
                 foreach ($this->parseSrcset($set) as $u) {
                     $rawUrls[] = $u;
                 }
+            }
+        }
+
+        // Galerie JS często przechowują pełny obraz poza znacznikiem <img>.
+        if (preg_match_all(
+            '#\b(?:data-big|data-full|data-image|data-zoom-image)=["\']([^"\']+)["\']#i',
+            $html,
+            $galleryImages
+        )) {
+            foreach ($galleryImages[1] as $u) {
+                $rawUrls[] = $u;
             }
         }
 

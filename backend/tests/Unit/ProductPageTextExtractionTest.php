@@ -93,6 +93,38 @@ HTML;
         $this->assertFalse(collect($imgs)->contains(fn (string $u): bool => str_contains($u, 'logo')));
     }
 
+    public function test_extracts_urgent_product_image_from_javascript_gallery_attributes(): void
+    {
+        $html = <<<'HTML'
+<html><body>
+<ul id="lightslider">
+    <li
+        data-big="/file/show/file/5ed0cac81fb5d/type/big/filename/1005_EU_1200.jpg"
+        data-full="/file/show/file/5ed0cac81fb5d/filename/1005_EU_1200.jpg"
+    ></li>
+</ul>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractImageUrls');
+        $method->setAccessible(true);
+
+        /** @var list<string> $images */
+        $images = $method->invoke(
+            $fetcher,
+            $html,
+            'https://urgent.pl/product/show/productid/439',
+            'urgent-1005'
+        );
+
+        $this->assertSame(
+            'https://urgent.pl/file/show/file/5ed0cac81fb5d/type/big/filename/1005_EU_1200.jpg',
+            $images[0] ?? null
+        );
+    }
+
     public function test_manufacturer_page_keeps_product_pdfs_and_skips_csr(): void
     {
         $html = <<<'HTML'
