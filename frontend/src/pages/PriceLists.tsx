@@ -205,9 +205,13 @@ export function PriceLists() {
   const { user } = useAuth()
   const canEnrich = can(user, 'price_lists.import')
   const canDelete = can(user, 'price_lists.delete')
-  const historyColSpan = 9 + (canEnrich ? 1 : 0) + (canDelete ? 1 : 0)
+  const historyColSpan = 9 + (canEnrich ? 1 : 0) + (canEnrich || canDelete ? 1 : 0)
   const [rows, setRows] = useState<PriceList[]>([])
   const [deleteBusyId, setDeleteBusyId] = useState<number | null>(null)
+  const [editId, setEditId] = useState<number | null>(null)
+  const [editManufacturer, setEditManufacturer] = useState('')
+  const [editVersion, setEditVersion] = useState('')
+  const [editBusyId, setEditBusyId] = useState<number | null>(null)
   const [manufacturer, setManufacturer] = useState('')
   const [version, setVersion] = useState('')
   const [category, setCategory] = useState('')
@@ -298,6 +302,64 @@ export function PriceLists() {
     }, 2500)
     return () => window.clearInterval(t)
   }, [enrichBatches])
+
+  function startEditPriceList(row: PriceList) {
+    setEditId(row.id)
+    setEditManufacturer(row.manufacturer)
+    setEditVersion(row.version)
+    setErr('')
+    setMsg('')
+  }
+
+  function cancelEditPriceList() {
+    setEditId(null)
+    setEditManufacturer('')
+    setEditVersion('')
+  }
+
+  async function saveEditPriceList(row: PriceList) {
+    const manufacturer = editManufacturer.trim()
+    const version = editVersion.trim()
+    if (!manufacturer || !version) {
+      setErr('Producent i wersja nie mogą być puste.')
+      return
+    }
+    const productCount = (row.product_ids ?? []).length
+    if (
+      manufacturer !== row.manufacturer &&
+      productCount > 0 &&
+      !confirm(
+        `Zmienić producenta „${row.manufacturer}” → „${manufacturer}”?\n` +
+          `Zaktualizuje też producenta na ${productCount} produktach z tego importu.`,
+      )
+    ) {
+      return
+    }
+    setEditBusyId(row.id)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string; price_list: PriceList; products_updated: number }>(
+        `/price-lists/${row.id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ manufacturer, version }),
+        },
+      )
+      setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, ...res.price_list } : r)))
+      setHistoryCache((prev) => {
+        const next = { ...prev }
+        if (next[row.id]) next[row.id] = { ...next[row.id], ...res.price_list }
+        return next
+      })
+      setMsg(res.message)
+      cancelEditPriceList()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd zapisu cennika')
+    } finally {
+      setEditBusyId(null)
+    }
+  }
 
   async function deletePriceList(row: PriceList) {
     const count = (row.product_ids ?? historyCache[row.id]?.product_ids ?? []).length
@@ -1366,6 +1428,9 @@ export function PriceLists() {
         <h2 className="mb-3 text-sm font-semibold">Historia importów</h2>
         <p className="mb-2 text-[11px] text-slate-500">
           Kliknij liczbę w kolumnie Update / Zmiany cen / Skip, aby zobaczyć listę pozycji.
+          {canEnrich
+            ? ' Producenta/wersję edytujesz przyciskiem „Edytuj” — zmiana producenta aktualizuje wszystkie produkty z tego importu.'
+            : ''}
         </p>
         <table className="w-full text-left text-xs">
           <thead>
@@ -1380,7 +1445,7 @@ export function PriceLists() {
               <th className="p-2">Skip</th>
               <th className="p-2">Kto</th>
               {canEnrich && <th className="p-2">Opisy/zdjęcia</th>}
-              {canDelete && <th className="p-2">Akcja</th>}
+              {(canEnrich || canDelete) && <th className="p-2">Akcja</th>}
             </tr>
           </thead>
           <tbody>
@@ -1395,12 +1460,35 @@ export function PriceLists() {
               const batchActive =
                 enrichBatch?.status === 'queued' || enrichBatch?.status === 'running'
               const missing = Math.max(0, productCount - enrichDone)
+              const editing = editId === r.id
               return (
               <Fragment key={r.id}>
                 <tr className="border-b">
                   <td className="p-2">{new Date(r.created_at).toLocaleString('pl-PL')}</td>
-                  <td className="p-2">{r.manufacturer}</td>
-                  <td className="p-2">{r.version}</td>
+                  <td className="p-2 min-w-[10rem]">
+                    {editing ? (
+                      <input
+                        className="w-full min-w-[12rem] rounded border border-slate-300 px-1.5 py-1 text-xs"
+                        value={editManufacturer}
+                        onChange={(e) => setEditManufacturer(e.target.value)}
+                        disabled={editBusyId === r.id}
+                      />
+                    ) : (
+                      r.manufacturer
+                    )}
+                  </td>
+                  <td className="p-2">
+                    {editing ? (
+                      <input
+                        className="w-24 rounded border border-slate-300 px-1.5 py-1 text-xs"
+                        value={editVersion}
+                        onChange={(e) => setEditVersion(e.target.value)}
+                        disabled={editBusyId === r.id}
+                      />
+                    ) : (
+                      r.version
+                    )}
+                  </td>
                   <td className="p-2">{r.original_filename ?? '—'}</td>
                   <td className="p-2 text-green-700">{r.products_created}</td>
                   <td className="p-2">
@@ -1492,16 +1580,50 @@ export function PriceLists() {
                         )}
                     </td>
                   )}
-                  {canDelete && (
+                  {(canEnrich || canDelete) && (
                     <td className="p-2">
-                      <button
-                        type="button"
-                        disabled={deleteBusyId === r.id}
-                        onClick={() => void deletePriceList(r)}
-                        className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50 disabled:opacity-50"
-                      >
-                        {deleteBusyId === r.id ? 'Usuwam…' : 'Usuń'}
-                      </button>
+                      <div className="flex flex-wrap gap-1">
+                        {canEnrich &&
+                          (editing ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={editBusyId === r.id}
+                                onClick={() => void saveEditPriceList(r)}
+                                className="rounded bg-sky-600 px-2 py-1 text-[11px] text-white disabled:opacity-50"
+                              >
+                                {editBusyId === r.id ? 'Zapis…' : 'Zapisz'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={editBusyId === r.id}
+                                onClick={cancelEditPriceList}
+                                className="rounded border border-slate-300 px-2 py-1 text-[11px] disabled:opacity-50"
+                              >
+                                Anuluj
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={editBusyId != null || deleteBusyId === r.id}
+                              onClick={() => startEditPriceList(r)}
+                              className="rounded border border-sky-300 px-2 py-1 text-[11px] text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+                            >
+                              Edytuj
+                            </button>
+                          ))}
+                        {canDelete && (
+                          <button
+                            type="button"
+                            disabled={deleteBusyId === r.id || editing}
+                            onClick={() => void deletePriceList(r)}
+                            className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            {deleteBusyId === r.id ? 'Usuwam…' : 'Usuń'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   )}
                 </tr>

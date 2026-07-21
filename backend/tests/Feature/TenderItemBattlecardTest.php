@@ -111,12 +111,15 @@ final class TenderItemBattlecardTest extends TestCase
             ->assertJsonPath('battlecard.ours.sku', 'RNITZ-OURS')
             ->assertJsonPath('battlecard.ours.offer_price', 3.9)
             ->assertJsonPath('battlecard.ours.suggested_offer_price', 2.36)
-            ->assertJsonPath('battlecard.substitutes.0.sku', 'RNITZ-SUB')
             ->assertJsonPath('battlecard.competitors', []);
 
         $subs = $res->json('battlecard.substitutes');
         $this->assertCount(2, $subs);
-        $this->assertContains($alt->sku, collect($subs)->pluck('sku')->all());
+        $skus = collect($subs)->pluck('sku')->all();
+        $this->assertContains('RNITZ-SUB', $skus);
+        $this->assertContains($alt->sku, $skus);
+        // najtańszy po upuście pierwszy
+        $this->assertSame('NITRIL-ALT', $subs[0]['sku']);
     }
 
     public function test_apply_cheaper_substitutes_dry_run_and_apply(): void

@@ -2082,7 +2082,23 @@ function ItemRow({
           )}
         </div>
       </td>
-      <td className="p-2">{item.margin_percent ?? '—'}%</td>
+      <td
+        className={`p-2 ${
+          item.margin_percent != null && Number(item.margin_percent) < 0
+            ? 'font-semibold text-red-700'
+            : ''
+        }`}
+        title={
+          item.margin_percent != null && Number(item.margin_percent) < 0
+            ? 'Ujemna marża — cena oferty poniżej zakupu (po upuście). Proponowany narzut: +18%.'
+            : 'Marża = (oferta − zakup) / oferta'
+        }
+      >
+        {item.margin_percent ?? '—'}%
+        {item.margin_percent != null && Number(item.margin_percent) < 0 ? (
+          <span className="mt-0.5 block text-[9px] font-normal">ujemna!</span>
+        ) : null}
+      </td>
       <td className="p-2">
         <div className="flex flex-col gap-1">
           {canEdit && (

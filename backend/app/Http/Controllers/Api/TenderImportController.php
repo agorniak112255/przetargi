@@ -10,6 +10,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\TenderPricingService;
 use App\Services\TenderWorkflowService;
+use App\Support\OfferPricing;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -102,7 +103,7 @@ class TenderImportController extends Controller
                 if ($offerRaw !== null && $offerRaw !== '') {
                     $item->offer_price = (float) str_replace(',', '.', (string) $offerRaw);
                 } elseif ($product !== null) {
-                    $item->offer_price = round((float) $product->purchase_price * 1.18, 2);
+                    $item->offer_price = OfferPricing::fromPurchase($product->purchase_price);
                 }
 
                 $item->save();

@@ -10,6 +10,7 @@ use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\OfferPricing;
 use Illuminate\Support\Collection;
 use Throwable;
 
@@ -907,7 +908,7 @@ final class ProductMatchService
         $item->match_source = $source;
         $item->status = 'matched';
         if ($item->offer_price === null) {
-            $item->offer_price = round((float) $product->purchase_price * 1.18, 2);
+            $item->offer_price = OfferPricing::fromPurchase($product->purchase_price);
         }
         $item->save();
         $item->load('mainProduct');

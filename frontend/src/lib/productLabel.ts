@@ -72,7 +72,7 @@ export function productSelectLabel(p: { sku: string } & Named): string {
   return `${p.sku} · ${productDisplayName(p, 56)}`
 }
 
-/** Sugerowana cena oferty = zakup × narzut (jak przy ręcznej zmianie produktu). */
+/** Sugerowana cena oferty = zakup × narzut (+18% domyślnie, jak config/pricing.php). */
 export function suggestedOfferPrice(purchase: number | null | undefined, markup = 1.18): number | null {
   if (purchase == null || Number.isNaN(Number(purchase)) || Number(purchase) <= 0) return null
   return Math.round(Number(purchase) * markup * 100) / 100

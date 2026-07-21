@@ -11,6 +11,7 @@ use App\Models\ProductEnrichmentBatch;
 use App\Services\PriceListDeletionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Throwable;
 
 class PriceListController extends Controller
@@ -98,6 +99,60 @@ class PriceListController extends Controller
     public function show(PriceList $priceList): JsonResponse
     {
         return response()->json($priceList->load('importer:id,name'));
+    }
+
+    /**
+     * Edycja metadanych cennika — zmiana producenta/wersji propaguje się na produkty z product_ids.
+     */
+    public function update(Request $request, PriceList $priceList): JsonResponse
+    {
+        $data = $request->validate([
+            'manufacturer' => ['sometimes', 'string', 'min:1', 'max:255'],
+            'version' => ['sometimes', 'string', 'min:1', 'max:120'],
+        ]);
+
+        if ($data === []) {
+            return response()->json(['message' => 'Brak pól do aktualizacji.'], 422);
+        }
+
+        $oldManufacturer = (string) $priceList->manufacturer;
+        $productIds = array_values(array_unique(array_filter(array_map(
+            static fn ($id): int => (int) $id,
+            $priceList->product_ids ?? []
+        ))));
+
+        $productsUpdated = 0;
+        DB::transaction(function () use ($priceList, $data, $productIds, &$productsUpdated): void {
+            if (array_key_exists('manufacturer', $data)) {
+                $priceList->manufacturer = trim($data['manufacturer']);
+            }
+            if (array_key_exists('version', $data)) {
+                $priceList->version = trim($data['version']);
+            }
+            $priceList->save();
+
+            if (array_key_exists('manufacturer', $data) && $productIds !== []) {
+                $productsUpdated = Product::query()
+                    ->whereIn('id', $productIds)
+                    ->update(['manufacturer' => $priceList->manufacturer]);
+            }
+        });
+
+        $priceList->load('importer:id,name');
+
+        return response()->json([
+            'price_list' => $priceList,
+            'products_updated' => $productsUpdated,
+            'message' => sprintf(
+                'Zapisano cennik%s%s.',
+                array_key_exists('manufacturer', $data) && $oldManufacturer !== $priceList->manufacturer
+                    ? sprintf(' (producent: „%s” → „%s”)', $oldManufacturer, $priceList->manufacturer)
+                    : '',
+                $productsUpdated > 0
+                    ? sprintf(', zaktualizowano producent na %d produktach', $productsUpdated)
+                    : ''
+            ),
+        ]);
     }
 
     public function destroy(Request $request, PriceList $priceList): JsonResponse

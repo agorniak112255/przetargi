@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Tender;
+use App\Support\OfferPricing;
 use App\Support\ProductDisplayName;
 
 /**
@@ -51,9 +52,7 @@ final class TenderOfferExportService
                 'quantity' => (int) $item->quantity,
                 'purchase_price' => $purchase,
                 'offer_price' => $offer,
-                'suggested_offer_price' => $purchase !== null && $purchase > 0
-                    ? round($purchase * 1.18, 2)
-                    : null,
+                'suggested_offer_price' => OfferPricing::fromPurchase($purchase),
                 'margin_percent' => $item->margin_percent !== null ? (float) $item->margin_percent : null,
                 'line_value' => $line,
                 'match_percent' => $item->ai_match_percent !== null ? (int) $item->ai_match_percent : null,

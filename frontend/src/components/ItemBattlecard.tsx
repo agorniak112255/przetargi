@@ -118,8 +118,14 @@ function Col({
         >
           Zakup: {fmtPrice(purchase)} zł
         </p>
-        <p className="text-[10px] text-emerald-800" title="Cena w ofercie (zapisana lub zakup × 1,18)">
+        <p
+          className="text-[10px] text-emerald-800"
+          title="Cena w ofercie (zapisana lub proponowana: zakup + 18%)"
+        >
           Oferta: {fmtPrice(offerHint)} zł
+          {p.offer_price == null && offerHint != null ? (
+            <span className="text-slate-500"> (prop. +18%)</span>
+          ) : null}
         </p>
       </div>
       {p.attributes?.material || p.attributes?.klasa_ochrony || p.attributes?.poziomy_en388 ? (

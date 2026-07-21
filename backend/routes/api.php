@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\PriceListImportController;
 use App\Http\Controllers\Api\ProductAiSearchController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductCrossRefController;
+use App\Http\Controllers\Api\ProductCatalogHealthController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
@@ -74,6 +75,12 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
     Route::get('/products/manufacturers', [ProductController::class, 'manufacturers'])->middleware('permission:products.view');
+    Route::get('/products/catalog-health', [ProductCatalogHealthController::class, 'show'])
+        ->middleware('permission:products.view');
+    Route::post('/products/catalog-health/queue', [ProductCatalogHealthController::class, 'queue'])
+        ->middleware('permission:price_lists.import');
+    Route::post('/products/catalog-health/backfill-attributes', [ProductCatalogHealthController::class, 'backfillAttributes'])
+        ->middleware('permission:price_lists.import');
     Route::get('/products/cross-ref', [ProductCrossRefController::class, 'crossRef'])->middleware('permission:products.view');
     Route::get('/products/compare', [ProductCrossRefController::class, 'compare'])->middleware('permission:products.view');
     Route::post('/products/ai-search', ProductAiSearchController::class)->middleware('permission:products.view');
@@ -105,6 +112,8 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     Route::get('/price-lists', [PriceListController::class, 'index'])->middleware('permission:price_lists.view');
     Route::get('/price-lists/{priceList}', [PriceListController::class, 'show'])->middleware('permission:price_lists.view');
+    Route::patch('/price-lists/{priceList}', [PriceListController::class, 'update'])
+        ->middleware('permission:price_lists.import');
     Route::delete('/price-lists/{priceList}', [PriceListController::class, 'destroy'])
         ->middleware('permission:price_lists.delete');
     Route::post('/price-lists/analyze', [PriceListImportController::class, 'analyze'])->middleware('permission:price_lists.import');

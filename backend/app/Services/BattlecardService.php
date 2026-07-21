@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\OfferPricing;
 
 /**
  * Snapshot pozycji SIWZ: propozycja główna + do 2 zamienników z katalogu.
@@ -195,9 +196,7 @@ final class BattlecardService
             'purchase_price' => $product->purchase_price !== null
                 ? (float) $product->purchase_price
                 : null,
-            'suggested_offer_price' => $product->purchase_price !== null && (float) $product->purchase_price > 0
-                ? round((float) $product->purchase_price * 1.18, 2)
-                : null,
+            'suggested_offer_price' => OfferPricing::fromPurchase($product->purchase_price),
             'stock' => (int) ($product->stock ?? 0),
             'match_percent' => $matchPercent,
             'match_source' => $matchSource,

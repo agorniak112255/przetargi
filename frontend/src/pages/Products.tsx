@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { CrossRefPanel } from '../components/CrossRefPanel'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
@@ -353,6 +354,14 @@ export function Products() {
           }}
         />
       )}
+      <CatalogHealthPanel
+        canQueue={canEnrich}
+        manufacturerFilter={manufacturer}
+        onQueued={(b) => {
+          setBatch(b)
+          setMsg(b.message || `W kolejce enrichment: ${b.total} produktów`)
+        }}
+      />
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Produkty</h1>
