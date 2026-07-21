@@ -223,6 +223,12 @@ final class ProductEnrichmentService
             $this->assertBatchNotCancelled($batchId);
             $searchPack = $this->search->searchBothPhases($product);
             $searchResults = $searchPack['results'];
+            $searchImages = [];
+            foreach ($searchPack['images'] ?? [] as $url) {
+                if (is_string($url) && str_starts_with($url, 'http')) {
+                    $searchImages[] = $url;
+                }
+            }
             if ($searchResults === []) {
                 $detail = $searchPack['errors'] !== []
                     ? implode(' | ', array_slice($searchPack['errors'], 0, 2))
@@ -327,6 +333,10 @@ final class ProductEnrichmentService
             foreach ($fetched['image_urls'] as $url) {
                 $imageUrls[] = $url;
             }
+            // Ansell/Imperva: HTML = bot-wall → zdjęcia z Tavily include_images
+            foreach ($searchImages as $url) {
+                $imageUrls[] = $url;
+            }
 
             $sourceUrls = [];
             foreach ($extracted['source_urls'] ?? [] as $url) {
@@ -412,6 +422,18 @@ final class ProductEnrichmentService
                     1
                 );
             }
+            if ($savedImages === [] && $searchImages !== []) {
+                $savedImages = $this->images->downloadMany(
+                    $product,
+                    $this->pickPrimaryImageUrls(
+                        $searchImages,
+                        [],
+                        (string) $product->sku,
+                        (string) $product->name,
+                    ),
+                    1
+                );
+            }
             $documentUrls = [];
             foreach ($extracted['document_urls'] ?? [] as $url) {
                 if (is_string($url) && ProductDocumentDownloader::looksLikePdfUrl($url)) {
@@ -453,8 +475,18 @@ final class ProductEnrichmentService
                 array_column($docPages, 'url'),
                 array_column($searchResults, 'url'),
             ));
-            $documentUrls = $this->preferManufacturerDocuments($documentUrls, $product, $mfrDomains);
-            $savedDocs = $this->documents->downloadMany($product, $documentUrls, 3);
+            $preferredDocs = $this->preferManufacturerDocuments($documentUrls, $product, $mfrDomains);
+            $savedDocs = $this->documents->downloadMany($product, $preferredDocs, 3);
+            // Imperva na domenie producenta → PDF z CDN/dystrybutora (SKU w URL)
+            if ($savedDocs === []) {
+                $fallbackDocs = array_values(array_unique(array_filter(
+                    $documentUrls,
+                    static fn ($u): bool => is_string($u) && ProductDocumentDownloader::looksLikePdfUrl($u)
+                )));
+                if ($fallbackDocs !== $preferredDocs) {
+                    $savedDocs = $this->documents->downloadMany($product, $fallbackDocs, 3);
+                }
+            }
             $payload['document_urls'] = array_values(array_filter(array_map(
                 static fn ($d): ?string => is_string($d->source_url) ? $d->source_url : null,
                 $savedDocs
@@ -720,7 +752,7 @@ final class ProductEnrichmentService
                     $score += 15;
                 }
             }
-            if (str_contains($u, 'glove') || str_contains($u, 'rekaw') || str_contains($u, 'maxi')) {
+            if (str_contains($u, 'glove') || str_contains($u, 'rekaw') || str_contains($u, 'maxi') || str_contains($u, 'ringers') || str_contains($u, 'ansell')) {
                 $score += 25;
             }
             // Drupal/ATG PIM / uvex shop-media — prawdziwe pliki

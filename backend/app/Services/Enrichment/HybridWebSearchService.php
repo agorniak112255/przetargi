@@ -26,6 +26,7 @@ class HybridWebSearchService
     /**
      * @return array{
      *     results: list<array{url: string, title: string, snippet: string}>,
+     *     images: list<string>,
      *     provider: string,
      *     raw_content: ?string
      * }
@@ -41,47 +42,61 @@ class HybridWebSearchService
             ? $mfrDomains
             : $this->preferredDomains();
         $merged = [];
+        $images = [];
         $seen = [];
+        $seenImages = [];
         $provider = 'tavily';
 
         // Limit zapytań i próg stopu zależą od trybu Tavily (Ustawienia AI).
         $queryIndex = 0;
         foreach (array_slice($queries, 0, $profile->maxQueries) as $query) {
-            $cacheKey = 'enrich_search_v14:'.hash('sha256', $profile->mode.'|'.$phase.'|'.$query);
+            $cacheKey = 'enrich_search_v15:'.hash('sha256', $profile->mode.'|'.$phase.'|'.$query);
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
                 $packResults = $this->filterResultsByIdentity($cached['results'], $product);
                 $provider = (string) ($cached['provider'] ?? 'tavily_cache');
+                foreach ($this->normalizeImageList($cached['images'] ?? []) as $img) {
+                    $ik = mb_strtolower($img);
+                    if (! isset($seenImages[$ik])) {
+                        $seenImages[$ik] = true;
+                        $images[] = $img;
+                    }
+                }
             } else {
                 $packResults = [];
+                $packImages = [];
                 try {
                     // Pierwsze zapytanie (jak Google): najpierw całe internety — mniej spalone kredytów na pustych domenach.
                     $openFirst = $queryIndex === 0 && $profile->openWebFallback;
                     if ($openFirst) {
-                        $pack = $this->searchViaTavily($query, [], $profile);
+                        $pack = $this->searchViaTavily($query, [], $profile, true);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+                        $packImages = $pack['images'];
                         $provider = 'tavily';
                     }
                     // manufacturer → domeny producenta; industry → sklepy+katalogi
                     if ($packResults === [] && $preferred !== []) {
-                        $pack = $this->searchViaTavily($query, $preferred, $profile);
+                        $pack = $this->searchViaTavily($query, $preferred, $profile, true);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
                         $packResults = array_values(array_filter(
                             $packResults,
                             fn (array $row): bool => $this->resultQuality($row, $product) >= 30
                         ));
+                        $packImages = array_merge($packImages, $pack['images']);
                         $provider = $phase === 'manufacturer' ? 'tavily_manufacturer' : 'tavily_preferred';
                     }
                     if ($packResults === [] && $profile->retailerFallback
                         && $phase === 'manufacturer' && $mfrDomains !== []) {
                         // brak na stronie producenta → sklepy (opis), nie PDF
-                        $pack = $this->searchViaTavily($query, $this->retailerDomains(), $profile);
+                        $pack = $this->searchViaTavily($query, $this->retailerDomains(), $profile, true);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+                        $packImages = array_merge($packImages, $pack['images']);
                         $provider = 'tavily_retailer';
                     }
                     if ($packResults === [] && $profile->openWebFallback && ! $openFirst) {
-                        $pack = $this->searchViaTavily($query, [], $profile);
+                        $pack = $this->searchViaTavily($query, [], $profile, true);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+                        $packImages = array_merge($packImages, $pack['images']);
                         $provider = 'tavily';
                     }
                 } catch (TavilyQuotaExceededException $e) {
@@ -90,9 +105,18 @@ class HybridWebSearchService
                     $errors[] = $e->getMessage();
                 }
 
+                foreach ($this->normalizeImageList($packImages) as $img) {
+                    $ik = mb_strtolower($img);
+                    if (! isset($seenImages[$ik])) {
+                        $seenImages[$ik] = true;
+                        $images[] = $img;
+                    }
+                }
+
                 if ($packResults !== []) {
                     Cache::put($cacheKey, [
                         'results' => $packResults,
+                        'images' => array_slice($this->normalizeImageList($packImages), 0, 12),
                         'provider' => $provider,
                     ], now()->addDays($profile->cacheDays));
                 }
@@ -138,6 +162,7 @@ class HybridWebSearchService
 
         return [
             'results' => array_slice($merged, 0, 8),
+            'images' => array_slice($images, 0, 12),
             'provider' => $provider,
             'raw_content' => null,
         ];
@@ -146,19 +171,23 @@ class HybridWebSearchService
     /**
      * @return array{
      *     results: list<array{url: string, title: string, snippet: string}>,
+     *     images: list<string>,
      *     errors: list<string>
      * }
      */
     public function searchBothPhases(Product $product): array
     {
         $merged = [];
+        $images = [];
         $seen = [];
+        $seenImages = [];
         $errors = [];
         $profile = $this->settings->tavilySearchProfile();
 
-        // full: obie fazy zawsze; eco/balanced: druga faza tylko gdy pierwsza nic nie dała.
+        // full: obie fazy zawsze; eco/balanced: druga faza gdy brak wyników LUB brak zdjęć
+        // (Ansell/Imperva: karta producenta jest, ale HTML/obrazki z Tavily często puste).
         foreach (['manufacturer', 'industry'] as $phase) {
-            if ($phase === 'industry' && ! $profile->bothPhasesAlways && $merged !== []) {
+            if ($phase === 'industry' && ! $profile->bothPhasesAlways && $merged !== [] && $images !== []) {
                 break;
             }
 
@@ -185,6 +214,15 @@ class HybridWebSearchService
                 $seen[$key] = true;
                 $merged[] = $row;
             }
+
+            foreach ($this->normalizeImageList($pack['images'] ?? []) as $img) {
+                $ik = mb_strtolower($img);
+                if (isset($seenImages[$ik])) {
+                    continue;
+                }
+                $seenImages[$ik] = true;
+                $images[] = $img;
+            }
         }
 
         usort($merged, function (array $a, array $b) use ($product): int {
@@ -198,6 +236,7 @@ class HybridWebSearchService
 
         return [
             'results' => array_slice($merged, 0, 8),
+            'images' => array_slice($images, 0, 12),
             'errors' => $errors,
         ];
     }
@@ -269,8 +308,10 @@ class HybridWebSearchService
             if (preg_match('#(ochronki na buty|shoe[- ]?cover|folie na buty|nakladki na obuwie)#i', $hay)) {
                 continue;
             }
-            if (! preg_match(
-                '#(glove|r[eę]kaw|rekaw|maxiflex|maxicut|maxidry|maxifoam|atg|demar|uvex|pros|bhp|ochron|ppe|en\s*388|buty|trzewik|p[oó]łbut|obuwie|shoe|boot|wodoochron|plavitex|ubranie|kurtka|spodnie|odzież|odziez|\bs1\b|\bs3\b|\bsrc\b|\bo1\b|\bo2\b|\bfo\b)#iu',
+            // Strona producenta z modelem w URL (np. ansell.com/…/ringers-r065) — bez „glove” w snippecie.
+            $fromManufacturer = $this->manufacturers->isManufacturerUrl($url, $product);
+            if (! $fromManufacturer && ! preg_match(
+                '#(glove|r[eę]kaw|rekaw|ringers|ansell|maxiflex|maxicut|maxidry|maxifoam|atg|demar|uvex|pros|bhp|ochron|ppe|en\s*388|buty|trzewik|p[oó]łbut|obuwie|shoe|boot|wodoochron|plavitex|ubranie|kurtka|spodnie|odzież|odziez|\bs1\b|\bs3\b|\bsrc\b|\bo1\b|\bo2\b|\bfo\b)#iu',
                 $hay.' '.$url.' '.$title
             )) {
                 continue;
@@ -517,6 +558,7 @@ PROMPT;
      * @param  list<string>  $includeDomains
      * @return array{
      *     results: list<array{url: string, title: string, snippet: string}>,
+     *     images: list<string>,
      *     provider: string,
      *     raw_content: ?string
      * }
@@ -525,6 +567,7 @@ PROMPT;
         string $query,
         array $includeDomains = [],
         ?TavilySearchProfile $profile = null,
+        bool $includeImages = false,
     ): array {
         TavilyQuotaGuard::assertAllowed();
 
@@ -541,6 +584,7 @@ PROMPT;
             'search_depth' => 'basic',
             'include_answer' => false,
             'max_results' => $profile->maxResults,
+            'include_images' => $includeImages,
         ];
         if ($includeDomains !== []) {
             $body['include_domains'] = $includeDomains;
@@ -571,7 +615,11 @@ PROMPT;
             ];
         }
 
-        if ($results === []) {
+        $images = $includeImages
+            ? $this->normalizeImageList($payload['images'] ?? [])
+            : [];
+
+        if ($results === [] && $images === []) {
             throw new RuntimeException(
                 $includeDomains !== []
                     ? 'Brak wyników w preferowanych sklepach BHP.'
@@ -581,9 +629,40 @@ PROMPT;
 
         return [
             'results' => $results,
+            'images' => $images,
             'provider' => $includeDomains !== [] ? 'tavily_preferred' : 'tavily',
             'raw_content' => null,
         ];
+    }
+
+    /**
+     * @param  mixed  $raw
+     * @return list<string>
+     */
+    private function normalizeImageList(mixed $raw): array
+    {
+        if (! is_array($raw)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($raw as $item) {
+            $url = null;
+            if (is_string($item)) {
+                $url = $item;
+            } elseif (is_array($item)) {
+                $url = (string) ($item['url'] ?? $item['src'] ?? '');
+            }
+            if (! is_string($url) || ! str_starts_with($url, 'http')) {
+                continue;
+            }
+            if (! ProductImageDownloader::looksLikeImageUrl($url)) {
+                continue;
+            }
+            $out[] = $url;
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**

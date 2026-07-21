@@ -38,7 +38,7 @@ final class ProductDocumentFinder
         $found = $this->guessKnownCdnDocuments($product);
 
         foreach (array_slice($queries, 0, $profile->docsMaxQueries) as $query) {
-            $cacheKey = 'enrich_docs_v7:'.hash('sha256', $profile->mode.'|'.$query.'|'.implode(',', $domains));
+            $cacheKey = 'enrich_docs_v8:'.hash('sha256', $profile->mode.'|'.$query.'|'.implode(',', $domains));
             $cached = Cache::get($cacheKey);
             if (is_array($cached)) {
                 foreach ($cached as $url) {
@@ -293,15 +293,23 @@ final class ProductDocumentFinder
             if ($url === '' || ! str_starts_with($url, 'http')) {
                 continue;
             }
-            if (! $this->manufacturers->isManufacturerUrl($url, $product, $manufacturerDomains)) {
-                continue;
-            }
             $hay = mb_strtolower(urldecode($url).' '.($row['title'] ?? '').' '.($row['snippet'] ?? ''));
             $isPdf = ProductDocumentDownloader::looksLikePdfUrl($url);
             $isDocPage = (bool) preg_match('#(deklar|certyfik|conform|datasheet|pds|tds|zgodo|certificate|download)#iu', $hay);
+            $isMfr = $this->manufacturers->isManufacturerUrl($url, $product, $manufacturerDomains);
+
+            // PDF z SKU w nazwie (CDN/dystrybutor) — gdy strona producenta (Ansell/Imperva) nie oddaje plików
+            if ($isPdf && $this->matchesProduct($hay, $product)) {
+                $out[] = $url;
+                continue;
+            }
+
+            if (! $isMfr) {
+                continue;
+            }
 
             // karty produktu /products/… tylko gdy widać SKU/nazwę
-            if ($this->matchesProduct($hay, $product) && ($isPdf || $isDocPage || $this->looksLikeProductDocPage($url))) {
+            if ($this->matchesProduct($hay, $product) && ($isDocPage || $this->looksLikeProductDocPage($url))) {
                 $out[] = $url;
                 continue;
             }

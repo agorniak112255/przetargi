@@ -75,6 +75,15 @@ final class ProductPageFetcher
             }
 
             $html = $response->body();
+            // Imperva/Incapsula (Ansell i inni) — challenge JS, nie prawdziwa karta
+            if ($this->looksLikeBotWall($html)) {
+                $snippet = trim((string) ($row['snippet'] ?? ''));
+                if ($snippet !== '') {
+                    $pages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
+                }
+
+                continue;
+            }
             $text = $this->extractProductPageText($html, $skuNorm);
             $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, (string) ($row['title'] ?? ''), $skuNorm);
 
@@ -221,6 +230,22 @@ final class ProductPageFetcher
         }
 
         return $hits >= max(1, (int) ceil(count($extras) * 0.5));
+    }
+
+    private function looksLikeBotWall(string $html): bool
+    {
+        $trim = trim($html);
+        if ($trim === '' || strlen($trim) < 800) {
+            return true;
+        }
+        $hay = mb_strtolower($trim);
+
+        return str_contains($hay, '_incapsula_resource')
+            || str_contains($hay, 'incapsula')
+            || str_contains($hay, 'imperva')
+            || str_contains($hay, 'cf-browser-verification')
+            || str_contains($hay, 'attention required! | cloudflare')
+            || (str_contains($hay, 'captcha') && strlen($trim) < 4000);
     }
 
     /**
