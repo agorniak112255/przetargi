@@ -48,6 +48,7 @@ final class BattlecardService
             $substitutes,
             $excludeIds,
         );
+        $substitutes = $this->sortSubstitutesCheapestFirst($substitutes);
 
         $card = [
             'requirement' => [
@@ -202,6 +203,25 @@ final class BattlecardService
             'match_source' => $matchSource,
             'reasons' => $reasons,
         ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $substitutes
+     * @return list<array<string, mixed>>
+     */
+    private function sortSubstitutesCheapestFirst(array $substitutes): array
+    {
+        usort($substitutes, static function (array $a, array $b): int {
+            $pa = (float) ($a['purchase_price'] ?? $a['catalog_price_net'] ?? PHP_FLOAT_MAX);
+            $pb = (float) ($b['purchase_price'] ?? $b['catalog_price_net'] ?? PHP_FLOAT_MAX);
+            if ($pa === $pb) {
+                return ((int) ($b['match_percent'] ?? 0)) <=> ((int) ($a['match_percent'] ?? 0));
+            }
+
+            return $pa <=> $pb;
+        });
+
+        return $substitutes;
     }
 
     /**

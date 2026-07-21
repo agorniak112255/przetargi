@@ -786,9 +786,9 @@ export function TenderDetail() {
                 disabled={busy}
                 onClick={() => void previewCheaperSubstitutes()}
                 title="Podgląd i zastosowanie najtańszych zamienników z battlecard (≥3% taniej po upuście)"
-                className="rounded bg-sky-600 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
+                className="rounded bg-amber-500 px-2 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
               >
-                Tańsze zamienniki
+                Zastosuj tańsze zamienniki
               </button>
             </>
           )}
@@ -975,7 +975,16 @@ export function TenderDetail() {
       {tab === 'pozycje' && (
         <div className="space-y-3">
           {can_edit && (
-            <div className="flex justify-end">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void previewCheaperSubstitutes()}
+                title="Na pozycjach z tańszym zamiennikiem (≥3% po upuście) — podgląd, potem zbiorcza zamiana"
+                className="rounded bg-amber-500 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+              >
+                Zastosuj tańsze zamienniki
+              </button>
               <button
                 type="button"
                 disabled={busy}
@@ -1044,7 +1053,15 @@ export function TenderDetail() {
             </table>
           </div>
           {can_edit && (
-            <div className="flex justify-end">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void previewCheaperSubstitutes()}
+                className="rounded bg-amber-500 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+              >
+                Zastosuj tańsze zamienniki
+              </button>
               <button
                 type="button"
                 disabled={busy}

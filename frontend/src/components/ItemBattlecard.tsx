@@ -44,18 +44,33 @@ function fmtPrice(v: number | null | undefined): string {
   return Number(v).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function cheaperSaveBadge(
+  ours: BattlecardProduct | null,
+  sub: BattlecardProduct | null,
+): string | null {
+  if (!ours || !sub) return null
+  const ourP = ours.purchase_price ?? ours.catalog_price_net
+  const subP = sub.purchase_price ?? sub.catalog_price_net
+  if (ourP == null || subP == null || ourP <= 0 || subP <= 0) return null
+  const save = ((ourP - subP) / ourP) * 100
+  if (save < 3) return null
+  return `−${Math.round(save)}%`
+}
+
 function Col({
   title,
   tone,
   p,
   clickable,
   onClick,
+  cheaperBadge,
 }: {
   title: string
   tone: 'main' | 'sub'
   p: BattlecardProduct | null
   clickable?: boolean
   onClick?: () => void
+  cheaperBadge?: string | null
 }) {
   const tones = {
     main: 'border-emerald-200 bg-emerald-50/80',
@@ -76,7 +91,14 @@ function Col({
     <>
       <div className="flex items-center justify-between gap-1">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">{title}</span>
-        <span className="text-[10px] font-bold text-violet-700">{p.match_percent}%</span>
+        <span className="flex items-center gap-1">
+          {tone === 'sub' && cheaperBadge ? (
+            <span className="rounded bg-amber-500 px-1 py-0.5 text-[9px] font-bold text-white">
+              {cheaperBadge}
+            </span>
+          ) : null}
+          <span className="text-[10px] font-bold text-violet-700">{p.match_percent}%</span>
+        </span>
       </div>
       <p className="mt-0.5 truncate text-[11px] font-medium text-slate-900" title={p.sku}>
         {p.sku}
@@ -298,6 +320,7 @@ export function ItemBattlecard({
                 title="Zamiennik 1"
                 tone="sub"
                 p={card.substitutes[0] ?? null}
+                cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[0] ?? null)}
                 clickable={
                   canSelectSubstitute &&
                   Boolean(card.substitutes[0]) &&
@@ -312,6 +335,7 @@ export function ItemBattlecard({
                 title="Zamiennik 2"
                 tone="sub"
                 p={card.substitutes[1] ?? null}
+                cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[1] ?? null)}
                 clickable={
                   canSelectSubstitute &&
                   Boolean(card.substitutes[1]) &&
