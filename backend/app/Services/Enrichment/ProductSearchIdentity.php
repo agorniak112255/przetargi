@@ -73,24 +73,44 @@ final class ProductSearchIdentity
 
     /**
      * URL zdjęcia musi wskazywać produkt (SKU/model) — blokuje losowe Tavily (piwo, mapy, menu).
+     * Uwaga: uvex shop-media bywa hashem bez SKU — wtedy ufaj tylko gdy URL pochodzi z karty (osobna ścieżka).
      */
     public function imageUrlMentionsProduct(string $url, Product $product): bool
     {
         $hay = mb_strtolower(urldecode($url));
+        $hay .= ' '.$this->decodeEmbeddedUrls($hay);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
+        // menu uvex w imgproxy (01_Menue-Pics) — nigdy
+        if (str_contains($hay, 'menue') || str_contains($hay, 'menu-neuheit') || str_contains($hay, 'menukachel')) {
+            return false;
+        }
+
         foreach ($this->strongImageTokens($product) as $token) {
-            if (mb_strlen($token) >= 5 && (str_contains($hay, $token) || str_contains($hayCompact, $token))) {
-                return true;
+            if ($token === '' || mb_strlen($token) < 3) {
+                continue;
             }
-            // 60544 / r065 / 065g — dokładny fragment kodu
-            if (preg_match('/^\d{4,}$/', $token) === 1
-                && preg_match('/(?<![0-9])'.preg_quote($token, '/').'(?![0-9])/u', $hay) === 1) {
+            // same cyfry SKU: 60544 OK w …6054407… (wariant rozmiaru uvex)
+            if (preg_match('/^\d{4,}$/', $token) === 1) {
+                if (preg_match('/(?<![0-9])'.preg_quote($token, '/').'/u', $hay) === 1
+                    || preg_match('/(?<![0-9])'.preg_quote($token, '/').'/u', $hayCompact) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if (mb_strlen($token) >= 5 && (str_contains($hay, $token) || str_contains($hayCompact, $token))) {
                 return true;
             }
             if (preg_match('/^r-?\d{2,4}g?$/i', $token) === 1
                 && (str_contains($hay, $token) || str_contains($hayCompact, preg_replace('/[^a-z0-9]/i', '', $token) ?? $token))) {
                 return true;
+            }
+            // c300 — tylko ze ścieżką produktu / rękawic, nie samotnie w menu
+            if (mb_strlen($token) >= 4 && (str_contains($hay, $token) || str_contains($hayCompact, $token))) {
+                if (preg_match('#(glove|handschuh|rekaw|product|shop-media|fileadmin/.+products)#i', $hay) === 1) {
+                    return true;
+                }
             }
         }
 
@@ -105,6 +125,42 @@ final class ProductSearchIdentity
         }
 
         return false;
+    }
+
+    /** Czy URL wygląda na galerię karty (uvex shop-media / Magento), nie na wynik Tavily. */
+    public function looksLikeProductGalleryUrl(string $url): bool
+    {
+        $u = mb_strtolower(urldecode($url).' '.$this->decodeEmbeddedUrls($url));
+        if (str_contains($u, 'menue') || str_contains($u, 'menu-neuheit') || str_contains($u, '01_menue')) {
+            return false;
+        }
+
+        return str_contains($u, 'shop-media')
+            || str_contains($u, 'media/catalog/product')
+            || str_contains($u, 'pim/products')
+            || str_contains($u, 'product-assets')
+            || str_contains($u, 'large_default')
+            || (str_contains($u, 'fileadmin') && str_contains($u, 'product'));
+    }
+
+    private function decodeEmbeddedUrls(string $hay): string
+    {
+        $out = [];
+        if (preg_match_all('#(?:^|/)([A-Za-z0-9_\-+/=]{24,})(?:\?|$)#', $hay, $m)) {
+            foreach ($m[1] as $chunk) {
+                $raw = strtr((string) $chunk, '-_', '+/');
+                $pad = strlen($raw) % 4;
+                if ($pad > 0) {
+                    $raw .= str_repeat('=', 4 - $pad);
+                }
+                $decoded = base64_decode($raw, true);
+                if (is_string($decoded) && $decoded !== '' && (str_contains($decoded, 'http') || str_contains($decoded, 'media') || str_contains($decoded, 'fileadmin'))) {
+                    $out[] = mb_strtolower($decoded);
+                }
+            }
+        }
+
+        return implode(' ', $out);
     }
 
     /**
@@ -218,6 +274,11 @@ final class ProductSearchIdentity
         if ($sku !== '') {
             $queries[] = $sku;
             $queries[] = '"'.$sku.'"';
+            // uvex: karta ma często SKU+rozmiar w slugu (6054407)
+            if (preg_match('/^\d{4,6}$/', $sku) === 1 && str_contains(mb_strtolower($brand), 'uvex')) {
+                $queries[] = 'site:uvex-safety.com '.$sku.' glove OR handschuh';
+                $queries[] = 'site:uvex-safety.com/products '.$sku;
+            }
         }
         // Ansell R065 / uvex model z aliasów
         foreach ($this->modelAliases($product) as $alias) {

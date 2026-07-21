@@ -337,9 +337,15 @@ final class ProductEnrichmentService
                 }
             }
             foreach ($fetched['image_urls'] as $url) {
-                $imageUrls[] = $url;
+                // ze strony karty: shop-media OK; odrzuć menu uvex
+                if (is_string($url) && (
+                    $this->identity->imageUrlMentionsProduct($url, $product)
+                    || $this->identity->looksLikeProductGalleryUrl($url)
+                )) {
+                    $imageUrls[] = $url;
+                }
             }
-            // Ansell/Imperva: HTML = bot-wall → zdjęcia z Tavily include_images
+            // Tavily — tylko z SKU/modelem w URL (nigdy mapy/piwo)
             foreach ($searchImages as $url) {
                 $imageUrls[] = $url;
             }
@@ -443,16 +449,23 @@ final class ProductEnrichmentService
                     1
                 );
             }
-            // Ansell/Imperva: pliki .ashx zablokowane — zrzut karty producenta
+            // Ansell/Imperva: pliki .ashx zablokowane — zrzut TYLKO karty z SKU w ścieżce (nie /search)
             if ($savedImages === []) {
                 $shotPages = [];
+                $skuNeedle = preg_replace('/\D+/', '', (string) $product->sku) ?? '';
                 foreach (array_merge($sourceUrls, array_column($mfrResults ?? [], 'url')) as $u) {
-                    if (is_string($u) && $this->manufacturers->isManufacturerUrl($u, $product, $mfrDomains)) {
-                        $shotPages[] = $u;
+                    if (! is_string($u) || ! $this->manufacturers->isManufacturerUrl($u, $product, $mfrDomains)) {
+                        continue;
                     }
-                }
-                if ($shotPages === [] && $sourceUrls !== []) {
-                    $shotPages = array_slice($sourceUrls, 0, 1);
+                    $path = mb_strtolower((string) (parse_url($u, PHP_URL_PATH) ?? ''));
+                    if (str_contains($path, '/search') || str_contains($path, '/category')) {
+                        continue;
+                    }
+                    if ($skuNeedle !== '' && $skuNeedle !== '0' && ! str_contains($path, $skuNeedle)
+                        && ! $this->identity->imageUrlMentionsProduct($u, $product)) {
+                        continue;
+                    }
+                    $shotPages[] = $u;
                 }
                 $shot = $this->images->downloadPageScreenshot($product, $shotPages, 0);
                 if ($shot !== null) {
@@ -633,12 +646,19 @@ final class ProductEnrichmentService
         );
 
         $rawImageUrls = is_array($cache->image_urls) ? $cache->image_urls : [];
-        $imageUrls = array_values(array_filter(
-            $rawImageUrls,
-            static fn ($u): bool => is_string($u) && ProductImageDownloader::looksLikeImageUrl($u)
-        ));
+        $imageUrls = [];
+        foreach ($rawImageUrls as $u) {
+            if (! is_string($u) || ! ProductImageDownloader::looksLikeImageUrl($u)) {
+                continue;
+            }
+            if (! $this->identity->imageUrlMentionsProduct($u, $product)
+                && ! $this->identity->looksLikeProductGalleryUrl($u)) {
+                continue;
+            }
+            $imageUrls[] = $u;
+        }
 
-        // Cache ma tylko URL karty HTML zamiast pliku — pełne pobranie po zdjęcie.
+        // Cache ma tylko URL karty HTML / śmieci — pełne pobranie po zdjęcie.
         if ($rawImageUrls !== [] && $imageUrls === []) {
             return false;
         }
@@ -748,15 +768,11 @@ final class ProductEnrichmentService
             if ($this->isJunkImageUrl($url) || ! ProductImageDownloader::looksLikeImageUrl($url)) {
                 continue;
             }
-            // bez SKU/modelu w URL — nie bierz (mapy, piwo, menu uvex)
-            if ($product !== null && ! $this->identity->imageUrlMentionsProduct($url, $product)) {
-                $low = mb_strtolower($url);
-                $shopGallery = str_contains($low, 'large_default')
-                    || str_contains($low, 'media/catalog/product')
-                    || str_contains($low, 'pim/products');
-                if (! $shopGallery) {
-                    continue;
-                }
+            // Tavily/śmieci: wymagaj SKU/modelu. Galeria karty (uvex shop-media = hash bez SKU) — OK.
+            if ($product !== null
+                && ! $this->identity->imageUrlMentionsProduct($url, $product)
+                && ! $this->identity->looksLikeProductGalleryUrl($url)) {
+                continue;
             }
             $u = mb_strtolower($url);
             // miniatury WP (-80x80 …)

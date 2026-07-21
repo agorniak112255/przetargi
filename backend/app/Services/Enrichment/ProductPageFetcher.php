@@ -742,6 +742,11 @@ final class ProductPageFetcher
                 && (((int) $wm[1] < 400) || ((int) $wm[2] < 400))) {
                 continue;
             }
+            // uvex imgproxy miniatury /w:60/h:60/
+            if (preg_match('#/w:(\d+)/h:(\d+)/#i', $meta, $wm)
+                && (((int) $wm[1] < 200) || ((int) $wm[2] < 200))) {
+                continue;
+            }
             // PrestaShop miniatury kolorów / thumbs
             if (preg_match('#/\d+-(small_default|cart_default|pdt_180)/#i', $meta)) {
                 continue;
@@ -778,9 +783,27 @@ final class ProductPageFetcher
                 $score += 50;
                 $skuInUrl = true;
             }
-            // menu / kafle nawigacji uvex (nie zdjęcie produktu)
-            if (str_contains($meta, 'menu-') || str_contains($meta, 'menue-') || str_contains($meta, '/01_menue') || str_contains($meta, 'favicon')) {
+            // menu / kafle nawigacji uvex (nie zdjęcie produktu) — też w base64 imgproxy
+            $decodedMeta = $meta;
+            if (preg_match('#/([A-Za-z0-9_\-+/=]{24,})$#', (string) (parse_url($abs, PHP_URL_PATH) ?? ''), $bm)) {
+                $raw = strtr($bm[1], '-_', '+/');
+                $pad = strlen($raw) % 4;
+                if ($pad > 0) {
+                    $raw .= str_repeat('=', 4 - $pad);
+                }
+                $dec = base64_decode($raw, true);
+                if (is_string($dec) && $dec !== '') {
+                    $decodedMeta .= ' '.mb_strtolower($dec);
+                }
+            }
+            if (preg_match('#(menu-|menue-|/01_menue|menue-pics|menu-neuheit|menukachel|favicon)#i', $decodedMeta) === 1) {
                 continue;
+            }
+            // uvex shop-media na karcie produktu — prawdziwa galeria
+            if (str_contains($meta, 'shop-media')) {
+                $score += 120;
+                $skuInUrl = true;
+                $trusted = true;
             }
             // PrestaShop galeria produktu
             if (preg_match('#/\d+-(large_default|medium_default|home_default|pdt_\d+)/#i', $meta)) {
