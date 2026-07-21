@@ -11,6 +11,10 @@ use Throwable;
 
 final class ProductPageFetcher
 {
+    public function __construct(
+        private readonly BlockedPageReader $blockedPages = new BlockedPageReader(),
+    ) {}
+
     /**
      * @param  list<array{url: string, title?: string, snippet?: string}>  $results
      * @param  list<string>  $manufacturerDomains  hosty producenta — wtedy bierzemy PDF ze strony (zwykle certyfikaty)
@@ -27,7 +31,7 @@ final class ProductPageFetcher
         $documents = [];
         foreach ($results as $row) {
             $u = (string) ($row['url'] ?? '');
-            if (ProductDocumentDownloader::looksLikePdfUrl($u)) {
+            if (ProductDocumentDownloader::looksLikeDocumentUrl($u)) {
                 $documents[] = $u;
             }
         }
@@ -75,11 +79,24 @@ final class ProductPageFetcher
             }
 
             $html = $response->body();
-            // Imperva/Incapsula (Ansell i inni) — challenge JS, nie prawdziwa karta
+            // Imperva/Incapsula (Ansell i inni) — challenge JS → reader (markdown z galerią/PDF)
             if ($this->looksLikeBotWall($html)) {
-                $snippet = trim((string) ($row['snippet'] ?? ''));
-                if ($snippet !== '') {
-                    $pages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
+                $viaReader = $this->blockedPages->fetch($url);
+                if ($viaReader !== null) {
+                    if ($viaReader['text'] !== '') {
+                        $pages[] = ['url' => $url, 'text' => $viaReader['text']];
+                    }
+                    foreach ($viaReader['image_urls'] as $img) {
+                        $images[] = $img;
+                    }
+                    foreach ($viaReader['document_urls'] as $doc) {
+                        $documents[] = $doc;
+                    }
+                } else {
+                    $snippet = trim((string) ($row['snippet'] ?? ''));
+                    if ($snippet !== '') {
+                        $pages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
+                    }
                 }
 
                 continue;
@@ -476,12 +493,29 @@ final class ProductPageFetcher
                 $raw[] = ['href' => (string) $href, 'label' => ''];
             }
         }
+        // Ansell: /products/…/pds|doc|ukdoc/…
+        if (preg_match_all('#href=["\']([^"\']+/(?:pds|doc|ukdoc)/[^"\']+)["\']#i', $html, $m)) {
+            foreach ($m[1] as $href) {
+                $raw[] = [
+                    'href' => html_entity_decode((string) $href, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+                    'label' => 'document',
+                ];
+            }
+        }
+        if (preg_match_all('#href=["\']([^"\']+\.ashx[^"\']*)["\']#i', $html, $m)) {
+            foreach ($m[1] as $href) {
+                $raw[] = [
+                    'href' => html_entity_decode((string) $href, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+                    'label' => '',
+                ];
+            }
+        }
 
         $out = [];
         $skuTokens = $this->skuTokens($skuNorm);
         foreach ($raw as $item) {
             $abs = $this->absolutize($item['href'], $pageUrl);
-            if ($abs === null || ! ProductDocumentDownloader::looksLikePdfUrl($abs)) {
+            if ($abs === null || ! ProductDocumentDownloader::looksLikeDocumentUrl($abs)) {
                 continue;
             }
             $meta = mb_strtolower(urldecode($abs));
@@ -638,6 +672,19 @@ final class ProductPageFetcher
             }
         }
 
+        // Ansell Sitecore: /-/media/.../065g_primary.ashx
+        if (preg_match_all('#(?:https?:)?//[^"\'\s<>]+/-/media/[^"\'\s<>]+\.ashx[^"\'\s<>]*#i', $html, $m)) {
+            foreach ($m[0] as $u) {
+                $rawUrls[] = str_starts_with($u, '//') ? 'https:'.$u : $u;
+                $trustedUrls[] = str_starts_with($u, '//') ? 'https:'.$u : $u;
+            }
+        }
+        if (preg_match_all('#/-/media/[^"\'\s<>]+\.ashx[^"\'\s<>]*#i', $html, $m)) {
+            foreach ($m[0] as $path) {
+                $rawUrls[] = $path;
+                $trustedUrls[] = $path;
+            }
+        }
         // Magento / JSON galeria (często escaped \/ )
         if (preg_match_all('#https?:\\\\?/\\\\?/[^"\'\s<>]+/(?:media/catalog/product|media/wysiwyg)/[^"\'\s<>]+\.(?:jpe?g|png|webp)#i', $html, $m)) {
             foreach ($m[0] as $u) {
@@ -814,6 +861,9 @@ final class ProductPageFetcher
             'loading.gif', 'loader-1', 'loader-2', 'progress.gif',
             'related', 'upsell', 'crosssell', 'widget',
             'piktogram', 'social-media', 'logo-social', 'btn-youtube', '/_icons/',
+            // uvex menu / kafle / mapy — nie produkt
+            'menue-', 'menu-', '/01_menue', 'menue-pics', 'menu_pics', 'flag',
+            'sustainability', 'bamboo-twinflex', 'world-map', 'sitemap',
         ] as $needle) {
             if (str_contains($u, $needle)) {
                 return true;

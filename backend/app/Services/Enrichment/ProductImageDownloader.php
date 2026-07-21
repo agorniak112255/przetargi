@@ -24,6 +24,10 @@ final class ProductImageDownloader
         'image/gif' => 'gif',
     ];
 
+    public function __construct(
+        private readonly BlockedPageReader $blockedPages = new BlockedPageReader(),
+    ) {}
+
     /**
      * Odrzuca URL karty produktu (HTML) — wcześniej SKU w ścieżce dawało fałszywy „hit”.
      */
@@ -41,8 +45,16 @@ final class ProductImageDownloader
         if (preg_match('/\.(jpe?g|png|webp|gif|avif|bmp)(\.(webp|avif))?(\?|$)/i', $path) === 1) {
             return true;
         }
+        // Ansell Sitecore PIM: …/065g_primary.ashx
+        if (str_ends_with($path, '.ashx') && (
+            str_contains($path, '/media/')
+            || str_contains($path, '/pim/')
+            || str_contains($path, 'product-assets')
+        )) {
+            return true;
+        }
         // typowe CDN / media / Drupal / uvex shop-media (często bez rozszerzenia w path)
-        if (preg_match('#/(media|shop-media|fileadmin|images?|img|cdn|static|uploads|assets|product[-_]?images?|sites/default/files|pim/products)/#i', $path) === 1) {
+        if (preg_match('#/(media|shop-media|fileadmin|images?|img|cdn|static|uploads|assets|product[-_]?images?|sites/default/files|pim/products|product-assets)/#i', $path) === 1) {
             return true;
         }
         // CloudFront / imgproxy uvex: /images/{hash}/w:992/h:992/...
@@ -100,6 +112,49 @@ final class ProductImageDownloader
         }
 
         return $saved;
+    }
+
+    /**
+     * Ostatnia deska: zrzut karty producenta (gdy pliki mediów za bot-wallem).
+     *
+     * @param  list<string>  $pageUrls
+     */
+    public function downloadPageScreenshot(Product $product, array $pageUrls, int $sortOrder = 0): ?ProductImage
+    {
+        foreach (array_values(array_unique($pageUrls)) as $pageUrl) {
+            if (! is_string($pageUrl) || ! str_starts_with($pageUrl, 'http')) {
+                continue;
+            }
+            // tylko sensowna karta produktu, nie listing
+            $path = mb_strtolower((string) (parse_url($pageUrl, PHP_URL_PATH) ?? ''));
+            if ($path === '' || str_contains($path, '/search') || str_contains($path, '/category')) {
+                continue;
+            }
+
+            try {
+                $bytes = $this->blockedPages->fetchScreenshot($pageUrl);
+            } catch (Throwable $e) {
+                Log::info('Product page screenshot skipped', [
+                    'product_id' => $product->id,
+                    'url' => $pageUrl,
+                    'error' => $e->getMessage(),
+                ]);
+
+                continue;
+            }
+
+            if ($bytes === null) {
+                continue;
+            }
+
+            $mime = str_starts_with($bytes, "\x89PNG") ? 'image/png' : 'image/jpeg';
+            $image = $this->storeBytes($product, $bytes, $mime, $pageUrl.'#screenshot', $sortOrder);
+            if ($image !== null) {
+                return $image;
+            }
+        }
+
+        return null;
     }
 
     private function downloadOne(Product $product, string $url, int $sortOrder): ?ProductImage
@@ -162,6 +217,25 @@ final class ProductImageDownloader
             }
         }
 
+        return $this->storeBytes($product, $bytes, $mime, $url, $sortOrder);
+    }
+
+    private function storeBytes(
+        Product $product,
+        string $bytes,
+        string $mime,
+        string $sourceUrl,
+        int $sortOrder,
+    ): ?ProductImage {
+        $mime = strtolower(trim(explode(';', $mime)[0] ?? ''));
+        if (! isset(self::ALLOWED_MIME[$mime])) {
+            return null;
+        }
+        $size = strlen($bytes);
+        if ($bytes === '' || $size > self::MAX_BYTES) {
+            return null;
+        }
+
         $checksum = hash('sha256', $bytes);
         $existing = ProductImage::query()
             ->where('product_id', $product->id)
@@ -178,7 +252,7 @@ final class ProductImageDownloader
         return ProductImage::query()->create([
             'product_id' => $product->id,
             'path' => $relative,
-            'source_url' => mb_substr($url, 0, 2000),
+            'source_url' => mb_substr($sourceUrl, 0, 2000),
             'is_primary' => $sortOrder === 0,
             'sort_order' => $sortOrder,
             'checksum' => $checksum,

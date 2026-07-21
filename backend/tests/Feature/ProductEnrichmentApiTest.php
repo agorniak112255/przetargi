@@ -289,6 +289,9 @@ final class ProductEnrichmentApiTest extends TestCase
             app(\App\Services\Enrichment\ProductDocumentFinder::class),
             app(\App\Services\Enrichment\ManufacturerDomainResolver::class),
             $llm,
+            app(\App\Services\Ai\AiSettingsService::class),
+            app(\App\Support\BhpAttributeNormalizer::class),
+            app(\App\Services\Enrichment\ProductSearchIdentity::class),
         );
 
         $service->enrichProduct($product, false);
@@ -382,6 +385,9 @@ final class ProductEnrichmentApiTest extends TestCase
             app(\App\Services\Enrichment\ProductDocumentFinder::class),
             app(\App\Services\Enrichment\ManufacturerDomainResolver::class),
             $llm,
+            app(\App\Services\Ai\AiSettingsService::class),
+            app(\App\Support\BhpAttributeNormalizer::class),
+            app(\App\Services\Enrichment\ProductSearchIdentity::class),
         );
 
         $service->enrichProduct($product, false);

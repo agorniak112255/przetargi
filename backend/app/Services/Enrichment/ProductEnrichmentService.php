@@ -35,6 +35,7 @@ final class ProductEnrichmentService
         private readonly OpenAiCompatibleClient $llm,
         private readonly AiSettingsService $aiSettings,
         private readonly BhpAttributeNormalizer $bhpAttributes,
+        private readonly ProductSearchIdentity $identity,
     ) {}
 
     /**
@@ -225,9 +226,14 @@ final class ProductEnrichmentService
             $searchResults = $searchPack['results'];
             $searchImages = [];
             foreach ($searchPack['images'] ?? [] as $url) {
-                if (is_string($url) && str_starts_with($url, 'http')) {
-                    $searchImages[] = $url;
+                if (! is_string($url) || ! str_starts_with($url, 'http')) {
+                    continue;
                 }
+                // Tavily bywa śmietnikiem (piwo, mapy) — tylko URL z SKU/modelem
+                if (! $this->identity->imageUrlMentionsProduct($url, $product)) {
+                    continue;
+                }
+                $searchImages[] = $url;
             }
             if ($searchResults === []) {
                 $detail = $searchPack['errors'] !== []
@@ -398,6 +404,7 @@ final class ProductEnrichmentService
                 $extracted['image_urls'] ?? [],
                 (string) $product->sku,
                 (string) $product->name,
+                $product,
             );
             // kilka kandydatów — LLM często zmyśla JPG (404), prawdziwe są w HTML strony
             $savedImages = $this->images->downloadMany($product, $primaryImageUrls, 1);
@@ -418,6 +425,7 @@ final class ProductEnrichmentService
                         [],
                         (string) $product->sku,
                         (string) $product->name,
+                        $product,
                     ),
                     1
                 );
@@ -430,13 +438,30 @@ final class ProductEnrichmentService
                         [],
                         (string) $product->sku,
                         (string) $product->name,
+                        $product,
                     ),
                     1
                 );
             }
+            // Ansell/Imperva: pliki .ashx zablokowane — zrzut karty producenta
+            if ($savedImages === []) {
+                $shotPages = [];
+                foreach (array_merge($sourceUrls, array_column($mfrResults ?? [], 'url')) as $u) {
+                    if (is_string($u) && $this->manufacturers->isManufacturerUrl($u, $product, $mfrDomains)) {
+                        $shotPages[] = $u;
+                    }
+                }
+                if ($shotPages === [] && $sourceUrls !== []) {
+                    $shotPages = array_slice($sourceUrls, 0, 1);
+                }
+                $shot = $this->images->downloadPageScreenshot($product, $shotPages, 0);
+                if ($shot !== null) {
+                    $savedImages = [$shot];
+                }
+            }
             $documentUrls = [];
             foreach ($extracted['document_urls'] ?? [] as $url) {
-                if (is_string($url) && ProductDocumentDownloader::looksLikePdfUrl($url)) {
+                if (is_string($url) && ProductDocumentDownloader::looksLikeDocumentUrl($url)) {
                     $documentUrls[] = $url;
                 }
             }
@@ -447,7 +472,7 @@ final class ProductEnrichmentService
             }
             foreach ($searchResults as $row) {
                 $u = (string) ($row['url'] ?? '');
-                if (ProductDocumentDownloader::looksLikePdfUrl($u)) {
+                if (ProductDocumentDownloader::looksLikeDocumentUrl($u)) {
                     $documentUrls[] = $u;
                 }
             }
@@ -457,7 +482,11 @@ final class ProductEnrichmentService
             $docHits = $this->documentFinder->findDocumentUrls($product);
             $docPages = [];
             foreach ($docHits as $url) {
-                if (ProductDocumentDownloader::looksLikePdfUrl($url)) {
+                if (ProductDocumentDownloader::looksLikeDocumentUrl($url) && (
+                    ProductDocumentDownloader::looksLikePdfUrl($url)
+                    || preg_match('#/(pds|doc|ukdoc)(/|$)#i', $url) === 1
+                    || str_ends_with(mb_strtolower((string) parse_url($url, PHP_URL_PATH)), '.ashx')
+                )) {
                     $documentUrls[] = $url;
                 } else {
                     $docPages[] = ['url' => $url, 'title' => '', 'snippet' => ''];
@@ -680,7 +709,7 @@ final class ProductEnrichmentService
      * @param  mixed  $llmUrls
      * @return list<string>
      */
-    private function pickPrimaryImageUrls(array $allUrls, mixed $llmUrls, string $sku, string $name): array
+    private function pickPrimaryImageUrls(array $allUrls, mixed $llmUrls, string $sku, string $name, ?Product $product = null): array
     {
         $scored = [];
         $skuNorm = mb_strtolower(trim($sku));
@@ -699,6 +728,10 @@ final class ProductEnrichmentService
         if (is_array($llmUrls)) {
             foreach ($llmUrls as $url) {
                 if (is_string($url) && str_starts_with($url, 'http')) {
+                    // LLM często zmyśla obce JPG — bez śladu SKU/modelu odrzuć
+                    if ($product !== null && ! $this->identity->imageUrlMentionsProduct($url, $product)) {
+                        continue;
+                    }
                     $push($url, 15);
                 }
             }
@@ -714,6 +747,16 @@ final class ProductEnrichmentService
         foreach ($scored as $url => $base) {
             if ($this->isJunkImageUrl($url) || ! ProductImageDownloader::looksLikeImageUrl($url)) {
                 continue;
+            }
+            // bez SKU/modelu w URL — nie bierz (mapy, piwo, menu uvex)
+            if ($product !== null && ! $this->identity->imageUrlMentionsProduct($url, $product)) {
+                $low = mb_strtolower($url);
+                $shopGallery = str_contains($low, 'large_default')
+                    || str_contains($low, 'media/catalog/product')
+                    || str_contains($low, 'pim/products');
+                if (! $shopGallery) {
+                    continue;
+                }
             }
             $u = mb_strtolower($url);
             // miniatury WP (-80x80 …)
@@ -1339,6 +1382,8 @@ final class ProductEnrichmentService
             'placeholder', 'blank', 'pixel', 'bg_environment', 'environment_oily', '.svg',
             'loader', 'spinner', 'loading', 'preloader', 'ajax-loader', 'load.gif',
             'loading.gif', 'loader-1', 'loader-2', 'progress.gif',
+            'menue-', 'menu-', '/01_menue', 'menue-pics', 'world-map', 'sitemap',
+            'beer', 'fox-deluxe', 'sustainability_report',
         ];
         foreach ($blocked as $needle) {
             if (str_contains($u, $needle)) {

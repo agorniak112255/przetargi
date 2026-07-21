@@ -20,6 +20,7 @@ final class ProductDocumentFinder
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly ManufacturerDomainResolver $manufacturers,
+        private readonly ProductSearchIdentity $identity = new ProductSearchIdentity(),
     ) {}
 
     /**
@@ -341,11 +342,20 @@ final class ProductDocumentFinder
 
     private function matchesProduct(string $hay, Product $product): bool
     {
+        if ($this->identity->hayMentionsProduct($hay, $product)) {
+            return true;
+        }
+
         $sku = mb_strtolower(trim((string) $product->sku));
         $name = mb_strtolower(trim((string) $product->name));
 
         if ($sku !== '' && preg_match('/(?<![0-9])'.preg_quote($sku, '/').'(?![0-9])/u', $hay)) {
             return true;
+        }
+        foreach ($this->identity->modelAliases($product) as $alias) {
+            if ($alias !== '' && str_contains($hay, $alias)) {
+                return true;
+            }
         }
 
         if (preg_match('/\b(\d{1,2}-\d{3})\b/', $sku.' '.$name, $m)) {

@@ -58,6 +58,10 @@ final class ProductSearchIdentity
             }
         }
 
+        foreach ($this->modelAliases($product) as $alias) {
+            $out[] = $alias;
+        }
+
         $out = array_values(array_unique(array_filter(
             $out,
             static fn (string $t): bool => $t !== '' && mb_strlen($t) >= 3
@@ -65,6 +69,123 @@ final class ProductSearchIdentity
 
         // za krótkie same „100” itd. — zostaw tylko gdy nie ma lepszych
         return $out !== [] ? $out : array_values(array_filter([mb_strtolower($sku), mb_strtolower($name)]));
+    }
+
+    /**
+     * URL zdjęcia musi wskazywać produkt (SKU/model) — blokuje losowe Tavily (piwo, mapy, menu).
+     */
+    public function imageUrlMentionsProduct(string $url, Product $product): bool
+    {
+        $hay = mb_strtolower(urldecode($url));
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+
+        foreach ($this->strongImageTokens($product) as $token) {
+            if (mb_strlen($token) >= 5 && (str_contains($hay, $token) || str_contains($hayCompact, $token))) {
+                return true;
+            }
+            // 60544 / r065 / 065g — dokładny fragment kodu
+            if (preg_match('/^\d{4,}$/', $token) === 1
+                && preg_match('/(?<![0-9])'.preg_quote($token, '/').'(?![0-9])/u', $hay) === 1) {
+                return true;
+            }
+            if (preg_match('/^r-?\d{2,4}g?$/i', $token) === 1
+                && (str_contains($hay, $token) || str_contains($hayCompact, preg_replace('/[^a-z0-9]/i', '', $token) ?? $token))) {
+                return true;
+            }
+        }
+
+        // Ansell PIM: …/ringers/r-065/065g_primary.ashx
+        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        if ($brand !== '' && str_contains($hay, $brand) && str_contains($hay, 'product-assets')) {
+            foreach ($this->modelAliases($product) as $alias) {
+                if (str_contains($hay, $alias) || str_contains($hayCompact, preg_replace('/[^a-z0-9]/i', '', $alias) ?? $alias)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function strongImageTokens(Product $product): array
+    {
+        $tokens = [];
+        $sku = mb_strtolower(trim((string) $product->sku));
+        $name = mb_strtolower(trim((string) $product->name));
+
+        if ($sku !== '') {
+            $tokens[] = $sku;
+            $tokens[] = preg_replace('/[^a-z0-9]+/iu', '', $sku) ?? $sku;
+        }
+        foreach ($this->modelAliases($product) as $alias) {
+            $tokens[] = $alias;
+        }
+        // nazwa handlowa: c300, ringers, maxiflex…
+        foreach (preg_split('/[\s\-®™\/_]+/u', $name) ?: [] as $part) {
+            $part = trim($part);
+            if ($part === '' || mb_strlen($part) < 4) {
+                continue;
+            }
+            if (in_array($part, ['size', 'rozmiar', 'gloves', 'glove', 'rekawice', 'rękawice', 'foam', 'with'], true)) {
+                continue;
+            }
+            $tokens[] = $part;
+        }
+        $core = $this->gloveCodeCore($product);
+        if ($core !== null) {
+            $tokens[] = $core;
+        }
+
+        return array_values(array_unique(array_filter($tokens)));
+    }
+
+    /**
+     * Alias modeli (Ansell 065-06 / Ringers 065 → r065, r-065, 065g).
+     *
+     * @return list<string>
+     */
+    public function modelAliases(Product $product): array
+    {
+        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        $sku = mb_strtolower(trim((string) $product->sku));
+        $name = mb_strtolower(trim((string) $product->name));
+        $blob = trim($sku.' '.$name);
+        $out = [];
+
+        // RINGERS R065 / Ringers 065 / ringers-r065
+        if (preg_match('/\bringers?\b/u', $blob) === 1
+            && preg_match('/\br?[\s\-]?0*(\d{2,3})\b/u', $blob, $m) === 1) {
+            $n = ltrim($m[1], '0');
+            if ($n === '') {
+                $n = $m[1];
+            }
+            $n = str_pad($n, 3, '0', STR_PAD_LEFT);
+            // R065 → 065
+            if (preg_match('/\br[\s\-]?0*(\d{2,3})\b/u', $blob, $rm) === 1) {
+                $n = str_pad(ltrim($rm[1], '0') ?: $rm[1], 3, '0', STR_PAD_LEFT);
+            }
+            $out[] = 'r'.$n;
+            $out[] = 'r-'.$n;
+            $out[] = $n.'g';
+            $out[] = 'ringers';
+        }
+
+        // Ansell size SKU 065-06 → artykuł 065
+        if (($brand === 'ansell' || str_contains($blob, 'ansell') || str_contains($blob, 'ringers'))
+            && preg_match('/^(\d{2,3})-(\d{2})$/', $sku, $m) === 1) {
+            $art = str_pad($m[1], 3, '0', STR_PAD_LEFT);
+            $out[] = 'r'.$art;
+            $out[] = 'r-'.$art;
+            $out[] = $art.'g';
+            $out[] = $art;
+        }
+
+        // uvex C300 / HyFlex w nazwie już w strongImageTokens
+
+        return array_values(array_unique($out));
     }
 
     /**
@@ -97,6 +218,13 @@ final class ProductSearchIdentity
         if ($sku !== '') {
             $queries[] = $sku;
             $queries[] = '"'.$sku.'"';
+        }
+        // Ansell R065 / uvex model z aliasów
+        foreach ($this->modelAliases($product) as $alias) {
+            if (preg_match('/^r-?\d{2,4}/i', $alias) === 1 || preg_match('/^\d{3}g$/i', $alias) === 1) {
+                $queries[] = trim($brand.' '.$alias);
+                $queries[] = '"'.$alias.'" '.$brand;
+            }
         }
         if ($brand !== '' && $bare !== '') {
             $queries[] = trim($brand.' '.$bare);

@@ -31,6 +31,33 @@ final class ProductDocumentDownloader
     }
 
     /**
+     * PDF + trasy producenta (Ansell /pds|/doc|/ukdoc, IFU .ashx).
+     */
+    public static function looksLikeDocumentUrl(string $url): bool
+    {
+        if (self::looksLikePdfUrl($url)) {
+            return true;
+        }
+        if (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://')) {
+            return false;
+        }
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        $full = mb_strtolower($url);
+
+        if (preg_match('#/(pds|doc|ukdoc)(/|$)#i', $path) === 1) {
+            return true;
+        }
+        if (str_ends_with($path, '.ashx') && preg_match(
+            '#(ifu|datasheet|declaration|deklar|conform|pdb|pds|certificate|certyfik)#i',
+            $full
+        ) === 1) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * @param  list<string>  $urls
      * @return list<ProductDocument>
      */
@@ -43,7 +70,7 @@ final class ProductDocumentDownloader
             if (count($saved) >= $max) {
                 break;
             }
-            if (! is_string($url) || ! self::looksLikePdfUrl($url)) {
+            if (! is_string($url) || ! self::looksLikeDocumentUrl($url)) {
                 continue;
             }
 
@@ -86,8 +113,11 @@ final class ProductDocumentDownloader
             if (preg_match('#(cert|conform|declaration|deklarac|zgodno|doc|ue|eu[-_]?doc|oeko|oeeko|reach)#iu', $u)) {
                 $score += 80;
             }
-            if (preg_match('#(datasheet|data[-_]?sheet|pds|tds|spec|karta)#i', $u)) {
+            if (preg_match('#(datasheet|data[-_]?sheet|pds|tds|spec|karta|pdb)#i', $u)) {
                 $score += 50;
+            }
+            if (preg_match('#/(pds|doc|ukdoc)(/|$)#i', $u)) {
+                $score += 70;
             }
             if (str_ends_with((string) parse_url($url, PHP_URL_PATH), '.pdf')) {
                 $score += 20;
@@ -120,6 +150,11 @@ final class ProductDocumentDownloader
             throw new \RuntimeException('Pusty lub zbyt duży PDF');
         }
         if (! str_starts_with($bytes, '%PDF')) {
+            // Ansell /pds|/doc czasem zwraca HTML z linkiem do PDF albo challenge
+            $fromHtml = $this->extractPdfUrlFromHtml($bytes, $url);
+            if ($fromHtml !== null && $fromHtml !== $url) {
+                return $this->downloadOne($product, $fromHtml, $sortOrder);
+            }
             throw new \RuntimeException('Plik nie wygląda na PDF');
         }
 
@@ -150,13 +185,39 @@ final class ProductDocumentDownloader
         ]);
     }
 
+    private function extractPdfUrlFromHtml(string $html, string $pageUrl): ?string
+    {
+        if (str_contains(mb_strtolower($html), 'incapsula') || str_contains(mb_strtolower($html), '_incapsula_resource')) {
+            return null;
+        }
+        if (preg_match('#https?://[^"\'\s<>]+\.pdf(?:\?[^"\'\s<>]*)?#i', $html, $m) === 1) {
+            return $m[0];
+        }
+        if (preg_match('#href=["\']([^"\']+\.pdf[^"\']*)["\']#i', $html, $m) === 1) {
+            $href = html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5);
+            if (str_starts_with($href, 'http')) {
+                return $href;
+            }
+            $base = rtrim($pageUrl, '/');
+            if (str_starts_with($href, '/')) {
+                $parts = parse_url($pageUrl);
+
+                return ($parts['scheme'] ?? 'https').'://'.($parts['host'] ?? '').$href;
+            }
+
+            return $base.'/'.ltrim($href, '/');
+        }
+
+        return null;
+    }
+
     private function guessKind(string $url): string
     {
         $u = mb_strtolower(urldecode($url));
-        if (preg_match('#(cert|conform|declaration|deklarac|zgodno|doc|oeko)#iu', $u)) {
+        if (preg_match('#(cert|conform|declaration|deklarac|zgodno|/doc/|ukdoc|oeko)#iu', $u)) {
             return ProductDocument::KIND_CERTIFICATE;
         }
-        if (preg_match('#(datasheet|data[-_]?sheet|pds|tds|spec|karta)#i', $u)) {
+        if (preg_match('#(datasheet|data[-_]?sheet|/pds/|pds|tds|spec|karta|pdb)#i', $u)) {
             return ProductDocument::KIND_DATASHEET;
         }
 
