@@ -25,14 +25,14 @@ export type BattlecardProduct = {
   substitute_type?: string
   approval_status?: string
   reason?: string | null
-  from_price_list?: boolean
+  source?: string
 }
 
 export type Battlecard = {
   requirement: { line_no: number; text: string }
   ours: BattlecardProduct | null
   substitutes: BattlecardProduct[]
-  competitors: BattlecardProduct[]
+  competitors?: BattlecardProduct[]
   highlights: string[]
 }
 
@@ -47,13 +47,12 @@ function Col({
   p,
 }: {
   title: string
-  tone: 'ours' | 'sub' | 'comp'
+  tone: 'main' | 'sub'
   p: BattlecardProduct | null
 }) {
   const tones = {
-    ours: 'border-emerald-200 bg-emerald-50/80',
+    main: 'border-emerald-200 bg-emerald-50/80',
     sub: 'border-sky-200 bg-sky-50/80',
-    comp: 'border-amber-200 bg-amber-50/80',
   }
   if (!p) {
     return (
@@ -144,7 +143,6 @@ export function ItemBattlecard({
     >
       <summary className="cursor-pointer font-semibold text-slate-800">
         Battlecard
-        {card?.competitors?.length ? ` · konkurencja: ${card.competitors.length}` : ''}
         {card?.substitutes?.length ? ` · zamienniki: ${card.substitutes.length}` : ''}
       </summary>
       <div className="mt-2 space-y-2">
@@ -160,21 +158,11 @@ export function ItemBattlecard({
               </ul>
             )}
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
-              <Col title="Nasz produkt" tone="ours" p={card.ours} />
-              <Col title="Zamiennik" tone="sub" p={card.substitutes[0] ?? null} />
-              <Col title="Konkurencja" tone="comp" p={card.competitors[0] ?? null} />
+              <Col title="Propozycja" tone="main" p={card.ours} />
+              <Col title="Zamiennik 1" tone="sub" p={card.substitutes[0] ?? null} />
+              <Col title="Zamiennik 2" tone="sub" p={card.substitutes[1] ?? null} />
             </div>
-            {(card.substitutes.length > 1 || card.competitors.length > 1) && (
-              <div className="space-y-1">
-                {card.substitutes.slice(1).map((s) => (
-                  <Col key={`s-${s.product_id}`} title="Zamiennik" tone="sub" p={s} />
-                ))}
-                {card.competitors.slice(1).map((c) => (
-                  <Col key={`c-${c.product_id}`} title="Konkurencja" tone="comp" p={c} />
-                ))}
-              </div>
-            )}
-            {!card.ours && !card.competitors.length && (
+            {!card.ours && (
               <p className="text-slate-400">Brak danych do porównania — najpierw dopasuj produkt.</p>
             )}
           </>

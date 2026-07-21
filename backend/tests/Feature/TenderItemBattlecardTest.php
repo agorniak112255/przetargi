@@ -6,7 +6,6 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\Product;
-use App\Models\ProductPriceHistory;
 use App\Models\ProductSubstitute;
 use App\Models\Tender;
 use App\Models\TenderItem;
@@ -26,7 +25,7 @@ final class TenderItemBattlecardTest extends TestCase
         $this->seed(RolesAndPermissionsSeeder::class);
     }
 
-    public function test_battlecard_returns_ours_substitutes_and_competitors(): void
+    public function test_battlecard_returns_main_and_two_substitutes(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
@@ -54,12 +53,13 @@ final class TenderItemBattlecardTest extends TestCase
             'purchase_price' => 1.80,
             'stock' => 50,
             'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
             'enriched_at' => now(),
         ]);
 
-        $comp = Product::query()->create([
-            'sku' => 'NITRIL-COMP',
-            'name' => 'Rękawice nitrylowe konkurencja',
+        $alt = Product::query()->create([
+            'sku' => 'NITRIL-ALT',
+            'name' => 'Rękawice nitrylowe katalog',
             'manufacturer' => 'OTHERBRAND',
             'category' => 'Rękawice',
             'description' => 'Rękawice robocze nitrylowe ze ściągaczem',
@@ -69,14 +69,6 @@ final class TenderItemBattlecardTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enrichment_payload' => ['materials' => ['nitryl']],
             'enriched_at' => now(),
-        ]);
-
-        ProductPriceHistory::query()->create([
-            'product_id' => $comp->id,
-            'price_list_id' => null,
-            'catalog_price_net' => 2.40,
-            'purchase_price' => 1.50,
-            'source' => 'price_list_import',
         ]);
 
         ProductSubstitute::query()->create([
@@ -114,22 +106,16 @@ final class TenderItemBattlecardTest extends TestCase
             'status' => 'ok',
         ]);
 
-        $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")
+        $res = $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")
             ->assertOk()
             ->assertJsonPath('battlecard.ours.sku', 'RNITZ-OURS')
             ->assertJsonPath('battlecard.ours.offer_price', 3.9)
             ->assertJsonPath('battlecard.substitutes.0.sku', 'RNITZ-SUB')
-            ->assertJsonPath('battlecard.competitors.0.sku', 'NITRIL-COMP')
-            ->assertJsonPath('battlecard.competitors.0.from_price_list', true)
-            ->assertJsonStructure([
-                'battlecard' => [
-                    'requirement' => ['line_no', 'text'],
-                    'ours',
-                    'substitutes',
-                    'competitors',
-                    'highlights',
-                ],
-            ]);
+            ->assertJsonPath('battlecard.competitors', []);
+
+        $subs = $res->json('battlecard.substitutes');
+        $this->assertCount(2, $subs);
+        $this->assertContains($alt->sku, collect($subs)->pluck('sku')->all());
     }
 
     public function test_match_item_includes_battlecard(): void

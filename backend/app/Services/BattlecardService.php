@@ -8,18 +8,16 @@ use App\Models\Product;
 use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
 use App\Support\BhpAttributeNormalizer;
-use Illuminate\Support\Collection;
 
 /**
- * Snapshot porównawczy pozycji SIWZ: nasz produkt vs zamienniki vs konkurencja z cenników.
+ * Snapshot pozycji SIWZ: propozycja główna + do 2 zamienników z katalogu.
+ * (Katalog = oferta ogólnie dostępna wielu marek — bez bloku „konkurencja”.)
  */
 final class BattlecardService
 {
-    private const SUBSTITUTE_LIMIT = 3;
+    private const SUBSTITUTE_LIMIT = 2;
 
-    private const COMPETITOR_LIMIT = 3;
-
-    private const COMPETITOR_MIN_SCORE = 50;
+    private const CATALOG_ALT_MIN_SCORE = 55;
 
     public function __construct(
         private readonly ProductMatchService $matcher,
@@ -45,7 +43,11 @@ final class BattlecardService
         }
 
         $substitutes = $this->buildSubstitutes($ours, $excludeIds);
-        $competitors = $this->buildCompetitors($item->requirement, $ours, $excludeIds);
+        $substitutes = $this->fillFromCatalog(
+            $item->requirement,
+            $substitutes,
+            $excludeIds,
+        );
 
         $card = [
             'requirement' => [
@@ -60,8 +62,8 @@ final class BattlecardService
                 $item->match_source,
                 'ours',
             ),
-            'substitutes' => $substitutes,
-            'competitors' => $competitors,
+            'substitutes' => array_slice($substitutes, 0, self::SUBSTITUTE_LIMIT),
+            'competitors' => [],
             'highlights' => [],
         ];
 
@@ -105,6 +107,7 @@ final class BattlecardService
             $snap['substitute_type'] = $row->type;
             $snap['approval_status'] = $row->approval_status;
             $snap['reason'] = $row->reason;
+            $snap['source'] = 'relation';
             $out[] = $snap;
         }
 
@@ -112,64 +115,45 @@ final class BattlecardService
     }
 
     /**
-     * Produkty innych producentów z historii cenników (fallback: cały katalog).
+     * Uzupełnij brakujące sloty zamienników top matchami z całego katalogu (SIWZ).
      *
+     * @param  list<array<string, mixed>>  $existing
      * @param  list<int>  $excludeIds
      * @return list<array<string, mixed>>
      */
-    private function buildCompetitors(string $requirement, ?Product $ours, array $excludeIds): array
+    private function fillFromCatalog(string $requirement, array $existing, array $excludeIds): array
     {
-        $ourMfr = $ours !== null ? $this->normMfr((string) $ours->manufacturer) : '';
-
-        [$pool, $fromPriceList] = $this->competitorPool($excludeIds, $ourMfr);
-        if ($pool->isEmpty()) {
-            return [];
+        $need = self::SUBSTITUTE_LIMIT - count($existing);
+        if ($need <= 0 || trim($requirement) === '') {
+            return $existing;
         }
 
-        $ranked = $this->matcher->rankProducts($requirement, $pool, self::COMPETITOR_LIMIT + 5);
-        $out = [];
+        $pool = Product::query()
+            ->when($excludeIds !== [], fn ($q) => $q->whereNotIn('id', array_unique($excludeIds)))
+            ->limit(500)
+            ->get();
+
+        if ($pool->isEmpty()) {
+            return $existing;
+        }
+
+        $ranked = $this->matcher->rankProducts($requirement, $pool, $need + 8);
         foreach ($ranked as $row) {
-            if ($row['score'] < self::COMPETITOR_MIN_SCORE) {
+            if ($row['score'] < self::CATALOG_ALT_MIN_SCORE) {
                 continue;
             }
             /** @var Product $p */
             $p = $row['product'];
-            if ($ourMfr !== '' && $this->normMfr((string) $p->manufacturer) === $ourMfr) {
-                continue;
-            }
-            $snap = $this->productSnapshot($p, $row['score'], null, [], null, 'competitor');
-            $snap['from_price_list'] = $fromPriceList;
-            $out[] = $snap;
-            if (count($out) >= self::COMPETITOR_LIMIT) {
+            $snap = $this->productSnapshot($p, $row['score'], null, [], null, 'substitute');
+            $snap['source'] = 'catalog';
+            $snap['substitute_type'] = 'katalog';
+            $existing[] = $snap;
+            if (count($existing) >= self::SUBSTITUTE_LIMIT) {
                 break;
             }
         }
 
-        return $out;
-    }
-
-    /**
-     * @param  list<int>  $excludeIds
-     * @return array{0: Collection<int, Product>, 1: bool}
-     */
-    private function competitorPool(array $excludeIds, string $ourMfr): array
-    {
-        $base = Product::query()
-            ->when($excludeIds !== [], fn ($q) => $q->whereNotIn('id', array_unique($excludeIds)))
-            ->when($ourMfr !== '', function ($q) use ($ourMfr) {
-                $q->whereRaw('LOWER(TRIM(manufacturer)) <> ?', [$ourMfr]);
-            });
-
-        $fromLists = (clone $base)
-            ->whereHas('priceHistory', fn ($q) => $q->where('source', 'price_list_import'))
-            ->limit(400)
-            ->get();
-
-        if ($fromLists->isNotEmpty()) {
-            return [$fromLists, true];
-        }
-
-        return [$base->limit(400)->get(), false];
+        return $existing;
     }
 
     /**
@@ -229,30 +213,23 @@ final class BattlecardService
         $highlights = [];
         $ours = $card['ours'];
         if ($ours === null) {
-            $highlights[] = 'Brak produktu głównego — uzupełnij match, aby porównać ofertę.';
+            $highlights[] = 'Brak propozycji głównej — uzupełnij match, aby porównać ofertę.';
 
             return $highlights;
         }
 
         $ourPrice = $ours['offer_price'] ?? $ours['catalog_price_net'] ?? null;
-        foreach ($card['competitors'] as $comp) {
-            $compPrice = $comp['catalog_price_net'] ?? null;
-            if ($ourPrice === null || $compPrice === null) {
+        foreach ($card['substitutes'] as $sub) {
+            $subPrice = $sub['catalog_price_net'] ?? null;
+            if ($ourPrice === null || $subPrice === null) {
                 continue;
             }
-            $diff = ((float) $ourPrice - (float) $compPrice) / (float) $compPrice * 100;
-            if ($diff <= -3) {
+            $diff = ((float) $ourPrice - (float) $subPrice) / (float) $subPrice * 100;
+            if ($diff >= 3) {
                 $highlights[] = sprintf(
-                    'Tańsi od %s (%s) o ok. %.0f%%.',
-                    $comp['manufacturer'],
-                    $comp['sku'],
-                    abs($diff),
-                );
-            } elseif ($diff >= 3) {
-                $highlights[] = sprintf(
-                    'Drodzy vs %s (%s) o ok. %.0f%% — sprawdź zamiennik / marżę.',
-                    $comp['manufacturer'],
-                    $comp['sku'],
+                    'Zamiennik %s (%s) tańszy o ok. %.0f%%.',
+                    $sub['sku'],
+                    $sub['manufacturer'],
                     $diff,
                 );
             }
@@ -273,10 +250,5 @@ final class BattlecardService
         }
 
         return array_slice($highlights, 0, 4);
-    }
-
-    private function normMfr(string $mfr): string
-    {
-        return mb_strtolower(trim($mfr));
     }
 }
