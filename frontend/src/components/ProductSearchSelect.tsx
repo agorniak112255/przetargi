@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type Product } from '../lib/api'
+import { productDisplayName, productSelectLabel } from '../lib/productLabel'
 import { ProductPreviewModal } from './ProductPreviewModal'
 
-type MiniProduct = { id: number; sku: string; name: string; manufacturer?: string | null }
+type MiniProduct = {
+  id: number
+  sku: string
+  name: string
+  manufacturer?: string | null
+  description?: string | null
+}
 
 type Props = {
   products: Product[]
@@ -21,7 +28,7 @@ function norm(s: string): string {
 }
 
 function labelOf(p: MiniProduct): string {
-  return `${p.sku} · ${p.name}`
+  return productSelectLabel(p)
 }
 
 export function ProductSearchSelect({
@@ -132,7 +139,9 @@ export function ProductSearchSelect({
           <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
           <span className="min-w-0">
             <span className="block truncate text-[11px] font-medium text-sky-900">{selected.sku}</span>
-            <span className="block truncate text-[10px] text-slate-600">{selected.name}</span>
+            <span className="block truncate text-[10px] text-slate-600" title={selected.name}>
+              {productDisplayName(selected)}
+            </span>
           </span>
         </button>
       )}
@@ -170,7 +179,7 @@ export function ProductSearchSelect({
               >
                 <span className="font-mono text-[11px] text-slate-600">{p.sku}</span>
                 <span className="text-slate-400"> · </span>
-                {p.name}
+                {productDisplayName(p, 48)}
               </button>
             </li>
           ))}

@@ -5,6 +5,7 @@ export type AiMatchPick = {
   id: number
   sku: string
   name: string
+  description?: string | null
   manufacturer?: string | null
   purchase_price?: string | number | null
   catalog_price_net?: string | number | null

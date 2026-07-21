@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Product } from '../lib/api'
+import { productDisplayName } from '../lib/productLabel'
 
 function descriptionProse(text: string | null | undefined): string {
   if (!text) return ''
@@ -59,10 +60,13 @@ export function ProductPreviewModal({ productId, onClose }: Props) {
             {error && <p className="text-sm text-red-600">{error}</p>}
             {product && (
               <>
-                <p className="text-sm font-semibold">{product.name}</p>
+                <p className="text-sm font-semibold">{productDisplayName(product, 120)}</p>
                 <p className="text-xs text-slate-500">
                   {product.sku} · {product.manufacturer}
                   {product.category ? ` · ${product.category}` : ''}
+                  {product.name && productDisplayName(product, 120) !== product.name
+                    ? ` · cennik: ${product.name}`
+                    : ''}
                 </p>
               </>
             )}

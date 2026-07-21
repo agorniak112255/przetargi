@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { productDisplayName } from '../lib/productLabel'
 
 export type BattlecardProduct = {
   role: string
   product_id: number
   sku: string
   name: string
+  description?: string | null
   manufacturer: string
   category: string | null
   norms: string | null
@@ -45,10 +47,14 @@ function Col({
   title,
   tone,
   p,
+  clickable,
+  onClick,
 }: {
   title: string
   tone: 'main' | 'sub'
   p: BattlecardProduct | null
+  clickable?: boolean
+  onClick?: () => void
 }) {
   const tones = {
     main: 'border-emerald-200 bg-emerald-50/80',
@@ -62,9 +68,9 @@ function Col({
       </div>
     )
   }
-  const price = p.offer_price ?? p.catalog_price_net
-  return (
-    <div className={`rounded border px-2 py-1.5 ${tones[tone]}`}>
+  const price = p.purchase_price ?? p.catalog_price_net
+  const body = (
+    <>
       <div className="flex items-center justify-between gap-1">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">{title}</span>
         <span className="text-[10px] font-bold text-violet-700">{p.match_percent}%</span>
@@ -73,10 +79,19 @@ function Col({
         {p.sku}
       </p>
       <p className="truncate text-[10px] text-slate-600" title={p.name}>
-        {p.name}
+        {productDisplayName(p, 48)}
       </p>
       <p className="mt-0.5 text-[10px] text-slate-500">{p.manufacturer || '—'}</p>
-      <p className="mt-1 text-[11px] font-semibold text-slate-800">{fmtPrice(price)} zł</p>
+      <p
+        className="mt-1 text-[11px] font-semibold text-slate-800"
+        title={
+          p.purchase_price != null
+            ? `Cennik po upuście${p.catalog_price_net != null ? ` (kat. ${fmtPrice(p.catalog_price_net)} zł)` : ''}`
+            : 'Cena katalogowa'
+        }
+      >
+        {fmtPrice(price)} zł
+      </p>
       {p.attributes?.material || p.attributes?.klasa_ochrony || p.attributes?.poziomy_en388 ? (
         <p className="mt-0.5 truncate text-[9px] text-slate-600">
           {[p.attributes.material, p.attributes.klasa_ochrony, p.attributes.poziomy_en388]
@@ -95,6 +110,92 @@ function Col({
           {p.approval_status ? ` · ${p.approval_status}` : ''}
         </p>
       ) : null}
+      {clickable ? (
+        <p className="mt-1 text-[9px] font-medium text-sky-700">Kliknij, aby wybrać do oferty</p>
+      ) : null}
+    </>
+  )
+
+  if (clickable && onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={`w-full rounded border px-2 py-1.5 text-left transition hover:border-sky-400 hover:bg-sky-100 ${tones[tone]}`}
+      >
+        {body}
+      </button>
+    )
+  }
+
+  return <div className={`rounded border px-2 py-1.5 ${tones[tone]}`}>{body}</div>
+}
+
+function ConfirmSubstituteModal({
+  current,
+  next,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  current: BattlecardProduct | null
+  next: BattlecardProduct
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-sm rounded-lg bg-white p-3 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="text-sm font-semibold text-slate-900">Zmienić produkt w ofercie?</p>
+        <p className="mt-1 text-xs text-slate-600">
+          Zamiennik zastąpi aktualną propozycję w tej pozycji.
+        </p>
+        <div className="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-[11px]">
+          <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
+            <p className="text-[9px] font-semibold uppercase text-slate-500">Teraz</p>
+            <p className="font-mono text-slate-800">{current?.sku ?? '—'}</p>
+            <p className="truncate text-slate-600">
+              {current ? productDisplayName(current, 36) : 'brak'}
+            </p>
+          </div>
+          <span className="text-slate-400">→</span>
+          <div className="rounded border border-sky-200 bg-sky-50 px-2 py-1.5">
+            <p className="text-[9px] font-semibold uppercase text-sky-700">Zamiennik</p>
+            <p className="font-mono text-slate-800">{next.sku}</p>
+            <p className="truncate text-slate-600">{productDisplayName(next, 36)}</p>
+            <p className="mt-0.5 font-semibold text-slate-800">
+              {fmtPrice(next.purchase_price ?? next.catalog_price_net)} zł
+            </p>
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onCancel}
+            className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Anuluj
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onConfirm}
+            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+          >
+            {busy ? 'Zapisuję…' : 'Tak, zmień'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -103,15 +204,21 @@ export function ItemBattlecard({
   tenderId,
   itemId,
   enabled,
+  canSelectSubstitute = false,
+  onSelectSubstitute,
 }: {
   tenderId: number
   itemId: number
   enabled: boolean
+  canSelectSubstitute?: boolean
+  onSelectSubstitute?: (product: BattlecardProduct) => Promise<void> | void
 }) {
   const [open, setOpen] = useState(true)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   const [card, setCard] = useState<Battlecard | null>(null)
+  const [pending, setPending] = useState<BattlecardProduct | null>(null)
+  const [confirmBusy, setConfirmBusy] = useState(false)
 
   useEffect(() => {
     if (!open || !enabled) return
@@ -133,7 +240,27 @@ export function ItemBattlecard({
     }
   }, [open, enabled, tenderId, itemId])
 
+  useEffect(() => {
+    if (pending == null) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && !confirmBusy) setPending(null)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [pending, confirmBusy])
+
   if (!enabled) return null
+
+  async function confirmSubstitute() {
+    if (!pending || !onSelectSubstitute) return
+    setConfirmBusy(true)
+    try {
+      await onSelectSubstitute(pending)
+      setPending(null)
+    } finally {
+      setConfirmBusy(false)
+    }
+  }
 
   return (
     <details
@@ -159,8 +286,34 @@ export function ItemBattlecard({
             )}
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
               <Col title="Propozycja" tone="main" p={card.ours} />
-              <Col title="Zamiennik 1" tone="sub" p={card.substitutes[0] ?? null} />
-              <Col title="Zamiennik 2" tone="sub" p={card.substitutes[1] ?? null} />
+              <Col
+                title="Zamiennik 1"
+                tone="sub"
+                p={card.substitutes[0] ?? null}
+                clickable={
+                  canSelectSubstitute &&
+                  Boolean(card.substitutes[0]) &&
+                  card.substitutes[0].product_id !== card.ours?.product_id
+                }
+                onClick={() => {
+                  const s = card.substitutes[0]
+                  if (s) setPending(s)
+                }}
+              />
+              <Col
+                title="Zamiennik 2"
+                tone="sub"
+                p={card.substitutes[1] ?? null}
+                clickable={
+                  canSelectSubstitute &&
+                  Boolean(card.substitutes[1]) &&
+                  card.substitutes[1].product_id !== card.ours?.product_id
+                }
+                onClick={() => {
+                  const s = card.substitutes[1]
+                  if (s) setPending(s)
+                }}
+              />
             </div>
             {!card.ours && (
               <p className="text-slate-400">Brak danych do porównania — najpierw dopasuj produkt.</p>
@@ -168,6 +321,17 @@ export function ItemBattlecard({
           </>
         )}
       </div>
+      {pending && (
+        <ConfirmSubstituteModal
+          current={card?.ours ?? null}
+          next={pending}
+          busy={confirmBusy}
+          onCancel={() => {
+            if (!confirmBusy) setPending(null)
+          }}
+          onConfirm={() => void confirmSubstitute()}
+        />
+      )}
     </details>
   )
 }

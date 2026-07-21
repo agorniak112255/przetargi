@@ -182,6 +182,7 @@ final class BattlecardService
             'product_id' => $product->id,
             'sku' => $product->sku,
             'name' => $product->name,
+            'description' => $product->description,
             'manufacturer' => $product->manufacturer,
             'category' => $product->category,
             'norms' => $norms,
@@ -218,16 +219,16 @@ final class BattlecardService
             return $highlights;
         }
 
-        $ourPrice = $ours['offer_price'] ?? $ours['catalog_price_net'] ?? null;
+        $ourPrice = $ours['purchase_price'] ?? $ours['catalog_price_net'] ?? null;
         foreach ($card['substitutes'] as $sub) {
-            $subPrice = $sub['catalog_price_net'] ?? null;
-            if ($ourPrice === null || $subPrice === null) {
+            $subPrice = $sub['purchase_price'] ?? $sub['catalog_price_net'] ?? null;
+            if ($ourPrice === null || $subPrice === null || (float) $subPrice <= 0) {
                 continue;
             }
             $diff = ((float) $ourPrice - (float) $subPrice) / (float) $subPrice * 100;
             if ($diff >= 3) {
                 $highlights[] = sprintf(
-                    'Zamiennik %s (%s) tańszy o ok. %.0f%%.',
+                    'Zamiennik %s (%s) tańszy o ok. %.0f%% (po upuście).',
                     $sub['sku'],
                     $sub['manufacturer'],
                     $diff,

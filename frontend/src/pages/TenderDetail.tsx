@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { ItemBattlecard } from '../components/ItemBattlecard'
+import { ItemBattlecard, type BattlecardProduct } from '../components/ItemBattlecard'
 import { ProductAiMatchModal } from '../components/ProductAiMatchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
+import { productDisplayName } from '../lib/productLabel'
 
 type MatchReason = { code: string; label: string; points: number }
 
@@ -1376,7 +1377,8 @@ export function TenderDetail() {
               return (
                 <div key={item.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <div className="border-b bg-slate-50 px-4 py-3 text-xs font-semibold">
-                    Poz. {item.line_no} · {item.main_product!.name} ({item.main_product!.sku})
+                    Poz. {item.line_no} · {productDisplayName(item.main_product!)} (
+                    {item.main_product!.sku})
                   </div>
                   <table className="w-full text-left text-xs">
                     <thead>
@@ -1666,9 +1668,19 @@ function ItemRow({
   onComment: (itemId: number, body: string) => Promise<void>
 }) {
   const [productId, setProductId] = useState<string>(itemProductId(item))
-  const [picked, setPicked] = useState<{ id: number; sku: string; name: string } | null>(
+  const [picked, setPicked] = useState<{
+    id: number
+    sku: string
+    name: string
+    description?: string | null
+  } | null>(
     item.main_product
-      ? { id: item.main_product.id, sku: item.main_product.sku, name: item.main_product.name }
+      ? {
+          id: item.main_product.id,
+          sku: item.main_product.sku,
+          name: item.main_product.name,
+          description: item.main_product.description,
+        }
       : null,
   )
   const [qty, setQty] = useState(String(item.quantity))
@@ -1686,7 +1698,12 @@ function ItemRow({
     setProductId(itemProductId(item))
     setPicked(
       item.main_product
-        ? { id: item.main_product.id, sku: item.main_product.sku, name: item.main_product.name }
+        ? {
+            id: item.main_product.id,
+            sku: item.main_product.sku,
+            name: item.main_product.name,
+            description: item.main_product.description,
+          }
         : null,
     )
     setQty(String(item.quantity))
@@ -1766,7 +1783,12 @@ function ItemRow({
               onClose={() => setAiModalOpen(false)}
               onSelect={(p) => {
                 setProductId(String(p.id))
-                setPicked({ id: p.id, sku: p.sku, name: p.name })
+                setPicked({
+                  id: p.id,
+                  sku: p.sku,
+                  name: p.name,
+                  description: p.description,
+                })
                 setMatchHint(`AI: ${p.sku} (${p.score}%)`)
                 setPendingAiScore(p.score)
                 setAiModalOpen(false)
@@ -1799,6 +1821,22 @@ function ItemRow({
               tenderId={tenderId}
               itemId={item.id}
               enabled={Boolean(item.main_product_id ?? item.main_product?.id)}
+              canSelectSubstitute
+              onSelectSubstitute={(p: BattlecardProduct) =>
+                onSave(item.id, {
+                  main_product_id: p.product_id,
+                  quantity: Number(qty) || 1,
+                  ai_match_percent: p.match_percent,
+                  match_source: 'battlecard',
+                  ai_match_reasons: [
+                    {
+                      code: 'battlecard',
+                      label: `Wybrano zamiennik ${p.sku} z battlecard`,
+                      points: p.match_percent,
+                    },
+                  ],
+                })
+              }
             />
           </div>
         ) : (
@@ -1814,8 +1852,11 @@ function ItemRow({
                   <span className="block truncate text-[11px] font-medium text-sky-900">
                     {item.main_product.sku}
                   </span>
-                  <span className="block truncate text-[10px] text-slate-600">
-                    {item.main_product.name}
+                  <span
+                    className="block truncate text-[10px] text-slate-600"
+                    title={item.main_product.name}
+                  >
+                    {productDisplayName(item.main_product)}
                   </span>
                   {item.ai_match_percent != null && (
                     <span className="mt-0.5 block text-[10px] text-violet-700">
