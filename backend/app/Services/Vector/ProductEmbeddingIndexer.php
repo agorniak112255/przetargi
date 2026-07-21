@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Vector;
 
 use App\Models\Product;
+use App\Support\BhpAttributeNormalizer;
 use App\Services\Ai\AiSettingsService;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -15,6 +16,7 @@ final class ProductEmbeddingIndexer
         private readonly AiSettingsService $settings,
         private readonly EmbeddingClient $embeddings,
         private readonly QdrantClient $qdrant,
+        private readonly BhpAttributeNormalizer $bhpAttributes,
     ) {}
 
     public function shouldIndex(): bool
@@ -88,6 +90,7 @@ final class ProductEmbeddingIndexer
             $this->joinList($payload['features'] ?? null),
             $this->joinList($payload['use_cases'] ?? null),
             $this->joinList($payload['norms'] ?? null),
+            $this->bhpAttributes->toSearchText($this->bhpAttributes->forProduct($product)),
         ];
 
         $text = implode(' | ', array_values(array_filter(

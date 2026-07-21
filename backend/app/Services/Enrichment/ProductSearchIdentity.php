@@ -78,10 +78,20 @@ final class ProductSearchIdentity
         $sku = trim((string) $product->sku);
         $name = trim((string) $product->name);
         $bare = $this->stripBrandPrefix($sku !== '' ? $sku : $name, $brand);
+        // nazwa „1000 ZIMA” → rdzeń kodu 1000
+        $codeCore = $this->gloveCodeCore($product) ?? $bare;
         $hint = $this->productHint($product);
         $phaseHint = $phase === 'industry' ? 'karta produktu' : 'datasheet OR karta';
 
         $queries = [];
+
+        // 0) Seria rękawic URGENT (często źle zaimportowana jako PROS-1000)
+        if ($this->looksLikeUrgentGloveSeries($product) && $codeCore !== '') {
+            $queries[] = 'Urgent '.$codeCore.' rękawice';
+            $queries[] = 'URGENT '.$codeCore;
+            $queries[] = '"'.$codeCore.'" Urgent rękawice robocze';
+            $queries[] = 'rękawice lateksem '.$codeCore.' Urgent';
+        }
 
         // 1) Jak Google — najpierw czysty kod / marka+kod, BEZ sztucznego hintu kategorii
         if ($sku !== '') {
@@ -103,6 +113,9 @@ final class ProductSearchIdentity
         if ($hint !== '') {
             if ($brand !== '' && $bare !== '') {
                 $queries[] = trim($brand.' '.$bare.' '.$hint);
+            }
+            if ($codeCore !== '' && $hint === 'rękawice') {
+                $queries[] = trim($codeCore.' '.$hint);
             }
             if ($sku !== '') {
                 $queries[] = trim('"'.$sku.'" '.$brand.' '.$hint);
@@ -127,16 +140,16 @@ final class ProductSearchIdentity
     public function hayMentionsProduct(string $hay, Product $product): bool
     {
         $hay = mb_strtolower($hay);
-        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        $brands = $this->acceptedBrands($product);
         $tokens = $this->matchTokens($product);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
         $hayDigits = preg_replace('/\D+/u', '', $hay) ?? '';
 
         foreach ($tokens as $token) {
             if ($this->tokenInHay($hay, $hayCompact, $token)) {
-                // krótki sam kod numeryczny → wymagaj marki w tekście (mniej false positive)
-                if ($this->isShortNumericToken($token) && $brand !== '' && ! str_contains($hay, $brand)
-                    && ! str_contains($hayCompact, preg_replace('/[^a-z0-9]+/iu', '', $brand) ?? $brand)) {
+                // krótki sam kod numeryczny → wymagaj marki (własnej lub URGENT przy serii rękawic)
+                if ($this->isShortNumericToken($token) && $brands !== []
+                    && ! $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
                     continue;
                 }
 
@@ -145,11 +158,20 @@ final class ProductSearchIdentity
         }
 
         // PROS-1001 vs „101/001”: cyfry z wyniku zawierają rdzeń ≥4 cyfr
+        // ale NIE traktuj „1000g” / „500ml” jako kodu produktu
         $digitCore = $this->primaryDigitCore($product);
         if ($digitCore !== null && mb_strlen($digitCore) >= 4 && $hayDigits !== ''
-            && str_contains($hayDigits, $digitCore)) {
-            if ($brand === '' || str_contains($hay, $brand)
-                || str_contains($hayCompact, preg_replace('/[^a-z0-9]+/iu', '', $brand) ?? $brand)) {
+            && str_contains($hayDigits, $digitCore)
+            && ! $this->numericTokenOnlyAsMeasurement($hay, $digitCore)) {
+            if ($brands === [] || $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
+                return true;
+            }
+        }
+
+        // karta URGENT …-1000-URGENT… przy błędnym producencie PROS w cenniku
+        if ($this->looksLikeUrgentGloveSeries($product) && str_contains($hay, 'urgent')) {
+            $code = $this->gloveCodeCore($product);
+            if ($code !== null && $this->numericTokenAsProductCode($hay, $code)) {
                 return true;
             }
         }
@@ -192,20 +214,64 @@ final class ProductSearchIdentity
         if ($token === '') {
             return false;
         }
+        // same cyfry: 1000 ≠ 1000g / 1000ml / 21000
+        if (preg_match('/^\d{3,}$/', $token) === 1) {
+            return $this->numericTokenAsProductCode($hay, $token)
+                || $this->numericTokenAsProductCode($hayCompact, $token);
+        }
         if (str_contains($hay, $token)) {
             return true;
         }
         $tokenCompact = preg_replace('/[^a-z0-9]+/iu', '', $token) ?? $token;
-        if ($tokenCompact !== '' && str_contains($hayCompact, $tokenCompact)) {
-            return true;
+        if ($tokenCompact === '' || ! str_contains($hayCompact, $tokenCompact)) {
+            return false;
         }
-        // granica dla samych cyfr (unikaj 1001 w 21001 bez sensu — lookahead)
-        if (preg_match('/^\d{3,}$/', $token) === 1) {
-            return preg_match('/(?<![0-9])'.preg_quote($token, '/').'(?![0-9])/u', $hay) === 1
-                || str_contains($hayCompact, $token);
+        // „pros1000” w hayCompact z „PROS 1000g” — wymagaj kodu bez jednostki
+        if (preg_match('/^[a-z]+(\d{3,6})$/i', $tokenCompact, $m) === 1) {
+            return $this->numericTokenAsProductCode($hay, $m[1])
+                || $this->numericTokenAsProductCode($hayCompact, $m[1]);
         }
 
-        return false;
+        return true;
+    }
+
+    /**
+     * Kod numeryczny jako samodzielny token — nie gramatura/jednostka (1000g, 500ml).
+     */
+    private function numericTokenAsProductCode(string $hay, string $token): bool
+    {
+        if ($token === '' || $hay === '') {
+            return false;
+        }
+        // po kodzie nie może być cyfra ani litera jednostki (g/kg/ml…)
+        return preg_match(
+            '/(?<![0-9])'.preg_quote($token, '/').'(?![0-9a-z])/iu',
+            $hay
+        ) === 1;
+    }
+
+    /** Wszystkie wystąpienia rdzenia w tekście to tylko „1000g”, „500ml” itd. */
+    private function numericTokenOnlyAsMeasurement(string $hay, string $token): bool
+    {
+        $count = preg_match_all(
+            '/(?<![0-9])'.preg_quote($token, '/').'(?![0-9])/iu',
+            $hay,
+            $matches,
+            PREG_OFFSET_CAPTURE
+        );
+        // brak bezpośredniego wystąpienia (np. tylko 101/001 → 101001 w hayDigits) — nie blokuj
+        if ($count === 0 || ($matches[0] ?? []) === []) {
+            return false;
+        }
+
+        foreach ($matches[0] as [$match, $offset]) {
+            $after = mb_strtolower(mb_substr($hay, (int) $offset + mb_strlen((string) $match), 4));
+            if (preg_match('/^(g|kg|ml|mm|cm|m)\b/u', $after) !== 1) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function isShortNumericToken(string $token): bool
@@ -236,7 +302,9 @@ final class ProductSearchIdentity
     private function productHint(Product $product): string
     {
         $nameSku = mb_strtolower(trim((string) $product->name.' '.(string) $product->sku));
+        $category = mb_strtolower(trim((string) ($product->category ?? '')));
         $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        $blob = trim($nameSku.' '.$category);
 
         if (preg_match(
             '#(trzewik|p[oó]łbut|polbut|\bbuty\b|obuwie|\bs1\b|\bs3\b|\bsrc\b|\bhro\b|demar|befado)#u',
@@ -245,8 +313,8 @@ final class ProductSearchIdentity
             return 'buty ochronne';
         }
 
-        if (preg_match('#(glove|r[eę]kaw|maxiflex|maxicut|maxidry)#u', $nameSku)
-            || preg_match('#^(atg|ansell)$#u', $brand)) {
+        if (preg_match('#(glove|r[eę]kaw|maxiflex|maxicut|maxidry)#u', $blob)
+            || preg_match('#^(atg|ansell|urgent)$#u', $brand)) {
             return 'rękawice';
         }
 
@@ -259,5 +327,74 @@ final class ProductSearchIdentity
         }
 
         return '';
+    }
+
+    /**
+     * Kody 1000–1xxx w kategorii rękawice — typowa seria URGENT (często źle jako PROS).
+     */
+    public function looksLikeUrgentGloveSeries(Product $product): bool
+    {
+        if ($this->productHint($product) !== 'rękawice') {
+            return false;
+        }
+        $code = $this->gloveCodeCore($product);
+        if ($code === null || preg_match('/^\d{3,4}$/', $code) !== 1) {
+            return false;
+        }
+        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+
+        // już URGENT albo błędnie PROS / puste
+        return $brand === '' || in_array($brand, ['pros', 'urgent', 'aj group', 'aj'], true);
+    }
+
+    public function gloveCodeCore(Product $product): ?string
+    {
+        $brand = $this->shortBrand((string) $product->manufacturer);
+        foreach ([(string) $product->name, (string) $product->sku] as $value) {
+            $bare = $this->stripBrandPrefix(trim($value), $brand);
+            if (preg_match('/^(\d{3,4})\b/u', $bare, $m) === 1) {
+                return $m[1];
+            }
+        }
+
+        return $this->primaryDigitCore($product);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function acceptedBrands(Product $product): array
+    {
+        $out = [];
+        $main = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        if ($main !== '') {
+            $out[] = $main;
+        }
+        if ($this->looksLikeUrgentGloveSeries($product)) {
+            $out[] = 'urgent';
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * @param  list<string>  $brands
+     */
+    private function hayHasAnyBrand(string $hay, string $hayCompact, array $brands): bool
+    {
+        foreach ($brands as $brand) {
+            if ($brand === '') {
+                continue;
+            }
+            if (str_contains($hay, $brand)) {
+                return true;
+            }
+            $compact = preg_replace('/[^a-z0-9]+/iu', '', $brand) ?? $brand;
+            if ($compact !== '' && str_contains($hayCompact, $compact)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

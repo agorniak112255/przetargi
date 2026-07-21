@@ -37,6 +37,12 @@ return [
         'coverguard' => ['coverguard.com', 'www.coverguard.com'],
         'singer' => ['singer.fr', 'www.singer.fr'],
         'pros' => ['pros.pl', 'www.pros.pl'],
+        'urgent' => [
+            'urgent.com.pl',
+            'www.urgent.com.pl',
+            'urgent.pl',
+            'www.urgent.pl',
+        ],
     ],
 
     /*
@@ -55,6 +61,8 @@ return [
         'roboczystyl.pl',
         'pros.pl',
         'www.pros.pl',
+        'optimumbhp.pl',
+        'www.optimumbhp.pl',
     ],
 
     /*
@@ -83,5 +91,7 @@ return [
         'roboczystyl.pl',
         'pros.pl',
         'www.pros.pl',
+        'optimumbhp.pl',
+        'www.optimumbhp.pl',
     ],
 ];

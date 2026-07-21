@@ -7,6 +7,7 @@ import { Clients } from './pages/Clients'
 import { Dashboard } from './pages/Dashboard'
 import { Help } from './pages/Help'
 import { Login } from './pages/Login'
+import { ProductCompare } from './pages/ProductCompare'
 import { ProductDetail } from './pages/ProductDetail'
 import { AiSettingsPage } from './pages/AiSettings'
 import { PriceLists } from './pages/PriceLists'
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="tenders" element={<Tenders />} />
           <Route path="tenders/:id" element={<TenderDetail />} />
           <Route path="products" element={<Products />} />
+          <Route path="products/compare" element={<ProductCompare />} />
           <Route path="products/:id" element={<ProductDetail />} />
           <Route path="price-lists" element={<PriceLists />} />
           <Route

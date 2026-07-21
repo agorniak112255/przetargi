@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { ItemBattlecard } from '../components/ItemBattlecard'
 import { ProductAiMatchModal } from '../components/ProductAiMatchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
@@ -890,6 +891,7 @@ export function TenderDetail() {
                 {filteredItems.map((item) => (
                   <ItemRow
                     key={item.id}
+                    tenderId={Number(id)}
                     item={item}
                     products={products}
                     canEdit={can_edit}
@@ -1639,6 +1641,7 @@ export function TenderDetail() {
 }
 
 function ItemRow({
+  tenderId,
   item,
   products,
   canEdit,
@@ -1650,6 +1653,7 @@ function ItemRow({
   onDraftChange,
   onComment,
 }: {
+  tenderId: number
   item: Item
   products: Product[]
   canEdit: boolean
@@ -1791,6 +1795,11 @@ function ItemRow({
                 )}
               </details>
             )}
+            <ItemBattlecard
+              tenderId={tenderId}
+              itemId={item.id}
+              enabled={Boolean(item.main_product_id ?? item.main_product?.id)}
+            />
           </div>
         ) : (
           <span>
@@ -1825,6 +1834,13 @@ function ItemRow({
                 ))}
               </ul>
             )}
+            <div className="mt-1">
+              <ItemBattlecard
+                tenderId={tenderId}
+                itemId={item.id}
+                enabled={Boolean(item.main_product)}
+              />
+            </div>
             <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
           </span>
         )}

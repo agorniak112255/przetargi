@@ -360,6 +360,16 @@ class HybridWebSearchService
 
         $hayCompact = preg_replace('/[^a-z0-9]+/i', '', $hay) ?? $hay;
         foreach ($nameTokens as $token) {
+            if (preg_match('/^\d{3,}$/', $token) === 1) {
+                // 1000 ≠ 1000g
+                $ok = preg_match('/(?<![0-9])'.preg_quote($token, '/').'(?![0-9a-z])/iu', $hay) === 1
+                    || preg_match('/(?<![0-9])'.preg_quote($token, '/').'(?![0-9a-z])/iu', $hayCompact) === 1;
+                if (! $ok) {
+                    return false;
+                }
+
+                continue;
+            }
             if (! str_contains($hay, $token) && ! str_contains($hayCompact, $token)) {
                 return false;
             }

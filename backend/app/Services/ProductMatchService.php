@@ -9,6 +9,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Vector\ProductVectorSearch;
+use App\Support\BhpAttributeNormalizer;
 use Illuminate\Support\Collection;
 use Throwable;
 
@@ -29,6 +30,7 @@ final class ProductMatchService
         private readonly ProductAiSearchService $aiSearch,
         private readonly AiSettingsService $aiSettings,
         private readonly ProductVectorSearch $vectorSearch,
+        private readonly BhpAttributeNormalizer $bhpAttributes,
     ) {}
 
     /**
@@ -100,10 +102,23 @@ final class ProductMatchService
      */
     public function bestMatch(string $requirement, Collection $products): ?array
     {
+        $ranked = $this->rankProducts($requirement, $products, 1);
+
+        return $ranked[0] ?? null;
+    }
+
+    /**
+     * Ranking produktów wg heurystyki match (bez AI).
+     *
+     * @param  Collection<int, Product>  $products
+     * @return list<array{product: Product, score: int}>
+     */
+    public function rankProducts(string $requirement, Collection $products, int $limit = 5): array
+    {
         $req = $this->normalize($requirement);
         $reqTokens = $this->significantTokens($req);
         $reqCodes = $this->codeCandidates($requirement);
-        $best = null;
+        $scored = [];
 
         foreach ($products as $product) {
             $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
@@ -112,44 +127,60 @@ final class ProductMatchService
             $useCases = is_array($payload['use_cases'] ?? null) ? $payload['use_cases'] : [];
             $normsPayload = is_array($payload['norms'] ?? null) ? $payload['norms'] : [];
 
+            $attrs = $this->bhpAttributes->forProduct($product);
             $extra = implode(' ', [
                 (string) ($product->description ?? ''),
                 implode(' ', $features),
                 implode(' ', $useCases),
                 implode(' ', $materials),
                 implode(' ', $normsPayload),
+                $this->bhpAttributes->toSearchText($attrs),
             ]);
             $hay = $this->normalize(
                 $product->name.' '.$product->sku.' '.$product->manufacturer.' '
                 .($product->norms ?? '').' '.($product->category ?? '').' '.$extra
             );
-            if (! $this->assortmentsCompatible($req, $hay, $product)) {
+            if (! $this->assortmentsCompatible($req, $hay, $product, $attrs)) {
                 continue;
             }
-            $score = $this->score($req, $reqTokens, $reqCodes, $hay, $product, $materials);
-            if ($best === null || $score > $best['score']) {
-                $best = ['product' => $product, 'score' => $score];
-            }
+            $score = $this->score($req, $reqTokens, $reqCodes, $hay, $product, $materials, $attrs);
+            $scored[] = ['product' => $product, 'score' => $score];
         }
 
-        return $best;
+        usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+
+        return array_slice($scored, 0, max(1, $limit));
     }
 
     /**
-     * Rękawice ≠ obuwie (S3/SRC) itd. — bez wspólnej kategorii wynik = pominięcie.
+     * Rękawice ≠ obuwie — kategoria z atrybutów ma pierwszeństwo przed zgadywaniem z tekstu.
+     *
+     * @param  array<string, mixed>  $attrs
      */
-    private function assortmentsCompatible(string $req, string $hay, Product $product): bool
+    private function assortmentsCompatible(string $req, string $hay, Product $product, array $attrs = []): bool
     {
         $prodText = $hay.' '.$this->normalize((string) ($product->category ?? ''))
             .' '.$this->normalize((string) ($product->name ?? ''));
         $reqFamily = $this->detectAssortmentFamily($req);
-        $prodFamily = $this->detectAssortmentFamily($prodText);
+        $prodFamily = $this->familyFromKategoria($attrs['kategoria_bhp'] ?? null)
+            ?? $this->detectAssortmentFamily($prodText);
 
         if ($reqFamily === null || $prodFamily === null) {
             return true;
         }
 
         return $reqFamily === $prodFamily;
+    }
+
+    private function familyFromKategoria(mixed $kategoria): ?string
+    {
+        return match (is_string($kategoria) ? $kategoria : null) {
+            'rekawice' => 'gloves',
+            'obuwie' => 'footwear',
+            'odziez' => 'apparel',
+            'ochrona_glowy' => 'head',
+            default => null,
+        };
     }
 
     private function detectAssortmentFamily(string $text): ?string
@@ -176,6 +207,7 @@ final class ProductMatchService
      * @param  list<string>  $reqTokens
      * @param  list<string>  $reqCodes
      * @param  list<string>  $materials
+     * @param  array<string, mixed>  $attrs
      */
     private function score(
         string $req,
@@ -184,6 +216,7 @@ final class ProductMatchService
         string $hay,
         Product $product,
         array $materials,
+        array $attrs = [],
     ): int {
         $score = 0;
         $skuHit = $this->skuMatchScore($req, $reqCodes, $product);
@@ -202,15 +235,7 @@ final class ProductMatchService
             $score += 35;
         }
 
-        if (preg_match_all('/en\s*[\d]+/i', $req, $m)) {
-            foreach ($m[0] as $norm) {
-                $n = preg_replace('/\s+/', '', mb_strtolower($norm)) ?? '';
-                $pn = preg_replace('/\s+/', '', mb_strtolower((string) $product->norms)) ?? '';
-                if ($n !== '' && $pn !== '' && str_contains($pn, $n)) {
-                    $score += 20;
-                }
-            }
-        }
+        $score += $this->attributeMatchScore($req, $product, $attrs)['points'];
 
         $hayTokens = $this->significantTokens($hay);
         $overlap = count(array_intersect($reqTokens, $hayTokens));
@@ -224,6 +249,73 @@ final class ProductMatchService
         }
 
         return min(99, $score);
+    }
+
+    /**
+     * Scoring po kanonicznych atrybutach BHP (normy EN, klasa, materiał, kod).
+     *
+     * @param  array<string, mixed>  $attrs
+     * @return array{points: int, reasons: list<array{code: string, label: string, points: int}>}
+     */
+    private function attributeMatchScore(string $req, Product $product, array $attrs): array
+    {
+        if ($attrs === []) {
+            $attrs = $this->bhpAttributes->forProduct($product);
+        }
+
+        $reasons = [];
+        $points = 0;
+        $reqCompact = preg_replace('/\s+/', '', $req) ?? $req;
+
+        $normy = is_array($attrs['normy_en'] ?? null) ? $attrs['normy_en'] : [];
+        $normHay = preg_replace(
+            '/\s+/',
+            '',
+            mb_strtolower(implode(' ', $normy).' '.(string) ($product->norms ?? ''))
+        ) ?? '';
+        $normPts = 0;
+        if (preg_match_all('/en(?:iso)?\s*[\d]+/i', $req, $m)) {
+            foreach ($m[0] as $norm) {
+                $n = preg_replace('/\s+/', '', mb_strtolower($norm)) ?? '';
+                if ($n !== '' && $normHay !== '' && str_contains($normHay, $n)) {
+                    $normPts += 22;
+                }
+            }
+        }
+        if ($normPts > 0) {
+            $normPts = min(44, $normPts);
+            $reasons[] = ['code' => 'attr_norma', 'label' => 'Norma EN (atrybuty)', 'points' => $normPts];
+            $points += $normPts;
+        }
+
+        $klasa = is_string($attrs['klasa_ochrony'] ?? null) ? mb_strtolower((string) $attrs['klasa_ochrony']) : '';
+        if ($klasa !== '' && (str_contains($req, $this->normalize($klasa))
+            || preg_match('/\b'.preg_quote($klasa, '/').'\b/u', $req) === 1)) {
+            $reasons[] = ['code' => 'attr_klasa', 'label' => 'Klasa ochrony ('.$attrs['klasa_ochrony'].')', 'points' => 18];
+            $points += 18;
+        }
+
+        $en388 = is_string($attrs['poziomy_en388'] ?? null) ? mb_strtoupper((string) $attrs['poziomy_en388']) : '';
+        if ($en388 !== '' && str_contains(mb_strtoupper($reqCompact), $en388)) {
+            $reasons[] = ['code' => 'attr_en388', 'label' => 'Poziomy EN 388 ('.$en388.')', 'points' => 16];
+            $points += 16;
+        }
+
+        $material = is_string($attrs['material'] ?? null) ? $this->normalize((string) $attrs['material']) : '';
+        if ($material !== '' && mb_strlen($material) >= 3 && str_contains($req, $material)) {
+            $reasons[] = ['code' => 'attr_material', 'label' => 'Materiał kanoniczny ('.$attrs['material'].')', 'points' => 14];
+            $points += 14;
+        }
+
+        $kod = is_string($attrs['kod_producenta'] ?? null) ? $this->normalize((string) $attrs['kod_producenta']) : '';
+        $kodCompact = preg_replace('/\s+/', '', $kod) ?? $kod;
+        if ($kodCompact !== '' && mb_strlen($kodCompact) >= 4 && str_contains($reqCompact, $kodCompact)
+            && $kodCompact !== $this->normalize($product->sku)) {
+            $reasons[] = ['code' => 'attr_kod', 'label' => 'Kod producenta (atrybuty)', 'points' => 12];
+            $points += 12;
+        }
+
+        return ['points' => min(60, $points), 'reasons' => $reasons];
     }
 
     /**
@@ -836,12 +928,14 @@ final class ProductMatchService
         $features = is_array($payload['features'] ?? null) ? $payload['features'] : [];
         $useCases = is_array($payload['use_cases'] ?? null) ? $payload['use_cases'] : [];
         $normsPayload = is_array($payload['norms'] ?? null) ? $payload['norms'] : [];
+        $attrs = $this->bhpAttributes->forProduct($product);
         $extra = implode(' ', [
             (string) ($product->description ?? ''),
             implode(' ', $features),
             implode(' ', $useCases),
             implode(' ', $materials),
             implode(' ', $normsPayload),
+            $this->bhpAttributes->toSearchText($attrs),
         ]);
         $hay = $this->normalize(
             $product->name.' '.$product->sku.' '.$product->manufacturer.' '
@@ -851,9 +945,11 @@ final class ProductMatchService
         $reasons = [];
         $score = 0;
 
-        if (! $this->assortmentsCompatible($req, $hay, $product)) {
+        if (! $this->assortmentsCompatible($req, $hay, $product, $attrs)) {
             $reqFamily = $this->detectAssortmentFamily($req) ?? '?';
-            $prodFamily = $this->detectAssortmentFamily($hay.' '.$this->normalize((string) ($product->category ?? ''))) ?? '?';
+            $prodFamily = $this->familyFromKategoria($attrs['kategoria_bhp'] ?? null)
+                ?? $this->detectAssortmentFamily($hay.' '.$this->normalize((string) ($product->category ?? '')))
+                ?? '?';
             $reasons[] = [
                 'code' => 'asortyment_reject',
                 'label' => 'Konflikt asortymentu ('.$reqFamily.' vs '.$prodFamily.')',
@@ -896,20 +992,11 @@ final class ProductMatchService
             $score += 35;
         }
 
-        $normPts = 0;
-        if (preg_match_all('/en\s*[\d]+/i', $req, $m)) {
-            foreach ($m[0] as $norm) {
-                $n = preg_replace('/\s+/', '', mb_strtolower($norm)) ?? '';
-                $pn = preg_replace('/\s+/', '', mb_strtolower((string) $product->norms)) ?? '';
-                if ($n !== '' && $pn !== '' && str_contains($pn, $n)) {
-                    $normPts += 20;
-                }
-            }
+        $attrScore = $this->attributeMatchScore($req, $product, $attrs);
+        foreach ($attrScore['reasons'] as $reason) {
+            $reasons[] = $reason;
         }
-        if ($normPts > 0) {
-            $reasons[] = ['code' => 'norma', 'label' => 'Zgodność normy EN', 'points' => $normPts];
-            $score += $normPts;
-        }
+        $score += $attrScore['points'];
 
         $hayTokens = $this->significantTokens($hay);
         $overlap = count(array_intersect($reqTokens, $hayTokens));

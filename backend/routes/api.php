@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\PriceListController;
 use App\Http\Controllers\Api\PriceListImportController;
 use App\Http\Controllers\Api\ProductAiSearchController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\ProductCrossRefController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
@@ -24,6 +25,7 @@ use App\Http\Controllers\Api\TenderDocumentController;
 use App\Http\Controllers\Api\TenderExportController;
 use App\Http\Controllers\Api\TenderImportController;
 use App\Http\Controllers\Api\TenderItemController;
+use App\Http\Controllers\Api\TenderBattlecardController;
 use App\Http\Controllers\Api\TenderMatchController;
 use Illuminate\Support\Facades\Route;
 
@@ -60,6 +62,8 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::delete('/tenders/{tender}/conditions/{condition}', [TenderConditionController::class, 'destroy'])->middleware('permission:tenders.edit_offer');
     Route::post('/tenders/{tender}/match', [TenderMatchController::class, 'store'])->middleware('permission:tenders.edit_offer');
     Route::post('/tenders/{tender}/items/{item}/match', [TenderMatchController::class, 'matchItem'])->middleware('permission:tenders.edit_offer');
+    Route::get('/tenders/{tender}/items/{item}/battlecard', [TenderBattlecardController::class, 'show'])
+        ->middleware('permission:tenders.view_own|tenders.view_all');
     Route::get('/tenders/{tender}/export/excel', [TenderExportController::class, 'excel'])->middleware('permission:tenders.export');
     Route::get('/tenders/{tender}/export/pdf', [TenderExportController::class, 'pdf'])->middleware('permission:tenders.export');
     Route::get('/tenders/{tender}/export/docx', [TenderExportController::class, 'docx'])->middleware('permission:tenders.export');
@@ -68,6 +72,8 @@ Route::middleware('auth:sanctum')->group(function (): void {
 
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
     Route::get('/products/manufacturers', [ProductController::class, 'manufacturers'])->middleware('permission:products.view');
+    Route::get('/products/cross-ref', [ProductCrossRefController::class, 'crossRef'])->middleware('permission:products.view');
+    Route::get('/products/compare', [ProductCrossRefController::class, 'compare'])->middleware('permission:products.view');
     Route::post('/products/ai-search', ProductAiSearchController::class)->middleware('permission:products.view');
     Route::post('/products/enrich', [ProductEnrichmentController::class, 'enrichProducts'])
         ->middleware('permission:price_lists.import');

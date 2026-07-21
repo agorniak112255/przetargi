@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Tender;
 use App\Models\TenderItem;
+use App\Services\BattlecardService;
 use App\Services\ProductMatchService;
 use App\Services\TenderWorkflowService;
 use Illuminate\Http\JsonResponse;
@@ -18,6 +19,7 @@ class TenderMatchController extends Controller
     public function __construct(
         private readonly ProductMatchService $matcher,
         private readonly TenderWorkflowService $workflow,
+        private readonly BattlecardService $battlecards,
     ) {}
 
     public function store(Request $request, Tender $tender): JsonResponse
@@ -57,6 +59,7 @@ class TenderMatchController extends Controller
 
         $force = $request->boolean('force', false);
         $result = $this->matcher->matchItem($item, $force);
+        $result['battlecard'] = $this->battlecards->forItem($item->fresh(['mainProduct']));
 
         return response()->json($result);
     }

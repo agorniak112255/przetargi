@@ -96,4 +96,68 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertNotEmpty($queries);
         $this->assertStringContainsString('60549', implode(' | ', $queries));
     }
+
+    public function test_rejects_weight_false_positive_1000g_for_sku_1000(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'PROS-1000',
+            'name' => '1000',
+            'manufacturer' => 'PROS',
+        ]);
+
+        $hay = 'https://roboczystyl.pl/sklep/ochrona-nog/buty-gumowe-pcv-nitryl-eva/'
+            .'spodniobuty-pros-sb01-strong-1000g-czarny '
+            .'Spodniobuty PROS SB01 STRONG 1000g czarny';
+
+        $this->assertFalse(
+            $id->hayMentionsProduct($hay, $product),
+            'Gramatura 1000g nie może być uznana za kod PROS-1000'
+        );
+        $this->assertFalse($id->coreInUrlOrTitle(
+            'https://roboczystyl.pl/sklep/.../spodniobuty-pros-sb01-strong-1000g-czarny',
+            'Spodniobuty PROS SB01 STRONG 1000g',
+            $product
+        ));
+    }
+
+    public function test_accepts_standalone_code_1000_with_brand(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'PROS-1000',
+            'name' => '1000',
+            'manufacturer' => 'PROS',
+            'category' => 'REKAWICE',
+        ]);
+
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://shop.example/produkt/pros-1000-rekawice PROS model 1000 rękawice',
+            $product
+        ));
+    }
+
+    public function test_urgent_glove_series_queries_and_match_despite_pros_label(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'PROS-1000',
+            'name' => '1000',
+            'manufacturer' => 'PROS',
+            'category' => 'REKAWICE',
+        ]);
+
+        $this->assertTrue($id->looksLikeUrgentGloveSeries($product));
+        $joined = implode(' | ', $id->searchQueries($product, 'industry'));
+        $this->assertStringContainsString('Urgent 1000', $joined);
+        $this->assertStringContainsString('rękawice', mb_strtolower($joined));
+
+        $hay = 'https://optimumbhp.pl/REKAWICE-ROBOCZE-POWLEKANE-LATEKSEM-1000-URGENT-p138481 '
+            .'Urgent 1000 rękawice robocze powlekane lateksem';
+        $this->assertTrue($id->hayMentionsProduct($hay, $product));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://roboczystyl.pl/spodniobuty-pros-sb01-strong-1000g-czarny Spodniobuty PROS 1000g',
+            $product
+        ));
+    }
 }

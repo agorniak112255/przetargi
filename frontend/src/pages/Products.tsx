@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { CrossRefPanel } from '../components/CrossRefPanel'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { api, can, type EnrichmentBatch, type Product } from '../lib/api'
@@ -90,6 +91,7 @@ function SortTh({
 
 export function Products() {
   const { user } = useAuth()
+  const [searchParams] = useSearchParams()
   const canEnrich = can(user, 'price_lists.import')
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
@@ -428,6 +430,8 @@ export function Products() {
           />
         </div>
       </div>
+
+      <CrossRefPanel initialCode={searchParams.get('cross') ?? ''} autoRun />
 
       <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
         <label className="mb-1 block text-xs font-medium text-slate-600">

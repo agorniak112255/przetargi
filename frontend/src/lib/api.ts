@@ -122,6 +122,16 @@ export type Product = {
     use_cases?: string[]
     source_urls?: string[]
     confidence?: number
+    attributes?: {
+      kategoria_bhp?: string | null
+      kod_producenta?: string | null
+      material?: string | null
+      materialy?: string[]
+      normy_en?: string[]
+      klasa_ochrony?: string | null
+      rozmiar?: string | null
+      poziomy_en388?: string | null
+    } | null
   } | null
   images?: ProductImage[]
   images_count?: number

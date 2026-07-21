@@ -14,6 +14,7 @@ use App\Models\ProductEnrichmentCache;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Support\BhpAttributeNormalizer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -33,6 +34,7 @@ final class ProductEnrichmentService
         private readonly ManufacturerDomainResolver $manufacturers,
         private readonly OpenAiCompatibleClient $llm,
         private readonly AiSettingsService $aiSettings,
+        private readonly BhpAttributeNormalizer $bhpAttributes,
     ) {}
 
     /**
@@ -341,13 +343,35 @@ final class ProductEnrichmentService
 
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
 
+            $features = $this->stringList($extracted['features'] ?? null);
+            $norms = $this->stringList($extracted['norms'] ?? null);
+            $certificates = $this->stringList($extracted['certificates'] ?? null);
+            $materials = $this->stringList($extracted['materials'] ?? null);
+            $useCases = $this->stringList($extracted['use_cases'] ?? null);
+            $specs = $this->stringList($extracted['specs'] ?? null);
+
+            $attributes = $this->bhpAttributes->normalize(
+                is_array($extracted['attributes'] ?? null) ? $extracted['attributes'] : null,
+                [
+                    'materials' => $materials,
+                    'norms' => $norms,
+                    'specs' => $specs,
+                    'certificates' => $certificates,
+                    'category' => (string) ($product->category ?? ''),
+                    'sku' => (string) $product->sku,
+                    'name' => (string) $product->name,
+                    'norms_column' => (string) ($product->norms ?? ''),
+                ]
+            );
+
             $payload = [
-                'features' => $this->stringList($extracted['features'] ?? null),
-                'norms' => $this->stringList($extracted['norms'] ?? null),
-                'certificates' => $this->stringList($extracted['certificates'] ?? null),
-                'materials' => $this->stringList($extracted['materials'] ?? null),
-                'use_cases' => $this->stringList($extracted['use_cases'] ?? null),
-                'specs' => $this->stringList($extracted['specs'] ?? null),
+                'features' => $features,
+                'norms' => $norms,
+                'certificates' => $certificates,
+                'materials' => $materials,
+                'use_cases' => $useCases,
+                'specs' => $specs,
+                'attributes' => $attributes,
                 'source_urls' => array_values(array_unique($sourceUrls)),
                 'confidence' => (float) ($extracted['confidence'] ?? 0),
                 'from_cache' => false,
@@ -533,6 +557,19 @@ final class ProductEnrichmentService
 
         $payload = is_array($cache->enrichment_payload) ? $cache->enrichment_payload : [];
         $payload['from_cache'] = true;
+        $payload['attributes'] = $this->bhpAttributes->normalize(
+            is_array($payload['attributes'] ?? null) ? $payload['attributes'] : null,
+            [
+                'materials' => $this->stringList($payload['materials'] ?? null),
+                'norms' => $this->stringList($payload['norms'] ?? null),
+                'specs' => $this->stringList($payload['specs'] ?? null),
+                'certificates' => $this->stringList($payload['certificates'] ?? null),
+                'category' => (string) ($product->category ?? ''),
+                'sku' => (string) $product->sku,
+                'name' => (string) $product->name,
+                'norms_column' => (string) ($product->norms ?? ''),
+            ]
+        );
 
         $rawImageUrls = is_array($cache->image_urls) ? $cache->image_urls : [];
         $imageUrls = array_values(array_filter(
@@ -1092,6 +1129,20 @@ final class ProductEnrichmentService
             $b = $this->stringList($extra[$key] ?? null);
             $base[$key] = array_values(array_unique(array_merge($a, $b)));
         }
+        if (is_array($extra['attributes'] ?? null)) {
+            $base['attributes'] = $this->bhpAttributes->normalize(
+                array_merge(
+                    is_array($base['attributes'] ?? null) ? $base['attributes'] : [],
+                    $extra['attributes']
+                ),
+                [
+                    'materials' => $this->stringList($base['materials'] ?? null),
+                    'norms' => $this->stringList($base['norms'] ?? null),
+                    'specs' => $this->stringList($base['specs'] ?? null),
+                    'certificates' => $this->stringList($base['certificates'] ?? null),
+                ]
+            );
+        }
         if ((float) ($extra['confidence'] ?? 0) > (float) ($base['confidence'] ?? 0)) {
             $base['confidence'] = $extra['confidence'];
         }
@@ -1488,12 +1539,23 @@ Zwróć WYŁĄCZNIE JSON:
   "certificates": ["certyfikaty, kat. PPE, CE"],
   "materials": ["materiały / powłoki"],
   "use_cases": ["zastosowania / branże / warunki pracy"],
+  "attributes": {
+    "kategoria_bhp": "rekawice|obuwie|odziez|ochrona_glowy|inne",
+    "kod_producenta": "SKU / nr katalogowy producenta",
+    "material": "główny materiał (np. nitryl)",
+    "materialy": ["lista materiałów"],
+    "normy_en": ["EN 388", "EN ISO 20345"],
+    "klasa_ochrony": "S3 / kat. II / …",
+    "rozmiar": "np. 9 lub 42-46 albo null",
+    "poziomy_en388": "np. 4544C albo null"
+  },
   "image_urls": ["https://… tylko realny URL zdjęcia produktu"],
   "document_urls": ["https://… tylko realny URL PDF karty/certyfikatu"],
   "source_urls": ["https://… karty produktu"],
   "confidence": 0.0
 }
-WYPEŁNIJ tablice features/specs/norms/materials/use_cases, gdy fakty są w tekście — nie zostawiaj ich pustych „dla skrótu”.
+WYPEŁNIJ tablice features/specs/norms/materials/use_cases oraz attributes, gdy fakty są w tekście — nie zostawiaj ich pustych „dla skrótu”.
+attributes: używaj wyłącznie wartości ze źródeł; brak danych → null / [].
 Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
 SYS,
             ],

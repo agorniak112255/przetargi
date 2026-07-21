@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { CrossRefPanel } from '../components/CrossRefPanel'
 import {
   api,
   can,
@@ -128,8 +129,22 @@ export function ProductDetail() {
             {p.enriched_at ? ` · ${new Date(p.enriched_at).toLocaleString('pl-PL')}` : ''}
           </p>
         </div>
-        {canEnrich && (
-          <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Link
+            to={`/products?cross=${encodeURIComponent(p.sku)}`}
+            className="rounded border border-emerald-600 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50"
+          >
+            Cross-ref po SKU
+          </Link>
+          {p.substitutes?.[0]?.substitute_product_id && (
+            <Link
+              to={`/products/compare?a=${p.id}&b=${p.substitutes[0].substitute_product_id}`}
+              className="rounded border border-slate-300 px-3 py-2 text-xs hover:bg-slate-50"
+            >
+              Porównaj z zamiennikiem
+            </Link>
+          )}
+          {canEnrich && (
             <button
               type="button"
               disabled={busy || status === 'queued'}
@@ -146,8 +161,12 @@ export function ProductDetail() {
                     ? 'Pobierz ponownie'
                     : 'Pobierz opis i zdjęcia'}
             </button>
-          </div>
-        )}
+          )}
+        </div>
+      </div>
+
+      <div className="mt-3">
+        <CrossRefPanel initialCode={p.sku} />
       </div>
 
       {err && <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
@@ -247,6 +266,35 @@ export function ProductDetail() {
           ) : null}
           {prose && (
             <p className="mb-3 whitespace-pre-wrap text-sm text-slate-700">{prose}</p>
+          )}
+          {p.enrichment_payload?.attributes && (
+            <div className="mb-3 rounded border border-slate-100 bg-slate-50 px-3 py-2">
+              <p className="mb-1 text-xs font-semibold text-slate-700">Atrybuty BHP</p>
+              <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-600 sm:grid-cols-3">
+                {(
+                  [
+                    ['Kategoria', p.enrichment_payload.attributes.kategoria_bhp],
+                    ['Materiał', p.enrichment_payload.attributes.material],
+                    ['Klasa', p.enrichment_payload.attributes.klasa_ochrony],
+                    ['EN 388', p.enrichment_payload.attributes.poziomy_en388],
+                    ['Rozmiar', p.enrichment_payload.attributes.rozmiar],
+                    ['Kod', p.enrichment_payload.attributes.kod_producenta],
+                  ] as const
+                ).map(([label, val]) =>
+                  val ? (
+                    <div key={label}>
+                      <dt className="text-slate-400">{label}</dt>
+                      <dd className="font-medium text-slate-800">{val}</dd>
+                    </div>
+                  ) : null,
+                )}
+              </dl>
+              {(p.enrichment_payload.attributes.normy_en?.length ?? 0) > 0 && (
+                <p className="mt-1 text-[11px] text-slate-600">
+                  Normy: {p.enrichment_payload.attributes.normy_en!.join(', ')}
+                </p>
+              )}
+            </div>
           )}
           {[
             ['Specyfikacja', p.enrichment_payload?.specs],
@@ -352,16 +400,26 @@ export function ProductDetail() {
             </tr>
           </thead>
           <tbody>
-            {p.substitutes.map((s) => (
+            {(p.substitutes ?? []).map((s) => (
               <tr key={s.id} className="border-b">
                 <td className="p-2">{s.substitute_product?.sku}</td>
                 <td className="p-2">{s.substitute_product?.name}</td>
                 <td className="p-2">{s.type}</td>
                 <td className="p-2">{s.match_percent}%</td>
-                <td className="p-2">{s.approval_status}</td>
+                <td className="p-2">
+                  <span>{s.approval_status}</span>
+                  {s.substitute_product_id && (
+                    <Link
+                      to={`/products/compare?a=${p.id}&b=${s.substitute_product_id}`}
+                      className="ml-2 text-[10px] font-semibold text-emerald-800 hover:underline"
+                    >
+                      Porównaj
+                    </Link>
+                  )}
+                </td>
               </tr>
             ))}
-            {p.substitutes.length === 0 && (
+            {(p.substitutes ?? []).length === 0 && (
               <tr>
                 <td colSpan={5} className="p-3 text-slate-400">
                   Brak zamienników dla tego głównego.
