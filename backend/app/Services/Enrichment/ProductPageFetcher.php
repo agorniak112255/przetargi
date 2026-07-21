@@ -13,7 +13,7 @@ use Throwable;
 final class ProductPageFetcher
 {
     public function __construct(
-        private readonly BlockedPageReader $blockedPages = new BlockedPageReader(),
+        private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
     ) {}
 
     /**
@@ -840,9 +840,10 @@ final class ProductPageFetcher
                 $score += 45;
                 $skuInUrl = true;
             }
-            // Bez śladu SKU / zaufanego źródła — słaby kandydat (related products)
+            // Bez śladu SKU w URL pozostaw jako słaby kandydat. Trafność obrazu
+            // zweryfikuje później AI Vision na podstawie produktu i kontekstu karty.
             if (! $skuInUrl && ! $pageHasOurCore && ! $trusted) {
-                $score -= 50;
+                $score = min($score, 1);
             }
             if ($score > 0) {
                 $candidates[] = ['url' => $abs, 'score' => $score];
@@ -856,7 +857,7 @@ final class ProductPageFetcher
             $out[] = $row['url'];
         }
 
-        return array_slice(array_values(array_unique($out)), 0, 3);
+        return array_slice(array_values(array_unique($out)), 0, 6);
     }
 
     /**

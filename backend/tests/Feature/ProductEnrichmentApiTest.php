@@ -13,10 +13,18 @@ use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use App\Models\User;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\HybridWebSearchService;
+use App\Services\Enrichment\ManufacturerDomainResolver;
 use App\Services\Enrichment\ProductDocumentDownloader;
+use App\Services\Enrichment\ProductDocumentFinder;
 use App\Services\Enrichment\ProductEnrichmentService;
+use App\Services\Enrichment\ProductImageCandidateVerifier;
+use App\Services\Enrichment\ProductImageDownloader;
+use App\Services\Enrichment\ProductPageFetcher;
+use App\Services\Enrichment\ProductSearchIdentity;
+use App\Support\BhpAttributeNormalizer;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -293,15 +301,16 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $service = new ProductEnrichmentService(
             $search,
-            app(\App\Services\Enrichment\ProductImageDownloader::class),
-            app(\App\Services\Enrichment\ProductDocumentDownloader::class),
-            app(\App\Services\Enrichment\ProductPageFetcher::class),
-            app(\App\Services\Enrichment\ProductDocumentFinder::class),
-            app(\App\Services\Enrichment\ManufacturerDomainResolver::class),
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ProductDocumentFinder::class),
+            app(ManufacturerDomainResolver::class),
             $llm,
-            app(\App\Services\Ai\AiSettingsService::class),
-            app(\App\Support\BhpAttributeNormalizer::class),
-            app(\App\Services\Enrichment\ProductSearchIdentity::class),
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
         );
 
         $service->enrichProduct($product, false);
@@ -389,15 +398,19 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $service = new ProductEnrichmentService(
             $search,
-            app(\App\Services\Enrichment\ProductImageDownloader::class),
-            app(\App\Services\Enrichment\ProductDocumentDownloader::class),
-            app(\App\Services\Enrichment\ProductPageFetcher::class),
-            app(\App\Services\Enrichment\ProductDocumentFinder::class),
-            app(\App\Services\Enrichment\ManufacturerDomainResolver::class),
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ProductDocumentFinder::class),
+            app(ManufacturerDomainResolver::class),
             $llm,
-            app(\App\Services\Ai\AiSettingsService::class),
-            app(\App\Support\BhpAttributeNormalizer::class),
-            app(\App\Services\Enrichment\ProductSearchIdentity::class),
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            new ProductImageCandidateVerifier(
+                app(ProductSearchIdentity::class),
+                $llm,
+            ),
         );
 
         $service->enrichProduct($product, false);
@@ -408,7 +421,69 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertIsArray($product->enrichment_payload);
         $this->assertSame(['nitryl', 'antypoślizgowe'], $product->enrichment_payload['features'] ?? null);
         $this->assertSame(1, ProductImage::query()->where('product_id', $product->id)->count());
-        $this->assertSame(1, \App\Models\ProductDocument::query()->where('product_id', $product->id)->count());
+        $this->assertSame(1, ProductDocument::query()->where('product_id', $product->id)->count());
+    }
+
+    public function test_ai_vision_accepts_urgent_image_without_sku_in_url_and_rejects_unrelated_one(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'URGENT-1005',
+            'name' => '1005',
+            'manufacturer' => 'URGENT',
+            'category' => 'Rękawice',
+            'norms' => 'EN 420, EN 388',
+        ]);
+        $gloveUrl = 'https://cdn.example.com/media/cache/7f3a91c2.jpg';
+        $unrelatedUrl = 'https://cdn.example.com/media/cache/91ad884e.jpg';
+        Http::fake([
+            'https://cdn.example.com/*' => Http::response(
+                $this->tinyJpeg(),
+                200,
+                ['Content-Type' => 'image/jpeg']
+            ),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonWithImages')
+            ->once()
+            ->with(
+                Mockery::on(static fn (string $prompt): bool => str_contains($prompt, 'URGENT-1005')),
+                Mockery::on(static fn (array $images): bool => count($images) === 2)
+            )
+            ->andReturn([
+                'candidates' => [
+                    [
+                        'index' => 0,
+                        'is_relevant_product' => true,
+                        'is_logo_or_banner' => false,
+                        'confidence' => 0.96,
+                        'reason' => 'Zdjęcie rękawicy z karty produktu.',
+                    ],
+                    [
+                        'index' => 1,
+                        'is_relevant_product' => false,
+                        'is_logo_or_banner' => false,
+                        'confidence' => 0.99,
+                        'reason' => 'Inny produkt.',
+                    ],
+                ],
+            ]);
+
+        $verifier = new ProductImageCandidateVerifier(
+            app(ProductSearchIdentity::class),
+            $llm,
+        );
+        $selected = $verifier->select(
+            $product,
+            [$gloveUrl, $unrelatedUrl],
+            [[
+                'url' => 'https://sklep.example.com/rekawice-urgent-1005',
+                'text' => 'URGENT 1005 rękawice ochronne EN 388.',
+            ]],
+            1
+        );
+
+        $this->assertSame([$gloveUrl], $selected);
     }
 
     public function test_ai_settings_accept_web_search_fields(): void
@@ -512,6 +587,10 @@ final class ProductEnrichmentApiTest extends TestCase
         $llm->shouldReceive('chatJson')
             ->zeroOrMoreTimes()
             ->andReturnUsing($handler);
+        $llm->shouldReceive('chatJsonWithImages')
+            ->zeroOrMoreTimes()
+            ->andReturn(['candidates' => []])
+            ->byDefault();
 
         return $llm;
     }

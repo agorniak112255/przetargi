@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Ai;
 
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -166,6 +167,43 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * Analiza kilku obrazów w jednym wywołaniu modelu multimodalnego.
+     *
+     * @param  list<array{bytes: string, mime: string, label: string}>  $images
+     * @return array<string, mixed>
+     */
+    public function chatJsonWithImages(string $prompt, array $images): array
+    {
+        $content = [
+            ['type' => 'text', 'text' => $prompt],
+        ];
+        foreach ($images as $index => $image) {
+            $content[] = [
+                'type' => 'text',
+                'text' => sprintf('Kandydat %d: %s', $index, $image['label']),
+            ];
+            $content[] = [
+                'type' => 'image_url',
+                'image_url' => [
+                    'url' => 'data:'.$image['mime'].';base64,'.base64_encode($image['bytes']),
+                    'detail' => 'low',
+                ],
+            ];
+        }
+
+        return $this->chatJson([
+            [
+                'role' => 'system',
+                'content' => 'Weryfikujesz zdjęcia produktów BHP. Zwracasz wyłącznie JSON i nie zgadujesz.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $content,
+            ],
+        ], 0.0, 1200);
+    }
+
+    /**
      * OpenAI Responses API z narzędziem web_search (gdy provider wspiera).
      *
      * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
@@ -314,7 +352,7 @@ class OpenAiCompatibleClient
     /**
      * @param  array<string, mixed>  $payload
      */
-    private function post(string $url, string $apiKey, array $payload): \Illuminate\Http\Client\Response
+    private function post(string $url, string $apiKey, array $payload): Response
     {
         $timeout = max(120, (int) ($this->settings->resolve()['timeout_seconds'] ?? 90));
 

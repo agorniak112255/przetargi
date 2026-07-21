@@ -37,11 +37,9 @@ final class ProductEnrichmentService
         private readonly AiSettingsService $aiSettings,
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly ProductSearchIdentity $identity,
+        private readonly ProductImageCandidateVerifier $imageVerifier,
     ) {}
 
-    /**
-     * @return ProductEnrichmentBatch
-     */
     public function enqueueProduct(Product $product, User $user, bool $force = false): ProductEnrichmentBatch
     {
         if (! $force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
@@ -322,18 +320,20 @@ final class ProductEnrichmentService
                 );
             }
 
-            // Zdjęcia: HTML karty + LLM tylko gdy URL zawiera SKU (nie Tavily, nie „product/c500” z LEGO)
-            $imageUrls = [];
-            foreach ($fetched['image_urls'] as $url) {
-                if (is_string($url) && $this->identity->isTrustedPageImageUrl($url, $product)) {
-                    $imageUrls[] = $url;
-                }
-            }
+            // Zdjęcia z kart produktu: pewne URL-e przechodzą po SKU, pozostałe ocenia AI Vision.
+            // Tavily include_images pozostaje wyłączone — kandydat musi pochodzić z pobranej karty.
+            $imageUrls = $this->imageVerifier->select(
+                $product,
+                $fetched['image_urls'],
+                $pageSnippets,
+                3
+            );
             foreach ($extracted['image_urls'] ?? [] as $url) {
                 if (is_string($url) && $this->identity->imageUrlMentionsProduct($url, $product)) {
                     $imageUrls[] = $url;
                 }
             }
+            $imageUrls = array_values(array_unique($imageUrls));
 
             $sourceUrls = [];
             foreach ($extracted['source_urls'] ?? [] as $url) {
@@ -401,7 +401,7 @@ final class ProductEnrichmentService
                 'product_id' => $product->id,
                 'sku' => $product->sku,
                 'fetched_count' => count($fetched['image_urls']),
-                'trusted_count' => count($imageUrls),
+                'verified_count' => count($imageUrls),
                 'selected_count' => count($primaryImageUrls),
                 'selected_urls' => $primaryImageUrls,
                 'source_urls' => array_slice($sourceUrls, 0, 3),
@@ -417,12 +417,12 @@ final class ProductEnrichmentService
                     1,
                     $mfrDomains
                 );
-                $retryUrls = [];
-                foreach ($retryPages['image_urls'] as $url) {
-                    if ($this->identity->isTrustedPageImageUrl($url, $product)) {
-                        $retryUrls[] = $url;
-                    }
-                }
+                $retryUrls = $this->imageVerifier->select(
+                    $product,
+                    $retryPages['image_urls'],
+                    $retryPages['pages'],
+                    3
+                );
                 $savedImages = $this->images->downloadMany(
                     $product,
                     $this->pickPrimaryImageUrls(
@@ -840,7 +840,7 @@ final class ProductEnrichmentService
 
         usort($ranked, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
 
-            return array_values(array_map(
+        return array_values(array_map(
             static fn (array $row): string => $row['url'],
             array_slice($ranked, 0, 4)
         ));
