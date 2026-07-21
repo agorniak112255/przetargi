@@ -224,17 +224,7 @@ final class ProductEnrichmentService
             $this->assertBatchNotCancelled($batchId);
             $searchPack = $this->search->searchBothPhases($product);
             $searchResults = $searchPack['results'];
-            $searchImages = [];
-            foreach ($searchPack['images'] ?? [] as $url) {
-                if (! is_string($url) || ! str_starts_with($url, 'http')) {
-                    continue;
-                }
-                // Tavily bywa śmietnikiem (piwo, mapy) — tylko URL z SKU/modelem
-                if (! $this->identity->imageUrlMentionsProduct($url, $product)) {
-                    continue;
-                }
-                $searchImages[] = $url;
-            }
+            // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
             if ($searchResults === []) {
                 $detail = $searchPack['errors'] !== []
                     ? implode(' | ', array_slice($searchPack['errors'], 0, 2))
@@ -330,24 +320,17 @@ final class ProductEnrichmentService
                 );
             }
 
+            // Zdjęcia: HTML karty + LLM tylko gdy URL zawiera SKU (nie Tavily, nie „product/c500” z LEGO)
             $imageUrls = [];
-            foreach ($extracted['image_urls'] ?? [] as $url) {
-                if (is_string($url) && str_starts_with($url, 'http')) {
-                    $imageUrls[] = $url;
-                }
-            }
             foreach ($fetched['image_urls'] as $url) {
-                // ze strony karty: shop-media OK; odrzuć menu uvex
-                if (is_string($url) && (
-                    $this->identity->imageUrlMentionsProduct($url, $product)
-                    || $this->identity->looksLikeProductGalleryUrl($url)
-                )) {
+                if (is_string($url) && $this->identity->isTrustedPageImageUrl($url, $product)) {
                     $imageUrls[] = $url;
                 }
             }
-            // Tavily — tylko z SKU/modelem w URL (nigdy mapy/piwo)
-            foreach ($searchImages as $url) {
-                $imageUrls[] = $url;
+            foreach ($extracted['image_urls'] ?? [] as $url) {
+                if (is_string($url) && $this->identity->imageUrlMentionsProduct($url, $product)) {
+                    $imageUrls[] = $url;
+                }
             }
 
             $sourceUrls = [];
@@ -407,12 +390,11 @@ final class ProductEnrichmentService
 
             $primaryImageUrls = $this->pickPrimaryImageUrls(
                 $imageUrls,
-                $extracted['image_urls'] ?? [],
+                [],
                 (string) $product->sku,
                 (string) $product->name,
                 $product,
             );
-            // kilka kandydatów — LLM często zmyśla JPG (404), prawdziwe są w HTML strony
             $savedImages = $this->images->downloadMany($product, $primaryImageUrls, 1);
             if ($savedImages === [] && $sourceUrls !== []) {
                 $retryPages = $this->pages->fetch(
@@ -422,12 +404,18 @@ final class ProductEnrichmentService
                     ),
                     (string) $product->sku,
                     1,
-                    []
+                    $mfrDomains
                 );
+                $retryUrls = [];
+                foreach ($retryPages['image_urls'] as $url) {
+                    if ($this->identity->isTrustedPageImageUrl($url, $product)) {
+                        $retryUrls[] = $url;
+                    }
+                }
                 $savedImages = $this->images->downloadMany(
                     $product,
                     $this->pickPrimaryImageUrls(
-                        $retryPages['image_urls'],
+                        $retryUrls,
                         [],
                         (string) $product->sku,
                         (string) $product->name,
@@ -436,38 +424,24 @@ final class ProductEnrichmentService
                     1
                 );
             }
-            if ($savedImages === [] && $searchImages !== []) {
-                $savedImages = $this->images->downloadMany(
-                    $product,
-                    $this->pickPrimaryImageUrls(
-                        $searchImages,
-                        [],
-                        (string) $product->sku,
-                        (string) $product->name,
-                        $product,
-                    ),
-                    1
-                );
-            }
-            // Ansell/Imperva: pliki .ashx zablokowane — zrzut TYLKO karty z SKU w ścieżce (nie /search)
-            if ($savedImages === []) {
+            // Ansell za Incapsulą: zrzut TYLKO gdy w ścieżce jest SKU i domena producenta
+            if ($savedImages === [] && $this->needsManufacturerScreenshot($product)) {
                 $shotPages = [];
                 $skuNeedle = preg_replace('/\D+/', '', (string) $product->sku) ?? '';
-                foreach (array_merge($sourceUrls, array_column($mfrResults ?? [], 'url')) as $u) {
+                foreach (array_merge($sourceUrls, array_column($mfrResults, 'url')) as $u) {
                     if (! is_string($u) || ! $this->manufacturers->isManufacturerUrl($u, $product, $mfrDomains)) {
                         continue;
                     }
                     $path = mb_strtolower((string) (parse_url($u, PHP_URL_PATH) ?? ''));
-                    if (str_contains($path, '/search') || str_contains($path, '/category')) {
+                    if ($path === '' || str_contains($path, '/search') || str_contains($path, '/category')) {
                         continue;
                     }
-                    if ($skuNeedle !== '' && $skuNeedle !== '0' && ! str_contains($path, $skuNeedle)
-                        && ! $this->identity->imageUrlMentionsProduct($u, $product)) {
+                    if ($skuNeedle === '' || ! str_contains($path, $skuNeedle)) {
                         continue;
                     }
                     $shotPages[] = $u;
                 }
-                $shot = $this->images->downloadPageScreenshot($product, $shotPages, 0);
+                $shot = $this->images->downloadPageScreenshot($product, array_slice($shotPages, 0, 1), 0);
                 if ($shot !== null) {
                     $savedImages = [$shot];
                 }
@@ -651,8 +625,7 @@ final class ProductEnrichmentService
             if (! is_string($u) || ! ProductImageDownloader::looksLikeImageUrl($u)) {
                 continue;
             }
-            if (! $this->identity->imageUrlMentionsProduct($u, $product)
-                && ! $this->identity->looksLikeProductGalleryUrl($u)) {
+            if (! $this->identity->isTrustedPageImageUrl($u, $product)) {
                 continue;
             }
             $imageUrls[] = $u;
@@ -729,6 +702,14 @@ final class ProductEnrichmentService
      * @param  mixed  $llmUrls
      * @return list<string>
      */
+    private function needsManufacturerScreenshot(Product $product): bool
+    {
+        $brand = mb_strtolower($this->identity->shortBrand((string) $product->manufacturer));
+
+        // tylko marki z bot-wallem na CDN mediów (Ansell/Imperva)
+        return $brand === 'ansell' || str_contains($brand, 'ansell');
+    }
+
     private function pickPrimaryImageUrls(array $allUrls, mixed $llmUrls, string $sku, string $name, ?Product $product = null): array
     {
         $scored = [];
@@ -768,10 +749,7 @@ final class ProductEnrichmentService
             if ($this->isJunkImageUrl($url) || ! ProductImageDownloader::looksLikeImageUrl($url)) {
                 continue;
             }
-            // Tavily/śmieci: wymagaj SKU/modelu. Galeria karty (uvex shop-media = hash bez SKU) — OK.
-            if ($product !== null
-                && ! $this->identity->imageUrlMentionsProduct($url, $product)
-                && ! $this->identity->looksLikeProductGalleryUrl($url)) {
+            if ($product !== null && ! $this->identity->isTrustedPageImageUrl($url, $product)) {
                 continue;
             }
             $u = mb_strtolower($url);
@@ -1399,7 +1377,7 @@ final class ProductEnrichmentService
             'loader', 'spinner', 'loading', 'preloader', 'ajax-loader', 'load.gif',
             'loading.gif', 'loader-1', 'loader-2', 'progress.gif',
             'menue-', 'menu-', '/01_menue', 'menue-pics', 'world-map', 'sitemap',
-            'beer', 'fox-deluxe', 'sustainability_report',
+            'beer', 'fox-deluxe', 'sustainability_report', 'lego',
         ];
         foreach ($blocked as $needle) {
             if (str_contains($u, $needle)) {

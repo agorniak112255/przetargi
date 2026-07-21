@@ -72,8 +72,28 @@ final class ProductSearchIdentity
     }
 
     /**
-     * URL zdjęcia musi wskazywać produkt (SKU/model) — blokuje losowe Tavily (piwo, mapy, menu).
-     * Uwaga: uvex shop-media bywa hashem bez SKU — wtedy ufaj tylko gdy URL pochodzi z karty (osobna ścieżka).
+     * Zdjęcie z HTML karty — SKU/model w URL ALBO zaufana galeria producenta (uvex shop-media).
+     * Nigdy: Tavily, LLM, lego.com/product/… z przypadkowym „c500”.
+     */
+    public function isTrustedPageImageUrl(string $url, Product $product): bool
+    {
+        if (! ProductImageDownloader::looksLikeImageUrl($url)) {
+            return false;
+        }
+        $hay = mb_strtolower(urldecode($url).' '.$this->decodeEmbeddedUrls($url));
+        if ($this->looksLikeJunkMediaPath($hay)) {
+            return false;
+        }
+        // twarde: SKU cyfrowe / alias modelu w URL
+        if ($this->imageUrlMentionsProduct($url, $product)) {
+            return true;
+        }
+        // uvex/Ansell CDN galerii — tylko typowe ścieżki mediów produktu (bez słowa „product” w dowolnym sklepie)
+        return $this->looksLikeManufacturerGalleryUrl($url, $product);
+    }
+
+    /**
+     * URL zdjęcia musi wskazywać produkt (SKU/model) — bez samego słowa „product” (LEGO!).
      */
     public function imageUrlMentionsProduct(string $url, Product $product): bool
     {
@@ -81,16 +101,22 @@ final class ProductSearchIdentity
         $hay .= ' '.$this->decodeEmbeddedUrls($hay);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
-        // menu uvex w imgproxy (01_Menue-Pics) — nigdy
-        if (str_contains($hay, 'menue') || str_contains($hay, 'menu-neuheit') || str_contains($hay, 'menukachel')) {
+        if ($this->looksLikeJunkMediaPath($hay)) {
             return false;
+        }
+
+        $sku = mb_strtolower(trim((string) $product->sku));
+        $skuCompact = preg_replace('/[^a-z0-9]+/iu', '', $sku) ?? $sku;
+        // pełny SKU w nazwie pliku (glove-ABC123.jpg) — bez wymogu „product” w hoście
+        if ($sku !== '' && mb_strlen($sku) >= 4 && (str_contains($hay, $sku) || str_contains($hayCompact, $skuCompact))) {
+            return true;
         }
 
         foreach ($this->strongImageTokens($product) as $token) {
             if ($token === '' || mb_strlen($token) < 3) {
                 continue;
             }
-            // same cyfry SKU: 60544 OK w …6054407… (wariant rozmiaru uvex)
+            // same cyfry SKU: 60544 OK w …6054407…
             if (preg_match('/^\d{4,}$/', $token) === 1) {
                 if (preg_match('/(?<![0-9])'.preg_quote($token, '/').'/u', $hay) === 1
                     || preg_match('/(?<![0-9])'.preg_quote($token, '/').'/u', $hayCompact) === 1) {
@@ -99,22 +125,18 @@ final class ProductSearchIdentity
 
                 continue;
             }
-            if (mb_strlen($token) >= 5 && (str_contains($hay, $token) || str_contains($hayCompact, $token))) {
-                return true;
-            }
             if (preg_match('/^r-?\d{2,4}g?$/i', $token) === 1
                 && (str_contains($hay, $token) || str_contains($hayCompact, preg_replace('/[^a-z0-9]/i', '', $token) ?? $token))) {
                 return true;
             }
-            // c300 — tylko ze ścieżką produktu / rękawic, nie samotnie w menu
+            // model (c300, ringers) — TYLKO ze ścieżką BHP/CDN, nigdy sam „…/product/…” (LEGO)
             if (mb_strlen($token) >= 4 && (str_contains($hay, $token) || str_contains($hayCompact, $token))) {
-                if (preg_match('#(glove|handschuh|rekaw|product|shop-media|fileadmin/.+products)#i', $hay) === 1) {
+                if (preg_match('#(glove|handschuh|rekaw|shop-media|product-assets|fileadmin/.+products|pim/products|media/catalog/product)#i', $hay) === 1) {
                     return true;
                 }
             }
         }
 
-        // Ansell PIM: …/ringers/r-065/065g_primary.ashx
         $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
         if ($brand !== '' && str_contains($hay, $brand) && str_contains($hay, 'product-assets')) {
             foreach ($this->modelAliases($product) as $alias) {
@@ -127,11 +149,38 @@ final class ProductSearchIdentity
         return false;
     }
 
-    /** Czy URL wygląda na galerię karty (uvex shop-media / Magento), nie na wynik Tavily. */
+    /** Galeria z CDN producenta (hash bez SKU) — tylko znane hosty/marki. */
+    public function looksLikeManufacturerGalleryUrl(string $url, Product $product): bool
+    {
+        $u = mb_strtolower(urldecode($url).' '.$this->decodeEmbeddedUrls($url));
+        if ($this->looksLikeJunkMediaPath($u)) {
+            return false;
+        }
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+
+        // uvex CloudFront shop-media / fileadmin produktów
+        if (str_contains($host, 'cloudfront.net') || str_contains($host, 'uvex')) {
+            return str_contains($u, 'shop-media')
+                || (str_contains($u, 'fileadmin') && str_contains($u, 'product') && ! str_contains($u, 'menue'));
+        }
+        // Ansell PIM
+        if (str_contains($host, 'ansell') || ($brand === 'ansell' && str_contains($u, 'product-assets'))) {
+            return str_contains($u, 'product-assets') || str_contains($u, '/-/media/');
+        }
+        // Magento / Presta typowe galerie
+        if (str_contains($u, 'media/catalog/product') || str_contains($u, 'large_default') || str_contains($u, 'pim/products')) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /** @deprecated użyj looksLikeManufacturerGalleryUrl */
     public function looksLikeProductGalleryUrl(string $url): bool
     {
         $u = mb_strtolower(urldecode($url).' '.$this->decodeEmbeddedUrls($url));
-        if (str_contains($u, 'menue') || str_contains($u, 'menu-neuheit') || str_contains($u, '01_menue')) {
+        if ($this->looksLikeJunkMediaPath($u)) {
             return false;
         }
 
@@ -139,8 +188,18 @@ final class ProductSearchIdentity
             || str_contains($u, 'media/catalog/product')
             || str_contains($u, 'pim/products')
             || str_contains($u, 'product-assets')
-            || str_contains($u, 'large_default')
-            || (str_contains($u, 'fileadmin') && str_contains($u, 'product'));
+            || str_contains($u, 'large_default');
+    }
+
+    private function looksLikeJunkMediaPath(string $hay): bool
+    {
+        return str_contains($hay, 'menue')
+            || str_contains($hay, 'menu-neuheit')
+            || str_contains($hay, 'menukachel')
+            || str_contains($hay, '01_menue')
+            || str_contains($hay, 'lego')
+            || str_contains($hay, 'beer')
+            || str_contains($hay, 'world-map');
     }
 
     private function decodeEmbeddedUrls(string $hay): string

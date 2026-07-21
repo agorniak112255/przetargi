@@ -11,7 +11,34 @@ use Tests\TestCase;
 
 final class ProductImageRelevanceTest extends TestCase
 {
-    public function test_rejects_unrelated_tavily_noise(): void
+    public function test_rejects_lego_beer_maps(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '60550',
+            'name' => 'uvex C500',
+            'manufacturer' => 'uvex',
+        ]);
+
+        $this->assertFalse($identity->isTrustedPageImageUrl(
+            'https://www.lego.com/cdn/product-assets/product.img.pri/60448/Web/609b8a.jpg',
+            $product
+        ));
+        $this->assertFalse($identity->imageUrlMentionsProduct(
+            'https://shop.example.com/product/c500-lego-set.jpg',
+            $product
+        ));
+        $this->assertFalse($identity->imageUrlMentionsProduct(
+            'https://cdn.example.com/fox-deluxe-beer.jpg',
+            $product
+        ));
+        $this->assertFalse($identity->imageUrlMentionsProduct(
+            'https://cdn.example.com/world-map-europe.png',
+            $product
+        ));
+    }
+
+    public function test_accepts_uvex_shop_media_and_sku_variant(): void
     {
         $identity = new ProductSearchIdentity;
         $product = new Product([
@@ -20,29 +47,13 @@ final class ProductImageRelevanceTest extends TestCase
             'manufacturer' => 'uvex',
         ]);
 
-        $this->assertFalse($identity->imageUrlMentionsProduct(
-            'https://cdn.example.com/world-map-europe.png',
+        $this->assertTrue($identity->isTrustedPageImageUrl(
+            'https://d3rbxgeqn1ye9j.cloudfront.net/shop-media/abc123/cb:1/media.jpg',
             $product
         ));
-        $this->assertFalse($identity->imageUrlMentionsProduct(
-            'https://cdn.example.com/fox-deluxe-beer.jpg',
-            $product
-        ));
-        $this->assertTrue($identity->imageUrlMentionsProduct(
-            'https://d3rbxgeqn1ye9j.cloudfront.net/fileadmin/products/uvex-c300-foam-60544.jpg',
-            $product
-        ));
-        // uvex slug z wariantem rozmiaru 6054407
         $this->assertTrue($identity->imageUrlMentionsProduct(
             'https://www.uvex-safety.com/en/products/safety-gloves/uvex-c300-foam-6054407.jpg',
             $product
-        ));
-        // shop-media = hash bez SKU — galeria karty
-        $this->assertTrue($identity->looksLikeProductGalleryUrl(
-            'https://d3rbxgeqn1ye9j.cloudfront.net/shop-media/abc123/cb:1/media.jpg'
-        ));
-        $this->assertFalse($identity->looksLikeProductGalleryUrl(
-            'https://d3rbxgeqn1ye9j.cloudfront.net/fileadmin/01_Menue-Pics/map.jpg'
         ));
     }
 

@@ -69,34 +69,31 @@ class HybridWebSearchService
                     // Pierwsze zapytanie (jak Google): najpierw całe internety — mniej spalone kredytów na pustych domenach.
                     $openFirst = $queryIndex === 0 && $profile->openWebFallback;
                     if ($openFirst) {
-                        $pack = $this->searchViaTavily($query, [], $profile, true);
+                        // include_images=false — Tavily images = śmietnik (LEGO/piwo)
+                        $pack = $this->searchViaTavily($query, [], $profile, false);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        $packImages = $pack['images'];
                         $provider = 'tavily';
                     }
                     // manufacturer → domeny producenta; industry → sklepy+katalogi
                     if ($packResults === [] && $preferred !== []) {
-                        $pack = $this->searchViaTavily($query, $preferred, $profile, true);
+                        $pack = $this->searchViaTavily($query, $preferred, $profile, false);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
                         $packResults = array_values(array_filter(
                             $packResults,
                             fn (array $row): bool => $this->resultQuality($row, $product) >= 30
                         ));
-                        $packImages = array_merge($packImages, $pack['images']);
                         $provider = $phase === 'manufacturer' ? 'tavily_manufacturer' : 'tavily_preferred';
                     }
                     if ($packResults === [] && $profile->retailerFallback
                         && $phase === 'manufacturer' && $mfrDomains !== []) {
                         // brak na stronie producenta → sklepy (opis), nie PDF
-                        $pack = $this->searchViaTavily($query, $this->retailerDomains(), $profile, true);
+                        $pack = $this->searchViaTavily($query, $this->retailerDomains(), $profile, false);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        $packImages = array_merge($packImages, $pack['images']);
                         $provider = 'tavily_retailer';
                     }
                     if ($packResults === [] && $profile->openWebFallback && ! $openFirst) {
-                        $pack = $this->searchViaTavily($query, [], $profile, true);
+                        $pack = $this->searchViaTavily($query, [], $profile, false);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        $packImages = array_merge($packImages, $pack['images']);
                         $provider = 'tavily';
                     }
                 } catch (TavilyQuotaExceededException $e) {
@@ -184,10 +181,9 @@ class HybridWebSearchService
         $errors = [];
         $profile = $this->settings->tavilySearchProfile();
 
-        // full: obie fazy zawsze; eco/balanced: druga faza gdy brak wyników LUB brak zdjęć
-        // (Ansell/Imperva: karta producenta jest, ale HTML/obrazki z Tavily często puste).
+        // full: obie fazy zawsze; eco/balanced: druga faza tylko gdy pierwsza nic nie dała
         foreach (['manufacturer', 'industry'] as $phase) {
-            if ($phase === 'industry' && ! $profile->bothPhasesAlways && $merged !== [] && $images !== []) {
+            if ($phase === 'industry' && ! $profile->bothPhasesAlways && $merged !== []) {
                 break;
             }
 
