@@ -246,6 +246,7 @@ export function TenderDetail() {
       purchase_price: number
     }>
   } | null>(null)
+  const cheaperPreviewRef = useRef<HTMLDivElement | null>(null)
 
   const load = useCallback(async () => {
     const d = await api<Detail>(`/tenders/${id}`)
@@ -348,6 +349,10 @@ export function TenderDetail() {
         return
       }
       setCheaperPreview({ candidates: res.candidates ?? [] })
+      setTab('pozycje')
+      requestAnimationFrame(() => {
+        cheaperPreviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      })
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd podglądu zamienników')
     } finally {
@@ -820,43 +825,6 @@ export function TenderDetail() {
         </div>
       </div>
 
-      {cheaperPreview && (
-        <div className="mb-3 rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-slate-800">
-          <p className="font-semibold text-sky-900">
-            Zastosować tańsze zamienniki na {cheaperPreview.candidates.length} pozycjach?
-          </p>
-          <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
-            {cheaperPreview.candidates.map((c) => (
-              <li key={c.item_id} className="font-mono text-[11px]">
-                Poz. {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku} (−{c.save_percent}% · zakup{' '}
-                {Number(c.purchase_price).toLocaleString('pl-PL', {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}{' '}
-                zł)
-              </li>
-            ))}
-          </ul>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setCheaperPreview(null)}
-              className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] disabled:opacity-50"
-            >
-              Anuluj
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void applyCheaperSubstitutes()}
-              className="rounded bg-sky-700 px-2 py-1 text-[11px] text-white disabled:opacity-50"
-            >
-              Tak, zastosuj
-            </button>
-          </div>
-        </div>
-      )}
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
 
@@ -993,6 +961,49 @@ export function TenderDetail() {
               >
                 Zapisz całość
               </button>
+            </div>
+          )}
+          {cheaperPreview && (
+            <div
+              ref={cheaperPreviewRef}
+              className="rounded-lg border-2 border-amber-400 bg-amber-50 p-3 text-xs text-slate-800 shadow-sm"
+            >
+              <p className="font-semibold text-amber-950">
+                Zastosować tańsze zamienniki na {cheaperPreview.candidates.length} pozycjach?
+              </p>
+              <p className="mt-1 text-[11px] text-amber-900/80">
+                To tylko podgląd — potwierdź poniżej, żeby zapisać zmiany w ofercie.
+              </p>
+              <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+                {cheaperPreview.candidates.map((c) => (
+                  <li key={c.item_id} className="font-mono text-[11px]">
+                    Poz. {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku} (−{c.save_percent}% · zakup{' '}
+                    {Number(c.purchase_price).toLocaleString('pl-PL', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}{' '}
+                    zł)
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setCheaperPreview(null)}
+                  className="rounded border border-slate-300 bg-white px-3 py-1.5 text-[11px] disabled:opacity-50"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void applyCheaperSubstitutes()}
+                  className="rounded bg-amber-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {busy ? 'Zapisuję…' : 'Tak, zastosuj'}
+                </button>
+              </div>
             </div>
           )}
           <div className="overflow-x-auto rounded-xl bg-white p-4 shadow-sm">

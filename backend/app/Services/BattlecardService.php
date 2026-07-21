@@ -235,7 +235,7 @@ final class BattlecardService
         if ($ours === null) {
             return null;
         }
-        $ourPurchase = (float) ($ours['purchase_price'] ?? 0);
+        $ourPurchase = $this->effectivePurchase($ours);
         if ($ourPurchase <= 0) {
             return null;
         }
@@ -243,7 +243,7 @@ final class BattlecardService
         $best = null;
         $bestPrice = $ourPurchase;
         foreach ($card['substitutes'] as $sub) {
-            $price = (float) ($sub['purchase_price'] ?? 0);
+            $price = $this->effectivePurchase($sub);
             if ($price <= 0 || $price >= $bestPrice) {
                 continue;
             }
@@ -262,6 +262,21 @@ final class BattlecardService
         }
 
         return $best;
+    }
+
+    /** @param  array<string, mixed>  $snap */
+    private function effectivePurchase(array $snap): float
+    {
+        $purchase = $snap['purchase_price'] ?? null;
+        if ($purchase !== null && (float) $purchase > 0) {
+            return (float) $purchase;
+        }
+        $catalog = $snap['catalog_price_net'] ?? null;
+        if ($catalog !== null && (float) $catalog > 0) {
+            return (float) $catalog;
+        }
+
+        return 0.0;
     }
 
     /**
