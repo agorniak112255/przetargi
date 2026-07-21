@@ -6,7 +6,9 @@ import { productDisplayName } from '../lib/productLabel'
 function descriptionProse(text: string | null | undefined): string {
   if (!text) return ''
   const cut = text.search(/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/)
-  return cut >= 0 ? text.slice(0, cut).trim() : text
+  let body = cut >= 0 ? text.slice(0, cut).trim() : text.trim()
+  body = body.replace(/([^\n])\s+(\d{1,2})\)\s+/g, '$1\n$2) ')
+  return body
 }
 
 type Props = {

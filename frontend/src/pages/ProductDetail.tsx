@@ -24,7 +24,10 @@ const STATUS_LABEL: Record<string, string> = {
 function descriptionProse(text: string | null | undefined): string {
   if (!text) return ''
   const cut = text.search(/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/)
-  return cut >= 0 ? text.slice(0, cut).trim() : text
+  let body = cut >= 0 ? text.slice(0, cut).trim() : text.trim()
+  // LLM często zwraca „1) … 2) …” w jednym akapicie — każdy punkt w osobnej linii
+  body = body.replace(/([^\n])\s+(\d{1,2})\)\s+/g, '$1\n$2) ')
+  return body
 }
 
 export function ProductDetail() {
