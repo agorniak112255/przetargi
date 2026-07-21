@@ -7,6 +7,7 @@ namespace App\Services\Enrichment;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 final class ProductPageFetcher
@@ -57,7 +58,11 @@ final class ProductPageFetcher
                         ->get($row['url']);
                 }
             });
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            Log::info('Product page fetch pool failed', [
+                'urls' => array_slice(array_column($htmlRows, 'url'), 0, 3),
+                'error' => $e->getMessage(),
+            ]);
             $responses = [];
         }
 
@@ -70,6 +75,10 @@ final class ProductPageFetcher
             $ok = $response instanceof Response && $response->successful();
 
             if (! $ok) {
+                Log::info('Product page fetch skipped', [
+                    'url' => $url,
+                    'status' => $response instanceof Response ? $response->status() : null,
+                ]);
                 $snippet = trim((string) ($row['snippet'] ?? ''));
                 if ($snippet !== '') {
                     $pages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];

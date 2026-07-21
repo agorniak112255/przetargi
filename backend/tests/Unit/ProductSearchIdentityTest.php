@@ -83,18 +83,28 @@ final class ProductSearchIdentityTest extends TestCase
     {
         $id = new ProductSearchIdentity;
         $product = new Product([
-            'sku' => '60549',
-            'name' => 'C300 Dry',
+            'sku' => '60497',
+            'name' => 'C500',
             'manufacturer' => 'uvex',
         ]);
 
         $this->assertTrue($id->hayMentionsProduct(
-            'https://bhp-sklep.com.pl/produkt/rekawice-uvex-c300-dry-60549 uvex C300 Dry 60549',
+            'https://www.uvex-safety.com/en/products/safety-gloves/uvex-c500-cut-protection-glove-6049706/ '
+                .'uvex C500 cut protection glove Product no. 60497',
             $product
         ));
+        $this->assertTrue($id->coreInUrlOrTitle(
+            'https://www.uvex-safety.com/en/products/safety-gloves/uvex-c500-cut-protection-glove-6049706/',
+            'uvex C500 cut protection glove',
+            $product
+        ));
+
         $queries = $id->searchQueries($product, 'manufacturer');
-        $this->assertNotEmpty($queries);
-        $this->assertStringContainsString('60549', implode(' | ', $queries));
+        $this->assertSame('site:uvex-safety.com 60497 glove OR handschuh', $queries[0]);
+        $this->assertSame('site:uvex-safety.com/products 60497', $queries[1]);
+
+        $industryQueries = $id->searchQueries($product, 'industry');
+        $this->assertSame('60497', $industryQueries[0]);
     }
 
     public function test_rejects_weight_false_positive_1000g_for_sku_1000(): void

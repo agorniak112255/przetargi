@@ -16,6 +16,8 @@ use Throwable;
 
 class HybridWebSearchService
 {
+    private const SEARCH_CACHE_VERSION = 'v16';
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly OpenAiCompatibleClient $llm,
@@ -50,7 +52,7 @@ class HybridWebSearchService
         // Limit zapytań i próg stopu zależą od trybu Tavily (Ustawienia AI).
         $queryIndex = 0;
         foreach (array_slice($queries, 0, $profile->maxQueries) as $query) {
-            $cacheKey = 'enrich_search_v15:'.hash('sha256', $profile->mode.'|'.$phase.'|'.$query);
+            $cacheKey = $this->searchCacheKey($profile->mode, $phase, $query);
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
                 $packResults = $this->filterResultsByIdentity($cached['results'], $product);
@@ -66,8 +68,19 @@ class HybridWebSearchService
                 $packResults = [];
                 $packImages = [];
                 try {
-                    // Pierwsze zapytanie (jak Google): najpierw całe internety — mniej spalone kredytów na pustych domenach.
-                    $openFirst = $queryIndex === 0 && $profile->openWebFallback;
+                    // Producent znany: pierwsze zapytanie ogranicz do oficjalnych domen.
+                    // Inaczej pojedynczy wynik sklepu kończy tryb balanced przed kartą producenta.
+                    $manufacturerFirst = $queryIndex === 0
+                        && $phase === 'manufacturer'
+                        && $mfrDomains !== [];
+                    $openFirst = $queryIndex === 0
+                        && $profile->openWebFallback
+                        && ! $manufacturerFirst;
+                    if ($manufacturerFirst) {
+                        $pack = $this->searchViaTavily($query, $mfrDomains, $profile, false);
+                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+                        $provider = 'tavily_manufacturer';
+                    }
                     if ($openFirst) {
                         // include_images=false — Tavily images = śmietnik (LEGO/piwo)
                         $pack = $this->searchViaTavily($query, [], $profile, false);
@@ -75,7 +88,7 @@ class HybridWebSearchService
                         $provider = 'tavily';
                     }
                     // manufacturer → domeny producenta; industry → sklepy+katalogi
-                    if ($packResults === [] && $preferred !== []) {
+                    if ($packResults === [] && $preferred !== [] && ! $manufacturerFirst) {
                         $pack = $this->searchViaTavily($query, $preferred, $profile, false);
                         $packResults = $this->filterResultsByIdentity($pack['results'], $product);
                         $packResults = array_values(array_filter(
@@ -165,6 +178,18 @@ class HybridWebSearchService
         ];
     }
 
+    public function forgetProductCache(Product $product): void
+    {
+        foreach (TavilySearchProfile::MODES as $mode) {
+            $profile = TavilySearchProfile::fromMode($mode);
+            foreach (['manufacturer', 'industry'] as $phase) {
+                foreach (array_slice($this->buildQueries($product, $phase), 0, $profile->maxQueries) as $query) {
+                    Cache::forget($this->searchCacheKey($mode, $phase, $query));
+                }
+            }
+        }
+    }
+
     /**
      * @return array{
      *     results: list<array{url: string, title: string, snippet: string}>,
@@ -251,6 +276,12 @@ class HybridWebSearchService
         }
 
         return $queries !== [] ? array_values(array_unique($queries)) : [trim((string) $product->sku)];
+    }
+
+    private function searchCacheKey(string $mode, string $phase, string $query): string
+    {
+        return 'enrich_search_'.self::SEARCH_CACHE_VERSION.':'
+            .hash('sha256', $mode.'|'.$phase.'|'.$query);
     }
 
     /** Preferuj nazwę z normami („7-003 B S1 SRC”) zamiast SKU z kodem katalogowym. */

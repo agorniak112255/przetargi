@@ -118,6 +118,11 @@ final class ProductEnrichmentApiTest extends TestCase
         ]);
 
         $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('forgetProductCache')
+            ->once()
+            ->with(Mockery::on(
+                static fn (Product $candidate): bool => $candidate->id === $product->id
+            ));
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn([
@@ -138,14 +143,17 @@ final class ProductEnrichmentApiTest extends TestCase
             'certificates' => [],
             'materials' => ['nitryl'],
             'use_cases' => ['montaż'],
-            'image_urls' => ['https://cdn.example.com/g.jpg'],
+            'image_urls' => ['https://cdn.example.com/glove-'.$product->sku.'.jpg'],
             'source_urls' => ['https://example.com/product/'.$product->sku],
             'confidence' => 0.8,
         ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         Http::fake([
-            'https://example.com/*' => Http::response('<html>'.$product->sku.' <img src="https://cdn.example.com/g.jpg"></html>', 200),
+            'https://example.com/*' => Http::response(
+                '<html>'.$product->sku.' <img src="https://cdn.example.com/glove-'.$product->sku.'.jpg"></html>',
+                200
+            ),
             'https://cdn.example.com/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
         ]);
 

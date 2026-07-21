@@ -57,6 +57,22 @@ final class ProductImageRelevanceTest extends TestCase
         ));
     }
 
+    public function test_accepts_actual_uvex_c500_shop_media_image(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '60497',
+            'name' => 'C500',
+            'manufacturer' => 'uvex',
+        ]);
+        $url = 'https://d3rbxgeqn1ye9j.cloudfront.net/shop-media/'
+            .'QTi5MIdcSTJgAnlbWZyNDblY1H4Du67AsQanM6BtpRc/cb:1784591063/'
+            .'bWVkaWEvZWUvODYvNGQvMTc1Njk4MzY4MS9hM2M2YjE1MjE1N2ExNTY1YjVhZjQ3YWE3M2FiODI2MC5qcGc';
+
+        $this->assertTrue(ProductImageDownloader::looksLikeImageUrl($url));
+        $this->assertTrue($identity->isTrustedPageImageUrl($url, $product));
+    }
+
     public function test_ansell_aliases_match_pim_ashx(): void
     {
         $identity = new ProductSearchIdentity;

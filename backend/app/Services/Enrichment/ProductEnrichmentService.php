@@ -216,6 +216,7 @@ final class ProductEnrichmentService
                 return;
             }
             if ($force) {
+                $this->search->forgetProductCache($product);
                 $this->forgetSkuCache($product);
                 $this->clearProductImages($product);
                 $this->clearProductDocuments($product);
@@ -395,6 +396,15 @@ final class ProductEnrichmentService
                 (string) $product->name,
                 $product,
             );
+            Log::info('Product image candidates prepared', [
+                'product_id' => $product->id,
+                'sku' => $product->sku,
+                'fetched_count' => count($fetched['image_urls']),
+                'trusted_count' => count($imageUrls),
+                'selected_count' => count($primaryImageUrls),
+                'selected_urls' => $primaryImageUrls,
+                'source_urls' => array_slice($sourceUrls, 0, 3),
+            ]);
             $savedImages = $this->images->downloadMany($product, $primaryImageUrls, 1);
             if ($savedImages === [] && $sourceUrls !== []) {
                 $retryPages = $this->pages->fetch(
@@ -445,6 +455,15 @@ final class ProductEnrichmentService
                 if ($shot !== null) {
                     $savedImages = [$shot];
                 }
+            }
+            if ($savedImages === []) {
+                Log::warning('Product image download exhausted', [
+                    'product_id' => $product->id,
+                    'sku' => $product->sku,
+                    'selected_urls' => $primaryImageUrls,
+                    'search_urls' => array_slice(array_column($searchResults, 'url'), 0, 8),
+                    'manufacturer_urls' => array_slice(array_column($mfrResults, 'url'), 0, 5),
+                ]);
             }
             $documentUrls = [];
             foreach ($extracted['document_urls'] ?? [] as $url) {

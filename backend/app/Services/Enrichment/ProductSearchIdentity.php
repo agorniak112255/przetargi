@@ -329,15 +329,19 @@ final class ProductSearchIdentity
             $queries[] = 'rękawice lateksem '.$codeCore.' Urgent';
         }
 
+        // Oficjalna karta uvex musi zmieścić się w limitach eco/balanced (1–2 zapytania).
+        // Kod bazowy 60497 występuje w slugu z rozmiarem, np. 6049706.
+        if ($phase === 'manufacturer'
+            && preg_match('/^\d{4,6}$/', $sku) === 1
+            && str_contains(mb_strtolower($brand), 'uvex')) {
+            $queries[] = 'site:uvex-safety.com '.$sku.' glove OR handschuh';
+            $queries[] = 'site:uvex-safety.com/products '.$sku;
+        }
+
         // 1) Jak Google — najpierw czysty kod / marka+kod, BEZ sztucznego hintu kategorii
         if ($sku !== '') {
             $queries[] = $sku;
             $queries[] = '"'.$sku.'"';
-            // uvex: karta ma często SKU+rozmiar w slugu (6054407)
-            if (preg_match('/^\d{4,6}$/', $sku) === 1 && str_contains(mb_strtolower($brand), 'uvex')) {
-                $queries[] = 'site:uvex-safety.com '.$sku.' glove OR handschuh';
-                $queries[] = 'site:uvex-safety.com/products '.$sku;
-            }
         }
         // Ansell R065 / uvex model z aliasów
         foreach ($this->modelAliases($product) as $alias) {
