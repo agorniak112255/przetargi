@@ -44,6 +44,28 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->seed(RolesAndPermissionsSeeder::class);
     }
 
+    public function test_document_only_search_result_does_not_finish_product_page_search(): void
+    {
+        $reflection = new \ReflectionClass(HybridWebSearchService::class);
+        $service = $reflection->newInstanceWithoutConstructor();
+        $method = $reflection->getMethod('hasEnoughPageResults');
+        $method->setAccessible(true);
+
+        $documentOnly = [[
+            'url' => 'https://urgent.pl/file/show/file/69034c7e0ad8b/filename/deklaracja_1005.pdf',
+            'title' => 'Deklaracja zgodności 1005',
+            'snippet' => 'URGENT 1005',
+        ]];
+        $productPage = [[
+            'url' => 'https://urgent.pl/product/show/productid/439',
+            'title' => 'Rękawice impregnowane pokryte nitrylem 1005',
+            'snippet' => 'URGENT 1005',
+        ]];
+
+        $this->assertFalse($method->invoke($service, $documentOnly, 1));
+        $this->assertTrue($method->invoke($service, $productPage, 1));
+    }
+
     public function test_single_product_enrichment_runs_synchronously(): void
     {
         Queue::fake();

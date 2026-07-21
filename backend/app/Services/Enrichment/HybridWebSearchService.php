@@ -141,7 +141,7 @@ class HybridWebSearchService
                 $merged[] = $row;
             }
 
-            if (count($merged) >= $profile->stopAfterResults) {
+            if ($this->hasEnoughPageResults($merged, $profile->stopAfterResults)) {
                 break;
             }
             $queryIndex++;
@@ -208,7 +208,9 @@ class HybridWebSearchService
 
         // full: obie fazy zawsze; eco/balanced: druga faza tylko gdy pierwsza nic nie dała
         foreach (['manufacturer', 'industry'] as $phase) {
-            if ($phase === 'industry' && ! $profile->bothPhasesAlways && $merged !== []) {
+            if ($phase === 'industry'
+                && ! $profile->bothPhasesAlways
+                && $this->hasEnoughPageResults($merged, 1)) {
                 break;
             }
 
@@ -260,6 +262,30 @@ class HybridWebSearchService
             'images' => array_slice($images, 0, 12),
             'errors' => $errors,
         ];
+    }
+
+    /**
+     * Dokument nie zastępuje karty produktu: może dostarczyć certyfikat,
+     * ale nie zawiera galerii ani pełnego opisu.
+     *
+     * @param  list<array{url: string, title: string, snippet: string}>  $results
+     */
+    private function hasEnoughPageResults(array $results, int $threshold): bool
+    {
+        $pages = 0;
+        foreach ($results as $row) {
+            $url = (string) ($row['url'] ?? '');
+            if ($url === '' || ProductDocumentDownloader::looksLikeDocumentUrl($url)) {
+                continue;
+            }
+
+            $pages++;
+            if ($pages >= max(1, $threshold)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -663,7 +689,6 @@ PROMPT;
     }
 
     /**
-     * @param  mixed  $raw
      * @return list<string>
      */
     private function normalizeImageList(mixed $raw): array
@@ -711,7 +736,6 @@ PROMPT;
     }
 
     /**
-     * @param  mixed  $raw
      * @return list<string>
      */
     private function normalizeDomainList(mixed $raw): array
