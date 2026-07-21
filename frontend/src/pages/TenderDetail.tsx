@@ -1950,6 +1950,7 @@ function ItemRow({
               itemId={item.id}
               enabled={Boolean(item.main_product_id ?? item.main_product?.id)}
               canSelectSubstitute
+              selectedProductId={item.main_product_id ?? item.main_product?.id ?? null}
               onSelectSubstitute={(p: BattlecardProduct) =>
                 onSave(item.id, {
                   main_product_id: p.product_id,
@@ -1959,7 +1960,7 @@ function ItemRow({
                   ai_match_reasons: [
                     {
                       code: 'battlecard',
-                      label: `Wybrano zamiennik ${p.sku} z battlecard`,
+                      label: `Wybrano ${p.sku} z battlecard`,
                       points: p.match_percent,
                     },
                   ],

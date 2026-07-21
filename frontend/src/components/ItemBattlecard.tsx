@@ -62,6 +62,7 @@ function Col({
   tone,
   p,
   clickable,
+  selected,
   onClick,
   cheaperBadge,
 }: {
@@ -69,6 +70,7 @@ function Col({
   tone: 'main' | 'sub'
   p: BattlecardProduct | null
   clickable?: boolean
+  selected?: boolean
   onClick?: () => void
   cheaperBadge?: string | null
 }) {
@@ -87,6 +89,7 @@ function Col({
   const purchase = p.purchase_price ?? p.catalog_price_net
   const offerHint =
     p.offer_price ?? p.suggested_offer_price ?? suggestedOfferPrice(p.purchase_price)
+  const selectedRing = selected ? 'ring-2 ring-violet-400 ring-offset-1' : ''
   const body = (
     <>
       <div className="flex items-center justify-between gap-1">
@@ -146,7 +149,9 @@ function Col({
           {p.approval_status ? ` · ${p.approval_status}` : ''}
         </p>
       ) : null}
-      {clickable ? (
+      {selected ? (
+        <p className="mt-1 text-[9px] font-semibold text-violet-700">Wybrane w ofercie</p>
+      ) : clickable ? (
         <p className="mt-1 text-[9px] font-medium text-sky-700">Kliknij, aby wybrać do oferty</p>
       ) : null}
     </>
@@ -157,14 +162,16 @@ function Col({
       <button
         type="button"
         onClick={onClick}
-        className={`w-full rounded border px-2 py-1.5 text-left transition hover:border-sky-400 hover:bg-sky-100 ${tones[tone]}`}
+        className={`w-full rounded border px-2 py-1.5 text-left transition hover:border-sky-400 hover:bg-sky-100 ${tones[tone]} ${selectedRing}`}
       >
         {body}
       </button>
     )
   }
 
-  return <div className={`rounded border px-2 py-1.5 ${tones[tone]}`}>{body}</div>
+  return (
+    <div className={`rounded border px-2 py-1.5 ${tones[tone]} ${selectedRing}`}>{body}</div>
+  )
 }
 
 function ConfirmSubstituteModal({
@@ -193,7 +200,7 @@ function ConfirmSubstituteModal({
       >
         <p className="text-sm font-semibold text-slate-900">Zmienić produkt w ofercie?</p>
         <p className="mt-1 text-xs text-slate-600">
-          Zamiennik zastąpi aktualną propozycję w tej pozycji.
+          Wybrany produkt zastąpi aktualną propozycję w tej pozycji.
         </p>
         <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-2 text-[11px]">
           <div className="min-w-0 overflow-hidden rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
@@ -207,7 +214,7 @@ function ConfirmSubstituteModal({
             →
           </span>
           <div className="min-w-0 overflow-hidden rounded border border-sky-200 bg-sky-50 px-2 py-1.5">
-            <p className="text-[9px] font-semibold uppercase text-sky-700">Zamiennik</p>
+            <p className="text-[9px] font-semibold uppercase text-sky-700">Nowy wybór</p>
             <p className="truncate font-mono text-slate-800">{next.sku}</p>
             <p className="mt-0.5 line-clamp-2 break-words text-slate-600">
               {productDisplayName(next, 48)}
@@ -245,12 +252,14 @@ export function ItemBattlecard({
   itemId,
   enabled,
   canSelectSubstitute = false,
+  selectedProductId = null,
   onSelectSubstitute,
 }: {
   tenderId: number
   itemId: number
   enabled: boolean
   canSelectSubstitute?: boolean
+  selectedProductId?: number | null
   onSelectSubstitute?: (product: BattlecardProduct) => Promise<void> | void
 }) {
   const [open, setOpen] = useState(true)
@@ -259,6 +268,26 @@ export function ItemBattlecard({
   const [card, setCard] = useState<Battlecard | null>(null)
   const [pending, setPending] = useState<BattlecardProduct | null>(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
+
+  function canPick(product: BattlecardProduct | null | undefined): boolean {
+    return (
+      canSelectSubstitute &&
+      Boolean(product) &&
+      (selectedProductId == null || product!.product_id !== selectedProductId)
+    )
+  }
+
+  function isSelected(product: BattlecardProduct | null | undefined): boolean {
+    return Boolean(product && selectedProductId != null && product.product_id === selectedProductId)
+  }
+
+  const currentInOffer =
+    card == null
+      ? null
+      : ([card.ours, ...card.substitutes].find(
+          (product) => product != null && product.product_id === selectedProductId,
+        ) ??
+        card.ours)
 
   useEffect(() => {
     if (!open || !enabled) return
@@ -325,17 +354,23 @@ export function ItemBattlecard({
               </ul>
             )}
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
-              <Col title="Propozycja" tone="main" p={card.ours} />
+              <Col
+                title="Propozycja"
+                tone="main"
+                p={card.ours}
+                selected={isSelected(card.ours)}
+                clickable={canPick(card.ours)}
+                onClick={() => {
+                  if (card.ours) setPending(card.ours)
+                }}
+              />
               <Col
                 title="Zamiennik 1"
                 tone="sub"
                 p={card.substitutes[0] ?? null}
                 cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[0] ?? null)}
-                clickable={
-                  canSelectSubstitute &&
-                  Boolean(card.substitutes[0]) &&
-                  card.substitutes[0].product_id !== card.ours?.product_id
-                }
+                selected={isSelected(card.substitutes[0] ?? null)}
+                clickable={canPick(card.substitutes[0] ?? null)}
                 onClick={() => {
                   const s = card.substitutes[0]
                   if (s) setPending(s)
@@ -346,11 +381,8 @@ export function ItemBattlecard({
                 tone="sub"
                 p={card.substitutes[1] ?? null}
                 cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[1] ?? null)}
-                clickable={
-                  canSelectSubstitute &&
-                  Boolean(card.substitutes[1]) &&
-                  card.substitutes[1].product_id !== card.ours?.product_id
-                }
+                selected={isSelected(card.substitutes[1] ?? null)}
+                clickable={canPick(card.substitutes[1] ?? null)}
                 onClick={() => {
                   const s = card.substitutes[1]
                   if (s) setPending(s)
@@ -365,7 +397,7 @@ export function ItemBattlecard({
       </div>
       {pending && (
         <ConfirmSubstituteModal
-          current={card?.ours ?? null}
+          current={currentInOffer}
           next={pending}
           busy={confirmBusy}
           onCancel={() => {
