@@ -147,10 +147,13 @@ export function AdminRoles() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold">Administracja · Role</h1>
         <Link to="/admin" className="text-xs text-blue-600 hover:underline">
           ← Użytkownicy
+        </Link>
+        <Link to="/admin/logs" className="text-xs text-blue-600 hover:underline">
+          Logi →
         </Link>
       </div>
 

@@ -36,6 +36,7 @@ final class PermissionCatalog
         'admin.access',
         'admin.users.manage',
         'admin.roles.manage',
+        'admin.activity.view',
     ];
 
     public const ROLES = [
@@ -168,6 +169,7 @@ final class PermissionCatalog
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],
             ['admin.users.manage', 'Zarządzanie użytkownikami', 'Może tworzyć, edytować i usuwać konta oraz przypisywać role.', 'Administracja'],
             ['admin.roles.manage', 'Zarządzanie rolami', 'Może zmieniać zestaw uprawnień przypisanych do ról.', 'Administracja'],
+            ['admin.activity.view', 'Dziennik aktywności', 'Może przeglądać logowania i historię działań użytkowników (120 dni).', 'Administracja'],
         ];
 
         $out = [];

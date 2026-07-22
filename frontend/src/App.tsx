@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth'
 import { Layout } from './components/Layout'
+import { AdminActivityLog } from './pages/AdminActivityLog'
 import { AdminRoles } from './pages/AdminRoles'
 import { AdminUsers } from './pages/AdminUsers'
 import { Clients } from './pages/Clients'
@@ -85,6 +86,14 @@ export default function App() {
             element={
               <PermissionGuard permission="admin.roles.manage">
                 <AdminRoles />
+              </PermissionGuard>
+            }
+          />
+          <Route
+            path="admin/logs"
+            element={
+              <PermissionGuard permission="admin.activity.view">
+                <AdminActivityLog />
               </PermissionGuard>
             }
           />
