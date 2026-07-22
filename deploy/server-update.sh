@@ -74,4 +74,13 @@ echo "==> cache"
 "$PHP_BIN" artisan route:cache || true
 "$PHP_BIN" artisan view:cache || true
 
+echo "==> laravel scheduler (cron schedule:run)"
+if [[ -x "$APP_ROOT/deploy/ensure-laravel-scheduler.sh" ]]; then
+  bash "$APP_ROOT/deploy/ensure-laravel-scheduler.sh" "$APP_ROOT" || true
+elif [[ -f "$APP_ROOT/deploy/ensure-laravel-scheduler.sh" ]]; then
+  bash "$APP_ROOT/deploy/ensure-laravel-scheduler.sh" "$APP_ROOT" || true
+else
+  echo "UWAGA: brak deploy/ensure-laravel-scheduler.sh — cron schedule:run nie został ustawiony."
+fi
+
 echo "==> gotowe: https://przetargi.supon.rzeszow.pl"
