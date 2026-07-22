@@ -35,7 +35,7 @@ export function Layout() {
     <div className="flex min-h-screen">
       <aside className="w-60 shrink-0 bg-slate-800 text-slate-100">
         <div className="border-b border-slate-700 p-4 text-xl font-bold">
-          SUPON AI
+          Przetargi Supon
           <small className="mt-1 block text-xs font-normal text-slate-400">
             {user?.name} · {user?.role}
           </small>

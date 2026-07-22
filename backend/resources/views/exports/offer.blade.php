@@ -85,7 +85,7 @@
         <strong>Marża:</strong> {{ $tender->margin_percent ?? '—' }}%
     </div>
     <p style="margin-top:18px;color:#666;font-size:9px;">
-        Wygenerowano z SUPON AI · {{ now()->format('Y-m-d H:i') }} · ceny zakupu = cennik po upuście
+        Wygenerowano z Przetargi Supon · {{ now()->format('Y-m-d H:i') }} · ceny zakupu = cennik po upuście
     </p>
 </body>
 </html>
