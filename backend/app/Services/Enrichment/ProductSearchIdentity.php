@@ -107,8 +107,12 @@ final class ProductSearchIdentity
 
         $sku = mb_strtolower(trim((string) $product->sku));
         $skuCompact = preg_replace('/[^a-z0-9]+/iu', '', $sku) ?? $sku;
+        // NB27 ≠ NB27B / NB27S — dłuższy wariant w URL = inny produkt (nawet gdy w nazwie jest „rubiflex”)
+        if ($this->urlContainsLongerAlphanumericSkuVariant($hay, $skuCompact)) {
+            return false;
+        }
         // pełny SKU w nazwie pliku (glove-ABC123.jpg) — bez wymogu „product” w hoście
-        if ($sku !== '' && mb_strlen($sku) >= 4 && (str_contains($hay, $sku) || str_contains($hayCompact, $skuCompact))) {
+        if ($sku !== '' && mb_strlen($sku) >= 4 && $this->skuTokenInImageHay($hay, $hayCompact, $sku, $skuCompact)) {
             return true;
         }
 
@@ -129,7 +133,16 @@ final class ProductSearchIdentity
                 && (str_contains($hay, $token) || str_contains($hayCompact, preg_replace('/[^a-z0-9]/i', '', $token) ?? $token))) {
                 return true;
             }
-            // model (c300, ringers) — TYLKO ze ścieżką BHP/CDN, nigdy sam „…/product/…” (LEGO)
+            // alfanumeryczny kod (NB27, C300): granica tokenu, nie substring
+            if ($this->isAlphanumericProductCode($token)) {
+                $tokenCompact = preg_replace('/[^a-z0-9]+/iu', '', $token) ?? $token;
+                if ($this->skuTokenInImageHay($hay, $hayCompact, $token, $tokenCompact)) {
+                    return true;
+                }
+
+                continue;
+            }
+            // model (ringers, rubiflex) — TYLKO ze ścieżką BHP/CDN, nigdy sam „…/product/…” (LEGO)
             if (mb_strlen($token) >= 4 && (str_contains($hay, $token) || str_contains($hayCompact, $token))) {
                 if (preg_match('#(glove|handschuh|rekaw|shop-media|product-assets|fileadmin/.+products|pim/products|media/catalog/product)#i', $hay) === 1) {
                     return true;
@@ -189,6 +202,65 @@ final class ProductSearchIdentity
             || str_contains($u, 'pim/products')
             || str_contains($u, 'product-assets')
             || str_contains($u, 'large_default');
+    }
+
+
+    /**
+     * NB27 w URL z NB27B/NB27S — to inny wariant, nie substring match.
+     */
+    private function urlContainsLongerAlphanumericSkuVariant(string $hay, string $skuCompact): bool
+    {
+        if ($skuCompact === '' || mb_strlen($skuCompact) < 3) {
+            return false;
+        }
+        // tylko kody mieszane (litery+cyfry); czyste cyfry mają sufiksy rozmiaru (60544→6054407)
+        if (! $this->isAlphanumericProductCode($skuCompact)) {
+            return false;
+        }
+
+        return preg_match(
+            '/(?<![a-z0-9])'.preg_quote($skuCompact, '/').'[a-z0-9]+/iu',
+            $hay
+        ) === 1;
+    }
+
+    /**
+     * Dopasowanie SKU w URL zdjęcia: alfanumeryczne jako cały token; cyfrowe z dozwolonym sufiksem rozmiaru.
+     */
+    private function skuTokenInImageHay(string $hay, string $hayCompact, string $sku, string $skuCompact): bool
+    {
+        if ($sku === '' && $skuCompact === '') {
+            return false;
+        }
+
+        if ($skuCompact !== '' && preg_match('/^\d+$/', $skuCompact) === 1) {
+            return preg_match('/(?<![0-9])'.preg_quote($skuCompact, '/').'/u', $hay) === 1
+                || preg_match('/(?<![0-9])'.preg_quote($skuCompact, '/').'/u', $hayCompact) === 1;
+        }
+
+        foreach (array_unique(array_filter([$sku, $skuCompact])) as $token) {
+            if (preg_match('/(?<![a-z0-9])'.preg_quote($token, '/').'(?![a-z0-9])/iu', $hay) === 1) {
+                return true;
+            }
+        }
+
+        if ($skuCompact !== ''
+            && preg_match('/(?<![a-z0-9])'.preg_quote($skuCompact, '/').'(?![a-z0-9])/iu', $hayCompact) === 1) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function isAlphanumericProductCode(string $token): bool
+    {
+        $compact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($token)) ?? '';
+        if ($compact === '' || mb_strlen($compact) < 3) {
+            return false;
+        }
+        // litery i cyfry (NB27, C300) — nie same litery (rubiflex) ani same cyfry (60544)
+        return preg_match('/[a-z]/u', $compact) === 1
+            && preg_match('/\d/u', $compact) === 1;
     }
 
     private function looksLikeJunkMediaPath(string $hay): bool
@@ -397,6 +469,12 @@ final class ProductSearchIdentity
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
         $hayDigits = preg_replace('/\D+/u', '', $hay) ?? '';
 
+        $skuCompact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower(trim((string) $product->sku))) ?? '';
+        // NB27 ≠ NB27B — karta dłuższego wariantu nie może przejść przez nazwę „rubiflex”
+        if ($this->urlContainsLongerAlphanumericSkuVariant($hay, $skuCompact)) {
+            return false;
+        }
+
         foreach ($tokens as $token) {
             if ($this->tokenInHay($hay, $hayCompact, $token)) {
                 // krótki sam kod numeryczny → wymagaj marki (własnej lub URGENT przy serii rękawic)
@@ -484,6 +562,12 @@ final class ProductSearchIdentity
         if (preg_match('/^\d{3,}$/', $token) === 1) {
             return $this->numericTokenAsProductCode($hay, $token)
                 || $this->numericTokenAsProductCode($hayCompact, $token);
+        }
+        // alfanumeryczny kod (NB27): cały token — nie substring w NB27B
+        if ($this->isAlphanumericProductCode($token)) {
+            $tokenCompact = preg_replace('/[^a-z0-9]+/iu', '', $token) ?? $token;
+
+            return $this->skuTokenInImageHay($hay, $hayCompact, $token, $tokenCompact);
         }
         if (str_contains($hay, $token)) {
             return true;

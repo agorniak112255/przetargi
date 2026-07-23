@@ -165,6 +165,27 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_rejects_longer_sku_variant_pages_for_nb27(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'NB27',
+            'name' => 'RUBIFLEX',
+            'manufacturer' => 'uvex',
+        ]);
+
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://www.uvex-safety.pl/pl/produkty/rekawice-ochronne/rekawica-ochronna-uvex-rubiflex-s-nb27b/ '
+                .'uvex rubiflex s nb27b',
+            $product
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.uvex-safety.pl/pl/produkty/rekawice-ochronne/rekawica-ochronna-uvex-rubiflex-nb27-6000934/ '
+                .'uvex rubiflex nb27 orange',
+            $product
+        ));
+    }
+
     public function test_urgent_glove_series_queries_and_match_despite_pros_label(): void
     {
         $id = new ProductSearchIdentity;

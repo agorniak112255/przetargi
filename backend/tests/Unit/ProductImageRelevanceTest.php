@@ -87,4 +87,31 @@ final class ProductImageRelevanceTest extends TestCase
         $this->assertTrue($identity->imageUrlMentionsProduct($url, $product));
         $this->assertContains('r-065', $identity->modelAliases($product));
     }
+
+    public function test_rejects_longer_alphanumeric_sku_variant_nb27b(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'NB27',
+            'name' => 'RUBIFLEX',
+            'manufacturer' => 'uvex',
+        ]);
+
+        $this->assertFalse($identity->imageUrlMentionsProduct(
+            'https://cdn.example.com/media/catalog/product/n/b/nb27b_rubiflex_s.jpg',
+            $product
+        ));
+        $this->assertFalse($identity->imageUrlMentionsProduct(
+            'https://cdn.example.com/media/catalog/product/nb27s_green.jpg',
+            $product
+        ));
+        $this->assertTrue($identity->imageUrlMentionsProduct(
+            'https://www.uvex-safety.pl/media/catalog/product/nb27_rubiflex_orange.jpg',
+            $product
+        ));
+        $this->assertTrue($identity->imageUrlMentionsProduct(
+            'https://www.uvex-safety.pl/pl/produkty/rekawice-ochronne/rekawica-ochronna-uvex-rubiflex-nb27-6000934.jpg',
+            $product
+        ));
+    }
 }

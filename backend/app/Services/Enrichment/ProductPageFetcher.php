@@ -120,7 +120,12 @@ final class ProductPageFetcher
                 continue;
             }
             $text = $this->extractProductPageText($html, $skuNorm);
-            $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, (string) ($row['title'] ?? ''), $skuNorm);
+            $title = (string) ($row['title'] ?? '');
+            // NB27B nie może zasilać opisu/zdjęć produktu NB27
+            if ($this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
+                continue;
+            }
+            $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, $title, $skuNorm);
 
             if ($text !== '') {
                 $pages[] = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
@@ -229,11 +234,28 @@ final class ProductPageFetcher
         }
         $hay = mb_strtolower($url.' '.$title.' '.$text);
         $hayCompact = preg_replace('/[^a-z0-9]+/i', '', $hay) ?? $hay;
+        if ($this->hayHasLongerAlphanumericSkuVariant($hay, $skuNorm)) {
+            return false;
+        }
         foreach ($variants as $variant) {
-            if ($variant !== '' && str_contains($hay, $variant)) {
-                return true;
+            if ($variant === '') {
+                continue;
             }
             $compact = preg_replace('/[^a-z0-9]+/i', '', $variant) ?? $variant;
+            if ($this->isAlphanumericSkuCode($compact)) {
+                if (preg_match('/(?<![a-z0-9])'.preg_quote($variant, '/').'(?![a-z0-9])/iu', $hay) === 1) {
+                    return true;
+                }
+                if ($compact !== '' && strlen($compact) >= 4
+                    && preg_match('/(?<![a-z0-9])'.preg_quote($compact, '/').'(?![a-z0-9])/iu', $hay) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if (str_contains($hay, $variant)) {
+                return true;
+            }
             if ($compact !== '' && strlen($compact) >= 4 && str_contains($hayCompact, $compact)) {
                 return true;
             }
@@ -775,16 +797,19 @@ final class ProductPageFetcher
                 $score += 100;
                 $skuInUrl = true;
             }
-            if ($skuNorm !== '' && str_contains($meta, $skuNorm)) {
+            if ($skuNorm !== '' && $this->metaContainsSkuToken($meta, $skuNorm)) {
                 $score += 120;
                 $skuInUrl = true;
             }
             foreach ($skuTokens as $token) {
-                if (str_contains($meta, $token)) {
+                if ($this->metaContainsSkuToken($meta, $token)) {
                     $score += 80;
                     $skuInUrl = true;
                     break;
                 }
+            }
+            if ($this->hayHasLongerAlphanumericSkuVariant($meta.' '.$pageUrl, $skuNorm)) {
+                continue;
             }
             // PROS-101… ↔ …pros-101s-34…
             if (! $skuInUrl && $this->pageMentionsBrandModelSku($meta, preg_replace('/[^a-z0-9]+/i', '', $meta) ?? $meta, $skuNorm)) {
@@ -1088,6 +1113,46 @@ final class ProductPageFetcher
         }
 
         return $hits >= 2;
+    }
+
+    /** NB27 w tekście/URL z NB27B/NB27S — inny wariant produktu. */
+    private function hayHasLongerAlphanumericSkuVariant(string $hay, string $skuNorm): bool
+    {
+        $skuCompact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower(trim($skuNorm))) ?? '';
+        if ($skuCompact === '' || mb_strlen($skuCompact) < 3 || ! $this->isAlphanumericSkuCode($skuCompact)) {
+            return false;
+        }
+
+        return preg_match(
+            '/(?<![a-z0-9])'.preg_quote($skuCompact, '/').'[a-z0-9]+/iu',
+            mb_strtolower($hay)
+        ) === 1;
+    }
+
+    private function isAlphanumericSkuCode(string $token): bool
+    {
+        $compact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($token)) ?? '';
+        if ($compact === '' || mb_strlen($compact) < 3) {
+            return false;
+        }
+
+        return preg_match('/[a-z]/u', $compact) === 1
+            && preg_match('/\d/u', $compact) === 1;
+    }
+
+    private function metaContainsSkuToken(string $meta, string $token): bool
+    {
+        $token = mb_strtolower(trim($token));
+        if ($token === '') {
+            return false;
+        }
+        $compact = preg_replace('/[^a-z0-9]+/iu', '', $token) ?? $token;
+        if ($this->isAlphanumericSkuCode($compact)) {
+            return preg_match('/(?<![a-z0-9])'.preg_quote($token, '/').'(?![a-z0-9])/iu', $meta) === 1
+                || preg_match('/(?<![a-z0-9])'.preg_quote($compact, '/').'(?![a-z0-9])/iu', $meta) === 1;
+        }
+
+        return str_contains($meta, $token);
     }
 
     /**
