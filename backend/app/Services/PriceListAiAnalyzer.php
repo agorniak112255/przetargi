@@ -757,18 +757,22 @@ Zwróć JSON:
 }
 
 Priorytet pól (to nas interesuje):
-1) sku = symbol / kod / product reference / indeks / SAP / „Kod produktu” (NIE tariff/commodity). Jeśli BRAK kolumny kodu — ustaw sku: null (system wygeneruje kod z nazwy).
-2) name = nazwa produktu (Nazwa / Opis / kolumna z nazwą nawet gdy pierwsza kolumna to tylko tekst bez nagłówka „kod”)
-3) catalog_price = cena katalogowa / sugerowana / CENA CENNIK / Price (EUR) — NIE kolumna „Zamówienie=0”
+1) sku = UNIKALNY kod pozycji: Article Number / Art. nr / Kod produktu / SKU / SAP.
+   Gdy są OBIE kolumny „Reference/Model” ORAZ „Article Number” — mapuj sku na Article Number (nie Reference).
+   Reference bywa pusty w wariantach rozmiarów. NIE tariff/commodity. Brak kolumny kodu → sku: null.
+2) name = krótka nazwa modelu (Model Name / Nazwa). Ta sama kolumna bywa też długim opisem EN — i tak mapuj ją na name; system rozdzieli tytuł/opis i uzupełni puste wiersze (forward-fill).
+3) catalog_price = cena katalogowa / sugerowana / CENA CENNIK / Price (€/pc) — NIE kolumna „Zamówienie=0”
 4) discount = upust / rabat / marża w % (kolumny: upust, rabat, discount, marża, PL Discount)
-5) pack_qty = ilość sztuk w kartonie / opakowaniu zbiorczym
-6) packaging = rodzaj opakowania / jednostka / pojemność
+5) pack_qty = Quantity per box / ilość sztuk w kartonie / opakowaniu zbiorczym
+6) packaging = Size / rozmiar / opakowanie / jednostka / pojemność
 7) purchase = cena po upuście / zakup tylko jeśli jest osobna kolumna
 8) currency = kolumna waluty jeśli jest (EUR/PLN/USD); currency na poziomie pliku = dominująca z nagłówka (Price EUR, PLN, zł…)
+9) category = Category/Type / kategoria / grupa
 
 Zasady:
 - Często nad tabelą jest blok rabatów/kontaktów — header_excel_row to wiersz z „Kod produktu”/„Nazwa”/„Cena…”, nie wiersz 1.
-- Nagłówki bywają PL+CZ (Kod produktu, Nazwa, Cena po rabacie €, CENA CENNIK).
+- Nagłówki bywają PL+CZ+EN (Kod produktu, Nazwa, Article Number, Model Name and Description, CENA CENNIK).
+- Układy z rozmiarami (S/M/L w kolejnych wierszach, nazwa tylko w 1. wierszu modelu) — i tak include=true; system uzupełni puste nazwy.
 - include=true dla arkuszy z produktami nawet bez kolumny SKU (sku=null).
 - Jeśli nagłówki powtarzają się w środku arkusza, ustaw repeating_headers=true.
 - header_excel_row = sample_rows[].excel_row wiersza z nazwami kolumn.

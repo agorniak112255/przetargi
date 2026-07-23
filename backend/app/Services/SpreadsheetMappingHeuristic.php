@@ -86,19 +86,17 @@ final class SpreadsheetMappingHeuristic
                 continue;
             }
 
+            $priceCol = $this->findCol($labels, [
+                'cena cennik', 'cena katalog', 'cena sugerowana', 'cena netto', 'list price',
+                'price(€', 'price (€', 'price(€/pc', 'price eur', 'price(eur', 'cena - ', 'cena_',
+                'cena hurtowa', 'cena', 'price', 'cennik',
+            ]);
             $cols = [
-                'sku' => $this->findCol($labels, [
-                    'kod produktu', 'kod towaru', 'product code', 'sku', 'symbol', 'indeks',
-                    'sap', 'ref', 'article', 'artikl', 'katalog',
-                ]),
+                'sku' => $this->findBestSkuCol($labels, $grid, $excelRow, $priceCol),
                 'name' => $this->findCol($labels, [
-                    'nazwa', 'name', 'opis', 'description', 'produkt', 'asortyment', 'model',
+                    'model name', 'nazwa', 'name', 'opis', 'description', 'produkt', 'asortyment', 'model',
                 ]),
-                'catalog_price' => $this->findCol($labels, [
-                    'cena cennik', 'cena katalog', 'cena sugerowana', 'cena netto', 'list price',
-                    'price (eur)', 'price eur', 'cena - ', 'cena_',
-                    'cena hurtowa', 'cena', 'price', 'cennik',
-                ]),
+                'catalog_price' => $priceCol,
                 'purchase' => $this->findCol($labels, [
                     'cena po rabacie', 'po rabacie', 'purchase', 'zakup', 'netto po',
                 ]) ?? $this->findCol($labels, ['cena hurtowa']),
@@ -106,15 +104,15 @@ final class SpreadsheetMappingHeuristic
                     'upust', 'rabat %', 'rabat', 'discount', 'marża', 'marza',
                 ]),
                 'pack_qty' => $this->findCol($labels, [
-                    'ilość w kartonie', 'ilosc w kartonie', 'ilość w opak', 'ilosc w opak',
-                    'carton', 'pack qty', 'množství', 'mnozstvi',
+                    'quantity per box', 'qty per box', 'ilość w kartonie', 'ilosc w kartonie',
+                    'ilość w opak', 'ilosc w opak', 'carton', 'pack qty', 'množství', 'mnozstvi',
                 ]),
                 'packaging' => $this->findCol($labels, [
-                    'opakowanie', 'packaging', 'jednostka',
+                    'opakowanie', 'packaging', 'jednostka', 'size', 'rozmiar',
                 ]),
                 'ean' => $this->findCol($labels, ['ean', 'barcode', 'kod kresk']),
                 'category' => $this->findCol($labels, [
-                    'kategoria', 'category', 'grupa asortymentowa', 'klasa asortymentowa',
+                    'category/type', 'kategoria', 'category', 'grupa asortymentowa', 'klasa asortymentowa',
                     'klasa', 'grupa', 'asortyment', 'skupina',
                 ]),
                 'currency' => $this->findCol($labels, ['waluta', 'currency']),
@@ -214,6 +212,97 @@ final class SpreadsheetMappingHeuristic
         }
 
         return null;
+    }
+
+    /**
+     * Wybór kolumny SKU: preferuj unikalny kod pozycji (Article Number)
+     * nad kodem modelu (Reference), który bywa pusty w wariantach rozmiarów.
+     *
+     * @param  list<string>  $labels
+     * @param  array<int, list<string>>  $grid
+     */
+    private function findBestSkuCol(array $labels, array $grid, int $headerRow, ?int $priceIdx): ?int
+    {
+        /** @var list<array{0: list<string>, 1: int}> $tiers */
+        $tiers = [
+            [['article number', 'artikelnummer', 'kod produktu', 'kod towaru', 'product code', 'sku', 'sap id'], 100],
+            [['art. nr', 'art nr', 'artikel', 'symbol', 'indeks', 'katalogové', 'katalogove'], 70],
+            [['article', 'sap'], 55],
+            [['product reference', 'reference', 'ref'], 25],
+        ];
+
+        $bestIdx = null;
+        $bestScore = 0.0;
+
+        foreach ($labels as $i => $label) {
+            if ($label === '') {
+                continue;
+            }
+            $compact = preg_replace('/\s+/', ' ', $label) ?? $label;
+            $aliasScore = 0;
+            foreach ($tiers as [$needles, $score]) {
+                foreach ($needles as $needle) {
+                    if ($compact === $needle || str_contains($compact, $needle)) {
+                        $aliasScore = $score;
+                        break 2;
+                    }
+                }
+            }
+            if ($aliasScore === 0) {
+                continue;
+            }
+
+            $stats = $this->skuColumnStats($grid, $headerRow, $i, $priceIdx);
+            // niski fill rate (typowy „Reference” tylko w 1. wierszu modelu) mocno obniża score
+            $score = $aliasScore + ($stats['fill_rate'] * 40) + ($stats['unique_rate'] * 25);
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $bestIdx = $i;
+            }
+        }
+
+        return $bestIdx;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     * @return array{fill_rate: float, unique_rate: float}
+     */
+    private function skuColumnStats(array $grid, int $headerRow, int $skuIdx, ?int $priceIdx): array
+    {
+        $priced = 0;
+        $filled = 0;
+        $values = [];
+        foreach ($grid as $r => $cells) {
+            if ($r <= $headerRow) {
+                continue;
+            }
+            if ($priceIdx !== null) {
+                $price = trim((string) ($cells[$priceIdx] ?? ''));
+                if ($price === '' || ! preg_match('/\d/', $price)) {
+                    continue;
+                }
+            }
+            $priced++;
+            $sku = trim((string) ($cells[$skuIdx] ?? ''));
+            if ($sku === '' || strtoupper($sku) === '#N/A') {
+                continue;
+            }
+            $filled++;
+            $values[$sku] = true;
+            if ($priced >= 40) {
+                break;
+            }
+        }
+
+        if ($priced === 0) {
+            return ['fill_rate' => 0.0, 'unique_rate' => 0.0];
+        }
+
+        return [
+            'fill_rate' => $filled / $priced,
+            'unique_rate' => $filled > 0 ? count($values) / $filled : 0.0,
+        ];
     }
 
     /**

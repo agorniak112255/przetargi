@@ -297,6 +297,9 @@ final class PriceListImportService
                 $sku = (string) $payload['sku'];
                 unset($payload['sku']);
                 $payload = $this->clampProductFields($payload);
+                if (($payload['description'] ?? null) === null) {
+                    unset($payload['description']);
+                }
                 $existing = Product::query()->where('sku', $sku)->first();
                 if ($existing !== null) {
                     $change = $this->detectPriceChange($existing, $payload, $sku);
@@ -532,9 +535,19 @@ final class PriceListImportService
         $headerSkips = 0;
 
         $defaultCurrency = $this->currencyDetector->normalize(null, 'PLN');
+        $carry = ['name' => null, 'category' => null, 'group' => null];
         foreach ($dataRows as $index => $row) {
             $excelRow = $index + 2;
-            $parsed = $this->parseRow($row, $map, $defaultCategory, $manufacturer, $excelRow, null, $defaultCurrency);
+            $parsed = $this->parseRow(
+                $row,
+                $map,
+                $defaultCategory,
+                $manufacturer,
+                $excelRow,
+                null,
+                $defaultCurrency,
+                $carry,
+            );
             if ($parsed['status'] === 'skip') {
                 $skipped++;
                 $emptySkips++;
@@ -615,6 +628,7 @@ final class PriceListImportService
             );
             $dataRows = array_slice($all, $headerIdx + 1);
             $rowsTotal += count($dataRows);
+            $carry = ['name' => null, 'category' => null, 'group' => null];
 
             foreach ($dataRows as $index => $row) {
                 $excelRow = $headerExcelRow + $index + 1;
@@ -631,6 +645,7 @@ final class PriceListImportService
                     $excelRow,
                     $sheetName,
                     $sheetDefaultCurrency,
+                    $carry,
                 );
                 if ($parsed['status'] === 'skip') {
                     $skipped++;
@@ -709,6 +724,7 @@ final class PriceListImportService
     /**
      * @param  array<int, mixed>  $row
      * @param  array<string, int>  $map
+     * @param  array{name: ?string, category: ?string, group: ?string}  $carry
      * @return array{status: string, product?: array<string, mixed>, message?: string}
      */
     private function parseRow(
@@ -719,18 +735,56 @@ final class PriceListImportService
         int $excelRow,
         ?string $sheetName = null,
         ?string $defaultCurrency = 'PLN',
+        ?array &$carry = null,
     ): array {
+        if ($carry === null) {
+            $carry = ['name' => null, 'category' => null, 'group' => null];
+        }
+
         $prefix = $sheetName !== null ? "[{$sheetName}] " : '';
-        $sku = isset($map['sku']) ? trim((string) ($row[$map['sku']] ?? '')) : '';
-        $name = trim((string) ($row[$map['name']] ?? ''));
+        $sku = isset($map['sku']) ? $this->normalizeSku((string) ($row[$map['sku']] ?? '')) : '';
+        $rawName = trim((string) ($row[$map['name']] ?? ''));
         $priceRaw = $row[$map['catalog_price']] ?? null;
 
-        if ($sku === '' && $name === '') {
+        $groupKey = $this->rowGroupKey($row, $map);
+        if ($groupKey !== null && ($carry['group'] ?? null) !== null && $groupKey !== $carry['group']) {
+            $carry['name'] = null;
+            $carry['category'] = null;
+        }
+        if ($groupKey !== null) {
+            $carry['group'] = $groupKey;
+        }
+
+        $description = null;
+        $name = $rawName;
+        if ($rawName !== '' && $this->isDescriptionLike($rawName)) {
+            $description = $rawName;
+            $name = ($carry['name'] ?? null) !== null
+                ? (string) $carry['name']
+                : $this->titleFromDescription($rawName);
+            if (($carry['name'] ?? null) === null) {
+                $carry['name'] = $name;
+            }
+        } elseif ($rawName === '' && ($carry['name'] ?? null) !== null) {
+            $name = (string) $carry['name'];
+        }
+
+        if ($sku === '' && $name === '' && $rawName === '') {
             return ['status' => 'skip'];
         }
 
         // wiersze-sekcje typu „ODZIEŻ SPAWALNICZA…” bez ceny
         if ($name !== '' && ($priceRaw === null || $priceRaw === '') && $sku === '') {
+            if ($rawName !== '' && ! $this->isDescriptionLike($rawName)) {
+                $carry['name'] = $rawName;
+            }
+            if (isset($map['category'])) {
+                $cat = trim((string) ($row[$map['category']] ?? ''));
+                if ($cat !== '') {
+                    $carry['category'] = $cat;
+                }
+            }
+
             return ['status' => 'skip'];
         }
 
@@ -742,7 +796,8 @@ final class PriceListImportService
         }
 
         if ($sku === '') {
-            $slug = strtoupper(preg_replace('/[^A-Za-z0-9]+/', '-', $name) ?? 'POZ');
+            $slugBase = ! $this->isDescriptionLike($name) ? $name : ($carry['name'] ?? $name);
+            $slug = strtoupper(preg_replace('/[^A-Za-z0-9]+/', '-', $slugBase) ?? 'POZ');
             $slug = trim(mb_substr($slug, 0, 28), '-');
             $sku = ($slug !== '' ? $slug : 'POZ').'-'.$excelRow;
         }
@@ -772,6 +827,14 @@ final class PriceListImportService
             $cat = trim((string) ($row[$map['category']] ?? ''));
             if ($cat !== '') {
                 $category = $cat;
+                $carry['category'] = $cat;
+            } elseif (
+                $groupKey !== null
+                && ($carry['category'] ?? null) !== null
+                && ($category === null || $category === '')
+            ) {
+                // tylko w układach grupowanych (Reference/model w kolumnie obok)
+                $category = $carry['category'];
             }
         }
 
@@ -785,7 +848,7 @@ final class PriceListImportService
 
         $packaging = null;
         if (isset($map['packaging'])) {
-            $packaging = trim((string) ($row[$map['packaging']] ?? '')) ?: null;
+            $packaging = $this->normalizeSku((string) ($row[$map['packaging']] ?? '')) ?: null;
         }
 
         $currency = $defaultCurrency ?? 'PLN';
@@ -802,6 +865,12 @@ final class PriceListImportService
         }
         $currency = $this->currencyDetector->normalize($currency, $defaultCurrency ?? 'PLN');
 
+        if ($rawName !== '' && ! $this->isDescriptionLike($rawName)) {
+            $carry['name'] = $rawName;
+        } elseif (($carry['name'] ?? null) === null && $name !== '') {
+            $carry['name'] = $name;
+        }
+
         return [
             'status' => 'ok',
             'product' => [
@@ -810,6 +879,7 @@ final class PriceListImportService
                 'manufacturer' => $manufacturer,
                 'ean' => isset($map['ean']) ? trim((string) ($row[$map['ean']] ?? '')) ?: null : null,
                 'category' => $category,
+                'description' => $description,
                 'norms' => null,
                 'catalog_price_net' => $catalog,
                 'discount_percent' => $discount,
@@ -820,6 +890,90 @@ final class PriceListImportService
                 'packaging' => $packaging,
             ],
         ];
+    }
+
+    private function normalizeSku(string $value): string
+    {
+        $sku = trim($value);
+        if ($sku === '' || strtoupper($sku) === '#N/A') {
+            return '';
+        }
+        // DuPont i podobne: „D13495380*” / „M*” — gwiazdka = made-to-order
+        $sku = rtrim($sku, " \t*");
+
+        return trim($sku);
+    }
+
+    /**
+     * Klucz grupy modelu (np. Reference w kol. A) — resetuje przenoszenie nazwy przy nowym modelu.
+     *
+     * @param  array<int, mixed>  $row
+     * @param  array<string, int>  $map
+     */
+    private function rowGroupKey(array $row, array $map): ?string
+    {
+        $used = array_flip(array_values($map));
+        $max = min(4, count($row));
+        for ($i = 0; $i < $max; $i++) {
+            if (isset($used[$i])) {
+                continue;
+            }
+            $value = $this->normalizeSku((string) ($row[$i] ?? ''));
+            if ($value !== '' && $this->looksLikeModelCode($value)) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    private function looksLikeModelCode(string $value): bool
+    {
+        if (mb_strlen($value) < 4 || mb_strlen($value) > 48) {
+            return false;
+        }
+        if (str_contains($value, ' ')) {
+            // kody typu „TD 0125 S WH 00” / „TK GEVJ T YL 00”
+            if (preg_match('/^[A-Z0-9][A-Z0-9 .\-\/]{3,}$/i', $value) !== 1) {
+                return false;
+            }
+            $words = preg_split('/\s+/', $value) ?: [];
+            if (count($words) > 8) {
+                return false;
+            }
+        }
+
+        return preg_match('/[A-Za-z]/', $value) === 1 && preg_match('/\d/', $value) === 1;
+    }
+
+    private function isDescriptionLike(string $text): bool
+    {
+        $text = trim(preg_replace('/\s+/u', ' ', $text) ?? $text);
+        $len = mb_strlen($text);
+        if ($len >= 120) {
+            return true;
+        }
+        $words = preg_split('/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY);
+        $wordCount = is_array($words) ? count($words) : 0;
+        if ($len >= 70 && $wordCount >= 14) {
+            return true;
+        }
+        if ($wordCount >= 20) {
+            return true;
+        }
+        $sentences = preg_match_all('/[.!?]/u', $text);
+
+        return $len >= 60 && $sentences >= 2 && $wordCount >= 10;
+    }
+
+    private function titleFromDescription(string $description): string
+    {
+        $text = trim(preg_replace('/\s+/u', ' ', $description) ?? $description);
+        if (preg_match('/^(.{12,90}?)[.!?]/u', $text, $m) === 1) {
+            return trim($m[1]);
+        }
+
+        return mb_substr($text, 0, 80);
     }
 
     /**
@@ -842,22 +996,29 @@ final class PriceListImportService
 
         $map = [];
         $defs = [
-            'sku' => ['sku', 'symbol', 'kod', 'code', 'indeks', 'ref', 'product reference'],
-            'name' => ['nazwa', 'name', 'produkt', 'opis', 'description'],
-            'catalog_price' => ['cena_kat', 'cena katalog', 'cena_netto', 'cena', 'price', 'netto'],
+            'sku' => [
+                'article number', 'artikelnummer', 'kod produktu', 'product code', 'sku',
+                'symbol', 'indeks', 'sap', 'article', 'product reference', 'reference', 'ref', 'kod', 'code',
+            ],
+            'name' => ['model name', 'nazwa', 'name', 'produkt', 'opis', 'description'],
+            'catalog_price' => [
+                'cena_kat', 'cena katalog', 'cena_netto', 'price(€', 'price (€', 'cena', 'price', 'netto',
+            ],
             'discount' => ['upust', 'rabat', 'discount', 'marża', 'marza', 'mraza'],
             'purchase' => ['zakup', 'cena_zakupu', 'purchase', 'koszt', 'po upuście', 'po upust'],
             'ean' => ['ean', 'barcode'],
             'category' => [
-                'kategoria', 'category', 'grupa asortymentowa', 'klasa asortymentowa',
+                'category/type', 'kategoria', 'category', 'grupa asortymentowa', 'klasa asortymentowa',
                 'klasa', 'grupa', 'asortyment',
             ],
             'norms' => ['norma', 'normy', 'en ', 'standard'],
             'pack_qty' => [
-                'ilość szt', 'ilosc szt', 'szt. w', 'szt w', 'w kart', 'w opak',
-                'pack size', 'units per', 'ilość w opak', 'ilosc w opak', 'opak. zbior',
+                'quantity per box', 'qty per box', 'ilość szt', 'ilosc szt', 'szt. w', 'szt w',
+                'w kart', 'w opak', 'pack size', 'units per', 'ilość w opak', 'ilosc w opak', 'opak. zbior',
             ],
-            'packaging' => ['opakowanie', 'packaging', 'jednostka', 'uom', 'pojemność', 'pojemnosc'],
+            'packaging' => [
+                'opakowanie', 'packaging', 'jednostka', 'uom', 'pojemność', 'pojemnosc', 'size', 'rozmiar',
+            ],
             'currency' => ['waluta', 'currency', 'curr', 'iso'],
             'stock' => ['stan magazyn', 'stock', 'magazyn'],
             'manufacturer' => ['producent', 'manufacturer', 'marka', 'brand'],
@@ -868,6 +1029,13 @@ final class PriceListImportService
             if ($idx !== null) {
                 $map[$key] = $idx;
             }
+        }
+
+        // Preferuj kolumnę o wyższym wypełnieniu (Article Number > Reference)
+        $skuAliasesStrong = ['article number', 'artikelnummer', 'kod produktu', 'product code', 'sku'];
+        $strongSku = $find($skuAliasesStrong);
+        if ($strongSku !== null) {
+            $map['sku'] = $strongSku;
         }
 
         return $map;
