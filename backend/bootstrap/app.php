@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
             'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
             'log.activity' => \App\Http\Middleware\LogApiActivity::class,
+            'tender.access' => \App\Http\Middleware\EnsureTenderAccess::class,
         ]);
     })
     ->withSchedule(function (\Illuminate\Console\Scheduling\Schedule $schedule): void {

@@ -47,6 +47,8 @@ return [
             'password' => env('MAIL_PASSWORD'),
             'timeout' => null,
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+            // Serwer firmowy często ma certyfikat niepasujący do hostname — wyłącz lokalnie/produkcyjnie świadomie.
+            'verify_peer' => filter_var(env('MAIL_VERIFY_PEER', true), FILTER_VALIDATE_BOOL),
         ],
 
         'ses' => [

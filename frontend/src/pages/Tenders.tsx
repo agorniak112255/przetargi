@@ -1,10 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, type Tender } from '../lib/api'
+import { useAuth } from '../auth'
+import { api, can, type Tender } from '../lib/api'
 
 type Client = { id: number; name: string }
 
 export function Tenders() {
+  const { user } = useAuth()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const filter = params.get('filter') ?? ''
@@ -16,6 +18,7 @@ export function Tenders() {
   const [deadline, setDeadline] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const seeAll = can(user, 'tenders.view_all')
 
   async function load() {
     const qs = filter ? `?filter=${encodeURIComponent(filter)}` : ''
@@ -69,8 +72,9 @@ export function Tenders() {
               else setParams({})
             }}
           >
-            <option value="">Wszystkie</option>
-            <option value="mine">Moje</option>
+            <option value="">{seeAll ? 'Wszystkie przetargi' : 'Moje i zaproszenia'}</option>
+            <option value="mine">Tylko moje (opiekun)</option>
+            <option value="invited">Tylko zaproszenia</option>
             <option value="deadline_soon">Deadline &lt; 7 dni</option>
           </select>
           <button

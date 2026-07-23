@@ -15,6 +15,7 @@ final class PermissionCatalog
         'tenders.edit_offer',
         'tenders.export',
         'tenders.comment',
+        'tenders.invite',
         'reports.view',
         'tenders.transition.draft',
         'tenders.transition.wycena',
@@ -37,6 +38,7 @@ final class PermissionCatalog
         'admin.users.manage',
         'admin.roles.manage',
         'admin.activity.view',
+        'admin.mail.manage',
     ];
 
     public const ROLES = [
@@ -92,6 +94,7 @@ final class PermissionCatalog
             'tenders.transition.archiwum',
             'tenders.transition.odrzucony',
             'tenders.comment',
+            'tenders.invite',
             'reports.view',
             'substitutes.approve',
             'substitutes.manage',
@@ -109,6 +112,7 @@ final class PermissionCatalog
             'tenders.view_all',
             'tenders.export',
             'tenders.comment',
+            'tenders.invite',
             'reports.view',
             'tenders.transition.zatwierdzona',
             'tenders.transition.exported',
@@ -142,12 +146,13 @@ final class PermissionCatalog
         $items = [
             ['dashboard.view', 'Dashboard', 'Podgląd pulpitu z podsumowaniem przetargów i KPI.', 'Pulpit'],
             ['tenders.view_own', 'Przetargi — tylko własne', 'Widzi wyłącznie przetargi, których jest opiekunem.', 'Przetargi'],
-            ['tenders.view_all', 'Przetargi — wszystkie', 'Widzi listę wszystkich przetargów w firmie.', 'Przetargi'],
+            ['tenders.view_all', 'Widzi wszystkie przetargi', 'Widzi listę i szczegóły wszystkich przetargów w firmie (nie tylko własne i zaproszenia).', 'Przetargi'],
             ['tenders.create', 'Tworzenie przetargu', 'Może założyć nowy projekt przetargowy.', 'Przetargi'],
             ['tenders.import', 'Import dokumentów', 'Może wgrywać PDF/XLSX/DOCX i uruchamiać analizę SIWZ.', 'Przetargi'],
             ['tenders.edit_offer', 'Edycja oferty', 'Może zmieniać pozycje, ceny i dopasowania (status szkic/wycena).', 'Przetargi'],
             ['tenders.export', 'Eksport oferty', 'Może pobrać ofertę do Excela i PDF.', 'Przetargi'],
             ['tenders.comment', 'Komentarze w przetargu', 'Może dodawać komentarze do przetargu i pozycji.', 'Przetargi'],
+            ['tenders.invite', 'Zapraszanie do przetargu', 'Może zapraszać użytkowników systemu do współpracy przy przetargu (jak opiekun).', 'Przetargi'],
             ['reports.view', 'Raporty', 'Podgląd raportów pipeline / marży i eksport CSV.', 'Pulpit'],
             ['tenders.transition.draft', 'Status → Szkic', 'Może cofnąć przetarg do statusu szkic.', 'Workflow statusów'],
             ['tenders.transition.wycena', 'Status → Wycena', 'Może ustawić status wycena (praca handlowca nad ofertą).', 'Workflow statusów'],
@@ -170,6 +175,7 @@ final class PermissionCatalog
             ['admin.users.manage', 'Zarządzanie użytkownikami', 'Może tworzyć, edytować i usuwać konta oraz przypisywać role.', 'Administracja'],
             ['admin.roles.manage', 'Zarządzanie rolami', 'Może zmieniać zestaw uprawnień przypisanych do ról.', 'Administracja'],
             ['admin.activity.view', 'Dziennik aktywności', 'Może przeglądać logowania i historię działań użytkowników (120 dni).', 'Administracja'],
+            ['admin.mail.manage', 'Konfiguracja SMTP', 'Może zmieniać ustawienia poczty wychodzącej i wysyłać test e-mail.', 'Administracja'],
         ];
 
         $out = [];

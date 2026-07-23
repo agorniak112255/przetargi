@@ -16,20 +16,21 @@ class DashboardController extends Controller
     public function __invoke(Request $request): JsonResponse
     {
         $user = $request->user();
-        $scopeOwn = ! $user->can('tenders.view_all');
+        $seeAll = $user->can('tenders.view_all');
 
-        $myTenders = Tender::query()
-            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
+        $scoped = static function ($query) use ($user, $seeAll) {
+            return $seeAll ? $query : $query->accessibleBy($user);
+        };
+
+        $myTenders = $scoped(Tender::query())
             ->whereNotIn('status', ['archiwum'])
             ->count();
 
-        $offerValue = (float) Tender::query()
-            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
+        $offerValue = (float) $scoped(Tender::query())
             ->whereNotIn('status', ['archiwum'])
             ->sum('offer_value_net');
 
-        $avgMargin = (float) Tender::query()
-            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
+        $avgMargin = (float) $scoped(Tender::query())
             ->whereNotNull('margin_percent')
             ->avg('margin_percent');
 
@@ -43,13 +44,11 @@ class DashboardController extends Controller
 
         $pendingApproval = $approvalStatuses === []
             ? 0
-            : Tender::query()
-                ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
+            : $scoped(Tender::query())
                 ->whereIn('status', $approvalStatuses)
                 ->count();
 
-        $deadlineSoon = Tender::query()
-            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
+        $deadlineSoon = $scoped(Tender::query())
             ->whereNotNull('deadline')
             ->whereDate('deadline', '<=', now()->addDays(7))
             ->whereDate('deadline', '>=', now()->toDateString())
@@ -66,8 +65,7 @@ class DashboardController extends Controller
                 ->count(),
             'pending_my_approval' => $pendingApproval,
             'deadline_soon' => $deadlineSoon,
-            'recent_tenders' => Tender::query()
-                ->when($scopeOwn, fn ($q) => $q->where('owner_id', $user->id))
+            'recent_tenders' => $scoped(Tender::query())
                 ->with(['client:id,name', 'owner:id,name'])
                 ->latest('last_activity_at')
                 ->limit(5)

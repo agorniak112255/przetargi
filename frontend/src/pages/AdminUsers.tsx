@@ -1,5 +1,4 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
 import { api, type User } from '../lib/api'
 
 type RoleOption = { name: string; label?: string }
@@ -16,6 +15,7 @@ export function AdminUsers() {
   const [role, setRole] = useState<string>('handlowiec')
   const [editId, setEditId] = useState<number | null>(null)
   const [editRole, setEditRole] = useState('handlowiec')
+  const [editEmail, setEditEmail] = useState('')
   const [editPassword, setEditPassword] = useState('')
 
   async function load() {
@@ -66,13 +66,17 @@ export function AdminUsers() {
     setErr('')
     setMsg('')
     try {
-      const body: Record<string, string> = { role: editRole }
+      const body: Record<string, string> = {
+        role: editRole,
+        email: editEmail.trim(),
+      }
       if (editPassword) body.password = editPassword
       await api(`/admin/users/${userId}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
       })
       setEditId(null)
+      setEditEmail('')
       setEditPassword('')
       setMsg('Zapisano zmiany.')
       await load()
@@ -100,16 +104,6 @@ export function AdminUsers() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">Administracja · Użytkownicy</h1>
-        <Link to="/admin/roles" className="text-xs text-blue-600 hover:underline">
-          Role i uprawnienia →
-        </Link>
-        <Link to="/admin/logs" className="text-xs text-blue-600 hover:underline">
-          Logi →
-        </Link>
-      </div>
-
       {err && <p className="mb-2 text-sm text-red-600">{err}</p>}
       {msg && <p className="mb-2 text-sm text-green-700">{msg}</p>}
 
@@ -168,7 +162,19 @@ export function AdminUsers() {
           {users.map((u) => (
             <tr key={u.id} className="border-b">
               <td className="p-2">{u.name}</td>
-              <td className="p-2">{u.email}</td>
+              <td className="p-2">
+                {editId === u.id ? (
+                  <input
+                    type="email"
+                    required
+                    className="w-full min-w-[180px] rounded border px-2 py-1 text-xs"
+                    value={editEmail}
+                    onChange={(e) => setEditEmail(e.target.value)}
+                  />
+                ) : (
+                  u.email
+                )}
+              </td>
               <td className="p-2">
                 {editId === u.id ? (
                   <select
@@ -198,13 +204,21 @@ export function AdminUsers() {
                     />
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || !editEmail.trim()}
                       onClick={() => void onSaveEdit(u.id)}
-                      className="rounded bg-green-600 px-2 py-1 text-xs text-white"
+                      className="rounded bg-green-600 px-2 py-1 text-xs text-white disabled:opacity-50"
                     >
                       Zapisz
                     </button>
-                    <button type="button" onClick={() => setEditId(null)} className="rounded bg-slate-200 px-2 py-1 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditId(null)
+                        setEditEmail('')
+                        setEditPassword('')
+                      }}
+                      className="rounded bg-slate-200 px-2 py-1 text-xs"
+                    >
                       Anuluj
                     </button>
                   </div>
@@ -215,6 +229,7 @@ export function AdminUsers() {
                       onClick={() => {
                         setEditId(u.id)
                         setEditRole(u.role)
+                        setEditEmail(u.email)
                         setEditPassword('')
                       }}
                       className="rounded bg-slate-200 px-2 py-1 text-xs"

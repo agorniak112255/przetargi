@@ -2,7 +2,9 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth'
 import { Layout } from './components/Layout'
 import { AdminActivityLog } from './pages/AdminActivityLog'
+import { AdminLayout } from './pages/AdminLayout'
 import { AdminRoles } from './pages/AdminRoles'
+import { AdminSmtp } from './pages/AdminSmtp'
 import { AdminUsers } from './pages/AdminUsers'
 import { Clients } from './pages/Clients'
 import { Dashboard } from './pages/Dashboard'
@@ -77,26 +79,43 @@ export default function App() {
             path="admin"
             element={
               <PermissionGuard permission="admin.access">
-                <AdminUsers />
+                <AdminLayout />
               </PermissionGuard>
             }
-          />
-          <Route
-            path="admin/roles"
-            element={
-              <PermissionGuard permission="admin.roles.manage">
-                <AdminRoles />
-              </PermissionGuard>
-            }
-          />
-          <Route
-            path="admin/logs"
-            element={
-              <PermissionGuard permission="admin.activity.view">
-                <AdminActivityLog />
-              </PermissionGuard>
-            }
-          />
+          >
+            <Route
+              index
+              element={
+                <PermissionGuard permission="admin.users.manage">
+                  <AdminUsers />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="roles"
+              element={
+                <PermissionGuard permission="admin.roles.manage">
+                  <AdminRoles />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="logs"
+              element={
+                <PermissionGuard permission="admin.activity.view">
+                  <AdminActivityLog />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="smtp"
+              element={
+                <PermissionGuard permission="admin.mail.manage">
+                  <AdminSmtp />
+                </PermissionGuard>
+              }
+            />
+          </Route>
           <Route path="help" element={<Help />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

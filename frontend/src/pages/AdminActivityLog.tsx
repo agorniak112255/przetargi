@@ -1,5 +1,4 @@
 import { Fragment, useEffect, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
 import { api, type User } from '../lib/api'
 
 type ActivityUser = {
@@ -108,16 +107,6 @@ export function AdminActivityLog() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">Administracja · Logi</h1>
-        <Link to="/admin" className="text-xs text-blue-600 hover:underline">
-          ← Użytkownicy
-        </Link>
-        <Link to="/admin/roles" className="text-xs text-blue-600 hover:underline">
-          Role i uprawnienia →
-        </Link>
-      </div>
-
       <p className="mb-3 text-sm text-slate-600">
         Historia logowań i działań w systemie. Retencja: {retention} dni ({total} wpisów).
       </p>

@@ -50,6 +50,11 @@ class User extends Authenticatable
         return $this->hasMany(Tender::class, 'owner_id');
     }
 
+    public function tenderInvitations(): HasMany
+    {
+        return $this->hasMany(TenderInvitation::class, 'user_id');
+    }
+
     /**
      * @return array{id: int, name: string, email: string, role: string, roles: list<string>, permissions: list<string>}
      */

@@ -62,6 +62,17 @@ type CommentRow = {
   tender_item_id?: number | null
 }
 
+type InvitationRow = {
+  id: number
+  note: string | null
+  email_sent_at: string | null
+  created_at: string | null
+  user?: { id: number; name: string; email: string; role?: string } | null
+  inviter?: { id: number; name: string; email: string; role?: string } | null
+}
+
+type DirectoryUser = { id: number; name: string; email: string; role: string }
+
 function itemProductId(item: Item): string {
   const id = item.main_product_id ?? item.main_product?.id
   return id != null ? String(id) : ''
@@ -135,6 +146,7 @@ const tabs = [
   'zamienniki',
   'oferta',
   'komentarze',
+  'zaproszenia',
   'historia',
   'workflow',
 ] as const
@@ -159,6 +171,8 @@ const actionLabel: Record<string, string> = {
   item_updated: 'Zmiana pozycji',
   item_bulk_updated: 'Zapis zbiorczy pozycji',
   comment_added: 'Dodano komentarz',
+  invitation_added: 'Zaproszono użytkownika',
+  invitation_removed: 'Usunięto zaproszenie',
 }
 
 function sameVal(a: unknown, b: unknown): boolean {
@@ -192,6 +206,9 @@ function formatActivityMeta(meta: Record<string, unknown> | null | undefined): s
   if (typeof meta.from === 'string' && typeof meta.to === 'string') {
     return `${meta.from} → ${meta.to}${meta.note ? ` (${String(meta.note)})` : ''}`
   }
+  if (typeof meta.user_name === 'string') {
+    return `${meta.user_name}${meta.user_email ? ` <${String(meta.user_email)}>` : ''}`
+  }
   return '—'
 }
 
@@ -200,7 +217,14 @@ function activityHasRealChange(a: ActivityRow): boolean {
   if (!meta) return false
   const before = meta.before as Record<string, unknown> | undefined
   const after = meta.after as Record<string, unknown> | undefined
-  if (!before || !after) return a.action === 'status_changed' || a.action === 'comment_added'
+  if (!before || !after) {
+    return (
+      a.action === 'status_changed' ||
+      a.action === 'comment_added' ||
+      a.action === 'invitation_added' ||
+      a.action === 'invitation_removed'
+    )
+  }
   return (['offer_price', 'quantity', 'main_product_id', 'ai_match_percent'] as const).some(
     (k) => !sameVal(before[k], after[k]),
   )
@@ -247,6 +271,11 @@ export function TenderDetail() {
     }>
   } | null>(null)
   const cheaperPreviewRef = useRef<HTMLDivElement | null>(null)
+  const [invitations, setInvitations] = useState<InvitationRow[]>([])
+  const [directory, setDirectory] = useState<DirectoryUser[]>([])
+  const [inviteUserId, setInviteUserId] = useState('')
+  const [inviteNote, setInviteNote] = useState('')
+  const [inviteQ, setInviteQ] = useState('')
 
   const load = useCallback(async () => {
     const d = await api<Detail>(`/tenders/${id}`)
@@ -257,22 +286,39 @@ export function TenderDetail() {
   const loadMeta = useCallback(async () => {
     if (!id) return
     try {
-      const [act, com] = await Promise.all([
+      const [act, com, inv] = await Promise.all([
         api<{ data: ActivityRow[] }>(`/tenders/${id}/activities?per_page=50`),
         api<{ data: CommentRow[] }>(`/tenders/${id}/comments`),
+        api<{ data: InvitationRow[] }>(`/tenders/${id}/invitations`),
       ])
       setActivities(Array.isArray(act.data) ? act.data : [])
       setComments(Array.isArray(com.data) ? com.data : [])
+      setInvitations(Array.isArray(inv.data) ? inv.data : [])
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Nie udało się wczytać historii/komentarzy')
     }
   }, [id])
+
+  const loadDirectory = useCallback(async (q = '') => {
+    if (!user?.permissions?.includes('tenders.invite')) return
+    try {
+      const qs = q ? `?q=${encodeURIComponent(q)}` : ''
+      const res = await api<{ data: DirectoryUser[] }>(`/users/directory${qs}`)
+      setDirectory(Array.isArray(res.data) ? res.data : [])
+    } catch {
+      setDirectory([])
+    }
+  }, [user])
 
   useEffect(() => {
     void load()
     void loadMeta()
     void api<{ data: Product[] }>('/products?per_page=100').then((p) => setProducts(p.data ?? []))
   }, [load, loadMeta])
+
+  useEffect(() => {
+    if (tab === 'zaproszenia') void loadDirectory(inviteQ)
+  }, [tab, inviteQ, loadDirectory])
 
   const registerItemDraft = useCallback((itemId: number, draft: ItemDraft) => {
     itemDraftsRef.current.set(itemId, draft)
@@ -693,6 +739,49 @@ export function TenderDetail() {
     }
   }
 
+  async function sendInvite() {
+    if (!inviteUserId) return
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ email_sent: boolean }>(`/tenders/${id}/invitations`, {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: Number(inviteUserId),
+          note: inviteNote.trim() || null,
+        }),
+      })
+      setInviteUserId('')
+      setInviteNote('')
+      await loadMeta()
+      setMsg(
+        res.email_sent
+          ? 'Zaproszono użytkownika i wysłano e-mail.'
+          : 'Zaproszono użytkownika (e-mail nie wyszedł — sprawdź SMTP).',
+      )
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd zaproszenia')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removeInvite(invitationId: number) {
+    if (!window.confirm('Usunąć dostęp tej osoby do przetargu?')) return
+    setBusy(true)
+    setErr('')
+    try {
+      await api(`/tenders/${id}/invitations/${invitationId}`, { method: 'DELETE' })
+      await loadMeta()
+      setMsg('Usunięto zaproszenie.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd usuwania zaproszenia')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function approveSub(subId: number, approval_status: string) {
     setErr('')
     setBusy(true)
@@ -755,6 +844,7 @@ export function TenderDetail() {
   const { tender, substitutes_by_main, can_edit, next_statuses, coverage } = data
   const canApproveSub = Boolean(user?.permissions?.includes('substitutes.approve'))
   const canComment = Boolean(user?.permissions?.includes('tenders.comment'))
+  const canInvite = Boolean(user?.permissions?.includes('tenders.invite'))
   const filteredItems =
     coverageFilter && coverage
       ? tender.items.filter((it) => coverage.item_ids[coverageFilter].includes(it.id))
@@ -923,7 +1013,9 @@ export function TenderDetail() {
               ? activities.length
               : t === 'komentarze'
                 ? comments.length
-                : null
+                : t === 'zaproszenia'
+                  ? invitations.length
+                  : null
           return (
             <button
               key={t}
@@ -1698,6 +1790,125 @@ export function TenderDetail() {
                 <tr>
                   <td colSpan={4} className="p-3 text-slate-400">
                     Brak wpisów audytu. Zmień cenę/produkt i kliknij Zapisz przy pozycji.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === 'zaproszenia' && (
+        <div className="space-y-3 rounded-xl bg-white p-4 shadow-sm text-xs">
+          <h2 className="text-sm font-semibold">Zaproszeni do przetargu</h2>
+          <p className="text-slate-500">
+            Zaproszone osoby mają dostęp do tego przetargu jak opiekun (w ramach własnych uprawnień roli).
+          </p>
+
+          {canInvite && (
+            <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_1fr_auto]">
+              <label>
+                Szukaj użytkownika
+                <input
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                  value={inviteQ}
+                  onChange={(e) => setInviteQ(e.target.value)}
+                  placeholder="Imię lub e-mail"
+                />
+              </label>
+              <label>
+                Osoba
+                <select
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                  value={inviteUserId}
+                  onChange={(e) => setInviteUserId(e.target.value)}
+                >
+                  <option value="">— wybierz —</option>
+                  {directory
+                    .filter(
+                      (u) =>
+                        u.id !== user?.id &&
+                        u.id !== tender.owner_id &&
+                        !invitations.some((inv) => inv.user?.id === u.id),
+                    )
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name} · {u.email} ({u.role})
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  disabled={busy || !inviteUserId}
+                  onClick={() => void sendInvite()}
+                  className="w-full rounded bg-blue-600 px-3 py-1.5 text-white disabled:opacity-50"
+                >
+                  Zaproś
+                </button>
+              </div>
+              <label className="sm:col-span-3">
+                Wiadomość (opcjonalnie, trafi do e-maila)
+                <textarea
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                  rows={2}
+                  value={inviteNote}
+                  onChange={(e) => setInviteNote(e.target.value)}
+                  placeholder="np. Proszę o wycenę sekcji rękawic"
+                />
+              </label>
+            </div>
+          )}
+
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Osoba</th>
+                <th className="p-2">Zaprosił</th>
+                <th className="p-2">Kiedy</th>
+                <th className="p-2">E-mail</th>
+                <th className="p-2">Notatka</th>
+                {canInvite && <th className="p-2" />}
+              </tr>
+            </thead>
+            <tbody>
+              {invitations.map((inv) => (
+                <tr key={inv.id} className="border-b align-top">
+                  <td className="p-2">
+                    <div className="font-medium">{inv.user?.name ?? '—'}</div>
+                    <div className="text-slate-500">{inv.user?.email}</div>
+                  </td>
+                  <td className="p-2">{inv.inviter?.name ?? '—'}</td>
+                  <td className="p-2 whitespace-nowrap">
+                    {inv.created_at ? new Date(inv.created_at).toLocaleString('pl-PL') : '—'}
+                  </td>
+                  <td className="p-2">
+                    {inv.email_sent_at ? (
+                      <span className="text-emerald-700">wysłany</span>
+                    ) : (
+                      <span className="text-amber-700">brak</span>
+                    )}
+                  </td>
+                  <td className="p-2 text-slate-600">{inv.note ?? '—'}</td>
+                  {canInvite && (
+                    <td className="p-2 text-right">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void removeInvite(inv.id)}
+                        className="rounded bg-red-600 px-2 py-1 text-[10px] text-white disabled:opacity-50"
+                      >
+                        Usuń
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {invitations.length === 0 && (
+                <tr>
+                  <td colSpan={canInvite ? 6 : 5} className="p-3 text-slate-400">
+                    Nikt jeszcze nie został zaproszony.
                   </td>
                 </tr>
               )}

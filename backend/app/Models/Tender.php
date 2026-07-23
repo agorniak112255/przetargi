@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -71,6 +72,29 @@ class Tender extends Model
     public function comments(): HasMany
     {
         return $this->hasMany(TenderComment::class)->latest('id');
+    }
+
+    public function invitations(): HasMany
+    {
+        return $this->hasMany(TenderInvitation::class)->latest('id');
+    }
+
+    /**
+     * Przetargi użytkownika jako opiekun albo zaproszony.
+     *
+     * @param  Builder<Tender>  $query
+     * @return Builder<Tender>
+     */
+    public function scopeAccessibleBy(Builder $query, User $user): Builder
+    {
+        $userId = (int) $user->id;
+
+        return $query->where(function (Builder $builder) use ($userId): void {
+            $builder->where('owner_id', $userId)
+                ->orWhereHas('invitations', static function (Builder $invitations) use ($userId): void {
+                    $invitations->where('user_id', $userId);
+                });
+        });
     }
 }
 

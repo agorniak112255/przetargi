@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { can, canAny } from '../lib/api'
+import { NotificationBell } from './NotificationBell'
 
 type NavLinkItem = {
   to: string
@@ -45,7 +46,7 @@ export function Layout() {
             <NavLink
               key={l.to}
               to={l.to}
-              end={l.to === '/' || l.to === '/admin'}
+              end={l.to === '/'}
               className={({ isActive }) =>
                 `block border-b border-slate-700 px-4 py-3 text-sm ${
                   isActive ? 'border-l-4 border-l-sky-400 bg-slate-700 pl-3' : 'hover:bg-slate-700'
@@ -56,10 +57,11 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
+        <NotificationBell />
         <button
           type="button"
           onClick={() => void logout()}
-          className="m-4 rounded bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600"
+          className="mx-4 mb-4 rounded bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600"
         >
           Wyloguj
         </button>

@@ -26,12 +26,15 @@ class TenderController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        $user = $request->user();
+        $userId = (int) $user->id;
+
         $query = Tender::query()
             ->with(['client:id,name', 'owner:id,name'])
             ->withCount('items');
 
-        if (! $request->user()->can('tenders.view_all')) {
-            $query->where('owner_id', $request->user()->id);
+        if (! $user->can('tenders.view_all')) {
+            $query->accessibleBy($user);
         }
 
         if ($request->filled('status')) {
@@ -40,7 +43,12 @@ class TenderController extends Controller
 
         $filter = (string) $request->input('filter', '');
         if ($filter === 'mine') {
-            $query->where('owner_id', $request->user()->id);
+            $query->where('owner_id', $userId);
+        }
+        if ($filter === 'invited') {
+            $query->whereHas('invitations', static function ($invitations) use ($userId): void {
+                $invitations->where('user_id', $userId);
+            });
         }
         if ($filter === 'unassigned') {
             $query->whereNull('owner_id');
