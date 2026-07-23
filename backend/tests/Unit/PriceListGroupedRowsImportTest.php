@@ -11,7 +11,7 @@ use Tests\TestCase;
 
 final class PriceListGroupedRowsImportTest extends TestCase
 {
-    public function test_collapses_same_price_sizes_keeps_model_sku(): void
+    public function test_kod_is_model_reference_not_article_number(): void
     {
         $path = $this->makeGroupedSpreadsheet();
         try {
@@ -22,17 +22,17 @@ final class PriceListGroupedRowsImportTest extends TestCase
                 $bySku[$p['sku']] = $p;
             }
 
-            // ta sama cena S/M/L → jedna pozycja (preferuj M)
-            $this->assertArrayHasKey('D14681380', $bySku);
+            // Kod = model Reference, nie Article D1468…
+            $this->assertArrayHasKey('TD 0125 S WH 00', $bySku);
+            $this->assertArrayNotHasKey('D14681380', $bySku);
             $this->assertArrayNotHasKey('D14681379', $bySku);
-            $this->assertArrayNotHasKey('D14681398', $bySku);
-            $this->assertSame('NEW! TYVEK Dual Combi', $bySku['D14681380']['name']);
-            $this->assertNotNull($bySku['D14681380']['description'] ?? null);
-            $this->assertNull($bySku['D14681380']['packaging']);
+            $this->assertSame('NEW! TYVEK Dual Combi', $bySku['TD 0125 S WH 00']['name']);
+            $this->assertNotNull($bySku['TD 0125 S WH 00']['description'] ?? null);
+            $this->assertNull($bySku['TD 0125 S WH 00']['packaging']);
 
-            $this->assertArrayHasKey('D13495380', $bySku);
-            $this->assertEqualsWithDelta(1074.89, (float) $bySku['D13495380']['catalog_price_net'], 0.001);
-            $this->assertStringContainsString('SCBA', $bySku['D13495380']['name']);
+            $this->assertArrayHasKey('TK GEVJ T YL 00', $bySku);
+            $this->assertEqualsWithDelta(1074.89, (float) $bySku['TK GEVJ T YL 00']['catalog_price_net'], 0.001);
+            $this->assertStringContainsString('SCBA', $bySku['TK GEVJ T YL 00']['name']);
         } finally {
             @unlink($path);
         }
@@ -46,9 +46,9 @@ final class PriceListGroupedRowsImportTest extends TestCase
             $preview = $service->previewFromMapping($path, $this->dupontMapping(), 20);
             $skus = array_column($preview['products'], 'sku');
 
-            $this->assertContains('D100S', $skus);
-            $this->assertContains('D100M', $skus);
-            $this->assertContains('D100L', $skus);
+            $this->assertContains('TF CHA5 T GY 00-S', $skus);
+            $this->assertContains('TF CHA5 T GY 00-M', $skus);
+            $this->assertContains('TF CHA5 T GY 00-L', $skus);
             $this->assertSame(3, $preview['products_found']);
         } finally {
             @unlink($path);
@@ -115,6 +115,7 @@ final class PriceListGroupedRowsImportTest extends TestCase
                     'header_excel_row' => 2,
                     'columns' => [
                         'sku' => 5,
+                        'model_key' => 2,
                         'name' => 4,
                         'catalog_price' => 9,
                         'discount' => null,

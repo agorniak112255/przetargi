@@ -382,9 +382,9 @@ Zwróć JSON:
 }
 
 Zasady:
-- model_key = Reference / Base Style / kod modelu wspólny dla rozmiarów (np. TD 0125 S WH 00)
+- model_key = Reference / Base Style / kod modelu (np. TD 0125 S WH 00) — to jest KOD produktu w ERP
 - name = krótka nazwa handlowa (np. NEW! TYVEK Dual Combi), NIE długi opis techniczny jeśli w tej samej kolumnie jest też tytuł
-- sku = Article Number / Kod produktu unikalny per wiersz/rozmiar
+- sku = Article Number (D1468…) — kod fabryczny rozmiaru; NIE mylić z modelem
 - packaging = Size / rozmiar
 - Jeśli brak kolumny: column=null
 - Uwzględnij web_context gdy jest

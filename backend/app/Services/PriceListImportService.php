@@ -685,11 +685,8 @@ final class PriceListImportService
      */
     private function collapseSamePriceVariants(array $products): array
     {
-        if (count($products) < 2) {
-            return [
-                'products' => array_map(fn (array $p): array => $this->stripInternalProductKeys($p), $products),
-                'removed' => 0,
-            ];
+        if ($products === []) {
+            return ['products' => [], 'removed' => 0];
         }
 
         $groups = [];
@@ -707,10 +704,15 @@ final class PriceListImportService
         $removed = 0;
         foreach ($order as $key) {
             $items = $groups[$key];
-            if (count($items) < 2 || str_starts_with($key, 'sku:')) {
+            if (str_starts_with($key, 'sku:')) {
                 foreach ($items as $item) {
-                    $out[] = $this->stripInternalProductKeys($item['product']);
+                    $out[] = $this->finalizeProductCode($item['product'], null);
                 }
+                continue;
+            }
+
+            if (count($items) === 1) {
+                $out[] = $this->finalizeProductCode($items[0]['product'], null);
                 continue;
             }
 
@@ -725,17 +727,41 @@ final class PriceListImportService
                     static fn (array $item): array => $item['product'],
                     $items,
                 ));
-                $out[] = $this->stripInternalProductKeys($chosen);
+                // Kod = model (Reference), nie Article Number rozmiaru
+                $out[] = $this->finalizeProductCode($chosen, null);
                 $removed += count($items) - 1;
                 continue;
             }
 
             foreach ($items as $item) {
-                $out[] = $this->stripInternalProductKeys($item['product']);
+                $pack = trim((string) ($item['product']['packaging'] ?? ''));
+                $out[] = $this->finalizeProductCode(
+                    $item['product'],
+                    $pack !== '' ? $pack : null,
+                );
             }
         }
 
         return ['products' => $out, 'removed' => $removed];
+    }
+
+    /**
+     * Kod w systemie = model (Reference). Article Number tylko gdy brak modelu.
+     * Przy różnych cenach rozmiarów: model-ROZMIAR.
+     *
+     * @param  array<string, mixed>  $product
+     * @return array<string, mixed>
+     */
+    private function finalizeProductCode(array $product, ?string $sizeSuffix): array
+    {
+        $model = trim((string) ($product['_model_key'] ?? ''));
+        if ($model !== '') {
+            $product['sku'] = $sizeSuffix !== null && $sizeSuffix !== ''
+                ? $model.'-'.$sizeSuffix
+                : $model;
+        }
+
+        return $this->stripInternalProductKeys($product);
     }
 
     /**
@@ -1064,13 +1090,23 @@ final class PriceListImportService
             if ($mapped !== '') {
                 return $mapped;
             }
-
-            return isset($carry['group']) && is_string($carry['group']) && $carry['group'] !== ''
-                ? $carry['group']
-                : null;
         }
 
-        return $this->rowGroupKey($row, $map);
+        // np. DuPont: Reference (model_key) tylko w 1. wierszu, a kod modelu jest też w kol. A
+        $inferred = $this->rowGroupKey($row, $map);
+        if ($inferred !== null) {
+            return $inferred;
+        }
+
+        if (isset($map['model_key'])
+            && isset($carry['group'])
+            && is_string($carry['group'])
+            && $carry['group'] !== ''
+        ) {
+            return $carry['group'];
+        }
+
+        return null;
     }
 
     /**

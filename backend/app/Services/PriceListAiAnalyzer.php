@@ -790,11 +790,11 @@ Zwróć JSON:
 }
 
 Priorytet pól (to nas interesuje):
-1) sku = UNIKALNY kod pozycji: Article Number / Art. nr / Kod produktu / SKU / SAP.
-   Gdy są OBIE kolumny „Reference/Model” ORAZ „Article Number” — mapuj sku na Article Number (nie Reference).
-   Reference → model_key. NIE tariff/commodity. Brak kolumny kodu → sku: null.
-2) model_key = kod modelu / Reference / Base Style wspólny dla rozmiarów (np. TD 0125 S WH 00). Osobno od sku.
-3) name = krótka nazwa modelu (Model Name / Nazwa). Ta sama kolumna bywa też długim opisem EN — i tak mapuj ją na name; system rozdzieli tytuł/opis i uzupełni puste wiersze (forward-fill).
+1) model_key = kod modelu / Reference / Base Style (np. TD 0125 S WH 00) — to jest właściwy KOD produktu w systemie.
+2) sku (kolumna Article Number) mapuj na Article Number gdy jest — system po imporcie ustawi Kod=model_key;
+   Article służy tylko do rozróżnienia wariantów gdy cena zależy od rozmiaru.
+3) name = krótka nazwa handlowa (np. NEW! TYVEK Dual Combi), NIE sam Article i NIE sam Reference.
+   Ta sama kolumna bywa też długim opisem EN — i tak mapuj ją na name; system rozdzieli tytuł/opis.
 4) catalog_price = cena katalogowa / sugerowana / CENA CENNIK / Price (€/pc) — NIE kolumna „Zamówienie=0”
 5) discount = upust / rabat / marża w % (kolumny: upust, rabat, discount, marża, PL Discount)
 6) pack_qty = Quantity per box / ilość sztuk w kartonie / opakowaniu zbiorczym
