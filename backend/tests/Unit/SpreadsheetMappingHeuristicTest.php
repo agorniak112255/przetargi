@@ -21,6 +21,7 @@ final class SpreadsheetMappingHeuristicTest extends TestCase
             $cols = $sheet['columns'];
 
             $this->assertSame(5, $cols['sku'], 'SKU = Article Number');
+            $this->assertSame(2, $cols['model_key'], 'model_key = Reference');
             $this->assertSame(4, $cols['name'], 'Name = Model Name and Description');
             $this->assertSame(9, $cols['catalog_price']);
             $this->assertSame(2, $sheet['header_excel_row']);

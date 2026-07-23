@@ -610,7 +610,7 @@ final class PriceListImportService
 
             $cols = is_array($sheetMap['columns'] ?? null) ? $sheetMap['columns'] : [];
             $map = [];
-            foreach (['sku', 'name', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'currency'] as $key) {
+            foreach (['sku', 'name', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'currency'] as $key) {
                 if (isset($cols[$key]) && is_numeric($cols[$key])) {
                     $map[$key] = (int) $cols[$key];
                 }
@@ -893,7 +893,7 @@ final class PriceListImportService
         $rawName = trim((string) ($row[$map['name']] ?? ''));
         $priceRaw = $row[$map['catalog_price']] ?? null;
 
-        $groupKey = $this->rowGroupKey($row, $map);
+        $groupKey = $this->resolveGroupKey($row, $map, $carry);
         if ($groupKey !== null && ($carry['group'] ?? null) !== null && $groupKey !== $carry['group']) {
             $carry['name'] = null;
             $carry['category'] = null;
@@ -1050,6 +1050,27 @@ final class PriceListImportService
         $sku = rtrim($sku, " \t*");
 
         return trim($sku);
+    }
+
+    /**
+     * @param  array<int, mixed>  $row
+     * @param  array<string, int>  $map
+     * @param  array{name: ?string, category: ?string, group: ?string}  $carry
+     */
+    private function resolveGroupKey(array $row, array $map, array $carry): ?string
+    {
+        if (isset($map['model_key'])) {
+            $mapped = $this->normalizeSku((string) ($row[$map['model_key']] ?? ''));
+            if ($mapped !== '') {
+                return $mapped;
+            }
+
+            return isset($carry['group']) && is_string($carry['group']) && $carry['group'] !== ''
+                ? $carry['group']
+                : null;
+        }
+
+        return $this->rowGroupKey($row, $map);
     }
 
     /**

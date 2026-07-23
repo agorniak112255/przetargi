@@ -21,6 +21,7 @@ final class PriceListAiAnalyzer
         private readonly CurrencyDetector $currencyDetector,
         private readonly PriceListMetaDetector $metaDetector,
         private readonly SpreadsheetMappingHeuristic $spreadsheetHeuristic,
+        private readonly PriceListSampleRoleResearcher $sampleRoleResearcher,
     ) {}
 
     /**
@@ -57,13 +58,22 @@ final class PriceListAiAnalyzer
             throw new RuntimeException('Plik nie zawiera arkuszy do analizy.');
         }
 
-        $prompt = $this->buildPrompt($sample, $manufacturerHint);
+        // 1) Research jednej pozycji (opcjonalnie z sieci) — model vs nazwa vs article
+        $sampleResearch = null;
+        try {
+            $sampleResearch = $this->sampleRoleResearcher->research($sample, $manufacturerHint);
+        } catch (\Throwable) {
+            $sampleResearch = null;
+        }
+
+        $prompt = $this->buildPrompt($sample, $manufacturerHint, $sampleResearch);
         $messages = [
             [
                 'role' => 'system',
                 'content' => 'Jesteś ekspertem od importu cenników BHP do systemu ERP. '
                     .'Odpowiadasz wyłącznie poprawnym JSON zgodnym ze schematem użytkownika. '
-                    .'Indeksy kolumn są 0-based. header_excel_row to numer wiersza Excel (1-based) z sample_rows[].excel_row.',
+                    .'Indeksy kolumn są 0-based. header_excel_row to numer wiersza Excel (1-based) z sample_rows[].excel_row. '
+                    .'Gdy podano sample_role_research — traktuj je jako źródło prawdy dla ról kolumn.',
             ],
             ['role' => 'user', 'content' => $prompt],
         ];
@@ -101,6 +111,11 @@ final class PriceListAiAnalyzer
                 );
             }
             $model = $aiReady ? $model.'+heuristic-fallback' : 'heuristic-xlsx';
+        }
+
+        if ($sampleResearch !== null) {
+            $mapping = $this->sampleRoleResearcher->applyToMapping($mapping, $sampleResearch);
+            $model .= '+sample-research';
         }
 
         $stats = $this->buildPreview($path, $mapping);
@@ -167,6 +182,7 @@ final class PriceListAiAnalyzer
             ],
             'model' => $model,
             'meta' => $meta,
+            'sample_role_research' => $sampleResearch,
         ];
     }
 
@@ -715,15 +731,31 @@ PROMPT;
     /**
      * @param  array{sheets: list<array<string, mixed>>}  $sample
      */
-    private function buildPrompt(array $sample, ?string $manufacturerHint): string
+    /**
+     * @param  array{sheets: list<array<string, mixed>>}  $sample
+     * @param  array<string, mixed>|null  $sampleResearch
+     */
+    private function buildPrompt(array $sample, ?string $manufacturerHint, ?array $sampleResearch = null): string
     {
         $payload = json_encode($sample, JSON_UNESCAPED_UNICODE);
         $hint = $manufacturerHint !== null && $manufacturerHint !== ''
             ? "Producent podany przez użytkownika: {$manufacturerHint}."
             : 'Producent nieznany — spróbuj wykryć z pliku.';
 
+        $researchBlock = '';
+        if ($sampleResearch !== null) {
+            $researchJson = json_encode($sampleResearch, JSON_UNESCAPED_UNICODE);
+            $researchBlock = <<<RES
+
+SAMPLE_ROLE_RESEARCH (źródło prawdy dla 1 pozycji — użyj tych kolumn):
+{$researchJson}
+Przykład DuPont: model_key="TD 0125 S WH 00", name="NEW! TYVEK Dual Combi", sku=Article Number (D1468…), packaging=Size.
+RES;
+        }
+
         return <<<PROMPT
 {$hint}
+{$researchBlock}
 
 Poniżej próbki arkuszy z pliku XLSX (sample_rows = kolejne niepuste wiersze od góry).
 Zmapuj strukturę do importu produktów.
@@ -746,6 +778,7 @@ Zwróć JSON:
         "purchase": null,
         "pack_qty": null,
         "packaging": null,
+        "model_key": null,
         "currency": null,
         "ean": null,
         "category": null
@@ -759,15 +792,16 @@ Zwróć JSON:
 Priorytet pól (to nas interesuje):
 1) sku = UNIKALNY kod pozycji: Article Number / Art. nr / Kod produktu / SKU / SAP.
    Gdy są OBIE kolumny „Reference/Model” ORAZ „Article Number” — mapuj sku na Article Number (nie Reference).
-   Reference bywa pusty w wariantach rozmiarów. NIE tariff/commodity. Brak kolumny kodu → sku: null.
-2) name = krótka nazwa modelu (Model Name / Nazwa). Ta sama kolumna bywa też długim opisem EN — i tak mapuj ją na name; system rozdzieli tytuł/opis i uzupełni puste wiersze (forward-fill).
-3) catalog_price = cena katalogowa / sugerowana / CENA CENNIK / Price (€/pc) — NIE kolumna „Zamówienie=0”
-4) discount = upust / rabat / marża w % (kolumny: upust, rabat, discount, marża, PL Discount)
-5) pack_qty = Quantity per box / ilość sztuk w kartonie / opakowaniu zbiorczym
-6) packaging = Size / rozmiar / opakowanie / jednostka / pojemność
-7) purchase = cena po upuście / zakup tylko jeśli jest osobna kolumna
-8) currency = kolumna waluty jeśli jest (EUR/PLN/USD); currency na poziomie pliku = dominująca z nagłówka (Price EUR, PLN, zł…)
-9) category = Category/Type / kategoria / grupa
+   Reference → model_key. NIE tariff/commodity. Brak kolumny kodu → sku: null.
+2) model_key = kod modelu / Reference / Base Style wspólny dla rozmiarów (np. TD 0125 S WH 00). Osobno od sku.
+3) name = krótka nazwa modelu (Model Name / Nazwa). Ta sama kolumna bywa też długim opisem EN — i tak mapuj ją na name; system rozdzieli tytuł/opis i uzupełni puste wiersze (forward-fill).
+4) catalog_price = cena katalogowa / sugerowana / CENA CENNIK / Price (€/pc) — NIE kolumna „Zamówienie=0”
+5) discount = upust / rabat / marża w % (kolumny: upust, rabat, discount, marża, PL Discount)
+6) pack_qty = Quantity per box / ilość sztuk w kartonie / opakowaniu zbiorczym
+7) packaging = Size / rozmiar / opakowanie / jednostka / pojemność
+8) purchase = cena po upuście / zakup tylko jeśli jest osobna kolumna
+9) currency = kolumna waluty jeśli jest (EUR/PLN/USD); currency na poziomie pliku = dominująca z nagłówka (Price EUR, PLN, zł…)
+10) category = Category/Type / kategoria / grupa
 
 Zasady:
 - Często nad tabelą jest blok rabatów/kontaktów — header_excel_row to wiersz z „Kod produktu”/„Nazwa”/„Cena…”, nie wiersz 1.
@@ -777,6 +811,7 @@ Zasady:
 - Jeśli nagłówki powtarzają się w środku arkusza, ustaw repeating_headers=true.
 - header_excel_row = sample_rows[].excel_row wiersza z nazwami kolumn.
 - Nie ustawiaj include=false tylko dlatego, że brak kodu produktu.
+- Gdy jest SAMPLE_ROLE_RESEARCH — skopiuj column z roles.* do columns.*.
 
 Dane:
 {$payload}
@@ -806,7 +841,7 @@ PROMPT;
             }
             $cols = is_array($sheet['columns'] ?? null) ? $sheet['columns'] : [];
             $normCols = [];
-            foreach (['sku', 'name', 'catalog_price', 'discount', 'purchase', 'pack_qty', 'packaging', 'currency', 'ean', 'category'] as $key) {
+            foreach (['sku', 'name', 'catalog_price', 'discount', 'purchase', 'pack_qty', 'packaging', 'model_key', 'currency', 'ean', 'category'] as $key) {
                 $v = $cols[$key] ?? null;
                 $normCols[$key] = is_numeric($v) ? (int) $v : null;
             }

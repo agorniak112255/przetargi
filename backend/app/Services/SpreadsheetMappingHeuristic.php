@@ -91,8 +91,16 @@ final class SpreadsheetMappingHeuristic
                 'price(€', 'price (€', 'price(€/pc', 'price eur', 'price(eur', 'cena - ', 'cena_',
                 'cena hurtowa', 'cena', 'price', 'cennik',
             ]);
+            $skuCol = $this->findBestSkuCol($labels, $grid, $excelRow, $priceCol);
+            $modelKeyCol = $this->findCol($labels, [
+                'product reference', 'reference', 'model code', 'base style',
+            ]);
+            if ($modelKeyCol !== null && $skuCol !== null && $modelKeyCol === $skuCol) {
+                $modelKeyCol = null;
+            }
             $cols = [
-                'sku' => $this->findBestSkuCol($labels, $grid, $excelRow, $priceCol),
+                'sku' => $skuCol,
+                'model_key' => $modelKeyCol,
                 'name' => $this->findCol($labels, [
                     'model name', 'nazwa', 'name', 'opis', 'description', 'produkt', 'asortyment', 'model',
                 ]),
@@ -173,6 +181,7 @@ final class SpreadsheetMappingHeuristic
                     'header_excel_row' => $excelRow,
                     'columns' => [
                         'sku' => $cols['sku'],
+                        'model_key' => $cols['model_key'],
                         'name' => $cols['name'],
                         'catalog_price' => $cols['catalog_price'],
                         'discount' => $cols['discount'],
