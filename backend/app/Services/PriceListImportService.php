@@ -569,8 +569,11 @@ final class PriceListImportService
             $products[] = $parsed['product'];
         }
 
+        $collapsed = $this->collapseSamePriceVariants($products);
+        $skipped += $collapsed['removed'];
+
         return [
-            'products' => $products,
+            'products' => $collapsed['products'],
             'skipped' => $skipped,
             'errors' => $errors,
             'skipped_details' => $this->finalizeSkippedDetails($skippedDetails, $emptySkips, $headerSkips, $skipped),
@@ -662,12 +665,156 @@ final class PriceListImportService
             }
         }
 
+        $collapsed = $this->collapseSamePriceVariants(array_values($bySku));
+        $skipped += $collapsed['removed'];
+
         return [
-            'products' => array_values($bySku),
+            'products' => $collapsed['products'],
             'skipped' => $skipped,
             'errors' => $errors,
             'rows_total' => $rowsTotal,
         ];
+    }
+
+    /**
+     * Ten sam model (Reference / nazwa+rozmiar): jedna pozycja gdy cena identyczna;
+     * różne ceny (rozmiar/wariant) → zostaw każdą pozycję.
+     *
+     * @param  list<array<string, mixed>>  $products
+     * @return array{products: list<array<string, mixed>>, removed: int}
+     */
+    private function collapseSamePriceVariants(array $products): array
+    {
+        if (count($products) < 2) {
+            return [
+                'products' => array_map(fn (array $p): array => $this->stripInternalProductKeys($p), $products),
+                'removed' => 0,
+            ];
+        }
+
+        $groups = [];
+        $order = [];
+        foreach ($products as $index => $product) {
+            $key = $this->collapseGroupKey($product);
+            if (! isset($groups[$key])) {
+                $groups[$key] = [];
+                $order[] = $key;
+            }
+            $groups[$key][] = ['index' => $index, 'product' => $product];
+        }
+
+        $out = [];
+        $removed = 0;
+        foreach ($order as $key) {
+            $items = $groups[$key];
+            if (count($items) < 2 || str_starts_with($key, 'sku:')) {
+                foreach ($items as $item) {
+                    $out[] = $this->stripInternalProductKeys($item['product']);
+                }
+                continue;
+            }
+
+            $priceKeys = [];
+            foreach ($items as $item) {
+                $price = round((float) ($item['product']['catalog_price_net'] ?? 0), 2);
+                $priceKeys[number_format($price, 2, '.', '')] = true;
+            }
+
+            if (count($priceKeys) === 1) {
+                $chosen = $this->pickVariantRepresentative(array_map(
+                    static fn (array $item): array => $item['product'],
+                    $items,
+                ));
+                $out[] = $this->stripInternalProductKeys($chosen);
+                $removed += count($items) - 1;
+                continue;
+            }
+
+            foreach ($items as $item) {
+                $out[] = $this->stripInternalProductKeys($item['product']);
+            }
+        }
+
+        return ['products' => $out, 'removed' => $removed];
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     */
+    private function collapseGroupKey(array $product): string
+    {
+        $modelKey = trim((string) ($product['_model_key'] ?? ''));
+        $name = mb_strtolower(trim((string) ($product['name'] ?? '')));
+        if ($modelKey !== '') {
+            return 'model:'.mb_strtolower($modelKey).'|'.$name;
+        }
+
+        $packaging = (string) ($product['packaging'] ?? '');
+        if ($name !== '' && $this->isSizePackaging($packaging)) {
+            return 'name:'.$name;
+        }
+
+        return 'sku:'.(string) ($product['sku'] ?? uniqid('p', true));
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $variants
+     * @return array<string, mixed>
+     */
+    private function pickVariantRepresentative(array $variants): array
+    {
+        $best = $variants[0];
+        $bestScore = -1;
+        foreach ($variants as $variant) {
+            $score = 0;
+            $pack = strtoupper((string) ($variant['packaging'] ?? ''));
+            if ($pack === 'M') {
+                $score += 50;
+            } elseif (in_array($pack, ['L', 'ONE SIZE', 'ONESIZE'], true)) {
+                $score += 30;
+            } elseif ($pack === 'S') {
+                $score += 10;
+            }
+            if (trim((string) ($variant['description'] ?? '')) !== '') {
+                $score += 20;
+            }
+            if (! $this->isDescriptionLike((string) ($variant['name'] ?? ''))) {
+                $score += 5;
+            }
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = $variant;
+            }
+        }
+
+        // jedna pozycja modelu — bez konkretnego rozmiaru w cenniku wyceny
+        $best['packaging'] = null;
+
+        return $best;
+    }
+
+    private function isSizePackaging(string $packaging): bool
+    {
+        $pack = strtoupper(trim($packaging));
+        if ($pack === '') {
+            return false;
+        }
+
+        return preg_match(
+            '/^(XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|[2-6]XL|ONE\s*SIZE|ONESIZE|\d{1,2})$/',
+            $pack
+        ) === 1;
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     * @return array<string, mixed>
+     */
+    private function stripInternalProductKeys(array $product): array
+    {
+        unset($product['_model_key']);
+
+        return $product;
     }
 
     /**
@@ -888,6 +1035,7 @@ final class PriceListImportService
                 'stock' => 0,
                 'pack_qty' => $packQty,
                 'packaging' => $packaging,
+                '_model_key' => $groupKey ?? ($carry['group'] ?? null),
             ],
         ];
     }
