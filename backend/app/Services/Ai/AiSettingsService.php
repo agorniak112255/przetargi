@@ -21,6 +21,7 @@ final class AiSettingsService
      *     api_key: ?string,
      *     model: string,
      *     enrichment_model: ?string,
+     *     enrichment_use_large_model: bool,
      *     timeout_seconds: int,
      *     temperature: float,
      *     web_search_enabled: bool,
@@ -59,6 +60,11 @@ final class AiSettingsService
                 'api_key' => $key !== null && $key !== '' ? (string) $key : null,
                 'model' => (string) $row->model,
                 'enrichment_model' => $this->nullableString($row->enrichment_model ?? null),
+                'enrichment_use_large_model' => $this->boolColumn(
+                    $row,
+                    'enrichment_use_large_model',
+                    false
+                ),
                 'timeout_seconds' => (int) $row->timeout_seconds,
                 'temperature' => (float) $row->temperature,
                 'web_search_enabled' => (bool) ($row->web_search_enabled ?? true),
@@ -107,6 +113,7 @@ final class AiSettingsService
             'api_key' => $key,
             'model' => (string) config('ai.model'),
             'enrichment_model' => $this->nullableString(config('ai.enrichment_model')),
+            'enrichment_use_large_model' => (bool) config('ai.enrichment_use_large_model', false),
             'timeout_seconds' => (int) config('ai.timeout_seconds'),
             'temperature' => (float) config('ai.temperature'),
             'web_search_enabled' => (bool) config('ai.web_search_enabled', true),
@@ -142,6 +149,7 @@ final class AiSettingsService
             'base_url' => $cfg['base_url'],
             'model' => $cfg['model'],
             'enrichment_model' => $cfg['enrichment_model'],
+            'enrichment_use_large_model' => $cfg['enrichment_use_large_model'],
             'timeout_seconds' => $cfg['timeout_seconds'],
             'temperature' => $cfg['temperature'],
             'web_search_enabled' => $cfg['web_search_enabled'],
@@ -176,6 +184,7 @@ final class AiSettingsService
             'base_url' => 'https://api.openai.com/v1',
             'model' => 'gpt-4o-mini',
             'enrichment_model' => null,
+            'enrichment_use_large_model' => false,
             'timeout_seconds' => 90,
             'temperature' => 0.1,
             'web_search_enabled' => false,
@@ -210,6 +219,11 @@ final class AiSettingsService
 
         if (array_key_exists('enrichment_model', $data)) {
             $row->enrichment_model = $this->nullableString($data['enrichment_model']);
+        }
+
+        if (array_key_exists('enrichment_use_large_model', $data)
+            && Schema::hasColumn('ai_settings', 'enrichment_use_large_model')) {
+            $row->enrichment_use_large_model = (bool) $data['enrichment_use_large_model'];
         }
 
         if (array_key_exists('tavily_search_mode', $data) && Schema::hasColumn('ai_settings', 'tavily_search_mode')) {
@@ -268,9 +282,18 @@ final class AiSettingsService
     public function enrichmentModel(): string
     {
         $cfg = $this->resolve();
+        if ($this->enrichmentUsesLargeModelFrom($cfg)) {
+            return (string) $cfg['model'];
+        }
         $cheap = trim((string) ($cfg['enrichment_model'] ?? ''));
 
         return $cheap !== '' ? $cheap : (string) $cfg['model'];
+    }
+
+    /** Wyszukiwanie i opis produktów wyłącznie modelem głównym (AI web search). */
+    public function enrichmentUsesLargeModel(): bool
+    {
+        return $this->enrichmentUsesLargeModelFrom($this->resolve());
     }
 
     public function tavilySearchProfile(): TavilySearchProfile
@@ -285,6 +308,23 @@ final class AiSettingsService
         $cfg = $this->resolve();
 
         return $this->normalizeEnrichmentBatchLimit($cfg['enrichment_batch_limit'] ?? null);
+    }
+
+    /**
+     * @param  array<string, mixed>  $cfg
+     */
+    private function enrichmentUsesLargeModelFrom(array $cfg): bool
+    {
+        return (bool) ($cfg['enrichment_use_large_model'] ?? false);
+    }
+
+    private function boolColumn(AiSetting $row, string $column, bool $default): bool
+    {
+        if (! Schema::hasColumn('ai_settings', $column)) {
+            return $default;
+        }
+
+        return (bool) ($row->{$column} ?? $default);
     }
 
     private function normalizeTavilySearchMode(mixed $value): string

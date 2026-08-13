@@ -36,6 +36,9 @@ class HybridWebSearchService
     public function searchProduct(Product $product, string $phase = 'manufacturer'): array
     {
         $queries = $this->buildQueries($product, $phase);
+        if ($this->settings->enrichmentUsesLargeModel()) {
+            return $this->searchViaLargeModel($product, $phase, $queries);
+        }
         $cfg = $this->settings->resolve();
         $profile = $this->settings->tavilySearchProfile();
         $errors = [];
@@ -178,6 +181,80 @@ class HybridWebSearchService
         ];
     }
 
+    /**
+     * @param  list<string>  $queries
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     images: list<string>,
+     *     provider: string,
+     *     raw_content: ?string
+     * }
+     */
+    private function searchViaLargeModel(Product $product, string $phase, array $queries): array
+    {
+        $errors = [];
+        $merged = [];
+        $seen = [];
+        $provider = 'ai_web_search';
+
+        foreach (array_slice($queries, 0, 2) as $query) {
+            $cacheKey = $this->searchCacheKey('large_model', $phase, $query);
+            $cached = Cache::get($cacheKey);
+            if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
+                $packResults = $this->filterResultsByIdentity($cached['results'], $product);
+                $provider = (string) ($cached['provider'] ?? 'ai_web_search_cache');
+            } else {
+                $packResults = [];
+                try {
+                    $pack = $this->searchViaAiWeb($query, $product, $phase);
+                    $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+                    if ($packResults !== []) {
+                        Cache::put($cacheKey, [
+                            'results' => $packResults,
+                            'images' => [],
+                            'provider' => 'ai_web_search',
+                        ], now()->addDays(7));
+                    }
+                } catch (Throwable $e) {
+                    $errors[] = $e->getMessage();
+                }
+            }
+
+            foreach ($packResults as $row) {
+                $key = mb_strtolower($row['url']);
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $merged[] = $row;
+            }
+
+            if ($this->hasEnoughPageResults($merged, 1)) {
+                break;
+            }
+        }
+
+        if ($merged === []) {
+            $bare = $this->identity->stripBrandPrefix(
+                (string) $product->sku,
+                $this->identity->shortBrand((string) $product->manufacturer)
+            );
+            throw new RuntimeException(
+                'Brak stron produktu (duży model, SKU '.$product->sku
+                .($bare !== '' && $bare !== $product->sku ? ' / '.$bare : '')
+                .'). '
+                .($errors !== [] ? implode(' | ', array_slice($errors, 0, 2)) : '')
+            );
+        }
+
+        return [
+            'results' => array_slice($merged, 0, 8),
+            'images' => [],
+            'provider' => $provider,
+            'raw_content' => null,
+        ];
+    }
+
     public function forgetProductCache(Product $product): void
     {
         foreach (TavilySearchProfile::MODES as $mode) {
@@ -186,6 +263,11 @@ class HybridWebSearchService
                 foreach (array_slice($this->buildQueries($product, $phase), 0, $profile->maxQueries) as $query) {
                     Cache::forget($this->searchCacheKey($mode, $phase, $query));
                 }
+            }
+        }
+        foreach (['manufacturer', 'industry'] as $phase) {
+            foreach (array_slice($this->buildQueries($product, $phase), 0, 2) as $query) {
+                Cache::forget($this->searchCacheKey('large_model', $phase, $query));
             }
         }
     }

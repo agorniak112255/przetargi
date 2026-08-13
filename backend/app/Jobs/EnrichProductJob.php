@@ -8,6 +8,7 @@ use App\Exceptions\EnrichmentCancelledException;
 use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\TavilyQuotaGuard;
 use Illuminate\Bus\Queueable;
@@ -37,7 +38,7 @@ class EnrichProductJob implements ShouldQueue
         public readonly bool $force = false,
     ) {}
 
-    public function handle(ProductEnrichmentService $enrichment): void
+    public function handle(ProductEnrichmentService $enrichment, AiSettingsService $aiSettings): void
     {
         $product = Product::query()->find($this->productId);
         $batch = ProductEnrichmentBatch::query()->find($this->batchId);
@@ -54,14 +55,19 @@ class EnrichProductJob implements ShouldQueue
         }
 
         try {
-            TavilyQuotaGuard::assertAllowed();
+            $useLargeModel = $aiSettings->enrichmentUsesLargeModel();
+            if (! $useLargeModel) {
+                TavilyQuotaGuard::assertAllowed();
+            }
             $enrichment->assertBatchNotCancelled($this->batchId);
 
             $batch->update([
                 'status' => ProductEnrichmentBatch::STATUS_RUNNING,
                 'current_sku' => $product->sku,
                 'current_name' => mb_substr($product->name, 0, 255),
-                'message' => 'Tavily + skrót AI (lub cache SKU)…',
+                'message' => $useLargeModel
+                    ? 'Duży model (web search + opis)…'
+                    : 'Tavily + skrót AI (lub cache SKU)…',
             ]);
 
             $enrichment->enrichProduct($product, $this->force, $this->batchId);

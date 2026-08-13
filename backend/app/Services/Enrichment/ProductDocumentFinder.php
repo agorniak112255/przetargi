@@ -33,10 +33,13 @@ final class ProductDocumentFinder
             $domains = $this->manufacturers->discoverOfficialDomains($product);
         }
 
+        $found = $this->guessKnownCdnDocuments($product);
+        if ($this->settings->enrichmentUsesLargeModel()) {
+            return array_values(array_unique($found));
+        }
+
         $queries = $this->buildQueries($product, $domains);
         $profile = $this->settings->tavilySearchProfile();
-        // znane wzorce CDN (np. uvex datasheet) — zanim Tavily; 404 odpada przy download
-        $found = $this->guessKnownCdnDocuments($product);
 
         foreach (array_slice($queries, 0, $profile->docsMaxQueries) as $query) {
             $cacheKey = 'enrich_docs_v8:'.hash('sha256', $profile->mode.'|'.$query.'|'.implode(',', $domains));

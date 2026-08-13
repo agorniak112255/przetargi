@@ -61,6 +61,9 @@ final class ManufacturerDomainResolver
         if ($known !== []) {
             return $known;
         }
+        if ($this->settings->enrichmentUsesLargeModel()) {
+            return [];
+        }
 
         $cacheKey = 'enrich_mfr_domains_v1:'.$brand;
         try {

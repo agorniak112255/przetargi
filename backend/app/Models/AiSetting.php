@@ -15,6 +15,7 @@ class AiSetting extends Model
         'api_key',
         'model',
         'enrichment_model',
+        'enrichment_use_large_model',
         'timeout_seconds',
         'temperature',
         'web_search_enabled',
@@ -42,6 +43,7 @@ class AiSetting extends Model
             'timeout_seconds' => 'integer',
             'temperature' => 'float',
             'web_search_enabled' => 'boolean',
+            'enrichment_use_large_model' => 'boolean',
             'enrichment_batch_limit' => 'integer',
             'vector_enabled' => 'boolean',
         ];

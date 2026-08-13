@@ -583,6 +583,60 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame('tvly-test-key-1234567890', $row->tavily_api_key);
     }
 
+    public function test_large_model_search_skips_tavily_and_uses_ai_web_search(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'openai/gpt-4o',
+            'enrichment_model' => 'deepseek/deepseek-v4-flash-0731',
+            'enrichment_use_large_model' => true,
+            'timeout_seconds' => 90,
+            'temperature' => 0.1,
+            'web_search_enabled' => false,
+        ]);
+
+        $product = $this->makeProduct([
+            'sku' => 'R065-TESTLARGE',
+            'name' => 'RINGERS R065 rękawice',
+            'manufacturer' => 'Ansell',
+        ]);
+        $productUrl = 'https://www.ansell.com/pl/pl/products/ringers-r065-testlarge';
+
+        Http::fake(function ($request) use ($productUrl) {
+            $url = $request->url();
+            if (str_contains($url, 'tavily.com')) {
+                return Http::response(['error' => 'tavily should not be called'], 500);
+            }
+            if (str_contains($url, '/responses')) {
+                return Http::response([
+                    'output_text' => 'Karta produktu Ansell RINGERS R065-TESTLARGE rękawice.',
+                    'model' => 'openai/gpt-4o',
+                    'output' => [[
+                        'content' => [[
+                            'text' => $productUrl,
+                            'annotations' => [[
+                                'url' => $productUrl,
+                                'title' => 'Rękawice Ansell RINGERS R065-TESTLARGE',
+                            ]],
+                        ]],
+                    ]],
+                ], 200);
+            }
+
+            return Http::response(['unexpected' => $url], 599);
+        });
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame('ai_web_search', $pack['provider']);
+        $this->assertSame($productUrl, $pack['results'][0]['url'] ?? null);
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
+        Http::assertSent(static fn ($request): bool => str_contains($request->url(), '/responses'));
+    }
+
     public function test_ansell_declaration_is_saved_when_direct_pdf_is_blocked(): void
     {
         if (! function_exists('imagecreatetruecolor')) {

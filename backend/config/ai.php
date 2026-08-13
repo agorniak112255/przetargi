@@ -10,6 +10,8 @@ return [
     'model' => env('AI_MODEL', 'gpt-4o-mini'),
     // Opisy produktów / filtr chrome — pusty = ten sam co model główny
     'enrichment_model' => env('AI_ENRICHMENT_MODEL'),
+    // true = wyszukiwanie i opis tylko modelem głównym (AI web search, bez Tavily)
+    'enrichment_use_large_model' => (bool) env('AI_ENRICHMENT_USE_LARGE_MODEL', false),
     'timeout_seconds' => (int) env('AI_TIMEOUT', 90),
     'temperature' => (float) env('AI_TEMPERATURE', 0.1),
     // Domyślnie WYŁĄCZONE — drogie. Główne źródło: Tavily.

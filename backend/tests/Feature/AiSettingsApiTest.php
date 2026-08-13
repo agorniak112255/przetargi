@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\AiSetting;
 use App\Models\User;
+use App\Services\Ai\AiSettingsService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -30,6 +32,7 @@ final class AiSettingsApiTest extends TestCase
             'base_url' => 'https://api.openai.com/v1',
             'model' => 'gpt-4o-mini',
             'enrichment_model' => 'openai/gpt-4o-mini',
+            'enrichment_use_large_model' => true,
             'api_key' => 'sk-test-key-1234567890',
             'timeout_seconds' => 60,
             'temperature' => 0.2,
@@ -42,6 +45,7 @@ final class AiSettingsApiTest extends TestCase
             ->assertJsonPath('has_api_key', true)
             ->assertJsonPath('model', 'gpt-4o-mini')
             ->assertJsonPath('enrichment_model', 'openai/gpt-4o-mini')
+            ->assertJsonPath('enrichment_use_large_model', true)
             ->assertJsonPath('vector_enabled', true)
             ->assertJsonPath('qdrant_url', 'http://127.0.0.1:6333')
             ->assertJsonPath('embedding_model', 'text-embedding-3-small');
@@ -50,8 +54,31 @@ final class AiSettingsApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('source', 'database')
             ->assertJsonPath('enrichment_model', 'openai/gpt-4o-mini')
+            ->assertJsonPath('enrichment_use_large_model', true)
             ->assertJsonPath('vector_enabled', true)
             ->assertJsonMissingPath('api_key')
             ->assertJsonMissingPath('qdrant_api_key');
+    }
+
+    public function test_large_model_option_uses_main_model_for_enrichment(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'openai/gpt-4o',
+            'enrichment_model' => 'deepseek/deepseek-v4-flash-0731',
+            'enrichment_use_large_model' => true,
+            'timeout_seconds' => 90,
+            'temperature' => 0.1,
+        ]);
+
+        $settings = app(AiSettingsService::class);
+
+        $this->assertTrue($settings->enrichmentUsesLargeModel());
+        $this->assertSame('openai/gpt-4o', $settings->enrichmentModel());
     }
 }
