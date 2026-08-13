@@ -205,18 +205,44 @@ class HybridWebSearchService
                 $provider = (string) ($cached['provider'] ?? 'ai_web_search_cache');
             } else {
                 $packResults = [];
-                try {
-                    $pack = $this->searchViaAiWeb($query, $product, $phase);
-                    $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                    if ($packResults !== []) {
-                        Cache::put($cacheKey, [
-                            'results' => $packResults,
-                            'images' => [],
-                            'provider' => 'ai_web_search',
-                        ], now()->addDays(7));
+                $cfg = $this->settings->resolve();
+                $tavilyKey = $cfg['tavily_api_key'] ?? null;
+                if (is_string($tavilyKey) && $tavilyKey !== '') {
+                    try {
+                        $pack = $this->searchViaTavily(
+                            $query,
+                            [],
+                            $this->settings->tavilySearchProfile(),
+                            false
+                        );
+                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+                        if ($packResults !== []) {
+                            $provider = 'tavily';
+                            Cache::put($cacheKey, [
+                                'results' => $packResults,
+                                'images' => [],
+                                'provider' => 'tavily',
+                            ], now()->addDays(7));
+                        }
+                    } catch (Throwable $tavilyError) {
+                        $errors[] = $tavilyError->getMessage();
                     }
-                } catch (Throwable $e) {
-                    $errors[] = $e->getMessage();
+                }
+                if ($packResults === []) {
+                    try {
+                        $pack = $this->searchViaAiWeb($query, $product, $phase);
+                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+                        if ($packResults !== []) {
+                            $provider = 'ai_web_search';
+                            Cache::put($cacheKey, [
+                                'results' => $packResults,
+                                'images' => [],
+                                'provider' => 'ai_web_search',
+                            ], now()->addDays(7));
+                        }
+                    } catch (Throwable $e) {
+                        $errors[] = $e->getMessage();
+                    }
                 }
             }
 
@@ -291,8 +317,8 @@ class HybridWebSearchService
         // full: obie fazy zawsze; eco/balanced: druga faza tylko gdy pierwsza nic nie dała
         foreach (['manufacturer', 'industry'] as $phase) {
             if ($phase === 'industry'
-                && ! $profile->bothPhasesAlways
-                && $this->hasEnoughPageResults($merged, 1)) {
+                && ($this->settings->enrichmentUsesLargeModel()
+                    || (! $profile->bothPhasesAlways && $this->hasEnoughPageResults($merged, 1)))) {
                 break;
             }
 
@@ -658,7 +684,7 @@ Zapytanie: {$query}. Zwróć tylko URL stron z tym kodem produktu.
 PROMPT;
 
         $seconds = (int) ($this->settings->resolve()['timeout_seconds'] ?? 90);
-        $response = $this->llm->responsesWithWebSearch($prompt, max(60, min(120, $seconds)));
+        $response = $this->llm->chatWithWebSearch($prompt, max(60, min(120, $seconds)));
         $results = [];
 
         foreach ($response['citations'] as $citation) {

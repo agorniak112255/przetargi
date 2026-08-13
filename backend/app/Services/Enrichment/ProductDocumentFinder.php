@@ -34,9 +34,6 @@ final class ProductDocumentFinder
         }
 
         $found = $this->guessKnownCdnDocuments($product);
-        if ($this->settings->enrichmentUsesLargeModel()) {
-            return array_values(array_unique($found));
-        }
 
         $queries = $this->buildQueries($product, $domains);
         $profile = $this->settings->tavilySearchProfile();

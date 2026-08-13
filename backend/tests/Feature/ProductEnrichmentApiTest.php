@@ -610,18 +610,20 @@ final class ProductEnrichmentApiTest extends TestCase
             if (str_contains($url, 'tavily.com')) {
                 return Http::response(['error' => 'tavily should not be called'], 500);
             }
-            if (str_contains($url, '/responses')) {
+            if (str_contains($url, '/chat/completions')) {
                 return Http::response([
-                    'output_text' => 'Karta produktu Ansell RINGERS R065-TESTLARGE rękawice.',
                     'model' => 'openai/gpt-4o',
-                    'output' => [[
-                        'content' => [[
-                            'text' => $productUrl,
+                    'choices' => [[
+                        'message' => [
+                            'content' => $productUrl,
                             'annotations' => [[
-                                'url' => $productUrl,
-                                'title' => 'Rękawice Ansell RINGERS R065-TESTLARGE',
+                                'type' => 'url_citation',
+                                'url_citation' => [
+                                    'url' => $productUrl,
+                                    'title' => 'Rękawice Ansell RINGERS R065-TESTLARGE',
+                                ],
                             ]],
-                        ]],
+                        ],
                     ]],
                 ], 200);
             }
@@ -634,7 +636,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame('ai_web_search', $pack['provider']);
         $this->assertSame($productUrl, $pack['results'][0]['url'] ?? null);
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
-        Http::assertSent(static fn ($request): bool => str_contains($request->url(), '/responses'));
+        Http::assertSent(static fn ($request): bool => str_contains($request->url(), '/chat/completions'));
     }
 
     public function test_ansell_declaration_is_saved_when_direct_pdf_is_blocked(): void

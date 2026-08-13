@@ -204,6 +204,80 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * OpenRouter chat/completions + plugin web (nie /responses — to wisi i timeoutuje).
+     *
+     * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
+     */
+    public function chatWithWebSearch(string $prompt, int $timeoutSeconds = 60): array
+    {
+        $cfg = $this->settings->resolve();
+        if (! $cfg['enabled']) {
+            throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
+        }
+        if (! $cfg['has_api_key'] || $cfg['api_key'] === null) {
+            throw new RuntimeException('Brak klucza API AI. Uzupełnij go w Ustawieniach AI.');
+        }
+
+        $url = $cfg['base_url'].'/chat/completions';
+        $payload = [
+            'model' => $cfg['model'],
+            'temperature' => 0.0,
+            'max_tokens' => 800,
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => 'Szukasz karty produktu BHP. Wypisz tylko prawdziwe URL-e (http), po jednym w linii. Nic nie zgaduj.',
+                ],
+                [
+                    'role' => 'user',
+                    'content' => $prompt,
+                ],
+            ],
+            'plugins' => [
+                [
+                    'id' => 'web',
+                    'max_results' => 3,
+                ],
+            ],
+        ];
+
+        try {
+            $response = Http::withToken($cfg['api_key'])
+                ->acceptJson()
+                ->withHeaders([
+                    'HTTP-Referer' => config('app.url', 'http://localhost'),
+                    'X-Title' => 'SUPON AI',
+                ])
+                ->timeout(max(30, $timeoutSeconds))
+                ->connectTimeout(15)
+                ->post($url, $payload);
+        } catch (ConnectionException $e) {
+            throw new RuntimeException('Nie można połączyć z API AI (web search): '.$e->getMessage(), 0, $e);
+        }
+
+        if (! $response->successful()) {
+            $body = $response->json();
+            $detail = is_array($body)
+                ? (string) data_get($body, 'error.message', $response->body())
+                : $response->body();
+            throw new RuntimeException('Web search AI HTTP '.$response->status().': '.$detail);
+        }
+
+        $data = $response->json();
+        $content = $this->extractContent($data);
+        $citations = $this->extractChatWebCitations($data);
+        if ($content === '' && $citations === []) {
+            throw new RuntimeException('Web search AI zwróciło pustą odpowiedź.');
+        }
+
+        return [
+            'content' => $content,
+            'model' => (string) data_get($data, 'model', $cfg['model']),
+            'citations' => $citations,
+        ];
+    }
+
+    /**
      * OpenAI Responses API z narzędziem web_search (gdy provider wspiera).
      *
      * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
@@ -344,6 +418,46 @@ class OpenAiCompatibleClient
                     ];
                 }
             }
+        }
+
+        return $citations;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $payload
+     * @return list<array{url: string, title: string}>
+     */
+    private function extractChatWebCitations(mixed $payload): array
+    {
+        $citations = [];
+        $annotations = data_get($payload, 'choices.0.message.annotations', []);
+        if (! is_array($annotations)) {
+            $annotations = [];
+        }
+        $extra = data_get($payload, 'choices.0.message.citations', []);
+        if (is_array($extra)) {
+            $annotations = array_merge($annotations, $extra);
+        }
+
+        foreach ($annotations as $annotation) {
+            if (! is_array($annotation)) {
+                continue;
+            }
+            $nested = $annotation['url_citation'] ?? null;
+            if (is_array($nested)) {
+                $url = (string) ($nested['url'] ?? '');
+                $title = (string) ($nested['title'] ?? $url);
+            } else {
+                $url = (string) ($annotation['url'] ?? '');
+                $title = (string) ($annotation['title'] ?? $url);
+            }
+            if ($url === '' || ! str_starts_with($url, 'http')) {
+                continue;
+            }
+            $citations[] = [
+                'url' => $url,
+                'title' => $title !== '' ? $title : $url,
+            ];
         }
 
         return $citations;

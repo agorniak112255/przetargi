@@ -282,9 +282,9 @@ export function AiSettingsPage() {
               onChange={(e) => setCfg({ ...cfg, enrichment_use_large_model: e.target.checked })}
             />
             <span>
-              Tylko duży model (główny) — wyszukiwanie i opis bez Tavily / taniego modelu
+              Tylko duży model (główny) — opis modelem z góry
               <span className="mt-0.5 block text-[11px] text-slate-500">
-                OpenRouter web search + model z góry. Droższe, ale pomija tani pipeline.
+                Szukanie: Tavily (gdy jest klucz), inaczej OpenRouter plugin web. Opis: model główny, nie tani.
               </span>
             </span>
           </label>
@@ -305,23 +305,21 @@ export function AiSettingsPage() {
             </datalist>
           </label>
           <label className="block text-xs">
-            Klucz Tavily {cfg.enrichment_use_large_model ? '(pomijany)' : '*'}{' '}
-            {cfg.has_tavily_api_key ? '(zostaw puste, by nie zmieniać)' : cfg.enrichment_use_large_model ? '' : '(wymagany do pobierania)'}
+            Klucz Tavily *{' '}
+            {cfg.has_tavily_api_key ? '(zostaw puste, by nie zmieniać)' : '(wymagany do pobierania)'}
             <input
               type={showTavilyKey ? 'text' : 'password'}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono disabled:bg-slate-100"
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
               value={tavilyKey}
               onChange={(e) => setTavilyKey(e.target.value)}
               placeholder={cfg.has_tavily_api_key ? '••••••••' : 'tvly-…'}
               autoComplete="off"
-              disabled={cfg.enrichment_use_large_model}
             />
             <span className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
               <input
                 type="checkbox"
                 checked={showTavilyKey}
                 onChange={(e) => setShowTavilyKey(e.target.checked)}
-                disabled={cfg.enrichment_use_large_model}
               />
               Pokaż klucz
             </span>
@@ -329,7 +327,7 @@ export function AiSettingsPage() {
           <label className="block text-xs">
             Tryb wyszukiwania Tavily (zużycie kredytów)
             <select
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 disabled:bg-slate-100"
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
               value={cfg.tavily_search_mode || 'balanced'}
               onChange={(e) =>
                 setCfg({
@@ -337,7 +335,6 @@ export function AiSettingsPage() {
                   tavily_search_mode: e.target.value as 'eco' | 'balanced' | 'full',
                 })
               }
-              disabled={cfg.enrichment_use_large_model}
             >
               <option value="eco">Oszczędny — 1 zapytanie, 1 faza (najmniej kredytów)</option>
               <option value="balanced">Zbalansowany — stop po 1 wyniku, dłuższy cache (domyślny)</option>
