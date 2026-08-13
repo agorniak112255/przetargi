@@ -197,7 +197,7 @@ class HybridWebSearchService
         $seen = [];
         $provider = 'ai_web_search';
 
-        foreach (array_slice($queries, 0, 2) as $query) {
+        foreach (array_slice($queries, 0, 1) as $query) {
             $cacheKey = $this->searchCacheKey('large_model', $phase, $query);
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
@@ -266,7 +266,7 @@ class HybridWebSearchService
             }
         }
         foreach (['manufacturer', 'industry'] as $phase) {
-            foreach (array_slice($this->buildQueries($product, $phase), 0, 2) as $query) {
+            foreach (array_slice($this->buildQueries($product, $phase), 0, 1) as $query) {
                 Cache::forget($this->searchCacheKey('large_model', $phase, $query));
             }
         }
@@ -657,7 +657,8 @@ Znajdź kartę produktu BHP ze SKU {$product->sku} ({$product->manufacturer} {$p
 Zapytanie: {$query}. Zwróć tylko URL stron z tym kodem produktu.
 PROMPT;
 
-        $response = $this->llm->responsesWithWebSearch($prompt, 20);
+        $seconds = (int) ($this->settings->resolve()['timeout_seconds'] ?? 90);
+        $response = $this->llm->responsesWithWebSearch($prompt, max(60, min(120, $seconds)));
         $results = [];
 
         foreach ($response['citations'] as $citation) {

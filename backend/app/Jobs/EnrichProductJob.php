@@ -30,7 +30,7 @@ class EnrichProductJob implements ShouldQueue
     /** @var list<int> */
     public array $backoff = [15, 45, 90];
 
-    public int $timeout = 120;
+    public int $timeout = 240;
 
     public function __construct(
         public readonly int $productId,
