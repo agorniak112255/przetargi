@@ -96,7 +96,7 @@ export function Products() {
   const canEnrich = can(user, 'price_lists.import')
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
-  const [manufacturer, setManufacturer] = useState('')
+  const [manufacturer, setManufacturer] = useState(() => searchParams.get('manufacturer') ?? '')
   const [manufacturers, setManufacturers] = useState<string[]>([])
   const [aiQuery, setAiQuery] = useState('')
   const [aiMode, setAiMode] = useState(false)
@@ -131,6 +131,11 @@ export function Products() {
       .then((res) => setManufacturers(res.data ?? []))
       .catch(() => setManufacturers([]))
   }, [])
+
+  useEffect(() => {
+    setManufacturer(searchParams.get('manufacturer') ?? '')
+    setPage(1)
+  }, [searchParams])
 
   useEffect(() => {
     if (!canEnrich) return

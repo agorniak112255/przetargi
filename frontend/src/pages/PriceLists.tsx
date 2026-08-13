@@ -1428,6 +1428,7 @@ export function PriceLists() {
         <h2 className="mb-3 text-sm font-semibold">Historia importów</h2>
         <p className="mb-2 text-[11px] text-slate-500">
           Kliknij liczbę w kolumnie Update / Zmiany cen / Skip, aby zobaczyć listę pozycji.
+          Kliknij producenta, aby otworzyć jego produkty.
           {canEnrich
             ? ' Producenta/wersję edytujesz przyciskiem „Edytuj” — zmiana producenta aktualizuje wszystkie produkty z tego importu.'
             : ''}
@@ -1473,8 +1474,16 @@ export function PriceLists() {
                         onChange={(e) => setEditManufacturer(e.target.value)}
                         disabled={editBusyId === r.id}
                       />
+                    ) : r.manufacturer ? (
+                      <Link
+                        to={`/products?manufacturer=${encodeURIComponent(r.manufacturer)}`}
+                        className="font-medium text-blue-700 hover:underline"
+                        title={`Pokaż produkty: ${r.manufacturer}`}
+                      >
+                        {r.manufacturer}
+                      </Link>
                     ) : (
-                      r.manufacturer
+                      '—'
                     )}
                   </td>
                   <td className="p-2">
