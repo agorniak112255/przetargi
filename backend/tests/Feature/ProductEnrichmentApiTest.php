@@ -583,6 +583,125 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame('tvly-test-key-1234567890', $row->tavily_api_key);
     }
 
+    public function test_sku_in_url_matches_without_ppe_keywords(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'NV2032CE',
+            'name' => 'Astro Cleat',
+            'manufacturer' => 'GVS',
+        ]);
+        $method = new \ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
+        $filtered = $method->invoke(app(HybridWebSearchService::class), [
+            [
+                'url' => 'https://www.gvs.com/products/nv2032ce-astro-cleat',
+                'title' => 'NV2032CE Astro Cleat',
+                'snippet' => 'Cable cleat for cables',
+            ],
+            [
+                'url' => 'https://gvs.sklep.pl/knx-gateway',
+                'title' => 'Bramka KNX',
+                'snippet' => 'GVS KNX',
+            ],
+        ], $product);
+
+        $this->assertCount(1, $filtered);
+        $this->assertStringContainsString('nv2032ce', mb_strtolower($filtered[0]['url']));
+    }
+
+    public function test_search_stops_when_sku_hits_open_web(): void
+    {
+        $this->seedTavilySettings();
+        $product = $this->makeProduct([
+            'sku' => 'NV2032CE',
+            'name' => 'Astro Cleat',
+            'manufacturer' => 'GVS',
+        ]);
+        $hitUrl = 'https://hurtownia.example/products/nv2032ce';
+        $tavilyCalls = 0;
+        Http::fake(function ($request) use ($hitUrl, &$tavilyCalls) {
+            $this->assertStringContainsString('tavily.com', $request->url());
+            $tavilyCalls++;
+            $this->assertSame([], $request->data()['include_domains'] ?? []);
+
+            return Http::response([
+                'results' => [[
+                    'url' => $hitUrl,
+                    'title' => 'NV2032CE Astro Cleat',
+                    'content' => 'Cable cleat',
+                ]],
+            ], 200);
+        });
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame(1, $tavilyCalls);
+        $this->assertSame('tavily', $pack['provider']);
+        $this->assertSame($hitUrl, $pack['results'][0]['url'] ?? null);
+    }
+
+    public function test_search_falls_back_to_manufacturer_site_when_sku_misses(): void
+    {
+        $this->seedTavilySettings();
+        $product = $this->makeProduct([
+            'sku' => 'NV2032CE',
+            'name' => 'Astro Cleat',
+            'manufacturer' => 'GVS',
+        ]);
+        $mfrUrl = 'https://www.gvs.com/products/nv2032ce-astro-cleat';
+        $openQueries = [];
+        $discoverQueries = [];
+        $mfrQueries = [];
+
+        Http::fake(function ($request) use ($mfrUrl, &$openQueries, &$discoverQueries, &$mfrQueries) {
+            $this->assertStringContainsString('tavily.com', $request->url());
+            $data = $request->data();
+            $query = (string) ($data['query'] ?? '');
+            $domains = $data['include_domains'] ?? [];
+            if (is_array($domains) && $domains !== []) {
+                $mfrQueries[] = $query;
+
+                return Http::response([
+                    'results' => [[
+                        'url' => $mfrUrl,
+                        'title' => 'NV2032CE Astro Cleat',
+                        'content' => 'Cable cleat',
+                    ]],
+                ], 200);
+            }
+            if (str_contains(mb_strtolower($query), 'official')
+                || str_contains(mb_strtolower($query), 'strona oficjalna')) {
+                $discoverQueries[] = $query;
+
+                return Http::response([
+                    'results' => [[
+                        'url' => $mfrUrl,
+                        'title' => 'NV2032CE',
+                        'content' => 'GVS',
+                    ]],
+                ], 200);
+            }
+            $openQueries[] = $query;
+
+            return Http::response([
+                'results' => [[
+                    'url' => 'https://gvs.sklep.pl/knx',
+                    'title' => 'GVS KNX',
+                    'content' => 'Bramka KNX',
+                ]],
+            ], 200);
+        });
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame(['NV2032CE'], $openQueries);
+        $this->assertNotEmpty($discoverQueries);
+        $this->assertStringContainsString('NV2032CE', $discoverQueries[0]);
+        $this->assertStringContainsString('GVS', $discoverQueries[0]);
+        $this->assertSame(['NV2032CE'], $mfrQueries);
+        $this->assertSame('tavily_manufacturer', $pack['provider']);
+        $this->assertSame($mfrUrl, $pack['results'][0]['url'] ?? null);
+    }
+
     public function test_large_model_search_skips_tavily_and_uses_ai_web_search(): void
     {
         AiSetting::query()->create([
@@ -722,6 +841,22 @@ final class ProductEnrichmentApiTest extends TestCase
             ->byDefault();
 
         return $llm;
+    }
+
+    private function seedTavilySettings(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'openai/gpt-4o',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'web_search_enabled' => false,
+            'tavily_api_key' => 'tvly-test-key-1234567890',
+            'tavily_search_mode' => 'balanced',
+        ]);
     }
 
     /**

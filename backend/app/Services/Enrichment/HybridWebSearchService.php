@@ -16,7 +16,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v17';
+    private const SEARCH_CACHE_VERSION = 'v18';
 
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -41,118 +41,21 @@ class HybridWebSearchService
         }
         $cfg = $this->settings->resolve();
         $profile = $this->settings->tavilySearchProfile();
-        $errors = [];
-        $mfrDomains = $this->manufacturers->domainsFor($product);
-        $preferred = $phase === 'manufacturer' && $mfrDomains !== []
-            ? $mfrDomains
-            : $this->preferredDomains();
-        $merged = [];
-        $images = [];
-        $seen = [];
-        $seenImages = [];
-        $provider = 'tavily';
-
-        // Limit zapytań i próg stopu zależą od trybu Tavily (Ustawienia AI).
-        $queryIndex = 0;
-        foreach (array_slice($queries, 0, $profile->maxQueries) as $query) {
-            $cacheKey = $this->searchCacheKey($profile->mode, $phase, $query);
-            $cached = Cache::get($cacheKey);
-            if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
-                $packResults = $this->filterResultsByIdentity($cached['results'], $product);
-                $provider = (string) ($cached['provider'] ?? 'tavily_cache');
-                foreach ($this->normalizeImageList($cached['images'] ?? []) as $img) {
-                    $ik = mb_strtolower($img);
-                    if (! isset($seenImages[$ik])) {
-                        $seenImages[$ik] = true;
-                        $images[] = $img;
-                    }
-                }
-            } else {
-                $packResults = [];
-                $packImages = [];
-                try {
-                    // Producent znany: pierwsze zapytanie ogranicz do oficjalnych domen.
-                    // Inaczej pojedynczy wynik sklepu kończy tryb balanced przed kartą producenta.
-                    $manufacturerFirst = $queryIndex === 0
-                        && $phase === 'manufacturer'
-                        && $mfrDomains !== [];
-                    $openFirst = $queryIndex === 0
-                        && $profile->openWebFallback
-                        && ! $manufacturerFirst;
-                    if ($manufacturerFirst) {
-                        $pack = $this->searchViaTavily($query, $mfrDomains, $profile, false);
-                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        $provider = 'tavily_manufacturer';
-                    }
-                    if ($openFirst) {
-                        // include_images=false — Tavily images = śmietnik (LEGO/piwo)
-                        $pack = $this->searchViaTavily($query, [], $profile, false);
-                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        $provider = 'tavily';
-                    }
-                    // manufacturer → domeny producenta; industry → sklepy+katalogi
-                    if ($packResults === [] && $preferred !== [] && ! $manufacturerFirst) {
-                        $pack = $this->searchViaTavily($query, $preferred, $profile, false);
-                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        $packResults = array_values(array_filter(
-                            $packResults,
-                            fn (array $row): bool => $this->resultQuality($row, $product) >= 30
-                        ));
-                        $provider = $phase === 'manufacturer' ? 'tavily_manufacturer' : 'tavily_preferred';
-                    }
-                    if ($packResults === [] && $profile->retailerFallback
-                        && $phase === 'manufacturer' && $mfrDomains !== []) {
-                        // brak na stronie producenta → sklepy (opis), nie PDF
-                        $pack = $this->searchViaTavily($query, $this->retailerDomains(), $profile, false);
-                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        $provider = 'tavily_retailer';
-                    }
-                    if ($packResults === [] && $profile->openWebFallback && ! $openFirst) {
-                        $pack = $this->searchViaTavily($query, [], $profile, false);
-                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        $provider = 'tavily';
-                    }
-                } catch (TavilyQuotaExceededException $e) {
-                    throw $e;
-                } catch (Throwable $e) {
-                    $errors[] = $e->getMessage();
-                }
-
-                foreach ($this->normalizeImageList($packImages) as $img) {
-                    $ik = mb_strtolower($img);
-                    if (! isset($seenImages[$ik])) {
-                        $seenImages[$ik] = true;
-                        $images[] = $img;
-                    }
-                }
-
-                if ($packResults !== []) {
-                    Cache::put($cacheKey, [
-                        'results' => $packResults,
-                        'images' => array_slice($this->normalizeImageList($packImages), 0, 12),
-                        'provider' => $provider,
-                    ], now()->addDays($profile->cacheDays));
-                }
-            }
-
-            foreach ($packResults as $row) {
-                $key = mb_strtolower($row['url']);
-                if (isset($seen[$key])) {
-                    continue;
-                }
-                $seen[$key] = true;
-                $merged[] = $row;
-            }
-
-            if ($this->hasEnoughPageResults($merged, $profile->stopAfterResults)) {
-                break;
-            }
-            $queryIndex++;
-        }
+        $skuQuery = $this->primarySkuQuery($product, $queries);
+        $found = $this->searchSkuThenManufacturerSite(
+            $product,
+            $skuQuery,
+            $profile,
+            $profile->mode,
+            $phase
+        );
+        $merged = $found['results'];
+        $errors = $found['errors'];
+        $provider = $found['provider'];
 
         if ($merged === [] && $cfg['web_search_enabled']) {
             try {
-                $pack = $this->searchViaAiWeb($queries[0] ?? (string) $product->sku, $product, $phase);
+                $pack = $this->searchViaAiWeb($skuQuery, $product, $phase);
                 $merged = $this->filterResultsByIdentity($pack['results'], $product);
                 $provider = 'ai_web_search';
             } catch (Throwable $e) {
@@ -175,7 +78,7 @@ class HybridWebSearchService
 
         return [
             'results' => array_slice($merged, 0, 8),
-            'images' => array_slice($images, 0, 12),
+            'images' => [],
             'provider' => $provider,
             'raw_content' => null,
         ];
@@ -192,71 +95,40 @@ class HybridWebSearchService
      */
     private function searchViaLargeModel(Product $product, string $phase, array $queries): array
     {
-        $errors = [];
-        $merged = [];
-        $seen = [];
-        $provider = 'ai_web_search';
+        $skuQuery = $this->primarySkuQuery($product, $queries);
+        $profile = $this->settings->tavilySearchProfile();
+        $found = $this->searchSkuThenManufacturerSite(
+            $product,
+            $skuQuery,
+            $profile,
+            'large_model',
+            $phase
+        );
+        $merged = $found['results'];
+        $errors = $found['errors'];
+        $provider = $found['provider'];
 
-        foreach (array_slice($queries, 0, 1) as $query) {
-            $cacheKey = $this->searchCacheKey('large_model', $phase, $query);
+        if ($merged === []) {
+            $cacheKey = $this->searchCacheKey('large_model', $phase, $skuQuery, 'ai');
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
-                $packResults = $this->filterResultsByIdentity($cached['results'], $product);
+                $merged = $this->filterResultsByIdentity($cached['results'], $product);
                 $provider = (string) ($cached['provider'] ?? 'ai_web_search_cache');
             } else {
-                $packResults = [];
-                $cfg = $this->settings->resolve();
-                $tavilyKey = $cfg['tavily_api_key'] ?? null;
-                if (is_string($tavilyKey) && $tavilyKey !== '') {
-                    try {
-                        $pack = $this->searchViaTavily(
-                            $query,
-                            [],
-                            $this->settings->tavilySearchProfile(),
-                            false
-                        );
-                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        if ($packResults !== []) {
-                            $provider = 'tavily';
-                            Cache::put($cacheKey, [
-                                'results' => $packResults,
-                                'images' => [],
-                                'provider' => 'tavily',
-                            ], now()->addDays(7));
-                        }
-                    } catch (Throwable $tavilyError) {
-                        $errors[] = $tavilyError->getMessage();
+                try {
+                    $pack = $this->searchViaAiWeb($skuQuery, $product, $phase);
+                    $merged = $this->filterResultsByIdentity($pack['results'], $product);
+                    if ($merged !== []) {
+                        $provider = 'ai_web_search';
+                        Cache::put($cacheKey, [
+                            'results' => $merged,
+                            'images' => [],
+                            'provider' => 'ai_web_search',
+                        ], now()->addDays(7));
                     }
+                } catch (Throwable $e) {
+                    $errors[] = $e->getMessage();
                 }
-                if ($packResults === []) {
-                    try {
-                        $pack = $this->searchViaAiWeb($query, $product, $phase);
-                        $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-                        if ($packResults !== []) {
-                            $provider = 'ai_web_search';
-                            Cache::put($cacheKey, [
-                                'results' => $packResults,
-                                'images' => [],
-                                'provider' => 'ai_web_search',
-                            ], now()->addDays(7));
-                        }
-                    } catch (Throwable $e) {
-                        $errors[] = $e->getMessage();
-                    }
-                }
-            }
-
-            foreach ($packResults as $row) {
-                $key = mb_strtolower($row['url']);
-                if (isset($seen[$key])) {
-                    continue;
-                }
-                $seen[$key] = true;
-                $merged[] = $row;
-            }
-
-            if ($this->hasEnoughPageResults($merged, 1)) {
-                break;
             }
         }
 
@@ -283,17 +155,28 @@ class HybridWebSearchService
 
     public function forgetProductCache(Product $product): void
     {
+        $skuQuery = $this->primarySkuQuery($product, $this->buildQueries($product, 'manufacturer'));
         foreach (TavilySearchProfile::MODES as $mode) {
             $profile = TavilySearchProfile::fromMode($mode);
             foreach (['manufacturer', 'industry'] as $phase) {
                 foreach (array_slice($this->buildQueries($product, $phase), 0, $profile->maxQueries) as $query) {
                     Cache::forget($this->searchCacheKey($mode, $phase, $query));
+                    foreach (['open', 'mfr'] as $step) {
+                        Cache::forget($this->searchCacheKey($mode, $phase, $query, $step));
+                    }
+                }
+                foreach (['open', 'mfr'] as $step) {
+                    Cache::forget($this->searchCacheKey($mode, $phase, $skuQuery, $step));
                 }
             }
         }
         foreach (['manufacturer', 'industry'] as $phase) {
             foreach (array_slice($this->buildQueries($product, $phase), 0, 1) as $query) {
                 Cache::forget($this->searchCacheKey('large_model', $phase, $query));
+                Cache::forget($this->searchCacheKey('large_model', $phase, $query, 'ai'));
+                foreach (['open', 'mfr', 'ai'] as $step) {
+                    Cache::forget($this->searchCacheKey('large_model', $phase, $skuQuery, $step));
+                }
             }
         }
     }
@@ -412,10 +295,147 @@ class HybridWebSearchService
         return $queries !== [] ? array_values(array_unique($queries)) : [trim((string) $product->sku)];
     }
 
-    private function searchCacheKey(string $mode, string $phase, string $query): string
+    private function searchCacheKey(string $mode, string $phase, string $query, string $step = ''): string
     {
+        $payload = $mode.'|'.$phase.'|'.$query;
+        if ($step !== '') {
+            $payload .= '|'.$step;
+        }
+
         return 'enrich_search_'.self::SEARCH_CACHE_VERSION.':'
-            .hash('sha256', $mode.'|'.$phase.'|'.$query);
+            .hash('sha256', $payload);
+    }
+
+    /**
+     * @param  list<string>  $queries
+     */
+    private function primarySkuQuery(Product $product, array $queries): string
+    {
+        $sku = trim((string) $product->sku);
+
+        return $sku !== '' ? $sku : ($queries[0] ?? '');
+    }
+
+    /**
+     * 1) SKU w całym internecie; 2) gdy pusto — domena producenta i SKU na jej stronie.
+     *
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     provider: string,
+     *     errors: list<string>
+     * }
+     */
+    private function searchSkuThenManufacturerSite(
+        Product $product,
+        string $skuQuery,
+        TavilySearchProfile $profile,
+        string $cacheMode,
+        string $phase,
+    ): array {
+        $errors = [];
+        $cfg = $this->settings->resolve();
+        $key = $cfg['tavily_api_key'] ?? null;
+        if (! is_string($key) || $key === '' || $skuQuery === '') {
+            return ['results' => [], 'provider' => 'tavily', 'errors' => []];
+        }
+
+        $open = $this->cachedTavilySearch(
+            $product,
+            $skuQuery,
+            [],
+            $profile,
+            $cacheMode,
+            $phase,
+            'open',
+            $errors
+        );
+        if ($open['results'] !== []) {
+            return [
+                'results' => $open['results'],
+                'provider' => $open['provider'],
+                'errors' => $errors,
+            ];
+        }
+
+        $mfrDomains = $this->manufacturers->domainsFor($product);
+        if ($mfrDomains === []) {
+            try {
+                $mfrDomains = $this->manufacturers->discoverOfficialDomains($product);
+            } catch (TavilyQuotaExceededException $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+        if ($mfrDomains === []) {
+            return ['results' => [], 'provider' => 'tavily', 'errors' => $errors];
+        }
+
+        $mfr = $this->cachedTavilySearch(
+            $product,
+            $skuQuery,
+            $mfrDomains,
+            $profile,
+            $cacheMode,
+            $phase,
+            'mfr',
+            $errors
+        );
+
+        return [
+            'results' => $mfr['results'],
+            'provider' => $mfr['results'] !== [] ? 'tavily_manufacturer' : $mfr['provider'],
+            'errors' => $errors,
+        ];
+    }
+
+    /**
+     * @param  list<string>  $includeDomains
+     * @param  list<string>  $errors
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     provider: string
+     * }
+     */
+    private function cachedTavilySearch(
+        Product $product,
+        string $query,
+        array $includeDomains,
+        TavilySearchProfile $profile,
+        string $cacheMode,
+        string $phase,
+        string $step,
+        array &$errors,
+    ): array {
+        $cacheKey = $this->searchCacheKey($cacheMode, $phase, $query, $step);
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
+            return [
+                'results' => $this->filterResultsByIdentity($cached['results'], $product),
+                'provider' => (string) ($cached['provider'] ?? 'tavily_cache'),
+            ];
+        }
+
+        try {
+            $pack = $this->searchViaTavily($query, $includeDomains, $profile, false);
+            $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+            $provider = $includeDomains !== [] ? 'tavily_manufacturer' : 'tavily';
+            if ($packResults !== []) {
+                Cache::put($cacheKey, [
+                    'results' => $packResults,
+                    'images' => [],
+                    'provider' => $provider,
+                ], now()->addDays($cacheMode === 'large_model' ? 7 : $profile->cacheDays));
+            }
+
+            return ['results' => $packResults, 'provider' => $provider];
+        } catch (TavilyQuotaExceededException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+
+            return ['results' => [], 'provider' => 'tavily'];
+        }
     }
 
     /** Preferuj nazwę z normami („7-003 B S1 SRC”) zamiast SKU z kodem katalogowym. */
@@ -467,14 +487,6 @@ class HybridWebSearchService
                 continue;
             }
             if (preg_match('#(ochronki na buty|shoe[- ]?cover|folie na buty|nakladki na obuwie)#i', $hay)) {
-                continue;
-            }
-            // Strona producenta z modelem w URL (np. ansell.com/…/ringers-r065) — bez „glove” w snippecie.
-            $fromManufacturer = $this->manufacturers->isManufacturerUrl($url, $product);
-            if (! $fromManufacturer && ! preg_match(
-                '#(glove|r[eę]kaw|rekaw|ringers|ansell|maxiflex|maxicut|maxidry|maxifoam|atg|demar|uvex|pros|bhp|ochron|ppe|en\s*388|buty|trzewik|p[oó]łbut|obuwie|shoe|boot|wodoochron|plavitex|ubranie|kurtka|spodnie|odzież|odziez|\bs1\b|\bs3\b|\bsrc\b|\bo1\b|\bo2\b|\bfo\b)#iu',
-                $hay.' '.$url.' '.$title
-            )) {
                 continue;
             }
             if ($this->isListingWithoutProduct($url, $product)) {

@@ -18,6 +18,8 @@ use Throwable;
  */
 final class ManufacturerDomainResolver
 {
+    private const DOMAIN_CACHE_PREFIX = 'enrich_mfr_domains_v2:';
+
     public function __construct(
         private readonly AiSettingsService $settings,
     ) {}
@@ -37,7 +39,7 @@ final class ManufacturerDomainResolver
             return $mapped;
         }
 
-        $cached = Cache::get('enrich_mfr_domains_v1:'.$brand);
+        $cached = Cache::get(self::DOMAIN_CACHE_PREFIX.$brand);
         if (is_array($cached)) {
             return array_values(array_filter($cached, 'is_string'));
         }
@@ -62,7 +64,7 @@ final class ManufacturerDomainResolver
             return $known;
         }
 
-        $cacheKey = 'enrich_mfr_domains_v1:'.$brand;
+        $cacheKey = self::DOMAIN_CACHE_PREFIX.$brand;
         try {
             TavilyQuotaGuard::assertAllowed();
             $cfg = $this->settings->resolve();
@@ -71,11 +73,18 @@ final class ManufacturerDomainResolver
                 return [];
             }
             $mfr = trim((string) $product->manufacturer);
+            $sku = trim((string) $product->sku);
+            $name = trim((string) $product->name);
+            $bits = array_values(array_filter([
+                $mfr,
+                $sku,
+                ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) ? $name : null,
+            ]));
             $response = Http::timeout(15)
                 ->connectTimeout(5)
                 ->withToken($key)
                 ->post('https://api.tavily.com/search', [
-                    'query' => $mfr.' official website OR strona oficjalna OR manufacturer PPE safety',
+                    'query' => implode(' ', $bits).' official website OR strona oficjalna producent',
                     'search_depth' => 'basic',
                     'include_answer' => false,
                     'max_results' => 6,
@@ -91,8 +100,13 @@ final class ManufacturerDomainResolver
 
                 return [];
             }
-            $found = $this->discoverFromResults($product, $response->json('results') ?? []);
-            Cache::put($cacheKey, $found, now()->addDays(30));
+            $rows = $response->json('results') ?? [];
+            $rows = is_array($rows) ? $rows : [];
+            $skuRows = $this->rowsMentioningSku($product, $rows);
+            $found = $this->discoverFromResults($product, $skuRows !== [] ? $skuRows : $rows);
+            if ($found !== []) {
+                Cache::put($cacheKey, $found, now()->addDays(30));
+            }
             Log::info('Discovered manufacturer domains', ['brand' => $brand, 'domains' => $found]);
 
             return $found;
@@ -103,6 +117,33 @@ final class ManufacturerDomainResolver
 
             return [];
         }
+    }
+
+    /**
+     * @param  list<mixed>  $rows
+     * @return list<array{url?: string, title?: string}>
+     */
+    private function rowsMentioningSku(Product $product, array $rows): array
+    {
+        $sku = mb_strtolower(trim((string) $product->sku));
+        $compact = preg_replace('/[^a-z0-9]+/iu', '', $sku) ?? $sku;
+        if ($compact === '' || mb_strlen($compact) < 3) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $hay = mb_strtolower((string) ($row['url'] ?? '').' '.(string) ($row['title'] ?? ''));
+            $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+            if (str_contains($hay, $sku) || str_contains($hayCompact, $compact)) {
+                $out[] = $row;
+            }
+        }
+
+        return $out;
     }
 
     /**
