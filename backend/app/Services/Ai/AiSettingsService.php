@@ -382,12 +382,15 @@ final class AiSettingsService
         }
 
         $incoming = $data[$field];
-        if (is_string($incoming) && trim($incoming) !== '' && ! str_contains($incoming, '*')) {
-            $row->{$field} = trim($incoming);
+        if (! is_string($incoming)) {
+            return;
         }
-        if ($incoming === null || $incoming === '') {
-            $row->{$field} = null;
+        $incoming = trim($incoming);
+        if ($incoming === '' || str_contains($incoming, '*')) {
+            return;
         }
+
+        $row->{$field} = $incoming;
     }
 
     /** Odszyfrowanie tajnych pól — przy złym APP_KEY (np. po db-push) nie wywala całego /ai-settings. */

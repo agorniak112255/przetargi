@@ -81,4 +81,36 @@ final class AiSettingsApiTest extends TestCase
         $this->assertTrue($settings->enrichmentUsesLargeModel());
         $this->assertSame('openai/gpt-4o', $settings->enrichmentModel());
     }
+
+    public function test_update_model_keeps_existing_api_keys(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'api_key' => 'sk-openrouter-keep-me-123',
+            'tavily_api_key' => 'tvly-keep-me-4567890',
+            'model' => 'deepseek/deepseek-v4-flash-0731',
+            'timeout_seconds' => 90,
+            'temperature' => 0.1,
+        ]);
+
+        $this->putJson('/api/ai-settings', [
+            'model' => 'openai/gpt-4o',
+            'api_key' => '',
+            'tavily_api_key' => 'sk-***xxxx',
+        ])->assertOk()
+            ->assertJsonPath('model', 'openai/gpt-4o')
+            ->assertJsonPath('has_api_key', true)
+            ->assertJsonPath('has_tavily_api_key', true);
+
+        $row = AiSetting::query()->first();
+        $this->assertNotNull($row);
+        $this->assertSame('sk-openrouter-keep-me-123', $row->api_key);
+        $this->assertSame('tvly-keep-me-4567890', $row->tavily_api_key);
+    }
 }

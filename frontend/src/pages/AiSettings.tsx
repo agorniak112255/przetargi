@@ -1,6 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api } from '../lib/api'
 
+function isKeptSecret(value: string): boolean {
+  const v = value.trim()
+  return v === '' || v.includes('*')
+}
+
 type AiSettings = {
   enabled: boolean
   provider: string
@@ -42,10 +47,19 @@ export function AiSettingsPage() {
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
 
+  function hydrateSecrets(next: AiSettings) {
+    setApiKey(next.has_api_key ? (next.api_key_masked ?? '') : '')
+    setTavilyKey(next.has_tavily_api_key ? (next.tavily_api_key_masked ?? '') : '')
+    setQdrantKey(next.has_qdrant_api_key ? (next.qdrant_api_key_masked ?? '') : '')
+    setEmbeddingKey(next.has_embedding_api_key ? (next.embedding_api_key_masked ?? '') : '')
+  }
+
   async function load() {
     setErr('')
     try {
-      setCfg(await api<AiSettings>('/ai-settings'))
+      const next = await api<AiSettings>('/ai-settings')
+      setCfg(next)
+      hydrateSecrets(next)
     } catch (ex) {
       setCfg(null)
       setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać ustawień AI')
@@ -82,16 +96,16 @@ export function AiSettingsPage() {
         embedding_model: cfg.embedding_model?.trim() || null,
         embedding_base_url: cfg.embedding_base_url?.trim() || null,
       }
-      if (apiKey.trim() !== '') {
+      if (!isKeptSecret(apiKey)) {
         body.api_key = apiKey.trim()
       }
-      if (tavilyKey.trim() !== '') {
+      if (!isKeptSecret(tavilyKey)) {
         body.tavily_api_key = tavilyKey.trim()
       }
-      if (qdrantKey.trim() !== '') {
+      if (!isKeptSecret(qdrantKey)) {
         body.qdrant_api_key = qdrantKey.trim()
       }
-      if (embeddingKey.trim() !== '') {
+      if (!isKeptSecret(embeddingKey)) {
         body.embedding_api_key = embeddingKey.trim()
       }
       const saved = await api<AiSettings>('/ai-settings', {
@@ -99,10 +113,7 @@ export function AiSettingsPage() {
         body: JSON.stringify(body),
       })
       setCfg(saved)
-      setApiKey('')
-      setTavilyKey('')
-      setQdrantKey('')
-      setEmbeddingKey('')
+      hydrateSecrets(saved)
       setMsg('Zapisano konfigurację AI.')
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd zapisu')
@@ -230,7 +241,7 @@ export function AiSettingsPage() {
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder={cfg.has_api_key ? '••••••••' : 'sk-…'}
-            autoComplete="off"
+            autoComplete="new-password"
           />
           <span className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
             <input
@@ -313,7 +324,7 @@ export function AiSettingsPage() {
               value={tavilyKey}
               onChange={(e) => setTavilyKey(e.target.value)}
               placeholder={cfg.has_tavily_api_key ? '••••••••' : 'tvly-…'}
-              autoComplete="off"
+              autoComplete="new-password"
             />
             <span className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
               <input
@@ -416,7 +427,7 @@ export function AiSettingsPage() {
               value={qdrantKey}
               onChange={(e) => setQdrantKey(e.target.value)}
               placeholder={cfg.has_qdrant_api_key ? '••••••••' : ''}
-              autoComplete="off"
+              autoComplete="new-password"
             />
           </label>
           <label className="block text-xs">
@@ -452,7 +463,7 @@ export function AiSettingsPage() {
               value={embeddingKey}
               onChange={(e) => setEmbeddingKey(e.target.value)}
               placeholder={cfg.has_embedding_api_key ? '••••••••' : ''}
-              autoComplete="off"
+              autoComplete="new-password"
             />
           </label>
         </div>
