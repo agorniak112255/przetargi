@@ -58,13 +58,22 @@ final class ProductMatchService
         $items = $tender->items()->when(
             $onlyEmpty,
             fn ($q) => $q->where(function ($q) {
-                $q->whereNull('main_product_id')
-                    ->orWhereNull('ai_match_percent')
-                    ->orWhere('ai_match_percent', '<', self::MIN_MATCH_SCORE);
+                $q->where(function ($w) {
+                    $w->whereNull('custom_name')->orWhere('custom_name', '');
+                })->where(function ($q) {
+                    $q->whereNull('main_product_id')
+                        ->orWhereNull('ai_match_percent')
+                        ->orWhere('ai_match_percent', '<', self::MIN_MATCH_SCORE);
+                });
             })
         )->get();
 
         foreach ($items as $item) {
+            if ($item->hasCustomOffer()) {
+                $skipped++;
+
+                continue;
+            }
             $pick = $this->resolveBestPick($item->requirement, $products);
             if ($pick === null) {
                 $this->applyNoCatalogMatch($item, $products);
@@ -657,6 +666,24 @@ final class ProductMatchService
     public function matchItem(TenderItem $item, bool $force = false): array
     {
         // zapisana pozycja z produktem — nie nadpisuj przy ponownym wejściu / kliku
+        if (! $force && $item->hasCustomOffer()) {
+            return [
+                'matched' => true,
+                'score' => (int) ($item->ai_match_percent ?? 0),
+                'product_id' => null,
+                'product' => null,
+                'offer_price' => $item->offer_price,
+                'skipped_existing' => true,
+                'sources' => [
+                    'heuristic' => null,
+                    'ai' => [],
+                ],
+                'candidates' => [],
+                'ai_match_reasons' => $item->ai_match_reasons,
+                'match_source' => $item->match_source,
+            ];
+        }
+
         if (! $force && $item->main_product_id !== null) {
             $item->loadMissing('mainProduct');
             $p = $item->mainProduct;

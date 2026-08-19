@@ -45,7 +45,7 @@ final class TenderCoverageService
 
         foreach ($tender->items as $item) {
             /** @var TenderItem $item */
-            if ($item->main_product_id === null) {
+            if (! $item->hasOfferProduct()) {
                 $withoutProduct[] = $item->id;
             }
             if ($item->offer_price === null) {

@@ -57,6 +57,7 @@ class TenderExportController extends Controller
                 'Uzasadnienie',
                 'Zamienniki SKU',
                 'Battlecard',
+                'Link',
             ],
         ], null, 'A1');
 
@@ -79,6 +80,7 @@ class TenderExportController extends Controller
                 $r['match_reasons'],
                 $r['substitute_skus'],
                 $r['highlights'],
+                $r['custom_url'] ?? '',
             ]], null, 'A'.$row);
             $row++;
         }

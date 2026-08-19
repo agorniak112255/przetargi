@@ -219,14 +219,32 @@ class TenderItemController extends Controller
             'ai_match_percent' => ['sometimes', 'nullable', 'integer', 'min:0', 'max:100'],
             'ai_match_reasons' => ['sometimes', 'nullable', 'array'],
             'match_source' => ['sometimes', 'nullable', 'string', 'max:32'],
+            'custom_name' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'custom_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
         ]);
+
+        if (isset($data['custom_url']) && is_string($data['custom_url']) && $data['custom_url'] !== '') {
+            if (! str_starts_with($data['custom_url'], 'http://') && ! str_starts_with($data['custom_url'], 'https://')) {
+                throw ValidationException::withMessages([
+                    'custom_url' => ['Link musi zaczynać się od http:// lub https://.'],
+                ]);
+            }
+        }
 
         $before = [
             'main_product_id' => $item->main_product_id,
             'quantity' => $item->quantity,
             'offer_price' => $item->offer_price,
             'ai_match_percent' => $item->ai_match_percent,
+            'custom_name' => $item->custom_name,
         ];
+
+        if (array_key_exists('custom_name', $data)) {
+            $item->custom_name = $this->nullableTrim($data['custom_name']);
+        }
+        if (array_key_exists('custom_url', $data)) {
+            $item->custom_url = $this->nullableTrim($data['custom_url']);
+        }
 
         if (array_key_exists('main_product_id', $data)) {
             $item->main_product_id = $data['main_product_id'];
@@ -246,7 +264,7 @@ class TenderItemController extends Controller
                     }
                 }
             }
-            if ($data['main_product_id'] === null) {
+            if ($data['main_product_id'] === null && ! $item->hasCustomOffer()) {
                 $item->ai_match_reasons = null;
                 $item->match_source = null;
             }
@@ -274,6 +292,20 @@ class TenderItemController extends Controller
             $item->match_source = $data['match_source'];
         }
 
+        if ($item->hasCustomOffer() && $item->main_product_id === null) {
+            $item->status = $data['status'] ?? 'matched';
+            if (! array_key_exists('match_source', $data) || $item->match_source === null) {
+                $item->match_source = 'custom';
+            }
+            $item->ai_match_reasons = $this->mergeCustomOfferReason($item);
+        } elseif (
+            ! $item->hasCustomOffer()
+            && $item->main_product_id === null
+            && ! array_key_exists('status', $data)
+        ) {
+            $item->status = 'brak';
+        }
+
         $item->save();
         $item->load('mainProduct');
         $this->pricing->recalculateItemMargin($item);
@@ -287,9 +319,51 @@ class TenderItemController extends Controller
                 'offer_price' => $item->offer_price,
                 'ai_match_percent' => $item->ai_match_percent,
                 'match_source' => $item->match_source,
+                'custom_name' => $item->custom_name,
             ],
         ]);
 
         return response()->json($item->fresh('mainProduct'));
+    }
+
+    private function nullableTrim(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+        $trim = trim($value);
+
+        return $trim === '' ? null : $trim;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function mergeCustomOfferReason(TenderItem $item): array
+    {
+        $reasons = is_array($item->ai_match_reasons) ? array_values($item->ai_match_reasons) : [];
+        $url = trim((string) ($item->custom_url ?? ''));
+        $label = 'Własna propozycja (nie z katalogu SUPON): '.(string) $item->custom_name;
+        foreach ($reasons as $i => $row) {
+            if (! is_array($row) || ($row['code'] ?? '') !== 'custom_offer') {
+                continue;
+            }
+            $reasons[$i] = [
+                'code' => 'custom_offer',
+                'label' => $label,
+                'points' => 0,
+                'url' => $url !== '' ? $url : ($row['url'] ?? null),
+            ];
+
+            return $reasons;
+        }
+        $reasons[] = [
+            'code' => 'custom_offer',
+            'label' => $label,
+            'points' => 0,
+            'url' => $url !== '' ? $url : null,
+        ];
+
+        return $reasons;
     }
 }

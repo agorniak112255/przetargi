@@ -19,9 +19,10 @@ type Props = {
   initialQuery: string
   onClose: () => void
   onSelect: (product: AiMatchPick) => void
+  onAddExternal?: (hint: { url: string; title: string }) => void
 }
 
-export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect }: Props) {
+export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect, onAddExternal }: Props) {
   const [query, setQuery] = useState(initialQuery)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -143,19 +144,31 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect }: P
           {error && <p className="text-xs text-red-600">{error}</p>}
 
           {externalHint && (
-            <a
-              href={externalHint.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-left"
-            >
-              <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
-                Link zewnętrzny — nie z katalogu
-              </span>
-              <span className="mt-1 block text-xs font-medium text-amber-950 underline">
-                {externalHint.title}
-              </span>
-            </a>
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+              <a
+                href={externalHint.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-left"
+              >
+                <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
+                  Link zewnętrzny — nie z katalogu
+                </span>
+                <span className="mt-1 block text-xs font-medium text-amber-950 underline">
+                  {externalHint.title}
+                </span>
+              </a>
+              {onAddExternal && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onAddExternal(externalHint)}
+                  className="mt-2 rounded bg-amber-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+                >
+                  Dodaj do oferty
+                </button>
+              )}
+            </div>
           )}
 
           {results.length > 0 && (

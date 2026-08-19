@@ -46,9 +46,12 @@ final class TenderOfferExportService
                 'line_no' => (int) $item->line_no,
                 'requirement' => (string) $item->requirement,
                 'sku' => $product?->sku,
-                'product_name' => ProductDisplayName::for($product, 80),
-                'catalog_name' => $product?->name,
-                'manufacturer' => $product?->manufacturer,
+                'product_name' => $product !== null
+                    ? ProductDisplayName::for($product, 80)
+                    : (trim((string) ($item->custom_name ?? '')) ?: '—'),
+                'catalog_name' => $product?->name ?? $item->custom_name,
+                'manufacturer' => $product?->manufacturer ?? ($item->hasCustomOffer() ? 'Poza katalogiem' : null),
+                'custom_url' => $item->custom_url,
                 'quantity' => (int) $item->quantity,
                 'purchase_price' => $purchase,
                 'offer_price' => $offer,

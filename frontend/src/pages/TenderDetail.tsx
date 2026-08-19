@@ -15,6 +15,11 @@ function ExternalHintLink({ reason }: { reason: MatchReason }) {
   if (!href) {
     return <span>{reason.label}</span>
   }
+  const badge =
+    reason.code === 'custom_offer' ? 'Własna propozycja — nie z katalogu' : 'Link zewnętrzny — nie z katalogu'
+  const title = reason.label
+    .replace(/^Link zewnętrzny \(nie z katalogu SUPON\):\s*/u, '')
+    .replace(/^Własna propozycja \(nie z katalogu SUPON\):\s*/u, '')
   return (
     <a
       href={href}
@@ -23,22 +28,44 @@ function ExternalHintLink({ reason }: { reason: MatchReason }) {
       className="inline-flex flex-col gap-0.5 font-semibold text-amber-900 underline decoration-amber-400"
     >
       <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
-        Link zewnętrzny — nie z katalogu
+        {badge}
       </span>
-      <span>{reason.label.replace(/^Link zewnętrzny \(nie z katalogu SUPON\):\s*/u, '')}</span>
+      <span>{title}</span>
     </a>
   )
 }
 
-function ExternalHints({ reasons }: { reasons?: MatchReason[] | null }) {
-  const links = (reasons ?? []).filter((r) => r.code === 'external_link')
+function ExternalHints({
+  reasons,
+  onAddToOffer,
+}: {
+  reasons?: MatchReason[] | null
+  onAddToOffer?: (hint: { url: string; title: string }) => void
+}) {
+  const links = (reasons ?? []).filter((r) => r.code === 'external_link' || r.code === 'custom_offer')
   if (links.length === 0) {
     return <span>—</span>
   }
   return (
     <div className="max-w-[280px] rounded border border-amber-300 bg-amber-50 px-2 py-1.5">
       {links.map((r, i) => (
-        <ExternalHintLink key={`${r.url ?? r.label}-${i}`} reason={r} />
+        <div key={`${r.url ?? r.label}-${i}`} className="space-y-1">
+          <ExternalHintLink reason={r} />
+          {onAddToOffer && r.code === 'external_link' && r.url && (
+            <button
+              type="button"
+              onClick={() =>
+                onAddToOffer({
+                  url: r.url!,
+                  title: r.label.replace(/^Link zewnętrzny \(nie z katalogu SUPON\):\s*/u, ''),
+                })
+              }
+              className="rounded bg-amber-700 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-amber-800"
+            >
+              Dodaj do oferty
+            </button>
+          )}
+        </div>
       ))}
     </div>
   )
@@ -57,6 +84,8 @@ type Item = {
   status: string
   main_product: Product | null
   main_product_id?: number | null
+  custom_name?: string | null
+  custom_url?: string | null
 }
 
 type Coverage = {
@@ -1727,7 +1756,7 @@ export function TenderDetail() {
                   item.offer_price != null ? Number(item.offer_price) * item.quantity : null
                 return (
                   <tr key={item.id} className="border-b">
-                    <td className="p-2">{item.main_product?.sku}</td>
+                    <td className="p-2">{item.main_product?.sku ?? item.custom_name ?? '—'}</td>
                     <td className="p-2">{item.offer_price ?? '—'}</td>
                     <td className="p-2">{item.margin_percent ?? '—'}%</td>
                     <td className="p-2">
@@ -2083,6 +2112,8 @@ function ItemRow({
   )
   const [qty, setQty] = useState(String(item.quantity))
   const [price, setPrice] = useState(item.offer_price ?? '')
+  const [customName, setCustomName] = useState(item.custom_name ?? '')
+  const [customUrl, setCustomUrl] = useState(item.custom_url ?? '')
   const [matchHint, setMatchHint] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [aiModalOpen, setAiModalOpen] = useState(false)
@@ -2106,6 +2137,8 @@ function ItemRow({
     )
     setQty(String(item.quantity))
     setPrice(item.offer_price ?? '')
+    setCustomName(item.custom_name ?? '')
+    setCustomUrl(item.custom_url ?? '')
     setPendingAiScore(null)
   }, [item])
 
@@ -2191,7 +2224,59 @@ function ItemRow({
                 setPendingAiScore(p.score)
                 setAiModalOpen(false)
               }}
+              onAddExternal={(hint) => {
+                setCustomName(hint.title)
+                setCustomUrl(hint.url)
+                setAiModalOpen(false)
+                void onSave(item.id, {
+                  custom_name: hint.title,
+                  custom_url: hint.url,
+                  quantity: Number(qty) || 1,
+                  offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
+                  match_source: 'custom',
+                  status: 'matched',
+                })
+              }}
             />
+            {!hasSavedProduct && (
+              <ExternalHints
+                reasons={item.ai_match_reasons}
+                onAddToOffer={(hint) => {
+                  setCustomName(hint.title)
+                  setCustomUrl(hint.url)
+                  void onSave(item.id, {
+                    custom_name: hint.title,
+                    custom_url: hint.url,
+                    quantity: Number(qty) || 1,
+                    offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
+                    match_source: 'custom',
+                    status: 'matched',
+                  })
+                }}
+              />
+            )}
+            <details className="max-w-[280px] rounded border border-amber-200 bg-amber-50/70 px-2 py-1">
+              <summary className="cursor-pointer text-[10px] font-semibold text-amber-950">
+                Własna propozycja{customName ? `: ${customName}` : ''}
+              </summary>
+              <div className="mt-1 space-y-1">
+                <input
+                  className="w-full rounded border border-amber-200 px-1.5 py-1 text-[11px]"
+                  placeholder="Nazwa do oferty"
+                  disabled={busy}
+                  value={customName}
+                  onChange={(e) => setCustomName(e.target.value)}
+                />
+                <input
+                  className="w-full rounded border border-amber-200 px-1.5 py-1 text-[11px]"
+                  placeholder="Link (opcjonalnie)"
+                  disabled={busy}
+                  value={customUrl}
+                  onChange={(e) => setCustomUrl(e.target.value)}
+                />
+                <p className="text-[10px] text-amber-900">Cenę wpisz w kolumnie Cena i zapisz.</p>
+              </div>
+            </details>
             {hasSavedProduct && (
               <details
                 open
@@ -2205,7 +2290,7 @@ function ItemRow({
                   <ul className="mt-1 list-disc pl-4">
                     {item.ai_match_reasons!.map((r, i) => (
                       <li key={`${r.code}-${i}`}>
-                        {r.code === 'external_link' ? (
+                        {r.code === 'external_link' || r.code === 'custom_offer' ? (
                           <ExternalHintLink reason={r} />
                         ) : (
                           <>
@@ -2270,6 +2355,23 @@ function ItemRow({
                   )}
                 </span>
               </button>
+            ) : item.custom_name ? (
+              <div className="max-w-[280px] rounded border border-amber-300 bg-amber-50 px-2 py-1.5">
+                <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
+                  Własna propozycja — nie z katalogu
+                </span>
+                <span className="mt-1 block text-[11px] font-medium text-amber-950">{item.custom_name}</span>
+                {item.custom_url && (
+                  <a
+                    href={item.custom_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-0.5 block truncate text-[10px] text-amber-900 underline"
+                  >
+                    {item.custom_url}
+                  </a>
+                )}
+              </div>
             ) : (
               <ExternalHints reasons={item.ai_match_reasons} />
             )}
@@ -2388,6 +2490,8 @@ function ItemRow({
                   main_product_id: productId ? Number(productId) : null,
                   quantity: Number(qty) || 1,
                   offer_price: price === '' ? null : Number(price.replace(',', '.')),
+                  custom_name: customName.trim() || null,
+                  custom_url: customUrl.trim() || null,
                   ...(pendingAiScore != null
                     ? {
                         ai_match_percent: pendingAiScore,

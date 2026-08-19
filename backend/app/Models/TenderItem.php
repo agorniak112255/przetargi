@@ -17,6 +17,8 @@ class TenderItem extends Model
         'ai_match_percent',
         'ai_match_reasons',
         'match_source',
+        'custom_name',
+        'custom_url',
         'quantity',
         'offer_price',
         'margin_percent',
@@ -40,5 +42,15 @@ class TenderItem extends Model
     public function mainProduct(): BelongsTo
     {
         return $this->belongsTo(Product::class, 'main_product_id');
+    }
+
+    public function hasCustomOffer(): bool
+    {
+        return trim((string) ($this->custom_name ?? '')) !== '';
+    }
+
+    public function hasOfferProduct(): bool
+    {
+        return $this->main_product_id !== null || $this->hasCustomOffer();
     }
 }

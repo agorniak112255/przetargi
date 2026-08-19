@@ -50,6 +50,9 @@
                         @if (!empty($r['manufacturer']))
                             <div class="muted">{{ $r['manufacturer'] }}</div>
                         @endif
+                        @if (!empty($r['custom_url']))
+                            <div class="muted">{{ $r['custom_url'] }}</div>
+                        @endif
                     </td>
                     <td class="right">{{ $r['quantity'] }}</td>
                     <td class="right">
