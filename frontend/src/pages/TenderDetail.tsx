@@ -220,6 +220,34 @@ const tabs = [
 
 type CoverageFilter = keyof Coverage['item_ids'] | null
 
+function foldSearch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/ą/g, 'a')
+    .replace(/ć/g, 'c')
+    .replace(/ę/g, 'e')
+    .replace(/ł/g, 'l')
+    .replace(/ń/g, 'n')
+    .replace(/ó/g, 'o')
+    .replace(/ś/g, 's')
+    .replace(/ź/g, 'z')
+    .replace(/ż/g, 'z')
+}
+
+function itemMatchesQuery(item: Item, query: string): boolean {
+  const tokens = foldSearch(query).split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) {
+    return true
+  }
+  const p = item.main_product
+  const hay = foldSearch(
+    [item.requirement, item.custom_name, p?.sku, p?.name, p?.manufacturer, p ? productDisplayName(p) : '']
+      .filter(Boolean)
+      .join(' '),
+  )
+  return tokens.every((t) => hay.includes(t))
+}
+
 const statusLabel: Record<string, string> = {
   draft: 'Szkic',
   wycena: 'Wycena',
@@ -321,6 +349,7 @@ export function TenderDetail() {
   const [docStatus, setDocStatus] = useState('')
   const itemDraftsRef = useRef<Map<number, ItemDraft>>(new Map())
   const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>(null)
+  const [itemQuery, setItemQuery] = useState('')
   const [transitionNote, setTransitionNote] = useState('')
   const [activities, setActivities] = useState<ActivityRow[]>([])
   const [comments, setComments] = useState<CommentRow[]>([])
@@ -868,7 +897,7 @@ export function TenderDetail() {
     }
   }
 
-  async function runMatch(onlyEmpty: boolean) {
+  async function runMatch(onlyEmpty: boolean, itemIds?: number[]) {
     setErr('')
     setMsg('')
     setBusy(true)
@@ -877,7 +906,10 @@ export function TenderDetail() {
         `/tenders/${id}/match`,
         {
           method: 'POST',
-          body: JSON.stringify({ only_empty: onlyEmpty }),
+          body: JSON.stringify({
+            only_empty: onlyEmpty,
+            ...(itemIds ? { item_ids: itemIds } : {}),
+          }),
         },
       )
       await load()
@@ -914,10 +946,13 @@ export function TenderDetail() {
   const canApproveSub = Boolean(user?.permissions?.includes('substitutes.approve'))
   const canComment = Boolean(user?.permissions?.includes('tenders.comment'))
   const canInvite = Boolean(user?.permissions?.includes('tenders.invite'))
-  const filteredItems =
-    coverageFilter && coverage
-      ? tender.items.filter((it) => coverage.item_ids[coverageFilter].includes(it.id))
-      : tender.items
+  const filteredItems = tender.items.filter((it) => {
+    if (coverageFilter && coverage && !coverage.item_ids[coverageFilter].includes(it.id)) {
+      return false
+    }
+    return itemMatchesQuery(it, itemQuery)
+  })
+  const listNarrowed = itemQuery.trim() !== '' || coverageFilter != null
 
   return (
     <div>
@@ -939,8 +974,14 @@ export function TenderDetail() {
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void runMatch(true)}
-                title="Tylko pozycje bez produktu — zapisanych nie rusza"
+                onClick={() =>
+                  void runMatch(true, listNarrowed ? filteredItems.map((i) => i.id) : undefined)
+                }
+                title={
+                  listNarrowed
+                    ? `Tylko puste spośród ${filteredItems.length} pozycji z filtra`
+                    : 'Tylko pozycje bez produktu — zapisanych nie rusza'
+                }
                 className="rounded bg-violet-600 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
               >
                 Dopasuj AI (puste)
@@ -949,19 +990,26 @@ export function TenderDetail() {
                 type="button"
                 disabled={busy}
                 onClick={() => {
-                  if (
-                    !window.confirm(
-                      'Ponownie przeszukać wszystkie pozycje (także te z produktem z katalogu)? Własne propozycje zostaną zachowane.',
-                    )
-                  ) {
+                  if (listNarrowed && filteredItems.length === 0) {
+                    setErr('Brak pozycji w filtrze.')
                     return
                   }
-                  void runMatch(false)
+                  const confirmMsg = listNarrowed
+                    ? `Ponownie przeszukać ${filteredItems.length} pozycji z filtra? Własne propozycje zostaną zachowane.`
+                    : 'Ponownie przeszukać wszystkie pozycje (także te z produktem z katalogu)? Własne propozycje zostaną zachowane.'
+                  if (!window.confirm(confirmMsg)) {
+                    return
+                  }
+                  void runMatch(false, listNarrowed ? filteredItems.map((i) => i.id) : undefined)
                 }}
-                title="Ponowne dopasowanie całej oferty — nadpisze produkty z katalogu"
+                title={
+                  listNarrowed
+                    ? `Ponowne dopasowanie ${filteredItems.length} pozycji z filtra`
+                    : 'Ponowne dopasowanie całej oferty — nadpisze produkty z katalogu'
+                }
                 className="rounded bg-violet-800 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
               >
-                Dopasuj AI (wszystkie)
+                Dopasuj AI ({listNarrowed ? `filtr ${filteredItems.length}` : 'wszystkie'})
               </button>
               <button
                 type="button"
@@ -1054,11 +1102,14 @@ export function TenderDetail() {
                 Zamienniki oczekujące: {coverage.substitutes_pending}
               </span>
             )}
-            {coverageFilter && (
+            {(coverageFilter || itemQuery.trim() !== '') && (
               <button
                 type="button"
                 className="rounded px-2 py-1 text-blue-700 underline"
-                onClick={() => setCoverageFilter(null)}
+                onClick={() => {
+                  setCoverageFilter(null)
+                  setItemQuery('')
+                }}
               >
                 Wyczyść filtr
               </button>
@@ -1187,6 +1238,20 @@ export function TenderDetail() {
             </div>
           )}
           <div className="overflow-x-auto rounded-xl bg-white p-4 shadow-sm">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <input
+                type="search"
+                value={itemQuery}
+                onChange={(e) => setItemQuery(e.target.value)}
+                placeholder="Szukaj w SIWZ / produkcie głównym…"
+                className="min-w-[240px] flex-1 rounded border border-slate-300 px-2 py-1.5 text-xs"
+              />
+              <span className="text-[11px] text-slate-500">
+                {listNarrowed
+                  ? `${filteredItems.length} / ${tender.items.length} pozycji`
+                  : `${tender.items.length} pozycji`}
+              </span>
+            </div>
             <table className="w-full text-left text-xs">
               <thead>
                 <tr className="border-b bg-slate-50">

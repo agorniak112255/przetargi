@@ -32,11 +32,16 @@ class TenderMatchController extends Controller
 
         $request->validate([
             'only_empty' => ['sometimes', 'boolean'],
+            'item_ids' => ['sometimes', 'array', 'max:2000'],
+            'item_ids.*' => ['integer'],
         ]);
+
+        $itemIds = $request->has('item_ids') ? array_values($request->input('item_ids', [])) : null;
 
         $result = $this->matcher->matchTender(
             $tender,
-            $request->boolean('only_empty', true)
+            $request->boolean('only_empty', true),
+            $itemIds
         );
 
         return response()->json([

@@ -172,6 +172,81 @@ final class TenderCustomOfferTest extends TestCase
         $this->assertNull($item->main_product_id);
     }
 
+    public function test_rematch_item_ids_only_touches_listed_items(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'tavily_api_key' => 'tvly-test',
+        ]);
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn(
+            [
+                'needed' => 'kalesony',
+                'search_phrases' => ['kalesony'],
+            ],
+            ['matches' => []],
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        Http::fake();
+
+        $tender = $this->makeTender();
+        $wrong = Product::query()->create([
+            'sku' => '07-755-XXXXL',
+            'name' => 'GVS Heavy Duty Blast Suit - XXXX Large',
+            'manufacturer' => 'GVS',
+            'description' => 'Kombinezon ochronny blast suit heavy duty.',
+            'catalog_price_net' => 100,
+            'purchase_price' => 80,
+            'stock' => 1,
+        ]);
+        $keep = Product::query()->create([
+            'sku' => 'HAT-KEEP',
+            'name' => 'Czapka ocieplana',
+            'manufacturer' => 'X',
+            'description' => 'Czapka ocieplana pod hełm, polar.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 12,
+            'stock' => 5,
+        ]);
+        $filtered = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'KALESONY bawełniane męskie rozmiar XXXXL',
+            'quantity' => 1,
+            'status' => 'matched',
+            'main_product_id' => $wrong->id,
+            'ai_match_percent' => 71,
+            'match_source' => 'ai',
+        ]);
+        $other = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 2,
+            'requirement' => 'Czapka ocieplana pod hełm',
+            'quantity' => 1,
+            'status' => 'matched',
+            'main_product_id' => $keep->id,
+            'ai_match_percent' => 85,
+            'match_source' => 'ai',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/match", [
+            'only_empty' => false,
+            'item_ids' => [$filtered->id],
+        ])->assertOk();
+
+        $filtered->refresh();
+        $other->refresh();
+        $this->assertNull($filtered->main_product_id);
+        $this->assertSame($keep->id, $other->main_product_id);
+    }
+
     public function test_catalog_product_clears_custom_offer(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

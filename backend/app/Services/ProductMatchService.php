@@ -51,28 +51,42 @@ final class ProductMatchService
     ) {}
 
     /**
+     * @param  list<int>|null  $itemIds  null = cała oferta; [] = nic nie ruszaj
      * @return array{matched: int, skipped: int, avg_score: float}
      */
-    public function matchTender(Tender $tender, bool $onlyEmpty = true): array
+    public function matchTender(Tender $tender, bool $onlyEmpty = true, ?array $itemIds = null): array
     {
         $products = Product::query()->get();
         $matched = 0;
         $skipped = 0;
         $scores = [];
 
+        if ($itemIds !== null) {
+            $itemIds = array_values(array_unique(array_map('intval', $itemIds)));
+            if ($itemIds === []) {
+                return [
+                    'matched' => 0,
+                    'skipped' => 0,
+                    'avg_score' => 0.0,
+                ];
+            }
+        }
+
         // onlyEmpty: puste + stare słabe propozycje (< progu) — żeby nie zostawały buty przy 34%
-        $items = $tender->items()->when(
-            $onlyEmpty,
-            fn ($q) => $q->where(function ($q) {
-                $q->where(function ($w) {
-                    $w->whereNull('custom_name')->orWhere('custom_name', '');
-                })->where(function ($q) {
-                    $q->whereNull('main_product_id')
-                        ->orWhereNull('ai_match_percent')
-                        ->orWhere('ai_match_percent', '<', self::MIN_MATCH_SCORE);
-                });
-            })
-        )->get();
+        $items = $tender->items()
+            ->when($itemIds !== null, fn ($q) => $q->whereIn('id', $itemIds))
+            ->when(
+                $onlyEmpty,
+                fn ($q) => $q->where(function ($q) {
+                    $q->where(function ($w) {
+                        $w->whereNull('custom_name')->orWhere('custom_name', '');
+                    })->where(function ($q) {
+                        $q->whereNull('main_product_id')
+                            ->orWhereNull('ai_match_percent')
+                            ->orWhere('ai_match_percent', '<', self::MIN_MATCH_SCORE);
+                    });
+                })
+            )->get();
 
         foreach ($items as $item) {
             if ($item->hasCustomOffer()) {
