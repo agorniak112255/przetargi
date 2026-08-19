@@ -288,7 +288,7 @@ final class BhpAttributeNormalizer
         if (preg_match('/\b(trzewik|polbut|sandal|obuwie|buty|footwear|podeszw|podnosek|\bs3\b|\bs1p?\b)\b/u', $t) === 1) {
             return 'obuwie';
         }
-        if (preg_match('/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell)\w*/u', $t) === 1) {
+        if (preg_match('/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell|fartuch|kitel|bluza)\w*/u', $t) === 1) {
             return 'odziez';
         }
         if (preg_match('/\b(kask|helmet|nausznik|gogle|okulary)\w*/u', $t) === 1) {

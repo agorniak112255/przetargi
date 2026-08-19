@@ -15,6 +15,7 @@ class OpenAiCompatibleClient
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly JsonResponseParser $jsonParser,
+        private readonly ChatCompletionContent $contentReader = new ChatCompletionContent,
     ) {}
 
     /**
@@ -32,43 +33,57 @@ class OpenAiCompatibleClient
         }
 
         $url = $cfg['base_url'].'/chat/completions';
-        $basePayload = [
-            'model' => $cfg['model'],
-            'temperature' => $temperature ?? $cfg['temperature'],
-            'messages' => $messages,
-            'max_tokens' => 16000,
-        ];
-        if (is_array($extra)) {
-            $basePayload = array_merge($basePayload, $extra);
+        $extra = is_array($extra) ? $extra : [];
+        $model = is_string($extra['model'] ?? null) && trim((string) $extra['model']) !== ''
+            ? trim((string) $extra['model'])
+            : (string) $cfg['model'];
+        $reasoning = $this->isReasoningModel($model);
+        $maxTokens = (int) ($extra['max_tokens'] ?? 16000);
+        if ($reasoning) {
+            $maxTokens = max($maxTokens, 8000);
         }
 
+        $basePayload = [
+            'model' => $model,
+            'messages' => $messages,
+            'max_tokens' => $maxTokens,
+        ];
+        if (! $reasoning) {
+            $basePayload['temperature'] = $temperature ?? $cfg['temperature'];
+        }
+        unset($extra['max_tokens'], $extra['model']);
+        $basePayload = array_merge($basePayload, $extra);
+
         try {
-            $response = null;
-            if ($jsonMode) {
-                $response = $this->post($url, $cfg['api_key'], $basePayload + [
-                    'response_format' => ['type' => 'json_object'],
-                ]);
-            }
-            if ($response === null || in_array($response->status(), [400, 404, 422], true)) {
-                $response = $this->post($url, $cfg['api_key'], $basePayload);
-            }
+            $response = $this->postChatWithRetry($url, $cfg['api_key'], $basePayload, $jsonMode, $reasoning);
         } catch (ConnectionException $e) {
             throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
         }
 
         if (! $response->successful()) {
-            $body = $response->json();
-            $detail = is_array($body)
-                ? (string) data_get($body, 'error.message', $response->body())
-                : $response->body();
-            throw new RuntimeException('API AI zwróciło błąd HTTP '.$response->status().': '.$detail);
+            throw new RuntimeException($this->formatHttpError($response));
         }
 
         $payload = $response->json();
-        $content = $this->extractContent($payload);
+        $content = $this->contentReader->fromPayload($payload);
+
+        // reasoning zjadł budżet tokenów — powtórz z większym limitem
+        if ($content === '' && $this->contentReader->finishReason($payload) === 'length' && $maxTokens < 16000) {
+            $basePayload['max_tokens'] = 16000;
+            try {
+                $response = $this->postChat($url, $cfg['api_key'], $basePayload, $jsonMode, $reasoning);
+            } catch (ConnectionException $e) {
+                throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
+            }
+            if ($response->successful()) {
+                $payload = $response->json();
+                $content = $this->contentReader->fromPayload($payload);
+            }
+        }
+
         if ($content === '') {
-            Log::warning('AI empty content', ['body' => $payload]);
-            throw new RuntimeException('API AI zwróciło pustą odpowiedź.');
+            Log::warning('AI empty content', ['body' => $payload, 'model' => $model]);
+            throw new RuntimeException('API AI zwróciło pustą odpowiedź (model reasoning potrzebuje więcej tokenów na wynik JSON).');
         }
 
         return [
@@ -264,7 +279,7 @@ class OpenAiCompatibleClient
         }
 
         $data = $response->json();
-        $content = $this->extractContent($data);
+        $content = $this->contentReader->fromPayload($data);
         $citations = $this->extractChatWebCitations($data);
         if ($content === '' && $citations === []) {
             throw new RuntimeException('Web search AI zwróciło pustą odpowiedź.');
@@ -466,9 +481,94 @@ class OpenAiCompatibleClient
     /**
      * @param  array<string, mixed>  $payload
      */
+    private function postChatWithRetry(string $url, string $apiKey, array $payload, bool $jsonMode, bool $reasoning): Response
+    {
+        $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning);
+        $attempt = 0;
+        while (in_array($response->status(), [429, 503], true) && $attempt < 3) {
+            $wait = $this->retryAfterSeconds($response, $attempt);
+            if ($wait > 0) {
+                sleep($wait);
+            }
+            $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning);
+            $attempt++;
+        }
+
+        return $response;
+    }
+
+    private function retryAfterSeconds(Response $response, int $attempt): int
+    {
+        if (app()->environment('testing')) {
+            return 0;
+        }
+        $header = $response->header('Retry-After');
+        if (is_numeric($header)) {
+            return min(30, max(1, (int) $header));
+        }
+
+        return [2, 6, 12][$attempt] ?? 12;
+    }
+
+    private function formatHttpError(Response $response): string
+    {
+        $status = $response->status();
+        $body = $response->json();
+        $detail = is_array($body)
+            ? (string) data_get($body, 'error.message', $response->body())
+            : $response->body();
+        if ($status === 429) {
+            return 'Limit zapytań modelu AI (HTTP 429). To OpenRouter/dostawca modelu, nie Tavily. '
+                .'Poczekaj ok. minutę i ponów opis produktu.';
+        }
+
+        return 'API AI zwróciło błąd HTTP '.$status.': '.$detail;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function postChat(string $url, string $apiKey, array $payload, bool $jsonMode, bool $reasoning): Response
+    {
+        $attempts = [];
+        if ($jsonMode) {
+            $attempts[] = $payload + ['response_format' => ['type' => 'json_object']];
+        }
+        $attempts[] = $payload;
+
+        $response = null;
+        foreach ($attempts as $body) {
+            $response = $this->post($url, $apiKey, $body);
+            if (! in_array($response->status(), [400, 404, 422], true)) {
+                return $response;
+            }
+        }
+
+        // GPT-5 / o-series: max_tokens bywa odrzucane — spróbuj max_completion_tokens
+        if ($reasoning && $response !== null && in_array($response->status(), [400, 422], true)) {
+            $alt = $payload;
+            $alt['max_completion_tokens'] = (int) ($payload['max_tokens'] ?? 8000);
+            unset($alt['max_tokens']);
+            $retry = $jsonMode ? ($alt + ['response_format' => ['type' => 'json_object']]) : $alt;
+            $response = $this->post($url, $apiKey, $retry);
+            if ($response->successful() || ! $jsonMode) {
+                return $response;
+            }
+            $response = $this->post($url, $apiKey, $alt);
+        }
+
+        return $response ?? $this->post($url, $apiKey, $payload);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
     private function post(string $url, string $apiKey, array $payload): Response
     {
         $timeout = max(120, (int) ($this->settings->resolve()['timeout_seconds'] ?? 90));
+        if ($this->isReasoningModel((string) ($payload['model'] ?? ''))) {
+            $timeout = max(180, $timeout);
+        }
 
         return Http::withToken($apiKey)
             ->acceptJson()
@@ -480,26 +580,8 @@ class OpenAiCompatibleClient
             ->post($url, $payload);
     }
 
-    private function extractContent(mixed $payload): string
+    private function isReasoningModel(string $model): bool
     {
-        $content = data_get($payload, 'choices.0.message.content');
-
-        if (is_array($content)) {
-            $parts = [];
-            foreach ($content as $part) {
-                if (is_string($part)) {
-                    $parts[] = $part;
-                } elseif (is_array($part)) {
-                    $parts[] = (string) ($part['text'] ?? $part['content'] ?? '');
-                }
-            }
-            $content = implode('', $parts);
-        }
-
-        if (! is_string($content)) {
-            $content = (string) data_get($payload, 'choices.0.message.reasoning', '');
-        }
-
-        return trim((string) $content);
+        return preg_match('/gpt-5|o1|o3|o4|tera|reasoning|r1|think/i', $model) === 1;
     }
 }

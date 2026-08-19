@@ -168,7 +168,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->app->instance(HybridWebSearchService::class, $search);
 
         $llm = $this->mockLlmWithSanitize([
-            'description' => 'Nowy opis po force. Spełnia normy EN 388 i chroni dłonie przy montażu. Trwała powłoka nitrylowa do codziennej pracy w zakładzie produkcyjnym oraz warsztacie.',
+            'description' => 'Rękawice testowe Ansell. Nowy opis po force. Spełnia normy EN 388 i chroni dłonie przy montażu. Trwała powłoka nitrylowa do codziennej pracy w zakładzie produkcyjnym oraz warsztacie.',
             'features' => [],
             'specs' => [],
             'norms' => ['EN 388'],

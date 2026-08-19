@@ -204,9 +204,9 @@ export function Products() {
     setErr('')
     setMsg('Szukam w katalogu przez AI…')
     const controller = new AbortController()
-    const timer = window.setTimeout(() => controller.abort(), 75_000)
+    const timer = window.setTimeout(() => controller.abort(), 180_000)
     try {
-      const res = await api<{ query: string; total: number; products: Product[] }>(
+      const res = await api<{ query: string; total: number; products: Product[]; ai_note?: string | null }>(
         '/products/ai-search',
         {
           method: 'POST',
@@ -224,14 +224,18 @@ export function Products() {
         from: res.total > 0 ? 1 : null,
         to: res.total > 0 ? res.total : null,
       })
-      setMsg(`AI znalazło ${res.total} produktów dla: „${res.query}”`)
+      setMsg(
+        res.total > 0
+          ? `AI znalazło ${res.total} produktów dla: „${res.query}”`
+          : (res.ai_note ?? 'Model nie znalazł pasującego produktu w katalogu.'),
+      )
     } catch (ex) {
       const aborted =
         (ex instanceof DOMException && ex.name === 'AbortError') ||
         (ex instanceof Error && /abort/i.test(ex.message))
       setErr(
         aborted
-          ? 'Wyszukiwanie AI przekroczyło limit czasu (75 s). Sprawdź klucz/model w Ustawieniach AI i spróbuj krótszego wymagania.'
+          ? 'Wyszukiwanie AI przekroczyło limit czasu (180 s). Sprawdź klucz/model w Ustawieniach AI i spróbuj krótszego wymagania.'
           : ex instanceof Error
             ? ex.message
             : 'Błąd wyszukiwania AI',

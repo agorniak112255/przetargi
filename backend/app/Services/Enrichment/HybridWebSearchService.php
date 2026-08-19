@@ -8,6 +8,7 @@ use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -764,11 +765,7 @@ PROMPT;
             $body['include_domains'] = $includeDomains;
         }
 
-        $response = Http::acceptJson()
-            ->timeout(12)
-            ->connectTimeout(5)
-            ->post('https://api.tavily.com/search', $body);
-
+        $response = $this->postTavilySearch($body);
         TavilyQuotaGuard::ensureSuccessful($response);
 
         $payload = $response->json();
@@ -807,6 +804,31 @@ PROMPT;
             'provider' => $includeDomains !== [] ? 'tavily_preferred' : 'tavily',
             'raw_content' => null,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $body
+     */
+    private function postTavilySearch(array $body): Response
+    {
+        $response = Http::acceptJson()
+            ->timeout(12)
+            ->connectTimeout(5)
+            ->post('https://api.tavily.com/search', $body);
+
+        $attempt = 0;
+        while ($response->status() === 429 && $attempt < 2) {
+            if (! app()->environment('testing')) {
+                sleep([2, 6][$attempt] ?? 6);
+            }
+            $response = Http::acceptJson()
+                ->timeout(12)
+                ->connectTimeout(5)
+                ->post('https://api.tavily.com/search', $body);
+            $attempt++;
+        }
+
+        return $response;
     }
 
     /**

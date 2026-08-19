@@ -25,7 +25,7 @@ class ProductAiSearchController extends Controller
         ]);
 
         if (function_exists('set_time_limit')) {
-            @set_time_limit(90);
+            @set_time_limit(180);
         }
 
         try {

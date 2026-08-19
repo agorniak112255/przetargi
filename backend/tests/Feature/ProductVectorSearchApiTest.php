@@ -56,7 +56,6 @@ final class ProductVectorSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->once()
             ->andReturn([
                 'matches' => [
                     ['id' => $match->id, 'score' => 88, 'reason' => 'LIKE path'],
@@ -139,7 +138,6 @@ final class ProductVectorSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->once()
             ->andReturn([
                 'matches' => [
                     ['id' => $vectorOnly->id, 'score' => 90, 'reason' => 'Wektor'],

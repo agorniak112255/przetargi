@@ -69,7 +69,7 @@ final class TenderItemMatchDualSourceTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->once()->andReturn([
+        $llm->shouldReceive('chatJson')->andReturn([
             'matches' => [
                 ['id' => $ai->id, 'score' => 88, 'reason' => 'Nitryl + ściągacz + RNITZ'],
             ],

@@ -174,6 +174,35 @@ final class ProductMatchServiceTest extends TestCase
         $this->assertSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null);
     }
 
+    #[Test]
+    public function lab_coat_does_not_match_gloves(): void
+    {
+        $products = new Collection([
+            $this->fakeProduct([
+                'sku' => '34-800',
+                'name' => 'KW Palm Coated',
+                'manufacturer' => 'ATG',
+                'category' => 'Rękawice',
+                'description' => 'Rękawice powlekane.',
+            ]),
+            $this->fakeProduct([
+                'sku' => 'LAB-COAT',
+                'name' => 'Fartuch laboratoryjny elano-bawełna',
+                'manufacturer' => 'X',
+                'category' => 'odziez',
+                'description' => 'Fartuch lab. zapinany na zatrzaski, gramatura 210g.',
+            ]),
+        ]);
+
+        $best = $this->matcher->bestMatch(
+            'FARTUCH LAB. ELANO-BAWEŁNA prosty, biały, rękawy wykończone zatrzaską. EN ISO 13688',
+            $products
+        );
+
+        $this->assertNotNull($best);
+        $this->assertSame('LAB-COAT', $best['product']->sku);
+    }
+
     /**
      * @param  array<string, mixed>  $attrs
      */

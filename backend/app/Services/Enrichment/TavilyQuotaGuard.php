@@ -39,6 +39,11 @@ final class TavilyQuotaGuard
 
         $status = $response->status();
         $body = $response->body();
+        if ($status === 429) {
+            throw new \RuntimeException(
+                $prefix.' HTTP 429: za dużo zapytań naraz. Poczekaj chwilę i ponów — to limit tempa, nie koniec kredytów.'
+            );
+        }
         if ($status === 432 || str_contains(mb_strtolower($body), 'usage limit')) {
             self::block($body);
             throw new TavilyQuotaExceededException(

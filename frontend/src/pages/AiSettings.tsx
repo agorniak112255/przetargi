@@ -226,6 +226,9 @@ export function AiSettingsPage() {
             list="ai-models"
           />
           <datalist id="ai-models">
+            <option value="openai/gpt-5.4" />
+            <option value="openai/gpt-4o" />
+            <option value="openai/gpt-4o-mini" />
             <option value="gpt-4o-mini" />
             <option value="gpt-4o" />
             <option value="gpt-4.1-mini" />

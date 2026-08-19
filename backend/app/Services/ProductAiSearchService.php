@@ -9,6 +9,7 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Vector\ProductVectorSearch;
 use Illuminate\Support\Collection;
 use RuntimeException;
+use Throwable;
 
 final class ProductAiSearchService
 {
@@ -33,9 +34,8 @@ final class ProductAiSearchService
         }
         $limit = max(1, min(80, $limit));
 
-        // Bez osobnego calla LLM na facety — szybciej i taniej.
-        $facets = $this->extractFacetsHeuristic($query);
-        $candidates = $this->prefilter($query, $facets, 35);
+        $facets = $this->resolveFacets($query);
+        $candidates = $this->prefilter($query, $facets, 40);
 
         if ($candidates->isEmpty()) {
             return [
@@ -43,27 +43,20 @@ final class ProductAiSearchService
                 'total' => 0,
                 'products' => [],
                 'facets' => $facets,
+                'ai_note' => 'Brak kandydatów w katalogu do oceny przez model.',
             ];
         }
 
-        $ranked = $this->rankCandidates($query, $candidates->take(20)->values(), $limit);
-
-        // awaryjnie: gdy model nic nie zwróci — top po heurystyce prefiltra
-        if ($ranked === []) {
-            $ranked = $candidates->take($limit)->map(function (Product $p): array {
-                $row = $this->productToRow($p);
-                $row['ai_match_percent'] = 50;
-                $row['ai_match_reason'] = 'Propozycja z wyszukiwania katalogu (model nie zwrócił rankingu)';
-
-                return $row;
-            })->values()->all();
-        }
+        $ranked = $this->rankCandidates($query, $candidates->take(30)->values(), $limit, $facets);
 
         return [
             'query' => $query,
             'total' => count($ranked),
             'products' => $ranked,
             'facets' => $facets,
+            'ai_note' => $ranked === []
+                ? 'Model nie znalazł pasującego produktu w przekazanych pozycjach katalogu.'
+                : null,
         ];
     }
 
@@ -73,13 +66,16 @@ final class ProductAiSearchService
      * @param  Collection<int, Product>  $candidates
      * @return list<array<string, mixed>>
      */
-    public function rankCandidates(string $query, Collection $candidates, int $limit = 5): array
+    /**
+     * @param  array{keywords?: list<string>, chemicals?: list<string>, norms?: list<string>, product_type?: string}  $facets
+     */
+    public function rankCandidates(string $query, Collection $candidates, int $limit = 5, array $facets = []): array
     {
         if ($candidates->isEmpty()) {
             return [];
         }
 
-        return $this->rankWithLlm($query, $candidates->values(), max(1, min(80, $limit)));
+        return $this->rankWithLlm($query, $candidates->values(), max(1, min(80, $limit)), $facets);
     }
 
     /**
@@ -87,7 +83,116 @@ final class ProductAiSearchService
      */
     public function extractFacetsForQuery(string $query): array
     {
-        return $this->extractFacetsHeuristic($query);
+        return $this->resolveFacets($query);
+    }
+
+    /**
+     * @return array{keywords: list<string>, chemicals: list<string>, norms: list<string>, product_type: string}
+     */
+    private function resolveFacets(string $query): array
+    {
+        $heuristic = $this->extractFacetsHeuristic($query);
+        try {
+            return $this->mergeFacets($heuristic, $this->extractFacetsWithLlm($query));
+        } catch (Throwable) {
+            return $heuristic;
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function extractFacetsWithLlm(string $query): array
+    {
+        $raw = $this->llm->chatJson([
+            [
+                'role' => 'system',
+                'content' => 'Analizujesz wymaganie SIWZ BHP. Zwróć wyłącznie JSON: '
+                    .'{"product_type":"fartuch|rękawice|obuwie|kombinezon|…",'
+                    .'"search_terms":["hasła do katalogu"],'
+                    .'"exclude_types":["typy PPE, które nie pasują"],'
+                    .'"norms":["EN …"],'
+                    .'"chemicals":["…"]}. '
+                    .'Ustal typ z rozumowania, nie z pojedynczych słów. '
+                    .'„rękawy” (rękaw odzieży) ≠ rękawice. „fartuch lab.” ≠ kombinezon Tyvek ≠ buty.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $query,
+            ],
+        ], null, 4000);
+
+        if (isset($raw['matches']) && ! isset($raw['product_type']) && ! isset($raw['search_terms'])) {
+            throw new RuntimeException('Odpowiedź modelu nie jest analizą wymagania.');
+        }
+
+        return $raw;
+    }
+
+    /**
+     * @param  array{keywords: list<string>, chemicals: list<string>, norms: list<string>, product_type: string}  $heuristic
+     * @param  array<string, mixed>  $ai
+     * @return array{keywords: list<string>, chemicals: list<string>, norms: list<string>, product_type: string}
+     */
+    private function mergeFacets(array $heuristic, array $ai): array
+    {
+        $type = $this->normalizeProductType((string) ($ai['product_type'] ?? ''));
+        if ($type === '') {
+            $type = $heuristic['product_type'];
+        }
+
+        $keywords = $heuristic['keywords'];
+        foreach ($ai['search_terms'] ?? [] as $term) {
+            if (is_string($term) && mb_strlen(trim($term)) >= 3) {
+                $keywords[] = trim($term);
+            }
+        }
+
+        $chemicals = $heuristic['chemicals'];
+        foreach ($ai['chemicals'] ?? [] as $chem) {
+            if (is_string($chem) && trim($chem) !== '') {
+                $chemicals[] = trim($chem);
+            }
+        }
+
+        $norms = $heuristic['norms'];
+        foreach ($ai['norms'] ?? [] as $norm) {
+            if (is_string($norm) && trim($norm) !== '') {
+                $norms[] = trim($norm);
+            }
+        }
+
+        return [
+            'keywords' => array_values(array_unique($keywords)),
+            'chemicals' => array_values(array_unique($chemicals)),
+            'norms' => array_values(array_unique($norms)),
+            'product_type' => $type,
+        ];
+    }
+
+    private function normalizeProductType(string $type): string
+    {
+        $ascii = $this->ascii($type);
+        if ($ascii === '') {
+            return '';
+        }
+        if (str_contains($ascii, 'fartuch') || str_contains($ascii, 'kitel') || str_contains($ascii, 'lab coat')) {
+            return 'fartuch';
+        }
+        if (str_contains($ascii, 'rekawic') || str_contains($ascii, 'glove')) {
+            return 'rękawice';
+        }
+        if (str_contains($ascii, 'obuwie') || str_contains($ascii, 'trzewik') || preg_match('/\bbuty\b/', $ascii) === 1) {
+            return 'obuwie';
+        }
+        if (str_contains($ascii, 'kombinezon') || str_contains($ascii, 'coverall')) {
+            return 'kombinezon';
+        }
+        if (str_contains($ascii, 'kominiark')) {
+            return 'kominiarka';
+        }
+
+        return mb_strtolower(trim($type));
     }
 
     /**
@@ -139,6 +244,10 @@ final class ProductAiSearchService
 
         $productType = '';
         foreach ([
+            'fartuch' => 'fartuch',
+            'kitel' => 'fartuch',
+            'lab coat' => 'fartuch',
+            'labcoat' => 'fartuch',
             'kominiarka' => 'kominiarka',
             'kominiark' => 'kominiarka',
             'czapka' => 'czapka',
@@ -151,9 +260,10 @@ final class ProductAiSearchService
             'kask' => 'kask',
             'helm' => 'hełm',
             'hełm' => 'hełm',
+            'kombinezon' => 'kombinezon',
             'odziez' => 'odzież',
             'odzież' => 'odzież',
-            'kombinezon' => 'kombinezon',
+            'bluza' => 'bluza',
             'nausznik' => 'nauszniki',
             'maska' => 'maska',
         ] as $needle => $type) {
@@ -178,10 +288,37 @@ final class ProductAiSearchService
     private function prefilter(string $query, array $facets, int $limit): Collection
     {
         $vectorHits = $this->prefilterVector($query, $facets, max($limit, 80));
-        if ($vectorHits->isNotEmpty()) {
+        $likeHits = $this->prefilterLike($query, $facets, $limit);
+
+        if ($likeHits->isEmpty()) {
             return $vectorHits->take($limit)->values();
         }
+        if ($vectorHits->isEmpty()) {
+            return $likeHits->take($limit)->values();
+        }
 
+        $seen = [];
+        $merged = collect();
+        foreach ($likeHits->concat($vectorHits) as $product) {
+            if (! $product instanceof Product || isset($seen[$product->id])) {
+                continue;
+            }
+            $seen[$product->id] = true;
+            $merged->push($product);
+            if ($merged->count() >= $limit) {
+                break;
+            }
+        }
+
+        return $merged->values();
+    }
+
+    /**
+     * @param  array{keywords: list<string>, chemicals: list<string>, norms: list<string>, product_type: string}  $facets
+     * @return Collection<int, Product>
+     */
+    private function prefilterLike(string $query, array $facets, int $limit): Collection
+    {
         $terms = $this->expandSearchTerms($facets);
         if ($terms === []) {
             return collect();
@@ -226,6 +363,31 @@ final class ProductAiSearchService
             });
             $q->where('name', 'not like', '%rękaw%')
                 ->where('name', 'not like', '%rekaw%');
+        } elseif (in_array($type, ['fartuch', 'kitel', 'odzież', 'bluza', 'kombinezon'], true)) {
+            $q->where(function ($w) use ($type): void {
+                $w->where('name', 'like', '%fartuch%')
+                    ->orWhere('name', 'like', '%kitel%')
+                    ->orWhere('name', 'like', '%lab coat%')
+                    ->orWhere('name', 'like', '%bluza%')
+                    ->orWhere('name', 'like', '%kombinezon%')
+                    ->orWhere('name', 'like', '%odzież%')
+                    ->orWhere('name', 'like', '%odziez%')
+                    ->orWhere('category', 'like', '%odzież%')
+                    ->orWhere('category', 'like', '%odziez%')
+                    ->orWhere('category', 'like', '%fartuch%')
+                    ->orWhere('description', 'like', '%fartuch%')
+                    ->orWhere('description', 'like', '%kitel%');
+                if ($type === 'kombinezon') {
+                    $w->orWhere('name', 'like', '%tyvek%')
+                        ->orWhere('name', 'like', '%coverall%');
+                }
+            });
+            $q->where('name', 'not like', '%rękawic%')
+                ->where('name', 'not like', '%rekawic%')
+                ->where('name', 'not like', '%trzewik%')
+                ->where('category', 'not like', '%obuwie%')
+                ->where('category', 'not like', '%rękawic%')
+                ->where('category', 'not like', '%rekawic%');
         } elseif ($type === 'buty' || $type === 'obuwie') {
             $q->where(function ($w): void {
                 $w->where('category', 'like', '%obuwie%')
@@ -290,8 +452,11 @@ final class ProductAiSearchService
                     $hits++;
                 }
             }
-            if ($type === 'rękawice' && (str_contains($hay, 'rekaw') || str_contains($hay, 'glove'))) {
+            if ($type === 'rękawice' && (str_contains($hay, 'rekawic') || str_contains($hay, 'glove'))) {
                 $hits += 2;
+            }
+            if (in_array($type, ['fartuch', 'kitel'], true) && (str_contains($hay, 'fartuch') || str_contains($hay, 'kitel'))) {
+                $hits += 4;
             }
 
             return ['product' => $p, 'hits' => $hits];
@@ -384,8 +549,11 @@ final class ProductAiSearchService
                         $hits++;
                     }
                 }
-                if ($type === 'rękawice' && (str_contains($hay, 'rekaw') || str_contains($hay, 'glove') || str_contains($hay, 'gauntlet'))) {
+                if ($type === 'rękawice' && (str_contains($hay, 'rekawic') || str_contains($hay, 'glove') || str_contains($hay, 'gauntlet'))) {
                     $hits += 2;
+                }
+                if (in_array($type, ['fartuch', 'kitel'], true) && (str_contains($hay, 'fartuch') || str_contains($hay, 'kitel'))) {
+                    $hits += 4;
                 }
                 if ($hasChem && $this->hasChemicalSignal($hay)) {
                     $hits += 3;
@@ -448,7 +616,7 @@ final class ProductAiSearchService
         }
 
         if ($type === 'rękawice') {
-            $isGlove = str_contains($hay, 'rekaw')
+            $isGlove = str_contains($hay, 'rekawic')
                 || str_contains($hay, 'glove')
                 || str_contains($hay, 'gauntlet')
                 || str_contains($hay, 'mitt');
@@ -457,11 +625,37 @@ final class ProductAiSearchService
             }
             // odrzuć oczywiste obuwie
             if ((str_contains($hay, 'obuwie') || str_contains($hay, 'trzewik') || preg_match('/\bs3\b/', $hay) === 1)
-                && ! str_contains($hay, 'rekaw') && ! str_contains($hay, 'glove')) {
+                && ! str_contains($hay, 'rekawic') && ! str_contains($hay, 'glove')) {
                 return false;
             }
 
             return true;
+        }
+
+        if (in_array($type, ['fartuch', 'kitel'], true)) {
+            $isCoat = str_contains($hay, 'fartuch')
+                || str_contains($hay, 'kitel')
+                || str_contains($hay, 'labcoat')
+                || str_contains($hay, 'lab coat');
+            if (! $isCoat) {
+                return false;
+            }
+
+            return ! $this->looksLikeGloves($hay) && ! $this->looksLikeFootwear($hay);
+        }
+
+        if (in_array($type, ['odzież', 'bluza', 'kombinezon'], true)) {
+            $isApparel = str_contains($hay, $this->ascii($type))
+                || str_contains($hay, 'fartuch')
+                || str_contains($hay, 'kitel')
+                || str_contains($hay, 'bluza')
+                || str_contains($hay, 'odziez')
+                || str_contains($hay, 'kombinezon');
+            if (! $isApparel) {
+                return false;
+            }
+
+            return ! $this->looksLikeGloves($hay) && ! $this->looksLikeFootwear($hay);
         }
 
         if ($type === 'buty' || $type === 'obuwie') {
@@ -473,6 +667,21 @@ final class ProductAiSearchService
 
         // pozostałe typy — luźne dopasowanie tokenu
         return str_contains($hay, $this->ascii($type));
+    }
+
+    private function looksLikeGloves(string $hay): bool
+    {
+        return str_contains($hay, 'rekawic')
+            || str_contains($hay, 'glove')
+            || str_contains($hay, 'gauntlet');
+    }
+
+    private function looksLikeFootwear(string $hay): bool
+    {
+        return str_contains($hay, 'obuwie')
+            || str_contains($hay, 'trzewik')
+            || str_contains($hay, 'polbut')
+            || preg_match('/\b(buty|s[123]|sb|ob)\b/', $hay) === 1;
     }
 
     private function hasChemicalSignal(string $hay): bool
@@ -525,6 +734,10 @@ final class ProductAiSearchService
     private function stemToken(string $token): string
     {
         $t = $this->ascii(mb_strtolower(trim($token)));
+        // rękawy (rękaw kurtki) ≠ rękawice
+        if (preg_match('/^rekaw(?!ic)/u', $t) === 1) {
+            return $t;
+        }
         foreach (['ami', 'ach', 'owi', 'owie', 'ami', 'ych', 'ymi', 'ego', 'emu', 'iej', 'ich', 'owi', 'ami'] as $suf) {
             if (str_ends_with($t, $suf) && mb_strlen($t) - mb_strlen($suf) >= 4) {
                 return mb_substr($t, 0, -mb_strlen($suf));
@@ -548,9 +761,10 @@ final class ProductAiSearchService
 
     /**
      * @param  Collection<int, Product>  $candidates
+     * @param  array{keywords?: list<string>, chemicals?: list<string>, norms?: list<string>, product_type?: string}  $facets
      * @return list<array<string, mixed>>
      */
-    private function rankWithLlm(string $query, Collection $candidates, int $limit): array
+    private function rankWithLlm(string $query, Collection $candidates, int $limit, array $facets = []): array
     {
         $cards = $candidates->map(function (Product $p): array {
             $payload = is_array($p->enrichment_payload) ? $p->enrichment_payload : [];
@@ -559,6 +773,7 @@ final class ProductAiSearchService
                 'id' => $p->id,
                 'sku' => $p->sku,
                 'name' => mb_substr((string) $p->name, 0, 120),
+                'category' => $p->category,
                 'manufacturer' => $p->manufacturer,
                 'norms' => $p->norms,
                 'description' => mb_substr((string) ($p->description ?? ''), 0, 280),
@@ -567,21 +782,26 @@ final class ProductAiSearchService
             ];
         })->values()->all();
 
+        $hint = is_string($facets['product_type'] ?? null) && $facets['product_type'] !== ''
+            ? "\nTyp z analizy wymagania: {$facets['product_type']}."
+            : '';
+
         $json = json_encode($cards, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $raw = $this->llm->chatJson([
             [
                 'role' => 'system',
-                'content' => 'Ekspert BHP. Wybierz produkty pasujące do wymagania. '
-                    .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"krótko"}]}. '
-                    .'Dopasuj po: 1) typ z nazwy (kominiarka≠rękawice≠buty≠kask) 2) specyfikacja 3) normy EN. '
-                    .'Inny typ PPE → nie zwracaj. score>=40 tylko gdy typ i normy/cechy się zgadzają. '
-                    .'score>=40 gdy sensownie pasuje. Max 5 pozycji. Tylko id z listy.',
+                'content' => 'Jesteś ekspertem BHP. Najpierw zrozum wymaganie SIWZ (jaki to produkt), '
+                    .'potem oceń wyłącznie pozycje z listy. '
+                    .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]} . '
+                    .'Inny asortyment (fartuch≠kombinezon≠rękawice≠buty; „rękawy” to rękaw odzieży) → nie zwracaj. '
+                    .'Jeśli żaden produkt nie jest tym typem: {"matches":[]}. '
+                    .'score>=40 tylko przy zgodnym typie. Max 5. Tylko id z listy.',
             ],
             [
                 'role' => 'user',
-                'content' => "Wymaganie:\n{$query}\n\nProdukty:\n{$json}",
+                'content' => "Wymaganie:\n{$query}{$hint}\n\nProdukty:\n{$json}",
             ],
-        ], 0.0, 2500);
+        ], null, 8000);
 
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
         $byId = $candidates->keyBy('id');

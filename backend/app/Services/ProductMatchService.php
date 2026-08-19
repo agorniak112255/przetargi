@@ -203,7 +203,7 @@ final class ProductMatchService
         ) === 1) {
             return 'footwear';
         }
-        if (preg_match('/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell)\w*/u', $text) === 1) {
+        if (preg_match('/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell|fartuch|kitel|bluza)\w*/u', $text) === 1) {
             return 'apparel';
         }
 
@@ -853,7 +853,7 @@ final class ProductMatchService
             return [];
         }
 
-        $ranked = $this->aiSearch->rankCandidates($requirement, $filtered->values(), $limit);
+        $ranked = $this->aiSearch->rankCandidates($requirement, $filtered->values(), $limit, $facets);
         if ($ranked === []) {
             return [];
         }
