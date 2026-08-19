@@ -8,7 +8,41 @@ import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
 import { productDisplayName } from '../lib/productLabel'
 
-type MatchReason = { code: string; label: string; points: number }
+type MatchReason = { code: string; label: string; points: number; url?: string }
+
+function ExternalHintLink({ reason }: { reason: MatchReason }) {
+  const href = reason.url
+  if (!href) {
+    return <span>{reason.label}</span>
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex flex-col gap-0.5 font-semibold text-amber-900 underline decoration-amber-400"
+    >
+      <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
+        Link zewnętrzny — nie z katalogu
+      </span>
+      <span>{reason.label.replace(/^Link zewnętrzny \(nie z katalogu SUPON\):\s*/u, '')}</span>
+    </a>
+  )
+}
+
+function ExternalHints({ reasons }: { reasons?: MatchReason[] | null }) {
+  const links = (reasons ?? []).filter((r) => r.code === 'external_link')
+  if (links.length === 0) {
+    return <span>—</span>
+  }
+  return (
+    <div className="max-w-[280px] rounded border border-amber-300 bg-amber-50 px-2 py-1.5">
+      {links.map((r, i) => (
+        <ExternalHintLink key={`${r.url ?? r.label}-${i}`} reason={r} />
+      ))}
+    </div>
+  )
+}
 
 type Item = {
   id: number
@@ -2171,8 +2205,14 @@ function ItemRow({
                   <ul className="mt-1 list-disc pl-4">
                     {item.ai_match_reasons!.map((r, i) => (
                       <li key={`${r.code}-${i}`}>
-                        {r.label}
-                        {r.points > 0 ? ` (+${r.points})` : ''}
+                        {r.code === 'external_link' ? (
+                          <ExternalHintLink reason={r} />
+                        ) : (
+                          <>
+                            {r.label}
+                            {r.points > 0 ? ` (+${r.points})` : ''}
+                          </>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -2231,9 +2271,9 @@ function ItemRow({
                 </span>
               </button>
             ) : (
-              '—'
+              <ExternalHints reasons={item.ai_match_reasons} />
             )}
-            {(item.ai_match_reasons?.length ?? 0) > 0 && (
+            {(item.ai_match_reasons?.length ?? 0) > 0 && item.main_product && (
               <ul className="mt-1 max-w-[280px] list-disc pl-4 text-[10px] text-slate-600">
                 {item.ai_match_reasons!.slice(0, 4).map((r, i) => (
                   <li key={`${r.code}-${i}`}>{r.label}</li>

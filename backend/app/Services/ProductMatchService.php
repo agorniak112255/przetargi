@@ -24,6 +24,15 @@ final class ProductMatchService
         'rekawice', 'rekawica', 'ochronne', 'ochronna', 'ochronny', 'robocze', 'robocza',
         'produkt', 'art', 'kat', 'para', 'par', 'szt', 'sztuk', 'the', 'and', 'for',
         'with', 'bez', 'oraz', 'typ', 'model', 'kolor', 'rozmiar',
+        'kurtka', 'bluza', 'spodnie', 'odziez', 'kamizelka', 'fartuch', 'kitel',
+        'kieszen', 'rekawy', 'zolta', 'granat', 'bialy', 'damski', 'meski',
+    ];
+
+    /** Typowe słowa SIWZ pisane KAPITALIKAMI — to nie są kody modelu. */
+    private const GENERIC_SIWZ_CODES = [
+        'kurtka', 'bluza', 'spodnie', 'odziez', 'ubranie', 'komplet', 'zestaw',
+        'ochronna', 'ochronne', 'robocza', 'robocze', 'odblask', 'ostrzegaw',
+        'elektryk', 'spawal', 'laboratory', 'fartuch',
     ];
 
     public function __construct(
@@ -32,6 +41,7 @@ final class ProductMatchService
         private readonly AiSettingsService $aiSettings,
         private readonly ProductVectorSearch $vectorSearch,
         private readonly BhpAttributeNormalizer $bhpAttributes,
+        private readonly ExternalCatalogHintService $externalHints,
     ) {}
 
     /**
@@ -57,15 +67,7 @@ final class ProductMatchService
         foreach ($items as $item) {
             $pick = $this->resolveBestPick($item->requirement, $products);
             if ($pick === null) {
-                $item->main_product_id = null;
-                $item->status = 'brak';
-                $item->ai_match_percent = $this->bestScoreHint($item->requirement, $products);
-                $item->ai_match_reasons = [
-                    ['code' => 'no_match', 'label' => 'Brak produktu powyżej progu '.self::MIN_MATCH_SCORE.'%', 'points' => 0],
-                ];
-                $item->match_source = null;
-                $item->save();
-                $this->pricing->recalculateItemMargin($item);
+                $this->applyNoCatalogMatch($item, $products);
                 $skipped++;
 
                 continue;
@@ -169,8 +171,50 @@ final class ProductMatchService
         if ($reqFamily === null || $prodFamily === null) {
             return true;
         }
+        if ($reqFamily !== $prodFamily) {
+            return false;
+        }
+        if ($reqFamily === 'apparel') {
+            return $this->apparelRolesCompatible($req, $prodText);
+        }
 
-        return $reqFamily === $prodFamily;
+        return true;
+    }
+
+    private function apparelRolesCompatible(string $req, string $prodText): bool
+    {
+        $reqRole = $this->detectApparelRole($req);
+        $prodRole = $this->detectApparelRole($prodText);
+        if ($reqRole !== null && $prodRole !== null && $reqRole !== $prodRole) {
+            return false;
+        }
+
+        $reqSet = preg_match('/\b(bluza.{0,12}spodn|spodn.{0,12}bluza|ubranie ochron|komplet|zestaw)\w*/u', $req) === 1;
+        $prodSet = preg_match('/\b(spodn|komplet|zestaw|ubranie)\w*/u', $prodText) === 1;
+        if ($reqSet && preg_match('/\b(bluz|kurtk)\w*/u', $prodText) === 1 && ! $prodSet) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function detectApparelRole(string $text): ?string
+    {
+        $t = $this->normalize($text);
+        if (preg_match('/\b20471\b|odblask|ostrzegawcz|hi.?vis|wysokiej widzial/u', $t) === 1) {
+            return 'hivis';
+        }
+        if (preg_match('/\bspawal|11611|welding|welder/u', $t) === 1) {
+            return 'welding';
+        }
+        if (preg_match('/\beletryk|1149|61482|lukiem|antystatyczn/u', $t) === 1) {
+            return 'electric';
+        }
+        if (preg_match('/\bzaroodporn|11612\b/u', $t) === 1) {
+            return 'heat';
+        }
+
+        return null;
     }
 
     private function familyFromKategoria(mixed $kategoria): ?string
@@ -195,16 +239,16 @@ final class ProductMatchService
         ) === 1) {
             return 'head';
         }
-        // normy/klasy typowe dla obuwia BHP
+        if (preg_match('/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell|fartuch|kitel|bluza)\w*/u', $text) === 1) {
+            return 'apparel';
+        }
+        // OB/SB same w SKU bluzy — obuwie tylko przy wyraźnym kontekście
         if (preg_match(
             '/\b(trzewik|polbut|sandal|obuwie|buty|butow|footwear|podeszw|podnosek'
-            .'|\bs1p?\b|\bs3\b|\bsb\b|\bob\b|src|hro)\b/u',
+            .'|\bs1p?\b|\bs3\b)\b/u',
             $text
         ) === 1) {
             return 'footwear';
-        }
-        if (preg_match('/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell|fartuch|kitel|bluza)\w*/u', $text) === 1) {
-            return 'apparel';
         }
 
         return null;
@@ -571,7 +615,8 @@ final class ProductMatchService
         if (preg_match_all('/\b[A-Z]{3,10}\b/u', $req, $m2)) {
             foreach ($m2[0] as $raw) {
                 $c = $this->normalize($raw);
-                if ($c !== '' && ! in_array($c, self::STOPWORDS, true) && ! in_array($c, $normSkip, true)) {
+                if ($c !== '' && ! in_array($c, self::STOPWORDS, true) && ! in_array($c, $normSkip, true)
+                    && ! $this->isGenericSiwzCode($c)) {
                     $out[] = $c;
                 }
             }
@@ -591,6 +636,17 @@ final class ProductMatchService
         }
 
         return array_values(array_unique($out));
+    }
+
+    private function isGenericSiwzCode(string $code): bool
+    {
+        foreach (self::GENERIC_SIWZ_CODES as $generic) {
+            if ($code === $generic || str_starts_with($code, $generic) || str_contains($generic, $code)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -641,22 +697,11 @@ final class ProductMatchService
         ];
 
         $candidates = $this->mergeCandidates($heuristic, $aiCandidates);
-        $pick = $this->pickAuto($item->requirement, $heuristic, $aiCandidates, $products);
+        $pick = $this->resolveBestPick($item->requirement, $products);
 
         if ($pick === null) {
-            $bestScore = max(
-                $heuristic['score'] ?? 0,
-                $aiCandidates[0]['score'] ?? 0,
-            );
-            $item->main_product_id = null;
-            $item->status = 'brak';
-            $item->ai_match_percent = $bestScore;
-            $item->ai_match_reasons = [
-                ['code' => 'no_match', 'label' => 'Brak produktu powyżej progu '.self::MIN_MATCH_SCORE.'%', 'points' => 0],
-            ];
-            $item->match_source = null;
-            $item->save();
-            $this->pricing->recalculateItemMargin($item);
+            $this->applyNoCatalogMatch($item, $products);
+            $bestScore = (int) ($item->ai_match_percent ?? 0);
 
             return [
                 'matched' => false,
@@ -710,19 +755,80 @@ final class ProductMatchService
      */
     private function resolveBestPick(string $requirement, Collection $products): ?array
     {
-        $heuristic = $this->bestMatch($requirement, $products);
-        if ($heuristic !== null && $heuristic['score'] >= self::MIN_MATCH_SCORE) {
-            return [
-                'product' => $heuristic['product'],
-                'score' => $heuristic['score'],
-                'source' => 'heuristic',
-            ];
+        $skuPick = $this->strongSkuPick($requirement, $products);
+        if ($skuPick !== null) {
+            return $skuPick;
         }
 
-        // drugie źródło: model AI (top 5) — tylko gdy heurystyka nie pewna
+        $described = $this->withDescriptions($products);
+        $heuristic = $described->isEmpty() ? null : $this->bestMatch($requirement, $described);
         $aiCandidates = $this->aiTopCandidates($requirement, 5);
+        $picked = $this->pickAuto($requirement, $heuristic, $aiCandidates, $described);
+        if ($picked === null) {
+            return null;
+        }
 
-        return $this->pickAuto($requirement, $heuristic, $aiCandidates, $products);
+        $picked['product'] = $this->resolveCatalogBySku($picked['product'], $products);
+
+        return $picked;
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return Collection<int, Product>
+     */
+    private function withDescriptions(Collection $products): Collection
+    {
+        return $products->filter(static fn (Product $p): bool => $p->hasUsableDescription())->values();
+    }
+
+    /**
+     * @param  Collection<int, Product>  $catalog
+     */
+    private function resolveCatalogBySku(Product $found, Collection $catalog): Product
+    {
+        $sku = trim((string) $found->sku);
+        if ($sku === '') {
+            return $found;
+        }
+
+        $same = $catalog->first(
+            static fn (Product $p): bool => strcasecmp(trim((string) $p->sku), $sku) === 0
+        );
+
+        return $same instanceof Product ? $same : $found;
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return array{product: Product, score: int, source: string}|null
+     */
+    private function strongSkuPick(string $requirement, Collection $products): ?array
+    {
+        foreach ($products as $product) {
+            if ($this->hasStrongSkuInRequirement($requirement, $product)) {
+                return [
+                    'product' => $product,
+                    'score' => max(self::MIN_MATCH_SCORE, $this->skuMatchScore(
+                        $this->normalize($requirement),
+                        $this->codeCandidates($requirement),
+                        $product
+                    )),
+                    'source' => 'heuristic',
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    private function hasStrongSkuInRequirement(string $requirement, Product $product): bool
+    {
+        return $this->skuMatchScore(
+            $this->normalize($requirement),
+            $this->codeCandidates($requirement),
+            $product
+        ) >= 70;
     }
 
     /**
@@ -733,7 +839,8 @@ final class ProductMatchService
      */
     private function pickAuto(string $requirement, ?array $heuristic, array $aiCandidates, Collection $products): ?array
     {
-        if ($heuristic !== null && $heuristic['score'] >= self::MIN_MATCH_SCORE) {
+        if ($heuristic !== null && $heuristic['score'] >= self::MIN_MATCH_SCORE
+            && $this->hasStrongSkuInRequirement($requirement, $heuristic['product'])) {
             return [
                 'product' => $heuristic['product'],
                 'score' => $heuristic['score'],
@@ -964,6 +1071,38 @@ final class ProductMatchService
         }
         $item->save();
         $item->load('mainProduct');
+        $this->pricing->recalculateItemMargin($item);
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     */
+    private function applyNoCatalogMatch(TenderItem $item, Collection $products): void
+    {
+        $item->main_product_id = null;
+        $item->status = 'brak';
+        $item->ai_match_percent = $this->bestScoreHint($item->requirement, $this->withDescriptions($products));
+        $reasons = [
+            [
+                'code' => 'no_match',
+                'label' => 'Brak produktu w katalogu (szukano w opisach). Nie dodano pozycji z internetu.',
+                'points' => 0,
+            ],
+        ];
+        $hint = $this->externalHints->hint($item->requirement);
+        if ($hint !== null) {
+            $reasons[] = [
+                'code' => 'external_link',
+                'label' => 'Link zewnętrzny (nie z katalogu SUPON): '.$hint['title'],
+                'points' => 0,
+                'url' => $hint['url'],
+            ];
+            $item->match_source = 'external';
+        } else {
+            $item->match_source = null;
+        }
+        $item->ai_match_reasons = $reasons;
+        $item->save();
         $this->pricing->recalculateItemMargin($item);
     }
 

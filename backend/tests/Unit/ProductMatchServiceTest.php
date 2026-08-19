@@ -175,6 +175,57 @@ final class ProductMatchServiceTest extends TestCase
     }
 
     #[Test]
+    public function hivis_jacket_does_not_match_welding_jacket(): void
+    {
+        $products = new Collection([
+            $this->fakeProduct([
+                'sku' => 'VEST/C-M-XL',
+                'name' => 'Kurtka spawalnicza Vest C M do XL',
+                'manufacturer' => 'X',
+                'category' => 'odziez',
+                'description' => 'Kurtka spawalnicza do prac spawalniczych.',
+                'norms' => 'EN ISO 11611',
+            ]),
+        ]);
+
+        $best = $this->matcher->bestMatch(
+            'KURTKA ROBOCZA ODBLASKOWA żółto-granatowa EN ISO 20471 EN ISO 13688',
+            $products
+        );
+
+        $this->assertTrue($best === null || $best['score'] < ProductMatchService::MIN_MATCH_SCORE);
+
+        $explained = $this->matcher->explainMatch(
+            'KURTKA ROBOCZA ODBLASKOWA żółto-granatowa EN ISO 20471 EN ISO 13688',
+            $products[0]
+        );
+        $this->assertSame(0, $explained['score']);
+        $this->assertSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null);
+    }
+
+    #[Test]
+    public function electrician_set_does_not_match_single_heat_jacket(): void
+    {
+        $products = new Collection([
+            $this->fakeProduct([
+                'sku' => 'OB-58',
+                'name' => 'Bluza ochronna żaroodporna C',
+                'manufacturer' => 'X',
+                'category' => 'odziez',
+                'description' => 'Bluza żaroodporna.',
+                'norms' => 'EN ISO 11612',
+            ]),
+        ]);
+
+        $best = $this->matcher->bestMatch(
+            'Ubranie ochronne dla elektryków (bluza + spodnie) EN 1149-5 EN ISO 11612',
+            $products
+        );
+
+        $this->assertTrue($best === null || $best['score'] < ProductMatchService::MIN_MATCH_SCORE);
+    }
+
+    #[Test]
     public function lab_coat_does_not_match_gloves(): void
     {
         $products = new Collection([

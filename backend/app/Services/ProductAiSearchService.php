@@ -43,7 +43,7 @@ final class ProductAiSearchService
                 'total' => 0,
                 'products' => [],
                 'facets' => $facets,
-                'ai_note' => 'Brak kandydatów w katalogu do oceny przez model.',
+                'ai_note' => 'Brak produktów z opisem w katalogu do oceny przez model. Nie szukano w internecie.',
             ];
         }
 
@@ -55,7 +55,7 @@ final class ProductAiSearchService
             'products' => $ranked,
             'facets' => $facets,
             'ai_note' => $ranked === []
-                ? 'Model nie znalazł pasującego produktu w przekazanych pozycjach katalogu.'
+                ? 'Model nie znalazł pasującego produktu wśród kart z opisem. Nie dodano pozycji z internetu.'
                 : null,
         ];
     }
@@ -330,6 +330,7 @@ final class ProductAiSearchService
         $q = Product::query()
             ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
             ->withCount(['substitutes', 'images']);
+        $this->constrainToDescribed($q);
 
         // typ asortymentu — nie mieszaj rękawic z butami tylko dlatego, że w opisie jest „rozpuszczalnik”
         if ($type === 'rękawice') {
@@ -536,6 +537,9 @@ final class ProductAiSearchService
         $ranked = $products
             ->map(function (Product $p) use ($type, $hasChem, $terms, $scoreById): ?array {
                 $hay = $this->productHaystack($p);
+                if (! $p->hasUsableDescription()) {
+                    return null;
+                }
                 if (! $this->matchesAssortmentType($hay, $type)) {
                     return null;
                 }
@@ -667,6 +671,19 @@ final class ProductAiSearchService
 
         // pozostałe typy — luźne dopasowanie tokenu
         return str_contains($hay, $this->ascii($type));
+    }
+
+    /**
+     * @param  \Illuminate\Database\Eloquent\Builder<Product>  $q
+     */
+    private function constrainToDescribed($q): void
+    {
+        $q->where(function ($w): void {
+            $w->where('enrichment_status', Product::ENRICHMENT_DONE)
+                ->orWhere(function ($d): void {
+                    $d->whereNotNull('description')->where('description', '!=', '');
+                });
+        });
     }
 
     private function looksLikeGloves(string $hay): bool

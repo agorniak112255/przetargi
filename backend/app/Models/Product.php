@@ -77,6 +77,16 @@ class Product extends Model
         return $this->hasMany(ProductDocument::class)->orderBy('sort_order');
     }
 
+    public function hasUsableDescription(): bool
+    {
+        if ($this->enrichment_status === self::ENRICHMENT_DONE) {
+            return true;
+        }
+        $d = trim((string) ($this->description ?? ''));
+
+        return $d !== '' && mb_strlen($d) >= 24;
+    }
+
     public function priceHistory(): HasMany
     {
         return $this->hasMany(ProductPriceHistory::class)->latest('id');

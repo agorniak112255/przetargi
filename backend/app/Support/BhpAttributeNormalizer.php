@@ -302,7 +302,15 @@ final class BhpAttributeNormalizer
     {
         $t = $text;
         if (preg_match('/\b(S1P?|S2|S3|SB|OB|SRC|HRO)\b/u', $t, $m) === 1) {
-            return mb_strtoupper($m[1]);
+            $cls = mb_strtoupper($m[1]);
+            $norm = $this->normalizeText($text);
+            $footwear = preg_match(
+                '/\b(trzewik|polbut|sandal|obuwie|buty|footwear|podeszw|podnosek)\b/u',
+                $norm
+            ) === 1;
+            if (in_array($cls, ['S1', 'S1P', 'S2', 'S3'], true) || $footwear) {
+                return $cls;
+            }
         }
         if (preg_match('/\bkat(?:egoria)?\.?\s*(I{1,3}|[123])\b/iu', $t, $m) === 1) {
             return 'kat. '.$m[1];
