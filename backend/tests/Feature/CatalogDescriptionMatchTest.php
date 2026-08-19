@@ -56,15 +56,13 @@ final class CatalogDescriptionMatchTest extends TestCase
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')->andReturn(
             [
-                'product_type' => 'fartuch',
-                'search_terms' => ['fartuch'],
-                'exclude_types' => [],
-                'norms' => [],
-                'chemicals' => [],
+                'needed' => 'fartuch laboratoryjny',
+                'search_phrases' => ['fartuch'],
             ],
             ['matches' => []],
         );
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        Http::fake();
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'FARTUCH LAB. ELANO-BAWEŁNA prosty biały EN ISO 13688',
@@ -90,11 +88,8 @@ final class CatalogDescriptionMatchTest extends TestCase
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')->andReturn(
             [
-                'product_type' => 'fartuch',
-                'search_terms' => ['fartuch'],
-                'exclude_types' => [],
-                'norms' => [],
-                'chemicals' => [],
+                'needed' => 'fartuch laboratoryjny',
+                'search_phrases' => ['fartuch'],
             ],
             ['matches' => []],
         );

@@ -857,9 +857,6 @@ final class ProductMatchService
             if (! $product instanceof Product) {
                 continue;
             }
-            if (! $this->productFitsRequirement($requirement, $product)) {
-                continue;
-            }
 
             return [
                 'product' => $product,
@@ -869,21 +866,6 @@ final class ProductMatchService
         }
 
         return null;
-    }
-
-    private function productFitsRequirement(string $requirement, Product $product): bool
-    {
-        $req = $this->normalize($requirement);
-        $attrs = $this->bhpAttributes->forProduct($product);
-        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
-        $hay = $this->normalize(
-            $product->name.' '.$product->sku.' '.$product->manufacturer.' '
-            .($product->norms ?? '').' '.($product->category ?? '').' '
-            .((string) ($product->description ?? '')).' '
-            .implode(' ', is_array($payload['norms'] ?? null) ? $payload['norms'] : [])
-        );
-
-        return $this->assortmentsCompatible($req, $hay, $product, $attrs);
     }
 
     /**
@@ -897,75 +879,14 @@ final class ProductMatchService
 
         try {
             @set_time_limit(120);
-
-            if ($this->vectorSearch->enabled()) {
-                $vectorOut = $this->aiTopCandidatesFromVector($requirement, $limit);
-                if ($vectorOut !== []) {
-                    return $vectorOut;
-                }
-            }
-
-            $result = $this->aiSearch->search($requirement, $limit);
+            $result = $this->aiSearch->search($requirement, $limit, false);
         } catch (Throwable) {
             return [];
         }
 
-        return $this->mapAiSearchRows($result['products'] ?? [], $limit, 'ai');
-    }
+        $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
 
-    /**
-     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
-     */
-    private function aiTopCandidatesFromVector(string $requirement, int $limit): array
-    {
-        $hits = $this->vectorSearch->similar($requirement, 80);
-        if ($hits === []) {
-            return [];
-        }
-
-        $ids = array_values(array_unique(array_map(
-            static fn (array $h): int => (int) $h['id'],
-            $hits
-        )));
-        $scoreById = [];
-        foreach ($hits as $hit) {
-            $id = (int) ($hit['id'] ?? 0);
-            if ($id > 0 && ! isset($scoreById[$id])) {
-                $scoreById[$id] = (float) ($hit['score'] ?? 0);
-            }
-        }
-
-        $byId = Product::query()
-            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
-            ->withCount(['substitutes', 'images'])
-            ->whereIn('id', $ids)
-            ->get()
-            ->keyBy('id');
-
-        $ordered = collect();
-        foreach ($ids as $id) {
-            if ($byId->has($id)) {
-                $ordered->push($byId->get($id));
-            }
-        }
-
-        if ($ordered->isEmpty()) {
-            return [];
-        }
-
-        // ten sam filtr asortymentu/chemii co w katalogu AI
-        $facets = $this->aiSearch->extractFacetsForQuery($requirement);
-        $filtered = $this->aiSearch->filterVectorCandidates($ordered, $facets, $scoreById, 20);
-        if ($filtered->isEmpty()) {
-            return [];
-        }
-
-        $ranked = $this->aiSearch->rankCandidates($requirement, $filtered->values(), $limit, $facets);
-        if ($ranked === []) {
-            return [];
-        }
-
-        return $this->mapAiSearchRows($ranked, $limit, 'vector');
+        return $this->mapAiSearchRows($result['products'] ?? [], $limit, $source);
     }
 
     /**

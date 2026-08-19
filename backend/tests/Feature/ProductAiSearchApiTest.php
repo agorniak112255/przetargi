@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\AiSetting;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
 use Tests\TestCase;
@@ -64,11 +66,8 @@ final class ProductAiSearchApiTest extends TestCase
         $llm->shouldReceive('chatJson')
             ->andReturn(
                 [
-                    'product_type' => 'rękawice',
-                    'search_terms' => ['rękawice', 'amoniak', 'chemiczne'],
-                    'exclude_types' => ['obuwie'],
-                    'norms' => ['EN 374'],
-                    'chemicals' => ['amoniak'],
+                    'needed' => 'rękawice ochronne do pracy z amoniakiem',
+                    'search_phrases' => ['rękawice chemiczne', 'amoniak', 'nitryl'],
                 ],
                 [
                     'matches' => [
@@ -130,11 +129,8 @@ final class ProductAiSearchApiTest extends TestCase
         $llm->shouldReceive('chatJson')
             ->andReturn(
                 [
-                    'product_type' => 'fartuch laboratoryjny',
-                    'search_terms' => ['fartuch', 'kitel', 'elano-bawełna', 'laboratoryjny'],
-                    'exclude_types' => ['rękawice', 'obuwie', 'kombinezon'],
-                    'norms' => ['EN ISO 13688'],
-                    'chemicals' => [],
+                    'needed' => 'fartuch laboratoryjny elano-bawełna',
+                    'search_phrases' => ['fartuch', 'kitel', 'elano-bawełna', 'laboratoryjny'],
                 ],
                 [
                     'matches' => [
@@ -148,7 +144,7 @@ final class ProductAiSearchApiTest extends TestCase
             'query' => 'FARTUCH LAB. ELANO-BAWEŁNA prosty, biały, rękawy wykończone zatrzaską. EN ISO 13688',
         ])
             ->assertOk()
-            ->assertJsonPath('facets.product_type', 'fartuch')
+            ->assertJsonPath('needed', 'fartuch laboratoryjny elano-bawełna')
             ->assertJsonPath('total', 1)
             ->assertJsonPath('products.0.id', $coat->id)
             ->assertJsonPath('products.0.ai_match_percent', 91);
@@ -187,11 +183,8 @@ final class ProductAiSearchApiTest extends TestCase
         $llm->shouldReceive('chatJson')
             ->andReturn(
                 [
-                    'product_type' => 'fartuch',
-                    'search_terms' => ['fartuch', 'kitel'],
-                    'exclude_types' => ['obuwie'],
-                    'norms' => [],
-                    'chemicals' => [],
+                    'needed' => 'fartuch laboratoryjny',
+                    'search_phrases' => ['fartuch', 'kitel'],
                 ],
                 ['matches' => []],
             );
@@ -202,6 +195,49 @@ final class ProductAiSearchApiTest extends TestCase
         ])
             ->assertOk()
             ->assertJsonPath('total', 0)
-            ->assertJsonPath('products', []);
+            ->assertJsonPath('products', [])
+            ->assertJsonPath('external_hint', null);
+    }
+
+    public function test_empty_catalog_returns_external_link_not_product(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'tavily_api_key' => 'tvly-test',
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn(
+            [
+                'needed' => 'ocieplana kurtka ochronna multi-ochronna',
+                'search_phrases' => ['kurtka ochronna', 'ocieplana'],
+            ],
+            ['matches' => []],
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        Http::fake([
+            'api.tavily.com/search' => Http::response([
+                'results' => [[
+                    'url' => 'https://example.com/kurtka-ochronna',
+                    'title' => 'Kurtka ochronna — karta producenta',
+                ]],
+            ], 200),
+        ]);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Kurtka ochronna ocieplana z odpinanym kapturem, 1 klasa widzialności',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 0)
+            ->assertJsonPath('products', [])
+            ->assertJsonPath('external_hint.url', 'https://example.com/kurtka-ochronna');
     }
 }

@@ -5,90 +5,89 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Models\Product;
+use App\Models\User;
+use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductAiSearchService;
+use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Sanctum\Sanctum;
+use Mockery;
 use Tests\TestCase;
 
 final class ProductVectorCandidateFilterTest extends TestCase
 {
-    public function test_filters_out_mechanical_gloves_for_chemical_query(): void
+    use RefreshDatabase;
+
+    protected function setUp(): void
     {
-        $svc = $this->app->make(ProductAiSearchService::class);
-
-        $chem = new Product([
-            'sku' => 'XG35B',
-            'name' => 'Rubiflex XG',
-            'manufacturer' => 'uvex',
-            'category' => 'Rękawice chemiczne',
-            'norms' => 'EN 374',
-            'description' => 'Rękawice do kwasów i rozpuszczalników',
-        ]);
-        $chem->id = 1;
-        $mech = new Product([
-            'sku' => '34-874',
-            'name' => 'MaxiFlex Ultimate',
-            'manufacturer' => 'ATG',
-            'category' => 'Rękawice',
-            'norms' => 'EN 388',
-            'description' => 'Rękawice robocze precyzyjne',
-        ]);
-        $mech->id = 2;
-
-        $facets = $svc->extractFacetsForQuery('rękawice do pracy z kwasami i rozpuszczalnikami');
-        $out = $svc->filterVectorCandidates(collect([$mech, $chem]), $facets, [1 => 0.7, 2 => 0.95], 10);
-
-        $this->assertCount(1, $out);
-        $this->assertSame('XG35B', $out->first()->sku);
+        parent::setUp();
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
     }
 
-    public function test_lab_coat_query_keeps_coat_and_drops_other_ppe(): void
+    public function test_understands_requirement_without_type_enum(): void
     {
-        $svc = $this->app->make(ProductAiSearchService::class);
-        $query = 'FARTUCH LAB. ELANO-BAWEŁNA prosty, biały, rękawy wykończone zatrzaską. EN ISO 13688';
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'ocieplana kurtka ochronna z kapturem',
+            'search_phrases' => ['kurtka ochronna', 'bluza ocieplana', 'hi-vis'],
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
-        $facets = $svc->extractFacetsForQuery($query);
-        $this->assertSame('fartuch', $facets['product_type']);
-
-        $coat = new Product([
-            'sku' => 'LAB-COAT',
-            'name' => 'Fartuch laboratoryjny elano-bawełna',
-            'manufacturer' => 'X',
-            'category' => 'Odzież',
-            'description' => 'Fartuch lab. zapinany na zatrzaski, gramatura 210g',
-        ]);
-        $coat->id = 1;
-        $boot = new Product([
-            'sku' => 'PROS-106',
-            'name' => '106 OB ZIMA BEZ PODNOSKA',
-            'manufacturer' => 'URGENT',
-            'category' => 'Obuwie',
-            'description' => 'Trzewiki zimowe',
-        ]);
-        $boot->id = 2;
-        $glove = new Product([
-            'sku' => '34-800',
-            'name' => 'KW Palm Coated',
-            'manufacturer' => 'ATG',
-            'category' => 'Rękawice',
-            'description' => 'Rękawice powlekane',
-        ]);
-        $glove->id = 3;
-        $coverall = new Product([
-            'sku' => 'TD-0127',
-            'name' => 'TYVEK Dual Finish',
-            'manufacturer' => 'DuPont',
-            'category' => 'Odzież',
-            'description' => 'Kombinezon ochronny Tyvek',
-        ]);
-        $coverall->id = 4;
-
-        $out = $svc->filterVectorCandidates(
-            collect([$boot, $glove, $coverall, $coat]),
-            $facets,
-            [1 => 0.4, 2 => 0.9, 3 => 0.85, 4 => 0.8],
-            10
+        $intent = $this->app->make(ProductAiSearchService::class)->understandRequirement(
+            'Kurtka ochronna ocieplana z odpinanym kapturem, 1 klasa widzialności'
         );
 
-        $this->assertCount(1, $out);
-        $this->assertSame('LAB-COAT', $out->first()->sku);
+        $this->assertSame('ocieplana kurtka ochronna z kapturem', $intent['needed']);
+        $this->assertContains('kurtka ochronna', $intent['search_phrases']);
+    }
+
+    public function test_model_picks_jacket_without_assortment_filter(): void
+    {
+        $jacket = Product::query()->create([
+            'sku' => 'JKT-1',
+            'name' => 'Kurtka ochronna ocieplana',
+            'manufacturer' => 'X',
+            'category' => 'Odzież',
+            'description' => 'Kurtka ocieplana, kaptur, antyelektrostatyczna, trudnopalna.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'BOOT-1',
+            'name' => 'Trzewiki S3',
+            'manufacturer' => 'Y',
+            'category' => 'Obuwie',
+            'description' => 'Obuwie ochronne zimowe S3.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 20,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn(
+            [
+                'needed' => 'ocieplana kurtka ochronna',
+                'search_phrases' => ['kurtka ochronna', 'ocieplana'],
+            ],
+            [
+                'matches' => [
+                    ['id' => $jacket->id, 'score' => 88, 'reason' => 'Kurtka ocieplana z kapturem'],
+                ],
+            ],
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Kurtka ochronna ocieplana z odpinanym kapturem. Klasa 1 widzialności.',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'JKT-1');
     }
 }

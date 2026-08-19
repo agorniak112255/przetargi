@@ -101,6 +101,7 @@ export function Products() {
   const [aiQuery, setAiQuery] = useState('')
   const [aiMode, setAiMode] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
+  const [externalHint, setExternalHint] = useState<{ url: string; title: string } | null>(null)
   const [page, setPage] = useState(1)
   const [sort, setSort] = useState<SortKey>('name')
   const [dir, setDir] = useState<'asc' | 'desc'>('asc')
@@ -206,7 +207,13 @@ export function Products() {
     const controller = new AbortController()
     const timer = window.setTimeout(() => controller.abort(), 180_000)
     try {
-      const res = await api<{ query: string; total: number; products: Product[]; ai_note?: string | null }>(
+      const res = await api<{
+        query: string
+        total: number
+        products: Product[]
+        ai_note?: string | null
+        external_hint?: { url: string; title: string } | null
+      }>(
         '/products/ai-search',
         {
           method: 'POST',
@@ -215,6 +222,7 @@ export function Products() {
         },
       )
       setAiMode(true)
+      setExternalHint(res.external_hint ?? null)
       setResult({
         data: res.products,
         current_page: 1,
@@ -252,6 +260,7 @@ export function Products() {
     setAiQuery('')
     setMsg('')
     setErr('')
+    setExternalHint(null)
   }
 
   useEffect(() => {
@@ -492,6 +501,19 @@ export function Products() {
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {externalHint && (
+        <a
+          href={externalHint.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mb-2 block rounded border border-amber-300 bg-amber-50 px-3 py-2"
+        >
+          <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
+            Link zewnętrzny — nie z katalogu
+          </span>
+          <span className="mt-1 block text-xs font-medium text-amber-950 underline">{externalHint.title}</span>
+        </a>
+      )}
 
       {batchActive && batch && (
         <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900">
@@ -658,7 +680,7 @@ export function Products() {
               <tr>
                 <td colSpan={tableCols} className="p-4 text-slate-400">
                   {aiMode
-                    ? 'AI nie znalazło pasujących produktów (wzbogać opisy lub doprecyzuj wymaganie).'
+                    ? 'AI nie znalazło pasującego produktu w katalogu.'
                     : 'Brak produktów dla tego wyszukiwania.'}
                 </td>
               </tr>

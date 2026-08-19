@@ -14,6 +14,9 @@ use Throwable;
  */
 final class ExternalCatalogHintService
 {
+    /** @var array<string, array{url: string, title: string}|null> */
+    private array $cache = [];
+
     public function __construct(
         private readonly AiSettingsService $settings,
     ) {}
@@ -27,17 +30,21 @@ final class ExternalCatalogHintService
         if (mb_strlen($query) < 12) {
             return null;
         }
+        $cacheKey = mb_strtolower(mb_substr($query, 0, 400));
+        if (array_key_exists($cacheKey, $this->cache)) {
+            return $this->cache[$cacheKey];
+        }
 
         $cfg = $this->settings->resolve();
         $key = $cfg['tavily_api_key'] ?? null;
         if (! is_string($key) || $key === '') {
-            return null;
+            return $this->remember($cacheKey, null);
         }
 
         try {
             TavilyQuotaGuard::assertAllowed();
         } catch (Throwable) {
-            return null;
+            return $this->remember($cacheKey, null);
         }
 
         try {
@@ -53,16 +60,16 @@ final class ExternalCatalogHintService
                     'include_images' => false,
                 ]);
         } catch (Throwable) {
-            return null;
+            return $this->remember($cacheKey, null);
         }
 
         if (! $response->successful() || $response->status() === 429) {
-            return null;
+            return $this->remember($cacheKey, null);
         }
 
         $rows = $response->json('results');
         if (! is_array($rows)) {
-            return null;
+            return $this->remember($cacheKey, null);
         }
 
         foreach ($rows as $row) {
@@ -75,12 +82,23 @@ final class ExternalCatalogHintService
             }
             $title = trim((string) ($row['title'] ?? $url));
 
-            return [
+            return $this->remember($cacheKey, [
                 'url' => $url,
                 'title' => $title !== '' ? $title : $url,
-            ];
+            ]);
         }
 
-        return null;
+        return $this->remember($cacheKey, null);
+    }
+
+    /**
+     * @param  array{url: string, title: string}|null  $value
+     * @return array{url: string, title: string}|null
+     */
+    private function remember(string $cacheKey, ?array $value): ?array
+    {
+        $this->cache[$cacheKey] = $value;
+
+        return $value;
     }
 }

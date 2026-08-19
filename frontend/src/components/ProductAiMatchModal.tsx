@@ -26,12 +26,14 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect }: P
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [results, setResults] = useState<AiMatchPick[]>([])
+  const [externalHint, setExternalHint] = useState<{ url: string; title: string } | null>(null)
 
   useEffect(() => {
     if (!open) return
     setQuery(initialQuery)
     setError('')
     setResults([])
+    setExternalHint(null)
   }, [open, initialQuery])
 
   useEffect(() => {
@@ -52,8 +54,13 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect }: P
     setBusy(true)
     setError('')
     setResults([])
+    setExternalHint(null)
     try {
-      const res = await api<{ products: Product[] }>('/products/ai-search', {
+      const res = await api<{
+        products: Product[]
+        ai_note?: string | null
+        external_hint?: { url: string; title: string } | null
+      }>('/products/ai-search', {
         method: 'POST',
         body: JSON.stringify({ query: q, limit: 5 }),
       })
@@ -69,8 +76,9 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect }: P
         reason: p.ai_match_reason ?? null,
       }))
       setResults(mapped)
+      setExternalHint(res.external_hint ?? null)
       if (mapped.length === 0) {
-        setError('AI nie znalazło pasujących produktów. Zmień treść zapytania.')
+        setError(res.ai_note ?? 'AI nie znalazło pasującego produktu w katalogu.')
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd wyszukiwania AI')
@@ -133,6 +141,22 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect }: P
           </button>
 
           {error && <p className="text-xs text-red-600">{error}</p>}
+
+          {externalHint && (
+            <a
+              href={externalHint.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-left"
+            >
+              <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
+                Link zewnętrzny — nie z katalogu
+              </span>
+              <span className="mt-1 block text-xs font-medium text-amber-950 underline">
+                {externalHint.title}
+              </span>
+            </a>
+          )}
 
           {results.length > 0 && (
             <div className="space-y-1.5">

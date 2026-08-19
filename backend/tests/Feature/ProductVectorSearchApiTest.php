@@ -56,11 +56,17 @@ final class ProductVectorSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturn([
-                'matches' => [
-                    ['id' => $match->id, 'score' => 88, 'reason' => 'LIKE path'],
+            ->andReturn(
+                [
+                    'needed' => 'rękawice do amoniaku',
+                    'search_phrases' => ['rękawice chemiczne', 'amoniak'],
                 ],
-            ]);
+                [
+                    'matches' => [
+                        ['id' => $match->id, 'score' => 88, 'reason' => 'LIKE path'],
+                    ],
+                ],
+            );
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         Http::fake();
@@ -138,11 +144,17 @@ final class ProductVectorSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturn([
-                'matches' => [
-                    ['id' => $vectorOnly->id, 'score' => 90, 'reason' => 'Wektor'],
+            ->andReturn(
+                [
+                    'needed' => 'rękawice chemiczne do amoniaku',
+                    'search_phrases' => ['rękawice chemiczne', 'amoniak', 'nitryl'],
                 ],
-            ]);
+                [
+                    'matches' => [
+                        ['id' => $vectorOnly->id, 'score' => 90, 'reason' => 'Wektor'],
+                    ],
+                ],
+            );
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
