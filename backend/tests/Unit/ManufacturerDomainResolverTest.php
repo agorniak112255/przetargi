@@ -54,4 +54,23 @@ final class ManufacturerDomainResolverTest extends TestCase
         );
         $this->assertFalse($resolver->isManufacturerUrl('https://icd.pl/x-1', $product, $domains));
     }
+
+    public function test_pilne_gloves_use_urgent_manufacturer_domains(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $product = new Product([
+            'manufacturer' => 'PILNE',
+            'sku' => 'PILNE-1019',
+            'name' => '1019 ZIMA Z POLARU',
+            'category' => 'REKAWICE',
+        ]);
+
+        $domains = $resolver->domainsFor($product);
+        $this->assertContains('urgent.com.pl', $domains);
+        $this->assertTrue($resolver->isManufacturerUrl(
+            'https://urgent.com.pl/wp-content/uploads/1019.jpg',
+            $product,
+            $domains
+        ));
+    }
 }

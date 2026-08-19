@@ -181,6 +181,12 @@ final class ProductSearchIdentity
         if (str_contains($host, 'ansell') || ($brand === 'ansell' && str_contains($u, 'product-assets'))) {
             return str_contains($u, 'product-assets') || str_contains($u, '/-/media/');
         }
+        if (str_contains($host, 'urgent.com.pl') || str_contains($host, 'urgent.pl')) {
+            return str_contains($u, 'wp-content')
+                || str_contains($u, 'upload')
+                || str_contains($u, 'product')
+                || preg_match('/(?<![0-9])\d{3,4}(?![0-9])/u', $u) === 1;
+        }
         // Magento / Presta typowe galerie
         if (str_contains($u, 'media/catalog/product') || str_contains($u, 'large_default') || str_contains($u, 'pim/products')) {
             return true;
@@ -694,7 +700,7 @@ final class ProductSearchIdentity
         $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
 
         // już URGENT albo błędnie PROS / puste
-        return $brand === '' || in_array($brand, ['pros', 'urgent', 'aj group', 'aj'], true);
+        return $brand === '' || in_array($brand, ['pros', 'urgent', 'aj group', 'aj', 'pilne'], true);
     }
 
     public function gloveCodeCore(Product $product): ?string

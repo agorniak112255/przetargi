@@ -895,9 +895,10 @@ export function TenderDetail() {
             type="button"
             disabled={busy}
             onClick={() => void exportOffer('excel')}
+            title="Pobierz ofertę do pliku Excel"
             className="rounded bg-emerald-600 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
           >
-            Excel
+            Eksport Excel
           </button>
           <button
             type="button"

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use App\Models\Product;
 use App\Services\Enrichment\ProductEnrichmentService;
 use ReflectionClass;
 use Tests\TestCase;
@@ -55,6 +56,29 @@ TXT;
             'use_cases' => [],
             'features' => [],
         ]]));
+    }
+
+    public function test_rejects_real_estate_description_for_gloves(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'sku' => 'PILNE-1019',
+            'name' => '1019 ZIMA Z POLARU',
+            'manufacturer' => 'PILNE',
+            'category' => 'REKAWICE',
+        ]);
+        $junk = 'Find the perfect office, industrial or commercial real estate for your team '
+            .'or get specialized space for multi-family housing, healthcare, technology and others. '
+            .'Let us help you find your next investment or leasing opportunity.';
+
+        $this->assertTrue($this->invoke($service, 'looksLikeOffTopicDescription', [$junk]));
+        $this->assertFalse($this->invoke($service, 'isUsableProductDescription', [$junk, $product]));
+        $this->assertTrue($this->invoke($service, 'isUsableProductDescription', [
+            'Rękawice zimowe 1019 z polaru marki Urgent. Przeznaczone do prac na zewnątrz w niskich temperaturach. '
+            .'Materiał polarowy zapewnia izolację termiczną. Stosowane w magazynach, transporcie i na budowie zimą. '
+            .'Model katalogowy 1019. Kategoria PPE — rękawice ochronne.',
+            $product,
+        ]));
     }
 
     /**

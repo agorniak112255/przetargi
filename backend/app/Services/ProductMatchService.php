@@ -189,6 +189,12 @@ final class ProductMatchService
         if (preg_match('/\b(rekawic|glove|handschuh)\w*/u', $text) === 1) {
             return 'gloves';
         }
+        if (preg_match(
+            '/\b(kominiark|czapk|hełm|helm|kask|czepek|kaptur|balaclava)\w*/u',
+            $text
+        ) === 1) {
+            return 'head';
+        }
         // normy/klasy typowe dla obuwia BHP
         if (preg_match(
             '/\b(trzewik|polbut|sandal|obuwie|buty|butow|footwear|podeszw|podnosek'
@@ -222,6 +228,7 @@ final class ProductMatchService
         $score = 0;
         $skuHit = $this->skuMatchScore($req, $reqCodes, $product);
         $score += $skuHit;
+        $score += $this->typeNameScore($req, $product);
 
         // bez sensownego SKU — dopasowanie po wymaganiach / materiale / marce / kodzie w opisie
         $score += $this->materialRequirementScore($req, $hay, $materials);
@@ -332,13 +339,14 @@ final class ProductMatchService
             return 0;
         }
 
-        $reqCompact = preg_replace('/\s+/', '', $req) ?? $req;
+        $reqNoNorms = $this->stripNormNumbers($req);
+        $reqCompact = preg_replace('/\s+/', '', $reqNoNorms) ?? $reqNoNorms;
 
-        // pełny SKU jako ciąg w wymaganiu
-        if (str_contains($reqCompact, $skuCompact) || preg_match(
+        // pełny SKU jako token w SIWZ — nie wewnątrz numeru normy EN/ISO
+        if (mb_strlen($skuCompact) >= 4 && (str_contains($reqCompact, $skuCompact) || preg_match(
             '/(^|[^a-z0-9])'.preg_quote($skuCompact, '/').'([^a-z0-9]|$)/u',
             $reqCompact
-        ) === 1) {
+        ) === 1)) {
             return 85;
         }
 
@@ -533,28 +541,50 @@ final class ProductMatchService
      *
      * @return list<string>
      */
+    private function stripNormNumbers(string $text): string
+    {
+        $t = preg_replace('/\ben(?:\s*iso)?\s*\d+(?:\s+\d+)*/u', ' ', $text) ?? $text;
+
+        return preg_replace('/\biso\s*\d+/u', ' ', $t) ?? $t;
+    }
+
+    /** Ten sam typ w SIWZ i w nazwie produktu (kominiarka ↔ kominiarka). */
+    private function typeNameScore(string $req, Product $product): int
+    {
+        $reqFamily = $this->detectAssortmentFamily($req);
+        if ($reqFamily === null) {
+            return 0;
+        }
+        $name = $this->normalize((string) $product->name);
+        if ($name === '' || $this->detectAssortmentFamily($name) !== $reqFamily) {
+            return 0;
+        }
+
+        return 40;
+    }
+
     private function codeCandidates(string $req): array
     {
         $out = [];
+        $normSkip = ['en', 'iso', 'ce', 'ppe', 'kat'];
 
-        // kody z cyfrą (34-274, PK600, 60028…)
-        if (preg_match_all('/\b[A-Za-z]{0,6}\d[A-Za-z0-9\-\/]{1,}\b/', $req, $m)) {
+        if (preg_match_all('/\b[A-Z]{3,10}\b/u', $req, $m2)) {
+            foreach ($m2[0] as $raw) {
+                $c = $this->normalize($raw);
+                if ($c !== '' && ! in_array($c, self::STOPWORDS, true) && ! in_array($c, $normSkip, true)) {
+                    $out[] = $c;
+                }
+            }
+        }
+
+        $stripped = $this->stripNormNumbers($this->normalize($req));
+        if (preg_match_all('/\b[A-Za-z]{0,6}\d[A-Za-z0-9\-\/]{1,}\b/', $stripped, $m)) {
             foreach ($m[0] as $raw) {
                 $c = preg_replace('/\s+/', '', $this->normalize($raw)) ?? '';
                 if ($c === '' || (ctype_digit($c) && mb_strlen($c) < 5)) {
                     continue;
                 }
                 if (mb_strlen($c) >= 4) {
-                    $out[] = $c;
-                }
-            }
-        }
-
-        // modele WIELKIMI literami z oryginału SIWZ (RNITZ, REJS, RDR)
-        if (preg_match_all('/\b[A-Z]{3,10}\b/u', $req, $m2)) {
-            foreach ($m2[0] as $raw) {
-                $c = $this->normalize($raw);
-                if ($c !== '' && ! in_array($c, self::STOPWORDS, true)) {
                     $out[] = $c;
                 }
             }
@@ -611,7 +641,7 @@ final class ProductMatchService
         ];
 
         $candidates = $this->mergeCandidates($heuristic, $aiCandidates);
-        $pick = $this->pickAuto($heuristic, $aiCandidates, $products);
+        $pick = $this->pickAuto($item->requirement, $heuristic, $aiCandidates, $products);
 
         if ($pick === null) {
             $bestScore = max(
@@ -692,7 +722,7 @@ final class ProductMatchService
         // drugie źródło: model AI (top 5) — tylko gdy heurystyka nie pewna
         $aiCandidates = $this->aiTopCandidates($requirement, 5);
 
-        return $this->pickAuto($heuristic, $aiCandidates, $products);
+        return $this->pickAuto($requirement, $heuristic, $aiCandidates, $products);
     }
 
     /**
@@ -701,7 +731,7 @@ final class ProductMatchService
      * @param  Collection<int, Product>  $products
      * @return array{product: Product, score: int, source: string}|null
      */
-    private function pickAuto(?array $heuristic, array $aiCandidates, Collection $products): ?array
+    private function pickAuto(string $requirement, ?array $heuristic, array $aiCandidates, Collection $products): ?array
     {
         if ($heuristic !== null && $heuristic['score'] >= self::MIN_MATCH_SCORE) {
             return [
@@ -711,20 +741,42 @@ final class ProductMatchService
             ];
         }
 
-        $topAi = $aiCandidates[0] ?? null;
-        if ($topAi !== null && $topAi['score'] >= self::MIN_MATCH_SCORE) {
+        foreach ($aiCandidates as $topAi) {
+            if ($topAi['score'] < self::MIN_MATCH_SCORE) {
+                continue;
+            }
             $product = $products->firstWhere('id', $topAi['id'])
                 ?? Product::query()->find($topAi['id']);
-            if ($product instanceof Product) {
-                return [
-                    'product' => $product,
-                    'score' => $topAi['score'],
-                    'source' => (string) ($topAi['source'] ?? 'ai'),
-                ];
+            if (! $product instanceof Product) {
+                continue;
             }
+            if (! $this->productFitsRequirement($requirement, $product)) {
+                continue;
+            }
+
+            return [
+                'product' => $product,
+                'score' => $topAi['score'],
+                'source' => (string) ($topAi['source'] ?? 'ai'),
+            ];
         }
 
         return null;
+    }
+
+    private function productFitsRequirement(string $requirement, Product $product): bool
+    {
+        $req = $this->normalize($requirement);
+        $attrs = $this->bhpAttributes->forProduct($product);
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $hay = $this->normalize(
+            $product->name.' '.$product->sku.' '.$product->manufacturer.' '
+            .($product->norms ?? '').' '.($product->category ?? '').' '
+            .((string) ($product->description ?? '')).' '
+            .implode(' ', is_array($payload['norms'] ?? null) ? $payload['norms'] : [])
+        );
+
+        return $this->assortmentsCompatible($req, $hay, $product, $attrs);
     }
 
     /**
@@ -964,6 +1016,11 @@ final class ProductMatchService
         if ($skuHit > 0) {
             $reasons[] = ['code' => 'sku', 'label' => 'Dopasowanie SKU / kodu modelu', 'points' => $skuHit];
             $score += $skuHit;
+        }
+        $typePts = $this->typeNameScore($req, $product);
+        if ($typePts > 0) {
+            $reasons[] = ['code' => 'type_name', 'label' => 'Zgodność typu / nazwy (np. kominiarka)', 'points' => $typePts];
+            $score += $typePts;
         }
 
         $mat = $this->materialRequirementScore($req, $hay, $materials);

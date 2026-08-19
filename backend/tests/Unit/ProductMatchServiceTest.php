@@ -136,6 +136,44 @@ final class ProductMatchServiceTest extends TestCase
         $this->assertGreaterThanOrEqual(ProductMatchService::MIN_MATCH_SCORE, $best['score']);
     }
 
+    #[Test]
+    public function balaclava_does_not_match_gloves_via_norm_number(): void
+    {
+        $products = new Collection([
+            $this->fakeProduct([
+                'sku' => '11612',
+                'name' => 'ROS - Rękawice 100% poliester, bezpyłowe',
+                'manufacturer' => 'ROS',
+                'category' => 'REKAWICE',
+                'description' => 'Rękawice poliestrowe bezpyłowe.',
+            ]),
+            $this->fakeProduct([
+                'sku' => 'KOM-ESD',
+                'name' => 'Kominiarka antyelektrostatyczna',
+                'manufacturer' => 'URGENT',
+                'category' => 'ochrona_glowy',
+                'norms' => 'EN 1149-5 EN ISO 11612 EN ISO 13688',
+                'description' => 'Kominiarka z certyfikatem ESD do prac w strefie zagrożonej wybuchem.',
+            ]),
+        ]);
+
+        $best = $this->matcher->bestMatch(
+            'KOMINIARKA ANTYELEKTROSTATYCZNA z certyfikatem - EN 1149-5 EN ISO 11612 EN ISO 13688',
+            $products
+        );
+
+        $this->assertNotNull($best);
+        $this->assertSame('KOM-ESD', $best['product']->sku);
+        $this->assertGreaterThanOrEqual(ProductMatchService::MIN_MATCH_SCORE, $best['score']);
+
+        $explained = $this->matcher->explainMatch(
+            'KOMINIARKA ANTYELEKTROSTATYCZNA z certyfikatem - EN 1149-5 EN ISO 11612 EN ISO 13688',
+            $products[0]
+        );
+        $this->assertSame(0, $explained['score']);
+        $this->assertSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null);
+    }
+
     /**
      * @param  array<string, mixed>  $attrs
      */

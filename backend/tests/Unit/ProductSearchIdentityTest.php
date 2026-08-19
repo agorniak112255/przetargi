@@ -209,4 +209,32 @@ final class ProductSearchIdentityTest extends TestCase
             $product
         ));
     }
+
+    public function test_pilne_sku_is_urgent_glove_series(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'PILNE-1019',
+            'name' => '1019 ZIMA Z POLARU',
+            'manufacturer' => 'PILNE',
+            'category' => 'REKAWICE',
+        ]);
+
+        $this->assertTrue($id->looksLikeUrgentGloveSeries($product));
+        $joined = implode(' | ', $id->searchQueries($product, 'industry'));
+        $this->assertStringContainsString('Urgent 1019', $joined);
+
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://urgent.com.pl/rekawice-1019-zima-z-polaru Urgent 1019 zima z polaru',
+            $product
+        ));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://cushmanwakefield.com/offices/1019 Find the perfect office, industrial or commercial real estate',
+            $product
+        ));
+        $this->assertTrue($id->isTrustedPageImageUrl(
+            'https://urgent.com.pl/wp-content/uploads/2020/1019-zima.jpg',
+            $product
+        ));
+    }
 }

@@ -22,6 +22,7 @@ final class ManufacturerDomainResolver
 
     public function __construct(
         private readonly AiSettingsService $settings,
+        private readonly ProductSearchIdentity $identity,
     ) {}
 
     /**
@@ -35,6 +36,12 @@ final class ManufacturerDomainResolver
         }
 
         $mapped = $this->domainsFromConfig($brand);
+        if ($this->identity->looksLikeUrgentGloveSeries($product)) {
+            $mapped = array_values(array_unique(array_merge(
+                $mapped,
+                $this->domainsFromConfig('urgent')
+            )));
+        }
         if ($mapped !== []) {
             return $mapped;
         }

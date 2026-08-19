@@ -283,6 +283,9 @@ final class ProductEnrichmentService
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets);
 
             $description = $this->composeFullDescription($extracted);
+            if (! $this->isUsableProductDescription($description, $product)) {
+                $description = '';
+            }
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
                 $fallback = $this->fallbackDescriptionFromPages($pageSnippets, (string) $product->sku);
                 if ($fallback !== '' && ! $this->looksLikeThinDescription($fallback)) {
@@ -1015,6 +1018,9 @@ final class ProductEnrichmentService
                 array_slice($pageSnippets, -3)
             );
             $extraDesc = $this->composeFullDescription($extraExtracted);
+            if (! $this->isUsableProductDescription($extraDesc, $product)) {
+                $extraDesc = '';
+            }
             if ($this->isRicherDescription($extraDesc, $description)) {
                 $description = $extraDesc;
                 $extracted = $this->mergeExtracted($extracted, $extraExtracted);
@@ -1354,7 +1360,7 @@ final class ProductEnrichmentService
             return true;
         }
         $low = mb_strtolower($d);
-        if ($this->looksLikeShopChromeDescription($d)) {
+        if ($this->looksLikeShopChromeDescription($d) || $this->looksLikeOffTopicDescription($d)) {
             return true;
         }
 
@@ -1380,6 +1386,64 @@ final class ProductEnrichmentService
         }
 
         return $hits >= 2;
+    }
+
+    private function looksLikeOffTopicDescription(string $description): bool
+    {
+        $low = mb_strtolower($description);
+        foreach ([
+            'real estate', 'nieruchomoś', 'leasing opportunity', 'investment or leasing',
+            'office, industrial or commercial', 'multi-family housing',
+            'powierzchni biurow', 'wynajmu nieruchomości', 'cushman', 'colliers', 'cbre',
+        ] as $needle) {
+            if (str_contains($low, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isUsableProductDescription(string $description, Product $product): bool
+    {
+        $d = trim($description);
+        if ($d === '' || $this->looksLikeMissingCardMeta($d) || $this->looksLikeThinDescription($d)) {
+            return false;
+        }
+
+        return $this->descriptionMentionsProduct($d, $product);
+    }
+
+    private function descriptionMentionsProduct(string $description, Product $product): bool
+    {
+        $hay = mb_strtolower($description);
+        $needles = [];
+        foreach ([(string) $product->sku, (string) $product->name, (string) $product->manufacturer] as $value) {
+            $value = mb_strtolower(trim($value));
+            if ($value !== '') {
+                $needles[] = $value;
+            }
+        }
+        $core = $this->identity->gloveCodeCore($product);
+        if ($core !== null) {
+            $needles[] = $core;
+        }
+        foreach (preg_split('/[\s\-®™\/_]+/u', mb_strtolower((string) $product->name)) ?: [] as $part) {
+            $part = trim($part);
+            if ($part !== '' && mb_strlen($part) >= 4) {
+                $needles[] = $part;
+            }
+        }
+        foreach ($needles as $needle) {
+            if ($needle !== '' && str_contains($hay, $needle)) {
+                return true;
+            }
+        }
+
+        return (bool) preg_match(
+            '#(rękaw|rekaw|glove|polar|ochron|bhp|ppe|nitryl|lateks|en\s*388|en\s*iso)#u',
+            $hay
+        );
     }
 
     /**
@@ -1603,7 +1667,8 @@ SYS,
             }
             $url = (string) ($row['url'] ?? '');
             $text = trim((string) ($row['text'] ?? ''));
-            if ($url === '' || $text === '' || $this->looksLikeShopChromeDescription($text)) {
+            if ($url === '' || $text === '' || $this->looksLikeShopChromeDescription($text)
+                || $this->looksLikeOffTopicDescription($text)) {
                 continue;
             }
             $byUrl[mb_strtolower($url)] = ['url' => $url, 'text' => mb_substr($text, 0, 3500)];
@@ -1672,6 +1737,7 @@ Zwróć WYŁĄCZNIE JSON:
 WYPEŁNIJ tablice features/specs/norms/materials/use_cases oraz attributes, gdy fakty są w tekście — nie zostawiaj ich pustych „dla skrótu”.
 attributes: używaj wyłącznie wartości ze źródeł; brak danych → null / [].
 Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
+Pomiń reklamy, nieruchomości, leasing, biura, inwestycje i inny tekst niezwiązany z tym produktem BHP.
 SYS,
             ],
             [

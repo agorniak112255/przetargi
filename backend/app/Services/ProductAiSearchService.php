@@ -139,6 +139,10 @@ final class ProductAiSearchService
 
         $productType = '';
         foreach ([
+            'kominiarka' => 'kominiarka',
+            'kominiark' => 'kominiarka',
+            'czapka' => 'czapka',
+            'czepek' => 'czepek',
             'rekawice' => 'rękawice',
             'rękawice' => 'rękawice',
             'buty' => 'buty',
@@ -209,6 +213,19 @@ final class ProductAiSearchService
                     ->where('name', 'not like', '%S3%')
                     ->where('name', 'not like', '% trzewik%');
             });
+        } elseif (in_array($type, ['kominiarka', 'czapka', 'czepek', 'hełm', 'kask'], true)) {
+            $q->where(function ($w) use ($type): void {
+                $w->where('name', 'like', '%'.$type.'%')
+                    ->orWhere('name', 'like', '%kominiark%')
+                    ->orWhere('name', 'like', '%czapk%')
+                    ->orWhere('name', 'like', '%hełm%')
+                    ->orWhere('name', 'like', '%helm%')
+                    ->orWhere('name', 'like', '%kask%')
+                    ->orWhere('category', 'like', '%głow%')
+                    ->orWhere('category', 'like', '%glowy%');
+            });
+            $q->where('name', 'not like', '%rękaw%')
+                ->where('name', 'not like', '%rekaw%');
         } elseif ($type === 'buty' || $type === 'obuwie') {
             $q->where(function ($w): void {
                 $w->where('category', 'like', '%obuwie%')
@@ -415,6 +432,21 @@ final class ProductAiSearchService
             return true;
         }
 
+        if (in_array($type, ['kominiarka', 'czapka', 'czepek', 'hełm', 'kask'], true)) {
+            $needle = $this->ascii($type);
+            $isHead = str_contains($hay, $needle)
+                || str_contains($hay, 'kominiark')
+                || str_contains($hay, 'czapk')
+                || str_contains($hay, 'helm')
+                || str_contains($hay, 'kask')
+                || str_contains($hay, 'czepek');
+            if (! $isHead) {
+                return false;
+            }
+
+            return ! str_contains($hay, 'rekaw') && ! str_contains($hay, 'glove');
+        }
+
         if ($type === 'rękawice') {
             $isGlove = str_contains($hay, 'rekaw')
                 || str_contains($hay, 'glove')
@@ -541,7 +573,8 @@ final class ProductAiSearchService
                 'role' => 'system',
                 'content' => 'Ekspert BHP. Wybierz produkty pasujące do wymagania. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"krótko"}]}. '
-                    .'Uwzględnij typ (rękawice≠obuwie), materiał i zastosowanie. '
+                    .'Dopasuj po: 1) typ z nazwy (kominiarka≠rękawice≠buty≠kask) 2) specyfikacja 3) normy EN. '
+                    .'Inny typ PPE → nie zwracaj. score>=40 tylko gdy typ i normy/cechy się zgadzają. '
                     .'score>=40 gdy sensownie pasuje. Max 5 pozycji. Tylko id z listy.',
             ],
             [

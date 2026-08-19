@@ -62,6 +62,12 @@ return [
             'urgent.pl',
             'www.urgent.pl',
         ],
+        'pilne' => [
+            'urgent.com.pl',
+            'www.urgent.com.pl',
+            'urgent.pl',
+            'www.urgent.pl',
+        ],
     ],
 
     /*
@@ -112,5 +118,7 @@ return [
         'www.pros.pl',
         'optimumbhp.pl',
         'www.optimumbhp.pl',
+        'urgent.com.pl',
+        'www.urgent.com.pl',
     ],
 ];
