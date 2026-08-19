@@ -11,6 +11,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
+use App\Support\ProductModelFuzzy;
 use Illuminate\Support\Collection;
 use Throwable;
 
@@ -48,6 +49,7 @@ final class ProductMatchService
         private readonly ProductVectorSearch $vectorSearch,
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly ExternalCatalogHintService $externalHints,
+        private readonly ProductModelFuzzy $modelFuzzy,
     ) {}
 
     /**
@@ -204,6 +206,14 @@ final class ProductMatchService
         $req = $this->normalize($requirement);
         $reqTokens = $this->significantTokens($req);
         $reqCodes = $this->codeCandidates($requirement);
+        if ($this->modelFuzzy->hasNamedModel($requirement)) {
+            $named = $products->filter(
+                fn (Product $p): bool => $this->modelFuzzy->matches($requirement, $p)
+            );
+            if ($named->isNotEmpty()) {
+                $products = $named;
+            }
+        }
         $scored = [];
 
         foreach ($products as $product) {
@@ -230,6 +240,10 @@ final class ProductMatchService
                 continue;
             }
             $score = $this->score($req, $reqTokens, $reqCodes, $hay, $product, $materials, $attrs);
+            $fuzzy = $this->modelFuzzy->score($requirement, $product);
+            if ($fuzzy >= 80) {
+                $score = max($score, $fuzzy);
+            }
             $scored[] = ['product' => $product, 'score' => $score];
         }
 
@@ -937,7 +951,10 @@ final class ProductMatchService
         $reqNorm = $this->normalize($requirement);
         $reqCodes = $this->codeCandidates($requirement);
         foreach ($products as $product) {
-            $score = $this->skuMatchScore($reqNorm, $reqCodes, $product);
+            $score = max(
+                $this->skuMatchScore($reqNorm, $reqCodes, $product),
+                $this->modelFuzzy->score($requirement, $product)
+            );
             if ($score < 70) {
                 continue;
             }
@@ -963,12 +980,16 @@ final class ProductMatchService
             $this->normalize($requirement),
             $this->codeCandidates($requirement),
             $product
-        ) >= 70;
+        ) >= 70 || $this->modelFuzzy->score($requirement, $product) >= 80;
     }
 
     /** Kody z cyfrą (6503, HF803) — nie wolno podstawić innej półmaski tej samej marki. */
     private function honorsSpecificModelCodes(string $requirement, Product $product): bool
     {
+        if ($this->modelFuzzy->hasNamedModel($requirement)) {
+            return $this->modelFuzzy->matches($requirement, $product);
+        }
+
         $codes = [];
         foreach ($this->codeCandidates($requirement) as $code) {
             if (preg_match('/\d/', $code) === 1 && mb_strlen($code) >= 4) {
@@ -1244,6 +1265,11 @@ final class ProductMatchService
         if ($skuHit > 0) {
             $reasons[] = ['code' => 'sku', 'label' => 'Dopasowanie SKU / kodu modelu', 'points' => $skuHit];
             $score += $skuHit;
+        }
+        $fuzzyHit = $this->modelFuzzy->score($requirement, $product);
+        if ($fuzzyHit >= 80) {
+            $reasons[] = ['code' => 'fuzzy_model', 'label' => 'Model z SIWZ (literówka)', 'points' => $fuzzyHit];
+            $score = max($score, $fuzzyHit);
         }
         $typePts = $this->typeNameScore($req, $product);
         if ($typePts > 0) {

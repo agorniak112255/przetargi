@@ -194,9 +194,9 @@ final class ProductAiSearchApiTest extends TestCase
             'query' => 'FARTUCH LAB. ELANO-BAWEŁNA prosty, biały. EN ISO 13688',
         ])
             ->assertOk()
-            ->assertJsonPath('total', 0)
-            ->assertJsonPath('products', [])
-            ->assertJsonPath('external_hint', null);
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'LAB-COAT')
+            ->assertJsonMissing(['sku' => 'PROS-106']);
     }
 
     public function test_ai_search_finds_sku_without_description(): void
@@ -246,6 +246,53 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('products.0.sku', '6503-EN');
+    }
+
+    public function test_ai_search_finds_catalog_model_despite_siwz_typo(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $mapa = Product::query()->create([
+            'sku' => '34700018',
+            'name' => 'TEMP-ICE 700',
+            'manufacturer' => 'MAPA',
+            'description' => null,
+            'catalog_price_net' => 4.9,
+            'purchase_price' => 3,
+            'stock' => 8,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+        Product::query()->create([
+            'sku' => '60592',
+            'name' => 'Rękawice zimowe Unilite Thermo Plus',
+            'manufacturer' => 'uvex',
+            'norms' => 'EN 388, EN 511, EN ISO 21420',
+            'description' => 'Rękawice zimowe Unilite Thermo Plus zgodne z EN 388 EN 511 EN ISO 21420.',
+            'catalog_price_net' => 28.6,
+            'purchase_price' => 21.45,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturn(
+                [
+                    'needed' => 'rękawice MAPA TEPM-ICE 700',
+                    'search_phrases' => ['mapa', 'tepm-ice', 'rękawice zimowe'],
+                ],
+                ['matches' => []],
+            );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice MAPA TEPM-ICE 700 · EN 388 EN 511 EN ISO 21420',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', '34700018')
+            ->assertJsonPath('products.0.id', $mapa->id)
+            ->assertJsonMissing(['sku' => '60592']);
     }
 
     public function test_empty_catalog_returns_external_link_not_product(): void

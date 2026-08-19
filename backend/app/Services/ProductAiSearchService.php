@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Product;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Vector\ProductVectorSearch;
+use App\Support\ProductModelFuzzy;
 use Illuminate\Support\Collection;
 use RuntimeException;
 use Throwable;
@@ -17,6 +18,7 @@ final class ProductAiSearchService
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductVectorSearch $vectorSearch,
         private readonly ExternalCatalogHintService $externalHints,
+        private readonly ProductModelFuzzy $modelFuzzy,
     ) {}
 
     /**
@@ -46,6 +48,9 @@ final class ProductAiSearchService
         }
 
         $ranked = $this->rankWithLlm($query, $candidates->take(30)->values(), $limit, $intent['needed']);
+        if ($this->modelFuzzy->hasNamedModel($query)) {
+            $ranked = $this->preferNamedModelHits($query, $ranked, $candidates, $limit);
+        }
         if ($ranked === []) {
             return $this->emptyResult($query, $intent, $withExternalHint, 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.');
         }
@@ -85,6 +90,7 @@ final class ProductAiSearchService
                     'role' => 'system',
                     'content' => 'Jesteś ekspertem BHP. Najpierw zrozum wymaganie SIWZ: jaki konkretny produkt jest potrzebny. '
                         .'Uwzględnij synonimy i różne nazwy (np. obuwie/buty/botki/trzewiki, kurtka/bluza ochronna). '
+                        .'Popraw oczywiste literówki w marce/modelu (np. TEPM-ICE → TEMP-ICE) i dodaj poprawioną frazę. '
                         .'Nie klasyfikuj przez sztywną listę typów. '
                         .'JSON: {"needed":"zwięzły opis szukanego produktu","search_phrases":["2-8 fraz do katalogu, także synonimy"]}. '
                         .'„rękawy” odzieży ≠ rękawice.',
@@ -188,12 +194,19 @@ final class ProductAiSearchService
     {
         $searchText = $intent['needed'] !== '' ? $intent['needed'] : $query;
         $codeHits = $this->retrieveByModelCode($query.' '.$searchText, $limit);
+        $fuzzyHits = $this->retrieveByFuzzyModel($query.' '.$searchText, $limit);
+        $priority = $this->uniqueProducts($codeHits->concat($fuzzyHits), $limit);
+
+        if ($this->modelFuzzy->hasNamedModel($query) && $priority->isNotEmpty()) {
+            return $priority;
+        }
+
         $vectorHits = $this->retrieveVector($searchText, max($limit, 80));
         $likeHits = $this->retrieveLike($intent['search_phrases'], $limit);
 
         $seen = [];
         $merged = collect();
-        foreach ($codeHits->concat($likeHits)->concat($vectorHits) as $product) {
+        foreach ($priority->concat($likeHits)->concat($vectorHits) as $product) {
             if (! $product instanceof Product || isset($seen[$product->id])) {
                 continue;
             }
@@ -232,6 +245,117 @@ final class ProductAiSearchService
         });
 
         return $q->limit(max(8, $limit))->get()->values();
+    }
+
+    /**
+     * Karty bez opisu też — literówka w modelu (TEPM-ICE → TEMP-ICE).
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByFuzzyModel(string $query, int $limit): Collection
+    {
+        $chunks = $this->modelFuzzy->sqlChunks($query);
+        if ($chunks === []) {
+            return collect();
+        }
+
+        $q = Product::query()
+            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
+            ->withCount(['substitutes', 'images']);
+
+        $q->where(function ($outer) use ($chunks): void {
+            foreach ($chunks as $chunk) {
+                $like = '%'.addcslashes($chunk, '%_\\').'%';
+                $outer->orWhere('sku', 'like', $like)
+                    ->orWhere('name', 'like', $like)
+                    ->orWhere('manufacturer', 'like', $like);
+            }
+        });
+
+        return $q->limit(250)
+            ->get()
+            ->filter(fn (Product $p): bool => $this->modelFuzzy->matches($query, $p))
+            ->sortByDesc(fn (Product $p): int => $this->modelFuzzy->score($query, $p))
+            ->take(max(8, $limit))
+            ->values();
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return Collection<int, Product>
+     */
+    private function uniqueProducts(Collection $products, int $limit): Collection
+    {
+        $seen = [];
+        $out = collect();
+        foreach ($products as $product) {
+            if (! $product instanceof Product || isset($seen[$product->id])) {
+                continue;
+            }
+            $seen[$product->id] = true;
+            $out->push($product);
+            if ($out->count() >= $limit) {
+                break;
+            }
+        }
+
+        return $out->values();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $ranked
+     * @param  Collection<int, Product>  $candidates
+     * @return list<array<string, mixed>>
+     */
+    private function preferNamedModelHits(string $query, array $ranked, Collection $candidates, int $limit): array
+    {
+        $named = $candidates->filter(
+            fn (Product $p): bool => $this->modelFuzzy->matches($query, $p)
+        )->values();
+        if ($named->isEmpty()) {
+            return $ranked;
+        }
+
+        $namedIds = [];
+        foreach ($named as $product) {
+            $namedIds[(int) $product->id] = true;
+        }
+
+        $kept = [];
+        foreach ($ranked as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            if ($id > 0 && isset($namedIds[$id])) {
+                $kept[] = $row;
+            }
+        }
+        if ($kept !== []) {
+            return array_slice($kept, 0, $limit);
+        }
+
+        return $this->rowsFromNamedModels($query, $named, $limit);
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromNamedModels(string $query, Collection $products, int $limit): array
+    {
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $row['ai_match_percent'] = min(99, max(80, $this->modelFuzzy->score($query, $product)));
+            $row['ai_match_reason'] = 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).';
+            $out[] = $row;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -452,6 +576,8 @@ final class ProductAiSearchService
                 'role' => 'system',
                 'content' => 'Jesteś ekspertem BHP. Porównaj wymaganie z kartami katalogu SUPON. '
                     .'Sam oceń, czy karta to ten sam rodzaj produktu (synonimy: buty=obuwie=trzewiki; kurtka może być bluzą ochronną). '
+                    .'Jeśli SIWZ podaje markę i model, wybierz kartę tej marki/modelu nawet przy literówce (TEPM-ICE = TEMP-ICE). '
+                    .'Nie podstawiaj innej marki tylko dlatego, że normy EN się zgadzają. '
                     .'Inny rodzaj PPE → nie zwracaj. Jeśli nic nie pasuje: {"matches":[]}. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}. '
                     .'score>=40 tylko przy zgodnym produkcie. Max 5. Tylko id z listy. '

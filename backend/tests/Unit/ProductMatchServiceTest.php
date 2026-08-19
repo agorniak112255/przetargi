@@ -323,6 +323,35 @@ final class ProductMatchServiceTest extends TestCase
         $this->assertLessThan(40, $explained['score']);
     }
 
+    #[Test]
+    public function typo_in_siwz_model_matches_catalog_name_not_other_brand(): void
+    {
+        $products = new Collection([
+            $this->fakeProduct([
+                'sku' => '60592',
+                'name' => 'Rękawice zimowe Unilite Thermo Plus',
+                'manufacturer' => 'uvex',
+                'description' => 'Rękawice zimowe zgodne z EN 388 EN 511 EN ISO 21420 karta z opisem.',
+                'norms' => 'EN 388 EN 511 EN ISO 21420',
+            ]),
+            $this->fakeProduct([
+                'sku' => '34700018',
+                'name' => 'TEMP-ICE 700',
+                'manufacturer' => 'MAPA',
+                'description' => null,
+            ]),
+        ]);
+
+        $best = $this->matcher->bestMatch(
+            'Rękawice MAPA TEPM-ICE 700 · EN 388 EN 511 EN ISO 21420',
+            $products
+        );
+
+        $this->assertNotNull($best);
+        $this->assertSame('34700018', $best['product']->sku);
+        $this->assertGreaterThanOrEqual(ProductMatchService::MIN_MATCH_SCORE, $best['score']);
+    }
+
     /**
      * @param  array<string, mixed>  $attrs
      */
