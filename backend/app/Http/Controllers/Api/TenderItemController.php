@@ -148,6 +148,8 @@ class TenderItemController extends Controller
             'items.*.main_product_id' => ['nullable', 'integer', 'exists:products,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
             'items.*.offer_price' => ['nullable', 'numeric', 'min:0'],
+            'items.*.custom_name' => ['nullable', 'string', 'max:500'],
+            'items.*.custom_url' => ['nullable', 'string', 'max:2048'],
         ]);
 
         $updated = 0;
@@ -170,8 +172,26 @@ class TenderItemController extends Controller
                 $item->main_product_id = $row['main_product_id'] ?? null;
                 $item->quantity = (int) $row['quantity'];
                 $item->offer_price = array_key_exists('offer_price', $row) ? $row['offer_price'] : $item->offer_price;
+                if (array_key_exists('custom_name', $row)) {
+                    $item->custom_name = $this->nullableTrim($row['custom_name'] ?? null);
+                }
+                if (array_key_exists('custom_url', $row)) {
+                    $url = $this->nullableTrim($row['custom_url'] ?? null);
+                    if ($url !== null && ! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://')) {
+                        throw ValidationException::withMessages([
+                            'items.'.$item->id.'.custom_url' => ['Link musi zaczynać się od http:// lub https://.'],
+                        ]);
+                    }
+                    $item->custom_url = $url;
+                }
                 if ($item->main_product_id !== null) {
+                    $item->custom_name = null;
+                    $item->custom_url = null;
                     $item->status = 'matched';
+                } elseif ($item->hasCustomOffer()) {
+                    $item->status = 'matched';
+                    $item->match_source = $item->match_source ?: 'custom';
+                    $item->ai_match_reasons = $this->mergeCustomOfferReason($item);
                 }
                 $item->save();
                 $item->load('mainProduct');
@@ -248,6 +268,10 @@ class TenderItemController extends Controller
 
         if (array_key_exists('main_product_id', $data)) {
             $item->main_product_id = $data['main_product_id'];
+            if ($data['main_product_id'] !== null) {
+                $item->custom_name = null;
+                $item->custom_url = null;
+            }
             if ($data['main_product_id'] !== null && ! array_key_exists('offer_price', $data)) {
                 $product = Product::query()->find($data['main_product_id']);
                 if ($product !== null && (float) $product->purchase_price > 0) {

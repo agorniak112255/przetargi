@@ -264,7 +264,7 @@ final class ProductAiSearchService
 
         $q->where(function ($outer) use ($phrases): void {
             foreach (array_slice($phrases, 0, 14) as $term) {
-                $like = '%'.$term.'%';
+                $like = '%'.addcslashes($term, '%_\\').'%';
                 $outer->orWhere(function ($w) use ($like): void {
                     $w->where('name', 'like', $like)
                         ->orWhere('description', 'like', $like)

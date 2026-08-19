@@ -145,6 +145,8 @@ type ItemDraft = {
   main_product_id: number | null
   quantity: number
   offer_price: number | null
+  custom_name: string | null
+  custom_url: string | null
 }
 
 type History = {
@@ -2147,8 +2149,10 @@ function ItemRow({
       main_product_id: productId ? Number(productId) : null,
       quantity: Number(qty) || 1,
       offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
+      custom_name: customName.trim() || null,
+      custom_url: customUrl.trim() || null,
     })
-  }, [item.id, productId, qty, price, onDraftChange])
+  }, [item.id, productId, qty, price, customName, customUrl, onDraftChange])
 
   const selectedProduct =
     picked && String(picked.id) === productId
@@ -2188,6 +2192,10 @@ function ItemRow({
                   setPicked(product ?? null)
                   setMatchHint('')
                   setPendingAiScore(null)
+                  if (id) {
+                    setCustomName('')
+                    setCustomUrl('')
+                  }
                 }}
                 hint={
                   matchHint ||
@@ -2222,13 +2230,19 @@ function ItemRow({
                 })
                 setMatchHint(`AI: ${p.sku} (${p.score}%)`)
                 setPendingAiScore(p.score)
+                setCustomName('')
+                setCustomUrl('')
                 setAiModalOpen(false)
               }}
               onAddExternal={(hint) => {
                 setCustomName(hint.title)
                 setCustomUrl(hint.url)
+                setProductId('')
+                setPicked(null)
+                setPendingAiScore(null)
                 setAiModalOpen(false)
                 void onSave(item.id, {
+                  main_product_id: null,
                   custom_name: hint.title,
                   custom_url: hint.url,
                   quantity: Number(qty) || 1,
@@ -2244,7 +2258,10 @@ function ItemRow({
                 onAddToOffer={(hint) => {
                   setCustomName(hint.title)
                   setCustomUrl(hint.url)
+                  setProductId('')
+                  setPicked(null)
                   void onSave(item.id, {
+                    main_product_id: null,
                     custom_name: hint.title,
                     custom_url: hint.url,
                     quantity: Number(qty) || 1,

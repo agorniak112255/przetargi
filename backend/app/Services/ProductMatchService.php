@@ -727,12 +727,25 @@ final class ProductMatchService
         $pick = $this->resolveBestPick($item->requirement, $products);
 
         if ($pick === null) {
+            if ($item->hasCustomOffer()) {
+                return [
+                    'matched' => true,
+                    'score' => (int) ($item->ai_match_percent ?? 0),
+                    'product_id' => null,
+                    'product' => null,
+                    'offer_price' => $item->offer_price,
+                    'skipped_existing' => true,
+                    'sources' => $sources,
+                    'candidates' => $candidates,
+                    'ai_match_reasons' => $item->ai_match_reasons,
+                    'match_source' => $item->match_source,
+                ];
+            }
             $this->applyNoCatalogMatch($item, $products);
-            $bestScore = (int) ($item->ai_match_percent ?? 0);
 
             return [
                 'matched' => false,
-                'score' => $bestScore,
+                'score' => (int) ($item->ai_match_percent ?? 0),
                 'product_id' => null,
                 'offer_price' => $item->offer_price,
                 'sources' => $sources,
@@ -976,16 +989,6 @@ final class ProductMatchService
         return array_slice($list, 0, 5);
     }
 
-    /**
-     * @param  Collection<int, Product>  $products
-     */
-    private function bestScoreHint(string $requirement, Collection $products): int
-    {
-        $heuristic = $this->bestMatch($requirement, $products);
-
-        return (int) ($heuristic['score'] ?? 0);
-    }
-
     private function applyProduct(
         TenderItem $item,
         Product $product,
@@ -1010,6 +1013,8 @@ final class ProductMatchService
         }
 
         $item->main_product_id = $product->id;
+        $item->custom_name = null;
+        $item->custom_url = null;
         $item->ai_match_percent = $score;
         $item->ai_match_reasons = $reasons;
         $item->match_source = $source;
@@ -1027,9 +1032,13 @@ final class ProductMatchService
      */
     private function applyNoCatalogMatch(TenderItem $item, Collection $products): void
     {
+        if ($item->hasCustomOffer()) {
+            return;
+        }
+
         $item->main_product_id = null;
         $item->status = 'brak';
-        $item->ai_match_percent = $this->bestScoreHint($item->requirement, $this->withDescriptions($products));
+        $item->ai_match_percent = null;
         $reasons = [
             [
                 'code' => 'no_match',
