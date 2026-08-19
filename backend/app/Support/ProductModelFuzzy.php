@@ -32,9 +32,13 @@ final class ProductModelFuzzy
         $text = $this->stripNorms($requirement);
         $out = [];
 
-        if (preg_match_all('/\b[a-z]{2,14}(?:-[a-z0-9]{1,12}){1,4}\b/u', $text, $m)) {
-            foreach ($m[0] as $raw) {
+        if (preg_match_all('/\b[a-z]{2,14}(?:-[a-z0-9]{1,12}){1,4}\b/u', $text, $m, PREG_OFFSET_CAPTURE)) {
+            foreach ($m[0] as [$raw, $offset]) {
                 $this->pushNeedle($out, $raw);
+                $after = ltrim(substr($text, $offset + strlen($raw), 16));
+                if (preg_match('/^(\d{3,5})\b/', $after, $nm) === 1) {
+                    $this->pushNeedle($out, $this->compact($raw).$nm[1]);
+                }
             }
         }
 
@@ -42,6 +46,9 @@ final class ProductModelFuzzy
         $tokens = array_values(array_filter($tokens, static fn (string $t): bool => $t !== ''));
         $count = count($tokens);
         for ($i = 0; $i < $count; $i++) {
+            if (str_contains($tokens[$i], '-') || (isset($tokens[$i + 1]) && str_contains($tokens[$i + 1], '-'))) {
+                continue;
+            }
             $a = $this->lettersOnly($tokens[$i]);
             $b = isset($tokens[$i + 1]) ? $this->lettersOnly($tokens[$i + 1]) : '';
             if ($a === '' || $b === '' || $this->isStop($a) || $this->isStop($b)) {
@@ -62,42 +69,60 @@ final class ProductModelFuzzy
     }
 
     /**
-     * Fragmenty LIKE — zawężają katalog przed filtrem Levenshtein.
+     * Marka z SIWZ — bez tokenu modelu (tepmice).
      *
      * @return list<string>
      */
-    public function sqlChunks(string $requirement): array
+    public function manufacturerHints(string $requirement): array
     {
-        $chunks = [];
-        foreach ($this->needles($requirement) as $needle) {
-            if (preg_match('/\d{3,5}$/', $needle, $m) === 1) {
-                $chunks[] = $m[0];
+        $needles = $this->needles($requirement);
+        $out = [];
+        foreach ($this->brandHints($requirement) as $brand) {
+            foreach ($needles as $needle) {
+                if ($brand === $needle || (mb_strlen($brand) >= 5 && str_contains($needle, $brand))) {
+                    continue 2;
+                }
             }
-            if (mb_strlen($needle) >= 7) {
-                $chunks[] = mb_substr($needle, 0, 4);
-            }
+            $out[] = $brand;
         }
 
+        return $out;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function hyphenLetterParts(string $requirement): array
+    {
         $text = $this->stripNorms($requirement);
+        $out = [];
         if (preg_match_all('/\b[a-z]{2,14}(?:-[a-z0-9]{1,12}){1,4}\b/u', $text, $m)) {
             foreach ($m[0] as $raw) {
                 foreach (explode('-', $raw) as $part) {
                     $part = $this->compact($part);
                     if (mb_strlen($part) >= 3 && ! $this->isStop($part) && ! ctype_digit($part)) {
-                        $chunks[] = $part;
+                        $out[] = $part;
                     }
                 }
             }
         }
 
-        foreach ($this->brandHints($requirement) as $brand) {
-            $chunks[] = $brand;
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function modelNumbers(string $requirement): array
+    {
+        $out = [];
+        foreach ($this->needles($requirement) as $needle) {
+            if (preg_match('/(\d{3,5})$/', $needle, $m) === 1) {
+                $out[] = $m[1];
+            }
         }
 
-        return array_values(array_unique(array_filter(
-            $chunks,
-            static fn (string $c): bool => mb_strlen($c) >= 3
-        )));
+        return array_values(array_unique($out));
     }
 
     /**

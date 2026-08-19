@@ -42,15 +42,28 @@ final class ProductAiSearchService
 
         $intent = $this->understandRequirement($query);
         $candidates = $this->retrieveCandidates($query, $intent, 40);
+        $named = $candidates->filter(
+            fn (Product $p): bool => $this->modelFuzzy->matches($query, $p)
+        )->values();
+        if ($named->isNotEmpty()) {
+            $ranked = $this->rowsFromNamedModels($query, $named, $limit);
+
+            return [
+                'query' => $query,
+                'total' => count($ranked),
+                'products' => $ranked,
+                'needed' => $intent['needed'],
+                'search_phrases' => $intent['search_phrases'],
+                'ai_note' => null,
+                'external_hint' => null,
+            ];
+        }
 
         if ($candidates->isEmpty()) {
             return $this->emptyResult($query, $intent, $withExternalHint, 'Brak kart z opisem w katalogu do porównania. Nie dodano produktu z internetu.');
         }
 
         $ranked = $this->rankWithLlm($query, $candidates->take(30)->values(), $limit, $intent['needed']);
-        if ($this->modelFuzzy->hasNamedModel($query)) {
-            $ranked = $this->preferNamedModelHits($query, $ranked, $candidates, $limit);
-        }
         if ($ranked === []) {
             return $this->emptyResult($query, $intent, $withExternalHint, 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.');
         }
@@ -195,7 +208,7 @@ final class ProductAiSearchService
         $searchText = $intent['needed'] !== '' ? $intent['needed'] : $query;
         $codeHits = $this->retrieveByModelCode($query.' '.$searchText, $limit);
         $fuzzyHits = $this->retrieveByFuzzyModel($query.' '.$searchText, $limit);
-        $priority = $this->uniqueProducts($codeHits->concat($fuzzyHits), $limit);
+        $priority = $this->uniqueProducts($fuzzyHits->concat($codeHits), $limit);
 
         if ($this->modelFuzzy->hasNamedModel($query) && $priority->isNotEmpty()) {
             return $priority;
@@ -254,25 +267,44 @@ final class ProductAiSearchService
      */
     private function retrieveByFuzzyModel(string $query, int $limit): Collection
     {
-        $chunks = $this->modelFuzzy->sqlChunks($query);
-        if ($chunks === []) {
-            return collect();
-        }
-
+        $brands = $this->modelFuzzy->manufacturerHints($query);
         $q = Product::query()
             ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
             ->withCount(['substitutes', 'images']);
 
-        $q->where(function ($outer) use ($chunks): void {
-            foreach ($chunks as $chunk) {
-                $like = '%'.addcslashes($chunk, '%_\\').'%';
-                $outer->orWhere('sku', 'like', $like)
-                    ->orWhere('name', 'like', $like)
-                    ->orWhere('manufacturer', 'like', $like);
+        if ($brands !== []) {
+            $q->where(function ($outer) use ($brands): void {
+                foreach ($brands as $brand) {
+                    $like = '%'.addcslashes($brand, '%_\\').'%';
+                    $outer->orWhere('manufacturer', 'like', $like)
+                        ->orWhere('name', 'like', $like);
+                }
+            });
+        } elseif ($this->modelFuzzy->hasNamedModel($query)) {
+            $parts = $this->modelFuzzy->hyphenLetterParts($query);
+            $nums = $this->modelFuzzy->modelNumbers($query);
+            if ($parts === [] && $nums === []) {
+                return collect();
             }
-        });
+            foreach ($parts as $part) {
+                $like = '%'.addcslashes($part, '%_\\').'%';
+                $q->where(function ($w) use ($like): void {
+                    $w->where('name', 'like', $like)->orWhere('sku', 'like', $like);
+                });
+            }
+            if ($nums !== []) {
+                $q->where(function ($w) use ($nums): void {
+                    foreach ($nums as $num) {
+                        $like = '%'.addcslashes($num, '%_\\').'%';
+                        $w->orWhere('name', 'like', $like)->orWhere('sku', 'like', $like);
+                    }
+                });
+            }
+        } else {
+            return collect();
+        }
 
-        return $q->limit(250)
+        return $q->limit(800)
             ->get()
             ->filter(fn (Product $p): bool => $this->modelFuzzy->matches($query, $p))
             ->sortByDesc(fn (Product $p): int => $this->modelFuzzy->score($query, $p))
@@ -364,6 +396,8 @@ final class ProductAiSearchService
     private function modelCodePhrases(string $query): array
     {
         $norm = mb_strtolower($query);
+        $norm = preg_replace('/\ben(?:\s*iso)?\s*\d+(?:\s+\d+)*/u', ' ', $norm) ?? $norm;
+        $norm = preg_replace('/\biso\s*\d+/u', ' ', $norm) ?? $norm;
         $out = [];
         if (preg_match_all('/\b[a-z]{0,6}\d[a-z0-9\-\/]{1,}\b/u', $norm, $m)) {
             foreach ($m[0] as $raw) {

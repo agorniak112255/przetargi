@@ -25,6 +25,9 @@ final class ProductModelFuzzyTest extends TestCase
         $req = 'Rękawice MAPA TEPM-ICE 700 · EN 388 EN 511 EN ISO 21420';
 
         $this->assertTrue($this->fuzzy->hasNamedModel($req));
+        $this->assertContains('tepmice', $this->fuzzy->needles($req));
+        $this->assertContains('tepmice700', $this->fuzzy->needles($req));
+        $this->assertSame(['mapa'], $this->fuzzy->manufacturerHints($req));
         $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
             '34700018',
             'TEMP-ICE 700',

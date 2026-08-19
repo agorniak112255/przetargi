@@ -127,15 +127,11 @@ final class ProductAiSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
+            ->once()
             ->andReturn(
                 [
                     'needed' => 'fartuch laboratoryjny elano-bawełna',
                     'search_phrases' => ['fartuch', 'kitel', 'elano-bawełna', 'laboratoryjny'],
-                ],
-                [
-                    'matches' => [
-                        ['id' => $coat->id, 'score' => 91, 'reason' => 'Fartuch lab., elano-bawełna, ISO 13688'],
-                    ],
                 ],
             );
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
@@ -147,7 +143,7 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('needed', 'fartuch laboratoryjny elano-bawełna')
             ->assertJsonPath('total', 1)
             ->assertJsonPath('products.0.id', $coat->id)
-            ->assertJsonPath('products.0.ai_match_percent', 91);
+            ->assertJsonPath('products.0.sku', 'LAB-COAT');
     }
 
     public function test_empty_model_ranking_does_not_invent_catalog_hits(): void
@@ -181,12 +177,12 @@ final class ProductAiSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
+            ->once()
             ->andReturn(
                 [
                     'needed' => 'fartuch laboratoryjny',
                     'search_phrases' => ['fartuch', 'kitel'],
                 ],
-                ['matches' => []],
             );
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -277,12 +273,12 @@ final class ProductAiSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
+            ->once()
             ->andReturn(
                 [
                     'needed' => 'rękawice MAPA TEPM-ICE 700',
                     'search_phrases' => ['mapa', 'tepm-ice', 'rękawice zimowe'],
                 ],
-                ['matches' => []],
             );
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -293,6 +289,51 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('products.0.sku', '34700018')
             ->assertJsonPath('products.0.id', $mapa->id)
             ->assertJsonMissing(['sku' => '60592']);
+    }
+
+    public function test_ai_search_typo_not_blocked_by_en_norm_numbers(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        for ($i = 1; $i <= 45; $i++) {
+            Product::query()->create([
+                'sku' => 'N21420-'.$i,
+                'name' => 'Rękawice zgodne z EN ISO 21420 seria '.$i,
+                'manufacturer' => 'Inna',
+                'description' => 'Karta z opisem normy EN ISO 21420 dla serii '.$i.'.',
+                'catalog_price_net' => 10 + $i,
+                'purchase_price' => 8,
+                'stock' => 1,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+        Product::query()->create([
+            'sku' => '34700018',
+            'name' => 'TEMP-ICE 700',
+            'manufacturer' => 'MAPA',
+            'description' => null,
+            'catalog_price_net' => 4.9,
+            'purchase_price' => 3,
+            'stock' => 8,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->once()
+            ->andReturn([
+                'needed' => 'rękawice MAPA TEPM-ICE 700 EN ISO 21420',
+                'search_phrases' => ['21420', 'rękawice', 'mapa'],
+            ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice MAPA TEPM-ICE 700 · EN ISO 21420 (dawniej EN 420)',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', '34700018')
+            ->assertJsonPath('external_hint', null);
     }
 
     public function test_empty_catalog_returns_external_link_not_product(): void
