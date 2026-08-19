@@ -56,7 +56,7 @@ final class ExternalCatalogHintService
                     'query' => mb_substr($query, 0, 400),
                     'search_depth' => 'basic',
                     'include_answer' => false,
-                    'max_results' => 3,
+                    'max_results' => 8,
                     'include_images' => false,
                 ]);
         } catch (Throwable) {
@@ -72,6 +72,18 @@ final class ExternalCatalogHintService
             return $this->remember($cacheKey, null);
         }
 
+        return $this->remember($cacheKey, $this->pickBestResult($rows));
+    }
+
+    /**
+     * Strona produktu przed PDF-em / świadectwem / deklaracją.
+     *
+     * @param  list<mixed>  $rows
+     * @return array{url: string, title: string}|null
+     */
+    public function pickBestResult(array $rows): ?array
+    {
+        $candidates = [];
         foreach ($rows as $row) {
             if (! is_array($row)) {
                 continue;
@@ -81,14 +93,82 @@ final class ExternalCatalogHintService
                 continue;
             }
             $title = trim((string) ($row['title'] ?? $url));
-
-            return $this->remember($cacheKey, [
+            $candidates[] = [
                 'url' => $url,
                 'title' => $title !== '' ? $title : $url,
-            ]);
+                'score' => $this->scoreResult($url, $title),
+            ];
+        }
+        if ($candidates === []) {
+            return null;
         }
 
-        return $this->remember($cacheKey, null);
+        usort($candidates, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+        $best = $candidates[0];
+
+        return [
+            'url' => $best['url'],
+            'title' => $best['title'],
+        ];
+    }
+
+    private function scoreResult(string $url, string $title): int
+    {
+        $hay = mb_strtolower($url.' '.$title);
+        $score = 50;
+
+        if ($this->looksLikePdf($url, $hay)) {
+            $score -= 80;
+        }
+        if ($this->looksLikeCertificateDoc($hay)) {
+            $score -= 50;
+        }
+        if ($this->looksLikeProductPage($url, $hay)) {
+            $score += 40;
+        }
+
+        return $score;
+    }
+
+    private function looksLikePdf(string $url, string $hay): bool
+    {
+        $path = strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+
+        return str_ends_with($path, '.pdf')
+            || str_contains($url, '.pdf?')
+            || str_contains($hay, '/pdf/')
+            || str_contains($hay, 'filetype=pdf');
+    }
+
+    private function looksLikeCertificateDoc(string $hay): bool
+    {
+        foreach ([
+            'swiadectwo', 'świadectwo', 'dopuszczenia', 'dopuszczenie',
+            'deklaracja zgodnosci', 'deklaracja zgodności', 'declaration of conformity',
+            'karta charakterystyki', 'safety data sheet', 'msds',
+        ] as $needle) {
+            if (str_contains($hay, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function looksLikeProductPage(string $url, string $hay): bool
+    {
+        $path = strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        if ($this->looksLikePdf($url, $hay)) {
+            return false;
+        }
+
+        foreach (['/produkt', '/product', '/sklep', '/p/', 'karta produktu'] as $needle) {
+            if (str_contains($path, $needle) || str_contains($hay, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
