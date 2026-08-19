@@ -287,7 +287,11 @@ final class TenderCustomOfferTest extends TestCase
         $this->postJson("/api/tenders/{$tender->id}/match", [
             'only_empty' => false,
             'item_ids' => [$item->id],
-        ])->assertOk();
+        ])
+            ->assertOk()
+            ->assertJsonPath('changed', 1)
+            ->assertJsonPath('changes.0.to_sku', '6503-EN')
+            ->assertJsonPath('changes.0.from_sku', 'HF-803');
 
         $item->refresh();
         $this->assertSame($right->id, $item->main_product_id);

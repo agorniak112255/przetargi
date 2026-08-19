@@ -1279,6 +1279,24 @@ final class PriceListImportService
             $payload['name'] = mb_substr($name, 0, $maxName);
         }
 
+        $limits = [
+            'category' => 255,
+            'manufacturer' => 100,
+            'packaging' => 120,
+            'ean' => 32,
+            'currency' => 8,
+        ];
+        foreach ($limits as $field => $max) {
+            $value = $payload[$field] ?? null;
+            if (! is_string($value) || $value === '') {
+                continue;
+            }
+            $value = trim($value);
+            if (mb_strlen($value) > $max) {
+                $payload[$field] = mb_substr($value, 0, $max);
+            }
+        }
+
         return $payload;
     }
 

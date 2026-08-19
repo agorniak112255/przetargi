@@ -184,6 +184,38 @@ final class AssortmentGroupImportTest extends TestCase
         $this->assertEqualsWithDelta(5.0, (float) $ungrouped->discount_percent, 0.001);
     }
 
+    public function test_import_accepts_long_category_header(): void
+    {
+        $category = 'ZESTAWY KUCHENNE 3x ŚCIERECZKA Z BAWEŁNY EGIPSKIEJ Z OCHRONĄ ANTYBAKTERYJNĄ, ANTIBACTERIAL+, W PUDEŁKACH PREZENTOWYCH';
+        $this->assertGreaterThan(100, mb_strlen($category));
+
+        $spreadsheet = new Spreadsheet;
+        $spreadsheet->getActiveSheet()->fromArray([
+            ['sku', 'nazwa', 'kategoria', 'cena'],
+            ['ZW-ZESTAWKUCH3-ARIZONA', 'Zestaw 3cz. Arizona', $category, 30.22],
+        ]);
+        $path = tempnam(sys_get_temp_dir(), 'cennik-cat').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+        $file = new UploadedFile($path, 'zwoltex.xlsx', null, null, true);
+
+        try {
+            $result = app(PriceListImportService::class)->import(
+                $file,
+                'Zwoltex Sp. z o.o.',
+                '2026-08',
+                User::factory()->create(),
+            );
+            $this->assertNotNull($result['price_list'], implode('; ', $result['errors'] ?? []));
+            $product = Product::query()->where('sku', 'ZW-ZESTAWKUCH3-ARIZONA')->first();
+            $this->assertNotNull($product);
+            $this->assertNotNull($product->category);
+            $this->assertLessThanOrEqual(255, mb_strlen((string) $product->category));
+            $this->assertStringStartsWith('ZESTAWY KUCHENNE', (string) $product->category);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     private function makeDemoSpreadsheet(): string
     {
         $spreadsheet = new Spreadsheet;

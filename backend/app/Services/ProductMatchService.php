@@ -52,7 +52,18 @@ final class ProductMatchService
 
     /**
      * @param  list<int>|null  $itemIds  null = cała oferta; [] = nic nie ruszaj
-     * @return array{matched: int, skipped: int, avg_score: float}
+     * @return array{
+     *     matched: int,
+     *     skipped: int,
+     *     avg_score: float,
+     *     processed: int,
+     *     changed: int,
+     *     unchanged: int,
+     *     cleared: int,
+     *     skipped_custom: int,
+     *     no_match: int,
+     *     changes: list<array{id: int, line_no: int, action: string, from_sku: ?string, to_sku: ?string}>
+     * }
      */
     public function matchTender(Tender $tender, bool $onlyEmpty = true, ?array $itemIds = null): array
     {
@@ -61,19 +72,29 @@ final class ProductMatchService
         $skipped = 0;
         $scores = [];
 
+        $emptyReport = [
+            'matched' => 0,
+            'skipped' => 0,
+            'avg_score' => 0.0,
+            'processed' => 0,
+            'changed' => 0,
+            'unchanged' => 0,
+            'cleared' => 0,
+            'skipped_custom' => 0,
+            'no_match' => 0,
+            'changes' => [],
+        ];
+
         if ($itemIds !== null) {
             $itemIds = array_values(array_unique(array_map('intval', $itemIds)));
             if ($itemIds === []) {
-                return [
-                    'matched' => 0,
-                    'skipped' => 0,
-                    'avg_score' => 0.0,
-                ];
+                return $emptyReport;
             }
         }
 
         // onlyEmpty: puste + stare słabe propozycje (< progu) — żeby nie zostawały buty przy 34%
         $items = $tender->items()
+            ->with('mainProduct')
             ->when($itemIds !== null, fn ($q) => $q->whereIn('id', $itemIds))
             ->when(
                 $onlyEmpty,
@@ -88,23 +109,30 @@ final class ProductMatchService
                 })
             )->get();
 
+        $changes = [];
         foreach ($items as $item) {
+            $beforeId = $item->main_product_id !== null ? (int) $item->main_product_id : null;
+            $beforeSku = $item->mainProduct?->sku;
             if ($item->hasCustomOffer()) {
                 $skipped++;
-
+                $changes[] = $this->matchChangeRow($item, 'skipped_custom', $beforeSku, $beforeSku);
                 continue;
             }
             $pick = $this->resolveBestPick($item->requirement, $products);
             if ($pick === null) {
                 $this->applyNoCatalogMatch($item, $products);
                 $skipped++;
-
+                $action = $beforeId !== null ? 'cleared' : 'no_match';
+                $changes[] = $this->matchChangeRow($item, $action, $beforeSku, null);
                 continue;
             }
 
             $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'] ?? 'heuristic');
             $matched++;
             $scores[] = $pick['score'];
+            $afterSku = $pick['product']->sku;
+            $action = $beforeId === (int) $pick['product']->id ? 'unchanged' : 'changed';
+            $changes[] = $this->matchChangeRow($item, $action, $beforeSku, $afterSku);
         }
 
         $allScores = $tender->items()->whereNotNull('ai_match_percent')->pluck('ai_match_percent');
@@ -121,10 +149,36 @@ final class ProductMatchService
 
         $avg = $scores === [] ? 0.0 : array_sum($scores) / count($scores);
 
+        $changedRows = array_values(array_filter(
+            $changes,
+            static fn (array $row): bool => in_array($row['action'], ['changed', 'cleared'], true)
+        ));
+
         return [
             'matched' => $matched,
             'skipped' => $skipped,
             'avg_score' => round($avg, 1),
+            'processed' => count($changes),
+            'changed' => count($changedRows),
+            'unchanged' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'unchanged')),
+            'cleared' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'cleared')),
+            'skipped_custom' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'skipped_custom')),
+            'no_match' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'no_match')),
+            'changes' => $changedRows,
+        ];
+    }
+
+    /**
+     * @return array{id: int, line_no: int, action: string, from_sku: ?string, to_sku: ?string}
+     */
+    private function matchChangeRow(TenderItem $item, string $action, ?string $fromSku, ?string $toSku): array
+    {
+        return [
+            'id' => (int) $item->id,
+            'line_no' => (int) $item->line_no,
+            'action' => $action,
+            'from_sku' => $fromSku,
+            'to_sku' => $toSku,
         ];
     }
 

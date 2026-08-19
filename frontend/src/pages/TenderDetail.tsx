@@ -220,6 +220,42 @@ const tabs = [
 
 type CoverageFilter = keyof Coverage['item_ids'] | null
 
+type MatchChange = {
+  id: number
+  line_no: number
+  action: 'changed' | 'cleared' | 'unchanged' | 'skipped_custom' | 'no_match'
+  from_sku: string | null
+  to_sku: string | null
+}
+
+type MatchReport = {
+  processed: number
+  changed: number
+  unchanged: number
+  cleared: number
+  skipped_custom: number
+  no_match: number
+  avg_score: number
+  changes: MatchChange[]
+  at: string
+}
+
+function matchReportStorageKey(tenderId: string): string {
+  return `tender-match-report-${tenderId}`
+}
+
+function loadMatchReport(tenderId: string): MatchReport | null {
+  try {
+    const raw = sessionStorage.getItem(matchReportStorageKey(tenderId))
+    if (!raw) {
+      return null
+    }
+    return JSON.parse(raw) as MatchReport
+  } catch {
+    return null
+  }
+}
+
 function foldSearch(s: string): string {
   return s
     .toLowerCase()
@@ -350,6 +386,10 @@ export function TenderDetail() {
   const itemDraftsRef = useRef<Map<number, ItemDraft>>(new Map())
   const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>(null)
   const [itemQuery, setItemQuery] = useState('')
+  const [matchBusy, setMatchBusy] = useState(false)
+  const [matchElapsed, setMatchElapsed] = useState(0)
+  const [matchReport, setMatchReport] = useState<MatchReport | null>(null)
+  const [showAiChanges, setShowAiChanges] = useState(false)
   const [transitionNote, setTransitionNote] = useState('')
   const [activities, setActivities] = useState<ActivityRow[]>([])
   const [comments, setComments] = useState<CommentRow[]>([])
@@ -411,6 +451,26 @@ export function TenderDetail() {
     void loadMeta()
     void api<{ data: Product[] }>('/products?per_page=100').then((p) => setProducts(p.data ?? []))
   }, [load, loadMeta])
+
+  useEffect(() => {
+    if (!id) {
+      return
+    }
+    setMatchReport(loadMatchReport(id))
+    setShowAiChanges(false)
+  }, [id])
+
+  useEffect(() => {
+    if (!matchBusy) {
+      setMatchElapsed(0)
+      return
+    }
+    const started = Date.now()
+    const timer = window.setInterval(() => {
+      setMatchElapsed(Math.floor((Date.now() - started) / 1000))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [matchBusy])
 
   useEffect(() => {
     if (tab === 'zaproszenia') void loadDirectory(inviteQ)
@@ -901,26 +961,58 @@ export function TenderDetail() {
     setErr('')
     setMsg('')
     setBusy(true)
+    setMatchBusy(true)
+    setShowAiChanges(false)
     try {
-      const res = await api<{ matched: number; skipped: number; avg_score: number }>(
-        `/tenders/${id}/match`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            only_empty: onlyEmpty,
-            ...(itemIds ? { item_ids: itemIds } : {}),
-          }),
-        },
-      )
+      const res = await api<{
+        matched: number
+        skipped: number
+        avg_score: number
+        processed?: number
+        changed?: number
+        unchanged?: number
+        cleared?: number
+        skipped_custom?: number
+        no_match?: number
+        changes?: MatchChange[]
+      }>(`/tenders/${id}/match`, {
+        method: 'POST',
+        body: JSON.stringify({
+          only_empty: onlyEmpty,
+          ...(itemIds ? { item_ids: itemIds } : {}),
+        }),
+      })
       await load()
+      await loadMeta()
+      const report: MatchReport = {
+        processed: res.processed ?? res.matched + res.skipped,
+        changed: res.changed ?? 0,
+        unchanged: res.unchanged ?? 0,
+        cleared: res.cleared ?? 0,
+        skipped_custom: res.skipped_custom ?? 0,
+        no_match: res.no_match ?? 0,
+        avg_score: res.avg_score,
+        changes: res.changes ?? [],
+        at: new Date().toISOString(),
+      }
+      setMatchReport(report)
+      if (id) {
+        sessionStorage.setItem(matchReportStorageKey(id), JSON.stringify(report))
+      }
+      if (report.changed > 0) {
+        setShowAiChanges(true)
+      }
       setMsg(
-        `Dopasowanie: ${res.matched} pozycji (pominięte ${res.skipped}), średni wynik ${res.avg_score}%.`,
+        report.changed > 0
+          ? `Dopasowanie zakończone: zmieniono ${report.changed} z ${report.processed} pozycji.`
+          : `Dopasowanie zakończone: brak zmian w ofercie (${report.processed} przerobionych, ${report.unchanged} bez zmiany, ${report.skipped_custom} własnych, ${report.no_match} bez produktu).`,
       )
       setTab('pozycje')
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd dopasowania')
     } finally {
       setBusy(false)
+      setMatchBusy(false)
     }
   }
 
@@ -946,8 +1038,12 @@ export function TenderDetail() {
   const canApproveSub = Boolean(user?.permissions?.includes('substitutes.approve'))
   const canComment = Boolean(user?.permissions?.includes('tenders.comment'))
   const canInvite = Boolean(user?.permissions?.includes('tenders.invite'))
+  const aiChangedIds = new Set((matchReport?.changes ?? []).map((c) => c.id))
   const filteredItems = tender.items.filter((it) => {
     if (coverageFilter && coverage && !coverage.item_ids[coverageFilter].includes(it.id)) {
+      return false
+    }
+    if (showAiChanges && !aiChangedIds.has(it.id)) {
       return false
     }
     return itemMatchesQuery(it, itemQuery)
@@ -1053,6 +1149,73 @@ export function TenderDetail() {
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {matchBusy && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/55 p-4">
+          <div className="max-w-md rounded-xl bg-white p-4 text-sm shadow-xl">
+            <p className="font-semibold text-slate-900">Trwa dopasowanie AI…</p>
+            <p className="mt-1 text-xs text-slate-600">
+              Nie odświeżaj strony. Przy 200 pozycjach to może zająć kilka minut.
+            </p>
+            <p className="mt-3 font-mono text-lg text-violet-800">{matchElapsed} s</p>
+          </div>
+        </div>
+      )}
+      {matchReport && !matchBusy && (
+        <div className="mb-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-violet-950">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <strong>Ostatnie dopasowanie AI</strong>
+              <span className="ml-2 text-violet-800/70">
+                {new Date(matchReport.at).toLocaleString('pl-PL')}
+              </span>
+              <p className="mt-1">
+                Przerobiono {matchReport.processed} · zmieniono {matchReport.changed} · bez zmiany{' '}
+                {matchReport.unchanged} · zdjęto produkt {matchReport.cleared} · własne pominięte{' '}
+                {matchReport.skipped_custom} · bez produktu {matchReport.no_match}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {matchReport.changed > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAiChanges((v) => !v)
+                    setTab('pozycje')
+                  }}
+                  className={`rounded px-2 py-1 ${
+                    showAiChanges ? 'bg-violet-800 text-white' : 'bg-white text-violet-900'
+                  }`}
+                >
+                  {showAiChanges ? 'Pokaż wszystkie' : `Tylko zmienione (${matchReport.changed})`}
+                </button>
+              )}
+              <button
+                type="button"
+                className="rounded px-2 py-1 text-violet-800 underline"
+                onClick={() => {
+                  setMatchReport(null)
+                  setShowAiChanges(false)
+                  if (id) {
+                    sessionStorage.removeItem(matchReportStorageKey(id))
+                  }
+                }}
+              >
+                Ukryj
+              </button>
+            </div>
+          </div>
+          {matchReport.changes.length > 0 && (
+            <ul className="mt-2 max-h-32 space-y-0.5 overflow-y-auto font-mono text-[11px]">
+              {matchReport.changes.slice(0, 80).map((c) => (
+                <li key={c.id}>
+                  Poz. {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku ?? 'brak'}
+                  {c.action === 'cleared' ? ' (zdjęto)' : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {coverage && (
         <div
@@ -1274,6 +1437,7 @@ export function TenderDetail() {
                     canEdit={can_edit}
                     canComment={canComment}
                     busy={busy}
+                    changedByAi={aiChangedIds.has(item.id)}
                     comments={comments.filter((c) => c.tender_item_id === item.id)}
                     itemActivities={activities.filter(
                       (a) => a.item?.id === item.id && activityHasRealChange(a),
@@ -2161,6 +2325,7 @@ function ItemRow({
   canEdit,
   canComment,
   busy,
+  changedByAi,
   comments,
   itemActivities,
   onSave,
@@ -2173,6 +2338,7 @@ function ItemRow({
   canEdit: boolean
   canComment: boolean
   busy: boolean
+  changedByAi?: boolean
   comments: CommentRow[]
   itemActivities: ActivityRow[]
   onSave: (id: number, patch: Record<string, unknown>) => Promise<void>
@@ -2248,10 +2414,19 @@ function ItemRow({
 
   return (
     <>
-    <tr className={showComment ? 'align-top' : 'border-b align-top'}>
+    <tr
+      className={`${showComment ? 'align-top' : 'border-b align-top'} ${
+        changedByAi ? 'bg-violet-50 ring-1 ring-inset ring-violet-200' : ''
+      }`}
+    >
       <td className="p-2">
         <span className="inline-flex items-center gap-1">
           {item.line_no}
+          {changedByAi && (
+            <span className="rounded bg-violet-700 px-1 py-px text-[9px] font-bold uppercase text-white">
+              AI
+            </span>
+          )}
           {hasChanges && (
             <span
               title={`${itemActivities.length} zmian — kliknij cenę / hist.`}
