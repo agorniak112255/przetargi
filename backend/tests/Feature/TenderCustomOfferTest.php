@@ -247,6 +247,53 @@ final class TenderCustomOfferTest extends TestCase
         $this->assertSame($keep->id, $other->main_product_id);
     }
 
+    public function test_rematch_binds_model_code_to_sku_without_description(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $wrong = Product::query()->create([
+            'sku' => 'HF-803',
+            'name' => '3M Secure Click Półmaska HF-803',
+            'manufacturer' => '3M',
+            'description' => 'Półmaska wielokrotnego użytku Secure Click z pełnym opisem karty.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 30,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $right = Product::query()->create([
+            'sku' => '6503-EN',
+            'name' => 'Półmaska 6503 część twarzowa, rozmiar: L duży',
+            'manufacturer' => '3M',
+            'description' => null,
+            'catalog_price_net' => 28.64,
+            'purchase_price' => 20,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+
+        $tender = $this->makeTender();
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 146,
+            'requirement' => 'Półmaska 3M 6503',
+            'quantity' => 1,
+            'status' => 'matched',
+            'main_product_id' => $wrong->id,
+            'ai_match_percent' => 65,
+            'match_source' => 'ai',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/match", [
+            'only_empty' => false,
+            'item_ids' => [$item->id],
+        ])->assertOk();
+
+        $item->refresh();
+        $this->assertSame($right->id, $item->main_product_id);
+        $this->assertSame('6503-EN', $item->mainProduct?->sku);
+    }
+
     public function test_catalog_product_clears_custom_offer(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

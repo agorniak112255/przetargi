@@ -255,6 +255,48 @@ final class ProductMatchServiceTest extends TestCase
     }
 
     #[Test]
+    public function four_digit_model_matches_sku_with_suffix_without_description(): void
+    {
+        $products = new Collection([
+            $this->fakeProduct([
+                'sku' => 'HF-803',
+                'name' => '3M Secure Click Półmaska HF-803',
+                'manufacturer' => '3M',
+                'description' => 'Półmaska wielokrotnego użytku Secure Click, karta z opisem.',
+            ]),
+            $this->fakeProduct([
+                'sku' => '6503-EN',
+                'name' => 'Półmaska 6503 część twarzowa, rozmiar: L duży',
+                'manufacturer' => '3M',
+                'description' => null,
+            ]),
+        ]);
+
+        $best = $this->matcher->bestMatch('Półmaska 3M 6503', $products);
+
+        $this->assertNotNull($best);
+        $this->assertSame('6503-EN', $best['product']->sku);
+        $this->assertGreaterThanOrEqual(ProductMatchService::MIN_MATCH_SCORE, $best['score']);
+    }
+
+    #[Test]
+    public function four_digit_model_does_not_match_sku_with_extra_digits(): void
+    {
+        $products = new Collection([
+            $this->fakeProduct([
+                'sku' => '65030',
+                'name' => 'Inny model',
+                'manufacturer' => 'X',
+                'description' => 'Opis wystarczająco długi do karty katalogowej.',
+            ]),
+        ]);
+
+        $best = $this->matcher->bestMatch('Półmaska 3M 6503', $products);
+
+        $this->assertTrue($best === null || $best['score'] < ProductMatchService::MIN_MATCH_SCORE);
+    }
+
+    #[Test]
     public function clothing_size_in_siwz_does_not_match_sku_suffix(): void
     {
         $products = new Collection([

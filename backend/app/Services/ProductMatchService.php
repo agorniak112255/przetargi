@@ -441,14 +441,21 @@ final class ProductMatchService
             return true;
         }
 
-        // czysto cyfrowe krótkie fragmenty (np. 600) NIGDY nie pasują do dłuższego SKU
+        // cyfry: 600 ⊄ 60028, ale 6503 ⊂ 6503-EN / 6503QL-EN (kolejny znak to nie cyfra)
         if (ctype_digit($code)) {
-            if (mb_strlen($code) < 5) {
+            if ($code === $skuCompact) {
+                return true;
+            }
+            if (mb_strlen($code) < 4) {
                 return false;
             }
+            if (str_starts_with($skuCompact, $code)) {
+                $next = mb_substr($skuCompact, mb_strlen($code), 1);
 
-            // dłuższy kod numeryczny: tylko równość lub pełne ograniczone wystąpienie
-            return $code === $skuCompact;
+                return $next !== '' && ! ctype_digit($next);
+            }
+
+            return false;
         }
 
         // alfanumeryczny model (RNITZ, RDR…): równość lub SKU zaczyna/kończy się kodem przy podobnej długości
@@ -655,7 +662,7 @@ final class ProductMatchService
         if (preg_match_all('/\b[A-Za-z]{0,6}\d[A-Za-z0-9\-\/]{1,}\b/', $stripped, $m)) {
             foreach ($m[0] as $raw) {
                 $c = preg_replace('/\s+/', '', $this->normalize($raw)) ?? '';
-                if ($c === '' || (ctype_digit($c) && mb_strlen($c) < 5)) {
+                if ($c === '' || (ctype_digit($c) && mb_strlen($c) < 4)) {
                     continue;
                 }
                 if (mb_strlen($c) >= 4 && ! $this->isClothingSize($c)) {
@@ -872,21 +879,28 @@ final class ProductMatchService
      */
     private function strongSkuPick(string $requirement, Collection $products): ?array
     {
+        $best = null;
+        $reqNorm = $this->normalize($requirement);
+        $reqCodes = $this->codeCandidates($requirement);
         foreach ($products as $product) {
-            if ($this->hasStrongSkuInRequirement($requirement, $product)) {
-                return [
-                    'product' => $product,
-                    'score' => max(self::MIN_MATCH_SCORE, $this->skuMatchScore(
-                        $this->normalize($requirement),
-                        $this->codeCandidates($requirement),
-                        $product
-                    )),
-                    'source' => 'heuristic',
-                ];
+            $score = $this->skuMatchScore($reqNorm, $reqCodes, $product);
+            if ($score < 70) {
+                continue;
+            }
+            $candidate = [
+                'product' => $product,
+                'score' => max(self::MIN_MATCH_SCORE, $score),
+                'source' => 'heuristic',
+            ];
+            if ($best === null
+                || $candidate['score'] > $best['score']
+                || ($candidate['score'] === $best['score']
+                    && mb_strlen((string) $product->sku) < mb_strlen((string) $best['product']->sku))) {
+                $best = $candidate;
             }
         }
 
-        return null;
+        return $best;
     }
 
     private function hasStrongSkuInRequirement(string $requirement, Product $product): bool
@@ -896,6 +910,36 @@ final class ProductMatchService
             $this->codeCandidates($requirement),
             $product
         ) >= 70;
+    }
+
+    /** Kody z cyfrą (6503, HF803) — nie wolno podstawić innej półmaski tej samej marki. */
+    private function honorsSpecificModelCodes(string $requirement, Product $product): bool
+    {
+        $codes = [];
+        foreach ($this->codeCandidates($requirement) as $code) {
+            if (preg_match('/\d/', $code) === 1 && mb_strlen($code) >= 4) {
+                $codes[] = $code;
+            }
+        }
+        if ($codes === []) {
+            return true;
+        }
+
+        $skuCompact = preg_replace('/\s+/', '', $this->normalize($product->sku)) ?? '';
+        $name = $this->normalize((string) $product->name);
+        foreach ($codes as $code) {
+            if ($this->codesMatch($skuCompact, $code)) {
+                return true;
+            }
+            if ($name !== '' && preg_match(
+                '/(^|[^a-z0-9])'.preg_quote($code, '/').'([^a-z0-9]|$)/u',
+                $name
+            ) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -922,6 +966,9 @@ final class ProductMatchService
             $product = $products->firstWhere('id', $topAi['id'])
                 ?? Product::query()->find($topAi['id']);
             if (! $product instanceof Product) {
+                continue;
+            }
+            if (! $this->honorsSpecificModelCodes($requirement, $product)) {
                 continue;
             }
             if (! $this->hasStrongSkuInRequirement($requirement, $product)

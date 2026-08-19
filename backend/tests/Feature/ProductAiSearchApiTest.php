@@ -199,6 +199,55 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('external_hint', null);
     }
 
+    public function test_ai_search_finds_sku_without_description(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $mask = Product::query()->create([
+            'sku' => '6503-EN',
+            'name' => 'Półmaska 6503 część twarzowa, rozmiar: L duży',
+            'manufacturer' => '3M',
+            'description' => null,
+            'catalog_price_net' => 28.64,
+            'purchase_price' => 20,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+        Product::query()->create([
+            'sku' => 'HF-803',
+            'name' => '3M Secure Click Półmaska HF-803',
+            'manufacturer' => '3M',
+            'description' => 'Półmaska wielokrotnego użytku Secure Click z opisem karty katalogowej.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 30,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturn(
+                [
+                    'needed' => 'półmaska 3M 6503',
+                    'search_phrases' => ['półmaska', '6503'],
+                ],
+                [
+                    'matches' => [
+                        ['id' => $mask->id, 'score' => 94, 'reason' => 'Kod 6503 w SKU'],
+                    ],
+                ],
+            );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Półmaska 3M 6503',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', '6503-EN');
+    }
+
     public function test_empty_catalog_returns_external_link_not_product(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

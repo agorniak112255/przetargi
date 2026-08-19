@@ -187,19 +187,13 @@ final class ProductAiSearchService
     private function retrieveCandidates(string $query, array $intent, int $limit): Collection
     {
         $searchText = $intent['needed'] !== '' ? $intent['needed'] : $query;
+        $codeHits = $this->retrieveByModelCode($query.' '.$searchText, $limit);
         $vectorHits = $this->retrieveVector($searchText, max($limit, 80));
         $likeHits = $this->retrieveLike($intent['search_phrases'], $limit);
 
-        if ($likeHits->isEmpty()) {
-            return $vectorHits->take($limit)->values();
-        }
-        if ($vectorHits->isEmpty()) {
-            return $likeHits->take($limit)->values();
-        }
-
         $seen = [];
         $merged = collect();
-        foreach ($likeHits->concat($vectorHits) as $product) {
+        foreach ($codeHits->concat($likeHits)->concat($vectorHits) as $product) {
             if (! $product instanceof Product || isset($seen[$product->id])) {
                 continue;
             }
@@ -211,6 +205,56 @@ final class ProductAiSearchService
         }
 
         return $merged->values();
+    }
+
+    /**
+     * Karty bez opisu też — gdy SIWZ ma kod modelu występujący w SKU/nazwie (6503 → 6503-EN).
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByModelCode(string $query, int $limit): Collection
+    {
+        $codes = $this->modelCodePhrases($query);
+        if ($codes === []) {
+            return collect();
+        }
+
+        $q = Product::query()
+            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
+            ->withCount(['substitutes', 'images']);
+
+        $q->where(function ($outer) use ($codes): void {
+            foreach ($codes as $code) {
+                $like = addcslashes($code, '%_\\');
+                $outer->orWhere('sku', 'like', $like.'%')
+                    ->orWhere('name', 'like', '%'.$like.'%');
+            }
+        });
+
+        return $q->limit(max(8, $limit))->get()->values();
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function modelCodePhrases(string $query): array
+    {
+        $norm = mb_strtolower($query);
+        $out = [];
+        if (preg_match_all('/\b[a-z]{0,6}\d[a-z0-9\-\/]{1,}\b/u', $norm, $m)) {
+            foreach ($m[0] as $raw) {
+                $c = preg_replace('/[^a-z0-9]/', '', $raw) ?? '';
+                if ($c === '' || mb_strlen($c) < 4) {
+                    continue;
+                }
+                if (ctype_digit($c) && mb_strlen($c) < 4) {
+                    continue;
+                }
+                $out[] = $c;
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**
@@ -285,6 +329,8 @@ final class ProductAiSearchService
                 $like = '%'.addcslashes($term, '%_\\').'%';
                 $outer->orWhere(function ($w) use ($like): void {
                     $w->where('name', 'like', $like)
+                        ->orWhere('sku', 'like', $like)
+                        ->orWhere('manufacturer', 'like', $like)
                         ->orWhere('description', 'like', $like)
                         ->orWhere('norms', 'like', $like)
                         ->orWhere('category', 'like', $like)
