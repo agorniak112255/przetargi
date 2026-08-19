@@ -130,6 +130,14 @@ final class ProductAiSearchService
             $phrases = $this->fallbackPhrases($query);
         }
 
+        $phrases = array_values(array_filter(
+            $phrases,
+            fn (string $p): bool => ! $this->isClothingSizePhrase($p)
+        ));
+        if ($phrases === []) {
+            $phrases = $this->fallbackPhrases($query);
+        }
+
         return [
             'needed' => $needed,
             'search_phrases' => array_values(array_unique($phrases)),
@@ -150,7 +158,7 @@ final class ProductAiSearchService
         $out = [];
         foreach ($tokens as $token) {
             $token = trim($token);
-            if (mb_strlen($token) < 4 || in_array($token, $stop, true)) {
+            if (mb_strlen($token) < 4 || in_array($token, $stop, true) || $this->isClothingSizePhrase($token)) {
                 continue;
             }
             $out[] = $token;
@@ -160,6 +168,16 @@ final class ProductAiSearchService
         }
 
         return $out !== [] ? $out : [mb_substr($query, 0, 80)];
+    }
+
+    private function isClothingSizePhrase(string $phrase): bool
+    {
+        $t = preg_replace('/[^a-z0-9]/', '', mb_strtolower(trim($phrase))) ?? '';
+
+        return in_array($t, [
+            'xxs', 'xs', 'xxl', 'xxxl', 'xxxxl', 'xxxxxl',
+            '2xl', '3xl', '4xl', '5xl', '2x', '3x', '4x',
+        ], true);
     }
 
     /**

@@ -105,12 +105,71 @@ final class TenderCustomOfferTest extends TestCase
 
         $this->postJson("/api/tenders/{$tender->id}/match", ['only_empty' => true])
             ->assertOk();
+        $this->postJson("/api/tenders/{$tender->id}/match", ['only_empty' => false])
+            ->assertOk();
 
         $item->refresh();
         $this->assertSame('Czapka polarowa', $item->custom_name);
         $this->assertSame('https://sklep.example/czapka', $item->custom_url);
         $this->assertSame('custom', $item->match_source);
         $this->assertSame('matched', $item->status);
+    }
+
+    public function test_rematch_all_reprocesses_existing_catalog_product(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'tavily_api_key' => 'tvly-test',
+        ]);
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn(
+            [
+                'needed' => 'kalesony bawelniane meskie',
+                'search_phrases' => ['kalesony', 'bawelniane'],
+            ],
+            ['matches' => []],
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        Http::fake();
+
+        $tender = $this->makeTender();
+        $product = Product::query()->create([
+            'sku' => '07-755-XXXXL',
+            'name' => 'GVS Heavy Duty Blast Suit - XXXX Large',
+            'manufacturer' => 'GVS',
+            'category' => 'odziez',
+            'description' => 'Kombinezon ochronny blast suit heavy duty.',
+            'catalog_price_net' => 100,
+            'purchase_price' => 80,
+            'stock' => 1,
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'KALESONY bawełniane (100% bawełny) męskie (niebieskie) rozmiar od S do XXXXL',
+            'quantity' => 1,
+            'status' => 'matched',
+            'main_product_id' => $product->id,
+            'ai_match_percent' => 71,
+            'match_source' => 'ai',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/match", ['only_empty' => true])
+            ->assertOk();
+        $item->refresh();
+        $this->assertSame($product->id, $item->main_product_id);
+
+        $this->postJson("/api/tenders/{$tender->id}/match", ['only_empty' => false])
+            ->assertOk();
+        $item->refresh();
+        $this->assertNull($item->main_product_id);
     }
 
     public function test_catalog_product_clears_custom_offer(): void

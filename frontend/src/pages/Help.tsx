@@ -215,7 +215,7 @@ function TendersHelp() {
         items={[
           'Lista: filtr „Moje” / „Deadline &lt; 7 dni” albo wszystkie. Przycisk „+ Nowy przetarg” — tytuł, klient, termin.',
           'W projekcie wgraj dokumenty (SIWZ / formularz) w zakładce Dokumenty. System czyta pliki i tworzy pozycje.',
-          'Pozycje: przy każdym wierszu wybierany jest produkt główny z bazy. Możesz poprawić ręcznie albo uruchomić „Dopasuj AI (puste)”.',
+          'Pozycje: przy każdym wierszu wybierany jest produkt główny z bazy. Możesz poprawić ręcznie, uruchomić „Dopasuj AI (puste)” albo „Dopasuj AI (wszystkie)” — to drugie ponownie przeszukuje też już dopasowane pozycje.',
           'Sprawdź „Pokrycie oferty” — zielone = gotowe; żółte = brak produktu, ceny, słabe AI albo niska marża. Filtry pomagają znaleźć problematyczne wiersze.',
           'Zamienniki w przetargu: alternatywy do produktu głównego. „Zastosuj tańsze zamienniki” proponuje oszczędności (≥3% po upuście).',
           'Oferta: ceny i marża. Workflow: kolejne akceptacje (kierownik → dyrektor). Na końcu Excel, PDF lub DOCX (wypełnia wgrany formularz).',

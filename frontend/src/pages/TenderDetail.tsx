@@ -948,6 +948,24 @@ export function TenderDetail() {
               <button
                 type="button"
                 disabled={busy}
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      'Ponownie przeszukać wszystkie pozycje (także te z produktem z katalogu)? Własne propozycje zostaną zachowane.',
+                    )
+                  ) {
+                    return
+                  }
+                  void runMatch(false)
+                }}
+                title="Ponowne dopasowanie całej oferty — nadpisze produkty z katalogu"
+                className="rounded bg-violet-800 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
+              >
+                Dopasuj AI (wszystkie)
+              </button>
+              <button
+                type="button"
+                disabled={busy}
                 onClick={() => void previewCheaperSubstitutes()}
                 title="Podgląd i zastosowanie najtańszych zamienników z battlecard (≥3% taniej po upuście)"
                 className="rounded bg-amber-500 px-2 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"

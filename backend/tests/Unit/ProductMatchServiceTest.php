@@ -254,6 +254,33 @@ final class ProductMatchServiceTest extends TestCase
         $this->assertSame('LAB-COAT', $best['product']->sku);
     }
 
+    #[Test]
+    public function clothing_size_in_siwz_does_not_match_sku_suffix(): void
+    {
+        $products = new Collection([
+            $this->fakeProduct([
+                'sku' => '07-755-XXXXL',
+                'name' => 'GVS Heavy Duty Blast Suit - XXXX Large',
+                'manufacturer' => 'GVS',
+                'category' => 'odziez',
+                'description' => 'Kombinezon ochronny blast suit heavy duty.',
+            ]),
+        ]);
+
+        $best = $this->matcher->bestMatch(
+            'KALESONY bawełniane (100% bawełny) męskie (niebieskie) rozmiar od S do XXXXL',
+            $products
+        );
+
+        $this->assertTrue($best === null || $best['score'] < ProductMatchService::MIN_MATCH_SCORE);
+
+        $explained = $this->matcher->explainMatch(
+            'KALESONY bawełniane (100% bawełny) męskie (niebieskie) rozmiar od S do XXXXL',
+            $products[0]
+        );
+        $this->assertLessThan(40, $explained['score']);
+    }
+
     /**
      * @param  array<string, mixed>  $attrs
      */

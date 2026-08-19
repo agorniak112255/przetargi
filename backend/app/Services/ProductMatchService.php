@@ -28,6 +28,12 @@ final class ProductMatchService
         'kieszen', 'rekawy', 'zolta', 'granat', 'bialy', 'damski', 'meski',
     ];
 
+    /** Rozmiary odzieży — nie są SKU ani kodem modelu (np. XXXXL ⊂ 07-755-XXXXL). */
+    private const CLOTHING_SIZES = [
+        'xxs', 'xs', 'xxl', 'xxxl', 'xxxxl', 'xxxxxl',
+        '2xl', '3xl', '4xl', '5xl', '2x', '3x', '4x',
+    ];
+
     /** Typowe słowa SIWZ pisane KAPITALIKAMI — to nie są kody modelu. */
     private const GENERIC_SIWZ_CODES = [
         'kurtka', 'bluza', 'spodnie', 'odziez', 'ubranie', 'komplet', 'zestaw',
@@ -514,7 +520,7 @@ final class ProductMatchService
         $sku = $this->normalize($product->sku);
 
         foreach ($reqTokens as $token) {
-            if (mb_strlen($token) < 4 || in_array($token, self::STOPWORDS, true)) {
+            if (mb_strlen($token) < 4 || in_array($token, self::STOPWORDS, true) || $this->isClothingSize($token)) {
                 continue;
             }
             if ($manuf !== '' && str_contains($manuf, $token)) {
@@ -547,7 +553,7 @@ final class ProductMatchService
     {
         $score = 0;
         foreach ($reqCodes as $code) {
-            if (ctype_digit($code) || mb_strlen($code) < 4) {
+            if (ctype_digit($code) || mb_strlen($code) < 4 || $this->isClothingSize($code)) {
                 continue;
             }
             if (str_contains($hay, $code)) {
@@ -584,7 +590,7 @@ final class ProductMatchService
     {
         return array_values(array_filter(
             $this->tokens($s),
-            static fn (string $t): bool => ! in_array($t, self::STOPWORDS, true)
+            fn (string $t): bool => ! in_array($t, self::STOPWORDS, true) && ! $this->isClothingSize($t)
         ));
     }
 
@@ -625,7 +631,7 @@ final class ProductMatchService
             foreach ($m2[0] as $raw) {
                 $c = $this->normalize($raw);
                 if ($c !== '' && ! in_array($c, self::STOPWORDS, true) && ! in_array($c, $normSkip, true)
-                    && ! $this->isGenericSiwzCode($c)) {
+                    && ! $this->isGenericSiwzCode($c) && ! $this->isClothingSize($c)) {
                     $out[] = $c;
                 }
             }
@@ -638,7 +644,7 @@ final class ProductMatchService
                 if ($c === '' || (ctype_digit($c) && mb_strlen($c) < 5)) {
                     continue;
                 }
-                if (mb_strlen($c) >= 4) {
+                if (mb_strlen($c) >= 4 && ! $this->isClothingSize($c)) {
                     $out[] = $c;
                 }
             }
@@ -656,6 +662,13 @@ final class ProductMatchService
         }
 
         return false;
+    }
+
+    private function isClothingSize(string $token): bool
+    {
+        $t = preg_replace('/[^a-z0-9]/', '', mb_strtolower($token)) ?? '';
+
+        return $t !== '' && in_array($t, self::CLOTHING_SIZES, true);
     }
 
     /**
@@ -895,6 +908,10 @@ final class ProductMatchService
             $product = $products->firstWhere('id', $topAi['id'])
                 ?? Product::query()->find($topAi['id']);
             if (! $product instanceof Product) {
+                continue;
+            }
+            if (! $this->hasStrongSkuInRequirement($requirement, $product)
+                && $this->explainMatch($requirement, $product)['score'] < 40) {
                 continue;
             }
 
