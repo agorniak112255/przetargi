@@ -22,7 +22,7 @@ final class TenderSpreadsheetItemExtractor
 
     /**
      * @return array{
-     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string}>,
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
      *     column_map: array<string, int|null>,
      *     header_row: int,
      *     notes: string
@@ -31,8 +31,11 @@ final class TenderSpreadsheetItemExtractor
     public function extract(string $path, bool $useAiMapping = true): ?array
     {
         $book = IOFactory::load($path);
-        $best = null;
-        $bestCount = 0;
+        $merged = [];
+        $sheetNotes = [];
+        $lastMap = $this->emptyColumnMap();
+        $headerRow = 0;
+        $usedSheets = 0;
 
         foreach ($book->getAllSheets() as $sheet) {
             $rows = $sheet->toArray(null, true, true, false);
@@ -48,13 +51,31 @@ final class TenderSpreadsheetItemExtractor
             }
 
             $pack = $this->extractFromMatrix($normalized, $useAiMapping);
-            if ($pack !== null && count($pack['items']) > $bestCount) {
-                $bestCount = count($pack['items']);
-                $best = $pack;
+            if ($pack === null || $pack['items'] === []) {
+                continue;
             }
+            $usedSheets++;
+            $title = trim((string) $sheet->getTitle());
+            foreach ($pack['items'] as $item) {
+                $merged[] = $item;
+            }
+            $sheetNotes[] = ($title !== '' ? $title.': ' : '').$pack['notes'];
+            $lastMap = $pack['column_map'];
+            $headerRow = $pack['header_row'];
         }
 
-        return $best;
+        if ($merged === []) {
+            return null;
+        }
+
+        return [
+            'items' => array_slice($merged, 0, 800),
+            'column_map' => $lastMap,
+            'header_row' => $headerRow,
+            'notes' => $usedSheets > 1
+                ? 'Scalono '.$usedSheets.' arkusze (nazwa / opis / normy). '.implode(' | ', $sheetNotes)
+                : ($sheetNotes[0] ?? 'Mapowanie nagłówków.'),
+        ];
     }
 
     /**
@@ -62,7 +83,7 @@ final class TenderSpreadsheetItemExtractor
      *
      * @param  list<list<string>>  $rows
      * @return array{
-     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string}>,
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
      *     column_map: array<string, int|null>,
      *     header_row: int,
      *     notes: string
@@ -85,7 +106,7 @@ final class TenderSpreadsheetItemExtractor
         }
 
         return [
-            'items' => array_slice($items, 0, 500),
+            'items' => array_slice($items, 0, 800),
             'column_map' => $detected['columns'],
             'header_row' => $detected['header_row'],
             'notes' => $detected['notes'],
@@ -124,8 +145,7 @@ final class TenderSpreadsheetItemExtractor
         }
 
         $needAi = $useAiMapping && ($best === null || $bestScore < 8
-            || ($best['columns']['sku'] ?? null) === null
-            || (($best['columns']['name'] ?? null) === null && ($best['columns']['sku'] ?? null) === null));
+            || ($best['columns']['name'] ?? null) === null);
 
         if ($needAi) {
             $ai = $this->aiMapHeaders($rows);
@@ -162,17 +182,25 @@ final class TenderSpreadsheetItemExtractor
             'sku' => $this->findCol($labels, [
                 'article', 'artiku', 'artikel', 'sku', 'kod produktu', 'kod towaru', 'product code',
                 'numer katalog', 'nr katalog', 'indeks', 'symbol', 'sap', 'ref.', 'reference',
-                'kod', 'nr poz', 'pozycja nr', 'lp',
-            ]),
+                'kod',
+            ], exclude: ['l.p', 'lp.', 'l.p.']),
             'name' => $this->findCol($labels, [
                 'przedmiot zamówienia', 'przedmiot zamowienia', 'przedmiot',
                 'name of article', 'name of product', 'nazwa artykułu', 'nazwa artykulu',
-                'nazwa produktu', 'nazwa towaru', 'opis produktu', 'asortyment',
-                'product name', 'article name', 'nazwa', 'name', 'opis', 'description', 'produkt',
-            ], exclude: ['project', 'client', 'klient', 'cena', 'price', 'podwykonawc']),
+                'nazwa produktu', 'nazwa towaru', 'nazwa asortymentu', 'asortyment',
+                'product name', 'article name', 'nazwa', 'name', 'produkt',
+            ], exclude: ['project', 'client', 'klient', 'cena', 'price', 'podwykonawc', 'norm']),
+            'description' => $this->findCol($labels, [
+                'opis techniczny', 'szczegółowy opis', 'szczegolowy opis', 'specyfikacja',
+                'opis produktu', 'description', 'opis',
+            ], exclude: ['nazwa']),
+            'norms' => $this->findCol($labels, [
+                'normy', 'norma', 'en iso', 'standard', 'normy en', 'wymagane normy',
+            ]),
             'offer_price' => $this->findPreferredPriceCol($labels),
             'quantity' => $this->findCol($labels, [
-                'quantity', 'qty', 'ilość', 'ilosc', 'szt', 'amount', 'liczba',
+                'quantity', 'qty', 'ilości', 'ilosci', 'ilość', 'ilosc',
+                'szt', 'amount', 'liczba', 'szacunkowe',
             ]),
             'project' => $this->findCol($labels, [
                 'name of project', 'project', 'projekt', 'klient końcowy', 'odbiorca',
@@ -275,6 +303,9 @@ final class TenderSpreadsheetItemExtractor
         if ($cols['quantity'] !== null) {
             $score += 1;
         }
+        if (($cols['norms'] ?? null) !== null) {
+            $score += 2;
+        }
         $blob = implode(' ', $labels);
         if (str_contains($blob, 'article') || str_contains($blob, 'sku')) {
             $score += 1;
@@ -331,11 +362,13 @@ final class TenderSpreadsheetItemExtractor
                 [
                     'role' => 'user',
                     'content' => "Znajdź wiersz nagłówka (0-based index) i indeksy kolumn (0-based lub null):\n"
-                        ."- sku: numer artykułu / kod / Article\n"
-                        ."- name: nazwa produktu / Name of Article (NIE nazwa projektu/klienta)\n"
-                        ."- offer_price: cena oferty / special price (preferuj najnowszą cenę, nie % wzrostu)\n"
-                        ."- quantity: ilość jeśli jest\n"
-                        ."JSON: {\"header_row\":0,\"columns\":{\"sku\":3,\"name\":4,\"offer_price\":7,\"quantity\":null}}\n\n"
+                        ."- sku: kod katalogowy produktu (NIE L.p. / lp / numer wiersza)\n"
+                        ."- name: nazwa / nazwa asortymentu (NIE projekt/klient)\n"
+                        ."- description: osobny opis, jeśli jest inną kolumną niż nazwa\n"
+                        ."- norms: normy EN/ISO jeśli są w osobnej kolumnie\n"
+                        ."- offer_price: cena oferty (nie % wzrostu)\n"
+                        ."- quantity: ilość / szacunkowe ilości roczne\n"
+                        ."JSON: {\"header_row\":2,\"columns\":{\"sku\":null,\"name\":1,\"description\":null,\"norms\":2,\"offer_price\":5,\"quantity\":4}}\n\n"
                         .json_encode($payload, JSON_UNESCAPED_UNICODE),
                 ],
             ];
@@ -349,6 +382,8 @@ final class TenderSpreadsheetItemExtractor
             $columns = [
                 'sku' => isset($c['sku']) && is_numeric($c['sku']) ? (int) $c['sku'] : null,
                 'name' => isset($c['name']) && is_numeric($c['name']) ? (int) $c['name'] : null,
+                'description' => isset($c['description']) && is_numeric($c['description']) ? (int) $c['description'] : null,
+                'norms' => isset($c['norms']) && is_numeric($c['norms']) ? (int) $c['norms'] : null,
                 'offer_price' => isset($c['offer_price']) && is_numeric($c['offer_price']) ? (int) $c['offer_price'] : null,
                 'quantity' => isset($c['quantity']) && is_numeric($c['quantity']) ? (int) $c['quantity'] : null,
                 'project' => null,
@@ -372,7 +407,7 @@ final class TenderSpreadsheetItemExtractor
     /**
      * @param  list<list<string>>  $rows
      * @param  array<string, int|null>  $cols
-     * @return list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string}>
+     * @return list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>
      */
     private function rowsToItems(array $rows, int $headerRow, array $cols): array
     {
@@ -385,14 +420,23 @@ final class TenderSpreadsheetItemExtractor
             $row = $rows[$r];
             $sku = $cols['sku'] !== null ? trim((string) ($row[$cols['sku']] ?? '')) : '';
             $name = $cols['name'] !== null ? trim((string) ($row[$cols['name']] ?? '')) : '';
-            if ($sku === '' && $name === '') {
+            $description = ($cols['description'] ?? null) !== null
+                ? trim((string) ($row[$cols['description']] ?? ''))
+                : '';
+            $norms = ($cols['norms'] ?? null) !== null
+                ? trim((string) ($row[$cols['norms']] ?? ''))
+                : '';
+            if ($this->isLineNumberSku($sku)) {
+                $sku = '';
+            }
+            if ($sku === '' && $name === '' && $description === '') {
                 continue;
             }
             // pomiń wiersze-nagłówki
             $skuLower = mb_strtolower($sku);
             $nameLower = mb_strtolower($name);
             if (in_array($skuLower, ['article', 'sku', 'kod', 'l.p.', 'lp'], true)
-                || in_array($nameLower, ['name of article', 'nazwa', 'name', 'przedmiot zamówienia'], true)
+                || in_array($nameLower, ['name of article', 'nazwa', 'nazwa asortymentu', 'name', 'przedmiot zamówienia'], true)
                 || str_starts_with($nameLower, 'suma')
                 || preg_match('/^\d+(\s*\(\d+\s*[x×]\s*\d+\))?$/u', $name) === 1) {
                 continue;
@@ -421,14 +465,24 @@ final class TenderSpreadsheetItemExtractor
                 $currency = $this->currencyDetector->detect($priceRaw);
             }
 
+            if ($name === '' && $description !== '') {
+                $name = $description;
+            }
             if ($name === '' && $sku !== '') {
                 $name = 'Pozycja '.$sku;
             }
             if ($sku !== '' && ! preg_match('/[A-Za-z0-9]/', $sku)) {
                 $sku = '';
             }
+            if ($norms !== '' && in_array(mb_strtolower($norms), ['normy', 'norma', '-', '—', '–', 'brak', 'n/a'], true)) {
+                $norms = '';
+            }
 
-            $reqParts = array_filter([$sku !== '' ? $sku : null, $name]);
+            $reqParts = array_values(array_filter([
+                $name !== '' ? $name : null,
+                ($description !== '' && mb_strtolower($description) !== mb_strtolower($name)) ? $description : null,
+                $norms !== '' ? $norms : null,
+            ]));
             $items[] = [
                 'sku' => $sku !== '' ? $sku : null,
                 'name' => $name,
@@ -436,6 +490,10 @@ final class TenderSpreadsheetItemExtractor
                 'quantity' => max(1, $qty),
                 'offer_price' => $price,
                 'currency' => $currency,
+                'norms' => $norms !== '' ? $norms : null,
+                'description' => ($description !== '' && mb_strtolower($description) !== mb_strtolower($name))
+                    ? $description
+                    : null,
             ];
         }
 
@@ -459,6 +517,29 @@ final class TenderSpreadsheetItemExtractor
         }
 
         return $numericish >= max(3, (int) ceil(count($nonEmpty) * 0.7));
+    }
+
+    /**
+     * @return array<string, int|null>
+     */
+    private function emptyColumnMap(): array
+    {
+        return [
+            'sku' => null,
+            'name' => null,
+            'description' => null,
+            'norms' => null,
+            'offer_price' => null,
+            'quantity' => null,
+            'project' => null,
+            'client' => null,
+            'currency' => null,
+        ];
+    }
+
+    private function isLineNumberSku(string $sku): bool
+    {
+        return $sku !== '' && preg_match('/^\d{1,4}\.$/', $sku) === 1;
     }
 
     private function toFloat(mixed $value): ?float

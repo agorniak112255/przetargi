@@ -120,6 +120,8 @@ type PreviewItem = {
   quantity: number
   offer_price?: number | null
   currency?: string | null
+  norms?: string | null
+  description?: string | null
   selected: boolean
 }
 type PreviewCondition = { category: string | null; content: string; selected: boolean }
@@ -555,13 +557,15 @@ export function TenderDetail() {
       }
       const items = docPreview.items
         .filter((i) => i.selected)
-        .map(({ sku, name, requirement, quantity, offer_price, currency }) => ({
+        .map(({ sku, name, requirement, quantity, offer_price, currency, norms, description }) => ({
           sku: sku ?? null,
           name: name ?? requirement,
           requirement,
           quantity,
           offer_price: offer_price ?? null,
           currency: currency ?? null,
+          norms: norms ?? null,
+          description: description ?? null,
         }))
       const conditions = docPreview.conditions
         .filter((c) => c.selected)
@@ -1452,7 +1456,8 @@ export function TenderDetail() {
                             <tr className="border-b">
                               <th className="p-1.5 w-8"></th>
                               <th className="p-1.5">Numer</th>
-                              <th className="p-1.5">Nazwa</th>
+                              <th className="p-1.5">Nazwa / opis</th>
+                              <th className="p-1.5">Normy</th>
                               <th className="p-1.5 text-right">Cena</th>
                               <th className="p-1.5 text-right">Ilość</th>
                             </tr>
@@ -1477,7 +1482,15 @@ export function TenderDetail() {
                                 <td className="p-1.5 font-mono text-[11px] text-slate-700">
                                   {it.sku ?? '—'}
                                 </td>
-                                <td className="p-1.5">{it.name || it.requirement}</td>
+                                <td className="p-1.5 max-w-[360px]">
+                                  <span className="block">{it.name || it.requirement}</span>
+                                  {it.description ? (
+                                    <span className="mt-0.5 block text-[11px] text-slate-500">{it.description}</span>
+                                  ) : null}
+                                </td>
+                                <td className="p-1.5 max-w-[200px] text-[11px] text-slate-700">
+                                  {it.norms ?? '—'}
+                                </td>
                                 <td className="p-1.5 text-right whitespace-nowrap">
                                   {it.offer_price != null
                                     ? `${Number(it.offer_price).toFixed(2)}${it.currency ? ` ${it.currency}` : ''}`

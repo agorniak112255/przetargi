@@ -113,7 +113,7 @@ final class TenderDocumentImportService
 
         $items = array_map(
             fn (array $r) => $this->normalizePreviewItem($r) + ['selected' => true],
-            array_slice($parsed['items'], 0, 400),
+            array_slice($parsed['items'], 0, 800),
         );
         $conditions = array_map(
             static fn (array $r) => $r + ['selected' => true],
@@ -194,7 +194,7 @@ final class TenderDocumentImportService
 
         $items = array_map(
             fn (array $r) => $this->normalizePreviewItem($r) + ['selected' => true],
-            array_slice($parsed['items'], 0, 400),
+            array_slice($parsed['items'], 0, 800),
         );
         $conditions = array_map(static fn (array $r) => $r + ['selected' => true], $parsed['conditions']);
 
@@ -211,7 +211,7 @@ final class TenderDocumentImportService
             if ($sheet !== null && $sheet['items'] !== []) {
                 $items = array_map(
                     fn (array $r) => $this->normalizePreviewItem($r) + ['selected' => true],
-                    array_slice($sheet['items'], 0, 400),
+                    array_slice($sheet['items'], 0, 800),
                 );
             }
         }
@@ -351,18 +351,27 @@ final class TenderDocumentImportService
 
     /**
      * @param  array<string, mixed>  $row
-     * @return array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string}
+     * @return array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}
      */
     private function normalizePreviewItem(array $row): array
     {
         $sku = isset($row['sku']) ? trim((string) $row['sku']) : '';
         $name = trim((string) ($row['name'] ?? ''));
+        $description = trim((string) ($row['description'] ?? ''));
+        $norms = trim((string) ($row['norms'] ?? ''));
         $req = trim((string) ($row['requirement'] ?? ''));
+        if ($name === '' && $description !== '') {
+            $name = $description;
+        }
         if ($name === '' && $req !== '') {
             $name = $req;
         }
         if ($req === '') {
-            $req = trim(implode(' · ', array_filter([$sku !== '' ? $sku : null, $name !== '' ? $name : null])));
+            $req = trim(implode(' · ', array_filter([
+                $name !== '' ? $name : null,
+                ($description !== '' && mb_strtolower($description) !== mb_strtolower($name)) ? $description : null,
+                $norms !== '' ? $norms : null,
+            ])));
         }
         $qty = $row['quantity'] ?? 1;
         $price = $row['offer_price'] ?? $row['price'] ?? null;
@@ -376,6 +385,10 @@ final class TenderDocumentImportService
             'quantity' => max(1, is_numeric($qty) ? (int) $qty : 1),
             'offer_price' => $price,
             'currency' => $currency,
+            'norms' => $norms !== '' ? $norms : null,
+            'description' => ($description !== '' && mb_strtolower($description) !== mb_strtolower($name))
+                ? $description
+                : null,
         ];
     }
 }
