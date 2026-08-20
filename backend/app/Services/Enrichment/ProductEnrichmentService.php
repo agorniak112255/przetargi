@@ -1720,7 +1720,7 @@ Zwróć WYŁĄCZNIE JSON:
   "materials": ["materiały / powłoki"],
   "use_cases": ["zastosowania / branże / warunki pracy"],
   "attributes": {
-    "kategoria_bhp": "rekawice|obuwie|odziez|ochrona_glowy|inne",
+    "kategoria_bhp": "rekawice|obuwie|odziez|ochrona_glowy|ochrona_twarzy|ochrona_oczu|ochrona_sluchu|drogi_oddechowe|asekuracja|ochrona_kolan|inne",
     "kod_producenta": "SKU / nr katalogowy producenta",
     "material": "główny materiał (np. nitryl)",
     "materialy": ["lista materiałów"],

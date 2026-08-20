@@ -12,7 +12,11 @@ use App\Models\Product;
 final class BhpAttributeNormalizer
 {
     /** @var list<string> */
-    public const KATEGORIE = ['rekawice', 'obuwie', 'odziez', 'ochrona_glowy', 'inne'];
+    public const KATEGORIE = [
+        'rekawice', 'obuwie', 'odziez',
+        'ochrona_glowy', 'ochrona_twarzy', 'ochrona_oczu', 'ochrona_sluchu',
+        'drogi_oddechowe', 'asekuracja', 'ochrona_kolan', 'inne',
+    ];
 
     /**
      * @return array{
@@ -273,6 +277,21 @@ final class BhpAttributeNormalizer
             'ochrona_glowy' => 'ochrona_glowy',
             'kask' => 'ochrona_glowy',
             'helmet' => 'ochrona_glowy',
+            'ochrona_twarzy' => 'ochrona_twarzy',
+            'oslona twarzy' => 'ochrona_twarzy',
+            'osłona twarzy' => 'ochrona_twarzy',
+            'face' => 'ochrona_twarzy',
+            'ochrona_oczu' => 'ochrona_oczu',
+            'gogle' => 'ochrona_oczu',
+            'okulary' => 'ochrona_oczu',
+            'ochrona_sluchu' => 'ochrona_sluchu',
+            'nauszniki' => 'ochrona_sluchu',
+            'drogi_oddechowe' => 'drogi_oddechowe',
+            'polmaska' => 'drogi_oddechowe',
+            'półmaska' => 'drogi_oddechowe',
+            'asekuracja' => 'asekuracja',
+            'szelki' => 'asekuracja',
+            'ochrona_kolan' => 'ochrona_kolan',
             'inne' => 'inne',
         ];
 
@@ -281,21 +300,7 @@ final class BhpAttributeNormalizer
 
     private function detectKategoria(string $text): ?string
     {
-        $t = $this->normalizeText($text);
-        if (preg_match('/\b(rekawic|glove|handschuh)\w*/u', $t) === 1) {
-            return 'rekawice';
-        }
-        if (preg_match('/\b(trzewik|polbut|sandal|obuwie|buty|footwear|podeszw|podnosek|\bs3\b|\bs1p?\b)\b/u', $t) === 1) {
-            return 'obuwie';
-        }
-        if (preg_match('/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell|fartuch|kitel|bluza)\w*/u', $t) === 1) {
-            return 'odziez';
-        }
-        if (preg_match('/\b(kask|helmet|nausznik|gogle|okulary)\w*/u', $t) === 1) {
-            return 'ochrona_glowy';
-        }
-
-        return null;
+        return (new PpeAssortment)->kategoria($text);
     }
 
     private function detectKlasa(string $text): ?string

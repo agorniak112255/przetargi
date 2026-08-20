@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Product;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Vector\ProductVectorSearch;
+use App\Support\PpeAssortment;
 use App\Support\ProductModelFuzzy;
 use Illuminate\Support\Collection;
 use RuntimeException;
@@ -19,6 +20,7 @@ final class ProductAiSearchService
         private readonly ProductVectorSearch $vectorSearch,
         private readonly ExternalCatalogHintService $externalHints,
         private readonly ProductModelFuzzy $modelFuzzy,
+        private readonly PpeAssortment $assortment,
     ) {}
 
     /**
@@ -41,7 +43,7 @@ final class ProductAiSearchService
         $limit = max(1, min(80, $limit));
 
         $intent = $this->understandRequirement($query);
-        $candidates = $this->retrieveCandidates($query, $intent, 40);
+        $candidates = $this->keepCompatible($query, $this->retrieveCandidates($query, $intent, 40));
         $named = $candidates->filter(
             fn (Product $p): bool => $this->modelFuzzy->matches($query, $p)
         )->values();
@@ -101,12 +103,14 @@ final class ProductAiSearchService
             $raw = $this->llm->chatJson([
                 [
                     'role' => 'system',
-                    'content' => 'Jesteś ekspertem BHP. Najpierw zrozum wymaganie SIWZ: jaki konkretny produkt jest potrzebny. '
-                        .'Uwzględnij synonimy i różne nazwy (np. obuwie/buty/botki/trzewiki, kurtka/bluza ochronna). '
-                        .'Popraw oczywiste literówki w marce/modelu (np. TEPM-ICE → TEMP-ICE) i dodaj poprawioną frazę. '
-                        .'Nie klasyfikuj przez sztywną listę typów. '
-                        .'JSON: {"needed":"zwięzły opis szukanego produktu","search_phrases":["2-8 fraz do katalogu, także synonimy"]}. '
-                        .'„rękawy” odzieży ≠ rękawice.',
+                    'content' => 'Jesteś ekspertem BHP. Z SIWZ wyodrębnij NAZWĘ produktu (rzeczownik), zanim cechy i normy. '
+                        .'needed: krótka nazwa na początku (np. kamizelka odblaskowa żółta) — bez EN i bez samego przymiotnika. '
+                        .'search_phrases: 2-8 fraz; PIERWSZE 2 to wyłącznie nazwa/synonim (kamizelka, kamizelka odblaskowa). '
+                        .'Cechy (siatkowa, nadruk) i normy EN dopiero na końcu. '
+                        .'Przymiotnik wspólny nie zastępuje nazwy: kamizelka ≠ osłona twarzy; rękawy ≠ rękawice. '
+                        .'Synonimy: obuwie/buty/trzewiki, kurtka/bluza ochronna. '
+                        .'Popraw literówki modelu (TEPM-ICE → TEMP-ICE). Nie klasyfikuj sztywną listą typów. '
+                        .'JSON: {"needed":"nazwa szukanego produktu","search_phrases":["najpierw nazwa","potem cechy/normy"]}.',
                 ],
                 [
                     'role' => 'user',
@@ -211,11 +215,16 @@ final class ProductAiSearchService
         $priority = $this->uniqueProducts($fuzzyHits->concat($codeHits), $limit);
 
         if ($this->modelFuzzy->hasNamedModel($query) && $priority->isNotEmpty()) {
-            return $priority;
+            $namedPriority = $this->keepCompatible($query, $priority);
+            if ($namedPriority->isNotEmpty()) {
+                return $namedPriority;
+            }
         }
 
-        $vectorHits = $this->retrieveVector($searchText, max($limit, 80));
         $likeHits = $this->retrieveLike($intent['search_phrases'], $limit);
+        $vectorHits = $likeHits->isEmpty()
+            ? $this->retrieveVector($searchText, max($limit, 80))
+            : collect();
 
         $seen = [];
         $merged = collect();
@@ -230,7 +239,18 @@ final class ProductAiSearchService
             }
         }
 
-        return $merged->values();
+        return $this->keepCompatible($query, $merged->values());
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return Collection<int, Product>
+     */
+    private function keepCompatible(string $query, Collection $products): Collection
+    {
+        return $products
+            ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p))
+            ->values();
     }
 
     /**
@@ -608,14 +628,16 @@ final class ProductAiSearchService
         $raw = $this->llm->chatJson([
             [
                 'role' => 'system',
-                'content' => 'Jesteś ekspertem BHP. Porównaj wymaganie z kartami katalogu SUPON. '
-                    .'Sam oceń, czy karta to ten sam rodzaj produktu (synonimy: buty=obuwie=trzewiki; kurtka może być bluzą ochronną). '
-                    .'Jeśli SIWZ podaje markę i model, wybierz kartę tej marki/modelu nawet przy literówce (TEPM-ICE = TEMP-ICE). '
-                    .'Nie podstawiaj innej marki tylko dlatego, że normy EN się zgadzają. '
-                    .'Inny rodzaj PPE → nie zwracaj. Jeśli nic nie pasuje: {"matches":[]}. '
+                'content' => 'Jesteś ekspertem BHP. Ranking w dwóch krokach — nie mieszaj ich. '
+                    .'1) NAZWA: rzeczownik z wymagania = ten sam produkt co w polu name karty '
+                    .'(synonimy: buty=obuwie=trzewiki; kurtka≈bluza ochronna). '
+                    .'Inny rodzaj → nie zwracaj: kamizelka ≠ osłona twarzy; rękawice ≠ obuwie. '
+                    .'Wspólna cecha (siatkowa) albo ta sama norma EN NIE wystarczy. '
+                    .'2) Dopiero potem cechy, materiał, klasa i normy — tylko wśród kart z kroku 1. '
+                    .'Marka/model z SIWZ wygrywa przy literówce (TEPM-ICE=TEMP-ICE); nie zmieniaj marki przez EN. '
+                    .'Brak zgodnej nazwy: {"matches":[]}. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}. '
-                    .'score>=40 tylko przy zgodnym produkcie. Max 5. Tylko id z listy. '
-                    .'Nie wymyślaj produktu spoza listy.',
+                    .'score>=40 tylko przy zgodnej nazwie. Max 5. Tylko id z listy. Nie wymyślaj.',
             ],
             [
                 'role' => 'user',
@@ -638,6 +660,9 @@ final class ProductAiSearchService
             }
             /** @var Product $product */
             $product = $byId->get($id);
+            if (! $this->assortment->compatibleProduct($query, $product)) {
+                continue;
+            }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(0, $score));
             $row['ai_match_reason'] = is_string($m['reason'] ?? null) ? $m['reason'] : null;

@@ -90,4 +90,21 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertNotEmpty($attrs['normy_en']);
         $this->assertSame('4131A', $attrs['poziomy_en388']);
     }
+
+    public function test_detects_face_protection_not_head(): void
+    {
+        $n = new BhpAttributeNormalizer;
+        $this->assertSame('ochrona_twarzy', $n->normalize(
+            [],
+            ['name' => 'Osłona twarzy żaroodporna siatkowa', 'category' => '']
+        )['kategoria_bhp']);
+        $this->assertSame('ochrona_oczu', $n->normalize(
+            [],
+            ['name' => 'Gogle chemiczne', 'category' => '']
+        )['kategoria_bhp']);
+        $this->assertSame('odziez', $n->normalize(
+            [],
+            ['name' => 'Kamizelka odblaskowa siatkowa', 'category' => '']
+        )['kategoria_bhp']);
+    }
 }

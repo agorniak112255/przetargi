@@ -324,6 +324,43 @@ final class ProductMatchServiceTest extends TestCase
     }
 
     #[Test]
+    public function vest_requirement_does_not_match_mesh_face_shield(): void
+    {
+        $products = new Collection([
+            $this->fakeProduct([
+                'sku' => '12-0423',
+                'name' => 'Osłona twarzy żaroodporna siatkowa',
+                'manufacturer' => 'ALWIT POLAND',
+                'description' => 'Osłona twarzy siatkowa żaroodporna do prac spawalniczych.',
+            ]),
+            $this->fakeProduct([
+                'sku' => 'V4B',
+                'name' => '3M™ Osłona twarzy siatkowa, pol',
+                'manufacturer' => '3M',
+                'description' => 'Osłona twarzy siatkowa 3M V4B.',
+            ]),
+            $this->fakeProduct([
+                'sku' => 'VEST-HV',
+                'name' => 'Kamizelka odblaskowa żółta siatkowa',
+                'manufacturer' => 'X',
+                'category' => 'odziez',
+                'description' => 'Kamizelka ostrzegawcza EN 20471 klasa 1, góra siatkowa.',
+                'norms' => 'EN ISO 20471',
+            ]),
+        ]);
+
+        $req = 'KAMIZELKA ODBLASKOWA żółta SIATKOWA z nadrukiem z przodu, góra siatkowa, dół materiał · EN 20471 kl. 1';
+        $best = $this->matcher->bestMatch($req, $products);
+
+        $this->assertNotNull($best);
+        $this->assertSame('VEST-HV', $best['product']->sku);
+
+        $explained = $this->matcher->explainMatch($req, $products[0]);
+        $this->assertSame(0, $explained['score']);
+        $this->assertSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null);
+    }
+
+    #[Test]
     public function typo_in_siwz_model_matches_catalog_name_not_other_brand(): void
     {
         $products = new Collection([

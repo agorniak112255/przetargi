@@ -377,4 +377,57 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('products', [])
             ->assertJsonPath('external_hint.url', 'https://example.com/kurtka-ochronna');
     }
+
+    public function test_ai_search_rejects_face_shield_for_vest_even_if_model_scores_it(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $vest = Product::query()->create([
+            'sku' => 'VEST-HV',
+            'name' => 'Kamizelka odblaskowa żółta siatkowa',
+            'manufacturer' => 'X',
+            'category' => 'Odzież',
+            'norms' => 'EN ISO 20471',
+            'description' => 'Kamizelka ostrzegawcza klasa 1, góra siatkowa, dół materiał.',
+            'catalog_price_net' => 22,
+            'purchase_price' => 14,
+            'stock' => 6,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $shield = Product::query()->create([
+            'sku' => '12-0423',
+            'name' => 'Osłona twarzy żaroodporna siatkowa',
+            'manufacturer' => 'ALWIT POLAND',
+            'category' => 'Ochrona twarzy',
+            'description' => 'Osłona twarzy siatkowa żaroodporna ALWIT do prac gorących.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 28,
+            'stock' => 3,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn(
+            [
+                'needed' => 'kamizelka odblaskowa żółta',
+                'search_phrases' => ['kamizelka', 'kamizelka odblaskowa', 'siatkowa', 'EN 20471'],
+            ],
+            [
+                'matches' => [
+                    ['id' => $shield->id, 'score' => 86, 'reason' => 'siatkowa'],
+                    ['id' => $vest->id, 'score' => 80, 'reason' => 'kamizelka'],
+                ],
+            ],
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'KAMIZELKA ODBLASKOWA żółta SIATKOWA z nadrukiem · EN 20471 kl. 1',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'VEST-HV')
+            ->assertJsonMissing(['sku' => '12-0423']);
+    }
 }

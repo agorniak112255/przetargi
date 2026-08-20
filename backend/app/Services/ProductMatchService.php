@@ -11,6 +11,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
+use App\Support\PpeAssortment;
 use App\Support\ProductModelFuzzy;
 use Illuminate\Support\Collection;
 use Throwable;
@@ -22,10 +23,9 @@ final class ProductMatchService
 
     /** Tokeny zbyt ogólne — nie podbijają score overlap. */
     private const STOPWORDS = [
-        'rekawice', 'rekawica', 'ochronne', 'ochronna', 'ochronny', 'robocze', 'robocza',
+        'ochronne', 'ochronna', 'ochronny', 'robocze', 'robocza',
         'produkt', 'art', 'kat', 'para', 'par', 'szt', 'sztuk', 'the', 'and', 'for',
         'with', 'bez', 'oraz', 'typ', 'model', 'kolor', 'rozmiar',
-        'kurtka', 'bluza', 'spodnie', 'odziez', 'kamizelka', 'fartuch', 'kitel',
         'kieszen', 'rekawy', 'zolta', 'granat', 'bialy', 'damski', 'meski',
     ];
 
@@ -39,7 +39,10 @@ final class ProductMatchService
     private const GENERIC_SIWZ_CODES = [
         'kurtka', 'bluza', 'spodnie', 'odziez', 'ubranie', 'komplet', 'zestaw',
         'ochronna', 'ochronne', 'robocza', 'robocze', 'odblask', 'ostrzegaw',
-        'elektryk', 'spawal', 'laboratory', 'fartuch',
+        'elektryk', 'spawal', 'laboratory', 'fartuch', 'kamizelka', 'kitel',
+        'kombinezon', 'kalesony', 'rekawice', 'rekawica', 'oslona', 'przylbica',
+        'polmaska', 'okulary', 'gogle', 'nauszniki', 'szelki', 'trzewiki',
+        'obuwie', 'helm', 'kask', 'kominiarka', 'siatkowa', 'odblaskowa',
     ];
 
     public function __construct(
@@ -50,6 +53,7 @@ final class ProductMatchService
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly ExternalCatalogHintService $externalHints,
         private readonly ProductModelFuzzy $modelFuzzy,
+        private readonly PpeAssortment $assortment,
     ) {}
 
     /**
@@ -261,94 +265,19 @@ final class ProductMatchService
     {
         $prodText = $hay.' '.$this->normalize((string) ($product->category ?? ''))
             .' '.$this->normalize((string) ($product->name ?? ''));
-        $reqFamily = $this->detectAssortmentFamily($req);
-        $prodFamily = $this->familyFromKategoria($attrs['kategoria_bhp'] ?? null)
-            ?? $this->detectAssortmentFamily($prodText);
+        $kat = is_string($attrs['kategoria_bhp'] ?? null) ? $attrs['kategoria_bhp'] : null;
 
-        if ($reqFamily === null || $prodFamily === null) {
-            return true;
-        }
-        if ($reqFamily !== $prodFamily) {
-            return false;
-        }
-        if ($reqFamily === 'apparel') {
-            return $this->apparelRolesCompatible($req, $prodText);
-        }
-
-        return true;
-    }
-
-    private function apparelRolesCompatible(string $req, string $prodText): bool
-    {
-        $reqRole = $this->detectApparelRole($req);
-        $prodRole = $this->detectApparelRole($prodText);
-        if ($reqRole !== null && $prodRole !== null && $reqRole !== $prodRole) {
-            return false;
-        }
-
-        $reqSet = preg_match('/\b(bluza.{0,12}spodn|spodn.{0,12}bluza|ubranie ochron|komplet|zestaw)\w*/u', $req) === 1;
-        $prodSet = preg_match('/\b(spodn|komplet|zestaw|ubranie)\w*/u', $prodText) === 1;
-        if ($reqSet && preg_match('/\b(bluz|kurtk)\w*/u', $prodText) === 1 && ! $prodSet) {
-            return false;
-        }
-
-        return true;
-    }
-
-    private function detectApparelRole(string $text): ?string
-    {
-        $t = $this->normalize($text);
-        if (preg_match('/\b20471\b|odblask|ostrzegawcz|hi.?vis|wysokiej widzial/u', $t) === 1) {
-            return 'hivis';
-        }
-        if (preg_match('/\bspawal|11611|welding|welder/u', $t) === 1) {
-            return 'welding';
-        }
-        if (preg_match('/\beletryk|1149|61482|lukiem|antystatyczn/u', $t) === 1) {
-            return 'electric';
-        }
-        if (preg_match('/\bzaroodporn|11612\b/u', $t) === 1) {
-            return 'heat';
-        }
-
-        return null;
+        return $this->assortment->compatible($req, $prodText, $kat);
     }
 
     private function familyFromKategoria(mixed $kategoria): ?string
     {
-        return match (is_string($kategoria) ? $kategoria : null) {
-            'rekawice' => 'gloves',
-            'obuwie' => 'footwear',
-            'odziez' => 'apparel',
-            'ochrona_glowy' => 'head',
-            default => null,
-        };
+        return $this->assortment->familyFromKategoria(is_string($kategoria) ? $kategoria : null);
     }
 
     private function detectAssortmentFamily(string $text): ?string
     {
-        if (preg_match('/\b(rekawic|glove|handschuh)\w*/u', $text) === 1) {
-            return 'gloves';
-        }
-        if (preg_match(
-            '/\b(kominiark|czapk|hełm|helm|kask|czepek|kaptur|balaclava)\w*/u',
-            $text
-        ) === 1) {
-            return 'head';
-        }
-        if (preg_match('/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell|fartuch|kitel|bluza)\w*/u', $text) === 1) {
-            return 'apparel';
-        }
-        // OB/SB same w SKU bluzy — obuwie tylko przy wyraźnym kontekście
-        if (preg_match(
-            '/\b(trzewik|polbut|sandal|obuwie|buty|butow|footwear|podeszw|podnosek'
-            .'|\bs1p?\b|\bs3\b)\b/u',
-            $text
-        ) === 1) {
-            return 'footwear';
-        }
-
-        return null;
+        return $this->assortment->family($text);
     }
 
     /**
