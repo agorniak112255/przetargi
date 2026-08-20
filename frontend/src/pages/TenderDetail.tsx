@@ -104,7 +104,7 @@ type Coverage = {
     weak_match: number[]
     low_margin: number[]
   }
-  thresholds: { min_match_score: number; min_margin_percent: number }
+  thresholds: { min_match_score: number; min_margin_percent: number; match_concurrency?: number }
 }
 
 type ActivityRow = {
@@ -253,7 +253,33 @@ function matchReportStorageKey(tenderId: string): string {
   return `tender-match-report-${tenderId}`
 }
 
-const MATCH_BATCH_SIZE = 4
+const MATCH_BATCH_SIZE = 1
+const MATCH_CONCURRENCY_DEFAULT = 4
+const MATCH_CONCURRENCY_MAX = 8
+
+function clampMatchConcurrency(value: number | undefined): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) {
+    return MATCH_CONCURRENCY_DEFAULT
+  }
+  return Math.max(1, Math.min(MATCH_CONCURRENCY_MAX, Math.round(n)))
+}
+
+async function mapPool<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0
+  const run = async () => {
+    while (next < items.length) {
+      const i = next
+      next += 1
+      await worker(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => run()))
+}
 
 function matchTargetIds(
   items: Item[],
@@ -434,6 +460,7 @@ export function TenderDetail() {
   const [matchElapsed, setMatchElapsed] = useState(0)
   const [matchProgress, setMatchProgress] = useState<MatchProgress | null>(null)
   const matchStartedAtRef = useRef(0)
+  const matchDoneRef = useRef(0)
   const [matchReport, setMatchReport] = useState<MatchReport | null>(null)
   const [showAiChanges, setShowAiChanges] = useState(false)
   const [transitionNote, setTransitionNote] = useState('')
@@ -533,7 +560,14 @@ export function TenderDetail() {
         if (p.started_at != null && p.started_at < started - 5) {
           return
         }
-        setMatchProgress(p)
+        setMatchProgress((prev) => ({
+          status: 'running',
+          done: matchDoneRef.current,
+          total: prev?.total ?? p.total,
+          line_no: p.line_no,
+          requirement: p.requirement,
+          started_at: started,
+        }))
       } catch {
         /* postęp jest pomocniczy */
       }
@@ -1042,6 +1076,7 @@ export function TenderDetail() {
     setMatchBusy(true)
     setShowAiChanges(false)
     matchStartedAtRef.current = Math.floor(Date.now() / 1000)
+    matchDoneRef.current = 0
     const targets = matchTargetIds(
       data?.tender.items ?? [],
       onlyEmpty,
@@ -1082,39 +1117,48 @@ export function TenderDetail() {
       changes: [],
     }
     const scoreParts: number[] = []
+    const chunks: number[][] = []
+    for (let i = 0; i < targets.length; i += MATCH_BATCH_SIZE) {
+      chunks.push(targets.slice(i, i + MATCH_BATCH_SIZE))
+    }
+    const errors: string[] = []
+    const concurrency = clampMatchConcurrency(data?.coverage?.thresholds.match_concurrency)
     try {
-      for (let i = 0; i < targets.length; i += MATCH_BATCH_SIZE) {
-        const chunk = targets.slice(i, i + MATCH_BATCH_SIZE)
-        const res = await api<MatchApiRes>(`/tenders/${id}/match`, {
-          method: 'POST',
-          body: JSON.stringify({
-            only_empty: onlyEmpty,
-            item_ids: chunk,
-            progress_offset: i,
-            progress_total: estimated,
-          }),
-        })
-        merged.matched += res.matched
-        merged.skipped += res.skipped
-        merged.processed = (merged.processed ?? 0) + (res.processed ?? res.matched + res.skipped)
-        merged.changed = (merged.changed ?? 0) + (res.changed ?? 0)
-        merged.unchanged = (merged.unchanged ?? 0) + (res.unchanged ?? 0)
-        merged.cleared = (merged.cleared ?? 0) + (res.cleared ?? 0)
-        merged.skipped_custom = (merged.skipped_custom ?? 0) + (res.skipped_custom ?? 0)
-        merged.no_match = (merged.no_match ?? 0) + (res.no_match ?? 0)
-        merged.changes = [...(merged.changes ?? []), ...(res.changes ?? [])]
-        if (res.matched > 0) {
-          scoreParts.push(res.avg_score)
+      await mapPool(chunks, concurrency, async (chunk) => {
+        try {
+          const res = await api<MatchApiRes>(`/tenders/${id}/match`, {
+            method: 'POST',
+            body: JSON.stringify({
+              only_empty: onlyEmpty,
+              item_ids: chunk,
+              progress_total: estimated,
+            }),
+          })
+          merged.matched += res.matched
+          merged.skipped += res.skipped
+          merged.processed = (merged.processed ?? 0) + (res.processed ?? res.matched + res.skipped)
+          merged.changed = (merged.changed ?? 0) + (res.changed ?? 0)
+          merged.unchanged = (merged.unchanged ?? 0) + (res.unchanged ?? 0)
+          merged.cleared = (merged.cleared ?? 0) + (res.cleared ?? 0)
+          merged.skipped_custom = (merged.skipped_custom ?? 0) + (res.skipped_custom ?? 0)
+          merged.no_match = (merged.no_match ?? 0) + (res.no_match ?? 0)
+          merged.changes = [...(merged.changes ?? []), ...(res.changes ?? [])]
+          if (res.matched > 0) {
+            scoreParts.push(res.avg_score)
+          }
+        } catch (e) {
+          errors.push(e instanceof Error ? e.message : 'Błąd dopasowania')
         }
+        matchDoneRef.current += chunk.length
         setMatchProgress({
-          status: i + chunk.length >= estimated ? 'done' : 'running',
-          done: Math.min(i + chunk.length, estimated),
+          status: matchDoneRef.current >= estimated ? 'done' : 'running',
+          done: Math.min(matchDoneRef.current, estimated),
           total: estimated,
           line_no: null,
           requirement: null,
           started_at: matchStartedAtRef.current,
         })
-      }
+      })
       merged.avg_score =
         scoreParts.length === 0
           ? 0
@@ -1145,6 +1189,9 @@ export function TenderDetail() {
           : `Dopasowanie zakończone: brak zmian w ofercie (${report.processed} przerobionych, ${report.unchanged} bez zmiany, ${report.skipped_custom} własnych, ${report.no_match} bez produktu).`,
       )
       setTab('pozycje')
+      if (errors.length > 0) {
+        setErr(`Część paczek nie przeszła (${errors.length}): ${errors[0]}`)
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd dopasowania')
     } finally {
@@ -1291,8 +1338,8 @@ export function TenderDetail() {
           <div className="w-full max-w-md rounded-xl bg-white p-4 text-sm shadow-xl">
             <p className="font-semibold text-slate-900">Trwa dopasowanie AI…</p>
             <p className="mt-1 text-xs text-slate-600">
-              Nie odświeżaj strony. Każda pozycja to osobne wyszukiwanie w katalogu — przy ~80 pustych
-              to zwykle kilka–kilkanaście minut.
+              Nie odświeżaj strony. Lecą {clampMatchConcurrency(coverage?.thresholds.match_concurrency)}{' '}
+              wyszukiwania naraz — przy ~80 pustych to zwykle kilka minut.
             </p>
             {(() => {
               const total = Math.max(matchProgress?.total ?? 0, 0)

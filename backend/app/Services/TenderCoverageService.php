@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\ProductSubstitute;
 use App\Models\Tender;
 use App\Models\TenderItem;
+use App\Services\Ai\AiSettingsService;
 
 final class TenderCoverageService
 {
@@ -14,6 +15,10 @@ final class TenderCoverageService
 
     /** Minimalna akceptowalna marża pozycji (%). */
     public const MIN_MARGIN_PERCENT = 15.0;
+
+    public function __construct(
+        private readonly AiSettingsService $aiSettings,
+    ) {}
 
     /**
      * @return array{
@@ -112,6 +117,7 @@ final class TenderCoverageService
             'thresholds' => [
                 'min_match_score' => self::MIN_MATCH_SCORE,
                 'min_margin_percent' => self::MIN_MARGIN_PERCENT,
+                'match_concurrency' => $this->aiSettings->matchConcurrency(),
             ],
         ];
     }

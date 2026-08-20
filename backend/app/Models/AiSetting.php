@@ -23,6 +23,7 @@ class AiSetting extends Model
         'search_fallback',
         'tavily_search_mode',
         'enrichment_batch_limit',
+        'match_concurrency',
         'vector_enabled',
         'qdrant_url',
         'qdrant_api_key',
@@ -45,6 +46,7 @@ class AiSetting extends Model
             'web_search_enabled' => 'boolean',
             'enrichment_use_large_model' => 'boolean',
             'enrichment_batch_limit' => 'integer',
+            'match_concurrency' => 'integer',
             'vector_enabled' => 'boolean',
         ];
     }

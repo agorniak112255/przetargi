@@ -19,6 +19,7 @@ type AiSettings = {
   search_fallback: string
   tavily_search_mode: 'eco' | 'balanced' | 'full'
   enrichment_batch_limit: number
+  match_concurrency: number
   vector_enabled: boolean
   qdrant_url: string | null
   qdrant_collection: string | null
@@ -90,6 +91,7 @@ export function AiSettingsPage() {
         search_fallback: cfg.search_fallback,
         tavily_search_mode: cfg.tavily_search_mode || 'balanced',
         enrichment_batch_limit: cfg.enrichment_batch_limit || 5,
+        match_concurrency: cfg.match_concurrency || 4,
         vector_enabled: cfg.vector_enabled,
         qdrant_url: cfg.qdrant_url?.trim() || null,
         qdrant_collection: cfg.qdrant_collection?.trim() || 'products',
@@ -376,6 +378,27 @@ export function AiSettingsPage() {
             <span className="mt-1 block text-[11px] text-slate-500">
               Limit na jedno kliknięcie: cenniki, „Pobierz widoczne bez opisu”, zaznaczone. Resztę
               trzeba uruchomić kolejnymi batchami.
+            </span>
+          </label>
+          <label className="block text-xs">
+            Ile pozycji dopasowywać naraz (1–8)
+            <input
+              type="number"
+              min={1}
+              max={8}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.match_concurrency ?? 4}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  match_concurrency: Math.max(1, Math.min(8, Number(e.target.value) || 4)),
+                })
+              }
+            />
+            <span className="mt-1 block text-[11px] text-slate-500">
+              1 = kolejka (najbezpieczniej). 3–4 = zwykle najlepszy stosunek czasu do błędów.
+              6–8 przyspiesza, ale sypie 429 od API, zatyka PHP-FPM i MySQL. Zależy od limitu
+              zapytań u dostawcy modelu, liczby workerów PHP na serwerze i timeoutu AI.
             </span>
           </label>
           <label className="flex items-center gap-2 text-xs">

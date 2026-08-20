@@ -45,6 +45,7 @@ class AiSettingsController extends Controller
             'search_fallback' => ['sometimes', 'string', 'in:tavily,none'],
             'tavily_search_mode' => ['sometimes', 'string', 'in:eco,balanced,full'],
             'enrichment_batch_limit' => ['sometimes', 'integer', 'min:1', 'max:50'],
+            'match_concurrency' => ['sometimes', 'integer', 'min:1', 'max:8'],
             'vector_enabled' => ['sometimes', 'boolean'],
             'qdrant_url' => ['nullable', 'url', 'max:255'],
             'qdrant_api_key' => ['nullable', 'string', 'max:500'],

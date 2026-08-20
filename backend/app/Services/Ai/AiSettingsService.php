@@ -29,6 +29,7 @@ final class AiSettingsService
      *     search_fallback: string,
      *     tavily_search_mode: string,
      *     enrichment_batch_limit: int,
+     *     match_concurrency: int,
      *     vector_enabled: bool,
      *     qdrant_url: ?string,
      *     qdrant_api_key: ?string,
@@ -80,6 +81,11 @@ final class AiSettingsService
                         ? ($row->enrichment_batch_limit ?? null)
                         : null
                 ),
+                'match_concurrency' => $this->normalizeMatchConcurrency(
+                    Schema::hasColumn('ai_settings', 'match_concurrency')
+                        ? ($row->match_concurrency ?? null)
+                        : null
+                ),
                 'vector_enabled' => $hasVectorCols ? (bool) ($row->vector_enabled ?? false) : false,
                 'qdrant_url' => $hasVectorCols ? $this->nullableString($row->qdrant_url ?? null) : null,
                 'qdrant_api_key' => $qdrantKey !== null && $qdrantKey !== '' ? (string) $qdrantKey : null,
@@ -121,6 +127,7 @@ final class AiSettingsService
             'search_fallback' => (string) config('ai.search_fallback', 'tavily'),
             'tavily_search_mode' => $this->normalizeTavilySearchMode(config('ai.tavily_search_mode')),
             'enrichment_batch_limit' => $this->normalizeEnrichmentBatchLimit(config('ai.enrichment_batch_limit')),
+            'match_concurrency' => $this->normalizeMatchConcurrency(config('ai.match_concurrency')),
             'vector_enabled' => (bool) config('ai.vector_enabled', false),
             'qdrant_url' => $this->nullableString(config('ai.qdrant_url')),
             'qdrant_api_key' => $qdrantKey,
@@ -156,6 +163,7 @@ final class AiSettingsService
             'search_fallback' => $cfg['search_fallback'],
             'tavily_search_mode' => $cfg['tavily_search_mode'],
             'enrichment_batch_limit' => $cfg['enrichment_batch_limit'],
+            'match_concurrency' => $cfg['match_concurrency'],
             'vector_enabled' => $cfg['vector_enabled'],
             'qdrant_url' => $cfg['qdrant_url'],
             'qdrant_collection' => $cfg['qdrant_collection'],
@@ -191,6 +199,7 @@ final class AiSettingsService
             'search_fallback' => 'tavily',
             'tavily_search_mode' => TavilySearchProfile::MODE_BALANCED,
             'enrichment_batch_limit' => 5,
+            'match_concurrency' => 4,
             'vector_enabled' => false,
             'qdrant_url' => 'http://127.0.0.1:6333',
             'qdrant_collection' => 'products',
@@ -233,6 +242,11 @@ final class AiSettingsService
         if (array_key_exists('enrichment_batch_limit', $data)
             && Schema::hasColumn('ai_settings', 'enrichment_batch_limit')) {
             $row->enrichment_batch_limit = $this->normalizeEnrichmentBatchLimit($data['enrichment_batch_limit']);
+        }
+
+        if (array_key_exists('match_concurrency', $data)
+            && Schema::hasColumn('ai_settings', 'match_concurrency')) {
+            $row->match_concurrency = $this->normalizeMatchConcurrency($data['match_concurrency']);
         }
 
         $this->applySecret($row, 'api_key', $data);
@@ -310,6 +324,13 @@ final class AiSettingsService
         return $this->normalizeEnrichmentBatchLimit($cfg['enrichment_batch_limit'] ?? null);
     }
 
+    public function matchConcurrency(): int
+    {
+        $cfg = $this->resolve();
+
+        return $this->normalizeMatchConcurrency($cfg['match_concurrency'] ?? null);
+    }
+
     /**
      * @param  array<string, mixed>  $cfg
      */
@@ -341,6 +362,13 @@ final class AiSettingsService
         $n = is_numeric($value) ? (int) $value : 5;
 
         return max(1, min(50, $n));
+    }
+
+    private function normalizeMatchConcurrency(mixed $value): int
+    {
+        $n = is_numeric($value) ? (int) $value : 4;
+
+        return max(1, min(8, $n));
     }
 
     private function nullableString(mixed $value): ?string

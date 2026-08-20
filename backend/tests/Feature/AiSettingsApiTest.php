@@ -36,6 +36,7 @@ final class AiSettingsApiTest extends TestCase
             'api_key' => 'sk-test-key-1234567890',
             'timeout_seconds' => 60,
             'temperature' => 0.2,
+            'match_concurrency' => 6,
             'vector_enabled' => true,
             'qdrant_url' => 'http://127.0.0.1:6333',
             'qdrant_collection' => 'products',
@@ -48,7 +49,11 @@ final class AiSettingsApiTest extends TestCase
             ->assertJsonPath('enrichment_use_large_model', true)
             ->assertJsonPath('vector_enabled', true)
             ->assertJsonPath('qdrant_url', 'http://127.0.0.1:6333')
-            ->assertJsonPath('embedding_model', 'text-embedding-3-small');
+            ->assertJsonPath('embedding_model', 'text-embedding-3-small')
+            ->assertJsonPath('match_concurrency', 6);
+
+        $this->putJson('/api/ai-settings', ['match_concurrency' => 9])
+            ->assertStatus(422);
 
         $this->getJson('/api/ai-settings')
             ->assertOk()
