@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Api\Admin\ActivityLogController as AdminActivityLogController;
 use App\Http\Controllers\Api\Admin\MailSettingsController as AdminMailSettingsController;
+use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaShopSettingsController;
 use App\Http\Controllers\Api\Admin\RoleController as AdminRoleController;
 use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Api\AiSettingsController;
@@ -17,6 +18,7 @@ use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductCrossRefController;
 use App\Http\Controllers\Api\ProductCatalogHealthController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
+use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\NotificationController;
@@ -109,6 +111,14 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/products/{product}/price-history', [ProductController::class, 'priceHistory'])->middleware('permission:products.view');
     Route::post('/products/{product}/enrich', [ProductEnrichmentController::class, 'enrichProduct'])
         ->middleware('permission:price_lists.import');
+    Route::get('/presta/status', [PrestaShopSearchController::class, 'status'])
+        ->middleware('permission:price_lists.import|products.view');
+    Route::post('/products/presta-search', [PrestaShopSearchController::class, 'searchProducts'])
+        ->middleware('permission:price_lists.import');
+    Route::post('/products/{product}/presta-search', [PrestaShopSearchController::class, 'searchProduct'])
+        ->middleware('permission:price_lists.import');
+    Route::post('/products/{product}/presta-apply', [PrestaShopSearchController::class, 'apply'])
+        ->middleware('permission:price_lists.import');
     Route::get('/product-enrichment/limits', [ProductEnrichmentController::class, 'limits'])
         ->middleware('permission:price_lists.import|products.view');
     Route::get('/product-enrichment-batches/active', [ProductEnrichmentController::class, 'activeBatches'])
@@ -165,5 +175,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
             ->middleware('permission:admin.mail.manage');
         Route::post('/mail-settings/test', [AdminMailSettingsController::class, 'test'])
             ->middleware('permission:admin.mail.manage');
+
+        Route::get('/presta-settings', [AdminPrestaShopSettingsController::class, 'show']);
+        Route::put('/presta-settings', [AdminPrestaShopSettingsController::class, 'update']);
+        Route::post('/presta-settings/test', [AdminPrestaShopSettingsController::class, 'test']);
     });
 });

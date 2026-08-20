@@ -4,6 +4,7 @@ import { Layout } from './components/Layout'
 import { AdminActivityLog } from './pages/AdminActivityLog'
 import { AdminLayout } from './pages/AdminLayout'
 import { AdminRoles } from './pages/AdminRoles'
+import { AdminPresta } from './pages/AdminPresta'
 import { AdminSmtp } from './pages/AdminSmtp'
 import { AdminUsers } from './pages/AdminUsers'
 import { Clients } from './pages/Clients'
@@ -115,6 +116,7 @@ export default function App() {
                 </PermissionGuard>
               }
             />
+            <Route path="presta" element={<AdminPresta />} />
           </Route>
           <Route path="help" element={<Help />} />
           <Route path="*" element={<Navigate to="/" replace />} />

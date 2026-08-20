@@ -36,6 +36,11 @@ const tiles: Tile[] = [
     description: 'Poczta wychodząca',
     permission: 'admin.mail.manage',
   },
+  {
+    to: '/admin/presta',
+    label: 'Sklep Presta',
+    description: 'Opisy i zdjęcia z bazy sklepu',
+  },
 ]
 
 export function AdminNavTiles() {

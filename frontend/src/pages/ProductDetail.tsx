@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CrossRefPanel } from '../components/CrossRefPanel'
+import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import {
   api,
   can,
@@ -39,6 +40,10 @@ export function ProductDetail() {
   const [err, setErr] = useState('')
   const [batch, setBatch] = useState<EnrichmentBatch | null>(null)
   const [imageModalUrl, setImageModalUrl] = useState<string | null>(null)
+  const [prestaOpen, setPrestaOpen] = useState(false)
+  const [prestaBusy, setPrestaBusy] = useState(false)
+  const [prestaErr, setPrestaErr] = useState('')
+  const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
   const [priceHistory, setPriceHistory] = useState<
     {
       id: number
@@ -111,6 +116,25 @@ export function ProductDetail() {
     }
   }
 
+  async function searchPresta() {
+    if (!id) return
+    setPrestaBusy(true)
+    setPrestaErr('')
+    setPrestaOpen(true)
+    try {
+      const res = await api<PrestaSearchResult>(`/products/${id}/presta-search`, {
+        method: 'POST',
+        body: '{}',
+      })
+      setPrestaItems([res])
+    } catch (ex) {
+      setPrestaItems([])
+      setPrestaErr(ex instanceof Error ? ex.message : 'Błąd wyszukiwania w Preście')
+    } finally {
+      setPrestaBusy(false)
+    }
+  }
+
   if (!p) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
   const status = p.enrichment_status ?? 'none'
@@ -164,6 +188,16 @@ export function ProductDetail() {
                   : status === 'done'
                     ? 'Pobierz ponownie'
                     : 'Pobierz opis i zdjęcia'}
+            </button>
+          )}
+          {canEnrich && (
+            <button
+              type="button"
+              disabled={prestaBusy}
+              onClick={() => void searchPresta()}
+              className="rounded bg-emerald-700 px-3 py-2 text-xs text-white disabled:opacity-50"
+            >
+              {prestaBusy ? 'Szukam…' : 'Wyszukaj w Presta'}
             </button>
           )}
         </div>
@@ -437,6 +471,16 @@ export function ProductDetail() {
           </tbody>
         </table>
       </div>
+      <PrestaSearchModal
+        open={prestaOpen}
+        items={prestaItems}
+        loading={prestaBusy}
+        error={prestaErr}
+        onClose={() => setPrestaOpen(false)}
+        onApplied={() => {
+          void load()
+        }}
+      />
     </div>
   )
 }

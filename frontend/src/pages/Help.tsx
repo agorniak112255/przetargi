@@ -267,7 +267,7 @@ function ProductsHelp() {
           'Szukaj po kodzie (SKU), nazwie albo producencie. Filtr producenta zawęża listę.',
           'Klik w wiersz → karta produktu: opis, zdjęcia, dokumenty, ceny, zamienniki.',
           'Porównanie produktów — gdy wahasz się między dwoma kodami.',
-          'Przy uprawnieniach: „Pobierz zaznaczone” ściąga opisy i zdjęcia z zewnętrznych źródeł (enrichment). Możesz też „Pobierz widoczne bez opisu”.',
+          'Przy uprawnieniach: „Pobierz zaznaczone” ściąga opisy i zdjęcia z internetu (AI). Osobno: „Wyszukaj w Presta” — karty z własnego sklepu, z podglądem przed zapisem.',
         ]}
       />
       <Tip>

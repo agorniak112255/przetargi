@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { CrossRefPanel } from '../components/CrossRefPanel'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
+import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { api, can, type EnrichmentBatch, type Product } from '../lib/api'
 
@@ -115,6 +116,10 @@ export function Products() {
   const [err, setErr] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [imageModal, setImageModal] = useState<{ name: string; url: string } | null>(null)
+  const [prestaOpen, setPrestaOpen] = useState(false)
+  const [prestaBusy, setPrestaBusy] = useState(false)
+  const [prestaErr, setPrestaErr] = useState('')
+  const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
   const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
   const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
@@ -349,6 +354,33 @@ export function Products() {
     }
   }
 
+  async function searchPrestaIds(ids: number[]) {
+    if (ids.length === 0) return
+    setPrestaBusy(true)
+    setPrestaErr('')
+    setPrestaOpen(true)
+    try {
+      if (ids.length === 1) {
+        const res = await api<PrestaSearchResult>(`/products/${ids[0]}/presta-search`, {
+          method: 'POST',
+          body: '{}',
+        })
+        setPrestaItems([res])
+        return
+      }
+      const res = await api<{ items: PrestaSearchResult[] }>('/products/presta-search', {
+        method: 'POST',
+        body: JSON.stringify({ product_ids: ids.slice(0, 80) }),
+      })
+      setPrestaItems(res.items ?? [])
+    } catch (ex) {
+      setPrestaItems([])
+      setPrestaErr(ex instanceof Error ? ex.message : 'Błąd wyszukiwania w Preście')
+    } finally {
+      setPrestaBusy(false)
+    }
+  }
+
   const pages = result ? pageNumbers(result.current_page, result.last_page) : []
   const visibleIds = (result?.data ?? []).map((p) => p.id)
   const pendingVisible = (result?.data ?? []).filter(
@@ -428,6 +460,16 @@ export function Products() {
               >
                 Pobierz widoczne bez opisu
                 {pendingVisible.length > 0 ? ` (${pendingVisible.length})` : ''}
+              </button>
+              <button
+                type="button"
+                disabled={prestaBusy || selectedIds.length === 0}
+                onClick={() => void searchPrestaIds(selectedIds)}
+                className="rounded bg-emerald-700 px-3 py-2 text-xs text-white disabled:opacity-50"
+                title="Szuka kart w sklepie Presta — osobny cykl, nie AI"
+              >
+                Wyszukaj w Presta
+                {selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
               </button>
             </>
           )}
@@ -671,6 +713,14 @@ export function Products() {
                             ? 'Ponów'
                             : 'Pobierz'}
                       </button>
+                      <button
+                        type="button"
+                        disabled={prestaBusy}
+                        onClick={() => void searchPrestaIds([p.id])}
+                        className="ml-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] text-emerald-900 disabled:opacity-50"
+                      >
+                        Presta
+                      </button>
                     </td>
                   )}
                 </tr>
@@ -689,6 +739,16 @@ export function Products() {
         </table>
 
         <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
+        <PrestaSearchModal
+          open={prestaOpen}
+          items={prestaItems}
+          loading={prestaBusy}
+          error={prestaErr}
+          onClose={() => setPrestaOpen(false)}
+          onApplied={() => {
+            void api<Page>(`/products?${buildParams()}`).then(setResult).catch(() => {})
+          }}
+        />
 
         {visibleEnrichOpen && (
           <div
