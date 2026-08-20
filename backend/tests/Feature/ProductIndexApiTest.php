@@ -82,4 +82,17 @@ final class ProductIndexApiTest extends TestCase
             ->assertOk()
             ->assertExactJson(['data' => ['Alpha', 'Zebra']]);
     }
+
+    public function test_products_index_accepts_per_page_up_to_500(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->getJson('/api/products?per_page=500')
+            ->assertOk()
+            ->assertJsonPath('per_page', 500);
+
+        $this->getJson('/api/products?per_page=600')
+            ->assertOk()
+            ->assertJsonPath('per_page', 500);
+    }
 }

@@ -46,6 +46,88 @@ function pageNumbers(current: number, last: number): Array<number | '…'> {
   return out
 }
 
+function ProductListControls({
+  result,
+  pages,
+  canSelect,
+  allVisibleSelected,
+  visibleCount,
+  selectedCount,
+  onToggleSelectVisible,
+  onPage,
+}: {
+  result: Page
+  pages: Array<number | '…'>
+  canSelect: boolean
+  allVisibleSelected: boolean
+  visibleCount: number
+  selectedCount: number
+  onToggleSelectVisible: () => void
+  onPage: (page: number) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 py-2">
+      <div className="flex flex-wrap items-center gap-3">
+        {canSelect && visibleCount > 0 && (
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={onToggleSelectVisible}
+              title="Zaznacz / odznacz widoczne"
+            />
+            Zaznacz widoczne ({visibleCount})
+            {selectedCount > 0 ? ` · zaznaczono ${selectedCount}` : ''}
+          </label>
+        )}
+        <p className="text-xs text-slate-500">
+          Strona {result.current_page} z {result.last_page} · {result.per_page}/stronę
+        </p>
+      </div>
+      {result.last_page > 1 && (
+        <nav className="flex flex-wrap items-center gap-1" aria-label="Paginacja">
+          <button
+            type="button"
+            disabled={result.current_page <= 1}
+            onClick={() => onPage(Math.max(1, result.current_page - 1))}
+            className="rounded border border-slate-300 px-2.5 py-1.5 text-xs disabled:opacity-40"
+          >
+            ← Poprzednia
+          </button>
+          {pages.map((n, i) =>
+            n === '…' ? (
+              <span key={`e-${i}`} className="px-1 text-xs text-slate-400">
+                …
+              </span>
+            ) : (
+              <button
+                key={n}
+                type="button"
+                onClick={() => onPage(n)}
+                className={`min-w-8 rounded px-2.5 py-1.5 text-xs ${
+                  n === result.current_page
+                    ? 'bg-blue-600 text-white'
+                    : 'border border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                {n}
+              </button>
+            ),
+          )}
+          <button
+            type="button"
+            disabled={result.current_page >= result.last_page}
+            onClick={() => onPage(Math.min(result.last_page, result.current_page + 1))}
+            className="rounded border border-slate-300 px-2.5 py-1.5 text-xs disabled:opacity-40"
+          >
+            Następna →
+          </button>
+        </nav>
+      )}
+    </div>
+  )
+}
+
 function hasDescription(p: Product): boolean {
   return Boolean(p.description && p.description.trim() !== '')
 }
@@ -169,7 +251,7 @@ export function Products() {
   function buildParams(pageNum = page): URLSearchParams {
     const params = new URLSearchParams({
       page: String(pageNum),
-      per_page: '100',
+      per_page: '500',
       sort,
       dir,
     })
@@ -579,6 +661,18 @@ export function Products() {
       )}
 
       <div className="rounded-xl bg-white p-4 shadow-sm overflow-x-auto">
+        {result && (
+          <ProductListControls
+            result={result}
+            pages={pages}
+            canSelect={canEnrich}
+            allVisibleSelected={allVisibleSelected}
+            visibleCount={visibleIds.length}
+            selectedCount={selectedIds.length}
+            onToggleSelectVisible={toggleSelectAllVisible}
+            onPage={setPage}
+          />
+        )}
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50">
@@ -736,6 +830,25 @@ export function Products() {
               </tr>
             )}
           </tbody>
+          {canEnrich && visibleIds.length > 0 && (
+            <tfoot>
+              <tr className="border-t bg-slate-50">
+                <td className="p-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    title="Zaznacz / odznacz widoczne"
+                    aria-label="Zaznacz wszystkie widoczne"
+                  />
+                </td>
+                <td colSpan={tableCols - 1} className="p-2 text-xs text-slate-600">
+                  Zaznacz widoczne ({visibleIds.length})
+                  {selectedIds.length > 0 ? ` · zaznaczono ${selectedIds.length}` : ''}
+                </td>
+              </tr>
+            </tfoot>
+          )}
         </table>
 
         <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
@@ -851,49 +964,18 @@ export function Products() {
           </div>
         )}
 
-        {result && !aiMode && result.last_page > 1 && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
-            <p className="text-xs text-slate-500">
-              Strona {result.current_page} z {result.last_page}
-            </p>
-            <nav className="flex flex-wrap items-center gap-1" aria-label="Paginacja">
-              <button
-                type="button"
-                disabled={result.current_page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="rounded border border-slate-300 px-2.5 py-1.5 text-xs disabled:opacity-40"
-              >
-                ← Poprzednia
-              </button>
-              {pages.map((n, i) =>
-                n === '…' ? (
-                  <span key={`e-${i}`} className="px-1 text-xs text-slate-400">
-                    …
-                  </span>
-                ) : (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setPage(n)}
-                    className={`min-w-8 rounded px-2.5 py-1.5 text-xs ${
-                      n === result.current_page
-                        ? 'bg-blue-600 text-white'
-                        : 'border border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ),
-              )}
-              <button
-                type="button"
-                disabled={result.current_page >= result.last_page}
-                onClick={() => setPage((p) => Math.min(result.last_page, p + 1))}
-                className="rounded border border-slate-300 px-2.5 py-1.5 text-xs disabled:opacity-40"
-              >
-                Następna →
-              </button>
-            </nav>
+        {result && (
+          <div className="mt-2 border-t pt-1">
+            <ProductListControls
+              result={result}
+              pages={pages}
+              canSelect={canEnrich}
+              allVisibleSelected={allVisibleSelected}
+              visibleCount={visibleIds.length}
+              selectedCount={selectedIds.length}
+              onToggleSelectVisible={toggleSelectAllVisible}
+              onPage={setPage}
+            />
           </div>
         )}
       </div>

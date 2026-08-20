@@ -11,6 +11,7 @@ use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Tests\Support\FakePrestaCatalogGateway;
 use Tests\TestCase;
@@ -71,6 +72,61 @@ final class PrestaShopSearchApiTest extends TestCase
         $this->assertSame('4.90', (string) $fresh->catalog_price_net);
         $this->assertSame('3.10', (string) $fresh->purchase_price);
         $this->assertTrue((bool) ($fresh->enrichment_payload['from_presta'] ?? false));
+    }
+
+    public function test_apply_downloads_shop_image(): void
+    {
+        Queue::fake();
+        Storage::fake('public');
+        $jpeg = $this->sampleJpeg();
+        $this->assertNotSame('', $jpeg);
+        Http::fake([
+            '*' => Http::response($jpeg, 200, ['Content-Type' => 'image/jpeg']),
+        ]);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct(['sku' => '34258328', 'manufacturer' => 'MAPA', 'name' => 'ALTO 258']);
+        $this->presta->rows = [$this->card(4797, '34258328', 'ALTO 258', 'MAPA')];
+        $this->presta->images = ['https://www.supon.rzeszow.pl/img/p/9/3/2/9/9329.jpg'];
+
+        $this->postJson("/api/products/{$product->id}/presta-apply", [
+            'presta_id' => 4797,
+            'method' => 'reference',
+            'score' => 96,
+        ])
+            ->assertOk()
+            ->assertJsonPath('images_count', 1);
+
+        $this->assertSame(1, $product->fresh()->images()->count());
+        $this->assertNotSame('remote', (string) $product->fresh()->images()->first()?->path);
+    }
+
+    public function test_apply_adds_photos_when_description_already_exists(): void
+    {
+        Queue::fake();
+        Storage::fake('public');
+        Http::fake([
+            '*' => Http::response('not-an-image', 404),
+        ]);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct([
+            'sku' => '34258328',
+            'manufacturer' => 'MAPA',
+            'name' => 'ALTO 258',
+            'description' => 'Istniejący opis produktu z cennika, wystarczająco długi.',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $this->presta->rows = [$this->card(4797, '34258328', 'ALTO 258', 'MAPA')];
+        $this->presta->images = ['https://www.supon.rzeszow.pl/img/p/9/3/2/9/9329.jpg'];
+
+        $this->postJson("/api/products/{$product->id}/presta-apply", [
+            'presta_id' => 4797,
+            'force' => false,
+        ])->assertOk()->assertJsonPath('images_count', 1);
+
+        $fresh = $product->fresh();
+        $this->assertStringContainsString('Istniejący opis', (string) $fresh->description);
+        $this->assertSame('remote', (string) $fresh->images()->first()?->path);
+        $this->assertStringContainsString('/img/p/9/3/2/9/9329.jpg', (string) $fresh->images()->first()?->url());
     }
 
     public function test_apply_batch_imports_best_card_per_product(): void
@@ -155,5 +211,21 @@ final class PrestaShopSearchApiTest extends TestCase
             'features' => 'EN 388; EN 511',
             'url' => 'https://supon.rzeszow.pl/'.$id.'-temp-ice-700.html',
         ];
+    }
+
+    private function sampleJpeg(): string
+    {
+        if (! function_exists('imagecreatetruecolor')) {
+            return '';
+        }
+        $img = imagecreatetruecolor(220, 220);
+        $bg = imagecolorallocate($img, 40, 120, 200);
+        imagefill($img, 0, 0, $bg);
+        ob_start();
+        imagejpeg($img, null, 85);
+        imagedestroy($img);
+        $bytes = ob_get_clean();
+
+        return is_string($bytes) ? $bytes : '';
     }
 }

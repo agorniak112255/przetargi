@@ -7,17 +7,18 @@ namespace App\Services\Presta;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Services\Enrichment\ProductImageDownloader;
-use App\Services\Enrichment\ProductPageFetcher;
 use App\Support\BhpAttributeNormalizer;
+use Illuminate\Support\Facades\Http;
 use RuntimeException;
+use Throwable;
 
 final class PrestaCatalogApplyService
 {
     public function __construct(
         private readonly PrestaCatalogGateway $catalog,
         private readonly ProductImageDownloader $images,
-        private readonly ProductPageFetcher $pages,
         private readonly BhpAttributeNormalizer $bhpAttributes,
     ) {}
 
@@ -56,7 +57,7 @@ final class PrestaCatalogApplyService
                 );
                 $applied++;
             } catch (RuntimeException $e) {
-                if (str_contains($e->getMessage(), 'ma już opis')) {
+                if (str_contains($e->getMessage(), 'już uzupełniony')) {
                     $skipped++;
                     continue;
                 }
@@ -87,13 +88,11 @@ final class PrestaCatalogApplyService
             (string) ($card['description'] ?? ''),
             (string) ($card['description_short'] ?? '')
         );
-        if ($description === '') {
-            throw new RuntimeException('Karta Presty nie ma opisu do skopiowania.');
-        }
-
         $existing = trim((string) ($product->description ?? ''));
-        if (! $force && $existing !== '' && mb_strlen($existing) >= 24) {
-            throw new RuntimeException('Produkt ma już opis. Zaznacz „nadpisz”, aby wziąć treść ze sklepu.');
+        $hasDesc = $existing !== '' && mb_strlen($existing) >= 24;
+        $writeDesc = $description !== '' && ($force || ! $hasDesc);
+        if ($description === '' && ! $hasDesc) {
+            throw new RuntimeException('Karta Presty nie ma opisu do skopiowania.');
         }
 
         $features = $this->featureList((string) ($card['features'] ?? ''));
@@ -116,7 +115,9 @@ final class PrestaCatalogApplyService
         );
         $payload['attributes'] = $attrs;
 
-        $product->description = mb_substr($description, 0, 10000);
+        if ($writeDesc) {
+            $product->description = mb_substr($description, 0, 10000);
+        }
         if (trim((string) ($product->norms ?? '')) === '' && $attrs['normy_en'] !== []) {
             $product->norms = implode(', ', $attrs['normy_en']);
         }
@@ -158,31 +159,105 @@ final class PrestaCatalogApplyService
     private function downloadImages(Product $product, array $card, bool $force): int
     {
         $product->load('images');
+        if ($force) {
+            $product->images()->where('path', 'remote')->delete();
+            $product->unsetRelation('images');
+            $product->load('images');
+        }
         if (! $force && $product->images->isNotEmpty()) {
-            return 0;
+            return $product->images->count();
         }
 
         $prestaId = (int) ($card['id_product'] ?? 0);
         $rewrite = (string) ($card['link_rewrite'] ?? '');
         $urls = $this->catalog->imageUrls($prestaId, $rewrite);
-
-        if ($urls === []) {
-            $pageUrl = (string) ($card['url'] ?? '');
-            if ($pageUrl !== '') {
-                $fetched = $this->pages->fetch(
-                    [['url' => $pageUrl, 'title' => (string) ($card['name'] ?? '')]],
-                    (string) (($card['reference'] ?? '') !== '' ? $card['reference'] : $product->sku),
-                    1,
-                    ['supon.rzeszow.pl']
-                );
-                $urls = array_values(array_unique(array_merge(
-                    $fetched['trusted_image_urls'] ?? [],
-                    $fetched['image_urls'] ?? []
-                )));
-            }
+        $pageUrl = (string) ($card['url'] ?? '');
+        if ($pageUrl !== '') {
+            $urls = array_values(array_unique(array_merge($urls, $this->ogImageUrls($pageUrl))));
         }
 
-        return count($this->images->downloadMany($product, $urls, 3));
+        $saved = $this->images->downloadMany($product, array_slice($urls, 0, 8), 3);
+        if ($saved !== []) {
+            return count($saved);
+        }
+
+        return $this->attachRemoteImages($product, $urls);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function ogImageUrls(string $pageUrl): array
+    {
+        if (! str_starts_with($pageUrl, 'http')) {
+            return [];
+        }
+
+        try {
+            $response = Http::timeout(8)
+                ->connectTimeout(3)
+                ->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept' => 'text/html,application/xhtml+xml',
+                ])
+                ->withOptions(['allow_redirects' => true])
+                ->get($pageUrl);
+            if (! $response->successful()) {
+                return [];
+            }
+            $html = $response->body();
+            $urls = [];
+            if (preg_match_all('#property=["\']og:image(?::secure_url)?["\'][^>]*content=["\']([^"\']+)#i', $html, $m)
+                || preg_match_all('#content=["\']([^"\']+)["\'][^>]*property=["\']og:image#i', $html, $m)) {
+                foreach ($m[1] as $url) {
+                    $urls[] = html_entity_decode((string) $url, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                }
+            }
+            if (preg_match_all('#https?://[^"\']+\d+-large_default/[^"\']+\.(?:jpe?g|webp)#i', $html, $m2)) {
+                foreach ($m2[0] as $url) {
+                    $urls[] = $url;
+                }
+            }
+
+            return array_values(array_unique(array_filter($urls)));
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @param  list<string>  $urls
+     */
+    private function attachRemoteImages(Product $product, array $urls): int
+    {
+        $added = 0;
+        $sort = (int) $product->images()->max('sort_order');
+        foreach ($urls as $url) {
+            if ($added >= 3 || ! is_string($url) || ! ProductImageDownloader::looksLikeImageUrl($url)) {
+                continue;
+            }
+            $checksum = hash('sha256', 'remote:'.$url);
+            $exists = ProductImage::query()
+                ->where('product_id', $product->id)
+                ->where(function ($q) use ($checksum, $url): void {
+                    $q->where('checksum', $checksum)->orWhere('source_url', $url);
+                })
+                ->exists();
+            if ($exists) {
+                continue;
+            }
+            ProductImage::query()->create([
+                'product_id' => $product->id,
+                'path' => 'remote',
+                'source_url' => mb_substr($url, 0, 2000),
+                'is_primary' => $added === 0,
+                'sort_order' => $sort + $added,
+                'checksum' => $checksum,
+            ]);
+            $added++;
+        }
+
+        return $added;
     }
 
     private function plainText(string $html, string $fallbackHtml): string

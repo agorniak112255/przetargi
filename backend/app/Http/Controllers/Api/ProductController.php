@@ -92,7 +92,7 @@ class ProductController extends Controller
             $query->orderBy('name', 'asc');
         }
 
-        $perPage = min(100, max(1, (int) $request->integer('per_page', 100)));
+        $perPage = min(500, max(1, (int) $request->integer('per_page', 500)));
         $page = $query->paginate($perPage);
 
         $page->getCollection()->transform(static function (Product $product): array {

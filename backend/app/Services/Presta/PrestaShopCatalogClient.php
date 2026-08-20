@@ -150,23 +150,25 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
 
         try {
             if (Schema::connection('prestashop')->hasTable($prefix.'image')) {
-                $images = DB::connection('prestashop')
+                $query = DB::connection('prestashop')
                     ->table($prefix.'image')
-                    ->where('id_product', $prestaId)
-                    ->orderByDesc('cover')
-                    ->orderBy('position')
-                    ->limit(6)
-                    ->get(['id_image']);
+                    ->where('id_product', $prestaId);
+                if (Schema::connection('prestashop')->hasColumn($prefix.'image', 'cover')) {
+                    $query->orderByDesc('cover');
+                }
+                if (Schema::connection('prestashop')->hasColumn($prefix.'image', 'position')) {
+                    $query->orderBy('position');
+                }
+                $images = $query->limit(6)->get(['id_image']);
                 foreach ($images as $image) {
-                    $id = (int) $image->id_image;
-                    if ($id <= 0) {
-                        continue;
-                    }
-                    $urls[] = $shop.'/'.$id.'-large_default/'.$linkRewrite.'.jpg';
-                    $urls[] = $shop.'/'.$prestaId.'-'.$id.'-'.$linkRewrite.'.jpg';
+                    $urls = array_merge(
+                        $urls,
+                        PrestaImageUrlBuilder::urls($shop, (int) $image->id_image, $linkRewrite)
+                    );
                 }
             }
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            report($e);
         }
 
         return array_values(array_unique($urls));
