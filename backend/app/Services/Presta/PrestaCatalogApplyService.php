@@ -22,9 +22,61 @@ final class PrestaCatalogApplyService
     ) {}
 
     /**
+     * @param  list<array{product_id: int, presta_id: int, method?: string, score?: int}>  $items
+     * @return array{applied: int, skipped: int, failed: int, errors: list<string>}
+     */
+    public function applyMany(array $items, bool $force = false): array
+    {
+        $applied = 0;
+        $skipped = 0;
+        $failed = 0;
+        $errors = [];
+        $seen = [];
+
+        foreach ($items as $row) {
+            $productId = (int) ($row['product_id'] ?? 0);
+            $prestaId = (int) ($row['presta_id'] ?? 0);
+            if ($productId <= 0 || $prestaId <= 0 || isset($seen[$productId])) {
+                continue;
+            }
+            $seen[$productId] = true;
+            $product = Product::query()->find($productId);
+            if (! $product instanceof Product) {
+                $failed++;
+                $errors[] = 'Brak produktu #'.$productId;
+                continue;
+            }
+            try {
+                $this->apply(
+                    $product,
+                    $prestaId,
+                    $force,
+                    (string) ($row['method'] ?? 'manual'),
+                    (int) ($row['score'] ?? 100),
+                );
+                $applied++;
+            } catch (RuntimeException $e) {
+                if (str_contains($e->getMessage(), 'ma już opis')) {
+                    $skipped++;
+                    continue;
+                }
+                $failed++;
+                $errors[] = $product->sku.': '.$e->getMessage();
+            }
+        }
+
+        return [
+            'applied' => $applied,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'errors' => array_slice($errors, 0, 12),
+        ];
+    }
+
+    /**
      * @return array{product: Product, match: PrestaProductMatch, images: int}
      */
-    public function apply(Product $product, int $prestaId, bool $force = false): array
+    public function apply(Product $product, int $prestaId, bool $force = false, string $method = 'manual', int $score = 100): array
     {
         $card = $this->catalog->findCard($prestaId);
         if ($card === null) {
@@ -82,8 +134,8 @@ final class PrestaCatalogApplyService
                 'presta_id' => $prestaId,
             ],
             [
-                'method' => 'manual',
-                'score' => 100,
+                'method' => mb_substr($method !== '' ? $method : 'manual', 0, 32),
+                'score' => max(0, min(100, $score)),
                 'status' => PrestaProductMatch::STATUS_APPLIED,
                 'presta_url' => (string) ($card['url'] ?? ''),
                 'presta_reference' => mb_substr((string) ($card['reference'] ?? ''), 0, 128),

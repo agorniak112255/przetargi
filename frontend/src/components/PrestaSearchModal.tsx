@@ -51,7 +51,15 @@ export function PrestaSearchModal({
 }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [localErr, setLocalErr] = useState('')
+  const [localMsg, setLocalMsg] = useState('')
   const [force, setForce] = useState(false)
+
+  const importable = items
+    .map((item) => {
+      const cand = item.auto ?? item.candidates[0] ?? null
+      return cand ? { product_id: item.product_id, cand } : null
+    })
+    .filter((row): row is { product_id: number; cand: PrestaCandidate } => row !== null)
 
   useEffect(() => {
     if (!open) return
@@ -67,6 +75,7 @@ export function PrestaSearchModal({
   async function apply(productId: number, cand: PrestaCandidate) {
     setBusyId(`${productId}:${cand.presta_id}`)
     setLocalErr('')
+    setLocalMsg('')
     try {
       await api(`/products/${productId}/presta-apply`, {
         method: 'POST',
@@ -85,6 +94,42 @@ export function PrestaSearchModal({
     }
   }
 
+  async function applyAll() {
+    if (importable.length === 0) return
+    setBusyId('all')
+    setLocalErr('')
+    setLocalMsg('')
+    try {
+      const res = await api<{ applied: number; skipped: number; failed: number; errors: string[] }>(
+        '/products/presta-apply-batch',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            force,
+            items: importable.map(({ product_id, cand }) => ({
+              product_id,
+              presta_id: cand.presta_id,
+              method: cand.method,
+              score: cand.score,
+            })),
+          }),
+        },
+      )
+      const parts = [`Zaimportowano ${res.applied}`]
+      if (res.skipped > 0) parts.push(`pominięto ${res.skipped} (już mają opis)`)
+      if (res.failed > 0) parts.push(`błędy ${res.failed}`)
+      setLocalMsg(parts.join(' · '))
+      if (res.errors.length > 0) {
+        setLocalErr(res.errors.join(' '))
+      }
+      onApplied()
+    } catch (ex) {
+      setLocalErr(ex instanceof Error ? ex.message : 'Nie udało się zaimportować wszystkich')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-10">
       <div className="max-h-[85vh] w-full max-w-3xl overflow-auto rounded-xl bg-white p-4 shadow-lg">
@@ -96,11 +141,25 @@ export function PrestaSearchModal({
               wymagają akceptacji.
             </p>
           </div>
-          <button type="button" onClick={onClose} className="rounded border px-2 py-1 text-xs">
-            Zamknij
-          </button>
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              disabled={busyId !== null || loading || importable.length === 0}
+              onClick={() => void applyAll()}
+              className="rounded bg-emerald-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+              title="Dla każdego SKU zapisuje najlepszą kartę (nie wszystkie warianty naraz)"
+            >
+              {busyId === 'all' ? 'Import…' : `Zaimportuj wszystkie${importable.length > 0 ? ` (${importable.length})` : ''}`}
+            </button>
+            <button type="button" onClick={onClose} className="rounded border px-2 py-1 text-xs">
+              Zamknij
+            </button>
+          </div>
         </div>
 
+        {localMsg && (
+          <p className="mb-2 rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-800">{localMsg}</p>
+        )}
         {(error || localErr) && (
           <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error || localErr}</p>
         )}

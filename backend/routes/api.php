@@ -117,6 +117,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:price_lists.import');
     Route::post('/products/{product}/presta-search', [PrestaShopSearchController::class, 'searchProduct'])
         ->middleware('permission:price_lists.import');
+    Route::post('/products/presta-apply-batch', [PrestaShopSearchController::class, 'applyBatch'])
+        ->middleware('permission:price_lists.import');
     Route::post('/products/{product}/presta-apply', [PrestaShopSearchController::class, 'apply'])
         ->middleware('permission:price_lists.import');
     Route::get('/product-enrichment/limits', [ProductEnrichmentController::class, 'limits'])

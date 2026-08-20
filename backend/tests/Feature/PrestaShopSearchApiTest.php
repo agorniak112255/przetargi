@@ -73,6 +73,33 @@ final class PrestaShopSearchApiTest extends TestCase
         $this->assertTrue((bool) ($fresh->enrichment_payload['from_presta'] ?? false));
     }
 
+    public function test_apply_batch_imports_best_card_per_product(): void
+    {
+        Queue::fake();
+        Http::fake();
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $a = $this->makeProduct(['sku' => 'URGENT-1000', 'name' => '1000', 'manufacturer' => 'URGENT']);
+        $b = $this->makeProduct(['sku' => '34700018', 'name' => 'TEMP-ICE 700', 'manufacturer' => 'MAPA']);
+        $this->presta->rows = [
+            $this->card(10, 'URGENT-1000', 'Rękawice 1000', 'URGENT'),
+            $this->card(11, '34700018', 'TEMP-ICE 700', 'MAPA'),
+        ];
+
+        $this->postJson('/api/products/presta-apply-batch', [
+            'force' => false,
+            'items' => [
+                ['product_id' => $a->id, 'presta_id' => 10, 'method' => 'reference', 'score' => 96],
+                ['product_id' => $b->id, 'presta_id' => 11, 'method' => 'reference', 'score' => 96],
+            ],
+        ])
+            ->assertOk()
+            ->assertJsonPath('applied', 2)
+            ->assertJsonPath('failed', 0);
+
+        $this->assertStringContainsString('Pełny opis', (string) $a->fresh()->description);
+        $this->assertStringContainsString('Pełny opis', (string) $b->fresh()->description);
+    }
+
     public function test_settings_hide_password(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

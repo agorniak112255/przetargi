@@ -77,16 +77,11 @@ class PrestaShopSearchController extends Controller
                 $product,
                 (int) $data['presta_id'],
                 (bool) ($data['force'] ?? false),
+                (string) ($data['method'] ?? 'manual'),
+                (int) ($data['score'] ?? 100),
             );
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
-        }
-
-        if (isset($data['method']) || isset($data['score'])) {
-            $result['match']->fill([
-                'method' => (string) ($data['method'] ?? $result['match']->method),
-                'score' => (int) ($data['score'] ?? $result['match']->score),
-            ])->save();
         }
 
         $fresh = $result['product'];
@@ -108,5 +103,25 @@ class PrestaShopSearchController extends Controller
                 'url' => $result['match']->presta_url,
             ],
         ]);
+    }
+
+    public function applyBatch(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'force' => ['sometimes', 'boolean'],
+            'items' => ['required', 'array', 'min:1', 'max:80'],
+            'items.*.product_id' => ['required', 'integer', 'exists:products,id'],
+            'items.*.presta_id' => ['required', 'integer', 'min:1'],
+            'items.*.method' => ['sometimes', 'string', 'max:32'],
+            'items.*.score' => ['sometimes', 'integer', 'min:0', 'max:100'],
+        ]);
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(500);
+        }
+
+        $result = $this->apply->applyMany($data['items'], (bool) ($data['force'] ?? false));
+
+        return response()->json($result);
     }
 }
