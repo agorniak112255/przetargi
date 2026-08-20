@@ -38,6 +38,10 @@ class TenderMatchController extends Controller
 
         $itemIds = $request->has('item_ids') ? array_values($request->input('item_ids', [])) : null;
 
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(3600);
+        }
+
         $result = $this->matcher->matchTender(
             $tender,
             $request->boolean('only_empty', true),
@@ -49,6 +53,11 @@ class TenderMatchController extends Controller
             'tender_id' => $tender->id,
             'ai_percent' => $tender->fresh()->ai_percent,
         ]);
+    }
+
+    public function progress(Tender $tender): JsonResponse
+    {
+        return response()->json(ProductMatchService::readMatchProgress((int) $tender->id));
     }
 
     public function matchItem(Request $request, Tender $tender, TenderItem $item): JsonResponse

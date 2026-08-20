@@ -14,6 +14,7 @@ use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
 use App\Support\ProductModelFuzzy;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Throwable;
 
 final class ProductMatchService
@@ -94,6 +95,8 @@ final class ProductMatchService
         if ($itemIds !== null) {
             $itemIds = array_values(array_unique(array_map('intval', $itemIds)));
             if ($itemIds === []) {
+                $this->writeMatchProgress((int) $tender->id, 0, 0, 'done', null, null);
+
                 return $emptyReport;
             }
         }
@@ -115,6 +118,11 @@ final class ProductMatchService
                 })
             )->get();
 
+        $startedAt = time();
+        $total = $items->count();
+        $done = 0;
+        $this->writeMatchProgress((int) $tender->id, 0, $total, 'running', null, null, $startedAt);
+
         $changes = [];
         foreach ($items as $item) {
             $beforeId = $item->main_product_id !== null ? (int) $item->main_product_id : null;
@@ -122,24 +130,35 @@ final class ProductMatchService
             if ($item->hasCustomOffer()) {
                 $skipped++;
                 $changes[] = $this->matchChangeRow($item, 'skipped_custom', $beforeSku, $beforeSku);
-                continue;
+            } else {
+                $pick = $this->resolveBestPick($item->requirement, $products);
+                if ($pick === null) {
+                    $this->applyNoCatalogMatch($item, $products);
+                    $skipped++;
+                    $action = $beforeId !== null ? 'cleared' : 'no_match';
+                    $changes[] = $this->matchChangeRow($item, $action, $beforeSku, null);
+                } else {
+                    $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'] ?? 'heuristic');
+                    $matched++;
+                    $scores[] = $pick['score'];
+                    $afterSku = $pick['product']->sku;
+                    $action = $beforeId === (int) $pick['product']->id ? 'unchanged' : 'changed';
+                    $changes[] = $this->matchChangeRow($item, $action, $beforeSku, $afterSku);
+                }
             }
-            $pick = $this->resolveBestPick($item->requirement, $products);
-            if ($pick === null) {
-                $this->applyNoCatalogMatch($item, $products);
-                $skipped++;
-                $action = $beforeId !== null ? 'cleared' : 'no_match';
-                $changes[] = $this->matchChangeRow($item, $action, $beforeSku, null);
-                continue;
-            }
-
-            $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'] ?? 'heuristic');
-            $matched++;
-            $scores[] = $pick['score'];
-            $afterSku = $pick['product']->sku;
-            $action = $beforeId === (int) $pick['product']->id ? 'unchanged' : 'changed';
-            $changes[] = $this->matchChangeRow($item, $action, $beforeSku, $afterSku);
+            $done++;
+            $this->writeMatchProgress(
+                (int) $tender->id,
+                $done,
+                $total,
+                'running',
+                (int) $item->line_no,
+                (string) $item->requirement,
+                $startedAt
+            );
         }
+
+        $this->writeMatchProgress((int) $tender->id, $total, $total, 'done', null, null, $startedAt);
 
         $allScores = $tender->items()->whereNotNull('ai_match_percent')->pluck('ai_match_percent');
         $avgAll = $allScores->isEmpty() ? 0.0 : (float) $allScores->avg();
@@ -172,6 +191,57 @@ final class ProductMatchService
             'no_match' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'no_match')),
             'changes' => $changedRows,
         ];
+    }
+
+    public static function progressCacheKey(int $tenderId): string
+    {
+        return 'tender-match-progress:'.$tenderId;
+    }
+
+    /**
+     * @return array{status: string, done: int, total: int, line_no: int|null, requirement: string|null, started_at: int|null}
+     */
+    public static function readMatchProgress(int $tenderId): array
+    {
+        $raw = Cache::get(self::progressCacheKey($tenderId));
+        if (! is_array($raw)) {
+            return [
+                'status' => 'idle',
+                'done' => 0,
+                'total' => 0,
+                'line_no' => null,
+                'requirement' => null,
+                'started_at' => null,
+            ];
+        }
+
+        return [
+            'status' => is_string($raw['status'] ?? null) ? $raw['status'] : 'idle',
+            'done' => (int) ($raw['done'] ?? 0),
+            'total' => (int) ($raw['total'] ?? 0),
+            'line_no' => isset($raw['line_no']) && is_numeric($raw['line_no']) ? (int) $raw['line_no'] : null,
+            'requirement' => is_string($raw['requirement'] ?? null) ? $raw['requirement'] : null,
+            'started_at' => isset($raw['started_at']) && is_numeric($raw['started_at']) ? (int) $raw['started_at'] : null,
+        ];
+    }
+
+    private function writeMatchProgress(
+        int $tenderId,
+        int $done,
+        int $total,
+        string $status,
+        ?int $lineNo,
+        ?string $requirement,
+        ?int $startedAt = null,
+    ): void {
+        Cache::put(self::progressCacheKey($tenderId), [
+            'status' => $status,
+            'done' => $done,
+            'total' => $total,
+            'line_no' => $lineNo,
+            'requirement' => $requirement !== null ? mb_substr($requirement, 0, 120) : null,
+            'started_at' => $startedAt ?? time(),
+        ], 1800);
     }
 
     /**

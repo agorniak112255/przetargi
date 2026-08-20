@@ -77,6 +77,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::patch('/tenders/{tender}/conditions/{condition}', [TenderConditionController::class, 'update'])->middleware('permission:tenders.edit_offer');
         Route::delete('/tenders/{tender}/conditions/{condition}', [TenderConditionController::class, 'destroy'])->middleware('permission:tenders.edit_offer');
         Route::post('/tenders/{tender}/match', [TenderMatchController::class, 'store'])->middleware('permission:tenders.edit_offer');
+        Route::get('/tenders/{tender}/match/progress', [TenderMatchController::class, 'progress'])->middleware('permission:tenders.edit_offer');
         Route::post('/tenders/{tender}/items/{item}/match', [TenderMatchController::class, 'matchItem'])->middleware('permission:tenders.edit_offer');
         Route::get('/tenders/{tender}/items/{item}/battlecard', [TenderBattlecardController::class, 'show']);
         Route::get('/tenders/{tender}/export/excel', [TenderExportController::class, 'excel'])->middleware('permission:tenders.export');

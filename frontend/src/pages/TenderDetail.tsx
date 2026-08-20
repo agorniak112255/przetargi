@@ -240,8 +240,48 @@ type MatchReport = {
   at: string
 }
 
+type MatchProgress = {
+  status: string
+  done: number
+  total: number
+  line_no: number | null
+  requirement: string | null
+  started_at: number | null
+}
+
 function matchReportStorageKey(tenderId: string): string {
   return `tender-match-report-${tenderId}`
+}
+
+function countMatchTargets(
+  items: Item[],
+  onlyEmpty: boolean,
+  itemIds: number[] | undefined,
+  minScore: number,
+): number {
+  const scoped = itemIds ? items.filter((i) => itemIds.includes(i.id)) : items
+  if (!onlyEmpty) {
+    return scoped.length
+  }
+  return scoped.filter((i) => {
+    if ((i.custom_name ?? '').trim() !== '') {
+      return false
+    }
+    if (i.main_product_id == null && i.main_product == null) {
+      return true
+    }
+    if (i.ai_match_percent == null) {
+      return true
+    }
+    return i.ai_match_percent < minScore
+  }).length
+}
+
+function formatMatchEta(seconds: number): string {
+  if (seconds < 60) {
+    return `ok. ${seconds} s`
+  }
+  return `ok. ${Math.ceil(seconds / 60)} min`
 }
 
 function loadMatchReport(tenderId: string): MatchReport | null {
@@ -388,6 +428,8 @@ export function TenderDetail() {
   const [itemQuery, setItemQuery] = useState('')
   const [matchBusy, setMatchBusy] = useState(false)
   const [matchElapsed, setMatchElapsed] = useState(0)
+  const [matchProgress, setMatchProgress] = useState<MatchProgress | null>(null)
+  const matchStartedAtRef = useRef(0)
   const [matchReport, setMatchReport] = useState<MatchReport | null>(null)
   const [showAiChanges, setShowAiChanges] = useState(false)
   const [transitionNote, setTransitionNote] = useState('')
@@ -471,6 +513,38 @@ export function TenderDetail() {
     }, 1000)
     return () => window.clearInterval(timer)
   }, [matchBusy])
+
+  useEffect(() => {
+    if (!matchBusy || !id) {
+      return
+    }
+    let cancelled = false
+    const started = matchStartedAtRef.current
+    const pull = async () => {
+      try {
+        const p = await api<MatchProgress>(`/tenders/${id}/match/progress`)
+        if (cancelled) {
+          return
+        }
+        if (p.started_at != null && p.started_at < started - 5) {
+          return
+        }
+        setMatchProgress(p)
+      } catch {
+        /* postęp jest pomocniczy */
+      }
+    }
+    void pull()
+    const poll = window.setInterval(() => void pull(), 1000)
+    const refresh = window.setInterval(() => {
+      void load()
+    }, 8000)
+    return () => {
+      cancelled = true
+      window.clearInterval(poll)
+      window.clearInterval(refresh)
+    }
+  }, [matchBusy, id, load])
 
   useEffect(() => {
     if (tab === 'zaproszenia') void loadDirectory(inviteQ)
@@ -963,6 +1037,21 @@ export function TenderDetail() {
     setBusy(true)
     setMatchBusy(true)
     setShowAiChanges(false)
+    matchStartedAtRef.current = Math.floor(Date.now() / 1000)
+    const estimated = countMatchTargets(
+      data?.tender.items ?? [],
+      onlyEmpty,
+      itemIds,
+      data?.coverage.thresholds.min_match_score ?? 65,
+    )
+    setMatchProgress({
+      status: 'running',
+      done: 0,
+      total: estimated,
+      line_no: null,
+      requirement: null,
+      started_at: matchStartedAtRef.current,
+    })
     try {
       const res = await api<{
         matched: number
@@ -1151,12 +1240,44 @@ export function TenderDetail() {
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
       {matchBusy && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/55 p-4">
-          <div className="max-w-md rounded-xl bg-white p-4 text-sm shadow-xl">
+          <div className="w-full max-w-md rounded-xl bg-white p-4 text-sm shadow-xl">
             <p className="font-semibold text-slate-900">Trwa dopasowanie AI…</p>
             <p className="mt-1 text-xs text-slate-600">
-              Nie odświeżaj strony. Przy 200 pozycjach to może zająć kilka minut.
+              Nie odświeżaj strony. Każda pozycja to osobne wyszukiwanie w katalogu — przy ~80 pustych
+              to zwykle kilka–kilkanaście minut.
             </p>
-            <p className="mt-3 font-mono text-lg text-violet-800">{matchElapsed} s</p>
+            {(() => {
+              const total = Math.max(matchProgress?.total ?? 0, 0)
+              const done = Math.min(matchProgress?.done ?? 0, total || matchProgress?.done ?? 0)
+              const pct = total > 0 ? Math.round((done / total) * 100) : 0
+              const eta =
+                done > 0 && total > done
+                  ? formatMatchEta(Math.round((matchElapsed * (total - done)) / done))
+                  : null
+              return (
+                <>
+                  <p className="mt-3 font-mono text-2xl font-semibold text-violet-800">
+                    {done} / {total || '…'}
+                  </p>
+                  <p className="text-xs text-slate-500">sprawdzonych pozycji</p>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-full rounded-full bg-violet-600 transition-all"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  {matchProgress?.line_no != null && (
+                    <p className="mt-2 truncate text-xs text-slate-600">
+                      Ostatnia: poz. {matchProgress.line_no}
+                      {matchProgress.requirement ? ` · ${matchProgress.requirement}` : ''}
+                    </p>
+                  )}
+                  <p className="mt-2 font-mono text-sm text-violet-800">
+                    {matchElapsed} s{eta ? ` · zostało ${eta}` : ''}
+                  </p>
+                </>
+              )
+            })()}
           </div>
         </div>
       )}
