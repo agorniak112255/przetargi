@@ -281,15 +281,6 @@ function matchTargetIds(
     .map((i) => i.id)
 }
 
-function countMatchTargets(
-  items: Item[],
-  onlyEmpty: boolean,
-  itemIds: number[] | undefined,
-  minScore: number,
-): number {
-  return matchTargetIds(items, onlyEmpty, itemIds, minScore).length
-}
-
 function formatMatchEta(seconds: number): string {
   if (seconds < 60) {
     return `ok. ${seconds} s`
