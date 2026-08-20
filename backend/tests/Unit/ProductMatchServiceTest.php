@@ -324,6 +324,25 @@ final class ProductMatchServiceTest extends TestCase
     }
 
     #[Test]
+    public function electrician_set_does_not_match_waterproof_jacket_via_fastening_words(): void
+    {
+        $jacket = $this->fakeProduct([
+            'sku' => '103',
+            'name' => '103 - Kurtka wodoochronna zapinana na zamek + stójka',
+            'manufacturer' => 'PROS / AJ Group',
+            'category' => 'odziez',
+            'description' => 'Kurtka wodoochronna zapinana na zamek.',
+        ]);
+
+        $req = 'Ubranie ochronne dla elektryków (bluza + spodnie) długa bluza zapinana na zatrzaski · EN 1149-5 IEC 61482';
+        $this->assertNull($this->matcher->bestMatch($req, new Collection([$jacket])));
+
+        $explained = $this->matcher->explainMatch($req, $jacket);
+        $this->assertSame(0, $explained['score']);
+        $this->assertSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null);
+    }
+
+    #[Test]
     public function glasses_requirement_does_not_match_gloves_even_with_shared_sku(): void
     {
         $gloves = $this->fakeProduct([

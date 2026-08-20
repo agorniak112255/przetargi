@@ -50,6 +50,20 @@ final class ProductModelFuzzyTest extends TestCase
         )));
     }
 
+    #[Test]
+    public function fastening_words_are_not_a_model_for_rain_jacket(): void
+    {
+        $req = 'Ubranie ochronne dla elektryków (bluza + spodnie) długa bluza zapinana na zatrzaski EN 1149-5 IEC 61482';
+
+        $this->assertNotContains('zapinanana', $this->fuzzy->needles($req));
+        $this->assertNotContains('dlaelektrykow', $this->fuzzy->needles($req));
+        $this->assertSame(0, $this->fuzzy->score($req, $this->product(
+            '103',
+            '103 - Kurtka wodoochronna zapinana na zamek + stójka',
+            'PROS / AJ Group',
+        )));
+    }
+
     private function product(string $sku, string $name, string $manufacturer): Product
     {
         $p = new Product;

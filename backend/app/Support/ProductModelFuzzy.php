@@ -20,6 +20,11 @@ final class ProductModelFuzzy
         'oslona', 'twarzy', 'przylbica', 'siatkowa', 'siatkowy', 'odblaskowa', 'odblaskowy',
         'zolta', 'nadrukiem', 'okulary', 'gogle', 'nauszniki', 'szelki', 'kalesony',
         'kombinezon', 'trzewiki', 'kominiarka', 'helm',
+        'dla', 'na', 'do', 'od', 'ze', 'za', 'po', 'we', 'przy', 'plus',
+        'dluga', 'krotka', 'zapinana', 'zatrzaski', 'zamek', 'stojka',
+        'kieszen', 'kieszenie', 'tasma', 'tasmy', 'elektryk', 'elektrykow',
+        'elektryka', 'elektryczne', 'ubranie', 'komplet', 'zestaw',
+        'wodoochronna', 'wodoochronny', 'przeciwdeszczowa', 'przeciwdeszczowy',
     ];
 
     public function hasNamedModel(string $requirement): bool
@@ -57,12 +62,15 @@ final class ProductModelFuzzy
             if ($a === '' || $b === '' || $this->isStop($a) || $this->isStop($b)) {
                 continue;
             }
-            if (mb_strlen($a) < 3 || mb_strlen($b) < 2 || (mb_strlen($a) + mb_strlen($b)) < 6) {
+            if (mb_strlen($a) < 3 || mb_strlen($b) < 3 || (mb_strlen($a) + mb_strlen($b)) < 6) {
                 continue;
             }
             $pair = $a.$b;
-            $this->pushNeedle($out, $pair);
             $nextNum = $this->trailingModelNumber($tokens, $i + 2);
+            $hasDigit = preg_match('/\d/', $tokens[$i].($tokens[$i + 1] ?? '')) === 1;
+            if ($hasDigit) {
+                $this->pushNeedle($out, $pair);
+            }
             if ($nextNum !== null) {
                 $this->pushNeedle($out, $pair.$nextNum);
             }

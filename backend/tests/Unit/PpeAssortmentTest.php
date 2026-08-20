@@ -82,6 +82,10 @@ final class PpeAssortmentTest extends TestCase
             ['Kurtka przeciwdeszczowa EN 343 EN 1149', 'Półmaska SECURA 3000'],
             ['Rękawice lateksowe sterylne', 'Komplet przeciwdeszczowy B50 bluza + spodnie'],
             ['Rękawice BORDER', 'Kalesony bawełniane męskie'],
+            [
+                'Ubranie ochronne dla elektryków (bluza + spodnie) EN 1149-5 IEC 61482',
+                '103 - Kurtka wodoochronna zapinana na zamek',
+            ],
         ];
     }
 

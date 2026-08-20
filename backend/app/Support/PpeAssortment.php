@@ -203,6 +203,10 @@ final class PpeAssortment
         if (preg_match('/\b(kombinezon)\w*/u', $t) === 1) {
             return 'coverall';
         }
+        if (preg_match('/\b(ubranie ochron|komplet|zestaw)\w*/u', $t) === 1
+            && preg_match('/\b(bluza|kurtk).{0,24}spodn|spodn.{0,24}(bluza|kurtk)/u', $t) === 1) {
+            return 'set';
+        }
         if (preg_match('/\b(spodn|ogrodniczk)\w*/u', $t) === 1) {
             return 'pants';
         }
@@ -230,6 +234,9 @@ final class PpeAssortment
         }
         if (preg_match('/\bzaroodporn|11612\b/u', $t) === 1) {
             return 'heat';
+        }
+        if (preg_match('/\bwodoochron|przeciwdeszcz|\b343\b|deszczow/u', $t) === 1) {
+            return 'rain';
         }
 
         return null;
