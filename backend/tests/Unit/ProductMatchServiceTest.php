@@ -53,6 +53,8 @@ final class ProductMatchServiceTest extends TestCase
                 'sku' => '60028',
                 'name' => 'ATHLETIC ALLROUND',
                 'manufacturer' => 'uvex',
+                'category' => 'Rękawice',
+                'description' => 'Rękawice montażowe ATHLETIC ALLROUND.',
             ]),
             $this->fakeProduct([
                 'sku' => '34-274',
@@ -324,6 +326,26 @@ final class ProductMatchServiceTest extends TestCase
     }
 
     #[Test]
+    public function polar_jacket_does_not_match_pola_gloves(): void
+    {
+        $gloves = $this->fakeProduct([
+            'sku' => 'POLA',
+            'name' => 'POLA - EN 420 KAT. II, EN 388 - 3131',
+            'manufacturer' => 'X',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice ochronne POLA.',
+            'norms' => 'EN 420 EN 388',
+        ]);
+
+        $req = 'KURTKA DAMSKA - POLAR granatowy rozm. S - XXXXL';
+        $this->assertNull($this->matcher->bestMatch($req, new Collection([$gloves])));
+
+        $explained = $this->matcher->explainMatch($req, $gloves);
+        $this->assertSame(0, $explained['score']);
+        $this->assertSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null);
+    }
+
+    #[Test]
     public function electrician_set_does_not_match_waterproof_jacket_via_fastening_words(): void
     {
         $jacket = $this->fakeProduct([
@@ -458,6 +480,7 @@ final class ProductMatchServiceTest extends TestCase
                 'sku' => '34700018',
                 'name' => 'TEMP-ICE 700',
                 'manufacturer' => 'MAPA',
+                'norms' => 'EN 388 EN 511',
                 'description' => null,
             ]),
         ]);

@@ -118,6 +118,35 @@ final class TenderMatchAssortmentGateTest extends TestCase
         $this->assertNull($item->ai_match_percent);
     }
 
+    public function test_polar_jacket_does_not_get_pola_gloves(): void
+    {
+        $this->catalogProduct([
+            'sku' => 'POLA',
+            'name' => 'POLA - EN 420 KAT. II, EN 388 - 3131',
+            'manufacturer' => 'X',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice ochronne POLA.',
+            'norms' => 'EN 420 EN 388',
+        ]);
+
+        $tender = $this->makeTender('PRZ/GATE/POLAR');
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 9,
+            'requirement' => 'KURTKA DAMSKA - POLAR granatowy rozm. S - XXXXL',
+            'quantity' => 15,
+            'status' => 'brak',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/match", ['only_empty' => true])
+            ->assertOk()
+            ->assertJsonPath('matched', 0);
+
+        $item->refresh();
+        $this->assertNull($item->main_product_id);
+        $this->assertNull($item->ai_match_percent);
+    }
+
     public function test_same_family_gloves_still_match(): void
     {
         $this->catalogProduct([

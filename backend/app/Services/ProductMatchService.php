@@ -509,13 +509,12 @@ final class ProductMatchService
         }
 
         $reqNoNorms = $this->stripNormNumbers($req);
-        $reqCompact = preg_replace('/\s+/', '', $reqNoNorms) ?? $reqNoNorms;
 
-        // pełny SKU jako token w SIWZ — nie wewnątrz numeru normy EN/ISO
-        if (mb_strlen($skuCompact) >= 4 && (str_contains($reqCompact, $skuCompact) || preg_match(
+        // pełny SKU jako osobny token — POLA nie trafia w POLAR
+        if (mb_strlen($skuCompact) >= 4 && preg_match(
             '/(^|[^a-z0-9])'.preg_quote($skuCompact, '/').'([^a-z0-9]|$)/u',
-            $reqCompact
-        ) === 1)) {
+            $reqNoNorms
+        ) === 1) {
             return 85;
         }
 

@@ -25,6 +25,8 @@ final class ProductModelFuzzy
         'kieszen', 'kieszenie', 'tasma', 'tasmy', 'elektryk', 'elektrykow',
         'elektryka', 'elektryczne', 'ubranie', 'komplet', 'zestaw',
         'wodoochronna', 'wodoochronny', 'przeciwdeszczowa', 'przeciwdeszczowy',
+        'polar', 'polaru', 'polarowa', 'polarowy', 'damska', 'damski', 'meska', 'meski',
+        'granatowy', 'granatowa', 'granat',
     ];
 
     public function hasNamedModel(string $requirement): bool

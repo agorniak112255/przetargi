@@ -48,6 +48,7 @@ final class PpeAssortmentTest extends TestCase
             ['Rękawice nitrylowe RNITZ', PpeAssortment::FAMILY_GLOVES],
             ['Trzewiki S3 ocieplane', PpeAssortment::FAMILY_FOOTWEAR],
             ['Kurtka ochronna ocieplana z kapturem', PpeAssortment::FAMILY_APPAREL],
+            ['POLA - EN 420 KAT. II, EN 388 - 3131', PpeAssortment::FAMILY_GLOVES],
             ['Kalesony bawełniane męskie', PpeAssortment::FAMILY_APPAREL],
             ['Fartuch laboratoryjny', PpeAssortment::FAMILY_APPAREL],
         ];
@@ -86,6 +87,7 @@ final class PpeAssortmentTest extends TestCase
                 'Ubranie ochronne dla elektryków (bluza + spodnie) EN 1149-5 IEC 61482',
                 '103 - Kurtka wodoochronna zapinana na zamek',
             ],
+            ['KURTKA DAMSKA - POLAR granatowy', 'POLA - EN 420 KAT. II, EN 388 - 3131'],
         ];
     }
 

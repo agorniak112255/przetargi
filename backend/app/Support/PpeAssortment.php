@@ -146,6 +146,33 @@ final class PpeAssortment
             return self::FAMILY_FOOTWEAR;
         }
 
+        return $this->familyFromNorms($t);
+    }
+
+    private function familyFromNorms(string $normalized): ?string
+    {
+        if (preg_match('/\b(388|420|511|21420)\b/u', $normalized) === 1) {
+            return self::FAMILY_GLOVES;
+        }
+        if (preg_match('/\b(20345|20347)\b/u', $normalized) === 1) {
+            return self::FAMILY_FOOTWEAR;
+        }
+        if (preg_match('/\b166\b/u', $normalized) === 1) {
+            return self::FAMILY_EYES;
+        }
+        if (preg_match('/\b352\b/u', $normalized) === 1) {
+            return self::FAMILY_HEARING;
+        }
+        if (preg_match('/\b(149|140|143)\b/u', $normalized) === 1) {
+            return self::FAMILY_RESPIRATORY;
+        }
+        if (preg_match('/\b(361|358)\b/u', $normalized) === 1) {
+            return self::FAMILY_FALL;
+        }
+        if (preg_match('/\b397\b/u', $normalized) === 1) {
+            return self::FAMILY_HEAD;
+        }
+
         return null;
     }
 
@@ -246,8 +273,11 @@ final class PpeAssortment
     {
         $reqFamily = $this->family($requirement);
         $prodFamily = $this->resolveFamily($productText, $kategoriaBhp);
-        if ($reqFamily === null || $prodFamily === null) {
+        if ($reqFamily === null) {
             return true;
+        }
+        if ($prodFamily === null) {
+            return false;
         }
         if ($reqFamily !== $prodFamily) {
             return false;

@@ -64,6 +64,17 @@ final class ProductModelFuzzyTest extends TestCase
         )));
     }
 
+    #[Test]
+    public function polar_fabric_is_not_sku_pola(): void
+    {
+        $req = 'KURTKA DAMSKA - POLAR granatowy rozm. S - XXXXL';
+        $this->assertSame(0, $this->fuzzy->score($req, $this->product(
+            'POLA',
+            'POLA - EN 420 KAT. II, EN 388 - 3131',
+            'X',
+        )));
+    }
+
     private function product(string $sku, string $name, string $manufacturer): Product
     {
         $p = new Product;
