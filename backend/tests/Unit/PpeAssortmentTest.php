@@ -78,6 +78,10 @@ final class PpeAssortmentTest extends TestCase
             ['KALESONY bawełniane męskie', 'Kombinezon ochronny blast suit'],
             ['FARTUCH laboratoryjny', 'Kamizelka odblaskowa'],
             ['Rękawice nitrylowe', 'Trzewiki S3'],
+            ['Okulary ochronne przyciemniane', 'Rękawice lateksowe HYFLEX 11-541'],
+            ['Kurtka przeciwdeszczowa EN 343 EN 1149', 'Półmaska SECURA 3000'],
+            ['Rękawice lateksowe sterylne', 'Komplet przeciwdeszczowy B50 bluza + spodnie'],
+            ['Rękawice BORDER', 'Kalesony bawełniane męskie'],
         ];
     }
 

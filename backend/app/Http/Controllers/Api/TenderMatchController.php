@@ -34,6 +34,8 @@ class TenderMatchController extends Controller
             'only_empty' => ['sometimes', 'boolean'],
             'item_ids' => ['sometimes', 'array', 'max:2000'],
             'item_ids.*' => ['integer'],
+            'progress_offset' => ['sometimes', 'integer', 'min:0'],
+            'progress_total' => ['sometimes', 'integer', 'min:0'],
         ]);
 
         $itemIds = $request->has('item_ids') ? array_values($request->input('item_ids', [])) : null;
@@ -45,7 +47,9 @@ class TenderMatchController extends Controller
         $result = $this->matcher->matchTender(
             $tender,
             $request->boolean('only_empty', true),
-            $itemIds
+            $itemIds,
+            (int) $request->input('progress_offset', 0),
+            $request->has('progress_total') ? (int) $request->input('progress_total') : null
         );
 
         return response()->json([

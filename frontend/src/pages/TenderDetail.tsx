@@ -253,28 +253,41 @@ function matchReportStorageKey(tenderId: string): string {
   return `tender-match-report-${tenderId}`
 }
 
+const MATCH_BATCH_SIZE = 4
+
+function matchTargetIds(
+  items: Item[],
+  onlyEmpty: boolean,
+  itemIds: number[] | undefined,
+  minScore: number,
+): number[] {
+  const scoped = itemIds ? items.filter((i) => itemIds.includes(i.id)) : items
+  if (!onlyEmpty) {
+    return scoped.map((i) => i.id)
+  }
+  return scoped
+    .filter((i) => {
+      if ((i.custom_name ?? '').trim() !== '') {
+        return false
+      }
+      if (i.main_product_id == null && i.main_product == null) {
+        return true
+      }
+      if (i.ai_match_percent == null) {
+        return true
+      }
+      return i.ai_match_percent < minScore
+    })
+    .map((i) => i.id)
+}
+
 function countMatchTargets(
   items: Item[],
   onlyEmpty: boolean,
   itemIds: number[] | undefined,
   minScore: number,
 ): number {
-  const scoped = itemIds ? items.filter((i) => itemIds.includes(i.id)) : items
-  if (!onlyEmpty) {
-    return scoped.length
-  }
-  return scoped.filter((i) => {
-    if ((i.custom_name ?? '').trim() !== '') {
-      return false
-    }
-    if (i.main_product_id == null && i.main_product == null) {
-      return true
-    }
-    if (i.ai_match_percent == null) {
-      return true
-    }
-    return i.ai_match_percent < minScore
-  }).length
+  return matchTargetIds(items, onlyEmpty, itemIds, minScore).length
 }
 
 function formatMatchEta(seconds: number): string {
@@ -1038,12 +1051,13 @@ export function TenderDetail() {
     setMatchBusy(true)
     setShowAiChanges(false)
     matchStartedAtRef.current = Math.floor(Date.now() / 1000)
-    const estimated = countMatchTargets(
+    const targets = matchTargetIds(
       data?.tender.items ?? [],
       onlyEmpty,
       itemIds,
       data?.coverage?.thresholds.min_match_score ?? 65,
     )
+    const estimated = targets.length
     setMatchProgress({
       status: 'running',
       done: 0,
@@ -1052,36 +1066,79 @@ export function TenderDetail() {
       requirement: null,
       started_at: matchStartedAtRef.current,
     })
+    type MatchApiRes = {
+      matched: number
+      skipped: number
+      avg_score: number
+      processed?: number
+      changed?: number
+      unchanged?: number
+      cleared?: number
+      skipped_custom?: number
+      no_match?: number
+      changes?: MatchChange[]
+    }
+    const merged: MatchApiRes = {
+      matched: 0,
+      skipped: 0,
+      avg_score: 0,
+      processed: 0,
+      changed: 0,
+      unchanged: 0,
+      cleared: 0,
+      skipped_custom: 0,
+      no_match: 0,
+      changes: [],
+    }
+    const scoreParts: number[] = []
     try {
-      const res = await api<{
-        matched: number
-        skipped: number
-        avg_score: number
-        processed?: number
-        changed?: number
-        unchanged?: number
-        cleared?: number
-        skipped_custom?: number
-        no_match?: number
-        changes?: MatchChange[]
-      }>(`/tenders/${id}/match`, {
-        method: 'POST',
-        body: JSON.stringify({
-          only_empty: onlyEmpty,
-          ...(itemIds ? { item_ids: itemIds } : {}),
-        }),
-      })
+      for (let i = 0; i < targets.length; i += MATCH_BATCH_SIZE) {
+        const chunk = targets.slice(i, i + MATCH_BATCH_SIZE)
+        const res = await api<MatchApiRes>(`/tenders/${id}/match`, {
+          method: 'POST',
+          body: JSON.stringify({
+            only_empty: onlyEmpty,
+            item_ids: chunk,
+            progress_offset: i,
+            progress_total: estimated,
+          }),
+        })
+        merged.matched += res.matched
+        merged.skipped += res.skipped
+        merged.processed = (merged.processed ?? 0) + (res.processed ?? res.matched + res.skipped)
+        merged.changed = (merged.changed ?? 0) + (res.changed ?? 0)
+        merged.unchanged = (merged.unchanged ?? 0) + (res.unchanged ?? 0)
+        merged.cleared = (merged.cleared ?? 0) + (res.cleared ?? 0)
+        merged.skipped_custom = (merged.skipped_custom ?? 0) + (res.skipped_custom ?? 0)
+        merged.no_match = (merged.no_match ?? 0) + (res.no_match ?? 0)
+        merged.changes = [...(merged.changes ?? []), ...(res.changes ?? [])]
+        if (res.matched > 0) {
+          scoreParts.push(res.avg_score)
+        }
+        setMatchProgress({
+          status: i + chunk.length >= estimated ? 'done' : 'running',
+          done: Math.min(i + chunk.length, estimated),
+          total: estimated,
+          line_no: null,
+          requirement: null,
+          started_at: matchStartedAtRef.current,
+        })
+      }
+      merged.avg_score =
+        scoreParts.length === 0
+          ? 0
+          : Math.round((scoreParts.reduce((a, b) => a + b, 0) / scoreParts.length) * 10) / 10
       await load()
       await loadMeta()
       const report: MatchReport = {
-        processed: res.processed ?? res.matched + res.skipped,
-        changed: res.changed ?? 0,
-        unchanged: res.unchanged ?? 0,
-        cleared: res.cleared ?? 0,
-        skipped_custom: res.skipped_custom ?? 0,
-        no_match: res.no_match ?? 0,
-        avg_score: res.avg_score,
-        changes: res.changes ?? [],
+        processed: merged.processed ?? merged.matched + merged.skipped,
+        changed: merged.changed ?? 0,
+        unchanged: merged.unchanged ?? 0,
+        cleared: merged.cleared ?? 0,
+        skipped_custom: merged.skipped_custom ?? 0,
+        no_match: merged.no_match ?? 0,
+        avg_score: merged.avg_score,
+        changes: merged.changes ?? [],
         at: new Date().toISOString(),
       }
       setMatchReport(report)

@@ -72,7 +72,13 @@ final class ProductMatchService
      *     changes: list<array{id: int, line_no: int, action: string, from_sku: ?string, to_sku: ?string}>
      * }
      */
-    public function matchTender(Tender $tender, bool $onlyEmpty = true, ?array $itemIds = null): array
+    public function matchTender(
+        Tender $tender,
+        bool $onlyEmpty = true,
+        ?array $itemIds = null,
+        int $progressOffset = 0,
+        ?int $progressTotal = null,
+    ): array
     {
         $products = Product::query()->get();
         $matched = 0;
@@ -119,9 +125,18 @@ final class ProductMatchService
             )->get();
 
         $startedAt = time();
-        $total = $items->count();
+        $batchCount = $items->count();
+        $displayTotal = $progressTotal ?? $batchCount;
         $done = 0;
-        $this->writeMatchProgress((int) $tender->id, 0, $total, 'running', null, null, $startedAt);
+        $this->writeMatchProgress(
+            (int) $tender->id,
+            $progressOffset,
+            $displayTotal,
+            'running',
+            null,
+            null,
+            $startedAt
+        );
 
         $changes = [];
         foreach ($items as $item) {
@@ -132,15 +147,20 @@ final class ProductMatchService
                 $changes[] = $this->matchChangeRow($item, 'skipped_custom', $beforeSku, $beforeSku);
             } else {
                 $pick = $this->resolveBestPick($item->requirement, $products);
-                if ($pick === null) {
+                $applied = $pick !== null && $this->applyProduct(
+                    $item,
+                    $pick['product'],
+                    $pick['score'],
+                    $pick['source'] ?? 'heuristic'
+                );
+                if (! $applied) {
                     $this->applyNoCatalogMatch($item, $products);
                     $skipped++;
                     $action = $beforeId !== null ? 'cleared' : 'no_match';
                     $changes[] = $this->matchChangeRow($item, $action, $beforeSku, null);
                 } else {
-                    $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'] ?? 'heuristic');
                     $matched++;
-                    $scores[] = $pick['score'];
+                    $scores[] = (int) $item->ai_match_percent;
                     $afterSku = $pick['product']->sku;
                     $action = $beforeId === (int) $pick['product']->id ? 'unchanged' : 'changed';
                     $changes[] = $this->matchChangeRow($item, $action, $beforeSku, $afterSku);
@@ -149,8 +169,8 @@ final class ProductMatchService
             $done++;
             $this->writeMatchProgress(
                 (int) $tender->id,
-                $done,
-                $total,
+                $progressOffset + $done,
+                $displayTotal,
                 'running',
                 (int) $item->line_no,
                 (string) $item->requirement,
@@ -158,7 +178,16 @@ final class ProductMatchService
             );
         }
 
-        $this->writeMatchProgress((int) $tender->id, $total, $total, 'done', null, null, $startedAt);
+        $finished = ($progressOffset + $batchCount) >= $displayTotal;
+        $this->writeMatchProgress(
+            (int) $tender->id,
+            $progressOffset + $batchCount,
+            $displayTotal,
+            $finished ? 'done' : 'running',
+            null,
+            null,
+            $startedAt
+        );
 
         $allScores = $tender->items()->whereNotNull('ai_match_percent')->pluck('ai_match_percent');
         $avgAll = $allScores->isEmpty() ? 0.0 : (float) $allScores->avg();
@@ -864,7 +893,19 @@ final class ProductMatchService
                 }
             }
         }
-        $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason);
+        if (! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason)) {
+            $this->applyNoCatalogMatch($item, $products);
+
+            return [
+                'matched' => false,
+                'score' => (int) ($item->ai_match_percent ?? 0),
+                'product_id' => null,
+                'offer_price' => $item->offer_price,
+                'sources' => $sources,
+                'candidates' => $candidates,
+                'ai_match_reasons' => $item->ai_match_reasons,
+            ];
+        }
         $item->load(['mainProduct', 'tender']);
         if ($item->tender !== null) {
             $this->pricing->recalculateTenderTotals($item->tender);
@@ -874,7 +915,7 @@ final class ProductMatchService
 
         return [
             'matched' => true,
-            'score' => $pick['score'],
+            'score' => (int) ($item->ai_match_percent ?? $pick['score']),
             'source' => $pick['source'],
             'product_id' => $p->id,
             'product' => [
@@ -898,7 +939,12 @@ final class ProductMatchService
     {
         $skuPick = $this->strongSkuPick($requirement, $products);
         if ($skuPick !== null) {
-            return $skuPick;
+            $honest = $this->persistableScore($requirement, $skuPick['product'], $skuPick['score']);
+            if ($honest !== null) {
+                $skuPick['score'] = $honest;
+
+                return $skuPick;
+            }
         }
 
         $described = $this->withDescriptions($products);
@@ -910,6 +956,11 @@ final class ProductMatchService
         }
 
         $picked['product'] = $this->resolveCatalogBySku($picked['product'], $products);
+        $honest = $this->persistableScore($requirement, $picked['product'], $picked['score']);
+        if ($honest === null) {
+            return null;
+        }
+        $picked['score'] = $honest;
 
         return $picked;
     }
@@ -950,6 +1001,9 @@ final class ProductMatchService
         $reqNorm = $this->normalize($requirement);
         $reqCodes = $this->codeCandidates($requirement);
         foreach ($products as $product) {
+            if (! $this->assortment->compatibleProduct($requirement, $product)) {
+                continue;
+            }
             $score = max(
                 $this->skuMatchScore($reqNorm, $reqCodes, $product),
                 $this->modelFuzzy->score($requirement, $product)
@@ -1025,7 +1079,8 @@ final class ProductMatchService
     private function pickAuto(string $requirement, ?array $heuristic, array $aiCandidates, Collection $products): ?array
     {
         if ($heuristic !== null && $heuristic['score'] >= self::MIN_MATCH_SCORE
-            && $this->hasStrongSkuInRequirement($requirement, $heuristic['product'])) {
+            && $this->hasStrongSkuInRequirement($requirement, $heuristic['product'])
+            && $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']) !== null) {
             return [
                 'product' => $heuristic['product'],
                 'score' => $heuristic['score'],
@@ -1042,7 +1097,14 @@ final class ProductMatchService
             if (! $product instanceof Product) {
                 continue;
             }
+            if (! $this->assortment->compatibleProduct($requirement, $product)) {
+                continue;
+            }
             if (! $this->honorsSpecificModelCodes($requirement, $product)) {
+                continue;
+            }
+            $honest = $this->persistableScore($requirement, $product, $topAi['score']);
+            if ($honest === null) {
                 continue;
             }
             if (! $this->hasStrongSkuInRequirement($requirement, $product)
@@ -1052,7 +1114,7 @@ final class ProductMatchService
 
             return [
                 'product' => $product,
-                'score' => $topAi['score'],
+                'score' => $honest,
                 'source' => (string) ($topAi['source'] ?? 'ai'),
             ];
         }
@@ -1070,15 +1132,34 @@ final class ProductMatchService
         }
 
         try {
-            @set_time_limit(120);
             $result = $this->aiSearch->search($requirement, $limit, false);
         } catch (Throwable) {
             return [];
         }
 
         $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
+        $mapped = $this->mapAiSearchRows($result['products'] ?? [], $limit, $source);
+        if ($mapped === []) {
+            return [];
+        }
 
-        return $this->mapAiSearchRows($result['products'] ?? [], $limit, $source);
+        $byId = Product::query()
+            ->whereIn('id', array_column($mapped, 'id'))
+            ->get()
+            ->keyBy('id');
+        $out = [];
+        foreach ($mapped as $row) {
+            $product = $byId->get($row['id']);
+            if (! $product instanceof Product) {
+                continue;
+            }
+            if (! $this->assortment->compatibleProduct($requirement, $product)) {
+                continue;
+            }
+            $out[] = $row;
+        }
+
+        return $out;
     }
 
     /**
@@ -1141,33 +1222,75 @@ final class ProductMatchService
         return array_slice($list, 0, 5);
     }
 
+    /**
+     * Konflikt rodzaju (okulary ≠ rękawice) = brak zapisu.
+     * AI nie może zawyżyć % ponad heurystykę / SKU.
+     */
+    private function persistableScore(string $requirement, Product $product, int $proposed): ?int
+    {
+        if (! $this->assortment->compatibleProduct($requirement, $product)) {
+            return null;
+        }
+
+        $explained = $this->explainMatch($requirement, $product);
+        if (($explained['reasons'][0]['code'] ?? '') === 'asortyment_reject') {
+            return null;
+        }
+
+        $skuish = max(
+            $this->skuMatchScore(
+                $this->normalize($requirement),
+                $this->codeCandidates($requirement),
+                $product
+            ),
+            $this->modelFuzzy->score($requirement, $product)
+        );
+        $honest = min(max(0, $proposed), max($explained['score'], $skuish));
+        if ($honest >= self::MIN_MATCH_SCORE) {
+            return $honest;
+        }
+        if ($skuish >= 70) {
+            return max(self::MIN_MATCH_SCORE, $skuish);
+        }
+
+        return null;
+    }
+
     private function applyProduct(
         TenderItem $item,
         Product $product,
         int $score,
         ?string $source = 'heuristic',
         ?string $aiReason = null,
-    ): void {
+    ): bool {
+        $honest = $this->persistableScore($item->requirement, $product, $score);
+        if ($honest === null) {
+            return false;
+        }
+
         $explained = $this->explainMatch($item->requirement, $product);
         $reasons = $explained['reasons'];
+        if (($reasons[0]['code'] ?? '') === 'asortyment_reject') {
+            return false;
+        }
         if ($aiReason !== null && $aiReason !== '') {
             array_unshift($reasons, [
                 'code' => $source === 'vector' ? 'vector' : 'ai',
                 'label' => $aiReason,
-                'points' => $score,
+                'points' => $honest,
             ]);
         } elseif ($source === 'vector') {
             array_unshift($reasons, [
                 'code' => 'vector',
                 'label' => 'Dopasowanie wektorowe + AI',
-                'points' => $score,
+                'points' => $honest,
             ]);
         }
 
         $item->main_product_id = $product->id;
         $item->custom_name = null;
         $item->custom_url = null;
-        $item->ai_match_percent = $score;
+        $item->ai_match_percent = $honest;
         $item->ai_match_reasons = $reasons;
         $item->match_source = $source;
         $item->status = 'matched';
@@ -1177,6 +1300,8 @@ final class ProductMatchService
         $item->save();
         $item->load('mainProduct');
         $this->pricing->recalculateItemMargin($item);
+
+        return true;
     }
 
     /**

@@ -9,6 +9,7 @@ use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
+use App\Support\PpeAssortment;
 
 /**
  * Snapshot pozycji SIWZ: propozycja główna + do 2 zamienników z katalogu.
@@ -23,6 +24,7 @@ final class BattlecardService
     public function __construct(
         private readonly ProductMatchService $matcher,
         private readonly BhpAttributeNormalizer $bhpAttributes,
+        private readonly PpeAssortment $assortment,
     ) {}
 
     /**
@@ -43,7 +45,7 @@ final class BattlecardService
             $excludeIds[] = (int) $ours->id;
         }
 
-        $substitutes = $this->buildSubstitutes($ours, $excludeIds);
+        $substitutes = $this->buildSubstitutes($ours, $excludeIds, $item->requirement);
         $substitutes = $this->fillFromCatalog(
             $item->requirement,
             $substitutes,
@@ -78,7 +80,7 @@ final class BattlecardService
      * @param  list<int>  $excludeIds
      * @return list<array<string, mixed>>
      */
-    private function buildSubstitutes(?Product $ours, array &$excludeIds): array
+    private function buildSubstitutes(?Product $ours, array &$excludeIds, string $requirement): array
     {
         if ($ours === null) {
             return [];
@@ -95,6 +97,9 @@ final class BattlecardService
         foreach ($rows as $row) {
             $p = $row->substituteProduct;
             if (! $p instanceof Product) {
+                continue;
+            }
+            if ($requirement !== '' && ! $this->assortment->compatibleProduct($requirement, $p)) {
                 continue;
             }
             $excludeIds[] = (int) $p->id;

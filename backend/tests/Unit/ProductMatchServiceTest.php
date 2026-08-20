@@ -324,6 +324,70 @@ final class ProductMatchServiceTest extends TestCase
     }
 
     #[Test]
+    public function glasses_requirement_does_not_match_gloves_even_with_shared_sku(): void
+    {
+        $gloves = $this->fakeProduct([
+            'sku' => '11-541',
+            'name' => 'HYFLEX 11-541 Rękawice montażowe',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze HyFlex 11-541.',
+        ]);
+        $glasses = $this->fakeProduct([
+            'sku' => 'SF401',
+            'name' => 'Okulary ochronne bezbarwne',
+            'manufacturer' => '3M',
+            'category' => 'ochrona_oczu',
+            'description' => 'Okulary ochronne 3M SecureFit.',
+        ]);
+        $products = new Collection([$gloves, $glasses]);
+
+        $req = 'Okulary ochronne przyciemniane HYFLEX 11-541';
+        $best = $this->matcher->bestMatch($req, $products);
+        $this->assertNotNull($best);
+        $this->assertSame('SF401', $best['product']->sku);
+
+        $explained = $this->matcher->explainMatch($req, $gloves);
+        $this->assertSame(0, $explained['score']);
+        $this->assertSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null);
+    }
+
+    #[Test]
+    public function rain_jacket_does_not_match_respirator(): void
+    {
+        $mask = $this->fakeProduct([
+            'sku' => 'SECURA-3000',
+            'name' => 'Półmaska SECURA 3000 część twarzowa',
+            'manufacturer' => 'SECURA',
+            'category' => 'drogi_oddechowe',
+            'description' => 'Półmaska wielokrotnego użytku.',
+        ]);
+        $explained = $this->matcher->explainMatch(
+            'Kurtka przeciwdeszczowa EN 343 EN 1149-5',
+            $mask
+        );
+        $this->assertSame(0, $explained['score']);
+        $this->assertSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null);
+        $this->assertNull($this->matcher->bestMatch('Kurtka przeciwdeszczowa EN 343 EN 1149-5', new Collection([$mask])));
+    }
+
+    #[Test]
+    public function gloves_requirement_does_not_match_rain_set(): void
+    {
+        $set = $this->fakeProduct([
+            'sku' => 'B50',
+            'name' => 'Komplet przeciwdeszczowy B50 bluza + spodnie',
+            'manufacturer' => 'X',
+            'category' => 'odziez',
+            'description' => 'Ubranie przeciwdeszczowe komplet.',
+        ]);
+        $explained = $this->matcher->explainMatch('Rękawice lateksowe sterylne', $set);
+        $this->assertSame(0, $explained['score']);
+        $this->assertSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null);
+        $this->assertNull($this->matcher->bestMatch('Rękawice lateksowe sterylne', new Collection([$set])));
+    }
+
+    #[Test]
     public function vest_requirement_does_not_match_mesh_face_shield(): void
     {
         $products = new Collection([

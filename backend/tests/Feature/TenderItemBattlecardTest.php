@@ -250,4 +250,66 @@ final class TenderItemBattlecardTest extends TestCase
             ->assertJsonPath('matched', true)
             ->assertJsonStructure(['battlecard' => ['ours', 'substitutes', 'competitors', 'highlights']]);
     }
+
+    public function test_battlecard_drops_wrong_ppe_family_relation(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $ours = Product::query()->create([
+            'sku' => 'GLOVE-MAIN',
+            'name' => 'Rękawice lateksowe',
+            'manufacturer' => 'X',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice lateksowe jednorazowe.',
+            'catalog_price_net' => 3,
+            'purchase_price' => 2,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $underwear = Product::query()->create([
+            'sku' => 'KALESONY-X',
+            'name' => 'Kalesony bawełniane męskie',
+            'manufacturer' => 'X',
+            'category' => 'odziez',
+            'description' => 'Kalesony 100% bawełna.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 8,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        ProductSubstitute::query()->create([
+            'main_product_id' => $ours->id,
+            'substitute_product_id' => $underwear->id,
+            'type' => 'tanszy',
+            'match_percent' => 90,
+            'approval_status' => 'zatwierdzony',
+        ]);
+
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/BC/GATE',
+            'title' => 'Zły zamiennik',
+            'client_id' => Client::query()->create(['name' => 'Klient GATE BC'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 50,
+            'last_activity_at' => now(),
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Rękawice lateksowe sterylne',
+            'main_product_id' => $ours->id,
+            'ai_match_percent' => 80,
+            'quantity' => 10,
+            'status' => 'ok',
+        ]);
+
+        $subs = $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")
+            ->assertOk()
+            ->json('battlecard.substitutes');
+
+        $this->assertNotContains('KALESONY-X', collect($subs)->pluck('sku')->all());
+    }
 }
