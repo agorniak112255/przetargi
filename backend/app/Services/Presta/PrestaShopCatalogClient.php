@@ -83,19 +83,8 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
         }
 
         $hasEan = Schema::connection('prestashop')->hasColumn($prefix.'product', 'ean13');
-        $eanSelect = $hasEan ? 'p.ean13' : "''";
 
-        $sql = 'SELECT p.id_product, p.reference, '.$eanSelect.' AS ean13,'
-            .' pl.name, pl.link_rewrite, pl.description_short, pl.description,'
-            .' m.name AS manufacturer,'
-            .' GROUP_CONCAT(DISTINCT fvl.value SEPARATOR \'; \') AS features'
-            .' FROM '.$prefix.'product p'
-            .' INNER JOIN '.$prefix.'product_lang pl'
-            .'   ON pl.id_product = p.id_product AND pl.id_lang = ?'
-            .' LEFT JOIN '.$prefix.'manufacturer m ON m.id_manufacturer = p.id_manufacturer'
-            .' LEFT JOIN '.$prefix.'feature_product fp ON fp.id_product = p.id_product'
-            .' LEFT JOIN '.$prefix.'feature_value_lang fvl'
-            .'   ON fvl.id_feature_value = fp.id_feature_value AND fvl.id_lang = ?'
+        $sql = $this->productSelectSql($prefix, $hasEan)
             .' WHERE p.active = 1 AND (';
 
         $bindings = [$lang, $lang];
@@ -122,7 +111,7 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
             return [];
         }
 
-        $sql .= implode(' OR ', $ors).') GROUP BY p.id_product ORDER BY p.id_product ASC LIMIT '.$limit;
+        $sql .= implode(' OR ', $ors).') ORDER BY p.id_product ASC LIMIT '.$limit;
         $rows = $db->select($sql, $bindings);
 
         return array_map(fn (object $row): array => $this->mapRow($row), $rows);
@@ -135,7 +124,6 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
         $prefix = $this->prefix();
         $lang = $this->idLang();
         $hasEan = Schema::connection('prestashop')->hasColumn($prefix.'product', 'ean13');
-        $eanSelect = $hasEan ? 'p.ean13' : "''";
 
         $db = DB::connection('prestashop');
         try {
@@ -144,19 +132,8 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
         }
 
         $row = $db->selectOne(
-            'SELECT p.id_product, p.reference, '.$eanSelect.' AS ean13,'
-            .' pl.name, pl.link_rewrite, pl.description_short, pl.description,'
-            .' m.name AS manufacturer,'
-            .' GROUP_CONCAT(DISTINCT fvl.value SEPARATOR \'; \') AS features'
-            .' FROM '.$prefix.'product p'
-            .' INNER JOIN '.$prefix.'product_lang pl'
-            .'   ON pl.id_product = p.id_product AND pl.id_lang = ?'
-            .' LEFT JOIN '.$prefix.'manufacturer m ON m.id_manufacturer = p.id_manufacturer'
-            .' LEFT JOIN '.$prefix.'feature_product fp ON fp.id_product = p.id_product'
-            .' LEFT JOIN '.$prefix.'feature_value_lang fvl'
-            .'   ON fvl.id_feature_value = fp.id_feature_value AND fvl.id_lang = ?'
-            .' WHERE p.id_product = ? AND p.active = 1'
-            .' GROUP BY p.id_product',
+            $this->productSelectSql($prefix, $hasEan)
+            .' WHERE p.id_product = ? AND p.active = 1',
             [$lang, $lang, $prestaId]
         );
 
@@ -211,6 +188,26 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
         if (! $this->configured()) {
             throw new RuntimeException('Sklep Presta nie jest skonfigurowany. Ustawienia → Administracja → Sklep Presta.');
         }
+    }
+
+    private function productSelectSql(string $prefix, bool $hasEan): string
+    {
+        $eanSelect = $hasEan ? 'p.ean13' : "''";
+
+        return 'SELECT p.id_product, p.reference, '.$eanSelect.' AS ean13,'
+            .' pl.name, pl.link_rewrite, pl.description_short, pl.description,'
+            .' m.name AS manufacturer, feat.features'
+            .' FROM '.$prefix.'product p'
+            .' INNER JOIN '.$prefix.'product_lang pl'
+            .'   ON pl.id_product = p.id_product AND pl.id_lang = ?'
+            .' LEFT JOIN '.$prefix.'manufacturer m ON m.id_manufacturer = p.id_manufacturer'
+            .' LEFT JOIN ('
+            .'   SELECT fp.id_product, GROUP_CONCAT(DISTINCT fvl.value SEPARATOR \'; \') AS features'
+            .'   FROM '.$prefix.'feature_product fp'
+            .'   LEFT JOIN '.$prefix.'feature_value_lang fvl'
+            .'     ON fvl.id_feature_value = fp.id_feature_value AND fvl.id_lang = ?'
+            .'   GROUP BY fp.id_product'
+            .' ) feat ON feat.id_product = p.id_product';
     }
 
     private function prefix(): string
