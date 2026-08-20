@@ -1042,7 +1042,7 @@ export function TenderDetail() {
       data?.tender.items ?? [],
       onlyEmpty,
       itemIds,
-      data?.coverage.thresholds.min_match_score ?? 65,
+      data?.coverage?.thresholds.min_match_score ?? 65,
     )
     setMatchProgress({
       status: 'running',
@@ -1248,7 +1248,7 @@ export function TenderDetail() {
             </p>
             {(() => {
               const total = Math.max(matchProgress?.total ?? 0, 0)
-              const done = Math.min(matchProgress?.done ?? 0, total || matchProgress?.done ?? 0)
+              const done = Math.min(matchProgress?.done ?? 0, total || (matchProgress?.done ?? 0))
               const pct = total > 0 ? Math.round((done / total) * 100) : 0
               const eta =
                 done > 0 && total > done
