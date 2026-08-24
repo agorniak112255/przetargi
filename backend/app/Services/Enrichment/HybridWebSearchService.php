@@ -17,7 +17,10 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v23';
+    private const SEARCH_CACHE_VERSION = 'v24';
+
+    /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
+    private const FREE_SEARCH_CANDIDATES = 20;
 
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -802,7 +805,7 @@ class HybridWebSearchService
     private function searchViaAiWeb(string $query, Product $product, string $phase): array
     {
         if ($this->settings->usesFreeWebSearch()) {
-            $hits = $this->duckDuckGo->search($query, 5);
+            $hits = $this->duckDuckGo->search($query, self::FREE_SEARCH_CANDIDATES);
 
             return [
                 'results' => $hits,
@@ -879,7 +882,13 @@ PROMPT;
     ): array {
         if ($this->settings->usesFreeWebSearch()) {
             $engine = $this->searchProviderName();
-            $results = $this->duckDuckGo->search($query, $profile->maxResults, $includeDomains);
+            // Darmowe szukanie nic nie kosztuje, a SearXNG miesza trafne karty z szumem —
+            // bierzemy szerszą listę i zawężamy ją dopiero filtrem tożsamości produktu.
+            $results = $this->duckDuckGo->search(
+                $query,
+                max($profile->maxResults, self::FREE_SEARCH_CANDIDATES),
+                $includeDomains
+            );
             if ($results === []) {
                 throw new RuntimeException(
                     $includeDomains !== []
