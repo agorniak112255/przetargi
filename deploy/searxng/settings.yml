@@ -23,6 +23,14 @@ search:
   safe_search: 0
   autocomplete: ""
   default_lang: "pl"
+  # Domyślnie captcha wyłącza silnik na 24 h — przy rotacji IP warto próbować szybciej
+  suspended_times:
+    SearxEngineCaptcha: 300
+    SearxEngineTooManyRequests: 300
+    SearxEngineAccessDenied: 600
+    recaptcha_SearxEngineCaptcha: 1800
+    cf_SearxEngineCaptcha: 1800
+    cf_SearxEngineAccessDenied: 600
 
 outgoing:
   request_timeout: 10.0
