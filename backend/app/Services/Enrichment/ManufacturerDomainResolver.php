@@ -84,7 +84,7 @@ final class ManufacturerDomainResolver
             ]));
             $query = implode(' ', $bits).' official website OR strona oficjalna producent';
 
-            if ($this->settings->usesDuckDuckGoSearch()) {
+            if ($this->settings->usesFreeWebSearch()) {
                 $rows = $this->duckDuckGo->search($query, 6);
             } else {
                 TavilyQuotaGuard::assertAllowed();

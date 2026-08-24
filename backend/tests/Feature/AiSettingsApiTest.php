@@ -61,6 +61,20 @@ final class AiSettingsApiTest extends TestCase
         $this->putJson('/api/ai-settings', ['match_concurrency' => 101])
             ->assertStatus(422);
 
+        $this->putJson('/api/ai-settings', [
+            'search_engine' => 'searxng',
+            'searxng_url' => 'http://127.0.0.1:8088/',
+        ])->assertOk()
+            ->assertJsonPath('search_engine', 'searxng')
+            ->assertJsonPath('searxng_url', 'http://127.0.0.1:8088');
+
+        $this->putJson('/api/ai-settings', ['search_engine' => 'niema'])
+            ->assertStatus(422);
+
+        $this->putJson('/api/ai-settings', ['search_engine' => 'duckduckgo'])
+            ->assertOk()
+            ->assertJsonPath('search_engine', 'duckduckgo');
+
         $this->getJson('/api/ai-settings')
             ->assertOk()
             ->assertJsonPath('source', 'database')

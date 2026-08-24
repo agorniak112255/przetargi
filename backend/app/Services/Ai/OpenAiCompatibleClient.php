@@ -231,7 +231,7 @@ class OpenAiCompatibleClient
         if (! $cfg['enabled']) {
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
         }
-        if ($this->settings->usesDuckDuckGoSearch()) {
+        if ($this->settings->usesFreeWebSearch()) {
             return $this->phpDuckDuckGoCitations($prompt);
         }
         if (! $cfg['has_api_key'] || $cfg['api_key'] === null) {

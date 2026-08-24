@@ -26,6 +26,28 @@ HTML;
         $this->assertNotContains('https://duckduckgo.com/about', $urls);
     }
 
+    public function test_parses_searxng_json_and_drops_engine_urls(): void
+    {
+        $json = json_encode([
+            'results' => [
+                [
+                    'url' => 'https://www.bhpnawigator.com.pl/rekawice-ochronne-robfm.html',
+                    'title' => 'Rękawice ROBFM JS Gloves',
+                    'content' => 'Rękawice termiczne ROBFM do 250C',
+                ],
+                ['url' => 'https://www.google.com/search?q=robfm', 'title' => 'Google', 'content' => ''],
+                ['url' => 'not-a-url', 'title' => 'Śmieć', 'content' => ''],
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $results = (new DuckDuckGoHtmlSearch)->parseSearxngJson($json);
+
+        $this->assertCount(1, $results);
+        $this->assertSame('https://www.bhpnawigator.com.pl/rekawice-ochronne-robfm.html', $results[0]['url']);
+        $this->assertSame('Rękawice ROBFM JS Gloves', $results[0]['title']);
+        $this->assertSame('Rękawice termiczne ROBFM do 250C', $results[0]['snippet']);
+    }
+
     public function test_parses_google_url_redirects(): void
     {
         $html = <<<HTML

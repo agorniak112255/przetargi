@@ -37,7 +37,7 @@ final class ExternalCatalogHintService
             return $this->cache[$cacheKey];
         }
 
-        if ($this->settings->usesDuckDuckGoSearch()) {
+        if ($this->settings->usesFreeWebSearch()) {
             try {
                 $hits = $this->duckDuckGo->search(mb_substr($query, 0, 400), 8);
             } catch (Throwable) {

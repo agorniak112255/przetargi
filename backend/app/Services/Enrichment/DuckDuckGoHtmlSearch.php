@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use App\Services\Ai\AiSettingsService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -11,12 +12,13 @@ use Throwable;
 
 /**
  * Darmowe szukanie po stronie PHP (nie plugin OpenRouter, nie Tavily).
- * DuckDuckGo przy wielu równoległych jobach z cennika często zwraca 403 —
- * dlatego: cache, jedna bramka, przerwa między requestami, zapas Qwant/Bing.
+ * Własna instancja SearXNG jest najpewniejsza — publiczne wyszukiwarki blokują
+ * ruch z serwera (captcha, 403) albo celowo zwracają nietrafione wyniki,
+ * dlatego dla nich: cache, jedna bramka, przerwa między requestami.
  */
 final class DuckDuckGoHtmlSearch
 {
-    private const QUERY_CACHE_PREFIX = 'free_web_search_v3:';
+    private const QUERY_CACHE_PREFIX = 'free_web_search_v4:';
 
     private const GATE_KEY = 'free_web_search_gate';
 
@@ -48,9 +50,18 @@ final class DuckDuckGoHtmlSearch
         $cacheKey = self::QUERY_CACHE_PREFIX.hash('sha256', $query);
         $cached = Cache::get($cacheKey);
         if (is_array($cached)) {
-            $results = $includeDomains !== [] ? $this->filterByDomains($cached, $includeDomains) : $cached;
+            return $this->limitResults($cached, $maxResults, $includeDomains);
+        }
 
-            return array_slice($results, 0, max(1, $maxResults));
+        $searxng = $this->searxngBaseUrl();
+        if ($searxng !== null) {
+            // Własna instancja nie ma limitów — bez globalnej bramki i przerw.
+            $results = $this->searchSearxng($searxng, $query);
+            if ($results !== []) {
+                Cache::put($cacheKey, $results, now()->addHours(6));
+            }
+
+            return $this->limitResults($results, $maxResults, $includeDomains);
         }
 
         $this->acquireGate();
@@ -66,9 +77,114 @@ final class DuckDuckGoHtmlSearch
             $this->releaseGate();
         }
 
-        $results = $includeDomains !== [] ? $this->filterByDomains($cached, $includeDomains) : $cached;
+        return $this->limitResults($cached, $maxResults, $includeDomains);
+    }
+
+    /**
+     * @param  list<array{url: string, title: string, snippet: string}>  $results
+     * @param  list<string>  $includeDomains
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function limitResults(array $results, int $maxResults, array $includeDomains): array
+    {
+        if ($includeDomains !== []) {
+            $results = $this->filterByDomains($results, $includeDomains);
+        }
 
         return array_slice($results, 0, max(1, $maxResults));
+    }
+
+    /** Adres własnego SearXNG z ustawień AI; null gdy wybrano inny silnik. */
+    private function searxngBaseUrl(): ?string
+    {
+        try {
+            $settings = app(AiSettingsService::class);
+            if ($settings->searchEngine() !== AiSettingsService::SEARCH_ENGINE_SEARXNG) {
+                return null;
+            }
+            $url = $settings->searxngUrl();
+        } catch (Throwable) {
+            return null;
+        }
+
+        if ($url === null) {
+            throw new RuntimeException(
+                'Wybrano SearXNG, ale w Ustawieniach AI brakuje adresu instancji (np. http://127.0.0.1:8088).'
+            );
+        }
+
+        return $url;
+    }
+
+    /**
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function searchSearxng(string $baseUrl, string $query): array
+    {
+        $url = rtrim($baseUrl, '/').'/search';
+
+        try {
+            $response = Http::withHeaders($this->browserHeaders())
+                ->timeout(25)
+                ->connectTimeout(6)
+                ->get($url, [
+                    'q' => $query,
+                    'format' => 'json',
+                    'language' => 'pl',
+                    'safesearch' => 0,
+                    'categories' => 'general',
+                ]);
+        } catch (Throwable $e) {
+            throw new RuntimeException('SearXNG ('.$url.') nie odpowiada: '.$e->getMessage());
+        }
+
+        if (! $response->successful()) {
+            throw new RuntimeException(
+                'SearXNG HTTP '.$response->status().' ('.$url.')'
+                .' — sprawdź, czy w settings.yml jest format json i wyłączony limiter.'
+            );
+        }
+
+        $results = $this->parseSearxngJson((string) $response->body());
+        if ($results === []) {
+            throw new RuntimeException('SearXNG: brak wyników dla "'.$query.'".');
+        }
+
+        return $results;
+    }
+
+    /**
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function parseSearxngJson(string $json): array
+    {
+        try {
+            $payload = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return [];
+        }
+
+        $rows = is_array($payload) ? ($payload['results'] ?? []) : [];
+        if (! is_array($rows)) {
+            return [];
+        }
+
+        $out = [];
+        $seen = [];
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $this->pushHit(
+                $out,
+                $seen,
+                (string) ($row['url'] ?? ''),
+                (string) ($row['title'] ?? ''),
+                (string) ($row['content'] ?? '')
+            );
+        }
+
+        return $out;
     }
 
     /**
@@ -395,12 +511,17 @@ final class DuckDuckGoHtmlSearch
 
     private function searchBing(string $query): array
     {
-        $response = Http::withHeaders($this->browserHeaders())
+        // Bez mkt/ciasteczek rynku Bing oddaje generyczną stronę bez związku z zapytaniem.
+        $response = Http::withHeaders($this->browserHeaders() + ['Referer' => 'https://www.bing.com/'])
+            ->withCookies(['SRCHHPGUSR' => 'SRCHLANG=pl', '_EDGE_S' => 'mkt=pl-pl'], '.bing.com')
             ->timeout(15)
             ->connectTimeout(8)
             ->get('https://www.bing.com/search', [
                 'q' => $query,
                 'setlang' => 'pl-PL',
+                'mkt' => 'pl-PL',
+                'setmkt' => 'pl-PL',
+                'count' => 20,
             ]);
 
         if (! $response->successful()) {

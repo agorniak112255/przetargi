@@ -21,6 +21,14 @@ final class AiSettingsService
 
     public const SEARCH_ENGINE_DUCKDUCKGO = 'duckduckgo';
 
+    public const SEARCH_ENGINE_SEARXNG = 'searxng';
+
+    private const SEARCH_ENGINES = [
+        self::SEARCH_ENGINE_TAVILY,
+        self::SEARCH_ENGINE_DUCKDUCKGO,
+        self::SEARCH_ENGINE_SEARXNG,
+    ];
+
     /**
      * @return array{
      *     enabled: bool,
@@ -35,6 +43,7 @@ final class AiSettingsService
      *     web_search_enabled: bool,
      *     tavily_api_key: ?string,
      *     search_engine: string,
+     *     searxng_url: ?string,
      *     search_fallback: string,
      *     tavily_search_mode: string,
      *     enrichment_batch_limit: int,
@@ -84,6 +93,9 @@ final class AiSettingsService
                         ? ($row->search_engine ?? null)
                         : null
                 ),
+                'searxng_url' => Schema::hasColumn('ai_settings', 'searxng_url')
+                    ? $this->nullableUrl($row->searxng_url ?? null)
+                    : null,
                 'search_fallback' => (string) ($row->search_fallback ?: 'tavily'),
                 'tavily_search_mode' => $this->normalizeTavilySearchMode(
                     Schema::hasColumn('ai_settings', 'tavily_search_mode')
@@ -139,6 +151,7 @@ final class AiSettingsService
             'web_search_enabled' => (bool) config('ai.web_search_enabled', true),
             'tavily_api_key' => $tavily,
             'search_engine' => $this->normalizeSearchEngine(config('ai.search_engine')),
+            'searxng_url' => $this->nullableUrl(config('ai.searxng_url')),
             'search_fallback' => (string) config('ai.search_fallback', 'tavily'),
             'tavily_search_mode' => $this->normalizeTavilySearchMode(config('ai.tavily_search_mode')),
             'enrichment_batch_limit' => $this->normalizeEnrichmentBatchLimit(config('ai.enrichment_batch_limit')),
@@ -176,6 +189,7 @@ final class AiSettingsService
             'temperature' => $cfg['temperature'],
             'web_search_enabled' => $cfg['web_search_enabled'],
             'search_engine' => $cfg['search_engine'],
+            'searxng_url' => $cfg['searxng_url'],
             'search_fallback' => $cfg['search_fallback'],
             'tavily_search_mode' => $cfg['tavily_search_mode'],
             'enrichment_batch_limit' => $cfg['enrichment_batch_limit'],
@@ -254,6 +268,10 @@ final class AiSettingsService
 
         if (array_key_exists('search_engine', $data) && Schema::hasColumn('ai_settings', 'search_engine')) {
             $row->search_engine = $this->normalizeSearchEngine($data['search_engine']);
+        }
+
+        if (array_key_exists('searxng_url', $data) && Schema::hasColumn('ai_settings', 'searxng_url')) {
+            $row->searxng_url = $this->nullableUrl($data['searxng_url']);
         }
 
         if (array_key_exists('tavily_search_mode', $data) && Schema::hasColumn('ai_settings', 'tavily_search_mode')) {
@@ -336,14 +354,29 @@ final class AiSettingsService
         return $this->normalizeSearchEngine($this->resolve()['search_engine'] ?? null);
     }
 
-    public function usesDuckDuckGoSearch(): bool
+    /** Darmowe szukanie po stronie PHP (SearXNG / publiczne wyszukiwarki) — bez kredytów Tavily. */
+    public function usesFreeWebSearch(): bool
     {
-        return $this->searchEngine() === self::SEARCH_ENGINE_DUCKDUCKGO;
+        return in_array(
+            $this->searchEngine(),
+            [self::SEARCH_ENGINE_DUCKDUCKGO, self::SEARCH_ENGINE_SEARXNG],
+            true
+        );
     }
 
     public function usesTavilySearch(): bool
     {
         return $this->searchEngine() === self::SEARCH_ENGINE_TAVILY;
+    }
+
+    /** Adres własnej instancji SearXNG (z włączonym formatem json) albo null. */
+    public function searxngUrl(): ?string
+    {
+        if ($this->searchEngine() !== self::SEARCH_ENGINE_SEARXNG) {
+            return null;
+        }
+
+        return $this->nullableUrl($this->resolve()['searxng_url'] ?? null);
     }
 
     public function tavilySearchProfile(): TavilySearchProfile
@@ -388,7 +421,7 @@ final class AiSettingsService
     {
         $engine = is_string($value) ? strtolower(trim($value)) : '';
 
-        return in_array($engine, [self::SEARCH_ENGINE_TAVILY, self::SEARCH_ENGINE_DUCKDUCKGO], true)
+        return in_array($engine, self::SEARCH_ENGINES, true)
             ? $engine
             : self::SEARCH_ENGINE_TAVILY;
     }

@@ -73,7 +73,7 @@ class EnrichProductJob implements ShouldQueue
 
         try {
             $useLargeModel = $aiSettings->enrichmentUsesLargeModel();
-            $useDuckDuckGo = $aiSettings->usesDuckDuckGoSearch();
+            $useDuckDuckGo = $aiSettings->usesFreeWebSearch();
             if (! $useLargeModel && ! $useDuckDuckGo) {
                 TavilyQuotaGuard::assertAllowed();
             }

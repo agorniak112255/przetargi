@@ -728,6 +728,49 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame($pageUrl, $pack['results'][0]['url'] ?? null);
     }
 
+    public function test_searxng_instance_is_used_instead_of_public_engines(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8081/v1',
+            'api_key' => 'local',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'search_engine' => 'searxng',
+            'searxng_url' => 'http://127.0.0.1:8088',
+            'web_search_enabled' => false,
+        ]);
+        $product = $this->makeProduct([
+            'sku' => 'ROBFM',
+            'name' => 'Rękawice termiczne',
+            'manufacturer' => 'JS Gloves',
+        ]);
+        $hitUrl = 'https://bhpsklep.example/rekawice-robfm';
+        Http::fake(function ($request) use ($hitUrl) {
+            if (str_contains($request->url(), '127.0.0.1:8088/search')) {
+                return Http::response([
+                    'results' => [[
+                        'url' => $hitUrl,
+                        'title' => 'Rękawice ROBFM JS Gloves',
+                        'content' => 'Rękawice termiczne ROBFM do 250C',
+                    ]],
+                ], 200);
+            }
+
+            return Http::response('unused', 404);
+        });
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame('searxng', $pack['provider']);
+        $this->assertSame($hitUrl, $pack['results'][0]['url'] ?? null);
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'google.com'));
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'bing.com'));
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
+    }
+
     public function test_search_stops_when_sku_hits_open_web(): void
     {
         $this->seedTavilySettings();

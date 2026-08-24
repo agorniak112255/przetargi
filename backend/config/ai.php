@@ -17,7 +17,9 @@ return [
     // Domyślnie WYŁĄCZONE — drogie. Główne źródło: Tavily.
     'web_search_enabled' => (bool) env('AI_WEB_SEARCH_ENABLED', false),
     'tavily_api_key' => env('AI_TAVILY_API_KEY'),
+    // tavily | duckduckgo | searxng (własna instancja SearXNG z formatem json)
     'search_engine' => env('AI_SEARCH_ENGINE', 'tavily'),
+    'searxng_url' => env('AI_SEARXNG_URL'),
     'search_fallback' => env('AI_SEARCH_FALLBACK', 'tavily'),
     // eco | balanced | full — zużycie kredytów Tavily przy opisach produktów
     'tavily_search_mode' => env('AI_TAVILY_SEARCH_MODE', 'balanced'),

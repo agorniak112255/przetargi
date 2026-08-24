@@ -237,7 +237,7 @@ final class ProductDocumentFinder
      */
     private function searchTavily(string $query, array $includeDomains = []): array
     {
-        if ($this->settings->usesDuckDuckGoSearch()) {
+        if ($this->settings->usesFreeWebSearch()) {
             return $this->duckDuckGo->search($query, 8, $includeDomains);
         }
 

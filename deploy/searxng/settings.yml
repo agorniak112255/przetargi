@@ -1,0 +1,49 @@
+# Konfiguracja SearXNG pod API JSON dla enrichmentu (PL, bez limitera).
+use_default_settings: true
+
+general:
+  instance_name: "Przetargi SearXNG"
+  donation_url: false
+  contact_url: false
+
+server:
+  secret_key: "zmien-mnie-na-losowy-ciag-znakow"
+  # limiter blokuje wywołania bez ciasteczek przeglądarki — PHP musi mieć false
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+search:
+  # json jest wymagany przez backend
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "pl"
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 12.0
+  pool_connections: 100
+  pool_maxsize: 20
+
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: mojeek
+    disabled: false
+  # startpage twardo blokuje ruch z serwerowni
+  - name: startpage
+    disabled: true
+  - name: wikipedia
+    disabled: true

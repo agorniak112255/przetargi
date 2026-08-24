@@ -17,7 +17,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v22';
+    private const SEARCH_CACHE_VERSION = 'v23';
 
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -111,7 +111,7 @@ class HybridWebSearchService
         $errors = $found['errors'];
         $provider = $found['provider'];
 
-        if ($merged === [] && ! $this->settings->usesDuckDuckGoSearch()) {
+        if ($merged === [] && ! $this->settings->usesFreeWebSearch()) {
             $cacheKey = $this->searchCacheKey('large_model', $phase, $skuQuery, 'ai');
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
@@ -801,12 +801,12 @@ class HybridWebSearchService
      */
     private function searchViaAiWeb(string $query, Product $product, string $phase): array
     {
-        if ($this->settings->usesDuckDuckGoSearch()) {
+        if ($this->settings->usesFreeWebSearch()) {
             $hits = $this->duckDuckGo->search($query, 5);
 
             return [
                 'results' => $hits,
-                'provider' => 'duckduckgo',
+                'provider' => $this->searchProviderName(),
                 'raw_content' => null,
             ];
         }
@@ -860,7 +860,7 @@ PROMPT;
      */
     private function searchProviderName(): string
     {
-        return $this->settings->usesDuckDuckGoSearch() ? 'duckduckgo' : 'tavily';
+        return $this->settings->searchEngine();
     }
 
     /**
@@ -877,20 +877,21 @@ PROMPT;
         array $includeDomains,
         TavilySearchProfile $profile,
     ): array {
-        if ($this->settings->usesDuckDuckGoSearch()) {
+        if ($this->settings->usesFreeWebSearch()) {
+            $engine = $this->searchProviderName();
             $results = $this->duckDuckGo->search($query, $profile->maxResults, $includeDomains);
             if ($results === []) {
                 throw new RuntimeException(
                     $includeDomains !== []
-                        ? 'Brak wyników DuckDuckGo na stronie producenta.'
-                        : 'DuckDuckGo nie zwróciło wyników.'
+                        ? 'Brak wyników ('.$engine.') na stronie producenta.'
+                        : $engine.' nie zwrócił wyników.'
                 );
             }
 
             return [
                 'results' => $results,
                 'images' => [],
-                'provider' => $includeDomains !== [] ? 'duckduckgo_preferred' : 'duckduckgo',
+                'provider' => $includeDomains !== [] ? $engine.'_preferred' : $engine,
                 'raw_content' => null,
             ];
         }

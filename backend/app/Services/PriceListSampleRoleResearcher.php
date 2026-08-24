@@ -285,7 +285,7 @@ final class PriceListSampleRoleResearcher
 
         $query = trim(($manufacturerHint ? $manufacturerHint.' ' : '').implode(' ', $tokens).' product model article');
 
-        if ($this->aiSettings->usesDuckDuckGoSearch()) {
+        if ($this->aiSettings->usesFreeWebSearch()) {
             try {
                 $parts = [];
                 foreach (app(DuckDuckGoHtmlSearch::class)->search($query, 4) as $row) {
@@ -329,7 +329,7 @@ final class PriceListSampleRoleResearcher
             }
         }
 
-        if (! $this->aiSettings->usesDuckDuckGoSearch() && ! empty($cfg['web_search_enabled'])) {
+        if (! $this->aiSettings->usesFreeWebSearch() && ! empty($cfg['web_search_enabled'])) {
             try {
                 $raw = $this->llm->responsesWithWebSearch(
                     "Na podstawie wyszukiwania w internecie: co oznaczają kody/nazwy w zapytaniu „{$query}”? "

@@ -22,6 +22,7 @@ class AiSetting extends Model
         'tavily_api_key',
         'search_fallback',
         'search_engine',
+        'searxng_url',
         'tavily_search_mode',
         'enrichment_batch_limit',
         'match_concurrency',

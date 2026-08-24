@@ -6,6 +6,8 @@ function isKeptSecret(value: string): boolean {
   return v === '' || v.includes('*')
 }
 
+type SearchEngine = 'tavily' | 'duckduckgo' | 'searxng'
+
 type AiSettings = {
   enabled: boolean
   provider: string
@@ -16,7 +18,8 @@ type AiSettings = {
   timeout_seconds: number
   temperature: number
   web_search_enabled: boolean
-  search_engine: 'tavily' | 'duckduckgo'
+  search_engine: SearchEngine
+  searxng_url: string | null
   search_fallback: string
   tavily_search_mode: 'eco' | 'balanced' | 'full'
   enrichment_batch_limit: number
@@ -90,6 +93,7 @@ export function AiSettingsPage() {
         temperature: cfg.temperature,
         web_search_enabled: cfg.web_search_enabled,
         search_engine: cfg.search_engine || 'tavily',
+        searxng_url: cfg.searxng_url?.trim() || null,
         search_fallback: cfg.search_fallback,
         tavily_search_mode: cfg.tavily_search_mode || 'balanced',
         enrichment_batch_limit: cfg.enrichment_batch_limit || 5,
@@ -300,18 +304,37 @@ export function AiSettingsPage() {
               onChange={(e) =>
                 setCfg({
                   ...cfg,
-                  search_engine: e.target.value as 'tavily' | 'duckduckgo',
+                  search_engine: e.target.value as SearchEngine,
                 })
               }
             >
               <option value="tavily">Tavily (płatne, dokładniejsze)</option>
-              <option value="duckduckgo">Lokalny LLM — Google / Bing (darmowe, bez Tavily)</option>
+              <option value="searxng">SearXNG — własna instancja (darmowe, zalecane)</option>
+              <option value="duckduckgo">Publiczne wyszukiwarki (darmowe, często blokowane)</option>
             </select>
             <span className="mt-1 block text-[11px] text-slate-500">
-              PHP szuka na Google, potem Bing (DuckDuckGo tylko zapasowo). Zero kredytów Tavily,
-              zero pluginu OpenRouter.
+              {cfg.search_engine === 'searxng'
+                ? 'PHP pyta Twój SearXNG (format json). Bez limitów i kredytów.'
+                : cfg.search_engine === 'duckduckgo'
+                  ? 'Google, Bing i DuckDuckGo blokują ruch z serwera (captcha, 403) — wyniki bywają puste lub nietrafione.'
+                  : 'Tavily zużywa kredyty, ale nie da się zablokować przez captcha.'}
             </span>
           </label>
+          {cfg.search_engine === 'searxng' && (
+            <label className="block text-xs">
+              Adres SearXNG *
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
+                value={cfg.searxng_url ?? ''}
+                onChange={(e) => setCfg({ ...cfg, searxng_url: e.target.value })}
+                placeholder="http://127.0.0.1:8088"
+              />
+              <span className="mt-1 block text-[11px] text-slate-500">
+                Kontener na tym samym serwerze — instalacja przez{' '}
+                <code>deploy/searxng/install-on-server.sh</code>.
+              </span>
+            </label>
+          )}
           <label className="flex items-start gap-2 text-xs">
             <input
               type="checkbox"
@@ -344,15 +367,15 @@ export function AiSettingsPage() {
           </label>
           <label className="block text-xs">
             Klucz Tavily{' '}
-            {cfg.search_engine === 'duckduckgo'
-              ? '(nieużywany w trybie lokalnym)'
+            {cfg.search_engine !== 'tavily'
+              ? '(nieużywany w trybie darmowym)'
               : cfg.has_tavily_api_key
                 ? '(zostaw puste, by nie zmieniać)'
                 : '* (wymagany do pobierania)'}
             <input
               type={showTavilyKey ? 'text' : 'password'}
               className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono disabled:bg-slate-100"
-              disabled={cfg.search_engine === 'duckduckgo'}
+              disabled={cfg.search_engine !== 'tavily'}
               value={tavilyKey}
               onChange={(e) => setTavilyKey(e.target.value)}
               placeholder={cfg.has_tavily_api_key ? '••••••••' : 'tvly-…'}
@@ -371,7 +394,7 @@ export function AiSettingsPage() {
             Tryb wyszukiwania Tavily (zużycie kredytów)
             <select
               className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 disabled:bg-slate-100"
-              disabled={cfg.search_engine === 'duckduckgo'}
+              disabled={cfg.search_engine !== 'tavily'}
               value={cfg.tavily_search_mode || 'balanced'}
               onChange={(e) =>
                 setCfg({
