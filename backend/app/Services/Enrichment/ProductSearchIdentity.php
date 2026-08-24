@@ -28,6 +28,10 @@ final class ProductSearchIdentity
             $raw[] = $sku;
             $raw[] = $this->stripBrandPrefix($sku, $brand);
         }
+        $core = $this->internalSkuCore($product);
+        if ($core !== '') {
+            $raw[] = $core;
+        }
         if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
             $raw[] = $name;
             $raw[] = $this->stripBrandPrefix($name, $brand);
@@ -407,7 +411,9 @@ final class ProductSearchIdentity
         $sku = trim((string) $product->sku);
         $name = trim((string) $product->name);
         $internalSku = $this->looksLikeInternalSku($product);
-        $bare = $internalSku ? '' : $this->stripBrandPrefix($sku !== '' ? $sku : $name, $brand);
+        $bare = $internalSku
+            ? $this->internalSkuCore($product)
+            : $this->stripBrandPrefix($sku !== '' ? $sku : $name, $brand);
         // nazwa „1000 ZIMA” → rdzeń kodu 1000
         $codeCore = $this->gloveCodeCore($product) ?? $bare;
         $hint = $this->productHint($product);
@@ -512,6 +518,13 @@ final class ProductSearchIdentity
                 $usableSku && ! $this->phraseHasToken($name, $sku) ? $name.' '.$sku : $name,
                 $product
             );
+        }
+        if (! $usableSku) {
+            // „URG-C-SPODNIE” w sklepie występuje jako „URG-C” — próbujemy po nazwie
+            $core = $this->internalSkuCore($product);
+            if ($core !== '') {
+                $out[] = $this->queryWithManufacturer($core, $product);
+            }
         }
 
         return array_values(array_unique(array_filter(
@@ -873,6 +886,34 @@ final class ProductSearchIdentity
         }
 
         return false;
+    }
+
+    /**
+     * Rdzeń kodu producenta z kodu cennikowego: „URG-C-SPODNIE” → „URG-C”.
+     * Sklepy trzymają tę krótszą formę, opisowy ogon to już nasz dopisek.
+     */
+    public function internalSkuCore(Product $product): string
+    {
+        if (! $this->looksLikeInternalSku($product)) {
+            return '';
+        }
+
+        $kept = [];
+        foreach (preg_split('/[\-\/ ]+/u', trim((string) $product->sku)) ?: [] as $segment) {
+            if (preg_match('/^\p{L}{4,}$/u', $segment) === 1) {
+                break;
+            }
+            if ($segment !== '') {
+                $kept[] = $segment;
+            }
+        }
+        if (count($kept) < 2) {
+            return '';
+        }
+
+        $core = implode('-', $kept);
+
+        return mb_strlen($core) >= 4 ? $core : '';
     }
 
     public function gloveCodeCore(Product $product): ?string

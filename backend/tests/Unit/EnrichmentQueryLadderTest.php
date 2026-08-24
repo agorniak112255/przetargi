@@ -25,6 +25,24 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertContains('Kurtka ostrzegawcza URG-914 Urgent', $queries);
     }
 
+    public function test_internal_sku_core_is_used_as_query(): void
+    {
+        $identity = new ProductSearchIdentity();
+        $product = new Product([
+            'manufacturer' => 'Urgent',
+            'sku' => 'URG-C-SPODNIE',
+            'name' => 'URG-C (spodnie)',
+        ]);
+
+        $this->assertSame('URG-C', $identity->internalSkuCore($product));
+        $this->assertContains('URG-C Urgent', $identity->primaryQueries($product));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://optimumbhp.pl/spodnie-robocze-do-pasa-krotkie-urg-c-urgent-szorty-robocze-p138548 '
+            .'Spodnie robocze URG-C Urgent',
+            $product
+        ));
+    }
+
     public function test_internal_sku_is_not_used_as_query(): void
     {
         $identity = new ProductSearchIdentity();

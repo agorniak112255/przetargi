@@ -145,7 +145,8 @@ class HybridWebSearchService
         }
 
         if ($merged === []) {
-            if ($this->identity->looksLikeInternalSku($product)) {
+            if ($this->identity->looksLikeInternalSku($product)
+                && $this->identity->internalSkuCore($product) === '') {
                 throw new RuntimeException(
                     'SKU '.$product->sku.' wygląda na kod z naszego cennika, a nie numer katalogowy '
                     .'producenta — w internecie takiego kodu nie ma. Uzupełnij kod producenta w produkcie. '
@@ -633,8 +634,14 @@ class HybridWebSearchService
      */
     private function fallbackDistinctiveHits(array $results, Product $product): array
     {
-        $sku = mb_strtolower(trim((string) $product->sku));
-        if ($sku === '' || mb_strlen($sku) < 4) {
+        $codes = [];
+        foreach ([(string) $product->sku, $this->identity->internalSkuCore($product)] as $code) {
+            $code = mb_strtolower(trim($code));
+            if ($code !== '' && mb_strlen($code) >= 4) {
+                $codes[] = $code;
+            }
+        }
+        if ($codes === []) {
             return [];
         }
 
@@ -647,7 +654,14 @@ class HybridWebSearchService
             $title = (string) ($row['title'] ?? '');
             $snippet = (string) ($row['snippet'] ?? '');
             $hay = mb_strtolower($url.' '.$title.' '.$snippet);
-            if (preg_match('/(?<![a-z0-9])'.preg_quote($sku, '/').'(?![a-z0-9])/u', $hay) !== 1) {
+            $hasCode = false;
+            foreach ($codes as $code) {
+                if (preg_match('/(?<![a-z0-9])'.preg_quote($code, '/').'(?![a-z0-9])/u', $hay) === 1) {
+                    $hasCode = true;
+                    break;
+                }
+            }
+            if (! $hasCode) {
                 continue;
             }
             // sam kod to za mało: „1202” to też alarm Apollo 11 i szerokość zdjęcia
