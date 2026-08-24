@@ -37,7 +37,8 @@ outgoing:
   max_request_timeout: 15.0
   pool_connections: 100
   pool_maxsize: 20
-  retries: 2
+  # 1, nie 2 — ponowienie do zablokowanego silnika tylko przyspiesza ban
+  retries: 1
   # Rotacja adresów źródłowych: install-on-server.sh wstawia tu publiczne IP hosta,
   # dzięki czemu kolejne zapytania nie lecą ciągle z tego samego adresu.
   # SOURCE_IPS_PLACEHOLDER
@@ -54,14 +55,26 @@ engines:
     disabled: false
     timeout: 10.0
 
+  # --- rezerwa: bywają blokowane, ale gdy trójka wyżej padnie, zostaje cokolwiek.
+  #     SearXNG sama je uśpi na 5 min po captchy, więc nie spowalniają na stałe ---
+  - name: duckduckgo
+    disabled: false
+    timeout: 8.0
+  - name: brave
+    disabled: false
+    timeout: 8.0
+  - name: startpage
+    disabled: false
+    timeout: 8.0
+  - name: mojeek
+    disabled: false
+    timeout: 8.0
+  - name: bing
+    disabled: false
+    timeout: 8.0
+
   # --- captcha / blokada IP serwera: tylko wydłużają zapytanie ---
   - name: google
-    disabled: true
-  - name: duckduckgo
-    disabled: true
-  - name: brave
-    disabled: true
-  - name: startpage
     disabled: true
   - name: presearch
     disabled: true

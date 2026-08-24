@@ -26,6 +26,23 @@ HTML;
         $this->assertNotContains('https://duckduckgo.com/about', $urls);
     }
 
+    public function test_reads_blocked_engines_from_searxng_json(): void
+    {
+        $json = json_encode([
+            'results' => [],
+            'unresponsive_engines' => [
+                ['google cse', 'Suspended: too many requests'],
+                ['qwant', 'CAPTCHA'],
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $blocked = (new DuckDuckGoHtmlSearch)->searxngBlockedEngines($json);
+
+        $this->assertStringContainsString('google cse: Suspended: too many requests', $blocked);
+        $this->assertStringContainsString('qwant: CAPTCHA', $blocked);
+        $this->assertSame('', (new DuckDuckGoHtmlSearch)->searxngBlockedEngines('{"results":[]}'));
+    }
+
     public function test_parses_searxng_json_and_drops_engine_urls(): void
     {
         $json = json_encode([

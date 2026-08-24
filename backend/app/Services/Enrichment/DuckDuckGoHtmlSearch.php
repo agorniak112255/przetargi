@@ -24,6 +24,11 @@ final class DuckDuckGoHtmlSearch
 
     private const LAST_AT_KEY = 'free_web_search_last_at';
 
+    private const SEARXNG_LAST_AT_KEY = 'searxng_search_last_at';
+
+    /** Odstęp między zapytaniami do SearXNG — chroni silniki, z których ona korzysta. */
+    private const SEARXNG_MIN_INTERVAL = 1.5;
+
     /**
      * @param  list<string>  $includeDomains
      * @return list<array{url: string, title: string, snippet: string}>
@@ -57,7 +62,9 @@ final class DuckDuckGoHtmlSearch
 
         $searxng = $this->searxngBaseUrl();
         if ($searxng !== null) {
-            // Własna instancja nie ma limitów — bez globalnej bramki i przerw.
+            // Instancja jest nasza, ale Google/Qwant liczą zapytania z niej wychodzące —
+            // 8 workerów naraz wyczerpuje ich limit w kilka minut.
+            $this->throttle(self::SEARXNG_MIN_INTERVAL, self::SEARXNG_LAST_AT_KEY);
             $results = $this->searchSearxng($searxng, $query);
             if ($results !== []) {
                 Cache::put($cacheKey, $results, now()->addHours(6));
@@ -147,12 +154,49 @@ final class DuckDuckGoHtmlSearch
             );
         }
 
-        $results = $this->parseSearxngJson((string) $response->body());
+        $body = (string) $response->body();
+        $results = $this->parseSearxngJson($body);
         if ($results === []) {
-            throw new RuntimeException('SearXNG: brak wyników dla "'.$query.'".');
+            $blocked = $this->searxngBlockedEngines($body);
+
+            throw new RuntimeException(
+                $blocked !== ''
+                    ? 'SearXNG: silniki zablokowane ('.$blocked.') — nic nie odpowiedziało na "'.$query.'".'
+                    : 'SearXNG: brak wyników dla "'.$query.'".'
+            );
         }
 
         return $results;
+    }
+
+    /** „google cse: too many requests, qwant: CAPTCHA” — od razu widać, że to nie nasz filtr. */
+    public function searxngBlockedEngines(string $json): string
+    {
+        try {
+            $payload = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return '';
+        }
+
+        $rows = is_array($payload) ? ($payload['unresponsive_engines'] ?? []) : [];
+        if (! is_array($rows) || $rows === []) {
+            return '';
+        }
+
+        $out = [];
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $engine = trim((string) ($row[0] ?? ''));
+            $reason = trim((string) ($row[1] ?? ''));
+            if ($engine === '') {
+                continue;
+            }
+            $out[] = $reason !== '' ? $engine.': '.$reason : $engine;
+        }
+
+        return implode(', ', array_slice($out, 0, 4));
     }
 
     /**
@@ -561,18 +605,18 @@ final class DuckDuckGoHtmlSearch
         Cache::forget(self::GATE_KEY);
     }
 
-    private function throttle(): void
+    private function throttle(float $minInterval = 0.9, string $key = self::LAST_AT_KEY): void
     {
         if (app()->environment('testing')) {
             return;
         }
 
-        $last = (float) Cache::get(self::LAST_AT_KEY, 0);
-        $wait = 0.9 - (microtime(true) - $last);
+        $last = (float) Cache::get($key, 0);
+        $wait = $minInterval - (microtime(true) - $last);
         if ($wait > 0) {
             usleep((int) round($wait * 1_000_000));
         }
-        Cache::put(self::LAST_AT_KEY, microtime(true), 30);
+        Cache::put($key, microtime(true), 30);
     }
 
     private function isBlockedSearchPage(string $html): bool
