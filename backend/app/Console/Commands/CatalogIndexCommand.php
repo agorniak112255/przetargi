@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Models\CatalogPage;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use Illuminate\Console\Command;
 use Throwable;
@@ -16,7 +17,9 @@ final class CatalogIndexCommand extends Command
 {
     protected $signature = 'catalog:index
         {host? : Domena do zaindeksowania (domyślnie wszystkie z konfiguracji)}
-        {--max=20000 : Limit adresów na domenę}';
+        {--max=60000 : Limit adresów na domenę}
+        {--seconds=240 : Limit czasu na domenę}
+        {--fresh-days=0 : Pomiń domeny odświeżone w ostatnich N dniach}';
 
     protected $description = 'Indeksuje karty produktu z sitemap producentów i hurtowni';
 
@@ -30,15 +33,28 @@ final class CatalogIndexCommand extends Command
         }
 
         $max = max(100, (int) $this->option('max'));
+        $seconds = max(30, (int) $this->option('seconds'));
+        $freshDays = max(0, (int) $this->option('fresh-days'));
         $total = 0;
         $failed = 0;
 
         foreach ($hosts as $host) {
             $this->line('==> '.$host);
+            if ($freshDays > 0 && $this->indexedRecently($host, $freshDays)) {
+                $this->line('    pomijam — zaindeksowane w ostatnich '.$freshDays.' dniach');
+
+                continue;
+            }
             try {
-                $result = $indexer->index($host, $max);
+                $result = $indexer->index($host, $max, $seconds);
                 $total += $result['saved'];
-                $this->info(sprintf('    %d adresów (sitemap: %d)', $result['saved'], count($result['sitemaps'])));
+                $this->info(sprintf(
+                    '    %d adresów (sitemap: %d)%s%s',
+                    $result['saved'],
+                    count($result['sitemaps']),
+                    $result['off_host'] > 0 ? sprintf(', %d z innej domeny', $result['off_host']) : '',
+                    $result['timed_out'] ? ', przerwane limitem czasu' : ''
+                ));
             } catch (Throwable $e) {
                 $failed++;
                 $this->warn('    '.$e->getMessage());
@@ -86,5 +102,13 @@ final class CatalogIndexCommand extends Command
         }
 
         return array_keys($normalized);
+    }
+
+    private function indexedRecently(string $host, int $days): bool
+    {
+        return CatalogPage::query()
+            ->where('host', $host)
+            ->where('last_seen_at', '>=', now()->subDays($days))
+            ->exists();
     }
 }

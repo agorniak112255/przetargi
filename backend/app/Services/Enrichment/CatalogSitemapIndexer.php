@@ -28,9 +28,9 @@ final class CatalogSitemapIndexer
     ];
 
     /**
-     * @return array{urls: int, saved: int, sitemaps: list<string>}
+     * @return array{urls: int, saved: int, sitemaps: list<string>, off_host: int, timed_out: bool}
      */
-    public function index(string $host, int $maxUrls = 20000): array
+    public function index(string $host, int $maxUrls = 60000, int $maxSeconds = 240): array
     {
         $host = $this->normalizeHost($host);
         if ($host === '') {
@@ -46,11 +46,18 @@ final class CatalogSitemapIndexer
         $rows = [];
         $saved = 0;
         $used = [];
+        $offHost = 0;
+        $timedOut = false;
+        $deadline = microtime(true) + max(30, $maxSeconds);
 
         // indeks sitemap dokłada kolejne pliki w trakcie — foreach nie zobaczyłby dopisanych
         for ($i = 0; $i < count($sitemaps) && $i < self::MAX_SITEMAP_FILES; $i++) {
             $sitemap = $sitemaps[$i];
             if (count($seen) >= $maxUrls) {
+                break;
+            }
+            if (microtime(true) >= $deadline) {
+                $timedOut = true;
                 break;
             }
             $body = $this->fetch($sitemap);
@@ -67,7 +74,12 @@ final class CatalogSitemapIndexer
 
                     continue;
                 }
-                if (! $this->belongsToHost($loc, $host) || isset($seen[$loc])) {
+                if (isset($seen[$loc])) {
+                    continue;
+                }
+                if (! $this->belongsToHost($loc, $host)) {
+                    $offHost++;
+
                     continue;
                 }
                 $seen[$loc] = true;
@@ -88,7 +100,13 @@ final class CatalogSitemapIndexer
 
         Log::info('Catalog sitemap indexed', ['host' => $host, 'urls' => count($seen), 'saved' => $saved]);
 
-        return ['urls' => count($seen), 'saved' => $saved, 'sitemaps' => $used];
+        return [
+            'urls' => count($seen),
+            'saved' => $saved,
+            'sitemaps' => $used,
+            'off_host' => $offHost,
+            'timed_out' => $timedOut,
+        ];
     }
 
     /**
