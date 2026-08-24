@@ -786,11 +786,11 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
 
-        $this->assertSame(['NV2032CE'], $openQueries);
+        $this->assertSame(['Astro Cleat NV2032CE GVS'], $openQueries);
         $this->assertNotEmpty($discoverQueries);
         $this->assertStringContainsString('NV2032CE', $discoverQueries[0]);
         $this->assertStringContainsString('GVS', $discoverQueries[0]);
-        $this->assertSame(['NV2032CE'], $mfrQueries);
+        $this->assertSame(['Astro Cleat NV2032CE GVS'], $mfrQueries);
         $this->assertSame('tavily_manufacturer', $pack['provider']);
         $this->assertSame($mfrUrl, $pack['results'][0]['url'] ?? null);
     }

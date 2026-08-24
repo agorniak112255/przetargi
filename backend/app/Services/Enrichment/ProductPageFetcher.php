@@ -29,7 +29,8 @@ final class ProductPageFetcher
      */
     public function fetch(array $results, string $sku, int $maxPages = 2, array $manufacturerDomains = []): array
     {
-        $ranked = array_slice($this->rankResults($results, $sku), 0, max(1, $maxPages));
+        $wanted = max(1, $maxPages);
+        $ranked = $this->rankResults($results, $sku);
         $skuNorm = mb_strtolower(trim($sku));
         $documents = [];
         foreach ($results as $row) {
@@ -45,10 +46,51 @@ final class ProductPageFetcher
                 $htmlRows[] = $row;
             }
         }
+        $htmlRows = array_slice($htmlRows, 0, min(count($htmlRows), $wanted * 3));
 
-        $responses = [];
+        $goodPages = [];
+        $fallbackPages = [];
+        $images = [];
+        $trustedImages = [];
+
+        for ($offset = 0; $offset < count($htmlRows) && count($goodPages) < $wanted; $offset += $wanted) {
+            $wave = array_values(array_slice($htmlRows, $offset, $wanted));
+            $responses = $this->fetchWave($wave);
+            foreach ($wave as $i => $row) {
+                $this->ingestFetchedRow(
+                    $row,
+                    $responses[(string) $i] ?? null,
+                    $skuNorm,
+                    $manufacturerDomains,
+                    $goodPages,
+                    $fallbackPages,
+                    $images,
+                    $trustedImages,
+                    $documents
+                );
+            }
+        }
+
+        $pages = $goodPages !== []
+            ? $this->bestPages($goodPages, $skuNorm, $wanted)
+            : array_slice($fallbackPages, 0, $wanted);
+
+        return [
+            'pages' => $pages,
+            'image_urls' => array_values(array_unique($images)),
+            'trusted_image_urls' => array_values(array_unique($trustedImages)),
+            'document_urls' => array_values(array_unique($documents)),
+        ];
+    }
+
+    /**
+     * @param  list<array{url: string, title?: string, snippet?: string}>  $htmlRows
+     * @return array<string, mixed>
+     */
+    private function fetchWave(array $htmlRows): array
+    {
         try {
-            $responses = Http::pool(function (Pool $pool) use ($htmlRows) {
+            return Http::pool(function (Pool $pool) use ($htmlRows) {
                 foreach ($htmlRows as $i => $row) {
                     $pool->as((string) $i)
                         ->timeout(10)
@@ -71,92 +113,126 @@ final class ProductPageFetcher
                 'urls' => array_slice(array_column($htmlRows, 'url'), 0, 3),
                 'error' => $e->getMessage(),
             ]);
-            $responses = [];
+
+            return [];
+        }
+    }
+
+    /**
+     * @param  array{url: string, title?: string, snippet?: string}  $row
+     * @param  list<array{url: string, text: string}>  $goodPages
+     * @param  list<array{url: string, text: string}>  $fallbackPages
+     * @param  list<string>  $images
+     * @param  list<string>  $trustedImages
+     * @param  list<string>  $documents
+     * @param  list<string>  $manufacturerDomains
+     */
+    private function ingestFetchedRow(
+        array $row,
+        mixed $response,
+        string $skuNorm,
+        array $manufacturerDomains,
+        array &$goodPages,
+        array &$fallbackPages,
+        array &$images,
+        array &$trustedImages,
+        array &$documents,
+    ): void {
+        $url = (string) ($row['url'] ?? '');
+        $ok = $response instanceof Response && $response->successful();
+
+        if (! $ok) {
+            Log::info('Product page fetch skipped', [
+                'url' => $url,
+                'status' => $response instanceof Response ? $response->status() : null,
+            ]);
+            $snippet = trim((string) ($row['snippet'] ?? ''));
+            if ($snippet !== '') {
+                $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
+            }
+
+            return;
         }
 
-        $pages = [];
-        $images = [];
-        $trustedImages = [];
-
-        foreach ($htmlRows as $i => $row) {
-            $url = $row['url'];
-            $response = $responses[(string) $i] ?? null;
-            $ok = $response instanceof Response && $response->successful();
-
-            if (! $ok) {
-                Log::info('Product page fetch skipped', [
-                    'url' => $url,
-                    'status' => $response instanceof Response ? $response->status() : null,
-                ]);
-                $snippet = trim((string) ($row['snippet'] ?? ''));
-                if ($snippet !== '') {
-                    $pages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
+        $html = $response->body();
+        if ($this->looksLikeBotWall($html)) {
+            $viaReader = $this->blockedPages->fetch($url);
+            if ($viaReader !== null) {
+                if ($viaReader['text'] !== '') {
+                    $goodPages[] = ['url' => $url, 'text' => $viaReader['text']];
                 }
-
-                continue;
-            }
-
-            $html = $response->body();
-            // Imperva/Incapsula (Ansell i inni) — challenge JS → reader (markdown z galerią/PDF)
-            if ($this->looksLikeBotWall($html)) {
-                $viaReader = $this->blockedPages->fetch($url);
-                if ($viaReader !== null) {
-                    if ($viaReader['text'] !== '') {
-                        $pages[] = ['url' => $url, 'text' => $viaReader['text']];
-                    }
-                    foreach ($viaReader['image_urls'] as $img) {
-                        $images[] = $img;
-                    }
-                    foreach ($viaReader['document_urls'] as $doc) {
-                        $documents[] = $doc;
-                    }
-                } else {
-                    $snippet = trim((string) ($row['snippet'] ?? ''));
-                    if ($snippet !== '') {
-                        $pages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
-                    }
-                }
-
-                continue;
-            }
-            $text = $this->extractProductPageText($html, $skuNorm);
-            $title = (string) ($row['title'] ?? '');
-            // NB27B nie może zasilać opisu/zdjęć produktu NB27
-            if ($this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
-                continue;
-            }
-            $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, $title, $skuNorm);
-
-            if ($text !== '') {
-                $pages[] = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
-            }
-
-            if ($pageLooksLikeProduct) {
-                foreach ($this->extractImageUrls($html, $url, $skuNorm) as $img) {
+                foreach ($viaReader['image_urls'] as $img) {
                     $images[] = $img;
                 }
-                foreach ($this->extractStructuredImageUrls($html) as $img) {
-                    $absolute = $this->absolutize($img, $url);
-                    if ($absolute !== null
-                        && ! $this->isJunkImageUrl($absolute)
-                        && ProductImageDownloader::looksLikeImageUrl($absolute)) {
-                        $trustedImages[] = $absolute;
-                    }
+                foreach ($viaReader['document_urls'] as $doc) {
+                    $documents[] = $doc;
+                }
+            } else {
+                $snippet = trim((string) ($row['snippet'] ?? ''));
+                if ($snippet !== '') {
+                    $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
                 }
             }
-            // PDF: na stronie producenta bierzemy dokumenty (certyfikaty/karty); w sklepie — tylko dopasowane
-            $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
-            foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer) as $doc) {
-                $documents[] = $doc;
-            }
+
+            return;
         }
 
-        return [
-            'pages' => $pages,
-            'image_urls' => array_values(array_unique($images)),
-            'trusted_image_urls' => array_values(array_unique($trustedImages)),
-            'document_urls' => array_values(array_unique($documents)),
-        ];
+        $text = $this->extractProductPageText($html, $skuNorm);
+        $title = (string) ($row['title'] ?? '');
+        if ($this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
+            return;
+        }
+        $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, $title, $skuNorm);
+
+        if ($text !== '') {
+            $goodPages[] = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
+        }
+
+        if ($pageLooksLikeProduct) {
+            foreach ($this->extractImageUrls($html, $url, $skuNorm) as $img) {
+                $images[] = $img;
+            }
+            foreach ($this->extractStructuredImageUrls($html) as $img) {
+                $absolute = $this->absolutize($img, $url);
+                if ($absolute !== null
+                    && ! $this->isJunkImageUrl($absolute)
+                    && ProductImageDownloader::looksLikeImageUrl($absolute)) {
+                    $trustedImages[] = $absolute;
+                }
+            }
+        }
+        $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
+        foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer) as $doc) {
+            $documents[] = $doc;
+        }
+    }
+
+    /**
+     * @param  list<array{url: string, text: string}>  $pages
+     * @return list<array{url: string, text: string}>
+     */
+    private function bestPages(array $pages, string $skuNorm, int $wanted): array
+    {
+        usort($pages, function (array $a, array $b) use ($skuNorm): int {
+            return $this->livePageScore($b, $skuNorm) <=> $this->livePageScore($a, $skuNorm);
+        });
+
+        return array_slice(array_values($pages), 0, $wanted);
+    }
+
+    /**
+     * @param  array{url: string, text: string}  $page
+     */
+    private function livePageScore(array $page, string $skuNorm): int
+    {
+        $url = (string) ($page['url'] ?? '');
+        $text = (string) ($page['text'] ?? '');
+        $score = min(3000, mb_strlen($text));
+        if ($this->pageMentionsSku($url, $text, '', $skuNorm)) {
+            $score += 4000;
+        }
+
+        return $score;
     }
 
     /**

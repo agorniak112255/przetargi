@@ -416,10 +416,12 @@ final class ProductSearchIdentity
             $queries[] = 'site:uvex-safety.com/products '.$sku;
         }
 
-        // 1) Jak Google — najpierw czysty kod / marka+kod, BEZ sztucznego hintu kategorii
+        $queries[] = $this->productNameWithManufacturer($product);
+
+        // 1) Jak Google — kod / nazwa zawsze z producentem
         if ($sku !== '') {
-            $queries[] = $sku;
-            $queries[] = '"'.$sku.'"';
+            $queries[] = $this->queryWithManufacturer($sku, $product);
+            $queries[] = $this->queryWithManufacturer('"'.$sku.'"', $product);
         }
         // Ansell R065 / uvex model z aliasów
         foreach ($this->modelAliases($product) as $alias) {
@@ -459,9 +461,49 @@ final class ProductSearchIdentity
         }
 
         return array_values(array_unique(array_filter(
-            $queries,
+            array_map(
+                fn (string $q): string => $this->queryWithManufacturer($q, $product),
+                $queries
+            ),
             static fn (string $q): bool => trim($q) !== ''
         )));
+    }
+
+    public function productNameWithManufacturer(Product $product): string
+    {
+        $name = trim((string) $product->name);
+        $sku = trim((string) $product->sku);
+        $parts = [];
+        if ($name !== '') {
+            $parts[] = $name;
+        }
+        if ($sku !== '' && ($name === '' || ! $this->phraseHasToken($name, $sku))) {
+            $parts[] = $sku;
+        }
+
+        return $this->queryWithManufacturer(trim(implode(' ', $parts)), $product);
+    }
+
+    public function queryWithManufacturer(string $query, Product $product): string
+    {
+        $query = trim((string) preg_replace('/\s+/u', ' ', $query));
+        $brand = $this->shortBrand((string) $product->manufacturer);
+        if ($query === '' || $brand === '' || $this->phraseHasToken($query, $brand)) {
+            return $query;
+        }
+
+        return $query.' '.$brand;
+    }
+
+    private function phraseHasToken(string $hay, string $token): bool
+    {
+        $hay = mb_strtolower($hay);
+        $token = mb_strtolower(trim($token));
+        if ($token === '' || mb_strlen($token) < 2) {
+            return false;
+        }
+
+        return preg_match('/(^|[^a-z0-9])'.preg_quote($token, '/').'([^a-z0-9]|$)/iu', $hay) === 1;
     }
 
     /**

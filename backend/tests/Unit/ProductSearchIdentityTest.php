@@ -104,7 +104,28 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertSame('site:uvex-safety.com/products 60497', $queries[1]);
 
         $industryQueries = $id->searchQueries($product, 'industry');
-        $this->assertSame('60497', $industryQueries[0]);
+        $this->assertSame('C500 60497 uvex', $industryQueries[0]);
+        foreach ($industryQueries as $query) {
+            $this->assertMatchesRegularExpression('/\buvex\b/i', $query);
+        }
+    }
+
+    public function test_search_phrase_always_appends_manufacturer(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '3-60NM',
+            'name' => 'Rękawice nitrylowe 3-60NM',
+            'manufacturer' => 'Lenard',
+        ]);
+
+        $this->assertSame(
+            'Rękawice nitrylowe 3-60NM Lenard',
+            $id->productNameWithManufacturer($product)
+        );
+        foreach ($id->searchQueries($product, 'industry') as $query) {
+            $this->assertMatchesRegularExpression('/\blenard\b/i', $query, $query);
+        }
     }
 
     public function test_ansell_product_source_uses_polish_locale(): void

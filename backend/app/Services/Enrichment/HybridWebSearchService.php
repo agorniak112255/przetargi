@@ -17,7 +17,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v19';
+    private const SEARCH_CACHE_VERSION = 'v20';
 
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -291,10 +291,19 @@ class HybridWebSearchService
         $legacy = $this->legacySafetyShoePhrase($product);
         if ($legacy !== '') {
             $mfr = $this->identity->shortBrand((string) $product->manufacturer);
-            array_unshift($queries, trim('"'.$legacy.'" '.$mfr.' buty ochronne'));
+            array_unshift($queries, $this->identity->queryWithManufacturer(
+                trim('"'.$legacy.'" '.$mfr.' buty ochronne'),
+                $product
+            ));
         }
 
-        return $queries !== [] ? array_values(array_unique($queries)) : [trim((string) $product->sku)];
+        $queries = array_map(
+            fn (string $q): string => $this->identity->queryWithManufacturer($q, $product),
+            $queries
+        );
+        $named = $this->identity->productNameWithManufacturer($product);
+
+        return $queries !== [] ? array_values(array_unique($queries)) : ($named !== '' ? [$named] : []);
     }
 
     private function searchCacheKey(string $mode, string $phase, string $query, string $step = ''): string
@@ -313,9 +322,9 @@ class HybridWebSearchService
      */
     private function primarySkuQuery(Product $product, array $queries): string
     {
-        $sku = trim((string) $product->sku);
+        $named = $this->identity->productNameWithManufacturer($product);
 
-        return $sku !== '' ? $sku : ($queries[0] ?? '');
+        return $named !== '' ? $named : ($queries[0] ?? '');
     }
 
     /**

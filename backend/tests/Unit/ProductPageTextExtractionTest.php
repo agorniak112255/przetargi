@@ -151,6 +151,50 @@ HTML;
         $this->assertSame([$imageUrl], $result['trusted_image_urls']);
     }
 
+    public function test_skips_dead_first_link_and_keeps_best_of_working_pages(): void
+    {
+        $dead = 'https://roboczystyl.pl/product/robfm';
+        $thin = 'https://shop-b.example/robfm';
+        $rich = 'https://shop-c.example/produkt/robfm-js-gloves';
+        $next = 'https://shop-d.example/product/robfm-mid';
+        Http::fake([
+            $dead => Http::response('gone', 404),
+            $thin => Http::response(
+                '<html><body><h1>ROBFM</h1><p>Krótki opis ROBFM. '
+                .str_repeat('Strona sklepu BHP. ', 50)
+                .'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            $rich => Http::response(
+                '<html><body><h1>Rękawice ROBFM JS Gloves</h1><p>'
+                .str_repeat('Rękawice ochronne bawełniane ROBFM do 250C. ', 40)
+                .'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            $next => Http::response(
+                '<html><body><h1>ROBFM</h1><p>'
+                .str_repeat('Rękawice ROBFM bawełniane do pracy. ', 30)
+                .'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $result = (new ProductPageFetcher)->fetch([
+            ['url' => $dead, 'title' => 'ROBFM martwy', 'snippet' => 'snippet martwy ROBFM'],
+            ['url' => $thin, 'title' => 'ROBFM krótki', 'snippet' => 'ROBFM'],
+            ['url' => $rich, 'title' => 'ROBFM JS Gloves', 'snippet' => 'JS Gloves ROBFM'],
+            ['url' => $next, 'title' => 'ROBFM extra', 'snippet' => 'ROBFM'],
+        ], 'ROBFM', 3);
+
+        $urls = array_column($result['pages'], 'url');
+        $this->assertSame([$rich, $next, $thin], $urls);
+        $this->assertStringContainsString('JS Gloves', $result['pages'][0]['text']);
+        $this->assertNotContains($dead, $urls);
+    }
+
     public function test_manufacturer_page_keeps_product_pdfs_and_skips_csr(): void
     {
         $html = <<<'HTML'

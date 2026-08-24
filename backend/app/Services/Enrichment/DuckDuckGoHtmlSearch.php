@@ -4,14 +4,24 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
+use Throwable;
 
 /**
- * Darmowe szukanie HTML DuckDuckGo — warstwa sieci po stronie PHP (nie plugin OpenRouter).
+ * Darmowe szukanie po stronie PHP (nie plugin OpenRouter, nie Tavily).
+ * DuckDuckGo przy wielu równoległych jobach z cennika często zwraca 403 —
+ * dlatego: cache, jedna bramka, przerwa między requestami, zapas Qwant/Bing.
  */
 final class DuckDuckGoHtmlSearch
 {
+    private const QUERY_CACHE_PREFIX = 'free_web_search_v1:';
+
+    private const GATE_KEY = 'free_web_search_gate';
+
+    private const LAST_AT_KEY = 'free_web_search_last_at';
+
     /**
      * @param  list<string>  $includeDomains
      * @return list<array{url: string, title: string, snippet: string}>
@@ -35,27 +45,88 @@ final class DuckDuckGoHtmlSearch
             $query .= ' '.implode(' ', array_slice($sites, 0, 3));
         }
 
-        $html = $this->fetchHtml($query);
-        $results = $this->parseHtml($html);
-        if ($includeDomains !== []) {
-            $results = $this->filterByDomains($results, $includeDomains);
+        $cacheKey = self::QUERY_CACHE_PREFIX.hash('sha256', $query);
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            $results = $includeDomains !== [] ? $this->filterByDomains($cached, $includeDomains) : $cached;
+
+            return array_slice($results, 0, max(1, $maxResults));
         }
+
+        $this->acquireGate();
+        try {
+            $cached = Cache::get($cacheKey);
+            if (! is_array($cached)) {
+                $cached = $this->searchUncached($query);
+                if ($cached !== []) {
+                    Cache::put($cacheKey, $cached, now()->addHours(6));
+                }
+            }
+        } finally {
+            $this->releaseGate();
+        }
+
+        $results = $includeDomains !== [] ? $this->filterByDomains($cached, $includeDomains) : $cached;
 
         return array_slice($results, 0, max(1, $maxResults));
     }
 
+    /**
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function searchUncached(string $query): array
+    {
+        $errors = [];
+
+        try {
+            $this->throttle();
+            $html = $this->fetchHtml($query);
+            $results = $this->parseHtml($html);
+            if ($results !== []) {
+                return $results;
+            }
+            $errors[] = 'DuckDuckGo: pusta strona wyników';
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+
+        try {
+            $this->throttle();
+            $results = $this->searchQwant($query);
+            if ($results !== []) {
+                return $results;
+            }
+            $errors[] = 'Qwant: brak wyników';
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+
+        try {
+            $this->throttle();
+            $results = $this->searchBing($query);
+            if ($results !== []) {
+                return $results;
+            }
+            $errors[] = 'Bing: brak wyników';
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+
+        throw new RuntimeException(
+            $errors !== []
+                ? implode(' | ', $errors)
+                : 'Darmowe wyszukiwanie nie zwróciło wyników.'
+        );
+    }
+
     public function fetchHtml(string $query): string
     {
-        $headers = [
-            'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-AI/1.0; +https://przetargi.supon.rzeszow.pl)',
-            'Accept' => 'text/html,application/xhtml+xml',
-            'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.6',
-        ];
-
+        $headers = $this->browserHeaders();
         $response = Http::withHeaders($headers)
             ->timeout(15)
             ->connectTimeout(6)
-            ->get('https://html.duckduckgo.com/html/', [
+            ->asForm()
+            ->post('https://html.duckduckgo.com/html/', [
                 'q' => $query,
                 'kl' => 'pl-pl',
             ]);
@@ -134,6 +205,156 @@ final class DuckDuckGoHtmlSearch
         return $out;
     }
 
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function parseQwantJson(array $payload): array
+    {
+        $items = data_get($payload, 'data.result.items', []);
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $out = [];
+        $seen = [];
+        foreach ($items as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            if (($item['type'] ?? '') !== '' && ($item['type'] ?? '') !== 'web') {
+                $nested = $item['items'] ?? [];
+                if (is_array($nested)) {
+                    foreach ($nested as $row) {
+                        if (is_array($row)) {
+                            $this->pushHit($out, $seen, (string) ($row['url'] ?? ''), (string) ($row['title'] ?? ''), (string) ($row['desc'] ?? ''));
+                        }
+                    }
+                }
+
+                continue;
+            }
+            $this->pushHit($out, $seen, (string) ($item['url'] ?? ''), (string) ($item['title'] ?? ''), (string) ($item['desc'] ?? ''));
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function parseBingHtml(string $html): array
+    {
+        $out = [];
+        $seen = [];
+        if (preg_match_all(
+            '/<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>.*?<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/is',
+            $html,
+            $matches,
+            PREG_SET_ORDER
+        ) === 0) {
+            return [];
+        }
+
+        foreach ($matches as $match) {
+            $this->pushHit(
+                $out,
+                $seen,
+                html_entity_decode((string) ($match[1] ?? ''), ENT_QUOTES | ENT_HTML5),
+                html_entity_decode(strip_tags((string) ($match[2] ?? '')), ENT_QUOTES | ENT_HTML5),
+                ''
+            );
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function searchQwant(string $query): array
+    {
+        $response = Http::withHeaders($this->browserHeaders())
+            ->timeout(12)
+            ->connectTimeout(6)
+            ->get('https://api.qwant.com/v3/search/web', [
+                'q' => $query,
+                'count' => 10,
+                'locale' => 'pl_PL',
+                'offset' => 0,
+            ]);
+
+        if (! $response->successful()) {
+            throw new RuntimeException('Qwant HTTP '.$response->status().': brak wyników wyszukiwania.');
+        }
+
+        $payload = $response->json();
+
+        return is_array($payload) ? $this->parseQwantJson($payload) : [];
+    }
+
+    /**
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function searchBing(string $query): array
+    {
+        $response = Http::withHeaders($this->browserHeaders())
+            ->timeout(12)
+            ->connectTimeout(6)
+            ->get('https://www.bing.com/search', [
+                'q' => $query,
+                'setlang' => 'pl-PL',
+            ]);
+
+        if (! $response->successful()) {
+            throw new RuntimeException('Bing HTTP '.$response->status().': brak wyników wyszukiwania.');
+        }
+
+        return $this->parseBingHtml((string) $response->body());
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function browserHeaders(): array
+    {
+        return [
+            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept' => 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+            'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.6',
+        ];
+    }
+
+    private function acquireGate(): void
+    {
+        $deadline = microtime(true) + (app()->environment('testing') ? 2 : 25);
+        while (! Cache::add(self::GATE_KEY, 1, 20)) {
+            if (microtime(true) >= $deadline) {
+                break;
+            }
+            usleep(app()->environment('testing') ? 10000 : 200000);
+        }
+    }
+
+    private function releaseGate(): void
+    {
+        Cache::forget(self::GATE_KEY);
+    }
+
+    private function throttle(): void
+    {
+        if (app()->environment('testing')) {
+            return;
+        }
+
+        $last = (float) Cache::get(self::LAST_AT_KEY, 0);
+        $wait = 0.9 - (microtime(true) - $last);
+        if ($wait > 0) {
+            usleep((int) round($wait * 1_000_000));
+        }
+        Cache::put(self::LAST_AT_KEY, microtime(true), 30);
+    }
+
     private function decodeDdgUrl(string $href): ?string
     {
         $href = trim($href);
@@ -148,12 +369,41 @@ final class DuckDuckGoHtmlSearch
             $href = urldecode($m[1]);
         }
 
+        return $this->publicHttpUrl($href);
+    }
+
+    /**
+     * @param  list<array{url: string, title: string, snippet: string}>  $out
+     * @param  array<string, true>  $seen
+     */
+    private function pushHit(array &$out, array &$seen, string $url, string $title, string $snippet): void
+    {
+        $url = $this->publicHttpUrl($url);
+        if ($url === null || isset($seen[$url])) {
+            return;
+        }
+        $seen[$url] = true;
+        $title = trim($title);
+        $out[] = [
+            'url' => $url,
+            'title' => $title !== '' ? $title : $url,
+            'snippet' => trim($snippet),
+        ];
+    }
+
+    private function publicHttpUrl(string $href): ?string
+    {
+        $href = trim($href);
         if (! str_starts_with($href, 'http://') && ! str_starts_with($href, 'https://')) {
             return null;
         }
 
         $host = strtolower((string) parse_url($href, PHP_URL_HOST));
-        if ($host === '' || str_contains($host, 'duckduckgo.com') || str_contains($host, 'duck.com')) {
+        if ($host === ''
+            || str_contains($host, 'duckduckgo.com')
+            || str_contains($host, 'duck.com')
+            || str_contains($host, 'bing.com')
+            || str_contains($host, 'qwant.com')) {
             return null;
         }
 
