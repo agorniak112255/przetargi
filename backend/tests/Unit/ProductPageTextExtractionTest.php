@@ -202,6 +202,33 @@ HTML;
         $this->assertStringContainsString('CARPRO', $result['pages'][0]['text']);
     }
 
+    public function test_reader_drops_shop_navigation_links(): void
+    {
+        $pageUrl = 'https://www.gloves.co.uk/rostaing-ripdexg-gloves.html';
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                "Title: Rostaing RIPDEXG\n\nMarkdown Content:\n"
+                ."[Popular Styles](https://www.gloves.co.uk/rostaing-ripdexg-gloves.html#)\n"
+                ."*   [Cut Resistant Gloves](https://www.gloves.co.uk/cut-resistant-gloves-oa.html)\n"
+                ."*   [Thermal Gloves](https://www.gloves.co.uk/thermal-gloves.html)\n\n"
+                .str_repeat('Rękawice Rostaing RIPDEXG ze skóry bydlęcej. ', 10),
+                200
+            ),
+            $pageUrl => Http::response('Access denied', 403),
+        ]);
+
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Rostaing RIPDEXG',
+            'snippet' => '',
+        ]], 'RIPDEXG-IT10', 1);
+
+        $text = $result['pages'][0]['text'];
+        $this->assertStringNotContainsString('Popular Styles', $text);
+        $this->assertStringNotContainsString('cut-resistant-gloves-oa', $text);
+        $this->assertStringContainsString('RIPDEXG ze skóry', $text);
+    }
+
     public function test_skips_dead_first_link_and_keeps_best_of_working_pages(): void
     {
         $dead = 'https://roboczystyl.pl/product/robfm';

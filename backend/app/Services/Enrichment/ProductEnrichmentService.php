@@ -1389,7 +1389,8 @@ final class ProductEnrichmentService
             return true;
         }
         $low = mb_strtolower($d);
-        if ($this->looksLikeShopChromeDescription($d) || $this->looksLikeOffTopicDescription($d)) {
+        if ($this->looksLikeShopChromeDescription($d) || $this->looksLikeOffTopicDescription($d)
+            || $this->looksLikeLinkDump($d)) {
             return true;
         }
 
@@ -1397,6 +1398,19 @@ final class ProductEnrichmentService
             || str_contains($low, 'kup online')
             || str_contains($low, 'ceny i opinie')
             || (substr_count($d, '.') <= 1 && mb_strlen($d) < 280);
+    }
+
+    /** Menu sklepu przepisane jako lista odnośników („Popular Styles”), nie opis. */
+    private function looksLikeLinkDump(string $description): bool
+    {
+        $links = preg_match_all('#\]\(https?://#i', $description);
+        if ($links !== false && $links >= 2) {
+            return true;
+        }
+
+        $urls = preg_match_all('#https?://#i', $description);
+
+        return $urls !== false && $urls >= 3;
     }
 
     /** Skopiowany chrome sklepu zamiast opisu produktu. */

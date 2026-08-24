@@ -109,8 +109,33 @@ final class BlockedPageReader
         $markdown = preg_replace('/^Title:.*$/mi', '', $markdown) ?? $markdown;
         $markdown = preg_replace('/^URL Source:.*$/mi', '', $markdown) ?? $markdown;
         $markdown = preg_replace('/^Markdown Content:\s*/mi', '', $markdown) ?? $markdown;
+        $markdown = preg_replace('/!\[[^\]]*\]\([^)]*\)/u', '', $markdown) ?? $markdown;
 
-        return trim($markdown);
+        // Reader oddaje menu sklepu jako listę linków — bez tego „Popular Styles”
+        // ląduje w opisie produktu. Zdania z pojedynczym odnośnikiem zostają.
+        $lines = [];
+        foreach (preg_split('/\R/u', $markdown) ?: [] as $line) {
+            $clean = preg_replace('/\[([^\]]*)\]\([^)]*\)/u', '$1', $line) ?? $line;
+            if ($this->lineIsNavigation($line, $clean)) {
+                continue;
+            }
+            $lines[] = $clean;
+        }
+
+        return trim(preg_replace('/\n{3,}/u', "\n\n", implode("\n", $lines)) ?? implode("\n", $lines));
+    }
+
+    /** Punkt listy, w którym poza odnośnikami nie ma żadnej treści. */
+    private function lineIsNavigation(string $raw, string $clean): bool
+    {
+        $links = preg_match_all('/\[[^\]]*\]\([^)]*\)/u', $raw);
+        if ($links === false || $links === 0) {
+            return false;
+        }
+        $withoutLinks = trim(preg_replace('/\[[^\]]*\]\([^)]*\)/u', '', $raw) ?? '');
+        $withoutLinks = trim((string) preg_replace('/^[\s*\-–—•|>#]+|[\s*\-–—•|>#]+$/u', '', $withoutLinks));
+
+        return $links >= 2 || $withoutLinks === '' || mb_strlen($withoutLinks) < 25;
     }
 
     /**
