@@ -104,6 +104,11 @@ return [
         'dobryspaw.pl',
         'centrumelektronarzedzi.pl',
         '3mpolska.pl',
+        'glovex.com.pl',
+        'rawpol.com',
+        'pol-aura.pl',
+        'gloves.co.uk',
+        'thesafetysupplycompany.co.uk',
     ],
 
     /*
