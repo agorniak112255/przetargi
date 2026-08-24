@@ -91,6 +91,17 @@ return [
     ],
 
     /*
+    | Domeny pomijane przy „catalog:index” — globalne serwisy korporacyjne mają
+    | sitemapy liczone w setkach MB i prawie nic po polsku. Nadal można je
+    | zaindeksować, podając host wprost: „artisan catalog:index 3m.com”.
+    */
+    'catalog_skip_hosts' => [
+        '3m.com',
+        'honeywell.com',
+        'sps.honeywell.com',
+    ],
+
+    /*
     | Preferowane domeny przy wyszukiwaniu kart produktu (producent + sklepy).
     */
     'preferred_domains' => [

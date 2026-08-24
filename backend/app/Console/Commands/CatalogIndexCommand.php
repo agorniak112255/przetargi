@@ -19,7 +19,8 @@ final class CatalogIndexCommand extends Command
         {host? : Domena do zaindeksowania (domyślnie wszystkie z konfiguracji)}
         {--max=60000 : Limit adresów na domenę}
         {--seconds=240 : Limit czasu na domenę}
-        {--fresh-days=0 : Pomiń domeny odświeżone w ostatnich N dniach}';
+        {--fresh-days=0 : Pomiń domeny odświeżone w ostatnich N dniach}
+        {--skip= : Dodatkowe domeny do pominięcia, po przecinku}';
 
     protected $description = 'Indeksuje karty produktu z sitemap producentów i hurtowni';
 
@@ -76,6 +77,17 @@ final class CatalogIndexCommand extends Command
             return [trim($single)];
         }
 
+        $skip = [];
+        foreach (array_merge(
+            (array) config('enrichment.catalog_skip_hosts', []),
+            explode(',', (string) $this->option('skip'))
+        ) as $domain) {
+            $host = $this->normalizeHost((string) $domain);
+            if ($host !== '') {
+                $skip[$host] = true;
+            }
+        }
+
         $out = [];
         foreach ((array) config('enrichment.retailer_domains', []) as $domain) {
             if (is_string($domain)) {
@@ -92,16 +104,23 @@ final class CatalogIndexCommand extends Command
 
         $normalized = [];
         foreach ($out as $domain) {
-            $host = mb_strtolower(trim(preg_replace('#^https?://#i', '', $domain) ?? $domain));
-            $host = preg_replace('/^www\./', '', trim(explode('/', $host)[0] ?? $host)) ?? $host;
+            $host = $this->normalizeHost($domain);
             // CDN-y trzymają pliki, nie karty produktu
-            if ($host === '' || str_contains($host, 'cloudfront.net')) {
+            if ($host === '' || str_contains($host, 'cloudfront.net') || isset($skip[$host])) {
                 continue;
             }
             $normalized[$host] = true;
         }
 
         return array_keys($normalized);
+    }
+
+    private function normalizeHost(string $domain): string
+    {
+        $host = mb_strtolower(trim(preg_replace('#^https?://#i', '', $domain) ?? $domain));
+        $host = trim(explode('/', $host)[0] ?? $host);
+
+        return preg_replace('/^www\./', '', $host) ?? $host;
     }
 
     private function indexedRecently(string $host, int $days): bool

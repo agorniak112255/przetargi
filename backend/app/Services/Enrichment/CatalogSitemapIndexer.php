@@ -164,8 +164,16 @@ final class CatalogSitemapIndexer
                 'User-Agent' => self::USER_AGENT,
                 'Accept' => 'application/xml,text/xml,text/plain,*/*',
             ])->timeout(180)->connectTimeout(8)
-                // bez read_timeout czytanie strumienia potrafi wisieć w nieskończoność
-                ->withOptions(['stream' => true, 'read_timeout' => 20])
+                // read_timeout działa tylko na StreamHandlerze, więc pod cURL-em
+                // zrywamy transfer wolniejszy niż 1 kB/s przez 20 s
+                ->withOptions([
+                    'stream' => true,
+                    'read_timeout' => 20,
+                    'curl' => [
+                        CURLOPT_LOW_SPEED_LIMIT => 1024,
+                        CURLOPT_LOW_SPEED_TIME => 20,
+                    ],
+                ])
                 ->get($url);
         } catch (Throwable $e) {
             Log::info('Sitemap stream failed', ['url' => $url, 'error' => $e->getMessage()]);
