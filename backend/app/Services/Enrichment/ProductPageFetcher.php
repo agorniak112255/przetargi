@@ -186,12 +186,15 @@ final class ProductPageFetcher
 
         if ($text !== '') {
             $goodPages[] = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
-        }
-
-        if ($pageLooksLikeProduct) {
+            // Kody z naszego cennika (HEATRESIST-GAT11) nie występują na kartach sklepów,
+            // więc zdjęcia bierzemy z każdej odczytanej strony — trafność oceni AI Vision.
             foreach ($this->extractImageUrls($html, $url, $skuNorm) as $img) {
                 $images[] = $img;
             }
+        }
+
+        // og:image bez potwierdzonego SKU nie zasługuje na status zaufanego
+        if ($pageLooksLikeProduct) {
             foreach ($this->extractStructuredImageUrls($html) as $img) {
                 $absolute = $this->absolutize($img, $url);
                 if ($absolute !== null

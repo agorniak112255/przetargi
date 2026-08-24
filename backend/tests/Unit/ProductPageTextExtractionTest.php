@@ -151,6 +151,32 @@ HTML;
         $this->assertSame([$imageUrl], $result['trusted_image_urls']);
     }
 
+    public function test_collects_images_from_page_without_our_internal_sku(): void
+    {
+        $pageUrl = 'https://www.supon.rzeszow.pl/rekawice/4946-rekawice-termiczne-rostaing-heatresist.html';
+        $imageUrl = 'https://www.supon.rzeszow.pl/4946-large_default/rekawice-termiczne-rostaing-heatresist.jpg';
+        Http::fake([
+            $pageUrl => Http::response(
+                '<html><body><h1>Rękawice termiczne Rostaing HEATRESIST</h1>'
+                .'<img src="'.$imageUrl.'">'
+                .'<p>'.str_repeat('Rękawice odporne na temperaturę 350 stopni. ', 40).'</p>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Rękawice termiczne Rostaing',
+            'snippet' => 'HEATRESIST',
+        ]], 'HEATRESIST-GAT11', 1);
+
+        // kod magazynowy nie występuje na karcie, ale zdjęcie i tak musi trafić do kandydatów
+        $this->assertContains($imageUrl, $result['image_urls']);
+        $this->assertSame([], $result['trusted_image_urls']);
+    }
+
     public function test_skips_dead_first_link_and_keeps_best_of_working_pages(): void
     {
         $dead = 'https://roboczystyl.pl/product/robfm';
