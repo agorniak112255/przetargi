@@ -635,7 +635,66 @@ final class ProductSearchIdentity
             }
         }
 
+        // „SKARPETY-POMARANCZ-ZOLTE” nie istnieje w sieci — zostaje marka i nazwa
+        return $this->hayMatchesNameAndBrand($hay, $product);
+    }
+
+    /**
+     * Produkty bez kodu producenta rozpoznajemy po marce i słowach z nazwy.
+     */
+    public function hayMatchesNameAndBrand(string $hay, Product $product): bool
+    {
+        return $this->hayHasBrand($hay, $product) && $this->nameTokensMatch($hay, $product);
+    }
+
+    /**
+     * Czy w tekście stoi dość słów z nazwy („skarpety … pomarańczowo-żółte”).
+     * Odmiana: porównujemy po rdzeniu słowa, nie po całej formie.
+     */
+    public function nameTokensMatch(string $hay, Product $product, int $need = 2): bool
+    {
+        $tokens = $this->nameWords($product);
+        $need = max(1, $need);
+        // jedno słowo („spodnie”) pasuje do połowy sklepu — wymagamy pary
+        if (count($tokens) < $need) {
+            return false;
+        }
+        $hay = mb_strtolower($hay);
+
+        $hits = 0;
+        foreach ($tokens as $token) {
+            $stem = mb_substr($token, 0, max(4, min(6, mb_strlen($token))));
+            if (str_contains($hay, $stem)) {
+                $hits++;
+                if ($hits >= $need) {
+                    return true;
+                }
+            }
+        }
+
         return false;
+    }
+
+    /**
+     * Znaczące słowa nazwy — bez ogólników, które ma każda karta BHP.
+     *
+     * @return list<string>
+     */
+    private function nameWords(Product $product): array
+    {
+        $generic = ['bhp', 'robocze', 'roboczy', 'robocza', 'ochronne', 'ochronny', 'ochronna',
+            'damskie', 'meskie', 'męskie', 'nowosc', 'nowość', 'szt', 'kpl', 'para', 'rozmiar'];
+
+        $out = [];
+        foreach (preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower(trim((string) $product->name))) ?: [] as $word) {
+            // liczby to kody — te sprawdzamy ściśle, nie po rdzeniu słowa
+            if (mb_strlen($word) < 4 || preg_match('/\d/u', $word) === 1 || in_array($word, $generic, true)) {
+                continue;
+            }
+            $out[] = $word;
+        }
+
+        return array_values(array_unique($out));
     }
 
     public function coreInUrlOrTitle(string $url, string $title, Product $product): bool
@@ -874,13 +933,15 @@ final class ProductSearchIdentity
         }
 
         $segments = array_values(array_filter(preg_split('/[\-\/ ]+/u', $sku) ?: []));
-        if (count($segments) < 3) {
+        if (count($segments) < 2) {
             return false;
         }
+        // przy dwóch członach wymagamy dłuższego słowa: „URG-C” to kod, „WKLADKI-ALUTERMICZNE” nie
+        $minWord = count($segments) >= 3 ? 4 : 7;
 
         foreach ($segments as $segment) {
             // człon będący słowem (BLUZA, SPODNIE) zdradza kod opisowy, nie model
-            if (preg_match('/^\p{L}{4,}$/u', $segment) === 1) {
+            if (preg_match('/^\p{L}{'.$minWord.',}$/u', $segment) === 1) {
                 return true;
             }
         }

@@ -58,6 +58,42 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertSame('Bluza ostrzegawcza HSV Urgent', $queries[0] ?? null);
     }
 
+    public function test_descriptive_sku_matches_by_brand_and_name(): void
+    {
+        $identity = new ProductSearchIdentity();
+        $product = new Product([
+            'manufacturer' => 'Urgent',
+            'sku' => 'SKARPETY-POMARANCZ-ZOLTE',
+            'name' => 'Skarpety pomarańczowo-żółte',
+        ]);
+
+        $this->assertTrue($identity->looksLikeInternalSku($product));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sklep.example/skarpety-urgent-pomaranczowo-zolte Skarpety robocze Urgent pomarańczowe',
+            $product
+        ));
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://sklep.example/rekawice-urgent-1202 Rękawice Urgent kozia',
+            $product
+        ));
+    }
+
+    public function test_two_word_descriptive_sku_is_internal_but_short_code_is_not(): void
+    {
+        $identity = new ProductSearchIdentity();
+
+        $this->assertTrue($identity->looksLikeInternalSku(new Product([
+            'manufacturer' => 'Urgent',
+            'sku' => 'WKLADKI-ALUTERMICZNE',
+            'name' => 'Wkładki alutermiczne',
+        ])));
+        $this->assertFalse($identity->looksLikeInternalSku(new Product([
+            'manufacturer' => 'Urgent',
+            'sku' => 'URG-TOP',
+            'name' => 'Czapka z daszkiem',
+        ])));
+    }
+
     public function test_open_search_starts_from_short_queries(): void
     {
         $product = new Product([

@@ -603,7 +603,8 @@ class HybridWebSearchService
             }
             // Krótki kod (1000) — tylko URL/tytuł. ROBFM / 3-60NM może być w snippecie sklepu.
             if (! $this->identity->coreInUrlOrTitle($url, $title, $product)
-                && ! $this->isDistinctiveSku($product)) {
+                && ! $this->isDistinctiveSku($product)
+                && ! $this->identity->nameTokensMatch($url.' '.$title, $product)) {
                 continue;
             }
             if (preg_match('#(ochronki na buty|shoe[- ]?cover|folie na buty|nakladki na obuwie)#i', $hay)) {
