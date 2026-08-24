@@ -9,7 +9,22 @@ function isKeptSecret(value: string): boolean {
 
 type SearchEngine = 'tavily' | 'duckduckgo' | 'searxng'
 
-type EmbeddingProvider = 'local' | 'openai'
+type EmbeddingProvider = 'local' | 'openai' | 'openrouter'
+
+const OPENROUTER_EMBEDDING_MODELS = [
+  { id: 'baai/bge-m3', hint: 'wielojęzyczny, 1024 wymiary, ~$0,01/1M' },
+  { id: 'qwen/qwen3-embedding-8b', hint: 'wielojęzyczny, mocny, ~$0,01/1M' },
+  { id: 'qwen/qwen3-embedding-4b', hint: 'wielojęzyczny, lżejszy, ~$0,02/1M' },
+  { id: 'intfloat/multilingual-e5-large', hint: 'klasyk wielojęzyczny, ~$0,01/1M' },
+  { id: 'openai/text-embedding-3-small', hint: 'OpenAI przez OpenRouter, ~$0,02/1M' },
+  { id: 'openai/text-embedding-3-large', hint: 'OpenAI przez OpenRouter, ~$0,13/1M' },
+  { id: 'google/gemini-embedding-2', hint: 'najwyższa jakość, ~$0,20/1M' },
+]
+
+const OPENAI_EMBEDDING_MODELS = [
+  { id: 'text-embedding-3-small', hint: '1536 wymiarów, ~$0,02/1M' },
+  { id: 'text-embedding-3-large', hint: '3072 wymiary, ~$0,13/1M' },
+]
 
 type AiSettings = {
   enabled: boolean
@@ -33,19 +48,19 @@ type AiSettings = {
   embedding_model: string | null
   embedding_base_url: string | null
   embedding_provider: EmbeddingProvider
-  embedding_openai_model: string | null
+  embedding_cloud_model: string | null
   embedding_collection: string
   has_api_key: boolean
   has_tavily_api_key: boolean
   has_qdrant_api_key: boolean
   has_embedding_api_key: boolean
-  has_embedding_openai_api_key: boolean
+  has_embedding_cloud_api_key: boolean
   source: string
   api_key_masked: string | null
   tavily_api_key_masked: string | null
   qdrant_api_key_masked: string | null
   embedding_api_key_masked: string | null
-  embedding_openai_api_key_masked: string | null
+  embedding_cloud_api_key_masked: string | null
 }
 
 export function AiSettingsPage() {
@@ -54,7 +69,7 @@ export function AiSettingsPage() {
   const [tavilyKey, setTavilyKey] = useState('')
   const [qdrantKey, setQdrantKey] = useState('')
   const [embeddingKey, setEmbeddingKey] = useState('')
-  const [openAiEmbeddingKey, setOpenAiEmbeddingKey] = useState('')
+  const [cloudEmbeddingKey, setCloudEmbeddingKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [showTavilyKey, setShowTavilyKey] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -66,8 +81,8 @@ export function AiSettingsPage() {
     setTavilyKey(next.has_tavily_api_key ? (next.tavily_api_key_masked ?? '') : '')
     setQdrantKey(next.has_qdrant_api_key ? (next.qdrant_api_key_masked ?? '') : '')
     setEmbeddingKey(next.has_embedding_api_key ? (next.embedding_api_key_masked ?? '') : '')
-    setOpenAiEmbeddingKey(
-      next.has_embedding_openai_api_key ? (next.embedding_openai_api_key_masked ?? '') : ''
+    setCloudEmbeddingKey(
+      next.has_embedding_cloud_api_key ? (next.embedding_cloud_api_key_masked ?? '') : ''
     )
   }
 
@@ -116,7 +131,7 @@ export function AiSettingsPage() {
         embedding_model: cfg.embedding_model?.trim() || null,
         embedding_base_url: cfg.embedding_base_url?.trim() || null,
         embedding_provider: cfg.embedding_provider || 'local',
-        embedding_openai_model: cfg.embedding_openai_model?.trim() || null,
+        embedding_cloud_model: cfg.embedding_cloud_model?.trim() || null,
       }
       if (!isKeptSecret(apiKey)) {
         body.api_key = apiKey.trim()
@@ -130,8 +145,8 @@ export function AiSettingsPage() {
       if (!isKeptSecret(embeddingKey)) {
         body.embedding_api_key = embeddingKey.trim()
       }
-      if (!isKeptSecret(openAiEmbeddingKey)) {
-        body.embedding_openai_api_key = openAiEmbeddingKey.trim()
+      if (!isKeptSecret(cloudEmbeddingKey)) {
+        body.embedding_cloud_api_key = cloudEmbeddingKey.trim()
       }
       const saved = await api<AiSettings>('/ai-settings', {
         method: 'PUT',
@@ -202,6 +217,8 @@ export function AiSettingsPage() {
       </div>
     )
   }
+
+  const isOpenRouter = cfg.embedding_provider === 'openrouter'
 
   return (
     <div>
@@ -534,6 +551,7 @@ export function AiSettingsPage() {
               }
             >
               <option value="local">Serwer lokalny (OpenAI-compatible)</option>
+              <option value="openrouter">OpenRouter (chmura)</option>
               <option value="openai">OpenAI (chmura)</option>
             </select>
             <span className="mt-1 block text-[11px] text-slate-500">
@@ -543,38 +561,60 @@ export function AiSettingsPage() {
             </span>
           </label>
 
-          {cfg.embedding_provider === 'openai' ? (
+          {cfg.embedding_provider !== 'local' ? (
             <>
               <label className="block text-xs">
-                Model OpenAI
+                Model embeddings ({isOpenRouter ? 'OpenRouter' : 'OpenAI'})
                 <input
                   className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
-                  value={cfg.embedding_openai_model ?? ''}
+                  value={cfg.embedding_cloud_model ?? ''}
                   onChange={(e) =>
-                    setCfg({ ...cfg, embedding_openai_model: e.target.value || null })
+                    setCfg({ ...cfg, embedding_cloud_model: e.target.value || null })
                   }
-                  placeholder="text-embedding-3-small"
-                  list="ai-openai-embedding-models"
+                  placeholder={
+                    isOpenRouter ? 'openai/text-embedding-3-small' : 'text-embedding-3-small'
+                  }
+                  list="ai-cloud-embedding-models"
                 />
-                <datalist id="ai-openai-embedding-models">
-                  <option value="text-embedding-3-small" />
-                  <option value="text-embedding-3-large" />
+                <datalist id="ai-cloud-embedding-models">
+                  {(isOpenRouter ? OPENROUTER_EMBEDDING_MODELS : OPENAI_EMBEDDING_MODELS).map(
+                    (m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.hint}
+                      </option>
+                    )
+                  )}
                 </datalist>
+                {isOpenRouter ? (
+                  <span className="mt-1 block text-[11px] text-slate-500">
+                    Do polskich opisów najlepiej <code>baai/bge-m3</code> albo{' '}
+                    <code>qwen/qwen3-embedding-8b</code> — ok. $0,01 za milion tokenów. Pełna lista:{' '}
+                    <code>https://openrouter.ai/api/v1/embeddings/models</code>.
+                  </span>
+                ) : null}
               </label>
               <label className="block text-xs">
-                Klucz OpenAI (embeddingi){' '}
-                {cfg.has_embedding_openai_api_key ? '(zostaw puste, by nie zmieniać)' : ''}
+                Klucz {isOpenRouter ? 'OpenRouter' : 'OpenAI'} (embeddingi){' '}
+                {cfg.has_embedding_cloud_api_key ? '(zostaw puste, by nie zmieniać)' : ''}
                 <input
                   type="password"
                   className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
-                  value={openAiEmbeddingKey}
-                  onChange={(e) => setOpenAiEmbeddingKey(e.target.value)}
-                  placeholder={cfg.has_embedding_openai_api_key ? '••••••••' : 'sk-…'}
+                  value={cloudEmbeddingKey}
+                  onChange={(e) => setCloudEmbeddingKey(e.target.value)}
+                  placeholder={
+                    cfg.has_embedding_cloud_api_key ? '••••••••' : isOpenRouter ? 'sk-or-v1-…' : 'sk-…'
+                  }
                   autoComplete="new-password"
                 />
                 <span className="mt-1 block text-[11px] text-slate-500">
-                  Adres stały: <code>https://api.openai.com/v1</code>. Koszt text-embedding-3-small
-                  to ok. $0,02 za milion tokenów.
+                  Adres stały:{' '}
+                  <code>
+                    {isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.openai.com/v1'}
+                  </code>
+                  .{' '}
+                  {isOpenRouter
+                    ? 'Puste pole = klucz czatu, jeśli czat też chodzi po OpenRouter.'
+                    : 'Klucz z platform.openai.com, klucz OpenRoutera tu nie zadziała.'}
                 </span>
               </label>
             </>

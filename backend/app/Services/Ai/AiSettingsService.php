@@ -34,9 +34,24 @@ final class AiSettingsService
 
     public const EMBEDDING_OPENAI = 'openai';
 
-    public const EMBEDDING_PROVIDERS = [self::EMBEDDING_LOCAL, self::EMBEDDING_OPENAI];
+    public const EMBEDDING_OPENROUTER = 'openrouter';
 
-    public const OPENAI_EMBEDDING_BASE_URL = 'https://api.openai.com/v1';
+    public const EMBEDDING_PROVIDERS = [
+        self::EMBEDDING_LOCAL,
+        self::EMBEDDING_OPENAI,
+        self::EMBEDDING_OPENROUTER,
+    ];
+
+    /** Adresy chmurowych dostawców embeddingów — nie do edycji z UI. */
+    private const EMBEDDING_CLOUD_BASE_URLS = [
+        self::EMBEDDING_OPENAI => 'https://api.openai.com/v1',
+        self::EMBEDDING_OPENROUTER => 'https://openrouter.ai/api/v1',
+    ];
+
+    private const EMBEDDING_CLOUD_DEFAULT_MODELS = [
+        self::EMBEDDING_OPENAI => 'text-embedding-3-small',
+        self::EMBEDDING_OPENROUTER => 'openai/text-embedding-3-small',
+    ];
 
     public const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small';
 
@@ -67,13 +82,13 @@ final class AiSettingsService
      *     embedding_base_url: ?string,
      *     embedding_api_key: ?string,
      *     embedding_provider: string,
-     *     embedding_openai_model: ?string,
-     *     embedding_openai_api_key: ?string,
+     *     embedding_cloud_model: ?string,
+     *     embedding_cloud_api_key: ?string,
      *     has_api_key: bool,
      *     has_tavily_api_key: bool,
      *     has_qdrant_api_key: bool,
      *     has_embedding_api_key: bool,
-     *     has_embedding_openai_api_key: bool,
+     *     has_embedding_cloud_api_key: bool,
      *     source: string
      * }
      */
@@ -85,7 +100,7 @@ final class AiSettingsService
             $tavily = $this->safeEncrypted($row, 'tavily_api_key');
             $qdrantKey = $this->safeEncrypted($row, 'qdrant_api_key');
             $embKey = $this->safeEncrypted($row, 'embedding_api_key');
-            $openAiEmbKey = $this->safeEncrypted($row, 'embedding_openai_api_key');
+            $cloudEmbKey = $this->safeEncrypted($row, 'embedding_cloud_api_key');
             $hasVectorCols = Schema::hasColumn('ai_settings', 'vector_enabled');
             $hasProviderCol = Schema::hasColumn('ai_settings', 'embedding_provider');
 
@@ -141,17 +156,17 @@ final class AiSettingsService
                 'embedding_provider' => $this->normalizeEmbeddingProvider(
                     $hasProviderCol ? ($row->embedding_provider ?? null) : null
                 ),
-                'embedding_openai_model' => $hasProviderCol
-                    ? $this->nullableString($row->embedding_openai_model ?? null)
+                'embedding_cloud_model' => $hasProviderCol
+                    ? $this->nullableString($row->embedding_cloud_model ?? null)
                     : null,
-                'embedding_openai_api_key' => $openAiEmbKey !== null && $openAiEmbKey !== ''
-                    ? (string) $openAiEmbKey
+                'embedding_cloud_api_key' => $cloudEmbKey !== null && $cloudEmbKey !== ''
+                    ? (string) $cloudEmbKey
                     : null,
                 'has_api_key' => $key !== null && $key !== '',
                 'has_tavily_api_key' => $tavily !== null && $tavily !== '',
                 'has_qdrant_api_key' => $qdrantKey !== null && $qdrantKey !== '',
                 'has_embedding_api_key' => $embKey !== null && $embKey !== '',
-                'has_embedding_openai_api_key' => $openAiEmbKey !== null && $openAiEmbKey !== '',
+                'has_embedding_cloud_api_key' => $cloudEmbKey !== null && $cloudEmbKey !== '',
                 'source' => 'database',
             ];
         }
@@ -164,8 +179,8 @@ final class AiSettingsService
         $qdrantKey = is_string($qdrantKey) && $qdrantKey !== '' ? $qdrantKey : null;
         $embKey = config('ai.embedding_api_key');
         $embKey = is_string($embKey) && $embKey !== '' ? $embKey : null;
-        $openAiEmbKey = config('ai.embedding_openai_api_key');
-        $openAiEmbKey = is_string($openAiEmbKey) && $openAiEmbKey !== '' ? $openAiEmbKey : null;
+        $cloudEmbKey = config('ai.embedding_cloud_api_key');
+        $cloudEmbKey = is_string($cloudEmbKey) && $cloudEmbKey !== '' ? $cloudEmbKey : null;
 
         return [
             'enabled' => (bool) config('ai.enabled'),
@@ -193,13 +208,13 @@ final class AiSettingsService
             'embedding_base_url' => $this->nullableUrl(config('ai.embedding_base_url')),
             'embedding_api_key' => $embKey,
             'embedding_provider' => $this->normalizeEmbeddingProvider(config('ai.embedding_provider')),
-            'embedding_openai_model' => $this->nullableString(config('ai.embedding_openai_model')),
-            'embedding_openai_api_key' => $openAiEmbKey,
+            'embedding_cloud_model' => $this->nullableString(config('ai.embedding_cloud_model')),
+            'embedding_cloud_api_key' => $cloudEmbKey,
             'has_api_key' => $key !== null,
             'has_tavily_api_key' => $tavily !== null,
             'has_qdrant_api_key' => $qdrantKey !== null,
             'has_embedding_api_key' => $embKey !== null,
-            'has_embedding_openai_api_key' => $openAiEmbKey !== null,
+            'has_embedding_cloud_api_key' => $cloudEmbKey !== null,
             'source' => 'env',
         ];
     }
@@ -233,19 +248,19 @@ final class AiSettingsService
             'embedding_model' => $cfg['embedding_model'],
             'embedding_base_url' => $cfg['embedding_base_url'],
             'embedding_provider' => $cfg['embedding_provider'],
-            'embedding_openai_model' => $cfg['embedding_openai_model'],
+            'embedding_cloud_model' => $cfg['embedding_cloud_model'],
             'embedding_collection' => $this->embeddingCollection($cfg),
             'has_api_key' => $cfg['has_api_key'],
             'has_tavily_api_key' => $cfg['has_tavily_api_key'],
             'has_qdrant_api_key' => $cfg['has_qdrant_api_key'],
             'has_embedding_api_key' => $cfg['has_embedding_api_key'],
-            'has_embedding_openai_api_key' => $cfg['has_embedding_openai_api_key'],
+            'has_embedding_cloud_api_key' => $cfg['has_embedding_cloud_api_key'],
             'source' => $cfg['source'],
             'api_key_masked' => $this->maskKey($cfg['api_key']),
             'tavily_api_key_masked' => $this->maskKey($cfg['tavily_api_key']),
             'qdrant_api_key_masked' => $this->maskKey($cfg['qdrant_api_key']),
             'embedding_api_key_masked' => $this->maskKey($cfg['embedding_api_key']),
-            'embedding_openai_api_key_masked' => $this->maskKey($cfg['embedding_openai_api_key']),
+            'embedding_cloud_api_key_masked' => $this->maskKey($cfg['embedding_cloud_api_key']),
         ];
     }
 
@@ -275,6 +290,8 @@ final class AiSettingsService
             'embedding_model' => self::OPENAI_EMBEDDING_MODEL,
             'embedding_provider' => self::EMBEDDING_LOCAL,
         ]);
+
+        $embeddingTargetBefore = $this->embeddingTarget($row);
 
         foreach ([
             'enabled',
@@ -327,15 +344,12 @@ final class AiSettingsService
             $row->match_concurrency = $this->normalizeMatchConcurrency($data['match_concurrency']);
         }
 
-        $providerChanged = false;
         if (Schema::hasColumn('ai_settings', 'embedding_provider')) {
             if (array_key_exists('embedding_provider', $data)) {
-                $next = $this->normalizeEmbeddingProvider($data['embedding_provider']);
-                $providerChanged = $next !== $this->normalizeEmbeddingProvider($row->embedding_provider ?? null);
-                $row->embedding_provider = $next;
+                $row->embedding_provider = $this->normalizeEmbeddingProvider($data['embedding_provider']);
             }
-            if (array_key_exists('embedding_openai_model', $data)) {
-                $row->embedding_openai_model = $this->nullableString($data['embedding_openai_model']);
+            if (array_key_exists('embedding_cloud_model', $data)) {
+                $row->embedding_cloud_model = $this->nullableString($data['embedding_cloud_model']);
             }
         }
 
@@ -343,7 +357,7 @@ final class AiSettingsService
         $this->applySecret($row, 'tavily_api_key', $data);
         $this->applySecret($row, 'qdrant_api_key', $data);
         $this->applySecret($row, 'embedding_api_key', $data);
-        $this->applySecret($row, 'embedding_openai_api_key', $data);
+        $this->applySecret($row, 'embedding_cloud_api_key', $data);
 
         if (array_key_exists('tavily_api_key', $data)
             && is_string($data['tavily_api_key'] ?? null)
@@ -359,18 +373,33 @@ final class AiSettingsService
         if (is_string($row->qdrant_url) && $row->qdrant_url !== '') {
             $row->qdrant_url = rtrim($row->qdrant_url, '/');
         }
+        $indexTargetChanged = $row->exists && $embeddingTargetBefore !== $this->embeddingTarget($row);
         $row->save();
 
-        if ($providerChanged) {
+        if ($indexTargetChanged) {
             $this->resetEmbeddingIndexState();
         }
 
         return $row;
     }
 
+    /** Zmiana dostawcy albo modelu unieważnia wektory — inny wymiar i inna przestrzeń. */
+    private function embeddingTarget(AiSetting $row): string
+    {
+        $provider = Schema::hasColumn('ai_settings', 'embedding_provider')
+            ? $this->normalizeEmbeddingProvider($row->embedding_provider ?? null)
+            : self::EMBEDDING_LOCAL;
+
+        $model = $provider === self::EMBEDDING_LOCAL
+            ? (string) ($row->embedding_model ?? '')
+            : (string) ($row->embedding_cloud_model ?? '');
+
+        return $provider.'|'.$model.'|'.(string) ($row->embedding_base_url ?? '');
+    }
+
     /**
-     * Każdy dostawca ma własną kolekcję (inny wymiar wektora), więc po przełączeniu
-     * hashe muszą zniknąć — inaczej reindeks pominąłby produkty jako „już zsynchronizowane”.
+     * Po zmianie celu indeksowania hashe muszą zniknąć — inaczej reindeks
+     * pominąłby produkty jako „już zsynchronizowane”, a kolekcja zostałaby pusta.
      */
     private function resetEmbeddingIndexState(): void
     {
@@ -390,13 +419,19 @@ final class AiSettingsService
     public function embeddingProfile(): array
     {
         $cfg = $this->resolve();
+        $provider = $cfg['embedding_provider'];
 
-        if ($cfg['embedding_provider'] === self::EMBEDDING_OPENAI) {
+        if (isset(self::EMBEDDING_CLOUD_BASE_URLS[$provider])) {
+            // Klucz czatu ratuje sytuację tylko wtedy, gdy prowadzi do tego samego dostawcy.
+            $sharedKey = str_starts_with($cfg['base_url'], self::EMBEDDING_CLOUD_BASE_URLS[$provider])
+                ? $cfg['api_key']
+                : null;
+
             return [
-                'provider' => self::EMBEDDING_OPENAI,
-                'base_url' => self::OPENAI_EMBEDDING_BASE_URL,
-                'api_key' => $cfg['embedding_openai_api_key'],
-                'model' => (string) ($cfg['embedding_openai_model'] ?: self::OPENAI_EMBEDDING_MODEL),
+                'provider' => $provider,
+                'base_url' => self::EMBEDDING_CLOUD_BASE_URLS[$provider],
+                'api_key' => $cfg['embedding_cloud_api_key'] ?: $sharedKey,
+                'model' => (string) ($cfg['embedding_cloud_model'] ?: self::EMBEDDING_CLOUD_DEFAULT_MODELS[$provider]),
             ];
         }
 
@@ -419,9 +454,9 @@ final class AiSettingsService
         $name = trim((string) ($cfg['qdrant_collection'] ?: 'products'));
         $name = $name !== '' ? $name : 'products';
 
-        return $cfg['embedding_provider'] === self::EMBEDDING_OPENAI
-            ? $name.'_openai'
-            : $name;
+        return $cfg['embedding_provider'] === self::EMBEDDING_LOCAL
+            ? $name
+            : $name.'_'.$cfg['embedding_provider'];
     }
 
     public function isReady(): bool

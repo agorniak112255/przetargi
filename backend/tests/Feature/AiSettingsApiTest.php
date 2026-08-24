@@ -146,11 +146,11 @@ final class AiSettingsApiTest extends TestCase
 
         $this->putJson('/api/ai-settings', [
             'embedding_provider' => 'openai',
-            'embedding_openai_api_key' => 'sk-openai-embeddings-123',
+            'embedding_cloud_api_key' => 'sk-openai-embeddings-123',
         ])->assertOk()
             ->assertJsonPath('embedding_provider', 'openai')
             ->assertJsonPath('embedding_collection', 'products_openai')
-            ->assertJsonPath('has_embedding_openai_api_key', true);
+            ->assertJsonPath('has_embedding_cloud_api_key', true);
 
         $this->assertSame([
             'provider' => 'openai',
@@ -165,6 +165,47 @@ final class AiSettingsApiTest extends TestCase
 
         $this->putJson('/api/ai-settings', ['embedding_provider' => 'gemini'])
             ->assertStatus(422);
+    }
+
+    public function test_openrouter_embeddings_fall_back_to_chat_key(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'api_key' => 'sk-or-v1-czat-1234567890',
+            'model' => 'openai/gpt-4o',
+            'timeout_seconds' => 90,
+            'temperature' => 0.1,
+            'vector_enabled' => true,
+            'qdrant_url' => 'http://127.0.0.1:6333',
+            'qdrant_collection' => 'products',
+        ]);
+
+        $this->putJson('/api/ai-settings', [
+            'embedding_provider' => 'openrouter',
+            'embedding_cloud_model' => 'baai/bge-m3',
+        ])->assertOk()
+            ->assertJsonPath('embedding_collection', 'products_openrouter');
+
+        $this->assertSame([
+            'provider' => 'openrouter',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'api_key' => 'sk-or-v1-czat-1234567890',
+            'model' => 'baai/bge-m3',
+        ], app(AiSettingsService::class)->embeddingProfile());
+
+        // czat na innym dostawcy — klucz czatu nie może wyciec do OpenAI
+        $this->putJson('/api/ai-settings', [
+            'base_url' => 'https://api.deepseek.com/v1',
+            'embedding_provider' => 'openai',
+        ])->assertOk();
+
+        $this->assertNull(app(AiSettingsService::class)->embeddingProfile()['api_key']);
     }
 
     public function test_update_model_keeps_existing_api_keys(): void

@@ -39,6 +39,6 @@ return [
     'embedding_base_url' => env('AI_EMBEDDING_BASE_URL'),
     'embedding_api_key' => env('AI_EMBEDDING_API_KEY'),
     'embedding_provider' => env('AI_EMBEDDING_PROVIDER', 'local'),
-    'embedding_openai_model' => env('AI_EMBEDDING_OPENAI_MODEL', 'text-embedding-3-small'),
-    'embedding_openai_api_key' => env('AI_EMBEDDING_OPENAI_API_KEY'),
+    'embedding_cloud_model' => env('AI_EMBEDDING_CLOUD_MODEL'),
+    'embedding_cloud_api_key' => env('AI_EMBEDDING_CLOUD_API_KEY'),
 ];
