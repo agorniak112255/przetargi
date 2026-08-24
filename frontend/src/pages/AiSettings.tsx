@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { clampEnrichmentBatchLimit, ENRICHMENT_BATCH_MAX } from '../lib/aiConcurrency'
 import { api } from '../lib/api'
 
 function isKeptSecret(value: string): boolean {
@@ -412,17 +413,17 @@ export function AiSettingsPage() {
             </span>
           </label>
           <label className="block text-xs">
-            Max produktów w kolejce enrichmentu (1–100)
+            Max produktów w kolejce enrichmentu (1–{ENRICHMENT_BATCH_MAX})
             <input
               type="number"
               min={1}
-              max={100}
+              max={ENRICHMENT_BATCH_MAX}
               className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
               value={cfg.enrichment_batch_limit ?? 5}
               onChange={(e) =>
                 setCfg({
                   ...cfg,
-                  enrichment_batch_limit: Math.max(1, Math.min(100, Number(e.target.value) || 5)),
+                  enrichment_batch_limit: clampEnrichmentBatchLimit(Number(e.target.value) || 5),
                 })
               }
             />

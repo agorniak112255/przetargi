@@ -13,7 +13,7 @@ use Throwable;
 
 final class AiSettingsService
 {
-    public const ENRICHMENT_BATCH_MAX = 100;
+    public const ENRICHMENT_BATCH_MAX = 1000;
 
     public const CONCURRENCY_MAX = 100;
 

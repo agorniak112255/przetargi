@@ -48,6 +48,64 @@ final class OpenAiRateLimitTest extends TestCase
         Http::assertSentCount(2);
     }
 
+    public function test_retries_busy_local_model_until_slot_is_free(): void
+    {
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::sequence()
+                ->push(['error' => ['message' => 'server is busy']], 503)
+                ->push(['error' => ['message' => 'no slot available']], 429)
+                ->push(['error' => ['message' => 'overloaded']], 529)
+                ->push([
+                    'choices' => [[
+                        'message' => ['content' => '{"ok":true}'],
+                    ]],
+                ], 200),
+        ]);
+
+        $json = app(OpenAiCompatibleClient::class)->chatJson([
+            ['role' => 'user', 'content' => 'ping'],
+        ]);
+
+        $this->assertTrue($json['ok'] ?? false);
+        Http::assertSentCount(4);
+    }
+
+    public function test_gives_up_after_five_overload_retries(): void
+    {
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response(
+                ['error' => ['message' => 'no slot available']],
+                429
+            ),
+        ]);
+
+        try {
+            app(OpenAiCompatibleClient::class)->chatJson([
+                ['role' => 'user', 'content' => 'ping'],
+            ]);
+            $this->fail('Oczekiwano wyjątku 429');
+        } catch (\RuntimeException) {
+            Http::assertSentCount(6);
+        }
+    }
+
+    public function test_sends_smaller_token_budget_by_default(): void
+    {
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response([
+                'choices' => [[
+                    'message' => ['content' => '{"ok":true}'],
+                ]],
+            ], 200),
+        ]);
+
+        app(OpenAiCompatibleClient::class)->chatJson([
+            ['role' => 'user', 'content' => 'ping'],
+        ]);
+
+        Http::assertSent(fn ($request) => ($request->data()['max_tokens'] ?? null) === 8000);
+    }
+
     public function test_exhausted_429_explains_openrouter_not_tavily(): void
     {
         Http::fake([

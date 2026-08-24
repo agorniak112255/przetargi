@@ -13,6 +13,11 @@ use RuntimeException;
 
 class OpenAiCompatibleClient
 {
+    /** Model przeciążony / limit zapytań — warto poczekać i ponowić. */
+    private const OVERLOAD_STATUSES = [429, 503, 529];
+
+    private const OVERLOAD_RETRIES = 5;
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly JsonResponseParser $jsonParser,
@@ -40,7 +45,9 @@ class OpenAiCompatibleClient
             ? trim((string) $extra['model'])
             : (string) $cfg['model'];
         $reasoning = $this->isReasoningModel($model);
-        $maxTokens = (int) ($extra['max_tokens'] ?? 16000);
+        // Mniejszy budżet = mniejszy kontekst na slot, czyli więcej równoległych
+        // slotów lokalnego modelu w tym samym VRAM. Przy urwaniu i tak ponawiamy z 16000.
+        $maxTokens = (int) ($extra['max_tokens'] ?? 8000);
         if ($reasoning) {
             $maxTokens = max($maxTokens, 8000);
         }
@@ -490,7 +497,7 @@ class OpenAiCompatibleClient
     {
         $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning);
         $attempt = 0;
-        while (in_array($response->status(), [429, 503], true) && $attempt < 3) {
+        while (in_array($response->status(), self::OVERLOAD_STATUSES, true) && $attempt < self::OVERLOAD_RETRIES) {
             $wait = $this->retryAfterSeconds($response, $attempt);
             if ($wait > 0) {
                 sleep($wait);
@@ -509,10 +516,14 @@ class OpenAiCompatibleClient
         }
         $header = $response->header('Retry-After');
         if (is_numeric($header)) {
-            return min(30, max(1, (int) $header));
+            return min(60, max(1, (int) $header));
         }
 
-        return [2, 6, 12][$attempt] ?? 12;
+        // Jitter jest tu istotny: bez niego wszystkie równoległe żądania wracają
+        // w tej samej chwili i znowu przepełniają kolejkę slotów modelu.
+        $base = [3, 8, 15, 25, 40][$attempt] ?? 40;
+
+        return $base + random_int(0, intdiv($base, 2));
     }
 
     private function formatHttpError(Response $response): string

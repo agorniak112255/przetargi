@@ -1,6 +1,6 @@
 export const AI_CONCURRENCY_DEFAULT = 4
 export const AI_CONCURRENCY_MAX = 100
-export const ENRICHMENT_BATCH_MAX = 100
+export const ENRICHMENT_BATCH_MAX = 1000
 
 export function clampAiConcurrency(value: number | undefined): number {
   const n = Number(value)
