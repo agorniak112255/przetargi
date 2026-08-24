@@ -1027,8 +1027,10 @@ final class ProductSearchIdentity
             return [];
         }
 
+        // „CROSSFOREST10” — tu „T” kończy słowo FOREST, a rozmiarem jest samo 10.
+        // Którego odczytu użyć, wie dopiero strona sklepu, więc dajemy oba.
         $out = [];
-        foreach ([$m[1].$m[2], $m[1]] as $candidate) {
+        foreach ([$m[1].$m[2], $m[1].$m[2].'T', $m[1]] as $candidate) {
             $candidate = rtrim($candidate, "-/+_. \t");
             if ($this->isUsableSizeVariant($candidate)) {
                 $out[$candidate] = true;

@@ -159,21 +159,34 @@ final class EnrichmentQueryLadderTest extends TestCase
     {
         $identity = new ProductSearchIdentity();
 
-        $this->assertSame(['BLACKSTICK30'], $identity->skuSizeVariants(new Product([
+        $this->assertContains('BLACKSTICK30', $identity->skuSizeVariants(new Product([
             'manufacturer' => 'Rostaing',
             'sku' => 'BLACKSTICK30+T11',
             'name' => 'BLACK STICK 30+',
         ])));
-        $this->assertSame(['ATTACK6PEOM-BSC', 'ATTACK6PEOM'], $identity->skuSizeVariants(new Product([
+        $this->assertContains('ATTACK6PEOM', $identity->skuSizeVariants(new Product([
             'manufacturer' => 'Rostaing',
             'sku' => 'ATTACK6PEOM-BSCT12',
             'name' => 'ATTACK 6 PEOM',
         ])));
         // „BLACK” samo w sobie pasowałoby do BLACKNIT i BLACKSTICK, więc wypada
-        $this->assertSame(['BLACK-FIT'], $identity->skuSizeVariants(new Product([
+        $variants = $identity->skuSizeVariants(new Product([
             'manufacturer' => 'Rostaing',
             'sku' => 'BLACK-FITT10',
             'name' => 'BLACK FIT',
+        ]));
+        $this->assertContains('BLACK-FIT', $variants);
+        $this->assertNotContains('BLACK', $variants);
+        // „T” bywa końcówką słowa, nie znacznikiem rozmiaru — oba odczyty muszą być
+        $this->assertContains('CROSSFOREST', $identity->skuSizeVariants(new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'CROSSFOREST10',
+            'name' => 'T10 GLOVES FOR CROSS X5 PAIRS',
+        ])));
+        $this->assertContains('CROSSBOHO', $identity->skuSizeVariants(new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'CROSSBOHOT06',
+            'name' => 'T6 GLOVES ON CROSS X12 PAIRS',
         ])));
         // krótki kod modelu zostaje, bo nie jest zwykłym słowem
         $this->assertContains('BOHO', $identity->skuSizeVariants(new Product([
@@ -277,7 +290,7 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
 
         $this->assertSame('URG-914 Urgent', $ladder[0] ?? null);
-        $this->assertLessThanOrEqual(3, count($ladder));
+        $this->assertLessThanOrEqual(4, count($ladder));
         $this->assertContains('Kurtka ostrzegawcza URG-914 Urgent', $ladder);
     }
 

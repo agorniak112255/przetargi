@@ -23,7 +23,7 @@ class HybridWebSearchService
     private const FREE_SEARCH_CANDIDATES = 20;
 
     /** Ile różnych fraz próbujemy w otwartym internecie, zanim pójdziemy na domenę producenta. */
-    private const OPEN_QUERY_ATTEMPTS = 3;
+    private const OPEN_QUERY_ATTEMPTS = 4;
 
     /** Tyle kart produktu wystarcza, żeby przerwać drabinkę fraz. */
     private const OPEN_ENOUGH_PAGES = 3;
