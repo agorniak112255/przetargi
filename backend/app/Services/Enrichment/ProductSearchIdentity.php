@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use Illuminate\Support\Str;
 
 /**
  * Jedna tożsamość produktu do wyszukiwania i filtrowania wyników.
@@ -683,7 +684,26 @@ final class ProductSearchIdentity
      */
     public function hayMatchesNameAndBrand(string $hay, Product $product): bool
     {
-        return $this->hayHasBrand($hay, $product) && $this->nameTokensMatch($hay, $product);
+        if (! $this->hayHasBrand($hay, $product)) {
+            return false;
+        }
+
+        return $this->nameTokensMatch($hay, $product) || $this->hayHasNamePhrase($hay, $product);
+    }
+
+    /**
+     * Cała nazwa jako fraza („BLACK FIT” → „black-fit”). Ratuje krótkie nazwy,
+     * których pojedyncze słowa są za krótkie, by je liczyć osobno.
+     */
+    public function hayHasNamePhrase(string $hay, Product $product): bool
+    {
+        $phrase = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii((string) $product->name))) ?? '';
+        if (mb_strlen($phrase) < 6) {
+            return false;
+        }
+        $hayCompact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii($hay))) ?? '';
+
+        return $hayCompact !== '' && str_contains($hayCompact, $phrase);
     }
 
     /**

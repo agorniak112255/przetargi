@@ -575,6 +575,12 @@ class HybridWebSearchService
             if ($packResults === [] && $pack['results'] !== []) {
                 $errors[] = 'Odrzucono '.count($pack['results'])
                     .' stron bez SKU '.$product->sku.' w tytule/URL (sprawdzono też treść kart).';
+                Log::info('Search results rejected by identity', [
+                    'product_id' => $product->id,
+                    'sku' => $product->sku,
+                    'query' => $query,
+                    'urls' => array_slice(array_column($pack['results'], 'url'), 0, 10),
+                ]);
             }
             $provider = $includeDomains !== []
                 ? $this->searchProviderName().'_manufacturer'

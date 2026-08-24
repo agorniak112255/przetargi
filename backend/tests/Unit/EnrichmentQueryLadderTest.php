@@ -204,6 +204,26 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertContains('BLACK-FIT Rostaing', $identity->primaryQueries($product));
     }
 
+    public function test_short_name_matches_as_whole_phrase_with_brand(): void
+    {
+        $identity = new ProductSearchIdentity();
+        $product = new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'BLACK-FITT06',
+            'name' => 'BLACK FIT',
+        ]);
+
+        // „FIT” ma trzy litery, więc para słów nigdy się nie uzbiera — ratuje cała fraza
+        $this->assertTrue($identity->hayMatchesNameAndBrand(
+            'Rostaing Black Fit rękawice ogrodowe',
+            $product
+        ));
+        $this->assertFalse($identity->hayMatchesNameAndBrand(
+            'Rostaing Blackstick 30+ rękawice',
+            $product
+        ));
+    }
+
     public function test_catalog_number_with_long_digits_keeps_full_code(): void
     {
         $identity = new ProductSearchIdentity();
