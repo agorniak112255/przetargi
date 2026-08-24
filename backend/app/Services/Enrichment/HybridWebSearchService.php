@@ -17,7 +17,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v25';
+    private const SEARCH_CACHE_VERSION = 'v26';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -619,6 +619,10 @@ class HybridWebSearchService
             $snippet = (string) ($row['snippet'] ?? '');
             $hay = mb_strtolower($url.' '.$title.' '.$snippet);
             if (preg_match('/(?<![a-z0-9])'.preg_quote($sku, '/').'(?![a-z0-9])/u', $hay) !== 1) {
+                continue;
+            }
+            // sam kod to za mało: „1202” to też alarm Apollo 11 i szerokość zdjęcia
+            if (! $this->identity->hayHasBrand($hay, $product)) {
                 continue;
             }
             $out[] = [

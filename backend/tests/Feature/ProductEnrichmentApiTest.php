@@ -685,6 +685,68 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertStringContainsString('rekawice-termiczne', $filtered[0]['url']);
     }
 
+    public function test_numeric_sku_without_brand_is_rejected(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '1202',
+            'name' => 'Rękawice 1202 kozia czerwona',
+            'manufacturer' => 'Urgent',
+        ]);
+        $method = new \ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
+        $filtered = $method->invoke(app(HybridWebSearchService::class), [
+            [
+                'url' => 'https://www.hq.nasa.gov/alsj/a11/a11.landing.html',
+                'title' => 'Apollo 11 Lunar Surface Journal: Program Alarms',
+                'snippet' => 'The 1202 alarm was urgently analysed by the crew.',
+            ],
+            [
+                'url' => 'https://pl.wikipedia.org/wiki/FSO_Warszawa',
+                'title' => 'FSO Warszawa',
+                'snippet' => 'Samochód 1202 kg masy własnej.',
+            ],
+        ], $product);
+
+        $this->assertSame([], $filtered);
+    }
+
+    public function test_numeric_sku_with_brand_still_matches(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '1202',
+            'name' => 'Rękawice 1202 kozia czerwona',
+            'manufacturer' => 'Urgent',
+        ]);
+        $method = new \ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
+        $filtered = $method->invoke(app(HybridWebSearchService::class), [
+            [
+                'url' => 'https://sklep.example/rekawice-urgent-1202',
+                'title' => 'Rękawice Urgent 1202 kozia czerwona',
+                'snippet' => 'Rękawice robocze Urgent 1202 ze skóry koziej.',
+            ],
+        ], $product);
+
+        $this->assertCount(1, $filtered);
+    }
+
+    public function test_thumbnail_width_is_not_treated_as_numeric_sku(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '1202',
+            'name' => 'Rękawice 1202 kozia czerwona',
+            'manufacturer' => 'Urgent',
+        ]);
+        $identity = app(ProductSearchIdentity::class);
+
+        $this->assertFalse($identity->imageUrlMentionsProduct(
+            'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/Warszawa.jpg/1202px-Warszawa.jpg',
+            $product
+        ));
+        $this->assertTrue($identity->imageUrlMentionsProduct(
+            'https://urgent.pl/media/products/rekawice-1202.jpg',
+            $product
+        ));
+    }
+
     public function test_keeps_shop_page_when_sku_only_in_html(): void
     {
         AiSetting::query()->create([

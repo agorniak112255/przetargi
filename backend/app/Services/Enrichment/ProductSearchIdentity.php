@@ -122,8 +122,8 @@ final class ProductSearchIdentity
             }
             // same cyfry SKU: 60544 OK w …6054407…
             if (preg_match('/^\d{4,}$/', $token) === 1) {
-                if (preg_match('/(?<![0-9])'.preg_quote($token, '/').'/u', $hay) === 1
-                    || preg_match('/(?<![0-9])'.preg_quote($token, '/').'/u', $hayCompact) === 1) {
+                if ($this->numericTokenOutsideDimensions($hay, $token)
+                    || $this->numericTokenOutsideDimensions($hayCompact, $token)) {
                     return true;
                 }
 
@@ -240,8 +240,8 @@ final class ProductSearchIdentity
         }
 
         if ($skuCompact !== '' && preg_match('/^\d+$/', $skuCompact) === 1) {
-            return preg_match('/(?<![0-9])'.preg_quote($skuCompact, '/').'/u', $hay) === 1
-                || preg_match('/(?<![0-9])'.preg_quote($skuCompact, '/').'/u', $hayCompact) === 1;
+            return $this->numericTokenOutsideDimensions($hay, $skuCompact)
+                || $this->numericTokenOutsideDimensions($hayCompact, $skuCompact);
         }
 
         foreach (array_unique(array_filter([$sku, $skuCompact])) as $token) {
@@ -256,6 +256,21 @@ final class ProductSearchIdentity
         }
 
         return false;
+    }
+
+    /**
+     * Kod cyfrowy w URL zdjęcia, ale nie rozmiar miniatury (1202px-…, 1202x800).
+     */
+    private function numericTokenOutsideDimensions(string $hay, string $token): bool
+    {
+        if ($token === '' || $hay === '') {
+            return false;
+        }
+
+        return preg_match(
+            '/(?<![0-9])'.preg_quote($token, '/').'(?!\s*(?:px|x\s*\d))/iu',
+            $hay
+        ) === 1;
     }
 
     private function isAlphanumericProductCode(string $token): bool
@@ -615,6 +630,21 @@ final class ProductSearchIdentity
         return $this->hayMentionsProduct($url.' '.$title, $product);
     }
 
+    /**
+     * Czy w tekście stoi marka produktu. Bez niej sam kod „1202” trafia w Apollo 11
+     * albo w szerokość miniatury, a nie w rękawice Urgent.
+     */
+    public function hayHasBrand(string $hay, Product $product): bool
+    {
+        $brands = $this->acceptedBrands($product);
+        if ($brands === []) {
+            return true;
+        }
+        $hay = mb_strtolower($hay);
+
+        return $this->hayHasAnyBrand($hay, preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay, $brands);
+    }
+
     public function preferredLocaleUrl(string $url, Product $product): string
     {
         $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
@@ -884,11 +914,13 @@ final class ProductSearchIdentity
             if ($brand === '') {
                 continue;
             }
-            if (str_contains($hay, $brand)) {
+            // marka jako całe słowo — „urgently” w tekście o Apollo to nie Urgent
+            if (preg_match('/(?<![a-z0-9])'.preg_quote($brand, '/').'(?![a-z0-9])/iu', $hay) === 1) {
                 return true;
             }
             $compact = preg_replace('/[^a-z0-9]+/iu', '', $brand) ?? $brand;
-            if ($compact !== '' && str_contains($hayCompact, $compact)) {
+            // sklejona forma tylko dla marek wieloczłonowych („AJ Group” → ajgroup)
+            if ($compact !== '' && $compact !== $brand && str_contains($hayCompact, $compact)) {
                 return true;
             }
         }
