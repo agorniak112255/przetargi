@@ -58,7 +58,9 @@ final class ProductCatalogHealthTest extends TestCase
             ->assertJsonPath('total', 2)
             ->assertJsonPath('missing_description', 1)
             ->assertJsonPath('not_enriched', 1)
-            ->assertJsonPath('offer_markup_percent', 18);
+            ->assertJsonPath('offer_markup_percent', 18)
+            ->assertJsonPath('vector.enabled', false)
+            ->assertJsonPath('vector.indexed', 0);
 
         $this->assertSame(9.44, OfferPricing::fromPurchase(8.0));
     }

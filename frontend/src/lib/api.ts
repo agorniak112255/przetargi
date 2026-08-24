@@ -108,7 +108,7 @@ export type Product = {
   pack_qty?: number | null
   packaging?: string | null
   substitutes_count?: number
-  enrichment_status?: 'none' | 'queued' | 'running' | 'done' | 'failed'
+  enrichment_status?: 'none' | 'queued' | 'running' | 'done' | 'failed' | 'manual'
   enriched_at?: string | null
   enrichment_error?: string | null
   price_change_percent?: number | null

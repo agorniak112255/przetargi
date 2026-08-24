@@ -7,9 +7,11 @@ type Report = {
   missing_images: number
   missing_attributes: number
   not_enriched: number
+  manual_review?: number
   with_description: number
   by_manufacturer: Array<{ manufacturer: string; count: number }>
   offer_markup_percent?: number
+  vector?: { enabled: boolean; indexed: number; pending_jobs: number }
 }
 
 type Props = {
@@ -118,6 +120,19 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
         <Stat label="Bez atrybutów BHP" value={report.missing_attributes} warn />
         <Stat label="Nie wzbogacone" value={report.not_enriched} warn />
         <Stat label="Z opisem" value={report.with_description} />
+        {(report.manual_review ?? 0) > 0 && (
+          <Stat label="Do ręcznego opisu" value={report.manual_review ?? 0} warn />
+        )}
+        {report.vector?.enabled && (
+          <Stat
+            label={
+              report.vector.pending_jobs > 0
+                ? `Wektory (indeksuje się, w kolejce ${report.vector.pending_jobs})`
+                : 'Wektory'
+            }
+            value={report.vector.indexed}
+          />
+        )}
       </div>
       {canQueue && (
         <div className="flex flex-wrap gap-2">

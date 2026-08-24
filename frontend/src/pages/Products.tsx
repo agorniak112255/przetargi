@@ -25,6 +25,7 @@ const STATUS_LABEL: Record<string, string> = {
   running: 'Pobieranie',
   done: 'OK',
   failed: 'Błąd',
+  manual: 'Ręcznie',
 }
 
 function pageNumbers(current: number, last: number): Array<number | '…'> {
@@ -784,9 +785,11 @@ export function Products() {
                           ? 'text-green-700'
                           : status === 'failed'
                             ? 'text-red-600'
-                            : status === 'running' || status === 'queued'
-                              ? 'text-blue-700'
-                              : 'text-slate-400'
+                            : status === 'manual'
+                              ? 'text-amber-700'
+                              : status === 'running' || status === 'queued'
+                                ? 'text-blue-700'
+                                : 'text-slate-400'
                       }
                       title={p.enrichment_error ?? undefined}
                     >

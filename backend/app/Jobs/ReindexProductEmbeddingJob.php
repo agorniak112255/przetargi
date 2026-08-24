@@ -26,10 +26,15 @@ class ReindexProductEmbeddingJob implements ShouldQueue
 
     public int $timeout = 90;
 
+    /** Osobna kolejka — reindeks całego katalogu nie może blokować pobierania opisów. */
+    public const QUEUE = 'embeddings';
+
     public function __construct(
         public readonly int $productId,
         public readonly bool $force = false,
-    ) {}
+    ) {
+        $this->onQueue(self::QUEUE);
+    }
 
     public function handle(ProductEmbeddingIndexer $indexer): void
     {

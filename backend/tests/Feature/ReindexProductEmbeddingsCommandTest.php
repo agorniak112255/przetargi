@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\AiSetting;
 use App\Models\Product;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -54,6 +55,12 @@ final class ReindexProductEmbeddingsCommandTest extends TestCase
 
         Http::assertSent(static fn ($request): bool => $request->method() === 'DELETE'
             && str_contains($request->url(), '/collections/products_openrouter'));
+
+        // reindeks katalogu nie może blokować pobierania opisów z kolejki default
+        Queue::assertPushed(
+            ReindexProductEmbeddingJob::class,
+            static fn (ReindexProductEmbeddingJob $job): bool => $job->queue === ReindexProductEmbeddingJob::QUEUE
+        );
 
         $product->refresh();
         $this->assertNull($product->embedding_hash);

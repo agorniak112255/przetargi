@@ -20,6 +20,9 @@ class Product extends Model
 
     public const ENRICHMENT_FAILED = 'failed';
 
+    /** Kod wewnętrzny, którego nie ma w internecie — opis wpisuje człowiek, kolejki go pomijają. */
+    public const ENRICHMENT_MANUAL = 'manual';
+
     protected $fillable = [
         'sku',
         'name',

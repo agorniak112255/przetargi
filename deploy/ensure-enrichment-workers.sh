@@ -34,7 +34,7 @@ fi
 
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "UWAGA: brak systemd — workery trzeba uruchomić ręcznie, np. $WORKERS razy:"
-  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --tries=3 --timeout=420 --max-time=3600 &"
+  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=default,embeddings --tries=3 --timeout=420 --max-time=3600 &"
   exit 0
 fi
 
@@ -55,7 +55,8 @@ User=$OWNER
 Group=$GROUP
 WorkingDirectory=$BACKEND
 # --max-time: worker kończy się co godzinę, systemd wstaje z nowym kodem i czystą pamięcią
-ExecStart=$PHP_BIN artisan queue:work --queue=default --sleep=2 --tries=3 --timeout=420 --max-time=3600
+# kolejność kolejek = priorytet: opisy zawsze przed reindeksem embeddingów
+ExecStart=$PHP_BIN artisan queue:work --queue=default,embeddings --sleep=2 --tries=3 --timeout=420 --max-time=3600
 Restart=always
 RestartSec=5
 StandardOutput=append:$LOG_FILE

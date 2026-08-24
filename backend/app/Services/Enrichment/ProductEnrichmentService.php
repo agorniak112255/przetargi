@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Exceptions\EnrichmentCancelledException;
+use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\EnrichProductJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\PriceList;
@@ -110,7 +111,10 @@ final class ProductEnrichmentService
 
         $query = Product::query()->whereIn('id', $ids);
         if (! $force) {
-            $query->where('enrichment_status', '!=', Product::ENRICHMENT_DONE);
+            $query->whereNotIn('enrichment_status', [
+                Product::ENRICHMENT_DONE,
+                Product::ENRICHMENT_MANUAL,
+            ]);
         }
         // zachowaj kolejność z $ids
         $eligible = $query->pluck('id')->map(static fn ($id): int => (int) $id)->all();
@@ -244,7 +248,7 @@ final class ProductEnrichmentService
                 $detail = $searchPack['errors'] !== []
                     ? implode(' | ', array_slice($searchPack['errors'], 0, 2))
                     : 'brak wyników';
-                throw new RuntimeException(
+                throw new ProductSourcesNotFoundException(
                     'Nie znaleziono stron z tym SKU w internecie. '.$detail
                 );
             }
@@ -610,7 +614,9 @@ final class ProductEnrichmentService
             ]);
             try {
                 $product->update([
-                    'enrichment_status' => Product::ENRICHMENT_FAILED,
+                    'enrichment_status' => $e instanceof ProductSourcesNotFoundException
+                        ? Product::ENRICHMENT_MANUAL
+                        : Product::ENRICHMENT_FAILED,
                     'enrichment_error' => mb_substr($e->getMessage(), 0, 2000),
                 ]);
             } catch (Throwable) {

@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Support\BhpAttributeNormalizer;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 
 /**
@@ -19,6 +23,7 @@ final class ProductCatalogHealthService
     public function __construct(
         private readonly ProductEnrichmentService $enrichment,
         private readonly BhpAttributeNormalizer $bhpAttributes,
+        private readonly AiSettingsService $aiSettings,
     ) {}
 
     /**
@@ -32,7 +37,9 @@ final class ProductCatalogHealthService
         }
 
         $total = (clone $base)->count();
-        $missingDescription = (clone $base)
+        // pozycje „do ręcznego opisu” wypadają z liczników kolejek — AI ich nie ruszy
+        $queueable = (clone $base)->where('enrichment_status', '!=', Product::ENRICHMENT_MANUAL);
+        $missingDescription = (clone $queueable)
             ->where(function ($q): void {
                 $q->whereNull('description')->orWhere('description', '');
             })
@@ -40,8 +47,11 @@ final class ProductCatalogHealthService
         $missingImages = (clone $base)
             ->whereDoesntHave('images')
             ->count();
-        $notEnriched = (clone $base)
+        $notEnriched = (clone $queueable)
             ->where('enrichment_status', '!=', Product::ENRICHMENT_DONE)
+            ->count();
+        $manualReview = (clone $base)
+            ->where('enrichment_status', Product::ENRICHMENT_MANUAL)
             ->count();
 
         $missingAttributes = 0;
@@ -60,11 +70,12 @@ final class ProductCatalogHealthService
             ): void {
                 foreach ($products as $product) {
                     /** @var Product $product */
+                    $manual = $product->enrichment_status === Product::ENRICHMENT_MANUAL;
                     $desc = trim((string) ($product->description ?? ''));
-                    if ($desc === '') {
+                    if ($desc === '' && ! $manual) {
                         $idsMissingDescription[] = (int) $product->id;
                     }
-                    if ($product->enrichment_status !== Product::ENRICHMENT_DONE) {
+                    if ($product->enrichment_status !== Product::ENRICHMENT_DONE && ! $manual) {
                         $idsNotEnriched[] = (int) $product->id;
                     }
                     if (! $this->hasUsefulAttributes($product)) {
@@ -97,7 +108,9 @@ final class ProductCatalogHealthService
             'missing_images' => $missingImages,
             'missing_attributes' => $missingAttributes,
             'not_enriched' => $notEnriched,
+            'manual_review' => $manualReview,
             'with_description' => max(0, $total - $missingDescription),
+            'vector' => $this->vectorProgress($base),
             'by_manufacturer' => $byManufacturer,
             'queue_candidates' => [
                 'missing_description' => count($idsMissingDescription),
@@ -111,6 +124,33 @@ final class ProductCatalogHealthService
                 'missing_attributes' => array_slice($idsMissingAttributes, 0, 20),
             ],
             'offer_markup_percent' => (int) config('pricing.offer_markup_percent', 18),
+        ];
+    }
+
+    /**
+     * Postęp indeksowania wektorów: ile produktów ma świeży embedding i ile zadań czeka.
+     *
+     * @param  Builder<Product>  $base
+     * @return array{enabled: bool, indexed: int, pending_jobs: int}
+     */
+    private function vectorProgress(Builder $base): array
+    {
+        $indexed = 0;
+        if (Schema::hasColumn('products', 'embedding_synced_at')) {
+            $indexed = (clone $base)->whereNotNull('embedding_synced_at')->count();
+        }
+
+        $pending = 0;
+        if (config('queue.default') === 'database' && Schema::hasTable('jobs')) {
+            $pending = DB::table('jobs')
+                ->where('queue', ReindexProductEmbeddingJob::QUEUE)
+                ->count();
+        }
+
+        return [
+            'enabled' => $this->aiSettings->isVectorReady(),
+            'indexed' => $indexed,
+            'pending_jobs' => $pending,
         ];
     }
 
@@ -180,7 +220,9 @@ final class ProductCatalogHealthService
     /** @return list<int> */
     private function candidateIds(string $reason, ?string $manufacturer): array
     {
-        $query = Product::query()->orderBy('id');
+        $query = Product::query()
+            ->orderBy('id')
+            ->where('enrichment_status', '!=', Product::ENRICHMENT_MANUAL);
         if ($manufacturer !== null && trim($manufacturer) !== '') {
             $query->where('manufacturer', $manufacturer);
         }

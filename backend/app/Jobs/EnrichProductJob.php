@@ -190,7 +190,8 @@ class EnrichProductJob implements ShouldQueue
         string $error,
         string $batchPrefix,
     ): void {
-        if ($product !== null && $product->enrichment_status !== Product::ENRICHMENT_DONE) {
+        $keepStatus = [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL];
+        if ($product !== null && ! in_array($product->enrichment_status, $keepStatus, true)) {
             $product->update([
                 'enrichment_status' => Product::ENRICHMENT_FAILED,
                 'enrichment_error' => mb_substr($error, 0, 2000),

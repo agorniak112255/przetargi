@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\EnrichProductJob;
 use App\Models\AiSetting;
 use App\Models\PriceList;
@@ -33,6 +34,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
+use RuntimeException;
 use Tests\TestCase;
 
 final class ProductEnrichmentApiTest extends TestCase
@@ -398,6 +400,55 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
         $this->assertSame('Opis z cache SKU.', $product->description);
         $this->assertTrue((bool) ($product->enrichment_payload['from_cache'] ?? false));
+    }
+
+    public function test_product_absent_from_web_goes_to_manual_and_leaves_queues(): void
+    {
+        Sanctum::actingAs($user = User::factory()->withRole('admin')->create());
+
+        $product = $this->makeProduct([
+            'sku' => 'UVEX-GK-PROGR-CR39',
+            'manufacturer' => 'UVEX',
+            'description' => null,
+        ]);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ProductDocumentFinder::class),
+            app(ManufacturerDomainResolver::class),
+            Mockery::mock(OpenAiCompatibleClient::class),
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException) {
+            // status ma zostać ustawiony mimo wyjątku
+        }
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+
+        $this->getJson('/api/products/catalog-health')
+            ->assertOk()
+            ->assertJsonPath('manual_review', 1)
+            ->assertJsonPath('missing_description', 0);
+
+        // ponowne kolejkowanie ma go pominąć, ręczne wymuszenie nadal działa
+        $this->expectException(RuntimeException::class);
+        app(ProductEnrichmentService::class)->enqueueProductIds([$product->id], $user, false);
     }
 
     public function test_enrichment_service_saves_description_and_image(): void
