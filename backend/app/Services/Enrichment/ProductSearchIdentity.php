@@ -519,12 +519,10 @@ final class ProductSearchIdentity
                 $product
             );
         }
-        if (! $usableSku) {
-            // „URG-C-SPODNIE” w sklepie występuje jako „URG-C” — próbujemy po nazwie
-            $core = $this->internalSkuCore($product);
-            if ($core !== '') {
-                $out[] = $this->queryWithManufacturer($core, $product);
-            }
+        // „URG-C-SPODNIE” w sklepie występuje jako „URG-C”, a „ERGOPRIMA45” jako „ERGOPRIMA”
+        $core = $this->internalSkuCore($product);
+        if ($core !== '' && mb_strtolower($core) !== mb_strtolower($sku)) {
+            $out[] = $this->queryWithManufacturer($core, $product);
         }
 
         return array_values(array_unique(array_filter(
@@ -982,6 +980,13 @@ final class ProductSearchIdentity
      */
     public function internalSkuCore(Product $product): string
     {
+        // „ERGOPRIMA45”, „ERGOMASTER60VL” — model sklejony z rozmiarem, bez separatora.
+        // Krótkie litery („NB27”) i długie ogony cyfr („MAXIFLEX34874”) zostają nietknięte,
+        // bo tam cyfry są częścią numeru katalogowego, a nie rozmiarem.
+        if (preg_match('/^(\p{L}{5,})(\d{1,3})(\p{L}{0,3})$/u', trim((string) $product->sku), $m) === 1) {
+            return $m[1];
+        }
+
         if (! $this->looksLikeInternalSku($product)) {
             return '';
         }

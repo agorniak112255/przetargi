@@ -116,6 +116,34 @@ final class EnrichmentQueryLadderTest extends TestCase
         ));
     }
 
+    public function test_model_glued_with_size_is_searched_without_the_size(): void
+    {
+        $identity = new ProductSearchIdentity();
+        $product = new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'ERGOPRIMA45',
+            'name' => '45CM ERGO ORANGE CUT CUFFS',
+        ]);
+
+        $this->assertSame('ERGOPRIMA', $identity->internalSkuCore($product));
+        $this->assertContains('ERGOPRIMA Rostaing', $identity->primaryQueries($product));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sklep.example/rostaing-ergoprima-rekaw Rostaing ERGOPRIMA rękaw',
+            $product
+        ));
+    }
+
+    public function test_catalog_number_with_long_digits_keeps_full_code(): void
+    {
+        $identity = new ProductSearchIdentity();
+
+        $this->assertSame('', $identity->internalSkuCore(new Product([
+            'manufacturer' => 'ATG',
+            'sku' => 'MAXIFLEX34874',
+            'name' => 'MaxiFlex Ultimate',
+        ])));
+    }
+
     public function test_word_like_sku_needs_brand_on_page(): void
     {
         $identity = new ProductSearchIdentity();
