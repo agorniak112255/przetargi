@@ -1635,12 +1635,10 @@ final class ProductEnrichmentService
             return [];
         }
 
-        $compact = array_map(static function (array $p): array {
-            return [
-                'url' => (string) ($p['url'] ?? ''),
-                'text' => mb_substr((string) ($p['text'] ?? ''), 0, 4500),
-            ];
-        }, array_slice($pageSnippets, 0, 4));
+        $compact = $this->fitPagesToBudget($pageSnippets, 4, 4500, 14000);
+        if ($compact === []) {
+            return $pageSnippets;
+        }
 
         $pagesJson = json_encode($compact, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
@@ -1707,20 +1705,49 @@ SYS,
     }
 
     /**
+     * llama.cpp dzieli kontekst na równoległe sloty, więc jeden prompt ma do dyspozycji
+     * ułamek okna modelu. Bez twardego budżetu kilka dłuższych kart daje HTTP 400.
+     *
+     * @param  list<array{url: string, text: string}>  $pages
+     * @return list<array{url: string, text: string}>
+     */
+    private function fitPagesToBudget(array $pages, int $maxPages, int $perPage, int $total): array
+    {
+        $out = [];
+        $left = $total;
+        foreach (array_slice($pages, 0, $maxPages) as $page) {
+            if ($left <= 0) {
+                break;
+            }
+            $text = trim((string) ($page['text'] ?? ''));
+            if ($text === '') {
+                continue;
+            }
+            $text = mb_substr($text, 0, min($perPage, $left));
+            $left -= mb_strlen($text);
+            $out[] = ['url' => (string) ($page['url'] ?? ''), 'text' => $text];
+        }
+
+        return $out;
+    }
+
+    /**
      * @param  list<array{url: string, title: string, snippet: string}>  $searchResults
      * @param  list<array{url: string, text: string}>  $pageSnippets
      * @return array<string, mixed>
      */
     private function extractWithLlm(Product $product, array $searchResults, array $pageSnippets): array
     {
-        $compactPages = array_map(static function (array $p): array {
+        $compactPages = $this->fitPagesToBudget($pageSnippets, 5, 3500, 13000);
+        $compactSources = array_map(static function (array $r): array {
             return [
-                'url' => $p['url'] ?? '',
-                'text' => mb_substr((string) ($p['text'] ?? ''), 0, 3500),
+                'url' => mb_substr((string) ($r['url'] ?? ''), 0, 300),
+                'title' => mb_substr((string) ($r['title'] ?? ''), 0, 150),
+                'snippet' => mb_substr((string) ($r['snippet'] ?? ''), 0, 200),
             ];
-        }, $pageSnippets);
+        }, array_slice($searchResults, 0, 8));
 
-        $sourcesJson = json_encode($searchResults, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $sourcesJson = json_encode($compactSources, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $pagesJson = json_encode($compactPages, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         return $this->llm->chatJsonEnrichment([
