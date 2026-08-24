@@ -1,4 +1,5 @@
 # Konfiguracja SearXNG pod API JSON dla enrichmentu (PL, bez limitera).
+# Silniki dobrane testem deploy/searxng/probe-engines-server.sh z IP serwera.
 use_default_settings: true
 
 general:
@@ -24,26 +25,61 @@ search:
   default_lang: "pl"
 
 outgoing:
-  request_timeout: 6.0
-  max_request_timeout: 12.0
+  request_timeout: 10.0
+  max_request_timeout: 15.0
   pool_connections: 100
   pool_maxsize: 20
+  retries: 2
+  # Rotacja adresów źródłowych: install-on-server.sh wstawia tu publiczne IP hosta,
+  # dzięki czemu kolejne zapytania nie lecą ciągle z tego samego adresu.
+  # SOURCE_IPS_PLACEHOLDER
 
 engines:
-  - name: google
-    disabled: false
-  - name: bing
-    disabled: false
-  - name: duckduckgo
-    disabled: false
+  # --- przechodzą z serwerowni ---
   - name: qwant
     disabled: false
+    timeout: 10.0
+  - name: yep
+    disabled: false
+    timeout: 10.0
+  - name: google cse
+    disabled: false
+    timeout: 10.0
+
+  # --- captcha / blokada IP serwera: tylko wydłużają zapytanie ---
+  - name: google
+    disabled: true
+  - name: duckduckgo
+    disabled: true
   - name: brave
-    disabled: false
-  - name: mojeek
-    disabled: false
-  # startpage twardo blokuje ruch z serwerowni
+    disabled: true
   - name: startpage
+    disabled: true
+  - name: presearch
+    disabled: true
+  - name: marginalia
+    disabled: true
+  - name: stract
+    disabled: true
+  - name: seekr
+    disabled: true
+  - name: right dao
+    disabled: true
+  - name: yahoo
+    disabled: true
+
+  # --- odpowiadają, ale wynikami bez związku z zapytaniem ---
+  - name: bing
+    disabled: true
+
+  # --- pusto dla kodów produktów ---
+  - name: mojeek
+    disabled: true
+  - name: wiby
+    disabled: true
+  - name: crowdview
+    disabled: true
+  - name: naver
     disabled: true
   - name: wikipedia
     disabled: true
