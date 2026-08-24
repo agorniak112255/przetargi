@@ -146,8 +146,9 @@ final class ProductVectorSearchApiTest extends TestCase
         $llm->shouldReceive('chatJson')
             ->andReturn(
                 [
+                    // frazy celowo nietrafione w LIKE — wektor wchodzi dopiero, gdy SQL nie ma nic
                     'needed' => 'rękawice chemiczne do amoniaku',
-                    'search_phrases' => ['rękawice chemiczne', 'amoniak', 'nitryl'],
+                    'search_phrases' => ['zzz-brak-dopasowania-w-like'],
                 ],
                 [
                     'matches' => [
