@@ -86,13 +86,16 @@ final class CatalogSitemapIndexer
                 if (isset($seen[$loc])) {
                     return true;
                 }
-                if (! $this->belongsToHost($loc, $host)) {
-                    $offHost++;
-
+                // sklepy potrafią trzymać sitemapę pod inną domeną niż karty produktu
+                $locHost = $this->normalizeHost((string) (parse_url($loc, PHP_URL_HOST) ?? ''));
+                if ($locHost === '' || $this->isNoiseHost($locHost)) {
                     return true;
                 }
+                if (! $this->belongsToHost($loc, $host)) {
+                    $offHost++;
+                }
                 $seen[$loc] = true;
-                $rows[] = $this->rowFor($host, $loc);
+                $rows[] = $this->rowFor($locHost, $loc);
                 if (count($rows) >= 500) {
                     $saved += $this->store($rows);
                     $rows = [];
@@ -101,8 +104,11 @@ final class CatalogSitemapIndexer
                 return count($seen) < $maxUrls;
             };
 
-            if ($this->streamLocations($sitemap, $consume)) {
+            if ($this->streamLocations($sitemap, $consume, $deadline)) {
                 $used[] = $sitemap;
+            }
+            if (microtime(true) >= $deadline) {
+                $timedOut = true;
             }
         }
 
@@ -151,13 +157,16 @@ final class CatalogSitemapIndexer
      *
      * @param  callable(string): bool  $onLocation  false przerywa czytanie
      */
-    private function streamLocations(string $url, callable $onLocation): bool
+    private function streamLocations(string $url, callable $onLocation, float $deadline = 0.0): bool
     {
         try {
             $response = Http::withHeaders([
                 'User-Agent' => self::USER_AGENT,
                 'Accept' => 'application/xml,text/xml,text/plain,*/*',
-            ])->timeout(180)->connectTimeout(8)->withOptions(['stream' => true])->get($url);
+            ])->timeout(180)->connectTimeout(8)
+                // bez read_timeout czytanie strumienia potrafi wisieć w nieskończoność
+                ->withOptions(['stream' => true, 'read_timeout' => 20])
+                ->get($url);
         } catch (Throwable $e) {
             Log::info('Sitemap stream failed', ['url' => $url, 'error' => $e->getMessage()]);
 
@@ -180,7 +189,16 @@ final class CatalogSitemapIndexer
         $first = true;
 
         while (! $body->eof()) {
-            $chunk = $body->read(self::CHUNK_BYTES);
+            if ($deadline > 0.0 && microtime(true) >= $deadline) {
+                return true;
+            }
+            try {
+                $chunk = $body->read(self::CHUNK_BYTES);
+            } catch (Throwable $e) {
+                Log::info('Sitemap read stopped', ['url' => $url, 'error' => $e->getMessage()]);
+
+                return true;
+            }
             if ($chunk === '') {
                 break;
             }
@@ -215,22 +233,22 @@ final class CatalogSitemapIndexer
      */
     private function drainLocations(string $buffer, callable $onLocation): ?string
     {
-        $end = strripos($buffer, '</loc>');
-        if ($end === false) {
+        if (preg_match_all('#</(?:[a-z0-9]+:)?loc>#i', $buffer, $tags, PREG_OFFSET_CAPTURE) === 0) {
             // bufor bez pełnego wpisu nie może rosnąć w nieskończoność
-            return mb_strlen($buffer) > self::MAX_BUFFER_BYTES
+            return strlen($buffer) > self::MAX_BUFFER_BYTES
                 ? substr($buffer, -1024)
                 : $buffer;
         }
 
-        $head = substr($buffer, 0, $end + 6);
-        foreach ($this->extractLocations($head) as $loc) {
+        $last = $tags[0][count($tags[0]) - 1];
+        $cut = (int) $last[1] + strlen((string) $last[0]);
+        foreach ($this->extractLocations(substr($buffer, 0, $cut)) as $loc) {
             if ($onLocation($loc) === false) {
                 return null;
             }
         }
 
-        return substr($buffer, $end + 6);
+        return substr($buffer, $cut);
     }
 
     /**
@@ -238,7 +256,8 @@ final class CatalogSitemapIndexer
      */
     public function extractLocations(string $xml): array
     {
-        if (preg_match_all('#<loc>\s*(.*?)\s*</loc>#si', $xml, $m) === 0) {
+        // część sklepów używa prefiksu przestrzeni nazw: <sm:loc>, <image:loc>
+        if (preg_match_all('#<(?:[a-z0-9]+:)?loc>\s*(?:<!\[CDATA\[)?\s*(.*?)\s*(?:\]\]>)?\s*</(?:[a-z0-9]+:)?loc>#si', $xml, $m) === 0) {
             return [];
         }
 
@@ -266,6 +285,18 @@ final class CatalogSitemapIndexer
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
 
         return str_contains($path, 'sitemap') && (str_ends_with($path, '.xml') || str_ends_with($path, '.gz'));
+    }
+
+    /** Portale społecznościowe i wyszukiwarki bywają linkowane w sitemapach — do indeksu nie wnoszą nic. */
+    private function isNoiseHost(string $host): bool
+    {
+        foreach (['google.', 'facebook.', 'youtube.', 'instagram.', 'twitter.', 'x.com', 'linkedin.', 'pinterest.'] as $noise) {
+            if (str_starts_with($host, $noise) || str_contains($host, '.'.$noise)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function belongsToHost(string $url, string $host): bool

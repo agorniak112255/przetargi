@@ -39,9 +39,10 @@ final class CatalogIndexTest extends TestCase
 
         $result = app(CatalogSitemapIndexer::class)->index('optimumbhp.pl');
 
-        $this->assertSame(1, $result['saved']);
+        $this->assertSame(2, $result['saved']);
         $this->assertDatabaseHas('catalog_pages', ['host' => 'optimumbhp.pl']);
-        $this->assertSame(0, CatalogPage::query()->where('url', 'like', '%inny-sklep%')->count());
+        // adres z innej domeny trafia do indeksu pod własnym hostem
+        $this->assertDatabaseHas('catalog_pages', ['host' => 'inny-sklep.pl']);
     }
 
     public function test_reindex_does_not_duplicate_rows(): void
@@ -78,23 +79,46 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://demar24.pl/buty-demar-1202']);
     }
 
-    public function test_counts_locations_pointing_to_other_domains(): void
+    public function test_keeps_locations_pointing_to_other_domains(): void
     {
         Http::fake([
-            'https://gvarant.pl/robots.txt' => Http::response('Sitemap: https://gvarant.pl/sitemap.xml', 200),
-            'https://gvarant.pl/sitemap.xml' => Http::response(
+            'https://atg-glovesolutions.com/robots.txt' => Http::response(
+                'Sitemap: https://atg-glovesolutions.com/sitemap.xml',
+                200
+            ),
+            'https://atg-glovesolutions.com/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><urlset>'
-                .'<url><loc>https://sklep.gvarant.com/produkt-a</loc></url>'
-                .'<url><loc>https://sklep.gvarant.com/produkt-b</loc></url>'
+                .'<url><loc>https://www.atggloves.com/maxiflex-42-874</loc></url>'
+                .'<url><loc>https://www.facebook.com/atggloves</loc></url>'
                 .'</urlset>',
                 200
             ),
         ]);
 
-        $result = app(CatalogSitemapIndexer::class)->index('gvarant.pl');
+        $result = app(CatalogSitemapIndexer::class)->index('atg-glovesolutions.com');
 
-        $this->assertSame(0, $result['saved']);
-        $this->assertSame(2, $result['off_host']);
+        $this->assertSame(1, $result['saved']);
+        $this->assertSame(1, $result['off_host']);
+        $this->assertDatabaseHas('catalog_pages', ['host' => 'atggloves.com']);
+        $this->assertSame(0, CatalogPage::query()->where('url', 'like', '%facebook%')->count());
+    }
+
+    public function test_reads_namespaced_and_cdata_locations(): void
+    {
+        Http::fake([
+            'https://pros.pl/robots.txt' => Http::response('Sitemap: https://pros.pl/sitemap.xml', 200),
+            'https://pros.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><sm:urlset xmlns:sm="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                .'<sm:url><sm:loc><![CDATA[https://pros.pl/produkt/kask-pros-1202]]></sm:loc></sm:url>'
+                .'</sm:urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('pros.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://pros.pl/produkt/kask-pros-1202']);
     }
 
     public function test_finds_product_page_by_code_in_url(): void
