@@ -54,4 +54,17 @@ HTML;
         $this->assertSame($target, $results[0]['url'] ?? null);
         $this->assertSame('Rękawice ROBFM', $results[0]['title'] ?? null);
     }
+
+    public function test_bing_snippet_after_title_is_kept(): void
+    {
+        $target = 'https://shop.example/rekawice-termiczne';
+        $href = 'https://www.bing.com/ck/a?!&amp;u=a1'.rtrim(base64_encode($target), '=').'&amp;ntb=1';
+        $html = '<ol id="b_results"><li class="b_algo"><h2><a href="'.$href.'">Rękawice termiczne</a></h2>'
+            .'<p>Model ROBFM JS Gloves do 250C.</p></li></ol>';
+
+        $results = (new DuckDuckGoHtmlSearch)->parseBingHtml($html);
+
+        $this->assertSame($target, $results[0]['url'] ?? null);
+        $this->assertStringContainsString('ROBFM', $results[0]['snippet'] ?? '');
+    }
 }

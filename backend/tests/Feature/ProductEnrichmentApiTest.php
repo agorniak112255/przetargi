@@ -664,6 +664,70 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertStringContainsString('nv2032ce', mb_strtolower($filtered[0]['url']));
     }
 
+    public function test_distinctive_sku_in_snippet_is_enough(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'ROBFM',
+            'name' => 'ROBFM',
+            'manufacturer' => 'JS Gloves',
+        ]);
+        $method = new \ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
+        $filtered = $method->invoke(app(HybridWebSearchService::class), [
+            [
+                'url' => 'https://shop.example/rekawice-termiczne',
+                'title' => 'Rękawice termiczne',
+                'snippet' => 'Model ROBFM JS Gloves do 250C',
+            ],
+        ], $product);
+
+        $this->assertCount(1, $filtered);
+        $this->assertStringContainsString('rekawice-termiczne', $filtered[0]['url']);
+    }
+
+    public function test_keeps_shop_page_when_sku_only_in_html(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8081/v1',
+            'api_key' => 'local',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'search_engine' => 'duckduckgo',
+            'web_search_enabled' => false,
+        ]);
+        $product = $this->makeProduct([
+            'sku' => 'ROBFM',
+            'name' => 'ROBFM',
+            'manufacturer' => 'JS Gloves',
+        ]);
+        $pageUrl = 'https://shop.example/rekawice-termiczne';
+        Http::fake(function ($request) use ($pageUrl) {
+            if (str_contains($request->url(), 'google.com/search')) {
+                return Http::response(
+                    '<a href="/url?q='.rawurlencode($pageUrl).'&amp;sa=U">Rękawice termiczne</a>',
+                    200
+                );
+            }
+            if ($request->url() === $pageUrl) {
+                return Http::response(
+                    '<html><body><h1>Rękawice termiczne</h1><p>'
+                    .str_repeat('Rękawice ochronne ROBFM JS Gloves do 250C. ', 40)
+                    .'</p></body></html>',
+                    200,
+                    ['Content-Type' => 'text/html']
+                );
+            }
+
+            return Http::response('unused', 404);
+        });
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame($pageUrl, $pack['results'][0]['url'] ?? null);
+    }
+
     public function test_search_stops_when_sku_hits_open_web(): void
     {
         $this->seedTavilySettings();

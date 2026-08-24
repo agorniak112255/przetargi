@@ -16,7 +16,7 @@ use Throwable;
  */
 final class DuckDuckGoHtmlSearch
 {
-    private const QUERY_CACHE_PREFIX = 'free_web_search_v2:';
+    private const QUERY_CACHE_PREFIX = 'free_web_search_v3:';
 
     private const GATE_KEY = 'free_web_search_gate';
 
@@ -264,21 +264,24 @@ final class DuckDuckGoHtmlSearch
         $out = [];
         $seen = [];
         if (preg_match_all(
-            '/<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>.*?<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/is',
+            '/<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>(.*?)<\/li>/is',
             $html,
-            $matches,
+            $items,
             PREG_SET_ORDER
         ) === 0) {
             return [];
         }
 
-        foreach ($matches as $match) {
+        foreach ($items as $item) {
+            $block = (string) ($item[1] ?? '');
+            if (preg_match('/<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/is', $block, $match) !== 1) {
+                continue;
+            }
             $url = $this->decodeBingUrl((string) ($match[1] ?? ''));
             if ($url === null) {
                 continue;
             }
             $snippet = '';
-            $block = (string) ($match[0] ?? '');
             if (preg_match('/<p[^>]*>(.*?)<\/p>/is', $block, $p) === 1) {
                 $snippet = trim(html_entity_decode(strip_tags($p[1]), ENT_QUOTES | ENT_HTML5));
             } elseif (preg_match('/<cite[^>]*>(.*?)<\/cite>/is', $block, $cite) === 1) {

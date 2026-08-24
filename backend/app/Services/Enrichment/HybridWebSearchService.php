@@ -17,7 +17,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v21';
+    private const SEARCH_CACHE_VERSION = 'v22';
 
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -25,6 +25,7 @@ class HybridWebSearchService
         private readonly DuckDuckGoHtmlSearch $duckDuckGo,
         private readonly ManufacturerDomainResolver $manufacturers,
         private readonly ProductSearchIdentity $identity,
+        private readonly ProductPageFetcher $pages,
     ) {}
 
     /**
@@ -437,8 +438,11 @@ class HybridWebSearchService
             $pack = $this->searchViaConfiguredEngine($query, $includeDomains, $profile);
             $packResults = $this->filterResultsByIdentity($pack['results'], $product);
             if ($packResults === [] && $pack['results'] !== []) {
+                $packResults = $this->keepHitsMentioningSkuOnPage($pack['results'], $product);
+            }
+            if ($packResults === [] && $pack['results'] !== []) {
                 $errors[] = 'Odrzucono '.count($pack['results'])
-                    .' stron bez SKU '.$product->sku.' w tytule/URL.';
+                    .' stron bez SKU '.$product->sku.' w tytule/URL (sprawdzono też treść kart).';
             }
             $provider = $includeDomains !== []
                 ? $this->searchProviderName().'_manufacturer'
@@ -505,8 +509,9 @@ class HybridWebSearchService
             if (! $this->identity->hayMentionsProduct($hay, $product)) {
                 continue;
             }
-            // Kod/model musi być w URL lub tytule — sam snippet (blog/listing) nie wystarczy
-            if (! $this->identity->coreInUrlOrTitle($url, $title, $product)) {
+            // Krótki kod (1000) — tylko URL/tytuł. ROBFM / 3-60NM może być w snippecie sklepu.
+            if (! $this->identity->coreInUrlOrTitle($url, $title, $product)
+                && ! $this->isDistinctiveSku($product)) {
                 continue;
             }
             if (preg_match('#(ochronki na buty|shoe[- ]?cover|folie na buty|nakladki na obuwie)#i', $hay)) {
@@ -565,6 +570,49 @@ class HybridWebSearchService
         }
 
         return $out;
+    }
+
+    /**
+     * Sklep często nie ma SKU w slugu — otwórz 5 kart i zostaw te z kodem w treści.
+     *
+     * @param  list<array{url?: string, title?: string, snippet?: string}>  $results
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function keepHitsMentioningSkuOnPage(array $results, Product $product): array
+    {
+        $fetched = $this->pages->fetch($results, (string) $product->sku, 5, []);
+        $out = [];
+        foreach ($fetched['pages'] as $page) {
+            $url = (string) ($page['url'] ?? '');
+            $text = (string) ($page['text'] ?? '');
+            if ($url === '' || $text === '') {
+                continue;
+            }
+            if (! $this->identity->hayMentionsProduct($url.' '.$text, $product)) {
+                continue;
+            }
+            $title = '';
+            foreach ($results as $row) {
+                if (is_array($row) && mb_strtolower((string) ($row['url'] ?? '')) === mb_strtolower($url)) {
+                    $title = (string) ($row['title'] ?? '');
+                    break;
+                }
+            }
+            $out[] = [
+                'url' => $url,
+                'title' => $title !== '' ? $title : $url,
+                'snippet' => mb_substr($text, 0, 400),
+            ];
+        }
+
+        return $out;
+    }
+
+    private function isDistinctiveSku(Product $product): bool
+    {
+        $sku = trim((string) $product->sku);
+
+        return mb_strlen($sku) >= 4 && preg_match('/[a-z]/iu', $sku) === 1;
     }
 
     private function isListingWithoutProduct(string $url, Product $product): bool
