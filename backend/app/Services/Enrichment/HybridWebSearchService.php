@@ -35,7 +35,27 @@ class HybridWebSearchService
         private readonly ManufacturerDomainResolver $manufacturers,
         private readonly ProductSearchIdentity $identity,
         private readonly ProductPageFetcher $pages,
+        private readonly CatalogIndexSearch $catalog,
     ) {}
+
+    /**
+     * Lokalny indeks sitemap — darmowy i bez limitów, więc pytamy go pierwszego.
+     *
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function catalogHits(Product $product): array
+    {
+        try {
+            return $this->filterResultsByIdentity($this->catalog->findFor($product), $product);
+        } catch (Throwable $e) {
+            Log::info('Catalog index lookup failed', [
+                'product_id' => $product->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+    }
 
     /**
      * @return array{
@@ -51,6 +71,16 @@ class HybridWebSearchService
         if ($this->settings->enrichmentUsesLargeModel()) {
             return $this->searchViaLargeModel($product, $phase, $queries);
         }
+        $catalogHits = $this->catalogHits($product);
+        if ($this->hasEnoughPageResults($catalogHits, 1)) {
+            return [
+                'results' => array_slice($catalogHits, 0, 8),
+                'images' => [],
+                'provider' => 'catalog_index',
+                'raw_content' => null,
+            ];
+        }
+
         $cfg = $this->settings->resolve();
         $profile = $this->settings->tavilySearchProfile();
         $skuQuery = $this->primarySkuQuery($product, $queries);
@@ -107,6 +137,16 @@ class HybridWebSearchService
      */
     private function searchViaLargeModel(Product $product, string $phase, array $queries): array
     {
+        $catalogHits = $this->catalogHits($product);
+        if ($this->hasEnoughPageResults($catalogHits, 1)) {
+            return [
+                'results' => array_slice($catalogHits, 0, 8),
+                'images' => [],
+                'provider' => 'catalog_index',
+                'raw_content' => null,
+            ];
+        }
+
         $skuQuery = $this->primarySkuQuery($product, $queries);
         $profile = $this->settings->tavilySearchProfile();
         $found = $this->searchSkuThenManufacturerSite(
