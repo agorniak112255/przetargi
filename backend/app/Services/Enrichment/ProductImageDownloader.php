@@ -61,6 +61,10 @@ final class ProductImageDownloader
         if (str_contains($host, 'cloudfront.net') && preg_match('#^/images/[^/]+/#i', $path) === 1) {
             return true;
         }
+        // Cloudflare Images: /{konto}/{id-obrazka}/{wariant} — nigdy bez rozszerzenia
+        if ($host === 'imagedelivery.net' && preg_match('#^/[^/]+/[^/]+/[^/]+$#', $path) === 1) {
+            return true;
+        }
 
         return false;
     }

@@ -74,6 +74,11 @@ final class ProductImageCandidateVerifier
             }
         }
 
+        usort(
+            $unverified,
+            fn (string $a, string $b): int => $this->layoutPenalty($a) <=> $this->layoutPenalty($b)
+        );
+
         $loaded = [];
         foreach (array_slice($unverified, 0, self::MAX_AI_CANDIDATES) as $url) {
             $image = $this->loadForVision($url);
@@ -165,6 +170,20 @@ final class ProductImageCandidateVerifier
             '/(?:^|[\/_.-])(logo|icon|sprite|favicon|banner|newsletter|payment|shipping|avatar|flag|menu)(?:[\/_.-]|$)/u',
             $path
         ) !== 1;
+    }
+
+    /**
+     * Grafiki nawigacji („/imgs/icons/menu-slab/ppe.webp”) przechodzą filtr nazw,
+     * a zajmują miejsca w limicie kandydatów dla Vision — idą więc na koniec kolejki.
+     */
+    private function layoutPenalty(string $url): int
+    {
+        $path = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+
+        return preg_match(
+            '#(?:^|[/_.-])(icons?|menu|nav|header|footer|banners?|badges?|thumbs?|sprites?|social)(?:[/_.-]|$)#u',
+            $path
+        ) === 1 ? 1 : 0;
     }
 
     /**

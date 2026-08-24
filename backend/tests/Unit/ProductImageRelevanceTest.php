@@ -73,6 +73,16 @@ final class ProductImageRelevanceTest extends TestCase
         $this->assertTrue($identity->isTrustedPageImageUrl($url, $product));
     }
 
+    public function test_accepts_cloudflare_images_url_without_extension(): void
+    {
+        $this->assertTrue(ProductImageDownloader::looksLikeImageUrl(
+            'https://imagedelivery.net/ICWTp6FWPGokq8hKKaA1Qg/9b927875-23ca-4e3b-1954-86d58f6d8500/medium'
+        ));
+        $this->assertFalse(ProductImageDownloader::looksLikeImageUrl(
+            'https://imagedelivery.net/ICWTp6FWPGokq8hKKaA1Qg'
+        ));
+    }
+
     public function test_ansell_aliases_match_pim_ashx(): void
     {
         $identity = new ProductSearchIdentity;
