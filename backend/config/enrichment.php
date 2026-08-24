@@ -71,10 +71,10 @@ return [
         'kcl' => ['kcl.de', 'www.kcl.de'],
         'rostaing' => ['rostaing.com', 'www.rostaing.com'],
         'gvs' => ['gvs.com', 'www.gvs.com'],
-        'weldas' => ['weldas.com', 'www.weldas.com'],
+        'weldas' => ['weldaseurope.com', 'www.weldaseurope.com', 'weldas.com', 'www.weldas.com'],
         'mapa' => ['mapa-pro.com', 'www.mapa-pro.com'],
-        'cxs' => ['cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
-        'canis' => ['cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
+        'cxs' => ['cxs.net.pl', 'www.cxs.net.pl', 'cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
+        'canis' => ['cxs.net.pl', 'www.cxs.net.pl', 'cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
         'medibut' => ['medibut.pl', 'www.medibut.pl'],
         'panther' => ['panther-safety.com', 'www.panther-safety.com'],
     ],
@@ -97,6 +97,13 @@ return [
         'www.pros.pl',
         'optimumbhp.pl',
         'www.optimumbhp.pl',
+        // znalezione przez „catalog:index --discover” dla marek bez pokrycia
+        'bpbhp.pl',
+        'rywal.com.pl',
+        'centrumspawalnicze.pl',
+        'dobryspaw.pl',
+        'centrumelektronarzedzi.pl',
+        '3mpolska.pl',
     ],
 
     /*
