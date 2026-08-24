@@ -980,10 +980,18 @@ final class ProductSearchIdentity
      */
     public function internalSkuCore(Product $product): string
     {
+        $sku = trim((string) $product->sku);
+
+        // „BLACKNITT11” — Rostaing dokleja rozmiar jako T08–T14 (taille), więc to „T”
+        // należy do rozmiaru, nie do nazwy modelu. Zakres cyfr chroni „COMFORT45”.
+        if (preg_match('/^(\p{L}{5,})T(0\d|1[0-4])$/u', $sku, $m) === 1) {
+            return $m[1];
+        }
+
         // „ERGOPRIMA45”, „ERGOMASTER60VL” — model sklejony z rozmiarem, bez separatora.
         // Krótkie litery („NB27”) i długie ogony cyfr („MAXIFLEX34874”) zostają nietknięte,
         // bo tam cyfry są częścią numeru katalogowego, a nie rozmiarem.
-        if (preg_match('/^(\p{L}{5,})(\d{1,3})(\p{L}{0,3})$/u', trim((string) $product->sku), $m) === 1) {
+        if (preg_match('/^(\p{L}{5,})(\d{1,3})(\p{L}{0,3})$/u', $sku, $m) === 1) {
             return $m[1];
         }
 

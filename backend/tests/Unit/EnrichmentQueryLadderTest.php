@@ -133,6 +133,28 @@ final class EnrichmentQueryLadderTest extends TestCase
         ));
     }
 
+    public function test_french_size_marker_is_not_part_of_the_model_name(): void
+    {
+        $identity = new ProductSearchIdentity();
+
+        $this->assertSame('BLACKTACTILTOUCH', $identity->internalSkuCore(new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'BLACKTACTILTOUCHT11',
+            'name' => 'BLACK TACTIL TOUCH',
+        ])));
+        $this->assertSame('BLACKNIT', $identity->internalSkuCore(new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'BLACKNITT11',
+            'name' => 'BLACKNIT',
+        ])));
+        // rozmiar 45 to nie taille, więc „T” zostaje częścią modelu
+        $this->assertSame('COMFORT', $identity->internalSkuCore(new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'COMFORT45',
+            'name' => 'Comfort 45',
+        ])));
+    }
+
     public function test_catalog_number_with_long_digits_keeps_full_code(): void
     {
         $identity = new ProductSearchIdentity();
