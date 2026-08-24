@@ -177,6 +177,31 @@ HTML;
         $this->assertSame([], $result['trusted_image_urls']);
     }
 
+    public function test_reads_card_through_reader_when_shop_waf_returns_403(): void
+    {
+        $pageUrl = 'https://www.gloves.co.uk/rostaing-carpro-gloves.html';
+        // reader musi być pierwszy: atrapy Laravela dopasowują z gwiazdką z przodu,
+        // więc wzorzec sklepu złapałby też adres „r.jina.ai/<url sklepu>”
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                "Title: Rostaing CARPRO\n\nMarkdown Content:\n"
+                .str_repeat('Rękawice Rostaing CARPRO do prac ogrodowych. ', 20),
+                200
+            ),
+            $pageUrl => Http::response('Access denied', 403),
+        ]);
+
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Rostaing CARPRO',
+            'snippet' => '',
+        ]], 'CARPRO/IT10', 1);
+
+        $this->assertCount(1, $result['pages']);
+        $this->assertSame($pageUrl, $result['pages'][0]['url']);
+        $this->assertStringContainsString('CARPRO', $result['pages'][0]['text']);
+    }
+
     public function test_skips_dead_first_link_and_keeps_best_of_working_pages(): void
     {
         $dead = 'https://roboczystyl.pl/product/robfm';

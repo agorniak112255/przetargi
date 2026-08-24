@@ -118,6 +118,44 @@ final class ProductPageFetcher
         }
     }
 
+    /** Kody, którymi WAF-y odsyłają boty, zanim w ogóle dojdzie do treści karty. */
+    private function isBlockedStatus(?int $status): bool
+    {
+        return $status !== null && in_array($status, [401, 403, 405, 429, 451, 503], true);
+    }
+
+    /**
+     * @param  list<array{url: string, text: string}>  $goodPages
+     * @param  list<string>  $images
+     * @param  list<string>  $documents
+     */
+    private function ingestViaReader(
+        string $url,
+        array &$goodPages,
+        array &$images,
+        array &$documents,
+    ): bool {
+        $viaReader = $this->blockedPages->fetch($url);
+        if ($viaReader === null) {
+            return false;
+        }
+
+        $used = false;
+        if ($viaReader['text'] !== '') {
+            $goodPages[] = ['url' => $url, 'text' => $viaReader['text']];
+            $used = true;
+        }
+        foreach ($viaReader['image_urls'] as $img) {
+            $images[] = $img;
+            $used = true;
+        }
+        foreach ($viaReader['document_urls'] as $doc) {
+            $documents[] = $doc;
+        }
+
+        return $used;
+    }
+
     /**
      * @param  array{url: string, title?: string, snippet?: string}  $row
      * @param  list<array{url: string, text: string}>  $goodPages
@@ -142,10 +180,14 @@ final class ProductPageFetcher
         $ok = $response instanceof Response && $response->successful();
 
         if (! $ok) {
-            Log::info('Product page fetch skipped', [
-                'url' => $url,
-                'status' => $response instanceof Response ? $response->status() : null,
-            ]);
+            $status = $response instanceof Response ? $response->status() : null;
+            // WAF sklepu (gloves.co.uk, rs-online) odrzuca IP serwerowni jeszcze przed treścią,
+            // więc kartę czytamy przez zewnętrzny reader zamiast odpuszczać stronę.
+            if ($this->isBlockedStatus($status)
+                && $this->ingestViaReader($url, $goodPages, $images, $documents)) {
+                return;
+            }
+            Log::info('Product page fetch skipped', ['url' => $url, 'status' => $status]);
             $snippet = trim((string) ($row['snippet'] ?? ''));
             if ($snippet !== '') {
                 $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
@@ -156,18 +198,7 @@ final class ProductPageFetcher
 
         $html = $response->body();
         if ($this->looksLikeBotWall($html)) {
-            $viaReader = $this->blockedPages->fetch($url);
-            if ($viaReader !== null) {
-                if ($viaReader['text'] !== '') {
-                    $goodPages[] = ['url' => $url, 'text' => $viaReader['text']];
-                }
-                foreach ($viaReader['image_urls'] as $img) {
-                    $images[] = $img;
-                }
-                foreach ($viaReader['document_urls'] as $doc) {
-                    $documents[] = $doc;
-                }
-            } else {
+            if (! $this->ingestViaReader($url, $goodPages, $images, $documents)) {
                 $snippet = trim((string) ($row['snippet'] ?? ''));
                 if ($snippet !== '') {
                     $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
