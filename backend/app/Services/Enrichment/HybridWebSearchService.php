@@ -201,6 +201,7 @@ class HybridWebSearchService
                 'Brak stron produktu (duży model, SKU '.$product->sku
                 .($bare !== '' && $bare !== $product->sku ? ' / '.$bare : '')
                 .'). '
+                .$this->triedQueriesNote($product, $queries)
                 .($errors !== [] ? implode(' | ', array_slice($errors, 0, 2)) : '')
             );
         }
@@ -383,6 +384,18 @@ class HybridWebSearchService
 
         return 'enrich_search_'.self::SEARCH_CACHE_VERSION.':'
             .hash('sha256', $payload);
+    }
+
+    /**
+     * Bez tego komunikat sugeruje, że pytaliśmy wyłącznie o SKU.
+     *
+     * @param  list<string>  $queries
+     */
+    private function triedQueriesNote(Product $product, array $queries): string
+    {
+        $tried = $this->openSearchQueries($product, $queries);
+
+        return $tried === [] ? '' : 'Szukano: „'.implode('”, „', $tried).'”. ';
     }
 
     /**
