@@ -297,7 +297,8 @@ final class ProductEnrichmentService
             );
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets);
 
-            $description = $this->composeFullDescription($extracted);
+            $rawDescription = $this->composeFullDescription($extracted);
+            $description = $rawDescription;
             if (! $this->isUsableProductDescription($description, $product)) {
                 $description = '';
             }
@@ -339,6 +340,18 @@ final class ProductEnrichmentService
             }
 
             if ($description === '' || $this->looksLikeMissingCardMeta($description)) {
+                Log::warning('Product description rejected', [
+                    'product_id' => $product->id,
+                    'sku' => $product->sku,
+                    'pages' => array_slice(array_column($pageSnippets, 'url'), 0, 5),
+                    'raw_length' => mb_strlen($rawDescription),
+                    'raw_head' => mb_substr($rawDescription, 0, 300),
+                    'mentions_product' => $rawDescription !== ''
+                        && $this->descriptionMentionsProduct($rawDescription, $product),
+                    'thin' => $rawDescription !== '' && $this->looksLikeThinDescription($rawDescription),
+                    'card_meta' => $rawDescription !== '' && $this->looksLikeMissingCardMeta($rawDescription),
+                ]);
+
                 throw new RuntimeException(
                     'Nie udało się zebrać pełnego opisu ze stron zawierających SKU '.$product->sku.'.'
                 );
