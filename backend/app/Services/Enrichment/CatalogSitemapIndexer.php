@@ -80,8 +80,9 @@ final class CatalogSitemapIndexer
                 break;
             }
 
+            $found = 0;
             $consume = function (string $loc) use (
-                &$sitemaps, &$seen, &$rows, &$saved, &$offHost, &$timedOut,
+                &$sitemaps, &$seen, &$rows, &$saved, &$offHost, &$timedOut, &$found,
                 $host, $maxUrls, $deadline
             ): bool {
                 if (microtime(true) >= $deadline) {
@@ -89,6 +90,7 @@ final class CatalogSitemapIndexer
 
                     return false;
                 }
+                $found++;
                 if ($this->looksLikeSitemap($loc)) {
                     if (count($sitemaps) < self::MAX_SITEMAP_FILES && ! in_array($loc, $sitemaps, true)) {
                         $sitemaps[] = $loc;
@@ -117,7 +119,9 @@ final class CatalogSitemapIndexer
                 return count($seen) < $maxUrls;
             };
 
-            if ($this->streamLocations($sitemap, $consume, $deadline)) {
+            // liczymy tylko mapy, które faktycznie coś dały — inaczej raport
+            // pokazuje soft-404 sklepu jako znalezioną sitemapę
+            if ($this->streamLocations($sitemap, $consume, $deadline) && $found > 0) {
                 $used[] = $sitemap;
             }
             if (microtime(true) >= $deadline) {
@@ -200,6 +204,11 @@ final class CatalogSitemapIndexer
         if (! $response->successful()) {
             return false;
         }
+        // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
+        // bez tego pobralibyśmy 130 kB HTML-a dla każdej zgadywanej ścieżki
+        if (str_contains(mb_strtolower((string) $response->header('Content-Type')), 'html')) {
+            return false;
+        }
 
         $body = $response->toPsrResponse()->getBody();
         if (! $body->isReadable()) {
@@ -235,6 +244,9 @@ final class CatalogSitemapIndexer
             }
             if ($inflate !== false && $inflate !== null) {
                 $chunk = (string) inflate_add($inflate, $chunk);
+            }
+            if ($buffer === '' && $this->looksLikeHtml($chunk)) {
+                return false;
             }
 
             $buffer .= $chunk;
@@ -349,6 +361,16 @@ final class CatalogSitemapIndexer
         $decoded = mb_strtolower(urldecode($url).' '.$title);
 
         return trim((string) preg_replace('/\s+/u', ' ', $decoded));
+    }
+
+    /** Część serwerów podaje HTML jako text/plain — rozstrzyga dopiero początek treści. */
+    private function looksLikeHtml(string $chunk): bool
+    {
+        $head = mb_strtolower(ltrim(mb_substr($chunk, 0, 512)));
+
+        return str_starts_with($head, '<!doctype html')
+            || str_starts_with($head, '<html')
+            || (str_contains($head, '<head') && ! str_contains($head, '<loc'));
     }
 
     private function looksLikeSitemap(string $url): bool

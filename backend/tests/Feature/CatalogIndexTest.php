@@ -61,6 +61,23 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame(1, CatalogPage::query()->count());
     }
 
+    public function test_soft_404_page_is_not_counted_as_sitemap(): void
+    {
+        Http::fake([
+            'https://gvarant.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            '*' => Http::response(
+                '<!DOCTYPE html><html><head><title>Sklep</title></head><body>Nie znaleziono</body></html>',
+                200,
+                ['Content-Type' => 'text/html; charset=utf-8']
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('gvarant.pl');
+
+        $this->assertSame(0, $result['urls']);
+        $this->assertSame([], $result['sitemaps']);
+    }
+
     public function test_reads_gzipped_sitemap(): void
     {
         Http::fake([

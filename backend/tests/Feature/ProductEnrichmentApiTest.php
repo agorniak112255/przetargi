@@ -988,12 +988,13 @@ final class ProductEnrichmentApiTest extends TestCase
     public function test_search_falls_back_to_manufacturer_site_when_sku_misses(): void
     {
         $this->seedTavilySettings();
+        // marka spoza config/enrichment.php — inaczej domena byłaby znana i nie byłoby czego szukać
         $product = $this->makeProduct([
             'sku' => 'NV2032CE',
             'name' => 'Astro Cleat',
-            'manufacturer' => 'GVS',
+            'manufacturer' => 'Novacleat',
         ]);
-        $mfrUrl = 'https://www.gvs.com/products/nv2032ce-astro-cleat';
+        $mfrUrl = 'https://www.novacleat.com/products/nv2032ce-astro-cleat';
         $openQueries = [];
         $discoverQueries = [];
         $mfrQueries = [];
@@ -1022,7 +1023,7 @@ final class ProductEnrichmentApiTest extends TestCase
                     'results' => [[
                         'url' => $mfrUrl,
                         'title' => 'NV2032CE',
-                        'content' => 'GVS',
+                        'content' => 'Novacleat',
                     ]],
                 ], 200);
             }
@@ -1030,8 +1031,8 @@ final class ProductEnrichmentApiTest extends TestCase
 
             return Http::response([
                 'results' => [[
-                    'url' => 'https://gvs.sklep.pl/knx',
-                    'title' => 'GVS KNX',
+                    'url' => 'https://novacleat.sklep.pl/knx',
+                    'title' => 'Novacleat KNX',
                     'content' => 'Bramka KNX',
                 ]],
             ], 200);
@@ -1041,14 +1042,14 @@ final class ProductEnrichmentApiTest extends TestCase
 
         // najpierw sam kod z producentem, potem nazwa z kodem, na końcu fraza z BHP
         $this->assertSame([
-            'NV2032CE GVS',
-            'Astro Cleat NV2032CE GVS',
-            'Astro Cleat NV2032CE GVS BHP',
+            'NV2032CE Novacleat',
+            'Astro Cleat NV2032CE Novacleat',
+            'Astro Cleat NV2032CE Novacleat BHP',
         ], $openQueries);
         $this->assertNotEmpty($discoverQueries);
         $this->assertStringContainsString('NV2032CE', $discoverQueries[0]);
-        $this->assertStringContainsString('GVS', $discoverQueries[0]);
-        $this->assertSame(['NV2032CE GVS'], $mfrQueries);
+        $this->assertStringContainsString('Novacleat', $discoverQueries[0]);
+        $this->assertSame(['NV2032CE Novacleat'], $mfrQueries);
         $this->assertSame('tavily_manufacturer', $pack['provider']);
         $this->assertSame($mfrUrl, $pack['results'][0]['url'] ?? null);
     }
