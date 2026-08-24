@@ -88,6 +88,18 @@ final class QdrantClient
         }
     }
 
+    /** Kasuje kolekcję aktywnego profilu — konieczne przy zmianie wymiaru wektora. */
+    public function dropCollection(): bool
+    {
+        $response = $this->http()->delete($this->base().'/collections/'.$this->collection());
+
+        if (! $response->successful() && $response->status() !== 404) {
+            throw new RuntimeException('Qdrant delete collection HTTP '.$response->status().': '.$response->body());
+        }
+
+        return $response->successful();
+    }
+
     /**
      * @param  list<float>  $vector
      * @param  array<string, mixed>  $payload
