@@ -611,6 +611,11 @@ final class ProductSearchIdentity
                     && ! $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
                     continue;
                 }
+                // kod będący zwykłym słowem („CASQUE” = kask po francusku) trafia w pół internetu
+                if ($this->isWordLikeToken($token) && $brands !== []
+                    && ! $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
+                    continue;
+                }
 
                 return true;
             }
@@ -635,8 +640,25 @@ final class ProductSearchIdentity
             }
         }
 
+        // Gdy kod niesie nazwę modelu („COUPURE-IT11” → COUPURE), jej brak na stronie
+        // oznacza inny model tej samej marki — dopasowanie po nazwie wpuściłoby fartuch
+        // zamiast rękawicy.
+        if ($this->internalSkuCore($product) !== '') {
+            return false;
+        }
+
         // „SKARPETY-POMARANCZ-ZOLTE” nie istnieje w sieci — zostaje marka i nazwa
         return $this->hayMatchesNameAndBrand($hay, $product);
+    }
+
+    /** Token bez cyfr to zwykłe słowo („casque”, „cut resistant gloves”), nie oznaczenie modelu. */
+    private function isWordLikeToken(string $token): bool
+    {
+        if (preg_match('/\d/u', $token) === 1) {
+            return false;
+        }
+
+        return mb_strlen((string) preg_replace('/[^\p{L}]+/u', '', $token)) >= 4;
     }
 
     /**
@@ -964,14 +986,31 @@ final class ProductSearchIdentity
             return '';
         }
 
+        $segments = array_values(array_filter(preg_split('/[\-\/ ]+/u', trim((string) $product->sku)) ?: []));
+
+        // „COUPURE-IT11”, „PROSOUD/1GAT11” — z przodu nazwa modelu, dalej rozmiar z cyfrą
+        $lead = [];
+        foreach ($segments as $segment) {
+            if (preg_match('/^\p{L}{4,}$/u', $segment) !== 1) {
+                break;
+            }
+            $lead[] = $segment;
+        }
+        if ($lead !== [] && count($lead) < count($segments)) {
+            foreach (array_slice($segments, count($lead)) as $segment) {
+                if (preg_match('/\d/u', $segment) === 1) {
+                    return implode('-', $lead);
+                }
+            }
+        }
+
+        // „URG-C-SPODNIE” — odwrotny układ: kod z przodu, nasz opis na końcu
         $kept = [];
-        foreach (preg_split('/[\-\/ ]+/u', trim((string) $product->sku)) ?: [] as $segment) {
+        foreach ($segments as $segment) {
             if (preg_match('/^\p{L}{4,}$/u', $segment) === 1) {
                 break;
             }
-            if ($segment !== '') {
-                $kept[] = $segment;
-            }
+            $kept[] = $segment;
         }
         if (count($kept) < 2) {
             return '';

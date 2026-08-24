@@ -94,6 +94,48 @@ final class EnrichmentQueryLadderTest extends TestCase
         ])));
     }
 
+    public function test_model_name_from_sku_is_required_on_page(): void
+    {
+        $identity = new ProductSearchIdentity();
+        $product = new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'COUPURE-IT11',
+            'name' => 'T11 PRO CUT-RESISTANT GLOVES',
+        ]);
+
+        $this->assertSame('COUPURE', $identity->internalSkuCore($product));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://gloves.co.uk/rostaing-coupureit-cut-resistant-gloves.html Rostaing COUPURE IT',
+            $product
+        ));
+        // karta rękawic termicznych tej samej marki nie może przejść po słowach z nazwy
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://www.thesafetysupplycompany.co.uk/p/9414695/rostaing-heat-resistant-gloves---mc-heatresist.html '
+            .'Rostaing Heat Resistant Gloves',
+            $product
+        ));
+    }
+
+    public function test_word_like_sku_needs_brand_on_page(): void
+    {
+        $identity = new ProductSearchIdentity();
+        $product = new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'CASQUE',
+            'name' => 'Casque de soudage',
+        ]);
+
+        // „casque” to po francusku kask — bez marki taka strona to przypadkowe trafienie
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://weldas.example/fr/protections-casque-de-soudage Protections pour casque',
+            $product
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sklep.example/rostaing-casque Rostaing casque',
+            $product
+        ));
+    }
+
     public function test_open_search_starts_from_short_queries(): void
     {
         $product = new Product([
