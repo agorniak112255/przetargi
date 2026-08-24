@@ -192,13 +192,16 @@ final class EnrichmentQueryLadderTest extends TestCase
             'name' => 'BLACK FIT',
         ]);
 
+        // nazwa produktu w cenniku to specyfikacja („T10 GLOVES…”), więc o dopasowaniu
+        // decyduje wyłącznie wariant kodu w adresie karty producenta
+        $product->name = 'T10 GLOVES F CUT GUARD 18 PU';
         $this->assertTrue($identity->hayMentionsProduct(
-            'https://sklep.example/rostaing-black-fit Rostaing BLACK-FIT rękawice',
+            'https://www.rostaing.com/gant-anti-coupure-ultra-fin-et-tactile-black-fit.html',
             $product
         ));
         // bez marki wariant kodu nie wystarcza
         $this->assertFalse($identity->hayMentionsProduct(
-            'https://sklep.example/black-fit BLACK-FIT rękawice ogrodowe',
+            'https://sklep.example/black-fit rękawice ogrodowe',
             $product
         ));
         $this->assertContains('BLACK-FIT Rostaing', $identity->primaryQueries($product));

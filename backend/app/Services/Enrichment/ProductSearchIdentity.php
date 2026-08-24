@@ -648,7 +648,7 @@ final class ProductSearchIdentity
         // „BLACKSTICK30+T11” to model plus rozmiar (taille) — w sklepie stoi sam model.
         // Wariant bez rozmiaru wpuszczamy wyłącznie razem z marką na stronie.
         foreach ($this->skuSizeVariants($product) as $variant) {
-            if (! $this->tokenInHay($hay, $hayCompact, $variant)) {
+            if (! $this->tokenInHay($hay, $hayCompact, mb_strtolower($variant))) {
                 continue;
             }
             if ($brands !== [] && ! $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
