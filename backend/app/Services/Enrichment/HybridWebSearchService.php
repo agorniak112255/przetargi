@@ -22,6 +22,9 @@ class HybridWebSearchService
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
 
+    /** Ile różnych fraz próbujemy w otwartym internecie, zanim pójdziemy na domenę producenta. */
+    private const OPEN_QUERY_ATTEMPTS = 3;
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly OpenAiCompatibleClient $llm,
@@ -50,7 +53,7 @@ class HybridWebSearchService
         $skuQuery = $this->primarySkuQuery($product, $queries);
         $found = $this->searchSkuThenManufacturerSite(
             $product,
-            $skuQuery,
+            $this->openSearchQueries($product, $queries),
             $profile,
             $profile->mode,
             $phase
@@ -105,7 +108,7 @@ class HybridWebSearchService
         $profile = $this->settings->tavilySearchProfile();
         $found = $this->searchSkuThenManufacturerSite(
             $product,
-            $skuQuery,
+            $this->openSearchQueries($product, $queries),
             $profile,
             'large_model',
             $phase
@@ -169,6 +172,16 @@ class HybridWebSearchService
     public function forgetProductCache(Product $product): void
     {
         $skuQuery = $this->primarySkuQuery($product, $this->buildQueries($product, 'manufacturer'));
+        foreach (['manufacturer', 'industry'] as $phase) {
+            $ladder = $this->openSearchQueries($product, $this->buildQueries($product, $phase));
+            foreach (array_merge(TavilySearchProfile::MODES, ['large_model']) as $mode) {
+                foreach ($ladder as $query) {
+                    foreach (['open', 'mfr'] as $step) {
+                        Cache::forget($this->searchCacheKey($mode, $phase, $query, $step));
+                    }
+                }
+            }
+        }
         foreach (TavilySearchProfile::MODES as $mode) {
             $profile = TavilySearchProfile::fromMode($mode);
             foreach (['manufacturer', 'industry'] as $phase) {
@@ -339,8 +352,43 @@ class HybridWebSearchService
     }
 
     /**
+     * Frazy dla otwartego internetu — od „URG-914 Urgent” po nazwę z kodem.
+     * Pierwsza, która da karty produktu, kończy szukanie.
+     *
+     * @param  list<string>  $queries
+     * @return list<string>
+     */
+    private function openSearchQueries(Product $product, array $queries): array
+    {
+        $ladder = [];
+        $legacy = $this->legacySafetyShoePhrase($product);
+        if ($legacy !== '') {
+            $ladder[] = $this->identity->queryWithManufacturer(
+                trim('"'.$legacy.'" '.$this->identity->shortBrand((string) $product->manufacturer)),
+                $product
+            );
+        }
+        foreach ($this->identity->primaryQueries($product) as $query) {
+            $ladder[] = $query;
+        }
+        foreach ($queries as $query) {
+            $ladder[] = $query;
+        }
+
+        return array_slice(
+            array_values(array_unique(array_filter(
+                $ladder,
+                static fn (string $q): bool => trim($q) !== ''
+            ))),
+            0,
+            self::OPEN_QUERY_ATTEMPTS
+        );
+    }
+
+    /**
      * 1) SKU w całym internecie; 2) gdy pusto — domena producenta i SKU na jej stronie.
      *
+     * @param  list<string>  $skuQueries
      * @return array{
      *     results: list<array{url: string, title: string, snippet: string}>,
      *     provider: string,
@@ -349,13 +397,14 @@ class HybridWebSearchService
      */
     private function searchSkuThenManufacturerSite(
         Product $product,
-        string $skuQuery,
+        array $skuQueries,
         TavilySearchProfile $profile,
         string $cacheMode,
         string $phase,
     ): array {
         $errors = [];
-        if ($skuQuery === '') {
+        $skuQueries = array_values(array_filter($skuQueries, static fn (string $q): bool => trim($q) !== ''));
+        if ($skuQueries === []) {
             return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => []];
         }
         if ($this->settings->usesTavilySearch()) {
@@ -365,23 +414,26 @@ class HybridWebSearchService
             }
         }
 
-        $open = $this->cachedTavilySearch(
-            $product,
-            $skuQuery,
-            [],
-            $profile,
-            $cacheMode,
-            $phase,
-            'open',
-            $errors
-        );
-        if ($open['results'] !== []) {
-            return [
-                'results' => $open['results'],
-                'provider' => $open['provider'],
-                'errors' => $errors,
-            ];
+        foreach ($skuQueries as $query) {
+            $open = $this->cachedTavilySearch(
+                $product,
+                $query,
+                [],
+                $profile,
+                $cacheMode,
+                $phase,
+                'open',
+                $errors
+            );
+            if ($open['results'] !== []) {
+                return [
+                    'results' => $open['results'],
+                    'provider' => $open['provider'],
+                    'errors' => $errors,
+                ];
+            }
         }
+        $skuQuery = $skuQueries[0];
 
         $mfrDomains = $this->manufacturers->domainsFor($product);
         if ($mfrDomains === []) {

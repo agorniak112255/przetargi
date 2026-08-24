@@ -27,6 +27,8 @@ return [
     'enrichment_batch_limit' => (int) env('AI_ENRICHMENT_BATCH_LIMIT', 5),
     // Ile zapytań AI naraz (1–100): SIWZ i Pobierz z cennika. Zależy od FPM i modelu.
     'match_concurrency' => (int) env('AI_MATCH_CONCURRENCY', 4),
+    // Ile sekund worker czeka na wolny slot enrichmentu, zanim odda produkt kolejce.
+    'enrichment_slot_wait_seconds' => (int) env('AI_ENRICHMENT_SLOT_WAIT', 120),
 
     // RAG / Qdrant
     'vector_enabled' => (bool) env('AI_VECTOR_ENABLED', false),

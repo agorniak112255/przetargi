@@ -448,8 +448,9 @@ export function AiSettingsPage() {
               }
             />
             <span className="mt-1 block text-[11px] text-slate-500">
-              Dopasowanie SIWZ i Pobierz z cennika. 1 = kolejka. 3–6 zwykle bezpiecznie dla
-              lokalnego modelu. 20–100 tylko gdy PHP-FPM i GPU dają radę — inaczej timeouty.
+              Dopasowanie SIWZ oraz twardy limit produktów liczonych naraz przy pobieraniu opisów —
+              wspólny dla wszystkich cenników. Zwolniony slot od razu bierze następny produkt.
+              Ustaw tyle, ile slotów ma model (llama.cpp <code>--parallel</code>).
             </span>
           </label>
           <label className="flex items-center gap-2 text-xs">

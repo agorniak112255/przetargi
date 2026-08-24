@@ -11,6 +11,7 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,6 +23,7 @@ class ProductEnrichmentController extends Controller
     public function __construct(
         private readonly ProductEnrichmentService $enrichment,
         private readonly AiSettingsService $aiSettings,
+        private readonly EnrichmentSlots $slots,
     ) {}
 
     public function limits(): JsonResponse
@@ -163,7 +165,7 @@ class ProductEnrichmentController extends Controller
 
         try {
             $job = new EnrichProductJob($product->id, $batch->id, (bool) $batch->force);
-            $job->handle($this->enrichment, $this->aiSettings);
+            $job->handle($this->enrichment, $this->aiSettings, $this->slots);
         } catch (EnrichmentCancelledException $e) {
             return response()->json([
                 'message' => $e->getMessage(),

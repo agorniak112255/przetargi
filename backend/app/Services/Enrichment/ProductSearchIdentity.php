@@ -470,6 +470,41 @@ final class ProductSearchIdentity
         )));
     }
 
+    /**
+     * Frazy, które realnie trafiają w kartę produktu — od najkrótszej.
+     * „URG-914 Urgent” działa, „Kurtka ostrzegawcza URG-914 Urgent” też;
+     * dopiski kategorii i BHP zostawiamy dopiero na dalsze próby.
+     *
+     * @return list<string>
+     */
+    public function primaryQueries(Product $product): array
+    {
+        $brand = $this->shortBrand((string) $product->manufacturer);
+        $sku = trim((string) $product->sku);
+        $name = trim((string) $product->name);
+        $usableSku = $sku !== '' && ! $this->looksLikeInternalSku($product);
+
+        $out = [];
+        if ($usableSku) {
+            $out[] = $this->queryWithManufacturer($sku, $product);
+            $bare = $this->stripBrandPrefix($sku, $brand);
+            if ($bare !== '' && $bare !== $sku) {
+                $out[] = $this->queryWithManufacturer($bare, $product);
+            }
+        }
+        if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
+            $out[] = $this->queryWithManufacturer(
+                $usableSku && ! $this->phraseHasToken($name, $sku) ? $name.' '.$sku : $name,
+                $product
+            );
+        }
+
+        return array_values(array_unique(array_filter(
+            $out,
+            static fn (string $q): bool => trim($q) !== ''
+        )));
+    }
+
     public function productNameWithManufacturer(Product $product): string
     {
         $name = trim((string) $product->name);
@@ -732,6 +767,15 @@ final class ProductSearchIdentity
         // Rękawice ocieplane polarem muszą wygrać z regułą odzieży niżej
         if (preg_match('#(glove|r[eę]kaw|maxiflex|maxicut|maxidry)#u', $blob)) {
             return 'rękawice';
+        }
+
+        // Kurtka/spodnie ostrzegawcze to hi-vis, nie ubranie wodoochronne
+        if (preg_match('#(hsv|ostrzegawcz|odblask|hi-vis|hivis)#u', $blob) === 1
+            && preg_match(
+                '#(kurtka|spodnie|ubranie|odzież|odziez|płaszcz|plaszcz|bluza|kamizelk|koszulka|softshell|polar|kombinezon)#u',
+                $blob
+            ) === 1) {
+            return 'odzież ostrzegawcza';
         }
 
         // Odzież wodoochronna — słowa z nazwy, NIE sama marka PROS

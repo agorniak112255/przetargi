@@ -6,7 +6,7 @@ import { CrossRefPanel } from '../components/CrossRefPanel'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
-import { clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
+import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { api, can, type EnrichmentBatch, type Product } from '../lib/api'
 
 type Page = {
@@ -206,6 +206,7 @@ export function Products() {
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
   const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
   const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
+  const [enrichConcurrency, setEnrichConcurrency] = useState(4)
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -228,9 +229,15 @@ export function Products() {
 
   useEffect(() => {
     if (!canEnrich) return
-    void api<{ enrichment_batch_limit: number }>('/product-enrichment/limits')
-      .then((res) => setEnrichBatchLimit(clampEnrichmentBatchLimit(res.enrichment_batch_limit)))
-      .catch(() => setEnrichBatchLimit(5))
+    void api<{ enrichment_batch_limit: number; match_concurrency?: number }>('/product-enrichment/limits')
+      .then((res) => {
+        setEnrichBatchLimit(clampEnrichmentBatchLimit(res.enrichment_batch_limit))
+        setEnrichConcurrency(clampAiConcurrency(res.match_concurrency))
+      })
+      .catch(() => {
+        setEnrichBatchLimit(5)
+        setEnrichConcurrency(4)
+      })
   }, [canEnrich])
 
   useEffect(() => {
@@ -379,7 +386,7 @@ export function Products() {
         (ids.length > enrichBatchLimit
           ? `Zlecono ${queuedIds.length}/${ids.length} (limit ${enrichBatchLimit})`
           : `Zlecono ${queuedIds.length} produktów`) +
-          '. Przetwarzają workery na serwerze — możesz zamknąć stronę.',
+          `. Serwer liczy ${enrichConcurrency} naraz — możesz zamknąć stronę.`,
       )
       setSelected({})
     } catch (ex) {
@@ -536,7 +543,7 @@ export function Products() {
                   setVisibleEnrichOpen(true)
                 }}
                 className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
-                title="Pobierz opisy dla widocznych bez danych — przetwarzają workery na serwerze"
+                title={`Pobierz opisy dla widocznych bez danych — serwer liczy ${enrichConcurrency} naraz`}
               >
                 Pobierz widoczne bez opisu
                 {pendingVisible.length > 0 ? ` (${pendingVisible.length})` : ''}

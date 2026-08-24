@@ -8,7 +8,6 @@ APP_ROOT="${1:-/var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl}"
 PHP_BIN="${PHP_BIN:-/opt/plesk/php/8.3/bin/php}"
 OWNER="${OWNER:-supon}"
 GROUP="${GROUP:-psacln}"
-WORKERS="${WORKERS:-8}"
 BACKEND="$APP_ROOT/backend"
 UNIT_NAME="przetargi-enrichment@"
 UNIT_FILE="/etc/systemd/system/${UNIT_NAME}.service"
@@ -20,6 +19,13 @@ if [[ ! -f "$BACKEND/artisan" ]]; then
   echo "ERR: brak $BACKEND/artisan" >&2
   exit 1
 fi
+
+# Domyślnie tyle workerów, ile ustawiono w panelu („Ile zapytań AI naraz”).
+if [[ -z "${WORKERS:-}" ]]; then
+  WORKERS="$("$PHP_BIN" "$BACKEND/artisan" enrichment:concurrency 2>/dev/null | tr -cd '0-9')"
+  echo "==> workery: limit z Ustawień AI = ${WORKERS:-brak odczytu}"
+fi
+WORKERS="${WORKERS:-8}"
 
 if (( WORKERS < 1 || WORKERS > SLOTS_MAX )); then
   echo "ERR: WORKERS=$WORKERS poza zakresem 1-$SLOTS_MAX" >&2
@@ -81,3 +87,5 @@ cd "$BACKEND"
 
 systemctl --no-pager --plain list-units "${UNIT_NAME}*" || true
 echo "==> workery: OK ($WORKERS równolegle, log: $LOG_FILE)"
+echo "    Obniżenie limitu w Ustawieniach AI działa od razu; podniesienie powyżej"
+echo "    $WORKERS wymaga ponownego uruchomienia tego skryptu."

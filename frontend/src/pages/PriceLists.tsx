@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
-import { clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
+import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { api, can, type EnrichmentBatch } from '../lib/api'
 
 type ProgressMode = 'analyze' | 'import' | null
@@ -239,6 +239,7 @@ export function PriceLists() {
   const [enrichBatches, setEnrichBatches] = useState<Record<number, EnrichmentBatch>>({})
   const [enrichBusyId, setEnrichBusyId] = useState<number | null>(null)
   const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
+  const [enrichConcurrency, setEnrichConcurrency] = useState(4)
   const [enrichConfirm, setEnrichConfirm] = useState<{
     row: PriceList
     pending: number
@@ -249,9 +250,15 @@ export function PriceLists() {
 
   useEffect(() => {
     if (!canEnrich) return
-    void api<{ enrichment_batch_limit: number }>('/product-enrichment/limits')
-      .then((res) => setEnrichBatchLimit(clampEnrichmentBatchLimit(res.enrichment_batch_limit)))
-      .catch(() => setEnrichBatchLimit(5))
+    void api<{ enrichment_batch_limit: number; match_concurrency?: number }>('/product-enrichment/limits')
+      .then((res) => {
+        setEnrichBatchLimit(clampEnrichmentBatchLimit(res.enrichment_batch_limit))
+        setEnrichConcurrency(clampAiConcurrency(res.match_concurrency))
+      })
+      .catch(() => {
+        setEnrichBatchLimit(5)
+        setEnrichConcurrency(4)
+      })
   }, [canEnrich])
 
   useEffect(() => {
@@ -403,7 +410,8 @@ export function PriceLists() {
       const ids = res.product_ids ?? []
       setMsg(
         `Zlecono ${ids.length} produktów z „${row.manufacturer} / ${row.version}”. ` +
-          'Przetwarzają workery na serwerze — możesz zamknąć stronę, postęp wróci po odświeżeniu.',
+          `Serwer liczy ${enrichConcurrency} naraz i dobiera następne, gdy zwolni się slot — ` +
+          'możesz zamknąć stronę, postęp wróci po odświeżeniu.',
       )
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd wzbogacania')
@@ -1552,7 +1560,7 @@ export function PriceLists() {
                             ? 'Brak product_ids (stary import)'
                             : enrichFailed > 0
                               ? `Ponów nieudane (${enrichFailed}), max ${enrichBatchLimit} na raz. ${r.enrichment_last_error ?? ''}`
-                              : 'Pobierz opisy/zdjęcia — przetwarzają workery na serwerze'
+                              : `Pobierz opisy/zdjęcia — serwer liczy ${enrichConcurrency} naraz`
                         }
                       >
                         {enrichBusyId === r.id

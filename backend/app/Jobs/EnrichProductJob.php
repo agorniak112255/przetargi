@@ -9,6 +9,7 @@ use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\TavilyQuotaGuard;
 use Illuminate\Bus\Queueable;
@@ -40,8 +41,11 @@ class EnrichProductJob implements ShouldQueue
         public readonly bool $force = false,
     ) {}
 
-    public function handle(ProductEnrichmentService $enrichment, AiSettingsService $aiSettings): void
-    {
+    public function handle(
+        ProductEnrichmentService $enrichment,
+        AiSettingsService $aiSettings,
+        EnrichmentSlots $slots,
+    ): void {
         $product = Product::query()->find($this->productId);
         $batch = ProductEnrichmentBatch::query()->find($this->batchId);
 
@@ -60,6 +64,32 @@ class EnrichProductJob implements ShouldQueue
             return;
         }
 
+        $slot = $slots->acquire(
+            $this->timeout + 60,
+            (float) config('ai.enrichment_slot_wait_seconds', 120)
+        );
+        if ($slot === null) {
+            // Limit z Ustawień AI obłożony — produkt wraca do kolejki bez zużycia próby.
+            self::dispatch($this->productId, $this->batchId, $this->force)
+                ->delay(now()->addSeconds(10));
+            $this->delete();
+
+            return;
+        }
+
+        try {
+            $this->enrich($enrichment, $aiSettings, $product, $batch);
+        } finally {
+            $slot->release();
+        }
+    }
+
+    private function enrich(
+        ProductEnrichmentService $enrichment,
+        AiSettingsService $aiSettings,
+        Product $product,
+        ProductEnrichmentBatch $batch,
+    ): void {
         $claimed = Product::query()
             ->whereKey($product->id)
             ->where('enrichment_status', Product::ENRICHMENT_QUEUED)
