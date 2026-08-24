@@ -418,7 +418,7 @@ final class CatalogSitemapIndexer
             }
         }
 
-        foreach (array_chunk($tokens, 1000) as $chunk) {
+        foreach (array_chunk($tokens, 400) as $chunk) {
             DB::table('catalog_page_tokens')->insertOrIgnore($chunk);
         }
     }
