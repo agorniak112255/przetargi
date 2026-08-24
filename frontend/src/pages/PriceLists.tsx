@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
-import { clampAiConcurrency, clampEnrichmentBatchLimit, mapPool } from '../lib/aiConcurrency'
+import { clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { api, can, type EnrichmentBatch } from '../lib/api'
 
 type ProgressMode = 'analyze' | 'import' | null
@@ -239,7 +239,6 @@ export function PriceLists() {
   const [enrichBatches, setEnrichBatches] = useState<Record<number, EnrichmentBatch>>({})
   const [enrichBusyId, setEnrichBusyId] = useState<number | null>(null)
   const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
-  const [enrichConcurrency, setEnrichConcurrency] = useState(4)
   const [enrichConfirm, setEnrichConfirm] = useState<{
     row: PriceList
     pending: number
@@ -250,15 +249,9 @@ export function PriceLists() {
 
   useEffect(() => {
     if (!canEnrich) return
-    void api<{ enrichment_batch_limit: number; match_concurrency?: number }>('/product-enrichment/limits')
-      .then((res) => {
-        setEnrichBatchLimit(clampEnrichmentBatchLimit(res.enrichment_batch_limit))
-        setEnrichConcurrency(clampAiConcurrency(res.match_concurrency))
-      })
-      .catch(() => {
-        setEnrichBatchLimit(5)
-        setEnrichConcurrency(4)
-      })
+    void api<{ enrichment_batch_limit: number }>('/product-enrichment/limits')
+      .then((res) => setEnrichBatchLimit(clampEnrichmentBatchLimit(res.enrichment_batch_limit)))
+      .catch(() => setEnrichBatchLimit(5))
   }, [canEnrich])
 
   useEffect(() => {
@@ -409,25 +402,8 @@ export function PriceLists() {
       setEnrichBatches((prev) => ({ ...prev, [row.id]: res.batch }))
       const ids = res.product_ids ?? []
       setMsg(
-        `Pobieranie opisów/zdjęć dla „${row.manufacturer} / ${row.version}”: ${ids.length} produktów, ${enrichConcurrency} naraz.`,
-      )
-      await mapPool(ids, enrichConcurrency, async (productId) => {
-        try {
-          const next = await api<{ batch: EnrichmentBatch }>(
-            `/product-enrichment-batches/${res.batch.id}/items/${productId}`,
-            { method: 'POST', body: '{}' },
-          )
-          setEnrichBatches((prev) => ({ ...prev, [row.id]: next.batch }))
-        } catch (itemErr) {
-          setErr(itemErr instanceof Error ? itemErr.message : 'Błąd wzbogacania')
-        }
-      })
-      const latest = await api<EnrichmentBatch>(`/product-enrichment-batches/${res.batch.id}`)
-      setEnrichBatches((prev) => ({ ...prev, [row.id]: latest }))
-      setMsg(
-        `Gotowe: ${latest.done} OK` +
-          (latest.failed > 0 ? `, ${latest.failed} błędów` : '') +
-          ` („${row.manufacturer} / ${row.version}”).`,
+        `Zlecono ${ids.length} produktów z „${row.manufacturer} / ${row.version}”. ` +
+          'Przetwarzają workery na serwerze — możesz zamknąć stronę, postęp wróci po odświeżeniu.',
       )
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd wzbogacania')
@@ -1575,8 +1551,8 @@ export function PriceLists() {
                           productCount === 0
                             ? 'Brak product_ids (stary import)'
                             : enrichFailed > 0
-                              ? `Ponów nieudane (${enrichFailed}), max ${enrichBatchLimit} naraz. ${r.enrichment_last_error ?? ''}`
-                              : `Pobierz opisy/zdjęcia — ${enrichConcurrency} zapytań naraz (Ustawienia AI)`
+                              ? `Ponów nieudane (${enrichFailed}), max ${enrichBatchLimit} na raz. ${r.enrichment_last_error ?? ''}`
+                              : 'Pobierz opisy/zdjęcia — przetwarzają workery na serwerze'
                         }
                       >
                         {enrichBusyId === r.id

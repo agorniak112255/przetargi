@@ -40,7 +40,9 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
-            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 90),
+            // Musi być większe niż najdłuższy job (EnrichProductJob: 420 s),
+            // inaczej kolejka odda ten sam produkt drugiemu workerowi.
+            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 480),
             'after_commit' => false,
         ],
 

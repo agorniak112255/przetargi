@@ -31,6 +31,42 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertStringNotContainsString('ubranie wodoochronne', $joined);
     }
 
+    public function test_urgent_sweatshirt_is_not_treated_as_gloves(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'URG-HSV-WOR-BLUZA',
+            'name' => 'URG-HSV-WOR (bluza)',
+            'manufacturer' => 'Urgent',
+        ]);
+
+        $joined = implode(' | ', $id->searchQueries($product, 'industry'));
+        $this->assertStringNotContainsString('rękawice', $joined);
+        $this->assertStringContainsString('odzież ostrzegawcza', $joined);
+    }
+
+    public function test_internal_price_list_code_is_not_searched_as_model(): void
+    {
+        $id = new ProductSearchIdentity;
+        $internal = new Product([
+            'sku' => 'URG-HSV-WOR-BLUZA',
+            'name' => 'URG-HSV-WOR (bluza)',
+            'manufacturer' => 'Urgent',
+        ]);
+        $this->assertTrue($id->looksLikeInternalSku($internal));
+
+        // kod z rdzeniem modelu zostaje w zapytaniach
+        foreach (['106-SB-ZIMA', '102-S3-TPU', 'ROBFM', 'PROS-1000'] as $sku) {
+            $this->assertFalse(
+                $id->looksLikeInternalSku(new Product(['sku' => $sku, 'manufacturer' => 'Urgent'])),
+                $sku.' nie jest kodem wewnętrznym'
+            );
+        }
+
+        $joined = implode(' | ', $id->searchQueries($internal, 'industry'));
+        $this->assertStringNotContainsString('"URG-HSV-WOR-BLUZA"', $joined);
+    }
+
     public function test_waterproof_name_still_gets_clothing_hint(): void
     {
         $id = new ProductSearchIdentity;

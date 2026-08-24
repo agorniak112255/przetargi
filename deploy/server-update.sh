@@ -83,4 +83,11 @@ else
   echo "UWAGA: brak deploy/ensure-laravel-scheduler.sh — cron schedule:run nie został ustawiony."
 fi
 
+echo "==> workery kolejki (enrichment)"
+if [[ -f "$APP_ROOT/deploy/ensure-enrichment-workers.sh" ]]; then
+  bash "$APP_ROOT/deploy/ensure-enrichment-workers.sh" "$APP_ROOT" || true
+else
+  echo "UWAGA: brak deploy/ensure-enrichment-workers.sh — enrichment nie ma kto przetwarzać."
+fi
+
 echo "==> gotowe: https://przetargi.supon.rzeszow.pl"

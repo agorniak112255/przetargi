@@ -391,7 +391,8 @@ final class ProductSearchIdentity
         $brand = $this->shortBrand((string) $product->manufacturer);
         $sku = trim((string) $product->sku);
         $name = trim((string) $product->name);
-        $bare = $this->stripBrandPrefix($sku !== '' ? $sku : $name, $brand);
+        $internalSku = $this->looksLikeInternalSku($product);
+        $bare = $internalSku ? '' : $this->stripBrandPrefix($sku !== '' ? $sku : $name, $brand);
         // nazwa „1000 ZIMA” → rdzeń kodu 1000
         $codeCore = $this->gloveCodeCore($product) ?? $bare;
         $hint = $this->productHint($product);
@@ -419,7 +420,7 @@ final class ProductSearchIdentity
         $queries[] = $this->productNameWithManufacturer($product);
 
         // 1) Jak Google — kod / nazwa zawsze z producentem
-        if ($sku !== '') {
+        if ($sku !== '' && ! $internalSku) {
             $queries[] = $this->queryWithManufacturer($sku, $product);
             $queries[] = $this->queryWithManufacturer('"'.$sku.'"', $product);
         }
@@ -449,7 +450,7 @@ final class ProductSearchIdentity
             if ($codeCore !== '' && $hint === 'rękawice') {
                 $queries[] = trim($codeCore.' '.$hint);
             }
-            if ($sku !== '') {
+            if ($sku !== '' && ! $internalSku) {
                 $queries[] = trim('"'.$sku.'" '.$brand.' '.$hint);
             }
         }
@@ -477,7 +478,11 @@ final class ProductSearchIdentity
         if ($name !== '') {
             $parts[] = $name;
         }
-        if ($sku !== '' && ($name === '' || ! $this->phraseHasToken($name, $sku))) {
+        if ($sku !== '' && ! $this->looksLikeInternalSku($product)
+            && ($name === '' || ! $this->phraseHasToken($name, $sku))) {
+            $parts[] = $sku;
+        }
+        if ($parts === [] && $sku !== '') {
             $parts[] = $sku;
         }
 
@@ -724,8 +729,8 @@ final class ProductSearchIdentity
             return 'buty ochronne';
         }
 
-        if (preg_match('#(glove|r[eę]kaw|maxiflex|maxicut|maxidry)#u', $blob)
-            || preg_match('#^(atg|ansell|urgent)$#u', $brand)) {
+        // Rękawice ocieplane polarem muszą wygrać z regułą odzieży niżej
+        if (preg_match('#(glove|r[eę]kaw|maxiflex|maxicut|maxidry)#u', $blob)) {
             return 'rękawice';
         }
 
@@ -735,6 +740,18 @@ final class ProductSearchIdentity
             $nameSku
         )) {
             return 'ubranie wodoochronne';
+        }
+
+        // Odzież przed marką: Urgent szyje też bluzy i kamizelki, a niżej
+        // sama marka wystarcza, by uznać produkt za rękawice.
+        if (preg_match('#(bluza|koszulka|t-shirt|tshirt|polo|kamizelk|softshell|polar|czapk|kombinezon|fartuch)#u', $blob)) {
+            return preg_match('#(hsv|ostrzegawcz|odblask|hi-vis|hivis)#u', $blob) === 1
+                ? 'odzież ostrzegawcza'
+                : 'odzież robocza';
+        }
+
+        if (preg_match('#^(atg|ansell|urgent)$#u', $brand)) {
+            return 'rękawice';
         }
 
         return '';
@@ -756,6 +773,32 @@ final class ProductSearchIdentity
 
         // już URGENT albo błędnie PROS / puste
         return $brand === '' || in_array($brand, ['pros', 'urgent', 'aj group', 'aj', 'pilne'], true);
+    }
+
+    /**
+     * Kod z naszego cennika (URG-HSV-WOR-BLUZA), a nie numer katalogowy producenta.
+     * Takiego ciągu nie ma w sieci, więc każde zapytanie z nim wraca puste.
+     */
+    public function looksLikeInternalSku(Product $product): bool
+    {
+        $sku = trim((string) $product->sku);
+        if ($sku === '' || preg_match('/\d{3,}/u', $sku) === 1) {
+            return false;
+        }
+
+        $segments = array_values(array_filter(preg_split('/[\-\/ ]+/u', $sku) ?: []));
+        if (count($segments) < 3) {
+            return false;
+        }
+
+        foreach ($segments as $segment) {
+            // człon będący słowem (BLUZA, SPODNIE) zdradza kod opisowy, nie model
+            if (preg_match('/^\p{L}{4,}$/u', $segment) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function gloveCodeCore(Product $product): ?string

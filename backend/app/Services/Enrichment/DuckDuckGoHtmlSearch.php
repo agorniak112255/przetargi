@@ -18,7 +18,7 @@ use Throwable;
  */
 final class DuckDuckGoHtmlSearch
 {
-    private const QUERY_CACHE_PREFIX = 'free_web_search_v4:';
+    private const QUERY_CACHE_PREFIX = 'free_web_search_v5:';
 
     private const GATE_KEY = 'free_web_search_gate';
 
@@ -43,8 +43,10 @@ final class DuckDuckGoHtmlSearch
                 $sites[] = 'site:'.$host;
             }
         }
+        // Tylko jedna domena: powtórzone site: łączą się warunkiem „i”,
+        // a strona nie leży w dwóch domenach naraz — takie zapytanie zawsze jest puste.
         if ($sites !== []) {
-            $query .= ' '.implode(' ', array_slice($sites, 0, 3));
+            $query .= ' '.$sites[0];
         }
 
         $cacheKey = self::QUERY_CACHE_PREFIX.hash('sha256', $query);

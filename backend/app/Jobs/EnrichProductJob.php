@@ -30,7 +30,9 @@ class EnrichProductJob implements ShouldQueue
     /** @var list<int> */
     public array $backoff = [15, 45, 90];
 
-    public int $timeout = 240;
+    // Klient AI potrafi czekać ~2 min na przeciążony model, potem dochodzi
+    // wyszukiwanie i pobieranie stron — 240 s ucinało robotę w połowie.
+    public int $timeout = 420;
 
     public function __construct(
         public readonly int $productId,

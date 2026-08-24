@@ -17,7 +17,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v24';
+    private const SEARCH_CACHE_VERSION = 'v25';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -139,6 +139,13 @@ class HybridWebSearchService
         }
 
         if ($merged === []) {
+            if ($this->identity->looksLikeInternalSku($product)) {
+                throw new RuntimeException(
+                    'SKU '.$product->sku.' wygląda na kod z naszego cennika, a nie numer katalogowy '
+                    .'producenta — w internecie takiego kodu nie ma. Uzupełnij kod producenta w produkcie. '
+                    .($errors !== [] ? implode(' | ', array_slice($errors, 0, 2)) : '')
+                );
+            }
             $bare = $this->identity->stripBrandPrefix(
                 (string) $product->sku,
                 $this->identity->shortBrand((string) $product->manufacturer)

@@ -15,6 +15,7 @@ use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\HybridWebSearchService;
 use App\Services\Enrichment\ManufacturerDomainResolver;
 use App\Services\Enrichment\ProductDocumentDownloader;
@@ -769,6 +770,42 @@ final class ProductEnrichmentApiTest extends TestCase
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'google.com'));
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'bing.com'));
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
+    }
+
+    public function test_domain_narrowed_query_uses_single_site_operator(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8081/v1',
+            'api_key' => 'local',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'search_engine' => 'searxng',
+            'searxng_url' => 'http://127.0.0.1:8088',
+            'web_search_enabled' => false,
+        ]);
+        Http::fake(['*' => Http::response([
+            'results' => [[
+                'url' => 'https://urgent.com.pl/bluza-hsv',
+                'title' => 'Bluza ostrzegawcza Urgent',
+                'content' => 'Bluza HSV',
+            ]],
+        ], 200)]);
+
+        app(DuckDuckGoHtmlSearch::class)->search(
+            'Urgent bluza ostrzegawcza',
+            5,
+            ['urgent.com.pl', 'www.urgent.pl', 'sklep.urgent.pl'],
+        );
+
+        Http::assertSent(static function ($request): bool {
+            $query = urldecode($request->url());
+
+            return str_contains($query, 'site:urgent.com.pl')
+                && substr_count($query, 'site:') === 1;
+        });
     }
 
     public function test_search_stops_when_sku_hits_open_web(): void
