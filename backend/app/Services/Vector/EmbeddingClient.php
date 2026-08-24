@@ -21,12 +21,15 @@ final class EmbeddingClient
     public function embed(string $text): array
     {
         $cfg = $this->settings->resolve();
-        $base = rtrim((string) ($cfg['embedding_base_url'] ?: $cfg['base_url']), '/');
-        $key = $cfg['embedding_api_key'] ?: $cfg['api_key'];
-        $model = trim((string) ($cfg['embedding_model'] ?: 'text-embedding-3-small'));
+        $profile = $this->settings->embeddingProfile();
+        $base = $profile['base_url'];
+        $key = $profile['api_key'];
+        $model = trim($profile['model']);
 
         if ($base === '' || $key === null || $key === '') {
-            throw new RuntimeException('Brak konfiguracji embeddings (base_url / api_key).');
+            throw new RuntimeException($profile['provider'] === AiSettingsService::EMBEDDING_OPENAI
+                ? 'Brak klucza API OpenAI dla embeddingów.'
+                : 'Brak konfiguracji embeddings (base_url / api_key).');
         }
         if ($model === '') {
             throw new RuntimeException('Brak modelu embeddings.');

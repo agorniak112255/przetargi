@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\AiSetting;
+use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -105,6 +106,65 @@ final class AiSettingsApiTest extends TestCase
 
         $this->assertTrue($settings->enrichmentUsesLargeModel());
         $this->assertSame('openai/gpt-4o', $settings->enrichmentModel());
+    }
+
+    public function test_embedding_provider_switch_uses_openai_and_own_collection(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $product = Product::query()->create([
+            'sku' => 'EMB-1',
+            'name' => 'Rękawice testowe',
+            'manufacturer' => 'Test',
+            'catalog_price_net' => 1,
+            'purchase_price' => 1,
+            'stock' => 1,
+            'embedding_hash' => str_repeat('a', 64),
+            'embedding_synced_at' => now(),
+        ]);
+
+        $this->putJson('/api/ai-settings', [
+            'vector_enabled' => true,
+            'qdrant_url' => 'http://127.0.0.1:6333',
+            'qdrant_collection' => 'products',
+            'embedding_base_url' => 'http://127.0.0.1:8080/v1',
+            'embedding_model' => 'e5-large',
+            'embedding_api_key' => 'local-key-123',
+        ])->assertOk()
+            ->assertJsonPath('embedding_provider', 'local')
+            ->assertJsonPath('embedding_collection', 'products');
+
+        $settings = app(AiSettingsService::class);
+        $this->assertSame([
+            'provider' => 'local',
+            'base_url' => 'http://127.0.0.1:8080/v1',
+            'api_key' => 'local-key-123',
+            'model' => 'e5-large',
+        ], $settings->embeddingProfile());
+
+        $this->putJson('/api/ai-settings', [
+            'embedding_provider' => 'openai',
+            'embedding_openai_api_key' => 'sk-openai-embeddings-123',
+        ])->assertOk()
+            ->assertJsonPath('embedding_provider', 'openai')
+            ->assertJsonPath('embedding_collection', 'products_openai')
+            ->assertJsonPath('has_embedding_openai_api_key', true);
+
+        $this->assertSame([
+            'provider' => 'openai',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-openai-embeddings-123',
+            'model' => 'text-embedding-3-small',
+        ], app(AiSettingsService::class)->embeddingProfile());
+
+        $product->refresh();
+        $this->assertNull($product->embedding_hash);
+        $this->assertNull($product->embedding_synced_at);
+
+        $this->putJson('/api/ai-settings', ['embedding_provider' => 'gemini'])
+            ->assertStatus(422);
     }
 
     public function test_update_model_keeps_existing_api_keys(): void

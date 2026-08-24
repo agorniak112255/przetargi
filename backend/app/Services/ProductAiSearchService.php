@@ -222,9 +222,7 @@ final class ProductAiSearchService
         }
 
         $likeHits = $this->retrieveLike($intent['search_phrases'], $limit);
-        $vectorHits = $likeHits->isEmpty()
-            ? $this->retrieveVector($searchText, max($limit, 80))
-            : collect();
+        $vectorHits = $this->retrieveVector($searchText, max($limit, 80));
 
         $seen = [];
         $merged = collect();

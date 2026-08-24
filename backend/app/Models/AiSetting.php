@@ -33,6 +33,9 @@ class AiSetting extends Model
         'embedding_model',
         'embedding_base_url',
         'embedding_api_key',
+        'embedding_provider',
+        'embedding_openai_model',
+        'embedding_openai_api_key',
     ];
 
     protected function casts(): array
@@ -43,6 +46,7 @@ class AiSetting extends Model
             'tavily_api_key' => 'encrypted',
             'qdrant_api_key' => 'encrypted',
             'embedding_api_key' => 'encrypted',
+            'embedding_openai_api_key' => 'encrypted',
             'timeout_seconds' => 'integer',
             'temperature' => 'float',
             'web_search_enabled' => 'boolean',

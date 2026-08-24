@@ -55,6 +55,9 @@ class AiSettingsController extends Controller
             'embedding_model' => ['nullable', 'string', 'max:120'],
             'embedding_base_url' => ['nullable', 'url', 'max:255'],
             'embedding_api_key' => ['nullable', 'string', 'max:500'],
+            'embedding_provider' => ['sometimes', 'string', 'in:'.implode(',', AiSettingsService::EMBEDDING_PROVIDERS)],
+            'embedding_openai_model' => ['nullable', 'string', 'max:120'],
+            'embedding_openai_api_key' => ['nullable', 'string', 'max:500'],
         ]);
 
         $this->settings->update($data);

@@ -9,6 +9,8 @@ function isKeptSecret(value: string): boolean {
 
 type SearchEngine = 'tavily' | 'duckduckgo' | 'searxng'
 
+type EmbeddingProvider = 'local' | 'openai'
+
 type AiSettings = {
   enabled: boolean
   provider: string
@@ -30,15 +32,20 @@ type AiSettings = {
   qdrant_collection: string | null
   embedding_model: string | null
   embedding_base_url: string | null
+  embedding_provider: EmbeddingProvider
+  embedding_openai_model: string | null
+  embedding_collection: string
   has_api_key: boolean
   has_tavily_api_key: boolean
   has_qdrant_api_key: boolean
   has_embedding_api_key: boolean
+  has_embedding_openai_api_key: boolean
   source: string
   api_key_masked: string | null
   tavily_api_key_masked: string | null
   qdrant_api_key_masked: string | null
   embedding_api_key_masked: string | null
+  embedding_openai_api_key_masked: string | null
 }
 
 export function AiSettingsPage() {
@@ -47,6 +54,7 @@ export function AiSettingsPage() {
   const [tavilyKey, setTavilyKey] = useState('')
   const [qdrantKey, setQdrantKey] = useState('')
   const [embeddingKey, setEmbeddingKey] = useState('')
+  const [openAiEmbeddingKey, setOpenAiEmbeddingKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [showTavilyKey, setShowTavilyKey] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -58,6 +66,9 @@ export function AiSettingsPage() {
     setTavilyKey(next.has_tavily_api_key ? (next.tavily_api_key_masked ?? '') : '')
     setQdrantKey(next.has_qdrant_api_key ? (next.qdrant_api_key_masked ?? '') : '')
     setEmbeddingKey(next.has_embedding_api_key ? (next.embedding_api_key_masked ?? '') : '')
+    setOpenAiEmbeddingKey(
+      next.has_embedding_openai_api_key ? (next.embedding_openai_api_key_masked ?? '') : ''
+    )
   }
 
   async function load() {
@@ -104,6 +115,8 @@ export function AiSettingsPage() {
         qdrant_collection: cfg.qdrant_collection?.trim() || 'products',
         embedding_model: cfg.embedding_model?.trim() || null,
         embedding_base_url: cfg.embedding_base_url?.trim() || null,
+        embedding_provider: cfg.embedding_provider || 'local',
+        embedding_openai_model: cfg.embedding_openai_model?.trim() || null,
       }
       if (!isKeptSecret(apiKey)) {
         body.api_key = apiKey.trim()
@@ -116,6 +129,9 @@ export function AiSettingsPage() {
       }
       if (!isKeptSecret(embeddingKey)) {
         body.embedding_api_key = embeddingKey.trim()
+      }
+      if (!isKeptSecret(openAiEmbeddingKey)) {
+        body.embedding_openai_api_key = openAiEmbeddingKey.trim()
       }
       const saved = await api<AiSettings>('/ai-settings', {
         method: 'PUT',
@@ -509,41 +525,103 @@ export function AiSettingsPage() {
             />
           </label>
           <label className="block text-xs">
-            Model embeddings
-            <input
+            Dostawca embeddingów
+            <select
               className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
-              value={cfg.embedding_model ?? ''}
-              onChange={(e) => setCfg({ ...cfg, embedding_model: e.target.value || null })}
-              placeholder="text-embedding-3-small"
-              list="ai-embedding-models"
-            />
-            <datalist id="ai-embedding-models">
-              <option value="text-embedding-3-small" />
-              <option value="text-embedding-3-large" />
-              <option value="text-embedding-ada-002" />
-            </datalist>
+              value={cfg.embedding_provider ?? 'local'}
+              onChange={(e) =>
+                setCfg({ ...cfg, embedding_provider: e.target.value as EmbeddingProvider })
+              }
+            >
+              <option value="local">Serwer lokalny (OpenAI-compatible)</option>
+              <option value="openai">OpenAI (chmura)</option>
+            </select>
+            <span className="mt-1 block text-[11px] text-slate-500">
+              Każdy dostawca ma własną kolekcję w Qdrant (inny wymiar wektora). Aktywna:{' '}
+              <code>{cfg.embedding_collection}</code>. Po przełączeniu zrób{' '}
+              <code>php artisan products:reindex-embeddings --force</code>.
+            </span>
           </label>
-          <label className="block text-xs">
-            Embedding base URL (puste = ten sam co chat)
-            <input
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
-              value={cfg.embedding_base_url ?? ''}
-              onChange={(e) => setCfg({ ...cfg, embedding_base_url: e.target.value || null })}
-              placeholder={cfg.base_url || 'https://api.openai.com/v1'}
-            />
-          </label>
-          <label className="block text-xs">
-            Embedding API key (puste = klucz chatu){' '}
-            {cfg.has_embedding_api_key ? '(zostaw puste, by nie zmieniać)' : ''}
-            <input
-              type="password"
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
-              value={embeddingKey}
-              onChange={(e) => setEmbeddingKey(e.target.value)}
-              placeholder={cfg.has_embedding_api_key ? '••••••••' : ''}
-              autoComplete="new-password"
-            />
-          </label>
+
+          {cfg.embedding_provider === 'openai' ? (
+            <>
+              <label className="block text-xs">
+                Model OpenAI
+                <input
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                  value={cfg.embedding_openai_model ?? ''}
+                  onChange={(e) =>
+                    setCfg({ ...cfg, embedding_openai_model: e.target.value || null })
+                  }
+                  placeholder="text-embedding-3-small"
+                  list="ai-openai-embedding-models"
+                />
+                <datalist id="ai-openai-embedding-models">
+                  <option value="text-embedding-3-small" />
+                  <option value="text-embedding-3-large" />
+                </datalist>
+              </label>
+              <label className="block text-xs">
+                Klucz OpenAI (embeddingi){' '}
+                {cfg.has_embedding_openai_api_key ? '(zostaw puste, by nie zmieniać)' : ''}
+                <input
+                  type="password"
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
+                  value={openAiEmbeddingKey}
+                  onChange={(e) => setOpenAiEmbeddingKey(e.target.value)}
+                  placeholder={cfg.has_embedding_openai_api_key ? '••••••••' : 'sk-…'}
+                  autoComplete="new-password"
+                />
+                <span className="mt-1 block text-[11px] text-slate-500">
+                  Adres stały: <code>https://api.openai.com/v1</code>. Koszt text-embedding-3-small
+                  to ok. $0,02 za milion tokenów.
+                </span>
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="block text-xs">
+                Model embeddings
+                <input
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                  value={cfg.embedding_model ?? ''}
+                  onChange={(e) => setCfg({ ...cfg, embedding_model: e.target.value || null })}
+                  placeholder="text-embedding-3-small"
+                  list="ai-embedding-models"
+                />
+                <datalist id="ai-embedding-models">
+                  <option value="text-embedding-3-small" />
+                  <option value="text-embedding-3-large" />
+                  <option value="text-embedding-ada-002" />
+                </datalist>
+              </label>
+              <label className="block text-xs">
+                Embedding base URL (puste = ten sam co chat)
+                <input
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                  value={cfg.embedding_base_url ?? ''}
+                  onChange={(e) => setCfg({ ...cfg, embedding_base_url: e.target.value || null })}
+                  placeholder={cfg.base_url || 'https://api.openai.com/v1'}
+                />
+                <span className="mt-1 block text-[11px] text-slate-500">
+                  llama-server musi być uruchomiony z <code>--embeddings</code>, inaczej zwraca HTTP
+                  501.
+                </span>
+              </label>
+              <label className="block text-xs">
+                Embedding API key (puste = klucz chatu){' '}
+                {cfg.has_embedding_api_key ? '(zostaw puste, by nie zmieniać)' : ''}
+                <input
+                  type="password"
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
+                  value={embeddingKey}
+                  onChange={(e) => setEmbeddingKey(e.target.value)}
+                  placeholder={cfg.has_embedding_api_key ? '••••••••' : ''}
+                  autoComplete="new-password"
+                />
+              </label>
+            </>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2 pt-1">

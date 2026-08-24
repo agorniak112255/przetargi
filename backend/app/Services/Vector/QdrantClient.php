@@ -26,10 +26,7 @@ final class QdrantClient
 
     public function collection(): string
     {
-        $cfg = $this->settings->resolve();
-        $name = trim((string) ($cfg['qdrant_collection'] ?: 'products'));
-
-        return $name !== '' ? $name : 'products';
+        return $this->settings->embeddingCollection();
     }
 
     /**
@@ -66,6 +63,14 @@ final class QdrantClient
         $name = $this->collection();
         $exists = $this->http()->get($this->base().'/collections/'.$name);
         if ($exists->successful()) {
+            $current = (int) data_get($exists->json(), 'result.config.params.vectors.size', 0);
+            if ($current > 0 && $current !== $vectorSize) {
+                throw new RuntimeException(
+                    'Kolekcja Qdrant "'.$name.'" ma wymiar '.$current.', a model embeddings zwraca '
+                    .$vectorSize.'. Usuń kolekcję i uruchom products:reindex-embeddings --force.'
+                );
+            }
+
             return;
         }
 
