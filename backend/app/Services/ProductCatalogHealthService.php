@@ -141,32 +141,40 @@ final class ProductCatalogHealthService
 
     /**
      * Lokalny backfill atrybutów BHP (bez AI) dla produktów bez użytecznych attributes.
+     * Rozdziela trafienia od pozycji, w których nazwa i normy nic nie dały — te czekają na opis.
      *
-     * @return array{updated: int}
+     * @return array{updated: int, filled: int, pending: int}
      */
     public function backfillAttributes(?string $manufacturer = null, bool $force = false): array
     {
-        $updated = 0;
+        $filled = 0;
+        $pending = 0;
         $query = Product::query()->orderBy('id');
         if ($manufacturer !== null && trim($manufacturer) !== '') {
             $query->where('manufacturer', $manufacturer);
         }
 
-        $query->chunkById(100, function ($products) use ($force, &$updated): void {
+        $query->chunkById(100, function ($products) use ($force, &$filled, &$pending): void {
             foreach ($products as $product) {
                 /** @var Product $product */
                 if (! $force && $this->hasUsefulAttributes($product)) {
                     continue;
                 }
                 $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
-                $payload['attributes'] = $this->bhpAttributes->forProduct($product);
+                $attributes = $this->bhpAttributes->forProduct($product);
+                $payload['attributes'] = $attributes;
                 $product->enrichment_payload = $payload;
                 $product->saveQuietly();
-                $updated++;
+
+                if ($this->attributesAreUseful($attributes)) {
+                    $filled++;
+                } else {
+                    $pending++;
+                }
             }
         });
 
-        return ['updated' => $updated];
+        return ['updated' => $filled + $pending, 'filled' => $filled, 'pending' => $pending];
     }
 
     /** @return list<int> */
@@ -198,10 +206,13 @@ final class ProductCatalogHealthService
     {
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : null;
-        if ($attrs === null) {
-            return false;
-        }
 
+        return $attrs !== null && $this->attributesAreUseful($attrs);
+    }
+
+    /** @param  array<string, mixed>  $attrs */
+    private function attributesAreUseful(array $attrs): bool
+    {
         return ($attrs['material'] ?? null) !== null
             || ($attrs['kategoria_bhp'] ?? null) !== null
             || (is_array($attrs['normy_en'] ?? null) && $attrs['normy_en'] !== []);

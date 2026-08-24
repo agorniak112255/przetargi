@@ -79,13 +79,31 @@ final class ProductCatalogHealthTest extends TestCase
             'enrichment_payload' => null,
         ]);
 
+        $bezOpisu = Product::query()->create([
+            'sku' => 'H4',
+            'name' => 'XG27B-450',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+            'enrichment_payload' => null,
+        ]);
+
         $this->postJson('/api/products/catalog-health/backfill-attributes')
             ->assertOk()
-            ->assertJsonPath('updated', 1);
+            ->assertJsonPath('updated', 2)
+            ->assertJsonPath('filled', 1)
+            ->assertJsonPath('pending', 1);
 
         $p->refresh();
         $attrs = $p->enrichment_payload['attributes'] ?? [];
         $this->assertSame('rekawice', $attrs['kategoria_bhp'] ?? null);
         $this->assertSame('nitryl', $attrs['material'] ?? null);
+
+        $bezOpisu->refresh();
+        $puste = $bezOpisu->enrichment_payload['attributes'] ?? [];
+        $this->assertNull($puste['material'] ?? null);
+        $this->assertNull($puste['kategoria_bhp'] ?? null);
     }
 }

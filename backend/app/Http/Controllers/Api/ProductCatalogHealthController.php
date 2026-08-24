@@ -75,9 +75,16 @@ class ProductCatalogHealthController extends Controller
             (bool) ($data['force'] ?? false),
         );
 
+        $message = "Wypełniono z nazwy i norm: {$result['filled']} produktów (bez AI).";
+        if ($result['pending'] > 0) {
+            $message .= " Czeka na opis: {$result['pending']} — nazwa nie zawiera materiału, normy ani kategorii.";
+        }
+
         return response()->json([
             'updated' => $result['updated'],
-            'message' => "Uzupełniono atrybuty BHP: {$result['updated']} produktów (bez AI).",
+            'filled' => $result['filled'],
+            'pending' => $result['pending'],
+            'message' => $message,
         ]);
     }
 }
