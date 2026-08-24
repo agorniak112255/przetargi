@@ -901,6 +901,52 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame($hitUrl, $pack['results'][0]['url'] ?? null);
     }
 
+    public function test_free_search_also_tries_name_query_for_single_hit(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8081/v1',
+            'api_key' => 'local',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'search_engine' => 'duckduckgo',
+            'web_search_enabled' => false,
+        ]);
+        $product = $this->makeProduct([
+            'sku' => '1202',
+            'name' => 'Rękawice 1202 kozia czerwona',
+            'manufacturer' => 'Urgent',
+        ]);
+        $queries = [];
+        Http::fake(function ($request) use (&$queries) {
+            if (! str_contains($request->url(), 'google.com/search')) {
+                return Http::response('unused', 404);
+            }
+            $query = urldecode((string) (parse_url($request->url(), PHP_URL_QUERY) ?? ''));
+            $queries[] = $query;
+            $url = str_contains($query, 'kozia')
+                ? 'https://sklep.example/rekawice-urgent-1202-kozia'
+                : 'https://hurtownia.example/urgent-1202';
+
+            return Http::response(
+                '<a href="/url?q='.rawurlencode($url).'&amp;sa=U">Rękawice Urgent 1202</a>',
+                200
+            );
+        });
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+        $urls = array_column($pack['results'], 'url');
+
+        $this->assertContains('https://hurtownia.example/urgent-1202', $urls);
+        $this->assertContains('https://sklep.example/rekawice-urgent-1202-kozia', $urls);
+        $this->assertTrue(
+            (bool) array_filter($queries, static fn (string $q): bool => str_contains($q, 'kozia')),
+            'Druga fraza z nazwą produktu musi polecieć, gdy pierwsza dała jedną kartę'
+        );
+    }
+
     public function test_duckduckgo_search_skips_tavily(): void
     {
         AiSetting::query()->create([

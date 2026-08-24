@@ -25,6 +25,9 @@ class HybridWebSearchService
     /** Ile różnych fraz próbujemy w otwartym internecie, zanim pójdziemy na domenę producenta. */
     private const OPEN_QUERY_ATTEMPTS = 3;
 
+    /** Tyle kart produktu wystarcza, żeby przerwać drabinkę fraz. */
+    private const OPEN_ENOUGH_PAGES = 3;
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly OpenAiCompatibleClient $llm,
@@ -414,6 +417,13 @@ class HybridWebSearchService
             }
         }
 
+        // Jedno trafienie to za mało na pełny opis — zbieramy karty z kolejnych fraz
+        // („1202 Urgent”, potem „Rękawice 1202 kozia czerwona Urgent”), aż uzbiera się kilka.
+        $openResults = [];
+        $seen = [];
+        $openProvider = '';
+        // Tavily jest płatne — tam pierwsze trafienie kończy szukanie.
+        $enoughPages = $this->settings->usesFreeWebSearch() ? self::OPEN_ENOUGH_PAGES : 1;
         foreach ($skuQueries as $query) {
             $open = $this->cachedTavilySearch(
                 $product,
@@ -425,13 +435,32 @@ class HybridWebSearchService
                 'open',
                 $errors
             );
-            if ($open['results'] !== []) {
-                return [
-                    'results' => $open['results'],
-                    'provider' => $open['provider'],
-                    'errors' => $errors,
-                ];
+            foreach ($open['results'] as $row) {
+                $key = mb_strtolower((string) ($row['url'] ?? ''));
+                if ($key === '' || isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $openResults[] = $row;
             }
+            if ($openProvider === '' && $open['results'] !== []) {
+                $openProvider = $open['provider'];
+            }
+            if ($this->hasEnoughPageResults($openResults, $enoughPages)) {
+                break;
+            }
+        }
+        if ($openResults !== []) {
+            usort(
+                $openResults,
+                fn (array $a, array $b): int => $this->resultQuality($b, $product) <=> $this->resultQuality($a, $product)
+            );
+
+            return [
+                'results' => $openResults,
+                'provider' => $openProvider !== '' ? $openProvider : $this->searchProviderName(),
+                'errors' => $errors,
+            ];
         }
         $skuQuery = $skuQueries[0];
 
