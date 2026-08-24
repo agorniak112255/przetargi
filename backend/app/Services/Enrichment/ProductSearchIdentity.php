@@ -680,7 +680,12 @@ final class ProductSearchIdentity
      *
      * @return list<string>
      */
-    private function nameWords(Product $product): array
+    /**
+     * Znaczące słowa z nazwy — bez rozmiarów, liczb i ogólników typu „robocze”.
+     *
+     * @return list<string>
+     */
+    public function nameWords(Product $product): array
     {
         $generic = ['bhp', 'robocze', 'roboczy', 'robocza', 'ochronne', 'ochronny', 'ochronna',
             'damskie', 'meskie', 'męskie', 'nowosc', 'nowość', 'szt', 'kpl', 'para', 'rozmiar'];

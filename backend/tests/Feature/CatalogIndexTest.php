@@ -158,14 +158,45 @@ final class CatalogIndexTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_finds_codeless_product_by_brand_and_name(): void
+    {
+        $this->seedPage('https://bhp-sklep.com.pl/wkladki-alutermiczne-urgent-do-butow');
+        $this->seedPage('https://bhp-sklep.com.pl/kurtka-zimowa-portwest');
+
+        $product = new Product([
+            'sku' => 'WKLADKI-ALUTERMICZNE',
+            'name' => 'Wkładki alutermiczne do butów',
+            'manufacturer' => 'Urgent',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+
+        $this->assertSame('https://bhp-sklep.com.pl/wkladki-alutermiczne-urgent-do-butow', $hits[0]['url'] ?? null);
+        $this->assertCount(1, $hits);
+    }
+
+    public function test_prefers_page_with_brand_when_code_matches_twice(): void
+    {
+        $this->seedPage('https://sklep-a.pl/lampka-1202');
+        $this->seedPage('https://sklep-b.pl/rekawice-urgent-1202');
+
+        $product = new Product(['sku' => '1202', 'name' => 'Rękawice 1202', 'manufacturer' => 'Urgent']);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+
+        $this->assertSame('https://sklep-b.pl/rekawice-urgent-1202', $hits[0]['url'] ?? null);
+    }
+
     private function seedPage(string $url): void
     {
-        CatalogPage::query()->create([
+        $page = CatalogPage::query()->create([
             'host' => (string) parse_url($url, PHP_URL_HOST),
             'url_hash' => CatalogPage::hashFor($url),
             'url' => $url,
             'haystack' => mb_strtolower($url),
             'last_seen_at' => now(),
         ]);
+
+        app(CatalogSitemapIndexer::class)->storeTokens([$page->url_hash]);
     }
 }

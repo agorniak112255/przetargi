@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\CatalogPage;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
@@ -24,6 +26,10 @@ final class CatalogSitemapIndexer
     private const MAX_BUFFER_BYTES = 2097152;
 
     private const USER_AGENT = 'Mozilla/5.0 (compatible; PrzetargiBot/1.0; +https://przetargi.supon.rzeszow.pl)';
+
+    private const MAX_TOKEN_LENGTH = 64;
+
+    private const MAX_TOKENS_PER_PAGE = 48;
 
     private const CANDIDATE_PATHS = [
         '/sitemap.xml',
@@ -280,6 +286,52 @@ final class CatalogSitemapIndexer
         return $out;
     }
 
+    /**
+     * Rozbija adres na tokeny, po których szukamy: segmenty slug-a, rozdzielone
+     * pary litery/cyfry oraz sklejenia sąsiadów („urg-c” → „urgc”).
+     *
+     * @return list<string>
+     */
+    public function tokensFor(string $url): array
+    {
+        $path = mb_strtolower(Str::ascii(urldecode(
+            (string) (parse_url($url, PHP_URL_PATH) ?? '').' '.(string) (parse_url($url, PHP_URL_QUERY) ?? '')
+        )));
+        $parts = preg_split('/[^a-z0-9]+/u', $path) ?: [];
+        $parts = array_values(array_filter($parts, static fn (string $p): bool => $p !== ''));
+
+        $out = [];
+        foreach ($parts as $i => $part) {
+            if (mb_strlen($part) <= self::MAX_TOKEN_LENGTH) {
+                $out[] = $part;
+            }
+            // „rekawice1202” → „rekawice” + „1202”
+            if (preg_match('/^[a-z]+$/u', $part) !== 1 && preg_match('/^[0-9]+$/u', $part) !== 1) {
+                foreach (preg_split('/(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])/u', $part) ?: [] as $piece) {
+                    if ($piece !== '' && mb_strlen($piece) <= self::MAX_TOKEN_LENGTH) {
+                        $out[] = $piece;
+                    }
+                }
+            }
+            $next = $parts[$i + 1] ?? null;
+            if ($next !== null && mb_strlen($part) + mb_strlen($next) <= 16) {
+                $out[] = $part.$next;
+            }
+        }
+
+        $unique = [];
+        foreach ($out as $token) {
+            if (mb_strlen($token) >= 2 && mb_strlen($token) <= self::MAX_TOKEN_LENGTH) {
+                $unique[$token] = true;
+            }
+            if (count($unique) >= self::MAX_TOKENS_PER_PAGE) {
+                break;
+            }
+        }
+
+        return array_keys($unique);
+    }
+
     /** „…/produkt/rekawice-urgent-1202” → „…/produkt/rekawice urgent 1202” do wyszukiwania. */
     public function haystackFor(string $url, string $title = ''): string
     {
@@ -340,8 +392,34 @@ final class CatalogSitemapIndexer
     private function store(array $rows): int
     {
         CatalogPage::query()->upsert($rows, ['url_hash'], ['haystack', 'last_seen_at', 'updated_at']);
+        $this->storeTokens(array_column($rows, 'url_hash'));
 
         return count($rows);
+    }
+
+    /**
+     * @param  list<string>  $hashes
+     */
+    public function storeTokens(array $hashes): void
+    {
+        if ($hashes === []) {
+            return;
+        }
+
+        $pages = CatalogPage::query()
+            ->whereIn('url_hash', $hashes)
+            ->get(['id', 'url']);
+
+        $tokens = [];
+        foreach ($pages as $page) {
+            foreach ($this->tokensFor((string) $page->url) as $token) {
+                $tokens[] = ['catalog_page_id' => $page->id, 'token' => $token];
+            }
+        }
+
+        foreach (array_chunk($tokens, 1000) as $chunk) {
+            DB::table('catalog_page_tokens')->insertOrIgnore($chunk);
+        }
     }
 
     private function fetch(string $url): ?string

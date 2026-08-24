@@ -6,17 +6,19 @@ namespace App\Services\Enrichment;
 
 use App\Models\CatalogPage;
 use App\Models\Product;
-use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * Szuka karty produktu w lokalnym indeksie sitemap — zanim zapytamy wyszukiwarkę.
+ * Dopasowanie idzie po tokenach adresu: najpierw kod, potem marka ze słowami z nazwy.
  */
 final class CatalogIndexSearch
 {
     /** Ile stron zwracamy do dalszego przetwarzania. */
     private const MAX_HITS = 8;
 
-    /** Ile wierszy na jeden kod bierzemy z bazy przed filtrem tożsamości. */
+    /** Ile wierszy bierzemy z bazy przed filtrem tożsamości. */
     private const SQL_LIMIT = 40;
 
     public function __construct(private readonly ProductSearchIdentity $identity) {}
@@ -26,37 +28,13 @@ final class CatalogIndexSearch
      */
     public function findFor(Product $product): array
     {
-        $codes = $this->codes($product);
-        if ($codes === []) {
-            return [];
-        }
+        $hits = $this->byCode($product);
 
-        $out = [];
-        $seen = [];
-        foreach ($codes as $code) {
-            foreach ($this->rowsForCode($code) as $page) {
-                $url = (string) $page->url;
-                $key = mb_strtolower($url);
-                if ($url === '' || isset($seen[$key])) {
-                    continue;
-                }
-                $seen[$key] = true;
-                $out[] = [
-                    'url' => $url,
-                    'title' => (string) ($page->title ?? $url),
-                    'snippet' => '',
-                ];
-                if (count($out) >= self::MAX_HITS) {
-                    return $out;
-                }
-            }
-        }
-
-        return $out;
+        return $hits !== [] ? $hits : $this->byBrandAndName($product);
     }
 
     /**
-     * Kody, po których ma sens szukać w URL-u: SKU, rdzeń kodu cennikowego, wersja bez znaków.
+     * Kody, po których ma sens szukać w adresie: SKU, rdzeń kodu cennikowego, wersja bez znaków.
      *
      * @return list<string>
      */
@@ -74,14 +52,16 @@ final class CatalogIndexSearch
         $out = [];
         foreach ($raw as $code) {
             $code = mb_strtolower(trim($code));
-            if ($code === '' || mb_strlen($code) < 4) {
+            if ($code === '' || mb_strlen($code) < 3) {
                 continue;
             }
-            $out[] = $code;
-            // „urg-c” w slugu bywa jako „urg_c” albo „urgc”
+            // „131-s1” jest w adresie jako „131”, „s1” i „131s1”
             $compact = preg_replace('/[^a-z0-9]+/u', '', $code) ?? $code;
-            if ($compact !== '' && $compact !== $code && mb_strlen($compact) >= 4) {
+            if ($compact !== '' && mb_strlen($compact) >= 4 && mb_strlen($compact) <= 64) {
                 $out[] = $compact;
+            }
+            if (mb_strlen($code) <= 64 && preg_match('/^[a-z0-9]+$/u', $code) === 1) {
+                $out[] = $code;
             }
         }
 
@@ -89,16 +69,123 @@ final class CatalogIndexSearch
     }
 
     /**
-     * @return \Illuminate\Support\Collection<int, CatalogPage>
+     * @return list<array{url: string, title: string, snippet: string}>
      */
-    private function rowsForCode(string $code)
+    private function byCode(Product $product): array
     {
-        return CatalogPage::query()
-            ->where(function (Builder $q) use ($code): void {
-                $q->where('haystack', 'like', '%'.$code.'%');
-            })
-            ->orderByDesc('last_seen_at')
+        $codes = $this->codes($product);
+        if ($codes === []) {
+            return [];
+        }
+
+        $ids = DB::table('catalog_page_tokens')
+            ->whereIn('token', $codes)
+            ->groupBy('catalog_page_id')
+            ->orderByRaw('COUNT(DISTINCT token) DESC')
             ->limit(self::SQL_LIMIT)
-            ->get();
+            ->pluck('catalog_page_id')
+            ->all();
+
+        return $this->pages($ids, $product);
+    }
+
+    /**
+     * Produkty bez kodu producenta („WKLADKI-ALUTERMICZNE”) rozpoznajemy po marce
+     * i znaczących słowach z nazwy.
+     *
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function byBrandAndName(Product $product): array
+    {
+        $brand = $this->brandToken($product);
+        $words = $this->nameTokens($product);
+        if ($brand === '' || $words === []) {
+            return [];
+        }
+
+        $need = min(2, count($words));
+        $ids = DB::table('catalog_page_tokens as t')
+            ->whereIn('t.token', $words)
+            ->whereExists(function ($q) use ($brand): void {
+                $q->select(DB::raw(1))
+                    ->from('catalog_page_tokens as b')
+                    ->whereColumn('b.catalog_page_id', 't.catalog_page_id')
+                    ->where('b.token', $brand);
+            })
+            ->groupBy('t.catalog_page_id')
+            ->havingRaw('COUNT(DISTINCT t.token) >= ?', [$need])
+            ->orderByRaw('COUNT(DISTINCT t.token) DESC')
+            ->limit(self::SQL_LIMIT)
+            ->pluck('t.catalog_page_id')
+            ->all();
+
+        return $this->pages($ids, $product);
+    }
+
+    /**
+     * @param  list<int|string>  $ids
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function pages(array $ids, Product $product): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $pages = CatalogPage::query()
+            ->whereIn('id', $ids)
+            ->get(['url', 'title', 'haystack']);
+
+        $brand = $this->brandToken($product);
+        $withBrand = [];
+        $rest = [];
+        foreach ($pages as $page) {
+            $url = (string) $page->url;
+            if ($url === '') {
+                continue;
+            }
+            $row = [
+                'url' => $url,
+                'title' => (string) ($page->title ?? ''),
+                'snippet' => '',
+            ];
+            // strona z marką w adresie jest pewniejsza niż sam zgodny kod
+            if ($brand !== '' && str_contains((string) $page->haystack, $brand)) {
+                $withBrand[] = $row;
+            } else {
+                $rest[] = $row;
+            }
+        }
+
+        return array_slice(array_merge($withBrand, $rest), 0, self::MAX_HITS);
+    }
+
+    private function brandToken(Product $product): string
+    {
+        $brand = mb_strtolower($this->identity->shortBrand((string) $product->manufacturer));
+        $brand = preg_replace('/[^a-z0-9]+/u', ' ', $brand) ?? $brand;
+        $first = trim(explode(' ', trim($brand))[0] ?? '');
+
+        return mb_strlen($first) >= 3 ? $first : '';
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function nameTokens(Product $product): array
+    {
+        $out = [];
+        foreach ($this->identity->nameWords($product) as $word) {
+            // w adresach stron „wkładki” występuje jako „wkladki”
+            $out[] = mb_strtolower(Str::ascii($word));
+        }
+        foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower((string) $product->name)) ?: [] as $word) {
+            // liczby z nazwy („SECAIR 2000”) są mocnym sygnałem
+            if (preg_match('/^\d{3,}$/u', $word) === 1) {
+                $out[] = $word;
+            }
+        }
+
+        return array_values(array_unique(array_slice(array_filter($out), 0, 6)));
     }
 }
