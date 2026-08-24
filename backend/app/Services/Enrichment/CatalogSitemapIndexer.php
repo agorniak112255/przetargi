@@ -29,7 +29,7 @@ final class CatalogSitemapIndexer
 
     private const MAX_TOKEN_LENGTH = 64;
 
-    private const MAX_TOKENS_PER_PAGE = 48;
+    private const MAX_TOKENS_PER_PAGE = 24;
 
     private const CANDIDATE_PATHS = [
         '/sitemap.xml',
@@ -313,8 +313,9 @@ final class CatalogSitemapIndexer
                     }
                 }
             }
+            // sklejamy tylko krótkie sąsiedztwa, bo to rozbite kody („urg-c”, „42-874”)
             $next = $parts[$i + 1] ?? null;
-            if ($next !== null && mb_strlen($part) + mb_strlen($next) <= 16) {
+            if ($next !== null && mb_strlen($part) <= 6 && mb_strlen($next) <= 6) {
                 $out[] = $part.$next;
             }
         }
