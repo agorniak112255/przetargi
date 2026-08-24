@@ -19,6 +19,12 @@ final class CatalogSitemapIndexer
     /** Ile plików sitemap z jednego indeksu przetwarzamy. */
     private const MAX_SITEMAP_FILES = 60;
 
+    private const CHUNK_BYTES = 262144;
+
+    private const MAX_BUFFER_BYTES = 2097152;
+
+    private const USER_AGENT = 'Mozilla/5.0 (compatible; PrzetargiBot/1.0; +https://przetargi.supon.rzeszow.pl)';
+
     private const CANDIDATE_PATHS = [
         '/sitemap.xml',
         '/sitemap_index.xml',
@@ -60,27 +66,25 @@ final class CatalogSitemapIndexer
                 $timedOut = true;
                 break;
             }
-            $body = $this->fetch($sitemap);
-            if ($body === null) {
-                continue;
-            }
-            $used[] = $sitemap;
 
-            foreach ($this->extractLocations($body) as $loc) {
+            $consume = function (string $loc) use (
+                &$sitemaps, &$seen, &$rows, &$saved, &$offHost, &$timedOut,
+                $host, $maxUrls, $deadline
+            ): bool {
                 if ($this->looksLikeSitemap($loc)) {
                     if (count($sitemaps) < self::MAX_SITEMAP_FILES && ! in_array($loc, $sitemaps, true)) {
                         $sitemaps[] = $loc;
                     }
 
-                    continue;
+                    return true;
                 }
                 if (isset($seen[$loc])) {
-                    continue;
+                    return true;
                 }
                 if (! $this->belongsToHost($loc, $host)) {
                     $offHost++;
 
-                    continue;
+                    return true;
                 }
                 $seen[$loc] = true;
                 $rows[] = $this->rowFor($host, $loc);
@@ -88,9 +92,17 @@ final class CatalogSitemapIndexer
                     $saved += $this->store($rows);
                     $rows = [];
                 }
-                if (count($seen) >= $maxUrls) {
-                    break;
+                if (microtime(true) >= $deadline) {
+                    $timedOut = true;
+
+                    return false;
                 }
+
+                return count($seen) < $maxUrls;
+            };
+
+            if ($this->streamLocations($sitemap, $consume)) {
+                $used[] = $sitemap;
             }
         }
 
@@ -132,6 +144,93 @@ final class CatalogSitemapIndexer
         }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Sitemapy sklepów mają nawet setki MB — czytamy je kawałkami, żeby nie zjeść pamięci.
+     *
+     * @param  callable(string): bool  $onLocation  false przerywa czytanie
+     */
+    private function streamLocations(string $url, callable $onLocation): bool
+    {
+        try {
+            $response = Http::withHeaders([
+                'User-Agent' => self::USER_AGENT,
+                'Accept' => 'application/xml,text/xml,text/plain,*/*',
+            ])->timeout(180)->connectTimeout(8)->withOptions(['stream' => true])->get($url);
+        } catch (Throwable $e) {
+            Log::info('Sitemap stream failed', ['url' => $url, 'error' => $e->getMessage()]);
+
+            return false;
+        }
+
+        if (! $response->successful()) {
+            return false;
+        }
+
+        $body = $response->toPsrResponse()->getBody();
+        if (! $body->isReadable()) {
+            return false;
+        }
+        if ($body->isSeekable()) {
+            $body->rewind();
+        }
+        $buffer = '';
+        $inflate = null;
+        $first = true;
+
+        while (! $body->eof()) {
+            $chunk = $body->read(self::CHUNK_BYTES);
+            if ($chunk === '') {
+                break;
+            }
+            if ($first) {
+                $first = false;
+                // .xml.gz bywa serwowane bez nagłówka Content-Encoding
+                if (str_starts_with($chunk, "\x1f\x8b")) {
+                    $inflate = inflate_init(ZLIB_ENCODING_GZIP);
+                }
+            }
+            if ($inflate !== false && $inflate !== null) {
+                $chunk = (string) inflate_add($inflate, $chunk);
+            }
+
+            $buffer .= $chunk;
+            $remainder = $this->drainLocations($buffer, $onLocation);
+            if ($remainder === null) {
+                return true;
+            }
+            $buffer = $remainder;
+        }
+
+        $this->drainLocations($buffer, $onLocation);
+
+        return true;
+    }
+
+    /**
+     * Zwraca resztę bufora po ostatnim </loc> albo null, gdy odbiorca każe przerwać.
+     *
+     * @param  callable(string): bool  $onLocation
+     */
+    private function drainLocations(string $buffer, callable $onLocation): ?string
+    {
+        $end = strripos($buffer, '</loc>');
+        if ($end === false) {
+            // bufor bez pełnego wpisu nie może rosnąć w nieskończoność
+            return mb_strlen($buffer) > self::MAX_BUFFER_BYTES
+                ? substr($buffer, -1024)
+                : $buffer;
+        }
+
+        $head = substr($buffer, 0, $end + 6);
+        foreach ($this->extractLocations($head) as $loc) {
+            if ($onLocation($loc) === false) {
+                return null;
+            }
+        }
+
+        return substr($buffer, $end + 6);
     }
 
     /**
@@ -210,7 +309,7 @@ final class CatalogSitemapIndexer
     {
         try {
             $response = Http::withHeaders([
-                'User-Agent' => 'Mozilla/5.0 (compatible; PrzetargiBot/1.0; +https://przetargi.supon.rzeszow.pl)',
+                'User-Agent' => self::USER_AGENT,
                 'Accept' => 'application/xml,text/xml,text/plain,*/*',
             ])->timeout(30)->connectTimeout(8)->get($url);
         } catch (Throwable $e) {

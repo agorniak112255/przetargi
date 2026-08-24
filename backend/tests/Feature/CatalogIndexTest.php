@@ -60,6 +60,43 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame(1, CatalogPage::query()->count());
     }
 
+    public function test_reads_gzipped_sitemap(): void
+    {
+        Http::fake([
+            'https://demar24.pl/robots.txt' => Http::response('Sitemap: https://demar24.pl/sitemap.xml.gz', 200),
+            'https://demar24.pl/sitemap.xml.gz' => Http::response(
+                (string) gzencode(
+                    '<?xml version="1.0"?><urlset><url><loc>https://demar24.pl/buty-demar-1202</loc></url></urlset>'
+                ),
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('demar24.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://demar24.pl/buty-demar-1202']);
+    }
+
+    public function test_counts_locations_pointing_to_other_domains(): void
+    {
+        Http::fake([
+            'https://gvarant.pl/robots.txt' => Http::response('Sitemap: https://gvarant.pl/sitemap.xml', 200),
+            'https://gvarant.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://sklep.gvarant.com/produkt-a</loc></url>'
+                .'<url><loc>https://sklep.gvarant.com/produkt-b</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('gvarant.pl');
+
+        $this->assertSame(0, $result['saved']);
+        $this->assertSame(2, $result['off_host']);
+    }
+
     public function test_finds_product_page_by_code_in_url(): void
     {
         $this->seedPage('https://optimumbhp.pl/REKAWICE-ROBOCZE-1202-URGENT-p138481');
