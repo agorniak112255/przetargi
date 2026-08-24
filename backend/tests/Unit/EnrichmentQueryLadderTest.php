@@ -155,6 +155,55 @@ final class EnrichmentQueryLadderTest extends TestCase
         ])));
     }
 
+    public function test_size_suffix_gives_searchable_code_variants(): void
+    {
+        $identity = new ProductSearchIdentity();
+
+        $this->assertSame(['BLACKSTICK30'], $identity->skuSizeVariants(new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'BLACKSTICK30+T11',
+            'name' => 'BLACK STICK 30+',
+        ])));
+        $this->assertSame(['ATTACK6PEOM-BSC', 'ATTACK6PEOM'], $identity->skuSizeVariants(new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'ATTACK6PEOM-BSCT12',
+            'name' => 'ATTACK 6 PEOM',
+        ])));
+        // „BLACK” samo w sobie pasowałoby do BLACKNIT i BLACKSTICK, więc wypada
+        $this->assertSame(['BLACK-FIT'], $identity->skuSizeVariants(new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'BLACK-FITT10',
+            'name' => 'BLACK FIT',
+        ])));
+        // krótki kod modelu zostaje, bo nie jest zwykłym słowem
+        $this->assertContains('BOHO', $identity->skuSizeVariants(new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'BOHO-IT08',
+            'name' => 'BOHO',
+        ])));
+    }
+
+    public function test_page_with_model_without_size_matches_when_brand_present(): void
+    {
+        $identity = new ProductSearchIdentity();
+        $product = new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'BLACK-FITT10',
+            'name' => 'BLACK FIT',
+        ]);
+
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sklep.example/rostaing-black-fit Rostaing BLACK-FIT rękawice',
+            $product
+        ));
+        // bez marki wariant kodu nie wystarcza
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://sklep.example/black-fit BLACK-FIT rękawice ogrodowe',
+            $product
+        ));
+        $this->assertContains('BLACK-FIT Rostaing', $identity->primaryQueries($product));
+    }
+
     public function test_catalog_number_with_long_digits_keeps_full_code(): void
     {
         $identity = new ProductSearchIdentity();

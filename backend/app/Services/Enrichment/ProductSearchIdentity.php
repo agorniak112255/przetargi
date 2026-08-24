@@ -524,6 +524,12 @@ final class ProductSearchIdentity
         if ($core !== '' && mb_strtolower($core) !== mb_strtolower($sku)) {
             $out[] = $this->queryWithManufacturer($core, $product);
         }
+        // „BLACK-FITT10” sprzedaje się jako „BLACK-FIT” — rozmiar w kodzie jest tylko nasz
+        foreach ($this->skuSizeVariants($product) as $variant) {
+            if (mb_strtolower($variant) !== mb_strtolower($sku)) {
+                $out[] = $this->queryWithManufacturer($variant, $product);
+            }
+        }
 
         return array_values(array_unique(array_filter(
             $out,
@@ -636,6 +642,19 @@ final class ProductSearchIdentity
             if ($code !== null && $this->numericTokenAsProductCode($hay, $code)) {
                 return true;
             }
+        }
+
+        // „BLACKSTICK30+T11” to model plus rozmiar (taille) — w sklepie stoi sam model.
+        // Wariant bez rozmiaru wpuszczamy wyłącznie razem z marką na stronie.
+        foreach ($this->skuSizeVariants($product) as $variant) {
+            if (! $this->tokenInHay($hay, $hayCompact, $variant)) {
+                continue;
+            }
+            if ($brands !== [] && ! $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
+                continue;
+            }
+
+            return true;
         }
 
         // Gdy kod niesie nazwę modelu („COUPURE-IT11” → COUPURE), jej brak na stronie
@@ -972,6 +991,45 @@ final class ProductSearchIdentity
         }
 
         return false;
+    }
+
+    /**
+     * Kod bez rozmiaru „taille”: „ATTACK6PEOM-BSCT12” → „ATTACK6PEOM-BSC” i „ATTACK6PEOM”.
+     * Rostaing dokleja T08–T14 na końcu, czasem z literą wariantu przed nim, więc
+     * zwracamy oba odczyty — trafi ten, który faktycznie stoi na karcie.
+     *
+     * @return list<string>
+     */
+    public function skuSizeVariants(Product $product): array
+    {
+        $sku = trim((string) $product->sku);
+        if ($sku === '' || preg_match('/^(.*?)([A-Za-z0-9]{0,3})T(?:0\d|1[0-4])$/u', $sku, $m) !== 1) {
+            return [];
+        }
+
+        $out = [];
+        foreach ([$m[1].$m[2], $m[1]] as $candidate) {
+            $candidate = rtrim($candidate, "-/+_. \t");
+            if ($this->isUsableSizeVariant($candidate)) {
+                $out[$candidate] = true;
+            }
+        }
+
+        return array_keys($out);
+    }
+
+    /** Sam kolor albo przymiotnik pasuje do połowy katalogu marki, więc odpada. */
+    private function isUsableSizeVariant(string $variant): bool
+    {
+        if (mb_strlen($variant) < 4) {
+            return false;
+        }
+
+        return ! in_array(mb_strtolower($variant), [
+            'black', 'white', 'grey', 'gray', 'noir', 'blanc', 'blue', 'green', 'red', 'jaune',
+            'pro', 'plus', 'max', 'soft', 'light', 'basic', 'classic', 'premium', 'standard',
+            'super', 'ultra', 'comfort', 'safety', 'glove', 'gant',
+        ], true);
     }
 
     /**
