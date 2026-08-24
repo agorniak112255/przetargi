@@ -481,7 +481,20 @@ final class ProductSearchIdentity
             $parts[] = $sku;
         }
 
-        return $this->queryWithManufacturer(trim(implode(' ', $parts)), $product);
+        $phrase = $this->queryWithManufacturer(trim(implode(' ', $parts)), $product);
+        $hint = $this->productHint($product);
+        if ($hint !== '') {
+            foreach (preg_split('/\s+/u', $hint) ?: [] as $word) {
+                if ($word !== '' && ! $this->phraseHasToken($phrase, $word)) {
+                    $phrase .= ' '.$word;
+                }
+            }
+        }
+        if (! $this->phraseHasToken($phrase, 'bhp')) {
+            $phrase .= ' BHP';
+        }
+
+        return trim($phrase);
     }
 
     public function queryWithManufacturer(string $query, Product $product): string

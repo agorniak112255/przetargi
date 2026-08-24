@@ -17,7 +17,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v20';
+    private const SEARCH_CACHE_VERSION = 'v21';
 
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -436,6 +436,10 @@ class HybridWebSearchService
         try {
             $pack = $this->searchViaConfiguredEngine($query, $includeDomains, $profile);
             $packResults = $this->filterResultsByIdentity($pack['results'], $product);
+            if ($packResults === [] && $pack['results'] !== []) {
+                $errors[] = 'Odrzucono '.count($pack['results'])
+                    .' stron bez SKU '.$product->sku.' w tytule/URL.';
+            }
             $provider = $includeDomains !== []
                 ? $this->searchProviderName().'_manufacturer'
                 : $this->searchProviderName();
@@ -518,9 +522,49 @@ class HybridWebSearchService
             ];
         }
 
+        if ($matched === []) {
+            $matched = $this->fallbackDistinctiveHits($results, $product);
+        }
+
         usort($matched, fn (array $a, array $b): int => $this->resultQuality($b, $product) <=> $this->resultQuality($a, $product));
 
         return $matched;
+    }
+
+    /**
+     * @param  list<array{url?: string, title?: string, snippet?: string}>  $results
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function fallbackDistinctiveHits(array $results, Product $product): array
+    {
+        $sku = mb_strtolower(trim((string) $product->sku));
+        if ($sku === '' || mb_strlen($sku) < 4) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($results as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $url = (string) ($row['url'] ?? '');
+            $title = (string) ($row['title'] ?? '');
+            $snippet = (string) ($row['snippet'] ?? '');
+            $hay = mb_strtolower($url.' '.$title.' '.$snippet);
+            if (preg_match('/(?<![a-z0-9])'.preg_quote($sku, '/').'(?![a-z0-9])/u', $hay) !== 1) {
+                continue;
+            }
+            $out[] = [
+                'url' => $url,
+                'title' => $title !== '' ? $title : $url,
+                'snippet' => $snippet,
+            ];
+            if (count($out) >= 5) {
+                break;
+            }
+        }
+
+        return $out;
     }
 
     private function isListingWithoutProduct(string $url, Product $product): bool

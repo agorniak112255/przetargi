@@ -16,7 +16,7 @@ use Throwable;
  */
 final class DuckDuckGoHtmlSearch
 {
-    private const QUERY_CACHE_PREFIX = 'free_web_search_v1:';
+    private const QUERY_CACHE_PREFIX = 'free_web_search_v2:';
 
     private const GATE_KEY = 'free_web_search_gate';
 
@@ -277,12 +277,19 @@ final class DuckDuckGoHtmlSearch
             if ($url === null) {
                 continue;
             }
+            $snippet = '';
+            $block = (string) ($match[0] ?? '');
+            if (preg_match('/<p[^>]*>(.*?)<\/p>/is', $block, $p) === 1) {
+                $snippet = trim(html_entity_decode(strip_tags($p[1]), ENT_QUOTES | ENT_HTML5));
+            } elseif (preg_match('/<cite[^>]*>(.*?)<\/cite>/is', $block, $cite) === 1) {
+                $snippet = trim(html_entity_decode(strip_tags($cite[1]), ENT_QUOTES | ENT_HTML5));
+            }
             $this->pushHit(
                 $out,
                 $seen,
                 $url,
                 html_entity_decode(strip_tags((string) ($match[2] ?? '')), ENT_QUOTES | ENT_HTML5),
-                ''
+                $snippet
             );
         }
 

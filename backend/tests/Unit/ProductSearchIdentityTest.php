@@ -104,7 +104,7 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertSame('site:uvex-safety.com/products 60497', $queries[1]);
 
         $industryQueries = $id->searchQueries($product, 'industry');
-        $this->assertSame('C500 60497 uvex', $industryQueries[0]);
+        $this->assertSame('C500 60497 uvex BHP', $industryQueries[0]);
         foreach ($industryQueries as $query) {
             $this->assertMatchesRegularExpression('/\buvex\b/i', $query);
         }
@@ -120,12 +120,24 @@ final class ProductSearchIdentityTest extends TestCase
         ]);
 
         $this->assertSame(
-            'Rękawice nitrylowe 3-60NM Lenard',
+            'Rękawice nitrylowe 3-60NM Lenard BHP',
             $id->productNameWithManufacturer($product)
         );
         foreach ($id->searchQueries($product, 'industry') as $query) {
             $this->assertMatchesRegularExpression('/\blenard\b/i', $query, $query);
         }
+    }
+
+    public function test_letter_sku_gets_bhp_disambiguator(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'ROBFM',
+            'name' => 'ROBFM',
+            'manufacturer' => 'JS Gloves',
+        ]);
+
+        $this->assertSame('ROBFM JS Gloves BHP', $id->productNameWithManufacturer($product));
     }
 
     public function test_ansell_product_source_uses_polish_locale(): void
