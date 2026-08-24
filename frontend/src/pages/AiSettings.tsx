@@ -16,6 +16,7 @@ type AiSettings = {
   timeout_seconds: number
   temperature: number
   web_search_enabled: boolean
+  search_engine: 'tavily' | 'duckduckgo'
   search_fallback: string
   tavily_search_mode: 'eco' | 'balanced' | 'full'
   enrichment_batch_limit: number
@@ -88,6 +89,7 @@ export function AiSettingsPage() {
         timeout_seconds: cfg.timeout_seconds,
         temperature: cfg.temperature,
         web_search_enabled: cfg.web_search_enabled,
+        search_engine: cfg.search_engine || 'tavily',
         search_fallback: cfg.search_fallback,
         tavily_search_mode: cfg.tavily_search_mode || 'balanced',
         enrichment_batch_limit: cfg.enrichment_batch_limit || 5,
@@ -287,9 +289,29 @@ export function AiSettingsPage() {
         <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
           <p className="text-xs font-semibold text-slate-700">Wyszukiwanie opisów produktów</p>
           <p className="text-[11px] text-slate-500">
-            Domyślnie: Tavily → filtr/opis tanim modelem → cache po SKU. Puste pole = model główny z
-            góry. Drogi AI web search tylko jako awaria — chyba że włączysz duży model poniżej.
+            Szukanie stron produktu robi PHP (Tavily albo darmowy DuckDuckGo), potem model pisze
+            opis. Lokalny LLM nie ma internetu — plugin OpenRouter <code>web</code> nic nie robi.
           </p>
+          <label className="block text-xs">
+            Szukanie w internecie
+            <select
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.search_engine || 'tavily'}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  search_engine: e.target.value as 'tavily' | 'duckduckgo',
+                })
+              }
+            >
+              <option value="tavily">Tavily (płatne, dokładniejsze)</option>
+              <option value="duckduckgo">Lokalny LLM — DuckDuckGo (darmowe, bez Tavily)</option>
+            </select>
+            <span className="mt-1 block text-[11px] text-slate-500">
+              DuckDuckGo: PHP scrappuje wyniki i wkleja URL-e do pipeline. Zero kredytów Tavily,
+              zero pluginu OpenRouter.
+            </span>
+          </label>
           <label className="flex items-start gap-2 text-xs">
             <input
               type="checkbox"
@@ -300,7 +322,7 @@ export function AiSettingsPage() {
             <span>
               Tylko duży model (główny) — opis modelem z góry
               <span className="mt-0.5 block text-[11px] text-slate-500">
-                Szukanie: Tavily (gdy jest klucz), inaczej OpenRouter plugin web. Opis: model główny, nie tani.
+                Opis modelem z góry. Szukanie wg opcji powyżej (Tavily albo DuckDuckGo).
               </span>
             </span>
           </label>
@@ -321,11 +343,16 @@ export function AiSettingsPage() {
             </datalist>
           </label>
           <label className="block text-xs">
-            Klucz Tavily *{' '}
-            {cfg.has_tavily_api_key ? '(zostaw puste, by nie zmieniać)' : '(wymagany do pobierania)'}
+            Klucz Tavily{' '}
+            {cfg.search_engine === 'duckduckgo'
+              ? '(nieużywany w trybie lokalnym)'
+              : cfg.has_tavily_api_key
+                ? '(zostaw puste, by nie zmieniać)'
+                : '* (wymagany do pobierania)'}
             <input
               type={showTavilyKey ? 'text' : 'password'}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono disabled:bg-slate-100"
+              disabled={cfg.search_engine === 'duckduckgo'}
               value={tavilyKey}
               onChange={(e) => setTavilyKey(e.target.value)}
               placeholder={cfg.has_tavily_api_key ? '••••••••' : 'tvly-…'}
@@ -343,7 +370,8 @@ export function AiSettingsPage() {
           <label className="block text-xs">
             Tryb wyszukiwania Tavily (zużycie kredytów)
             <select
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 disabled:bg-slate-100"
+              disabled={cfg.search_engine === 'duckduckgo'}
               value={cfg.tavily_search_mode || 'balanced'}
               onChange={(e) =>
                 setCfg({
@@ -406,7 +434,7 @@ export function AiSettingsPage() {
               checked={cfg.web_search_enabled ?? false}
               onChange={(e) => setCfg({ ...cfg, web_search_enabled: e.target.checked })}
             />
-            Drogi fallback: AI web search (OpenRouter Responses) — tylko gdy Tavily zawiedzie
+            Drogi fallback: AI web search (OpenRouter) — tylko Tavily + OpenRouter, nie lokalny LLM
           </label>
         </div>
 

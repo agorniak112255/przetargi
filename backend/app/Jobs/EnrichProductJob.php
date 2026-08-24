@@ -73,7 +73,8 @@ class EnrichProductJob implements ShouldQueue
 
         try {
             $useLargeModel = $aiSettings->enrichmentUsesLargeModel();
-            if (! $useLargeModel) {
+            $useDuckDuckGo = $aiSettings->usesDuckDuckGoSearch();
+            if (! $useLargeModel && ! $useDuckDuckGo) {
                 TavilyQuotaGuard::assertAllowed();
             }
             $enrichment->assertBatchNotCancelled($this->batchId);
@@ -82,9 +83,11 @@ class EnrichProductJob implements ShouldQueue
                 'status' => ProductEnrichmentBatch::STATUS_RUNNING,
                 'current_sku' => $product->sku,
                 'current_name' => mb_substr($product->name, 0, 255),
-                'message' => $useLargeModel
-                    ? 'Duży model (web search + opis)…'
-                    : 'Tavily + skrót AI (lub cache SKU)…',
+                'message' => $useDuckDuckGo
+                    ? 'DuckDuckGo + lokalny model…'
+                    : ($useLargeModel
+                        ? 'Duży model (web search + opis)…'
+                        : 'Tavily + skrót AI (lub cache SKU)…'),
             ]);
 
             $enrichment->enrichProduct($product, $this->force, $this->batchId);

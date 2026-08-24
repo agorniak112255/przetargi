@@ -42,6 +42,7 @@ class AiSettingsController extends Controller
             'temperature' => ['sometimes', 'numeric', 'min:0', 'max:2'],
             'web_search_enabled' => ['sometimes', 'boolean'],
             'tavily_api_key' => ['nullable', 'string', 'max:500'],
+            'search_engine' => ['sometimes', 'string', 'in:tavily,duckduckgo'],
             'search_fallback' => ['sometimes', 'string', 'in:tavily,none'],
             'tavily_search_mode' => ['sometimes', 'string', 'in:eco,balanced,full'],
             'enrichment_batch_limit' => ['sometimes', 'integer', 'min:1', 'max:'.AiSettingsService::ENRICHMENT_BATCH_MAX],

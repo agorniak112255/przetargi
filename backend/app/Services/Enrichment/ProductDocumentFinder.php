@@ -21,6 +21,7 @@ final class ProductDocumentFinder
         private readonly AiSettingsService $settings,
         private readonly ManufacturerDomainResolver $manufacturers,
         private readonly ProductSearchIdentity $identity = new ProductSearchIdentity(),
+        private readonly DuckDuckGoHtmlSearch $duckDuckGo = new DuckDuckGoHtmlSearch,
     ) {}
 
     /**
@@ -236,6 +237,10 @@ final class ProductDocumentFinder
      */
     private function searchTavily(string $query, array $includeDomains = []): array
     {
+        if ($this->settings->usesDuckDuckGoSearch()) {
+            return $this->duckDuckGo->search($query, 8, $includeDomains);
+        }
+
         TavilyQuotaGuard::assertAllowed();
 
         $cfg = $this->settings->resolve();

@@ -695,6 +695,43 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame($hitUrl, $pack['results'][0]['url'] ?? null);
     }
 
+    public function test_duckduckgo_search_skips_tavily(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8081/v1',
+            'api_key' => 'local',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'search_engine' => 'duckduckgo',
+            'web_search_enabled' => false,
+        ]);
+        $product = $this->makeProduct([
+            'sku' => 'NV2032CE',
+            'name' => 'Astro Cleat',
+            'manufacturer' => 'GVS',
+        ]);
+        $hitUrl = 'https://hurtownia.example/products/nv2032ce';
+        Http::fake(function ($request) use ($hitUrl) {
+            $this->assertStringNotContainsString('tavily.com', $request->url());
+            $this->assertStringContainsString('duckduckgo.com', $request->url());
+
+            return Http::response(
+                '<a class="result__a" href="//duckduckgo.com/l/?uddg='
+                .rawurlencode($hitUrl).'">NV2032CE Astro Cleat</a>',
+                200
+            );
+        });
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame('duckduckgo', $pack['provider']);
+        $this->assertSame($hitUrl, $pack['results'][0]['url'] ?? null);
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
+    }
+
     public function test_search_falls_back_to_manufacturer_site_when_sku_misses(): void
     {
         $this->seedTavilySettings();
@@ -912,6 +949,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'web_search_enabled' => false,
             'tavily_api_key' => 'tvly-test-key-1234567890',
             'tavily_search_mode' => 'balanced',
+            'search_engine' => 'tavily',
         ]);
     }
 

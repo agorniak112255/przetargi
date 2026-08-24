@@ -23,6 +23,7 @@ final class ManufacturerDomainResolver
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly ProductSearchIdentity $identity,
+        private readonly DuckDuckGoHtmlSearch $duckDuckGo = new DuckDuckGoHtmlSearch,
     ) {}
 
     /**
@@ -73,12 +74,6 @@ final class ManufacturerDomainResolver
 
         $cacheKey = self::DOMAIN_CACHE_PREFIX.$brand;
         try {
-            TavilyQuotaGuard::assertAllowed();
-            $cfg = $this->settings->resolve();
-            $key = (string) ($cfg['tavily_api_key'] ?? '');
-            if ($key === '') {
-                return [];
-            }
             $mfr = trim((string) $product->manufacturer);
             $sku = trim((string) $product->sku);
             $name = trim((string) $product->name);
@@ -87,28 +82,40 @@ final class ManufacturerDomainResolver
                 $sku,
                 ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) ? $name : null,
             ]));
-            $response = Http::timeout(15)
-                ->connectTimeout(5)
-                ->withToken($key)
-                ->post('https://api.tavily.com/search', [
-                    'query' => implode(' ', $bits).' official website OR strona oficjalna producent',
-                    'search_depth' => 'basic',
-                    'include_answer' => false,
-                    'max_results' => 6,
-                ]);
-            if (! $response->successful()) {
-                if ($response->status() === 432
-                    || str_contains(mb_strtolower($response->body()), 'usage limit')) {
-                    TavilyQuotaGuard::block($response->body());
-                    throw new TavilyQuotaExceededException(
-                        'Tavily HTTP '.$response->status().': limit planu Tavily wyczerpany.'
-                    );
-                }
+            $query = implode(' ', $bits).' official website OR strona oficjalna producent';
 
-                return [];
+            if ($this->settings->usesDuckDuckGoSearch()) {
+                $rows = $this->duckDuckGo->search($query, 6);
+            } else {
+                TavilyQuotaGuard::assertAllowed();
+                $cfg = $this->settings->resolve();
+                $key = (string) ($cfg['tavily_api_key'] ?? '');
+                if ($key === '') {
+                    return [];
+                }
+                $response = Http::timeout(15)
+                    ->connectTimeout(5)
+                    ->withToken($key)
+                    ->post('https://api.tavily.com/search', [
+                        'query' => $query,
+                        'search_depth' => 'basic',
+                        'include_answer' => false,
+                        'max_results' => 6,
+                    ]);
+                if (! $response->successful()) {
+                    if ($response->status() === 432
+                        || str_contains(mb_strtolower($response->body()), 'usage limit')) {
+                        TavilyQuotaGuard::block($response->body());
+                        throw new TavilyQuotaExceededException(
+                            'Tavily HTTP '.$response->status().': limit planu Tavily wyczerpany.'
+                        );
+                    }
+
+                    return [];
+                }
+                $rows = $response->json('results') ?? [];
+                $rows = is_array($rows) ? $rows : [];
             }
-            $rows = $response->json('results') ?? [];
-            $rows = is_array($rows) ? $rows : [];
             $skuRows = $this->rowsMentioningSku($product, $rows);
             $found = $this->discoverFromResults($product, $skuRows !== [] ? $skuRows : $rows);
             if ($found !== []) {

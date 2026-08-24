@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\JsonResponseParser;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -284,7 +285,19 @@ final class PriceListSampleRoleResearcher
 
         $query = trim(($manufacturerHint ? $manufacturerHint.' ' : '').implode(' ', $tokens).' product model article');
 
-        if (! empty($cfg['tavily_api_key'])) {
+        if ($this->aiSettings->usesDuckDuckGoSearch()) {
+            try {
+                $parts = [];
+                foreach (app(DuckDuckGoHtmlSearch::class)->search($query, 4) as $row) {
+                    $parts[] = trim($row['title']).': '.trim($row['url']);
+                }
+                if ($parts !== []) {
+                    return mb_substr(implode("\n", $parts), 0, 2500);
+                }
+            } catch (Throwable $e) {
+                Log::info('Sample role DuckDuckGo failed', ['error' => $e->getMessage()]);
+            }
+        } elseif (! empty($cfg['tavily_api_key'])) {
             try {
                 $response = Http::acceptJson()
                     ->timeout(18)
@@ -316,7 +329,7 @@ final class PriceListSampleRoleResearcher
             }
         }
 
-        if (! empty($cfg['web_search_enabled'])) {
+        if (! $this->aiSettings->usesDuckDuckGoSearch() && ! empty($cfg['web_search_enabled'])) {
             try {
                 $raw = $this->llm->responsesWithWebSearch(
                     "Na podstawie wyszukiwania w internecie: co oznaczają kody/nazwy w zapytaniu „{$query}”? "

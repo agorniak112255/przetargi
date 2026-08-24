@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Ai;
 
+use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -16,6 +17,7 @@ class OpenAiCompatibleClient
         private readonly AiSettingsService $settings,
         private readonly JsonResponseParser $jsonParser,
         private readonly ChatCompletionContent $contentReader = new ChatCompletionContent,
+        private readonly DuckDuckGoHtmlSearch $duckDuckGo = new DuckDuckGoHtmlSearch,
     ) {}
 
     /**
@@ -228,6 +230,9 @@ class OpenAiCompatibleClient
         $cfg = $this->settings->resolve();
         if (! $cfg['enabled']) {
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
+        }
+        if ($this->settings->usesDuckDuckGoSearch()) {
+            return $this->phpDuckDuckGoCitations($prompt);
         }
         if (! $cfg['has_api_key'] || $cfg['api_key'] === null) {
             throw new RuntimeException('Brak klucza API AI. Uzupełnij go w Ustawieniach AI.');
@@ -578,6 +583,34 @@ class OpenAiCompatibleClient
             ])
             ->timeout($timeout)
             ->post($url, $payload);
+    }
+
+    /**
+     * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
+     */
+    private function phpDuckDuckGoCitations(string $prompt): array
+    {
+        $query = $prompt;
+        if (preg_match('/Zapytanie:\s*(.+)$/mu', $prompt, $m) === 1) {
+            $query = trim($m[1]);
+        }
+        $hits = $this->duckDuckGo->search($query, 5);
+        if ($hits === []) {
+            throw new RuntimeException('DuckDuckGo nie zwróciło URL-i.');
+        }
+
+        $citations = [];
+        $lines = [];
+        foreach ($hits as $hit) {
+            $citations[] = ['url' => $hit['url'], 'title' => $hit['title']];
+            $lines[] = $hit['url'];
+        }
+
+        return [
+            'content' => implode("\n", $lines),
+            'model' => 'duckduckgo',
+            'citations' => $citations,
+        ];
     }
 
     private function isReasoningModel(string $model): bool

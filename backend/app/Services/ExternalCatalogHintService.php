@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Services\Ai\AiSettingsService;
+use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\TavilyQuotaGuard;
 use Illuminate\Support\Facades\Http;
 use Throwable;
@@ -19,6 +20,7 @@ final class ExternalCatalogHintService
 
     public function __construct(
         private readonly AiSettingsService $settings,
+        private readonly DuckDuckGoHtmlSearch $duckDuckGo = new DuckDuckGoHtmlSearch,
     ) {}
 
     /**
@@ -33,6 +35,16 @@ final class ExternalCatalogHintService
         $cacheKey = mb_strtolower(mb_substr($query, 0, 400));
         if (array_key_exists($cacheKey, $this->cache)) {
             return $this->cache[$cacheKey];
+        }
+
+        if ($this->settings->usesDuckDuckGoSearch()) {
+            try {
+                $hits = $this->duckDuckGo->search(mb_substr($query, 0, 400), 8);
+            } catch (Throwable) {
+                return $this->remember($cacheKey, null);
+            }
+
+            return $this->remember($cacheKey, $this->pickBestResult($hits));
         }
 
         $cfg = $this->settings->resolve();

@@ -17,6 +17,10 @@ final class AiSettingsService
 
     public const CONCURRENCY_MAX = 100;
 
+    public const SEARCH_ENGINE_TAVILY = 'tavily';
+
+    public const SEARCH_ENGINE_DUCKDUCKGO = 'duckduckgo';
+
     /**
      * @return array{
      *     enabled: bool,
@@ -30,6 +34,7 @@ final class AiSettingsService
      *     temperature: float,
      *     web_search_enabled: bool,
      *     tavily_api_key: ?string,
+     *     search_engine: string,
      *     search_fallback: string,
      *     tavily_search_mode: string,
      *     enrichment_batch_limit: int,
@@ -74,6 +79,11 @@ final class AiSettingsService
                 'temperature' => (float) $row->temperature,
                 'web_search_enabled' => (bool) ($row->web_search_enabled ?? true),
                 'tavily_api_key' => $tavily !== null && $tavily !== '' ? (string) $tavily : null,
+                'search_engine' => $this->normalizeSearchEngine(
+                    Schema::hasColumn('ai_settings', 'search_engine')
+                        ? ($row->search_engine ?? null)
+                        : null
+                ),
                 'search_fallback' => (string) ($row->search_fallback ?: 'tavily'),
                 'tavily_search_mode' => $this->normalizeTavilySearchMode(
                     Schema::hasColumn('ai_settings', 'tavily_search_mode')
@@ -128,6 +138,7 @@ final class AiSettingsService
             'temperature' => (float) config('ai.temperature'),
             'web_search_enabled' => (bool) config('ai.web_search_enabled', true),
             'tavily_api_key' => $tavily,
+            'search_engine' => $this->normalizeSearchEngine(config('ai.search_engine')),
             'search_fallback' => (string) config('ai.search_fallback', 'tavily'),
             'tavily_search_mode' => $this->normalizeTavilySearchMode(config('ai.tavily_search_mode')),
             'enrichment_batch_limit' => $this->normalizeEnrichmentBatchLimit(config('ai.enrichment_batch_limit')),
@@ -164,6 +175,7 @@ final class AiSettingsService
             'timeout_seconds' => $cfg['timeout_seconds'],
             'temperature' => $cfg['temperature'],
             'web_search_enabled' => $cfg['web_search_enabled'],
+            'search_engine' => $cfg['search_engine'],
             'search_fallback' => $cfg['search_fallback'],
             'tavily_search_mode' => $cfg['tavily_search_mode'],
             'enrichment_batch_limit' => $cfg['enrichment_batch_limit'],
@@ -200,6 +212,7 @@ final class AiSettingsService
             'timeout_seconds' => 90,
             'temperature' => 0.1,
             'web_search_enabled' => false,
+            'search_engine' => self::SEARCH_ENGINE_TAVILY,
             'search_fallback' => 'tavily',
             'tavily_search_mode' => TavilySearchProfile::MODE_BALANCED,
             'enrichment_batch_limit' => 5,
@@ -237,6 +250,10 @@ final class AiSettingsService
         if (array_key_exists('enrichment_use_large_model', $data)
             && Schema::hasColumn('ai_settings', 'enrichment_use_large_model')) {
             $row->enrichment_use_large_model = (bool) $data['enrichment_use_large_model'];
+        }
+
+        if (array_key_exists('search_engine', $data) && Schema::hasColumn('ai_settings', 'search_engine')) {
+            $row->search_engine = $this->normalizeSearchEngine($data['search_engine']);
         }
 
         if (array_key_exists('tavily_search_mode', $data) && Schema::hasColumn('ai_settings', 'tavily_search_mode')) {
@@ -314,6 +331,21 @@ final class AiSettingsService
         return $this->enrichmentUsesLargeModelFrom($this->resolve());
     }
 
+    public function searchEngine(): string
+    {
+        return $this->normalizeSearchEngine($this->resolve()['search_engine'] ?? null);
+    }
+
+    public function usesDuckDuckGoSearch(): bool
+    {
+        return $this->searchEngine() === self::SEARCH_ENGINE_DUCKDUCKGO;
+    }
+
+    public function usesTavilySearch(): bool
+    {
+        return $this->searchEngine() === self::SEARCH_ENGINE_TAVILY;
+    }
+
     public function tavilySearchProfile(): TavilySearchProfile
     {
         $cfg = $this->resolve();
@@ -350,6 +382,15 @@ final class AiSettingsService
         }
 
         return (bool) ($row->{$column} ?? $default);
+    }
+
+    private function normalizeSearchEngine(mixed $value): string
+    {
+        $engine = is_string($value) ? strtolower(trim($value)) : '';
+
+        return in_array($engine, [self::SEARCH_ENGINE_TAVILY, self::SEARCH_ENGINE_DUCKDUCKGO], true)
+            ? $engine
+            : self::SEARCH_ENGINE_TAVILY;
     }
 
     private function normalizeTavilySearchMode(mixed $value): string

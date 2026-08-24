@@ -37,6 +37,7 @@ final class AiSettingsApiTest extends TestCase
             'timeout_seconds' => 60,
             'temperature' => 0.2,
             'match_concurrency' => 6,
+            'search_engine' => 'duckduckgo',
             'vector_enabled' => true,
             'qdrant_url' => 'http://127.0.0.1:6333',
             'qdrant_collection' => 'products',
@@ -50,7 +51,8 @@ final class AiSettingsApiTest extends TestCase
             ->assertJsonPath('vector_enabled', true)
             ->assertJsonPath('qdrant_url', 'http://127.0.0.1:6333')
             ->assertJsonPath('embedding_model', 'text-embedding-3-small')
-            ->assertJsonPath('match_concurrency', 6);
+            ->assertJsonPath('match_concurrency', 6)
+            ->assertJsonPath('search_engine', 'duckduckgo');
 
         $this->putJson('/api/ai-settings', ['match_concurrency' => 100])
             ->assertOk()

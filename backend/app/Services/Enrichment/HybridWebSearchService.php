@@ -17,11 +17,12 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v18';
+    private const SEARCH_CACHE_VERSION = 'v19';
 
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly OpenAiCompatibleClient $llm,
+        private readonly DuckDuckGoHtmlSearch $duckDuckGo,
         private readonly ManufacturerDomainResolver $manufacturers,
         private readonly ProductSearchIdentity $identity,
     ) {}
@@ -298,7 +299,7 @@ class HybridWebSearchService
 
     private function searchCacheKey(string $mode, string $phase, string $query, string $step = ''): string
     {
-        $payload = $mode.'|'.$phase.'|'.$query;
+        $payload = $this->searchProviderName().'|'.$mode.'|'.$phase.'|'.$query;
         if ($step !== '') {
             $payload .= '|'.$step;
         }
@@ -334,10 +335,14 @@ class HybridWebSearchService
         string $phase,
     ): array {
         $errors = [];
-        $cfg = $this->settings->resolve();
-        $key = $cfg['tavily_api_key'] ?? null;
-        if (! is_string($key) || $key === '' || $skuQuery === '') {
-            return ['results' => [], 'provider' => 'tavily', 'errors' => []];
+        if ($skuQuery === '') {
+            return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => []];
+        }
+        if ($this->settings->usesTavilySearch()) {
+            $key = $this->settings->resolve()['tavily_api_key'] ?? null;
+            if (! is_string($key) || $key === '') {
+                return ['results' => [], 'provider' => 'tavily', 'errors' => []];
+            }
         }
 
         $open = $this->cachedTavilySearch(
@@ -369,7 +374,7 @@ class HybridWebSearchService
             }
         }
         if ($mfrDomains === []) {
-            return ['results' => [], 'provider' => 'tavily', 'errors' => $errors];
+            return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => $errors];
         }
 
         $mfr = $this->cachedTavilySearch(
@@ -385,7 +390,9 @@ class HybridWebSearchService
 
         return [
             'results' => $mfr['results'],
-            'provider' => $mfr['results'] !== [] ? 'tavily_manufacturer' : $mfr['provider'],
+            'provider' => $mfr['results'] !== []
+                ? $this->searchProviderName().'_manufacturer'
+                : $mfr['provider'],
             'errors' => $errors,
         ];
     }
@@ -413,14 +420,16 @@ class HybridWebSearchService
         if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
             return [
                 'results' => $this->filterResultsByIdentity($cached['results'], $product),
-                'provider' => (string) ($cached['provider'] ?? 'tavily_cache'),
+                'provider' => (string) ($cached['provider'] ?? $this->searchProviderName().'_cache'),
             ];
         }
 
         try {
-            $pack = $this->searchViaTavily($query, $includeDomains, $profile, false);
+            $pack = $this->searchViaConfiguredEngine($query, $includeDomains, $profile);
             $packResults = $this->filterResultsByIdentity($pack['results'], $product);
-            $provider = $includeDomains !== [] ? 'tavily_manufacturer' : 'tavily';
+            $provider = $includeDomains !== []
+                ? $this->searchProviderName().'_manufacturer'
+                : $this->searchProviderName();
             if ($packResults !== []) {
                 Cache::put($cacheKey, [
                     'results' => $packResults,
@@ -435,7 +444,7 @@ class HybridWebSearchService
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
 
-            return ['results' => [], 'provider' => 'tavily'];
+            return ['results' => [], 'provider' => $this->searchProviderName()];
         }
     }
 
@@ -691,11 +700,14 @@ class HybridWebSearchService
      */
     private function searchViaAiWeb(string $query, Product $product, string $phase): array
     {
-        $baseUrl = strtolower((string) ($this->settings->resolve()['base_url'] ?? ''));
-        if (! str_contains($baseUrl, 'openrouter.ai') && ! str_contains($baseUrl, 'api.openai.com')) {
-            throw new RuntimeException(
-                'Lokalny model nie ma pluginu web — szukanie tylko przez Tavily.'
-            );
+        if ($this->settings->usesDuckDuckGoSearch()) {
+            $hits = $this->duckDuckGo->search($query, 5);
+
+            return [
+                'results' => $hits,
+                'provider' => 'duckduckgo',
+                'raw_content' => null,
+            ];
         }
 
         $prompt = <<<PROMPT
@@ -745,6 +757,46 @@ PROMPT;
      *     raw_content: ?string
      * }
      */
+    private function searchProviderName(): string
+    {
+        return $this->settings->usesDuckDuckGoSearch() ? 'duckduckgo' : 'tavily';
+    }
+
+    /**
+     * @param  list<string>  $includeDomains
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     images: list<string>,
+     *     provider: string,
+     *     raw_content: ?string
+     * }
+     */
+    private function searchViaConfiguredEngine(
+        string $query,
+        array $includeDomains,
+        TavilySearchProfile $profile,
+    ): array {
+        if ($this->settings->usesDuckDuckGoSearch()) {
+            $results = $this->duckDuckGo->search($query, $profile->maxResults, $includeDomains);
+            if ($results === []) {
+                throw new RuntimeException(
+                    $includeDomains !== []
+                        ? 'Brak wyników DuckDuckGo na stronie producenta.'
+                        : 'DuckDuckGo nie zwróciło wyników.'
+                );
+            }
+
+            return [
+                'results' => $results,
+                'images' => [],
+                'provider' => $includeDomains !== [] ? 'duckduckgo_preferred' : 'duckduckgo',
+                'raw_content' => null,
+            ];
+        }
+
+        return $this->searchViaTavily($query, $includeDomains, $profile, false);
+    }
+
     private function searchViaTavily(
         string $query,
         array $includeDomains = [],

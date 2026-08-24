@@ -21,6 +21,7 @@ class AiSetting extends Model
         'web_search_enabled',
         'tavily_api_key',
         'search_fallback',
+        'search_engine',
         'tavily_search_mode',
         'enrichment_batch_limit',
         'match_concurrency',
