@@ -112,6 +112,13 @@ return [
     ],
 
     /*
+    | Odstęp w sekundach między kolejnymi zapytaniami do SearXNG — wspólny dla
+    | wszystkich workerów. Darmowe silniki blokują szybkie serie, więc przy
+    | kilkunastu workerach to jedyne, co trzyma je przy życiu.
+    */
+    'search_min_interval' => (float) env('ENRICHMENT_SEARCH_MIN_INTERVAL', 4.0),
+
+    /*
     | Domeny pomijane przy „catalog:index” — globalne serwisy korporacyjne mają
     | sitemapy liczone w setkach MB i prawie nic po polsku. Nadal można je
     | zaindeksować, podając host wprost: „artisan catalog:index 3m.com”.

@@ -26,8 +26,8 @@ final class DuckDuckGoHtmlSearch
 
     private const SEARXNG_LAST_AT_KEY = 'searxng_search_last_at';
 
-    /** Odstęp między zapytaniami do SearXNG — chroni silniki, z których ona korzysta. */
-    private const SEARXNG_MIN_INTERVAL = 1.5;
+    /** Najdłuższe oczekiwanie w kolejce zapytań — dalej czekanie zjadłoby limit czasu zadania. */
+    private const SEARXNG_MAX_WAIT = 90.0;
 
     /**
      * @param  list<string>  $includeDomains
@@ -64,7 +64,7 @@ final class DuckDuckGoHtmlSearch
         if ($searxng !== null) {
             // Instancja jest nasza, ale Google/Qwant liczą zapytania z niej wychodzące —
             // 8 workerów naraz wyczerpuje ich limit w kilka minut.
-            $this->throttle(self::SEARXNG_MIN_INTERVAL, self::SEARXNG_LAST_AT_KEY);
+            $this->reserveSearchSlot();
             $results = $this->searchSearxng($searxng, $query);
             if ($results !== []) {
                 Cache::put($cacheKey, $results, now()->addHours(6));
@@ -603,6 +603,40 @@ final class DuckDuckGoHtmlSearch
     private function releaseGate(): void
     {
         Cache::forget(self::GATE_KEY);
+    }
+
+    /**
+     * Rezerwuje kolejny wolny moment na zapytanie. Zwykły odstęp „od ostatniego
+     * requestu” nie działa przy kilkunastu workerach — wszystkie odczytują ten sam
+     * znacznik i ruszają razem. Tu każdy dostaje własne miejsce w kolejce.
+     */
+    private function reserveSearchSlot(): void
+    {
+        if (app()->environment('testing')) {
+            return;
+        }
+
+        $interval = max(0.2, (float) config('enrichment.search_min_interval', 4.0));
+        $wait = 0.0;
+        $lock = Cache::lock(self::SEARXNG_LAST_AT_KEY.'_lock', 10);
+
+        try {
+            if (! $lock->block(15, static fn (): bool => true)) {
+                return;
+            }
+            $now = microtime(true);
+            $at = max($now, (float) Cache::get(self::SEARXNG_LAST_AT_KEY, 0.0));
+            Cache::put(self::SEARXNG_LAST_AT_KEY, $at + $interval, 300);
+            $wait = min($at - $now, self::SEARXNG_MAX_WAIT);
+        } catch (Throwable) {
+            return;
+        } finally {
+            $lock->release();
+        }
+
+        if ($wait > 0) {
+            usleep((int) round($wait * 1_000_000));
+        }
     }
 
     private function throttle(float $minInterval = 0.9, string $key = self::LAST_AT_KEY): void
