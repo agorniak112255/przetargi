@@ -52,7 +52,11 @@ final class AiSettingsApiTest extends TestCase
             ->assertJsonPath('embedding_model', 'text-embedding-3-small')
             ->assertJsonPath('match_concurrency', 6);
 
-        $this->putJson('/api/ai-settings', ['match_concurrency' => 9])
+        $this->putJson('/api/ai-settings', ['match_concurrency' => 100])
+            ->assertOk()
+            ->assertJsonPath('match_concurrency', 100);
+
+        $this->putJson('/api/ai-settings', ['match_concurrency' => 101])
             ->assertStatus(422);
 
         $this->getJson('/api/ai-settings')

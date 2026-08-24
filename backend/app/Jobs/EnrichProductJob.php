@@ -54,6 +54,23 @@ class EnrichProductJob implements ShouldQueue
             return;
         }
 
+        if (! $this->force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
+            return;
+        }
+
+        $claimed = Product::query()
+            ->whereKey($product->id)
+            ->where('enrichment_status', Product::ENRICHMENT_QUEUED)
+            ->update([
+                'enrichment_status' => Product::ENRICHMENT_RUNNING,
+                'enrichment_error' => null,
+            ]);
+        if ($claimed === 0 && ! $this->force) {
+            return;
+        }
+
+        $product->refresh();
+
         try {
             $useLargeModel = $aiSettings->enrichmentUsesLargeModel();
             if (! $useLargeModel) {

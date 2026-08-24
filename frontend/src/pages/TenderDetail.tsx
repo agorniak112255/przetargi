@@ -5,6 +5,7 @@ import { ItemBattlecard, type BattlecardProduct } from '../components/ItemBattle
 import { ProductAiMatchModal } from '../components/ProductAiMatchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
+import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
 import { productDisplayName } from '../lib/productLabel'
 
@@ -254,32 +255,6 @@ function matchReportStorageKey(tenderId: string): string {
 }
 
 const MATCH_BATCH_SIZE = 1
-const MATCH_CONCURRENCY_DEFAULT = 4
-const MATCH_CONCURRENCY_MAX = 8
-
-function clampMatchConcurrency(value: number | undefined): number {
-  const n = Number(value)
-  if (!Number.isFinite(n)) {
-    return MATCH_CONCURRENCY_DEFAULT
-  }
-  return Math.max(1, Math.min(MATCH_CONCURRENCY_MAX, Math.round(n)))
-}
-
-async function mapPool<T>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T) => Promise<void>,
-): Promise<void> {
-  let next = 0
-  const run = async () => {
-    while (next < items.length) {
-      const i = next
-      next += 1
-      await worker(items[i])
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => run()))
-}
 
 function matchTargetIds(
   items: Item[],
@@ -1122,7 +1097,7 @@ export function TenderDetail() {
       chunks.push(targets.slice(i, i + MATCH_BATCH_SIZE))
     }
     const errors: string[] = []
-    const concurrency = clampMatchConcurrency(data?.coverage?.thresholds.match_concurrency)
+    const concurrency = clampAiConcurrency(data?.coverage?.thresholds.match_concurrency)
     try {
       await mapPool(chunks, concurrency, async (chunk) => {
         try {
@@ -1338,7 +1313,7 @@ export function TenderDetail() {
           <div className="w-full max-w-md rounded-xl bg-white p-4 text-sm shadow-xl">
             <p className="font-semibold text-slate-900">Trwa dopasowanie AI…</p>
             <p className="mt-1 text-xs text-slate-600">
-              Nie odświeżaj strony. Lecą {clampMatchConcurrency(coverage?.thresholds.match_concurrency)}{' '}
+              Nie odświeżaj strony. Lecą {clampAiConcurrency(coverage?.thresholds.match_concurrency)}{' '}
               wyszukiwania naraz — przy ~80 pustych to zwykle kilka minut.
             </p>
             {(() => {

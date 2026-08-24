@@ -22,7 +22,7 @@ return [
     'tavily_search_mode' => env('AI_TAVILY_SEARCH_MODE', 'balanced'),
     // Max produktów do kolejki enrichmentu na jedno kliknięcie (cenniki / lista)
     'enrichment_batch_limit' => (int) env('AI_ENRICHMENT_BATCH_LIMIT', 5),
-    // Ile pozycji SIWZ dopasowywać naraz (1–8). Zależy od limitu API i workerów PHP.
+    // Ile zapytań AI naraz (1–100): SIWZ i Pobierz z cennika. Zależy od FPM i modelu.
     'match_concurrency' => (int) env('AI_MATCH_CONCURRENCY', 4),
 
     // RAG / Qdrant

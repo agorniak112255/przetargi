@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\EnrichmentCancelledException;
 use App\Http\Controllers\Controller;
+use App\Jobs\EnrichProductJob;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
@@ -13,6 +15,7 @@ use App\Services\Enrichment\ProductEnrichmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use RuntimeException;
+use Throwable;
 
 class ProductEnrichmentController extends Controller
 {
@@ -25,6 +28,7 @@ class ProductEnrichmentController extends Controller
     {
         return response()->json([
             'enrichment_batch_limit' => $this->aiSettings->enrichmentBatchLimit(),
+            'match_concurrency' => $this->aiSettings->matchConcurrency(),
         ]);
     }
 
@@ -90,7 +94,7 @@ class ProductEnrichmentController extends Controller
         ]);
 
         try {
-            $batch = $this->enrichment->enqueuePriceList(
+            $queued = $this->enrichment->enqueuePriceList(
                 $priceList,
                 $request->user(),
                 (bool) ($data['force'] ?? false),
@@ -100,7 +104,8 @@ class ProductEnrichmentController extends Controller
         }
 
         return response()->json([
-            'batch' => $this->batchPayload($batch),
+            'batch' => $this->batchPayload($queued['batch']),
+            'product_ids' => $queued['product_ids'],
             'price_list_id' => $priceList->id,
         ], 202);
     }
@@ -114,7 +119,7 @@ class ProductEnrichmentController extends Controller
         ]);
 
         try {
-            $batch = $this->enrichment->enqueueProductIds(
+            $queued = $this->enrichment->enqueueProductIds(
                 array_map('intval', $data['product_ids']),
                 $request->user(),
                 (bool) ($data['force'] ?? false),
@@ -124,7 +129,8 @@ class ProductEnrichmentController extends Controller
         }
 
         return response()->json([
-            'batch' => $this->batchPayload($batch),
+            'batch' => $this->batchPayload($queued['batch']),
+            'product_ids' => $queued['product_ids'],
         ], 202);
     }
 
@@ -147,6 +153,37 @@ class ProductEnrichmentController extends Controller
     public function showBatch(ProductEnrichmentBatch $batch): JsonResponse
     {
         return response()->json($this->batchPayload($batch));
+    }
+
+    public function processBatchItem(ProductEnrichmentBatch $batch, Product $product): JsonResponse
+    {
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(240);
+        }
+
+        try {
+            $job = new EnrichProductJob($product->id, $batch->id, (bool) $batch->force);
+            $job->handle($this->enrichment, $this->aiSettings);
+        } catch (EnrichmentCancelledException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'batch' => $this->batchPayload($batch->fresh() ?? $batch),
+            ], 409);
+        } catch (RuntimeException|Throwable $e) {
+            $fresh = $batch->fresh() ?? $batch;
+            if (! $fresh->isCancelled() && ($fresh->done + $fresh->failed) < $fresh->total) {
+                $this->enrichment->markBatchItem($fresh, false);
+            }
+
+            return response()->json([
+                'message' => $e->getMessage(),
+                'batch' => $this->batchPayload($fresh->fresh() ?? $fresh),
+            ], 422);
+        }
+
+        return response()->json([
+            'batch' => $this->batchPayload($batch->fresh() ?? $batch),
+        ]);
     }
 
     public function cancelBatch(ProductEnrichmentBatch $batch): JsonResponse

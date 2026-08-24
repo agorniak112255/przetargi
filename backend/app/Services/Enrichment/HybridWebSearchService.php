@@ -691,6 +691,13 @@ class HybridWebSearchService
      */
     private function searchViaAiWeb(string $query, Product $product, string $phase): array
     {
+        $baseUrl = strtolower((string) ($this->settings->resolve()['base_url'] ?? ''));
+        if (! str_contains($baseUrl, 'openrouter.ai') && ! str_contains($baseUrl, 'api.openai.com')) {
+            throw new RuntimeException(
+                'Lokalny model nie ma pluginu web — szukanie tylko przez Tavily.'
+            );
+        }
+
         $prompt = <<<PROMPT
 Znajdź kartę produktu BHP ze SKU {$product->sku} ({$product->manufacturer} {$product->name}).
 Zapytanie: {$query}. Zwróć tylko URL stron z tym kodem produktu.

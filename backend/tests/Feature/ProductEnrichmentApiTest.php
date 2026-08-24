@@ -224,7 +224,8 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->postJson("/api/price-lists/{$priceList->id}/enrich")
             ->assertStatus(202)
             ->assertJsonPath('batch.total', 1)
-            ->assertJsonPath('batch.scope', 'price_list');
+            ->assertJsonPath('batch.scope', 'price_list')
+            ->assertJsonPath('product_ids.0', $p1->id);
 
         Queue::assertPushed(EnrichProductJob::class, 1);
     }
@@ -277,9 +278,64 @@ final class ProductEnrichmentApiTest extends TestCase
         ])
             ->assertStatus(202)
             ->assertJsonPath('batch.total', 2)
-            ->assertJsonPath('batch.scope', 'products');
+            ->assertJsonPath('batch.scope', 'products')
+            ->assertJsonPath('product_ids.0', $p1->id)
+            ->assertJsonPath('product_ids.1', $p2->id);
 
         Queue::assertPushed(EnrichProductJob::class, 2);
+    }
+
+    public function test_process_batch_item_uses_sku_cache(): void
+    {
+        Storage::fake('public');
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        ProductEnrichmentCache::query()->create([
+            'manufacturer' => 'ansell',
+            'sku' => 'pool-1',
+            'description' => 'Opis z cache SKU.',
+            'enrichment_payload' => ['features' => ['x'], 'from_cache' => false],
+            'image_urls' => [],
+            'source_urls' => ['https://example.com/p'],
+        ]);
+
+        $product = $this->makeProduct([
+            'sku' => 'POOL-1',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $queued = $this->postJson('/api/products/enrich', [
+            'product_ids' => [$product->id],
+        ])->assertStatus(202);
+
+        $batchId = (int) $queued->json('batch.id');
+
+        $this->postJson("/api/product-enrichment-batches/{$batchId}/items/{$product->id}")
+            ->assertOk()
+            ->assertJsonPath('batch.done', 1);
+
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->fresh()?->enrichment_status);
+    }
+
+    public function test_enrichment_limits_include_concurrency(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 90,
+            'temperature' => 0.1,
+            'match_concurrency' => 12,
+            'enrichment_batch_limit' => 20,
+        ]);
+
+        $this->getJson('/api/product-enrichment/limits')
+            ->assertOk()
+            ->assertJsonPath('match_concurrency', 12)
+            ->assertJsonPath('enrichment_batch_limit', 20);
     }
 
     public function test_products_index_includes_enrichment_columns(): void

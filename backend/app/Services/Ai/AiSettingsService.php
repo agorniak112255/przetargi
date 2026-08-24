@@ -13,6 +13,10 @@ use Throwable;
 
 final class AiSettingsService
 {
+    public const ENRICHMENT_BATCH_MAX = 100;
+
+    public const CONCURRENCY_MAX = 100;
+
     /**
      * @return array{
      *     enabled: bool,
@@ -361,14 +365,14 @@ final class AiSettingsService
     {
         $n = is_numeric($value) ? (int) $value : 5;
 
-        return max(1, min(50, $n));
+        return max(1, min(self::ENRICHMENT_BATCH_MAX, $n));
     }
 
     private function normalizeMatchConcurrency(mixed $value): int
     {
         $n = is_numeric($value) ? (int) $value : 4;
 
-        return max(1, min(8, $n));
+        return max(1, min(self::CONCURRENCY_MAX, $n));
     }
 
     private function nullableString(mixed $value): ?string

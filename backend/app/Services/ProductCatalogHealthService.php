@@ -128,7 +128,8 @@ final class ProductCatalogHealthService
             throw new RuntimeException('Brak produktów do kolejki dla wybranego filtra.');
         }
 
-        $batch = $this->enrichment->enqueueProductIds($ids, $user, $force);
+        $queued = $this->enrichment->enqueueProductIds($ids, $user, $force);
+        $batch = $queued['batch'];
 
         return [
             'batch' => $batch,

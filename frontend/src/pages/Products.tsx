@@ -6,6 +6,7 @@ import { CrossRefPanel } from '../components/CrossRefPanel'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
+import { clampAiConcurrency, clampEnrichmentBatchLimit, mapPool } from '../lib/aiConcurrency'
 import { api, can, type EnrichmentBatch, type Product } from '../lib/api'
 
 type Page = {
@@ -205,6 +206,7 @@ export function Products() {
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
   const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
   const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
+  const [enrichConcurrency, setEnrichConcurrency] = useState(4)
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -227,12 +229,15 @@ export function Products() {
 
   useEffect(() => {
     if (!canEnrich) return
-    void api<{ enrichment_batch_limit: number }>('/product-enrichment/limits')
+    void api<{ enrichment_batch_limit: number; match_concurrency?: number }>('/product-enrichment/limits')
       .then((res) => {
-        const n = Number(res.enrichment_batch_limit)
-        if (Number.isFinite(n) && n >= 1) setEnrichBatchLimit(Math.min(50, Math.floor(n)))
+        setEnrichBatchLimit(clampEnrichmentBatchLimit(res.enrichment_batch_limit))
+        setEnrichConcurrency(clampAiConcurrency(res.match_concurrency))
       })
-      .catch(() => setEnrichBatchLimit(5))
+      .catch(() => {
+        setEnrichBatchLimit(5)
+        setEnrichConcurrency(4)
+      })
   }, [canEnrich])
 
   useEffect(() => {
@@ -371,16 +376,34 @@ export function Products() {
     setErr('')
     setMsg('')
     try {
-      const res = await api<{ batch: EnrichmentBatch }>('/products/enrich', {
+      const res = await api<{ batch: EnrichmentBatch; product_ids?: number[] }>('/products/enrich', {
         method: 'POST',
         body: JSON.stringify({ product_ids: capped, force }),
       })
       setBatch(res.batch)
+      const queuedIds = res.product_ids ?? capped
       setMsg(
-        res.batch.message ||
-          (ids.length > enrichBatchLimit
-            ? `W kolejce: ${res.batch.total}/${ids.length} (limit ${enrichBatchLimit}).`
-            : `W kolejce: ${res.batch.total} produktów (opisy i zdjęcia).`),
+        ids.length > enrichBatchLimit
+          ? `Pobieranie ${queuedIds.length}/${ids.length} (limit ${enrichBatchLimit}), ${enrichConcurrency} naraz.`
+          : `Pobieranie ${queuedIds.length} produktów, ${enrichConcurrency} naraz.`,
+      )
+      await mapPool(queuedIds, enrichConcurrency, async (productId) => {
+        try {
+          const next = await api<{ batch: EnrichmentBatch }>(
+            `/product-enrichment-batches/${res.batch.id}/items/${productId}`,
+            { method: 'POST', body: '{}' },
+          )
+          setBatch(next.batch)
+        } catch {
+          // błąd pozycji — batch.failed zlicza backend
+        }
+      })
+      const latest = await api<EnrichmentBatch>(`/product-enrichment-batches/${res.batch.id}`)
+      setBatch(latest)
+      setMsg(
+        `Gotowe: ${latest.done} OK` +
+          (latest.failed > 0 ? `, ${latest.failed} błędów` : '') +
+          (ids.length > enrichBatchLimit ? ` (limit ${enrichBatchLimit}).` : '.'),
       )
       setSelected({})
       setResult(await api<Page>(`/products?${buildParams()}`))
@@ -538,7 +561,7 @@ export function Products() {
                   setVisibleEnrichOpen(true)
                 }}
                 className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
-                title={`Pobierz opisy dla widocznych bez danych (max ${enrichBatchLimit} naraz — Ustawienia AI)`}
+                title={`Pobierz opisy dla widocznych bez danych (${enrichConcurrency} zapytań naraz — Ustawienia AI)`}
               >
                 Pobierz widoczne bez opisu
                 {pendingVisible.length > 0 ? ` (${pendingVisible.length})` : ''}

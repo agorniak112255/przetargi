@@ -361,17 +361,17 @@ export function AiSettingsPage() {
             </span>
           </label>
           <label className="block text-xs">
-            Max produktów w kolejce enrichmentu (1–50)
+            Max produktów w kolejce enrichmentu (1–100)
             <input
               type="number"
               min={1}
-              max={50}
+              max={100}
               className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
               value={cfg.enrichment_batch_limit ?? 5}
               onChange={(e) =>
                 setCfg({
                   ...cfg,
-                  enrichment_batch_limit: Math.max(1, Math.min(50, Number(e.target.value) || 5)),
+                  enrichment_batch_limit: Math.max(1, Math.min(100, Number(e.target.value) || 5)),
                 })
               }
             />
@@ -381,24 +381,23 @@ export function AiSettingsPage() {
             </span>
           </label>
           <label className="block text-xs">
-            Ile pozycji dopasowywać naraz (1–8)
+            Ile zapytań AI naraz (1–100)
             <input
               type="number"
               min={1}
-              max={8}
+              max={100}
               className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
               value={cfg.match_concurrency ?? 4}
               onChange={(e) =>
                 setCfg({
                   ...cfg,
-                  match_concurrency: Math.max(1, Math.min(8, Number(e.target.value) || 4)),
+                  match_concurrency: Math.max(1, Math.min(100, Number(e.target.value) || 4)),
                 })
               }
             />
             <span className="mt-1 block text-[11px] text-slate-500">
-              1 = kolejka (najbezpieczniej). 3–4 = zwykle najlepszy stosunek czasu do błędów.
-              6–8 przyspiesza, ale sypie 429 od API, zatyka PHP-FPM i MySQL. Zależy od limitu
-              zapytań u dostawcy modelu, liczby workerów PHP na serwerze i timeoutu AI.
+              Dopasowanie SIWZ i Pobierz z cennika. 1 = kolejka. 3–6 zwykle bezpiecznie dla
+              lokalnego modelu. 20–100 tylko gdy PHP-FPM i GPU dają radę — inaczej timeouty.
             </span>
           </label>
           <label className="flex items-center gap-2 text-xs">

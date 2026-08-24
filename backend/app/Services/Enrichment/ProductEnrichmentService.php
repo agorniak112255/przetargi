@@ -67,8 +67,15 @@ final class ProductEnrichmentService
         return $batch;
     }
 
-    public function enqueuePriceList(PriceList $priceList, User $user, bool $force = false): ProductEnrichmentBatch
-    {
+    /**
+     * @return array{batch: ProductEnrichmentBatch, product_ids: list<int>}
+     */
+    public function enqueuePriceList(
+        PriceList $priceList,
+        User $user,
+        bool $force = false,
+        bool $dispatchJobs = true,
+    ): array {
         $ids = array_values(array_unique(array_map('intval', $priceList->product_ids ?? [])));
         if ($ids === []) {
             throw new RuntimeException('Ten cennik nie ma zapisanych produktów do wzbogacenia (stary import?).');
@@ -80,11 +87,13 @@ final class ProductEnrichmentService
             $force,
             ProductEnrichmentBatch::SCOPE_PRICE_LIST,
             (int) $priceList->id,
+            $dispatchJobs,
         );
     }
 
     /**
      * @param  list<int>  $ids
+     * @return array{batch: ProductEnrichmentBatch, product_ids: list<int>}
      */
     public function enqueueProductIds(
         array $ids,
@@ -92,7 +101,8 @@ final class ProductEnrichmentService
         bool $force = false,
         string $scope = ProductEnrichmentBatch::SCOPE_PRODUCTS,
         int $scopeId = 0,
-    ): ProductEnrichmentBatch {
+        bool $dispatchJobs = true,
+    ): array {
         $ids = array_values(array_unique(array_map('intval', $ids)));
         if ($ids === []) {
             throw new RuntimeException('Brak produktów do wzbogacenia.');
@@ -144,11 +154,16 @@ final class ProductEnrichmentService
             'enrichment_error' => null,
         ]);
 
-        foreach ($productIds as $productId) {
-            EnrichProductJob::dispatch($productId, $batch->id, $force);
+        if ($dispatchJobs) {
+            foreach ($productIds as $productId) {
+                EnrichProductJob::dispatch($productId, $batch->id, $force);
+            }
         }
 
-        return $batch;
+        return [
+            'batch' => $batch,
+            'product_ids' => $productIds,
+        ];
     }
 
     /**
