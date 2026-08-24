@@ -71,6 +71,11 @@ final class CatalogSitemapIndexer
                 &$sitemaps, &$seen, &$rows, &$saved, &$offHost, &$timedOut,
                 $host, $maxUrls, $deadline
             ): bool {
+                if (microtime(true) >= $deadline) {
+                    $timedOut = true;
+
+                    return false;
+                }
                 if ($this->looksLikeSitemap($loc)) {
                     if (count($sitemaps) < self::MAX_SITEMAP_FILES && ! in_array($loc, $sitemaps, true)) {
                         $sitemaps[] = $loc;
@@ -91,11 +96,6 @@ final class CatalogSitemapIndexer
                 if (count($rows) >= 500) {
                     $saved += $this->store($rows);
                     $rows = [];
-                }
-                if (microtime(true) >= $deadline) {
-                    $timedOut = true;
-
-                    return false;
                 }
 
                 return count($seen) < $maxUrls;
