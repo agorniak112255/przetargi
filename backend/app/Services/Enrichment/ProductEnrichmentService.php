@@ -344,6 +344,7 @@ final class ProductEnrichmentService
                     'product_id' => $product->id,
                     'sku' => $product->sku,
                     'pages' => array_slice(array_column($pageSnippets, 'url'), 0, 5),
+                    'search_urls' => array_slice(array_column($descResults, 'url'), 0, 5),
                     'raw_length' => mb_strlen($rawDescription),
                     'raw_head' => mb_substr($rawDescription, 0, 300),
                     'mentions_product' => $rawDescription !== ''
