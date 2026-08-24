@@ -25,4 +25,33 @@ HTML;
         $this->assertContains('https://bhp24.pl/uvex-hg', $urls);
         $this->assertNotContains('https://duckduckgo.com/about', $urls);
     }
+
+    public function test_parses_google_url_redirects(): void
+    {
+        $html = <<<HTML
+<a href="/url?q=https%3A%2F%2Fwww.bhpnawigator.com.pl%2Fochrona-termiczna%2Frekawice-ochronne-robfm.html&amp;sa=U">Rękawice ROBFM JS Gloves</a>
+<a href="https://www.google.com/search?q=robfm">Więcej</a>
+HTML;
+
+        $results = (new DuckDuckGoHtmlSearch)->parseGoogleHtml($html);
+
+        $this->assertSame(
+            'https://www.bhpnawigator.com.pl/ochrona-termiczna/rekawice-ochronne-robfm.html',
+            $results[0]['url'] ?? null
+        );
+        $this->assertSame('Rękawice ROBFM JS Gloves', $results[0]['title'] ?? null);
+        $this->assertCount(1, $results);
+    }
+
+    public function test_decodes_bing_ck_redirects(): void
+    {
+        $target = 'https://www.bhpniedzielscy.com.pl/katalog-bhp/towar,id-687';
+        $href = 'https://www.bing.com/ck/a?!&amp;&amp;p=abc&amp;u=a1'.rtrim(base64_encode($target), '=').'&amp;ntb=1';
+        $html = '<ol id="b_results"><li class="b_algo"><h2><a href="'.$href.'">Rękawice ROBFM</a></h2></li></ol>';
+
+        $results = (new DuckDuckGoHtmlSearch)->parseBingHtml($html);
+
+        $this->assertSame($target, $results[0]['url'] ?? null);
+        $this->assertSame('Rękawice ROBFM', $results[0]['title'] ?? null);
+    }
 }

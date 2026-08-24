@@ -110,7 +110,7 @@ class HybridWebSearchService
         $errors = $found['errors'];
         $provider = $found['provider'];
 
-        if ($merged === []) {
+        if ($merged === [] && ! $this->settings->usesDuckDuckGoSearch()) {
             $cacheKey = $this->searchCacheKey('large_model', $phase, $skuQuery, 'ai');
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {

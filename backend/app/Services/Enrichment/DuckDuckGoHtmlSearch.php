@@ -80,6 +80,28 @@ final class DuckDuckGoHtmlSearch
 
         try {
             $this->throttle();
+            $results = $this->searchGoogle($query);
+            if ($results !== []) {
+                return $results;
+            }
+            $errors[] = 'Google: brak wyników';
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+
+        try {
+            $this->throttle();
+            $results = $this->searchBing($query);
+            if ($results !== []) {
+                return $results;
+            }
+            $errors[] = 'Bing: brak wyników';
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+
+        try {
+            $this->throttle();
             $html = $this->fetchHtml($query);
             $results = $this->parseHtml($html);
             if ($results !== []) {
@@ -101,17 +123,6 @@ final class DuckDuckGoHtmlSearch
             $errors[] = $e->getMessage();
         }
 
-        try {
-            $this->throttle();
-            $results = $this->searchBing($query);
-            if ($results !== []) {
-                return $results;
-            }
-            $errors[] = 'Bing: brak wyników';
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
-
         throw new RuntimeException(
             $errors !== []
                 ? implode(' | ', $errors)
@@ -121,32 +132,37 @@ final class DuckDuckGoHtmlSearch
 
     public function fetchHtml(string $query): string
     {
-        $headers = $this->browserHeaders();
-        $response = Http::withHeaders($headers)
-            ->timeout(15)
-            ->connectTimeout(6)
-            ->asForm()
-            ->post('https://html.duckduckgo.com/html/', [
-                'q' => $query,
-                'kl' => 'pl-pl',
-            ]);
+        $attempts = [
+            ['https://html.duckduckgo.com/html/', ['q' => $query, 'kl' => 'pl-pl']],
+            ['https://lite.duckduckgo.com/lite/', ['q' => $query, 'kl' => 'pl-pl']],
+        ];
+        $lastStatus = 0;
+        foreach ($attempts as [$url, $params]) {
+            try {
+                $response = Http::withHeaders($this->browserHeaders())
+                    ->timeout(12)
+                    ->connectTimeout(5)
+                    ->get($url, $params);
+                $lastStatus = $response->status();
+                if (! $response->successful()) {
+                    continue;
+                }
+                $html = (string) $response->body();
+                if ($html === '' || $this->isBlockedSearchPage($html)) {
+                    continue;
+                }
 
-        if (! $response->successful() || trim($response->body()) === '') {
-            $response = Http::withHeaders($headers)
-                ->timeout(15)
-                ->connectTimeout(6)
-                ->asForm()
-                ->post('https://lite.duckduckgo.com/lite/', [
-                    'q' => $query,
-                    'kl' => 'pl-pl',
-                ]);
+                return $html;
+            } catch (Throwable) {
+                continue;
+            }
         }
 
-        if (! $response->successful()) {
-            throw new RuntimeException('DuckDuckGo HTTP '.$response->status().': brak wyników wyszukiwania.');
-        }
-
-        return (string) $response->body();
+        throw new RuntimeException(
+            $lastStatus > 0
+                ? 'DuckDuckGo HTTP '.$lastStatus.': brak wyników wyszukiwania.'
+                : 'DuckDuckGo: timeout/captcha — brak wyników wyszukiwania.'
+        );
     }
 
     /**
@@ -257,13 +273,51 @@ final class DuckDuckGoHtmlSearch
         }
 
         foreach ($matches as $match) {
+            $url = $this->decodeBingUrl((string) ($match[1] ?? ''));
+            if ($url === null) {
+                continue;
+            }
             $this->pushHit(
                 $out,
                 $seen,
-                html_entity_decode((string) ($match[1] ?? ''), ENT_QUOTES | ENT_HTML5),
+                $url,
                 html_entity_decode(strip_tags((string) ($match[2] ?? '')), ENT_QUOTES | ENT_HTML5),
                 ''
             );
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function parseGoogleHtml(string $html): array
+    {
+        if ($this->isBlockedSearchPage($html)) {
+            return [];
+        }
+
+        $out = [];
+        $seen = [];
+        if (preg_match_all('/<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/is', $html, $matches, PREG_SET_ORDER) === 0) {
+            return [];
+        }
+
+        foreach ($matches as $match) {
+            $href = html_entity_decode((string) ($match[1] ?? ''), ENT_QUOTES | ENT_HTML5);
+            if (! str_contains($href, '/url?') && ! str_starts_with($href, 'http')) {
+                continue;
+            }
+            $url = $this->decodeGoogleUrl($href);
+            if ($url === null) {
+                continue;
+            }
+            $title = trim(html_entity_decode(strip_tags((string) ($match[2] ?? '')), ENT_QUOTES | ENT_HTML5));
+            if ($title === '' || preg_match('/^(cached|podobne|translate|tłumacz)$/iu', $title) === 1) {
+                continue;
+            }
+            $this->pushHit($out, $seen, $url, $title, '');
         }
 
         return $out;
@@ -296,11 +350,44 @@ final class DuckDuckGoHtmlSearch
     /**
      * @return list<array{url: string, title: string, snippet: string}>
      */
+    /**
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function searchGoogle(string $query): array
+    {
+        $response = Http::withHeaders($this->browserHeaders())
+            ->withCookies([
+                'CONSENT' => 'YES+',
+                'SOCS' => 'CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjQwMTI5LjA4X3AxGgJlbiACGgYIgNzZsgY',
+            ], '.google.com')
+            ->timeout(15)
+            ->connectTimeout(8)
+            ->get('https://www.google.com/search', [
+                'q' => $query,
+                'hl' => 'pl',
+                'gl' => 'pl',
+                'gbv' => '1',
+                'num' => 10,
+                'pws' => 0,
+            ]);
+
+        if (! $response->successful()) {
+            throw new RuntimeException('Google HTTP '.$response->status().': brak wyników wyszukiwania.');
+        }
+
+        $html = (string) $response->body();
+        if ($this->isBlockedSearchPage($html)) {
+            throw new RuntimeException('Google: zgoda/captcha — brak wyników wyszukiwania.');
+        }
+
+        return $this->parseGoogleHtml($html);
+    }
+
     private function searchBing(string $query): array
     {
         $response = Http::withHeaders($this->browserHeaders())
-            ->timeout(12)
-            ->connectTimeout(6)
+            ->timeout(15)
+            ->connectTimeout(8)
             ->get('https://www.bing.com/search', [
                 'q' => $query,
                 'setlang' => 'pl-PL',
@@ -355,6 +442,60 @@ final class DuckDuckGoHtmlSearch
         Cache::put(self::LAST_AT_KEY, microtime(true), 30);
     }
 
+    private function isBlockedSearchPage(string $html): bool
+    {
+        $hay = mb_strtolower($html);
+
+        return str_contains($hay, 'anomaly-modal')
+            || str_contains($hay, 'unfortunately, bots use duckduckgo')
+            || str_contains($hay, 'zanim przejdziesz do wyszukiwarki')
+            || str_contains($hay, 'before you continue to google')
+            || str_contains($hay, 'unusual traffic')
+            || str_contains($hay, 'challenge_version')
+            || (str_contains($hay, 'consent.google.com') && ! str_contains($hay, '/url?q='));
+    }
+
+    private function decodeGoogleUrl(string $href): ?string
+    {
+        $href = html_entity_decode(trim($href), ENT_QUOTES | ENT_HTML5);
+        if (str_contains($href, '/url?') || str_contains($href, 'google.com/url')) {
+            $query = (string) (parse_url($href, PHP_URL_QUERY) ?? '');
+            parse_str($query, $params);
+            $href = (string) ($params['q'] ?? $params['url'] ?? '');
+        }
+
+        return $this->publicHttpUrl($href);
+    }
+
+    private function decodeBingUrl(string $href): ?string
+    {
+        $href = html_entity_decode(trim($href), ENT_QUOTES | ENT_HTML5);
+        if (preg_match('/[?&]u=([^&]+)/', $href, $m) === 1) {
+            $raw = urldecode($m[1]);
+            if (str_starts_with($raw, 'a1')) {
+                $raw = substr($raw, 2);
+            }
+            $decoded = $this->decodeBase64Url($raw);
+            if ($decoded !== null) {
+                return $this->publicHttpUrl($decoded);
+            }
+        }
+
+        return $this->publicHttpUrl($href);
+    }
+
+    private function decodeBase64Url(string $raw): ?string
+    {
+        $raw = strtr($raw, '-_', '+/');
+        $pad = strlen($raw) % 4;
+        if ($pad !== 0) {
+            $raw .= str_repeat('=', 4 - $pad);
+        }
+        $decoded = base64_decode($raw, true);
+
+        return is_string($decoded) && $decoded !== '' ? $decoded : null;
+    }
+
     private function decodeDdgUrl(string $href): ?string
     {
         $href = trim($href);
@@ -403,7 +544,10 @@ final class DuckDuckGoHtmlSearch
             || str_contains($host, 'duckduckgo.com')
             || str_contains($host, 'duck.com')
             || str_contains($host, 'bing.com')
-            || str_contains($host, 'qwant.com')) {
+            || str_contains($host, 'qwant.com')
+            || preg_match('/(^|\.)google\./', $host) === 1
+            || str_contains($host, 'googleusercontent.com')
+            || str_contains($host, 'gstatic.com')) {
             return null;
         }
 

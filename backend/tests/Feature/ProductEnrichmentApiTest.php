@@ -716,13 +716,14 @@ final class ProductEnrichmentApiTest extends TestCase
         $hitUrl = 'https://hurtownia.example/products/nv2032ce';
         Http::fake(function ($request) use ($hitUrl) {
             $this->assertStringNotContainsString('tavily.com', $request->url());
-            $this->assertStringContainsString('duckduckgo.com', $request->url());
+            if (str_contains($request->url(), 'google.com/search')) {
+                return Http::response(
+                    '<a href="/url?q='.rawurlencode($hitUrl).'&amp;sa=U">NV2032CE Astro Cleat</a>',
+                    200
+                );
+            }
 
-            return Http::response(
-                '<a class="result__a" href="//duckduckgo.com/l/?uddg='
-                .rawurlencode($hitUrl).'">NV2032CE Astro Cleat</a>',
-                200
-            );
+            return Http::response('unused', 404);
         });
 
         $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');

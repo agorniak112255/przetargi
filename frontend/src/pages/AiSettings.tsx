@@ -289,7 +289,7 @@ export function AiSettingsPage() {
         <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
           <p className="text-xs font-semibold text-slate-700">Wyszukiwanie opisów produktów</p>
           <p className="text-[11px] text-slate-500">
-            Szukanie stron produktu robi PHP (Tavily albo darmowy DuckDuckGo), potem model pisze
+            Szukanie stron produktu robi PHP (Tavily albo darmowo Google/Bing), potem model pisze
             opis. Lokalny LLM nie ma internetu — plugin OpenRouter <code>web</code> nic nie robi.
           </p>
           <label className="block text-xs">
@@ -305,10 +305,10 @@ export function AiSettingsPage() {
               }
             >
               <option value="tavily">Tavily (płatne, dokładniejsze)</option>
-              <option value="duckduckgo">Lokalny LLM — DuckDuckGo (darmowe, bez Tavily)</option>
+              <option value="duckduckgo">Lokalny LLM — Google / Bing (darmowe, bez Tavily)</option>
             </select>
             <span className="mt-1 block text-[11px] text-slate-500">
-              DuckDuckGo: PHP scrappuje wyniki i wkleja URL-e do pipeline. Zero kredytów Tavily,
+              PHP szuka na Google, potem Bing (DuckDuckGo tylko zapasowo). Zero kredytów Tavily,
               zero pluginu OpenRouter.
             </span>
           </label>
@@ -322,7 +322,7 @@ export function AiSettingsPage() {
             <span>
               Tylko duży model (główny) — opis modelem z góry
               <span className="mt-0.5 block text-[11px] text-slate-500">
-                Opis modelem z góry. Szukanie wg opcji powyżej (Tavily albo DuckDuckGo).
+                Opis modelem z góry. Szukanie wg opcji powyżej (Tavily albo Google/Bing).
               </span>
             </span>
           </label>
