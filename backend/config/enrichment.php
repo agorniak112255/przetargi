@@ -68,6 +68,15 @@ return [
             'urgent.pl',
             'www.urgent.pl',
         ],
+        'kcl' => ['kcl.de', 'www.kcl.de'],
+        'rostaing' => ['rostaing.com', 'www.rostaing.com'],
+        'gvs' => ['gvs.com', 'www.gvs.com'],
+        'weldas' => ['weldas.com', 'www.weldas.com'],
+        'mapa' => ['mapa-pro.com', 'www.mapa-pro.com'],
+        'cxs' => ['cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
+        'canis' => ['cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
+        'medibut' => ['medibut.pl', 'www.medibut.pl'],
+        'panther' => ['panther-safety.com', 'www.panther-safety.com'],
     ],
 
     /*
