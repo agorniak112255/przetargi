@@ -19,13 +19,14 @@ use Throwable;
 final class CatalogSitemapIndexer
 {
     /** Ile plików sitemap z jednego indeksu przetwarzamy. */
-    private const MAX_SITEMAP_FILES = 60;
+    private const MAX_SITEMAP_FILES = 100;
 
     private const CHUNK_BYTES = 262144;
 
     private const MAX_BUFFER_BYTES = 2097152;
 
-    private const USER_AGENT = 'Mozilla/5.0 (compatible; PrzetargiBot/1.0; +https://przetargi.supon.rzeszow.pl)';
+    /** Sklepy za WAF-em odrzucają nagłówki botów, więc przedstawiamy się jak przeglądarka. */
+    private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
     private const MAX_TOKEN_LENGTH = 64;
 
@@ -35,8 +36,14 @@ final class CatalogSitemapIndexer
         '/sitemap.xml',
         '/sitemap_index.xml',
         '/sitemap-index.xml',
+        '/sitemapindex.xml',
         '/sitemap/sitemap.xml',
+        '/sitemap/index.xml',
+        // PrestaShop, WordPress/Yoast, Shoper i sklepy z prefiksem języka
         '/1_pl_0_sitemap.xml',
+        '/wp-sitemap.xml',
+        '/sitemap.php',
+        '/pl/sitemap.xml',
     ];
 
     /**
@@ -150,8 +157,11 @@ final class CatalogSitemapIndexer
         }
 
         if ($out === []) {
-            foreach (self::CANDIDATE_PATHS as $path) {
-                $out[] = 'https://'.$host.$path;
+            // część sklepów serwuje mapę tylko pod „www”
+            foreach ([$host, 'www.'.$host] as $variant) {
+                foreach (self::CANDIDATE_PATHS as $path) {
+                    $out[] = 'https://'.$variant.$path;
+                }
             }
         }
 
