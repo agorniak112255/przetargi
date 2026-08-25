@@ -49,7 +49,9 @@ class HybridWebSearchService
     private function catalogHits(Product $product): array
     {
         try {
-            return $this->filterResultsByIdentity($this->catalog->findFor($product), $product);
+            // sitemapa nie niesie tytułów ani zajawek, więc filtr od wyników wyszukiwarki
+            // odrzuciłby tu wszystko — tożsamości pilnuje confirmedCatalogHits
+            return $this->catalog->findFor($product);
         } catch (Throwable $e) {
             Log::info('Catalog index lookup failed', [
                 'product_id' => $product->id,
@@ -347,15 +349,24 @@ class HybridWebSearchService
     {
         $out = [];
         foreach ($hits as $row) {
-            $url = (string) ($row['url'] ?? '');
+            $url = $this->identity->preferredLocaleUrl((string) ($row['url'] ?? ''), $product);
             $title = (string) ($row['title'] ?? '');
             $hay = mb_strtolower($url.' '.$title.' '.($row['snippet'] ?? ''));
+            if ($this->isListingWithoutProduct($url, $product)
+                || $this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+                continue;
+            }
             // sklepy skracają oznaczenie w adresie („maska-mt-212” zamiast MT 212/2),
             // więc wystarczy kod z rodziny naszego — obcy model nadal odpada
             if ($this->identity->hayHasProductCode($hay, $product)
                 || $this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
-                || $this->identity->hayHasNamePhrase($url.' '.$title, $product)) {
-                $out[] = $row;
+                || $this->identity->hayHasNamePhrase($url.' '.$title, $product)
+                || $this->identity->nameTokensMatch($url.' '.$title, $product)) {
+                $out[] = [
+                    'url' => $url,
+                    'title' => $title !== '' ? $title : $url,
+                    'snippet' => (string) ($row['snippet'] ?? ''),
+                ];
             }
         }
 

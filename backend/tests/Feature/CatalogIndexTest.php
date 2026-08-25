@@ -209,6 +209,29 @@ final class CatalogIndexTest extends TestCase
         $this->assertCount(1, $hits);
     }
 
+    public function test_shortened_code_page_from_index_is_used_instead_of_web(): void
+    {
+        $this->seedPage('https://www.bezpieczni112.pl/maska-mt-212-p-8.html');
+        $product = Product::query()->create([
+            'sku' => 'MT-212-2',
+            'name' => 'Maska MT 212/2',
+            'manufacturer' => 'MASKPOL',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        Http::fake();
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame('catalog_index', $pack['provider']);
+        $this->assertSame(
+            'https://www.bezpieczni112.pl/maska-mt-212-p-8.html',
+            $pack['results'][0]['url'] ?? null
+        );
+        Http::assertNothingSent();
+    }
+
     public function test_prefers_page_with_brand_when_code_matches_twice(): void
     {
         $this->seedPage('https://sklep-a.pl/lampka-1202');

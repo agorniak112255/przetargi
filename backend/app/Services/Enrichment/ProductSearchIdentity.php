@@ -905,7 +905,7 @@ final class ProductSearchIdentity
         $codes = $this->compactProductCodes($product);
         $seen = [];
         preg_match_all(
-            '/(?<![\p{L}\d])(\p{Lu}{1,4})[\s\-]?(\d{2,4})((?:[\s\-\/]\d{1,3})*)/u',
+            '/(?<![\p{L}\d])(\p{Lu}{1,4})[\s\-]?(\d{2,4})((?:[\s\-\/]\d{1,3})*)(?!\d)/u',
             $text,
             $matches,
             PREG_SET_ORDER
@@ -956,8 +956,9 @@ final class ProductSearchIdentity
         $hay = mb_strtolower($title).' '.str_replace(['/', '_'], ' ', $path);
 
         $out = [];
+        // „…-p138481” to identyfikator sklepu, nie model — stąd zakaz urwania w cyfrach
         preg_match_all(
-            '/(?<![\p{L}\d])(\p{L}{1,4})[\s\-]?(\d{2,4})((?:[\s\-\/]\d{1,3})*)/u',
+            '/(?<![\p{L}\d])(\p{L}{1,4})[\s\-]?(\d{2,4})((?:[\s\-\/]\d{1,3})*)(?!\d)/u',
             $hay,
             $matches,
             PREG_SET_ORDER

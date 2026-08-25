@@ -342,6 +342,22 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertFalse($id->hayHasProductCode('maska mt 212/23 maskpol', $product));
     }
 
+    public function test_shop_page_id_is_not_read_as_another_model(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'Urgent',
+            'sku' => '1202',
+            'name' => 'Rękawice 1202 kozia czerwona',
+        ]);
+        $identity = app(ProductSearchIdentity::class);
+
+        $this->assertFalse($identity->pageClaimsAnotherCode(
+            'https://optimumbhp.pl/REKAWICE-ROBOCZE-1202-URGENT-p138481',
+            '',
+            $product
+        ));
+    }
+
     public function test_accessory_card_mentioning_our_model_is_not_our_card(): void
     {
         $id = new ProductSearchIdentity;
