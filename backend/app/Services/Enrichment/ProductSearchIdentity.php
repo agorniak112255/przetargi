@@ -505,21 +505,32 @@ final class ProductSearchIdentity
         $sku = trim((string) $product->sku);
         $name = trim((string) $product->name);
         $usableSku = $sku !== '' && ! $this->looksLikeInternalSku($product);
+        // „PROS-121-S1-GUMA” to nasz kod złożony z opisu — w sieci działa dopiero
+        // nazwa z producentem („121 S1 GUMA Urgent”), więc ona idzie pierwsza.
+        $composedSku = $this->hasDescriptiveWordSegment($sku);
 
-        $out = [];
+        $skuQueries = [];
         if ($usableSku) {
-            $out[] = $this->queryWithManufacturer($sku, $product);
+            $skuQueries[] = $this->queryWithManufacturer($sku, $product);
             $bare = $this->stripBrandPrefix($sku, $brand);
             if ($bare !== '' && $bare !== $sku) {
-                $out[] = $this->queryWithManufacturer($bare, $product);
+                $skuQueries[] = $this->queryWithManufacturer($bare, $product);
             }
         }
+
+        $nameQueries = [];
         if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
-            $out[] = $this->queryWithManufacturer(
-                $usableSku && ! $this->phraseHasToken($name, $sku) ? $name.' '.$sku : $name,
+            $nameQueries[] = $this->queryWithManufacturer(
+                $usableSku && ! $composedSku && ! $this->phraseHasToken($name, $sku)
+                    ? $name.' '.$sku
+                    : $name,
                 $product
             );
         }
+
+        $out = $composedSku
+            ? array_merge($nameQueries, $skuQueries)
+            : array_merge($skuQueries, $nameQueries);
         // „URG-C-SPODNIE” w sklepie występuje jako „URG-C”, a „ERGOPRIMA45” jako „ERGOPRIMA”
         $core = $this->internalSkuCore($product);
         if ($core !== '' && mb_strtolower($core) !== mb_strtolower($sku)) {
@@ -538,6 +549,26 @@ final class ProductSearchIdentity
         )));
     }
 
+    /**
+     * Człon będący zwykłym słowem („GUMA”, „ZIMA”, „BLUZA”) zdradza kod sklejony u nas —
+     * wyszukiwarka takiego ciągu nie zna, choć numer modelu w środku jest prawdziwy.
+     */
+    private function hasDescriptiveWordSegment(string $sku): bool
+    {
+        $segments = array_values(array_filter(preg_split('/[\-\/ ]+/u', trim($sku)) ?: []));
+        if (count($segments) < 2) {
+            return false;
+        }
+
+        foreach ($segments as $segment) {
+            if (preg_match('/^\p{L}{4,}$/u', $segment) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function productNameWithManufacturer(Product $product): string
     {
         $name = trim((string) $product->name);
@@ -547,6 +578,7 @@ final class ProductSearchIdentity
             $parts[] = $name;
         }
         if ($sku !== '' && ! $this->looksLikeInternalSku($product)
+            && ! $this->hasDescriptiveWordSegment($sku)
             && ($name === '' || ! $this->phraseHasToken($name, $sku))) {
             $parts[] = $sku;
         }
@@ -1090,9 +1122,13 @@ final class ProductSearchIdentity
             $lead[] = $segment;
         }
         if ($lead !== [] && count($lead) < count($segments)) {
-            foreach (array_slice($segments, count($lead)) as $segment) {
-                if (preg_match('/\d/u', $segment) === 1) {
-                    return implode('-', $lead);
+            $core = implode('-', $lead);
+            // „PROS-121-S1-GUMA” → sam prefiks hurtowni; model siedzi dalej, w nazwie
+            if (mb_strlen($core) >= 5) {
+                foreach (array_slice($segments, count($lead)) as $segment) {
+                    if (preg_match('/\d/u', $segment) === 1) {
+                        return $core;
+                    }
                 }
             }
         }

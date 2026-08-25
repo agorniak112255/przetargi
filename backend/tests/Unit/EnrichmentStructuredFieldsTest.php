@@ -81,6 +81,46 @@ TXT;
         ]));
     }
 
+    public function test_rejects_foreign_card_that_only_shares_bhp_wording(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'sku' => 'PROS-121-S1-GUMA',
+            'name' => '121 S1 GUMA',
+            'manufacturer' => 'URGENT',
+        ]);
+
+        $this->assertFalse($this->invoke($service, 'descriptionMentionsProduct', [
+            'Damskie spodnie robocze antystatyczne ESD Portwest AS12 w kolorze granatowym. '
+            .'Do skutecznej ochrony ESD wymagane jest zastosowanie pełnego systemu.',
+            $product,
+        ]));
+        $this->assertTrue($this->invoke($service, 'descriptionMentionsProduct', [
+            'URGENT 121 S1. Trzewik bezpieczny z metalowym podnoskiem, zamknięty obszar pięty, '
+            .'właściwości antyelektrostatyczne i absorpcja energii w pięcie.',
+            $product,
+        ]));
+    }
+
+    public function test_generic_name_falls_back_to_brand_and_ppe_family(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'sku' => 'URG-TOP',
+            'name' => 'Rękawice robocze',
+            'manufacturer' => 'Urgent',
+        ]);
+
+        $this->assertTrue($this->invoke($service, 'descriptionMentionsProduct', [
+            'Rękawice robocze Urgent z powłoką nitrylową, chwyt w warunkach wilgotnych.',
+            $product,
+        ]));
+        $this->assertFalse($this->invoke($service, 'descriptionMentionsProduct', [
+            'Trzewiki robocze Urgent z podnoskiem kompozytowym i podeszwą SRC.',
+            $product,
+        ]));
+    }
+
     /**
      * @param  list<mixed>  $args
      */

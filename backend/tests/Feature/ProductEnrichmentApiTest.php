@@ -27,6 +27,7 @@ use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\Enrichment\ProductPageFetcher;
 use App\Services\Enrichment\ProductSearchIdentity;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -91,7 +92,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->app->instance(HybridWebSearchService::class, $search);
 
         $llm = $this->mockLlmWithSanitize([
-            'description' => 'Rękawice nitrylowe do pracy w przemyśle. Spełniają normy EN 388 i chronią przed ścieraniem. Przeznaczone do montażu oraz prac precyzyjnych w warunkach suchych. Trwała powłoka nitrylowa zwiększa żywotność przy codziennym użytkowaniu.',
+            'description' => 'Rękawice nitrylowe Ansell '.$product->sku.' do pracy w przemyśle. Spełniają normy EN 388 i chronią przed ścieraniem. Przeznaczone do montażu oraz prac precyzyjnych w warunkach suchych. Trwała powłoka nitrylowa zwiększa żywotność przy codziennym użytkowaniu.',
             'features' => ['nitryl'],
             'specs' => ['Długość: 30 cm'],
             'norms' => ['EN 388'],
@@ -392,6 +393,7 @@ final class ProductEnrichmentApiTest extends TestCase
             app(BhpAttributeNormalizer::class),
             app(ProductSearchIdentity::class),
             app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
         );
 
         $service->enrichProduct($product, false);
@@ -429,6 +431,7 @@ final class ProductEnrichmentApiTest extends TestCase
             app(BhpAttributeNormalizer::class),
             app(ProductSearchIdentity::class),
             app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
         );
 
         try {
@@ -479,7 +482,8 @@ final class ProductEnrichmentApiTest extends TestCase
                 'errors' => [],
             ]);
 
-        $richDescription = 'Rękawice nitrylowe do pracy w przemyśle. Spełniają normy EN 388 i chronią przed ścieraniem. '
+        $richDescription = 'Rękawice nitrylowe Ansell '.$product->sku.' do pracy w przemyśle. '
+            .'Spełniają normy EN 388 i chronią przed ścieraniem. '
             .'Przeznaczone do montażu oraz prac precyzyjnych w warunkach suchych. '
             .'Trwała powłoka nitrylowa zwiększa żywotność przy codziennym użytkowaniu w zakładzie.';
 
@@ -541,6 +545,7 @@ final class ProductEnrichmentApiTest extends TestCase
                 app(ProductSearchIdentity::class),
                 $llm,
             ),
+            app(PpeAssortment::class),
         );
 
         $service->enrichProduct($product, false);

@@ -25,6 +25,24 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertContains('Kurtka ostrzegawcza URG-914 Urgent', $queries);
     }
 
+    public function test_house_code_with_short_number_searches_by_name_and_brand_first(): void
+    {
+        $identity = new ProductSearchIdentity();
+        $product = new Product([
+            'manufacturer' => 'URGENT',
+            'sku' => 'PROS-121-S1-GUMA',
+            'name' => '121 S1 GUMA',
+        ]);
+
+        $queries = $identity->primaryQueries($product);
+
+        $this->assertSame('121 S1 GUMA URGENT', $queries[0] ?? null);
+        $this->assertSame(
+            '121 S1 GUMA URGENT buty ochronne BHP',
+            $identity->productNameWithManufacturer($product)
+        );
+    }
+
     public function test_internal_sku_core_is_used_as_query(): void
     {
         $identity = new ProductSearchIdentity();

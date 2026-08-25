@@ -17,6 +17,7 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\PpeAssortment;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -27,6 +28,18 @@ use Throwable;
 
 final class ProductEnrichmentService
 {
+    /** Słowa, które pasują do połowy katalogu BHP — same nie potwierdzają modelu. */
+    private const GENERIC_NAME_TOKENS = [
+        'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
+        'ubranie', 'odziez', 'odzież', 'buty', 'obuwie', 'trzewiki', 'polbuty', 'półbuty', 'sandaly',
+        'robocze', 'robocza', 'roboczy', 'ochronne', 'ochronna', 'ochronny', 'ochrona', 'bezpieczne',
+        'damskie', 'meskie', 'męskie', 'czarne', 'czarny', 'biale', 'białe', 'zolte', 'żółte',
+        'granatowe', 'szare', 'zielone', 'niebieskie', 'pomaranczowe', 'pomarańczowe', 'czerwone',
+        'rozmiar', 'komplet', 'zestaw', 'para', 'sztuka', 'sztuk', 'model', 'seria', 'linia', 'wersja',
+        'guma', 'gumowe', 'skora', 'skóra', 'skorzane', 'skórzane', 'lateks', 'nitryl', 'bawelna',
+        'bawełna', 'poliester', 'pary',
+    ];
+
     public function __construct(
         private readonly HybridWebSearchService $search,
         private readonly ProductImageDownloader $images,
@@ -39,6 +52,7 @@ final class ProductEnrichmentService
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly ProductSearchIdentity $identity,
         private readonly ProductImageCandidateVerifier $imageVerifier,
+        private readonly PpeAssortment $assortment,
     ) {}
 
     public function enqueueProduct(Product $product, User $user, bool $force = false): ProductEnrichmentBatch
@@ -343,7 +357,11 @@ final class ProductEnrichmentService
                 }
             }
 
-            if ($description === '' || $this->looksLikeMissingCardMeta($description)) {
+            // Fallback ze stron i doszukiwanie omijają walidację LLM, więc tożsamość
+            // sprawdzamy jeszcze raz na tekście, który realnie trafiłby do bazy.
+            $confirmed = $description !== '' && $this->descriptionMentionsProduct($description, $product);
+
+            if (! $confirmed || $this->looksLikeMissingCardMeta($description)) {
                 Log::warning('Product description rejected', [
                     'product_id' => $product->id,
                     'sku' => $product->sku,
@@ -355,10 +373,12 @@ final class ProductEnrichmentService
                         && $this->descriptionMentionsProduct($rawDescription, $product),
                     'thin' => $rawDescription !== '' && $this->looksLikeThinDescription($rawDescription),
                     'card_meta' => $rawDescription !== '' && $this->looksLikeMissingCardMeta($rawDescription),
+                    'final_head' => mb_substr($description, 0, 300),
                 ]);
 
-                throw new RuntimeException(
-                    'Nie udało się zebrać pełnego opisu ze stron zawierających SKU '.$product->sku.'.'
+                throw new ProductSourcesNotFoundException(
+                    'Nie znaleziono karty potwierdzającej produkt '.$product->sku
+                    .' — żaden opis nie wymieniał jego kodu ani modelu. Opis wpisz ręcznie.'
                 );
             }
 
@@ -1463,36 +1483,117 @@ final class ProductEnrichmentService
         return $this->descriptionMentionsProduct($d, $product);
     }
 
+    /**
+     * Opis wolno przypisać dopiero wtedy, gdy sam nazywa produkt po kodzie albo modelu.
+     * Bez tego karta obcego produktu z tej samej branży przechodziła jako nasza.
+     */
     private function descriptionMentionsProduct(string $description, Product $product): bool
     {
         $hay = mb_strtolower($description);
-        $needles = [];
-        foreach ([(string) $product->sku, (string) $product->name, (string) $product->manufacturer] as $value) {
-            $value = mb_strtolower(trim($value));
-            if ($value !== '') {
-                $needles[] = $value;
-            }
-        }
-        $core = $this->identity->gloveCodeCore($product);
-        if ($core !== null) {
-            $needles[] = $core;
-        }
-        foreach (preg_split('/[\s\-®™\/_]+/u', mb_strtolower((string) $product->name)) ?: [] as $part) {
-            $part = trim($part);
-            if ($part !== '' && mb_strlen($part) >= 4) {
-                $needles[] = $part;
-            }
-        }
-        foreach ($needles as $needle) {
-            if ($needle !== '' && str_contains($hay, $needle)) {
+
+        foreach ($this->identityCodes($product) as $code) {
+            if ($this->hayHasToken($hay, $code)) {
                 return true;
             }
         }
 
-        return (bool) preg_match(
-            '#(rękaw|rekaw|glove|polar|ochron|bhp|ppe|nitryl|lateks|en\s*388|en\s*iso)#u',
-            $hay
+        $tokens = $this->discriminativeNameTokens($product);
+        $score = 0;
+        foreach ($tokens as $token => $weight) {
+            if ($this->hayHasToken($hay, (string) $token)) {
+                $score += $weight;
+            }
+        }
+        // Sama marka nie wystarcza — pod „Urgent” idzie pół katalogu — ale razem
+        // ze słowem z nazwy domyka potwierdzenie.
+        $brand = mb_strtolower($this->identity->shortBrand((string) $product->manufacturer));
+        if ($score > 0 && $brand !== '' && $this->hayHasToken($hay, $brand)) {
+            $score++;
+        }
+        if ($score >= 2) {
+            return true;
+        }
+
+        // Nazwa z samych słów ogólnych („Rękawice robocze”) nie da się potwierdzić kodem —
+        // wtedy o zgodności decyduje marka razem z rodzajem środka ochrony.
+        if ($tokens === []) {
+            return $this->matchesBrandAndFamily($hay, $product);
+        }
+
+        return false;
+    }
+
+    /**
+     * Kody, których obecność w tekście przesądza sprawę.
+     *
+     * @return list<string>
+     */
+    private function identityCodes(Product $product): array
+    {
+        $codes = [];
+        $sku = trim((string) $product->sku);
+        if ($sku !== '' && ! $this->identity->looksLikeInternalSku($product)) {
+            $codes[] = $sku;
+        }
+        foreach ([$this->identity->internalSkuCore($product), $this->identity->gloveCodeCore($product)] as $code) {
+            if (is_string($code) && mb_strlen($code) >= 4) {
+                $codes[] = $code;
+            }
+        }
+        foreach ($this->identity->skuSizeVariants($product) as $variant) {
+            $codes[] = $variant;
+        }
+
+        return array_values(array_unique(array_map('mb_strtolower', $codes)));
+    }
+
+    /**
+     * Słowa z nazwy, które faktycznie odróżniają model: numer serii i oznaczenia z cyfrą
+     * ważą podwójnie, zwykłe słowo pojedynczo, a branżowe ogólniki wcale.
+     *
+     * @return array<string, int>
+     */
+    private function discriminativeNameTokens(Product $product): array
+    {
+        $tokens = [];
+        foreach (preg_split('/[\s\-®™\/_,.()]+/u', mb_strtolower((string) $product->name)) ?: [] as $token) {
+            $token = trim($token);
+            if ($token === '' || in_array($token, self::GENERIC_NAME_TOKENS, true)) {
+                continue;
+            }
+            if (preg_match('/^\d{2,}$/u', $token) === 1
+                || preg_match('/^(?=.*\d)(?=.*\p{L})[\p{L}\d]{3,}$/u', $token) === 1) {
+                $tokens[$token] = 2;
+            } elseif (preg_match('/^\p{L}{4,}$/u', $token) === 1) {
+                $tokens[$token] = 1;
+            }
+        }
+
+        return $tokens;
+    }
+
+    private function matchesBrandAndFamily(string $hay, Product $product): bool
+    {
+        $brand = mb_strtolower($this->identity->shortBrand((string) $product->manufacturer));
+        if ($brand === '' || ! $this->hayHasToken($hay, $brand)) {
+            return false;
+        }
+
+        $family = $this->assortment->family(
+            trim($product->name.' '.$product->sku.' '.(string) $product->category)
         );
+
+        return $family === null || $family === $this->assortment->family($hay);
+    }
+
+    private function hayHasToken(string $hay, string $token): bool
+    {
+        $token = mb_strtolower(trim($token));
+        if (mb_strlen($token) < 2) {
+            return false;
+        }
+
+        return preg_match('/(^|[^\p{L}\d])'.preg_quote($token, '/').'([^\p{L}\d]|$)/iu', $hay) === 1;
     }
 
     /**
