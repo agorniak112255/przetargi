@@ -302,6 +302,29 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertNotContains('Maska MT 212/2 MT-212-2 MASKPOL', $queries);
     }
 
+    public function test_code_without_variant_segment_is_asked_for_too(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'MASKPOL',
+            'sku' => 'MT-212-2',
+            'name' => 'Maska MT 212/2',
+            'category' => 'Maski',
+        ]);
+        $identity = app(ProductSearchIdentity::class);
+
+        $this->assertSame(['MT 212'], $identity->variantBaseCodes($product));
+        $this->assertContains('MT 212 MASKPOL', $identity->primaryQueries($product));
+        $this->assertContains('MT 212 MASKPOL', $identity->searchQueries($product, 'manufacturer'));
+
+        // kod bez członu z wariantem zostaje bez zmian
+        $plain = new Product([
+            'manufacturer' => 'Urgent',
+            'sku' => 'URG-914',
+            'name' => 'Kurtka ostrzegawcza URG-914',
+        ]);
+        $this->assertSame([], $identity->variantBaseCodes($plain));
+    }
+
     public function test_only_page_titled_with_our_model_counts_as_product_card(): void
     {
         $product = new Product([

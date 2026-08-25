@@ -467,6 +467,9 @@ final class ProductSearchIdentity
             && mb_strtolower($name) !== mb_strtolower($bare)) {
             $queries[] = trim($brand.' '.$name);
         }
+        foreach ($this->variantBaseCodes($product) as $base) {
+            $queries[] = $base;
+        }
 
         // 2) Dopiero potem warianty z hintem (gdy nazwa sugeruje kategorię)
         if ($hint !== '') {
@@ -545,6 +548,9 @@ final class ProductSearchIdentity
             if (mb_strtolower($variant) !== mb_strtolower($sku)) {
                 $out[] = $this->queryWithManufacturer($variant, $product);
             }
+        }
+        foreach ($this->variantBaseCodes($product) as $base) {
+            $out[] = $this->queryWithManufacturer($base, $product);
         }
 
         return array_values(array_unique(array_filter(
@@ -864,6 +870,29 @@ final class ProductSearchIdentity
         }
 
         return false;
+    }
+
+    /**
+     * Oznaczenie bez członu z wariantem: „MT-212-2” sprzedaje się jako „MASKA MT 212”,
+     * a pełne „MT 212/2” zostaje dopiero w treści karty. Bez tej formy wyszukiwarka
+     * zwraca wyłącznie sąsiedni model.
+     *
+     * @return list<string>
+     */
+    public function variantBaseCodes(Product $product): array
+    {
+        $out = [];
+        foreach ([(string) $product->sku, (string) $product->name] as $source) {
+            if (preg_match(
+                '/(?<![\p{L}\d])(\p{L}{1,4})[\s\-]?(\d{2,4})[\-\/](\d{1,2})(?![\d\p{L}])/u',
+                trim($source),
+                $hit
+            ) === 1) {
+                $out[] = mb_strtoupper($hit[1]).' '.$hit[2];
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**
