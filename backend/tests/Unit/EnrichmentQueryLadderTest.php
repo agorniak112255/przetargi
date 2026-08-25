@@ -289,6 +289,19 @@ final class EnrichmentQueryLadderTest extends TestCase
         ));
     }
 
+    public function test_name_carrying_the_code_in_another_notation_is_not_glued_with_sku(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $queries = $identity->primaryQueries(new Product([
+            'manufacturer' => 'MASKPOL',
+            'sku' => 'MT-212-2',
+            'name' => 'Maska MT 212/2',
+        ]));
+
+        $this->assertContains('Maska MT 212/2 MASKPOL', $queries);
+        $this->assertNotContains('Maska MT 212/2 MT-212-2 MASKPOL', $queries);
+    }
+
     public function test_catalog_index_hit_without_product_code_does_not_stop_web_search(): void
     {
         $product = new Product([

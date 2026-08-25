@@ -540,8 +540,6 @@ class HybridWebSearchService
                 'errors' => $errors,
             ];
         }
-        $skuQuery = $skuQueries[0];
-
         $mfrDomains = $this->manufacturers->domainsFor($product);
         if ($mfrDomains === []) {
             try {
@@ -556,16 +554,24 @@ class HybridWebSearchService
             return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => $errors];
         }
 
-        $mfr = $this->cachedTavilySearch(
-            $product,
-            $skuQuery,
-            $mfrDomains,
-            $profile,
-            $cacheMode,
-            $phase,
-            'mfr',
-            $errors
-        );
+        // Na stronie producenta kod bywa zapisany inaczej niż w cenniku, więc gdy
+        // zapytanie po SKU nic nie da, próbujemy drugiej frazy z drabinki (zwykle nazwy).
+        $mfr = ['results' => [], 'provider' => $this->searchProviderName()];
+        foreach (array_slice($skuQueries, 0, 2) as $query) {
+            $mfr = $this->cachedTavilySearch(
+                $product,
+                $query,
+                $mfrDomains,
+                $profile,
+                $cacheMode,
+                $phase,
+                'mfr',
+                $errors
+            );
+            if ($mfr['results'] !== []) {
+                break;
+            }
+        }
 
         return [
             'results' => $mfr['results'],
@@ -794,8 +800,10 @@ class HybridWebSearchService
                     break;
                 }
             }
-            // wzmianka w treści to za mało: karta akcesorium wymienia kompatybilne modele
-            if ($this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+            // wzmianka w treści to za mało: karta akcesorium wymienia kompatybilne modele,
+            // a zbiorcza lista deklaracji zgodności wymienia cały katalog producenta
+            if ($this->identity->pageClaimsAnotherCode($url, $title, $product)
+                || $this->isListingWithoutProduct($url, $product)) {
                 continue;
             }
             $out[] = [
@@ -825,6 +833,9 @@ class HybridWebSearchService
             '/manufacturer/', '/producent/', '/brand/', '/marka/',
             '/category/', '/kategoria/', '/kategorie/', '/collection/',
             '/search', '/szukaj', '/catalog/', '/katalog/', '/blog/',
+            // zbiorcze strony producenta wymieniają cały asortyment, w tym nasz kod
+            '/deklaracje', '/certyfikat', '/do-pobrania', '/dokumenty', '/downloads',
+            '/aktualnosci', '/news',
         ] as $needle) {
             if (str_contains($u, $needle)) {
                 return true;

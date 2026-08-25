@@ -624,6 +624,10 @@ final class ProductSearchIdentity
         if ($token === '' || mb_strlen($token) < 2) {
             return false;
         }
+        // nazwa „Maska MT 212/2” niesie już kod „MT-212-2” — doklejanie go psuje zapytanie
+        if ($this->codeInText($hay, $token)) {
+            return true;
+        }
 
         return preg_match('/(^|[^a-z0-9])'.preg_quote($token, '/').'([^a-z0-9]|$)/iu', $hay) === 1;
     }
