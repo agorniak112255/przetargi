@@ -380,6 +380,101 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('external_hint.url', 'https://example.com/kurtka-ochronna');
     }
 
+    public function test_ai_search_finds_balaclava_without_description_among_described_caps(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        for ($i = 1; $i <= 40; $i++) {
+            Product::query()->create([
+                'sku' => 'CZAPKA-ZIMOWA-'.$i,
+                'name' => 'Czapka zimowa 5'.$i.' polar',
+                'manufacturer' => 'Urgent',
+                'category' => 'Czapki',
+                'description' => 'Czapka zimowa polarowa marki Urgent, model 5'.$i.', ochrona głowy zimą.',
+                'catalog_price_net' => 10 + $i,
+                'purchase_price' => 8,
+                'stock' => 2,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        $balaclava = Product::query()->create([
+            'sku' => 'BALTIC',
+            'name' => 'KOMINIARKA Z POLARU POLIESTRU, 100 g/m²',
+            'manufacturer' => 'Delta Plus',
+            'category' => 'EVOLUTION',
+            'description' => null,
+            'catalog_price_net' => 9.9,
+            'purchase_price' => 6,
+            'stock' => 12,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $balaclava): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        'needed' => 'kominiarka z polaru',
+                        'search_phrases' => ['kominiarka', 'czapka', 'polar'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $balaclava->id, 'score' => 91, 'reason' => 'Kominiarka z polaru'],
+                ]];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'CZAPKA KOMINIARKA Z POLARU czarna lub granatowa',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'BALTIC');
+
+        $this->assertNotNull($cards);
+        $this->assertStringContainsString('KOMINIARKA Z POLARU POLIESTRU', $cards);
+    }
+
+    public function test_ai_search_still_skips_undescribed_card_matched_only_by_category(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'WIESZAK-01',
+            'name' => 'Wieszak magazynowy stalowy',
+            'manufacturer' => 'X',
+            'category' => 'Kominiarki i czapki',
+            'description' => null,
+            'catalog_price_net' => 50,
+            'purchase_price' => 30,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->once()
+            ->andReturn([
+                'needed' => 'kominiarka z polaru',
+                'search_phrases' => ['kominiarka', 'polar'],
+            ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'CZAPKA KOMINIARKA Z POLARU czarna lub granatowa',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 0)
+            ->assertJsonMissing(['sku' => 'WIESZAK-01']);
+    }
+
     public function test_ai_search_rejects_face_shield_for_vest_even_if_model_scores_it(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

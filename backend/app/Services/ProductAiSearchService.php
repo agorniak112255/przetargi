@@ -9,12 +9,17 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\PpeAssortment;
 use App\Support\ProductModelFuzzy;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use RuntimeException;
 use Throwable;
 
 final class ProductAiSearchService
 {
+    private const LIKE_NAME_POOL = 80;
+
+    private const LIKE_DESCRIBED_POOL = 160;
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductVectorSearch $vectorSearch,
@@ -495,61 +500,113 @@ final class ProductAiSearchService
             return collect();
         }
 
-        $q = Product::query()
-            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
-            ->withCount(['substitutes', 'images']);
-        $this->constrainToDescribed($q);
-
-        $q->where(function ($outer) use ($phrases): void {
-            foreach (array_slice($phrases, 0, 14) as $term) {
-                $like = '%'.addcslashes($term, '%_\\').'%';
-                $outer->orWhere(function ($w) use ($like): void {
-                    $w->where('name', 'like', $like)
-                        ->orWhere('sku', 'like', $like)
-                        ->orWhere('manufacturer', 'like', $like)
-                        ->orWhere('description', 'like', $like)
-                        ->orWhere('norms', 'like', $like)
-                        ->orWhere('category', 'like', $like)
-                        ->orWhere('enrichment_payload', 'like', $like);
-                });
-            }
-        });
-
-        $pool = $q->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
-            ->orderByDesc('enriched_at')
-            ->limit(160)
-            ->get();
-
+        $terms = array_slice($phrases, 0, 14);
+        $pool = $this->uniqueProducts(
+            $this->likeByNameOrSku($terms)->concat($this->likeByDescribedFields($terms)),
+            self::LIKE_NAME_POOL + self::LIKE_DESCRIBED_POOL,
+        );
         if ($pool->isEmpty()) {
             return collect();
         }
 
-        return $pool->map(function (Product $p) use ($phrases): array {
-            $hay = mb_strtolower(implode(' ', [
-                (string) $p->name,
+        $count = count($phrases);
+
+        return $pool->map(function (Product $p) use ($phrases, $count): array {
+            $identity = mb_strtolower((string) $p->name.' '.(string) $p->sku);
+            $hay = $identity.' '.mb_strtolower(implode(' ', [
                 (string) $p->category,
                 (string) ($p->norms ?? ''),
                 (string) ($p->description ?? ''),
                 json_encode($p->enrichment_payload ?? [], JSON_UNESCAPED_UNICODE) ?: '',
             ]));
             $hits = 0;
-            foreach ($phrases as $term) {
-                if (str_contains($hay, mb_strtolower($term))) {
+            $score = 0;
+            $identityScore = 0;
+            foreach ($phrases as $i => $term) {
+                // Intent zwraca nazwę produktu w pierwszych frazach, cechy i normy na końcu.
+                $weight = $count - $i;
+                $term = mb_strtolower($term);
+                if (str_contains($hay, $term)) {
                     $hits++;
+                    $score += $weight;
+                }
+                if (str_contains($identity, $term)) {
+                    $identityScore += $weight;
                 }
             }
 
-            return ['product' => $p, 'hits' => $hits];
+            return ['product' => $p, 'hits' => $hits, 'rank' => $identityScore * 100 + $score];
         })
             ->filter(static fn (array $row): bool => $row['hits'] >= 1)
-            ->sortByDesc(static fn (array $row): int => $row['hits'])
+            ->sortByDesc(static fn (array $row): int => $row['rank'])
             ->take($limit)
             ->pluck('product')
             ->values();
     }
 
     /**
-     * @param  \Illuminate\Database\Eloquent\Builder<Product>  $q
+     * Trafienie w nazwę lub SKU jest wystarczająco mocne, żeby pominąć wymóg opisu.
+     *
+     * @param  list<string>  $terms
+     * @return Collection<int, Product>
+     */
+    private function likeByNameOrSku(array $terms): Collection
+    {
+        return $this->likeBaseQuery()
+            ->where(function ($outer) use ($terms): void {
+                foreach ($terms as $term) {
+                    $like = '%'.addcslashes($term, '%_\\').'%';
+                    $outer->orWhere('name', 'like', $like)
+                        ->orWhere('sku', 'like', $like);
+                }
+            })
+            ->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
+            ->orderByDesc('enriched_at')
+            ->limit(self::LIKE_NAME_POOL)
+            ->get();
+    }
+
+    /**
+     * Trafienie w opis, normy czy kategorię jest słabe — tylko karty z opisem.
+     *
+     * @param  list<string>  $terms
+     * @return Collection<int, Product>
+     */
+    private function likeByDescribedFields(array $terms): Collection
+    {
+        $q = $this->likeBaseQuery();
+        $this->constrainToDescribed($q);
+
+        return $q->where(function ($outer) use ($terms): void {
+            foreach ($terms as $term) {
+                $like = '%'.addcslashes($term, '%_\\').'%';
+                $outer->orWhere(function ($w) use ($like): void {
+                    $w->where('manufacturer', 'like', $like)
+                        ->orWhere('description', 'like', $like)
+                        ->orWhere('norms', 'like', $like)
+                        ->orWhere('category', 'like', $like)
+                        ->orWhere('enrichment_payload', 'like', $like);
+                });
+            }
+        })
+            ->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
+            ->orderByDesc('enriched_at')
+            ->limit(self::LIKE_DESCRIBED_POOL)
+            ->get();
+    }
+
+    /**
+     * @return Builder<Product>
+     */
+    private function likeBaseQuery()
+    {
+        return Product::query()
+            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
+            ->withCount(['substitutes', 'images']);
+    }
+
+    /**
+     * @param  Builder<Product>  $q
      */
     private function constrainToDescribed($q): void
     {
