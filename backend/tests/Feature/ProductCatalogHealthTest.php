@@ -108,4 +108,63 @@ final class ProductCatalogHealthTest extends TestCase
         $this->assertNull($puste['material'] ?? null);
         $this->assertNull($puste['kategoria_bhp'] ?? null);
     }
+
+    public function test_vector_progress_endpoint_counts_indexed_products(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'V1',
+            'name' => 'Zaindeksowany',
+            'manufacturer' => 'ATG',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+            'embedding_synced_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'V2',
+            'name' => 'Bez wektora',
+            'manufacturer' => 'ATG',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+        ]);
+
+        $this->getJson('/api/products/catalog-health/vector')
+            ->assertOk()
+            ->assertExactJson([
+                'enabled' => false,
+                'indexed' => 1,
+                'pending_jobs' => 0,
+            ]);
+    }
+
+    public function test_vector_progress_endpoint_respects_manufacturer_filter(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'V3',
+            'name' => 'Zaindeksowany ATG',
+            'manufacturer' => 'ATG',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+            'embedding_synced_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'V4',
+            'name' => 'Zaindeksowany CANIS',
+            'manufacturer' => 'CANIS',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+            'embedding_synced_at' => now(),
+        ]);
+
+        $this->getJson('/api/products/catalog-health/vector?manufacturer=CANIS')
+            ->assertOk()
+            ->assertJsonPath('indexed', 1);
+    }
 }

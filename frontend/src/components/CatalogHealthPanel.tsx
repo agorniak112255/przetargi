@@ -11,8 +11,10 @@ type Report = {
   with_description: number
   by_manufacturer: Array<{ manufacturer: string; count: number }>
   offer_markup_percent?: number
-  vector?: { enabled: boolean; indexed: number; pending_jobs: number }
+  vector?: VectorReport
 }
+
+type VectorReport = { enabled: boolean; indexed: number; pending_jobs: number }
 
 type Props = {
   canQueue: boolean
@@ -41,6 +43,21 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
   useEffect(() => {
     void load()
   }, [manufacturerFilter])
+
+  const indexing = Boolean(report?.vector?.enabled) && (report?.vector?.pending_jobs ?? 0) > 0
+
+  // pełny raport przelicza cały katalog, więc w trakcie reindeksu dociągamy sam licznik wektorów
+  useEffect(() => {
+    if (!indexing) return
+    const q = manufacturerFilter ? `?manufacturer=${encodeURIComponent(manufacturerFilter)}` : ''
+    const id = window.setInterval(() => {
+      api<VectorReport>(`/products/catalog-health/vector${q}`)
+        .then((vector) => setReport((prev) => (prev ? { ...prev, vector } : prev)))
+        .catch(() => undefined)
+    }, 5000)
+
+    return () => window.clearInterval(id)
+  }, [indexing, manufacturerFilter])
 
   async function queue(reason: 'missing_description' | 'not_enriched') {
     setBusy(true)

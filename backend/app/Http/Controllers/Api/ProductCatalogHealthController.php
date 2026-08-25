@@ -27,6 +27,17 @@ class ProductCatalogHealthController extends Controller
         );
     }
 
+    public function vector(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'manufacturer' => ['sometimes', 'nullable', 'string', 'max:120'],
+        ]);
+
+        return response()->json(
+            $this->health->vectorReport($data['manufacturer'] ?? null)
+        );
+    }
+
     public function queue(Request $request): JsonResponse
     {
         $data = $request->validate([

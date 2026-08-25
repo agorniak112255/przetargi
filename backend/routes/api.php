@@ -11,18 +11,19 @@ use App\Http\Controllers\Api\AiSettingsController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\PriceListController;
 use App\Http\Controllers\Api\PriceListImportController;
 use App\Http\Controllers\Api\ProductAiSearchController;
+use App\Http\Controllers\Api\ProductCatalogHealthController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductCrossRefController;
-use App\Http\Controllers\Api\ProductCatalogHealthController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
-use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
-use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\TenderActivityController;
+use App\Http\Controllers\Api\TenderBattlecardController;
 use App\Http\Controllers\Api\TenderCommentController;
 use App\Http\Controllers\Api\TenderConditionController;
 use App\Http\Controllers\Api\TenderController;
@@ -32,7 +33,6 @@ use App\Http\Controllers\Api\TenderExportController;
 use App\Http\Controllers\Api\TenderImportController;
 use App\Http\Controllers\Api\TenderInvitationController;
 use App\Http\Controllers\Api\TenderItemController;
-use App\Http\Controllers\Api\TenderBattlecardController;
 use App\Http\Controllers\Api\TenderMatchController;
 use App\Http\Controllers\Api\UserDirectoryController;
 use Illuminate\Support\Facades\Route;
@@ -98,6 +98,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
     Route::get('/products/manufacturers', [ProductController::class, 'manufacturers'])->middleware('permission:products.view');
     Route::get('/products/catalog-health', [ProductCatalogHealthController::class, 'show'])
+        ->middleware('permission:products.view');
+    Route::get('/products/catalog-health/vector', [ProductCatalogHealthController::class, 'vector'])
         ->middleware('permission:products.view');
     Route::post('/products/catalog-health/queue', [ProductCatalogHealthController::class, 'queue'])
         ->middleware('permission:price_lists.import');

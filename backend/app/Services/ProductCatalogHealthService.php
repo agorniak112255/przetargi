@@ -128,6 +128,21 @@ final class ProductCatalogHealthService
     }
 
     /**
+     * Sam postęp wektorów — tani odpowiednik report() do odpytywania w trakcie reindeksu.
+     *
+     * @return array{enabled: bool, indexed: int, pending_jobs: int}
+     */
+    public function vectorReport(?string $manufacturer = null): array
+    {
+        $base = Product::query();
+        if ($manufacturer !== null && trim($manufacturer) !== '') {
+            $base->where('manufacturer', $manufacturer);
+        }
+
+        return $this->vectorProgress($base);
+    }
+
+    /**
      * Postęp indeksowania wektorów: ile produktów ma świeży embedding i ile zadań czeka.
      *
      * @param  Builder<Product>  $base
