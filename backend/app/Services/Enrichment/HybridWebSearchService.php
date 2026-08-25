@@ -7,6 +7,7 @@ namespace App\Services\Enrichment;
 use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
@@ -1071,7 +1072,7 @@ Zapytanie: {$query}. Zwróć tylko URL stron z tym kodem produktu.
 PROMPT;
 
         $seconds = (int) ($this->settings->resolve()['timeout_seconds'] ?? 90);
-        $response = $this->llm->chatWithWebSearch($prompt, max(60, min(120, $seconds)));
+        $response = $this->llm->chatWithWebSearch($prompt, max(60, min(120, $seconds)), AiTask::WebSearch);
         $results = [];
 
         foreach ($response['citations'] as $citation) {

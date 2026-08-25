@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Services\Ai\AiTask;
 use App\Services\Ai\JsonResponseParser;
 use App\Services\Ai\OpenAiCompatibleClient;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -372,7 +373,7 @@ final class TenderSpreadsheetItemExtractor
                         .json_encode($payload, JSON_UNESCAPED_UNICODE),
                 ],
             ];
-            $raw = $this->llm->chat($messages);
+            $raw = $this->llm->chat($messages, null, true, null, AiTask::SpreadsheetExtract);
             $parsed = $this->jsonParser->parse($raw['content'] ?? '');
             if (! is_array($parsed)) {
                 return null;

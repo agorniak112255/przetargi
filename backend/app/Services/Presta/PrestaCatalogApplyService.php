@@ -45,6 +45,7 @@ final class PrestaCatalogApplyService
             if (! $product instanceof Product) {
                 $failed++;
                 $errors[] = 'Brak produktu #'.$productId;
+
                 continue;
             }
             try {
@@ -59,6 +60,7 @@ final class PrestaCatalogApplyService
             } catch (RuntimeException $e) {
                 if (str_contains($e->getMessage(), 'już uzupełniony')) {
                     $skipped++;
+
                     continue;
                 }
                 $failed++;

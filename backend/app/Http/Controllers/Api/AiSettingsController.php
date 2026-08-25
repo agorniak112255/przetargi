@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\Ai\AiModelProfiles;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Vector\EmbeddingClient;
 use App\Services\Vector\QdrantClient;
@@ -58,6 +60,16 @@ class AiSettingsController extends Controller
             'embedding_provider' => ['sometimes', 'string', 'in:'.implode(',', AiSettingsService::EMBEDDING_PROVIDERS)],
             'embedding_cloud_model' => ['nullable', 'string', 'max:120'],
             'embedding_cloud_api_key' => ['nullable', 'string', 'max:500'],
+            'model_profiles' => ['sometimes', 'array', 'max:'.AiModelProfiles::MAX_PROFILES],
+            'model_profiles.*.id' => ['nullable', 'string', 'max:64'],
+            'model_profiles.*.name' => ['nullable', 'string', 'max:120'],
+            'model_profiles.*.base_url' => ['nullable', 'string', 'max:255'],
+            'model_profiles.*.model' => ['nullable', 'string', 'max:120'],
+            'model_profiles.*.api_key' => ['nullable', 'string', 'max:500'],
+            'model_profiles.*.timeout_seconds' => ['nullable', 'integer', 'min:10', 'max:600'],
+            'model_profiles.*.temperature' => ['nullable', 'numeric', 'min:0', 'max:2'],
+            'model_profiles.*.tasks' => ['nullable', 'array'],
+            'model_profiles.*.tasks.*' => ['string', 'in:'.implode(',', AiTask::keys())],
         ]);
 
         $this->settings->update($data);

@@ -6,6 +6,4 @@ namespace App\Exceptions;
 
 use RuntimeException;
 
-final class TavilyQuotaExceededException extends RuntimeException
-{
-}
+final class TavilyQuotaExceededException extends RuntimeException {}

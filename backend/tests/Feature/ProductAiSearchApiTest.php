@@ -817,6 +817,69 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertStringContainsString('ABRAK', $cards);
     }
 
+    public function test_typo_in_the_product_noun_still_scopes_the_search_to_the_right_family(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $pants = Product::query()->create([
+            'sku' => 'SPOD-250',
+            'name' => 'SPODNIE ROBOCZE Canis',
+            'manufacturer' => 'CANIS SAFETY',
+            'category' => 'Odzież robocza',
+            'description' => 'Spodnie robocze z tkaniny o gramaturze 250 g/m².',
+            'catalog_price_net' => 95,
+            'purchase_price' => 60,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        // Ta sama gramatura, inna rodzina. Wchodzi w pulę przez token 250gsm,
+        // więc bramka rodziny jest jedyną rzeczą, która ją odsiewa.
+        $gloves = Product::query()->create([
+            'sku' => 'REK-250',
+            'name' => 'Rękawice powlekane',
+            'manufacturer' => 'Inna',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice z dzianiny o gramaturze 250 g/m².',
+            'catalog_price_net' => 8,
+            'purchase_price' => 4,
+            'stock' => 40,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $pants, $gloves): array {
+                $call++;
+                if ($call === 1) {
+                    // Model czyta „podnie” i zwraca nazwę po korekcie.
+                    return [
+                        'needed' => 'spodnie robocze',
+                        'search_phrases' => ['spodnie', 'spodnie robocze', 'gramatura 250'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $gloves->id, 'score' => 95, 'reason' => 'Gramatura 250'],
+                    ['id' => $pants->id, 'score' => 80, 'reason' => 'Spodnie 250 g/m²'],
+                ]];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', ['query' => 'podnie gramatura 250 gr'])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'SPOD-250')
+            ->assertJsonMissing(['sku' => 'REK-250']);
+
+        $this->assertNotNull($cards);
+        $this->assertStringNotContainsString('REK-250', $cards);
+    }
+
     private function firstCardSku(?string $prompt): ?string
     {
         $this->assertNotNull($prompt);

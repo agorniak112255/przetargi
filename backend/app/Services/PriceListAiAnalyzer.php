@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Services\Ai\AiSettingsService;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\JsonResponseParser;
 use App\Services\Ai\OpenAiCompatibleClient;
 use RuntimeException;
@@ -79,11 +81,11 @@ final class PriceListAiAnalyzer
         ];
         $model = 'heuristic';
         $mapping = null;
-        $aiReady = app(\App\Services\Ai\AiSettingsService::class)->isReady();
+        $aiReady = app(AiSettingsService::class)->isReady();
 
         if ($aiReady) {
             try {
-                $raw = $this->llm->chat($messages);
+                $raw = $this->llm->chat($messages, null, true, null, AiTask::PriceListPdf);
                 $model = $raw['model'];
                 try {
                     $json = $this->jsonParser->parse($raw['content']);
@@ -94,7 +96,7 @@ final class PriceListAiAnalyzer
                             'role' => 'user',
                             'content' => 'Poprzednia odpowiedź była niepoprawna. Zwróć WYŁĄCZNIE jeden obiekt JSON zgodny ze schematem.',
                         ],
-                    ]);
+                    ], null, null, null, AiTask::PriceListPdf);
                 }
                 $mapping = $this->normalizeMapping($json);
             } catch (RuntimeException) {
@@ -201,13 +203,13 @@ final class PriceListAiAnalyzer
         $prompt = $this->pdfProductPrompt($hint);
         $fileSize = is_file($path) ? (int) filesize($path) : 0;
         $visionError = null;
-        $aiReady = app(\App\Services\Ai\AiSettingsService::class)->isReady();
+        $aiReady = app(AiSettingsService::class)->isReady();
 
         // 1) Vision tylko dla mniejszych PDF (gdy AI skonfigurowane)
         if ($aiReady && $fileSize > 0 && $fileSize <= 4_000_000) {
             try {
                 @set_time_limit(240);
-                $raw = $this->llm->chatWithPdf($prompt, $path, basename($path));
+                $raw = $this->llm->chatWithPdf($prompt, $path, basename($path), AiTask::PriceListPdf);
                 $json = $this->jsonParser->parse($raw['content']);
                 $products = $this->normalizeProducts($json['products'] ?? [], $manufacturerHint);
                 if ($products !== [] && $this->looksLikeGoodPdfExtract($products)) {
@@ -324,7 +326,7 @@ final class PriceListAiAnalyzer
                             ."\n\nWzorce: (A) 119.00 32 80.92; (B) NV15S-00138 … 50 PCE … 2.62.",
                     ],
                 ];
-                $raw = $this->llm->chat($messages);
+                $raw = $this->llm->chat($messages, null, true, null, AiTask::PriceListPdf);
                 $model = $raw['model'];
                 $partJson = $this->jsonParser->parse($raw['content']);
                 if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
@@ -339,6 +341,7 @@ final class PriceListAiAnalyzer
                 );
             } catch (\Throwable) {
                 $chunkErrors++;
+
                 continue;
             }
         }
@@ -632,7 +635,6 @@ PROMPT;
     }
 
     /**
-     * @param  mixed  $rows
      * @return list<array<string, mixed>>
      */
     private function normalizeProducts(mixed $rows, ?string $manufacturerHint): array

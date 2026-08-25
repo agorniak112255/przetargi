@@ -6,6 +6,4 @@ namespace App\Exceptions;
 
 use RuntimeException;
 
-final class EnrichmentCancelledException extends RuntimeException
-{
-}
+final class EnrichmentCancelledException extends RuntimeException {}

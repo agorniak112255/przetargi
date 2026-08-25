@@ -26,24 +26,78 @@ class OpenAiCompatibleClient
     ) {}
 
     /**
+     * $task wskazuje profil modelu z Ustawień AI; bez niego działa konfiguracja główna.
+     *
      * @param  list<array{role: string, content: mixed}>  $messages
      * @return array{content: string, model: string, usage: array<string, mixed>|null}
      */
-    public function chat(array $messages, ?float $temperature = null, bool $jsonMode = true, ?array $extra = null): array
+    public function chat(
+        array $messages,
+        ?float $temperature = null,
+        bool $jsonMode = true,
+        ?array $extra = null,
+        ?AiTask $task = null
+    ): array {
+        return $this->withProfileFallback(
+            $task,
+            fn (array $profile): array => $this->chatWithProfile($profile, $messages, $temperature, $jsonMode, $extra)
+        );
+    }
+
+    /**
+     * Cichy fallback: brak środków, limit 429 albo padnięty endpoint profilu nie może
+     * zatrzymać funkcji, która przed wprowadzeniem profili działała na modelu głównym.
+     *
+     * @param  callable(array<string, mixed>): array<string, mixed>  $run
+     * @return array<string, mixed>
+     */
+    private function withProfileFallback(?AiTask $task, callable $run): array
     {
-        $cfg = $this->settings->resolve();
-        if (! $cfg['enabled']) {
+        $profile = $this->settings->profileForTask($task);
+
+        try {
+            return $run($profile);
+        } catch (RuntimeException $e) {
+            if ($profile['is_default']) {
+                throw $e;
+            }
+
+            Log::warning('Profil AI zawiódł — schodzę na konfigurację główną', [
+                'task' => $task?->value,
+                'profile' => $profile['label'],
+                'error' => $e->getMessage(),
+            ]);
+
+            return $run($this->settings->profileForTask(null));
+        }
+    }
+
+    /**
+     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, is_default: bool}  $profile
+     * @param  list<array{role: string, content: mixed}>  $messages
+     * @return array{content: string, model: string, usage: array<string, mixed>|null}
+     */
+    private function chatWithProfile(
+        array $profile,
+        array $messages,
+        ?float $temperature,
+        bool $jsonMode,
+        ?array $extra
+    ): array {
+        if (! $this->settings->resolve()['enabled']) {
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
         }
-        if (! $cfg['has_api_key'] || $cfg['api_key'] === null) {
-            throw new RuntimeException('Brak klucza API AI. Uzupełnij go w Ustawieniach AI.');
+        if ($profile['api_key'] === null || $profile['api_key'] === '') {
+            throw new RuntimeException($profile['is_default']
+                ? 'Brak klucza API AI. Uzupełnij go w Ustawieniach AI.'
+                : 'Brak klucza API dla profilu „'.$profile['label'].'”.');
         }
 
-        $url = $cfg['base_url'].'/chat/completions';
+        $url = $profile['base_url'].'/chat/completions';
         $extra = is_array($extra) ? $extra : [];
         $model = is_string($extra['model'] ?? null) && trim((string) $extra['model']) !== ''
             ? trim((string) $extra['model'])
-            : (string) $cfg['model'];
+            : $profile['model'];
         $reasoning = $this->isReasoningModel($model);
         // Mniejszy budżet = mniejszy kontekst na slot, czyli więcej równoległych
         // slotów lokalnego modelu w tym samym VRAM. Przy urwaniu i tak ponawiamy z 16000.
@@ -58,13 +112,14 @@ class OpenAiCompatibleClient
             'max_tokens' => $maxTokens,
         ];
         if (! $reasoning) {
-            $basePayload['temperature'] = $temperature ?? $cfg['temperature'];
+            $basePayload['temperature'] = $temperature ?? $profile['temperature'];
         }
         unset($extra['max_tokens'], $extra['model']);
         $basePayload = array_merge($basePayload, $extra);
+        $timeout = $profile['timeout_seconds'];
 
         try {
-            $response = $this->postChatWithRetry($url, $cfg['api_key'], $basePayload, $jsonMode, $reasoning);
+            $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
         } catch (ConnectionException $e) {
             throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
         }
@@ -80,7 +135,7 @@ class OpenAiCompatibleClient
         if ($content === '' && $this->contentReader->finishReason($payload) === 'length' && $maxTokens < 16000) {
             $basePayload['max_tokens'] = 16000;
             try {
-                $response = $this->postChat($url, $cfg['api_key'], $basePayload, $jsonMode, $reasoning);
+                $response = $this->postChat($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
             } catch (ConnectionException $e) {
                 throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
             }
@@ -97,7 +152,7 @@ class OpenAiCompatibleClient
 
         return [
             'content' => $content,
-            'model' => (string) data_get($payload, 'model', $cfg['model']),
+            'model' => (string) data_get($payload, 'model', $profile['model']),
             'usage' => data_get($payload, 'usage'),
         ];
     }
@@ -107,7 +162,7 @@ class OpenAiCompatibleClient
      *
      * @return array{content: string, model: string, usage: array<string, mixed>|null}
      */
-    public function chatWithPdf(string $prompt, string $pdfPath, string $filename): array
+    public function chatWithPdf(string $prompt, string $pdfPath, string $filename, ?AiTask $task = null): array
     {
         $bytes = file_get_contents($pdfPath);
         if ($bytes === false) {
@@ -148,15 +203,20 @@ class OpenAiCompatibleClient
                     'pdf' => ['engine' => 'native'],
                 ],
             ],
-        ]);
+        ], $task);
     }
 
     /**
      * @param  list<array{role: string, content: mixed}>  $messages
      * @return array<string, mixed>
      */
-    public function chatJson(array $messages, ?float $temperature = null, ?int $maxTokens = null, ?string $model = null): array
-    {
+    public function chatJson(
+        array $messages,
+        ?float $temperature = null,
+        ?int $maxTokens = null,
+        ?string $model = null,
+        ?AiTask $task = null
+    ): array {
         $extra = [];
         if ($maxTokens !== null) {
             $extra['max_tokens'] = max(256, $maxTokens);
@@ -164,7 +224,7 @@ class OpenAiCompatibleClient
         if ($model !== null && trim($model) !== '') {
             $extra['model'] = trim($model);
         }
-        $result = $this->chat($messages, $temperature, true, $extra !== [] ? $extra : null);
+        $result = $this->chat($messages, $temperature, true, $extra !== [] ? $extra : null, $task);
 
         try {
             return $this->jsonParser->parse($result['content']);
@@ -178,16 +238,27 @@ class OpenAiCompatibleClient
                     'role' => 'user',
                     'content' => "Popraw poniższy tekst do walidnego JSON:\n\n".$result['content'],
                 ],
-            ], 0.0, true, $extra !== [] ? $extra : null);
+            ], 0.0, true, $extra !== [] ? $extra : null, $task);
 
             return $this->jsonParser->parse($repair['content']);
         }
     }
 
-    /** Opisy produktów / filtr chrome — używa taniego modelu z ustawień. */
+    /**
+     * Opisy produktów / filtr chrome. Profil przypisany do zadania jest ważniejszy —
+     * dopiero bez niego wraca stare pole „Model do opisów”.
+     */
     public function chatJsonEnrichment(array $messages, ?float $temperature = null, ?int $maxTokens = null): array
     {
-        return $this->chatJson($messages, $temperature, $maxTokens, $this->settings->enrichmentModel());
+        $hasProfile = ! $this->settings->profileForTask(AiTask::Enrichment)['is_default'];
+
+        return $this->chatJson(
+            $messages,
+            $temperature,
+            $maxTokens,
+            $hasProfile ? null : $this->settings->enrichmentModel(),
+            AiTask::Enrichment
+        );
     }
 
     /**
@@ -196,7 +267,7 @@ class OpenAiCompatibleClient
      * @param  list<array{bytes: string, mime: string, label: string}>  $images
      * @return array<string, mixed>
      */
-    public function chatJsonWithImages(string $prompt, array $images): array
+    public function chatJsonWithImages(string $prompt, array $images, ?AiTask $task = null): array
     {
         $content = [
             ['type' => 'text', 'text' => $prompt],
@@ -224,7 +295,7 @@ class OpenAiCompatibleClient
                 'role' => 'user',
                 'content' => $content,
             ],
-        ], 0.0, 1200);
+        ], 0.0, 1200, null, $task);
     }
 
     /**
@@ -232,22 +303,37 @@ class OpenAiCompatibleClient
      *
      * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
      */
-    public function chatWithWebSearch(string $prompt, int $timeoutSeconds = 60): array
+    public function chatWithWebSearch(string $prompt, int $timeoutSeconds = 60, ?AiTask $task = null): array
     {
-        $cfg = $this->settings->resolve();
-        if (! $cfg['enabled']) {
+        if (! $this->settings->resolve()['enabled']) {
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
         }
         if ($this->settings->usesFreeWebSearch()) {
             return $this->phpDuckDuckGoCitations($prompt);
         }
-        if (! $cfg['has_api_key'] || $cfg['api_key'] === null) {
+
+        /** @var array{content: string, model: string, citations: list<array{url: string, title: string}>} $result */
+        $result = $this->withProfileFallback(
+            $task,
+            fn (array $profile): array => $this->webSearchWithProfile($profile, $prompt, $timeoutSeconds)
+        );
+
+        return $result;
+    }
+
+    /**
+     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, is_default: bool}  $profile
+     * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
+     */
+    private function webSearchWithProfile(array $profile, string $prompt, int $timeoutSeconds): array
+    {
+        if ($profile['api_key'] === null || $profile['api_key'] === '') {
             throw new RuntimeException('Brak klucza API AI. Uzupełnij go w Ustawieniach AI.');
         }
 
-        $url = $cfg['base_url'].'/chat/completions';
+        $url = $profile['base_url'].'/chat/completions';
         $payload = [
-            'model' => $cfg['model'],
+            'model' => $profile['model'],
             'temperature' => 0.0,
             'max_tokens' => 800,
             'messages' => [
@@ -269,7 +355,7 @@ class OpenAiCompatibleClient
         ];
 
         try {
-            $response = Http::withToken($cfg['api_key'])
+            $response = Http::withToken($profile['api_key'])
                 ->acceptJson()
                 ->withHeaders([
                     'HTTP-Referer' => config('app.url', 'http://localhost'),
@@ -299,7 +385,7 @@ class OpenAiCompatibleClient
 
         return [
             'content' => $content,
-            'model' => (string) data_get($data, 'model', $cfg['model']),
+            'model' => (string) data_get($data, 'model', $profile['model']),
             'citations' => $citations,
         ];
     }
@@ -309,19 +395,34 @@ class OpenAiCompatibleClient
      *
      * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
      */
-    public function responsesWithWebSearch(string $prompt, int $timeoutSeconds = 25): array
+    public function responsesWithWebSearch(string $prompt, int $timeoutSeconds = 25, ?AiTask $task = null): array
     {
-        $cfg = $this->settings->resolve();
-        if (! $cfg['enabled']) {
+        if (! $this->settings->resolve()['enabled']) {
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
         }
-        if (! $cfg['has_api_key'] || $cfg['api_key'] === null) {
+
+        /** @var array{content: string, model: string, citations: list<array{url: string, title: string}>} $result */
+        $result = $this->withProfileFallback(
+            $task,
+            fn (array $profile): array => $this->responsesWithProfile($profile, $prompt, $timeoutSeconds)
+        );
+
+        return $result;
+    }
+
+    /**
+     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, is_default: bool}  $profile
+     * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
+     */
+    private function responsesWithProfile(array $profile, string $prompt, int $timeoutSeconds): array
+    {
+        if ($profile['api_key'] === null || $profile['api_key'] === '') {
             throw new RuntimeException('Brak klucza API AI. Uzupełnij go w Ustawieniach AI.');
         }
 
-        $url = $cfg['base_url'].'/responses';
+        $url = $profile['base_url'].'/responses';
         $payload = [
-            'model' => $cfg['model'],
+            'model' => $profile['model'],
             'tools' => [
                 ['type' => 'web_search'],
             ],
@@ -331,7 +432,7 @@ class OpenAiCompatibleClient
         ];
 
         try {
-            $response = Http::withToken($cfg['api_key'])
+            $response = Http::withToken($profile['api_key'])
                 ->acceptJson()
                 ->withHeaders([
                     'HTTP-Referer' => config('app.url', 'http://localhost'),
@@ -360,7 +461,7 @@ class OpenAiCompatibleClient
 
         return [
             'content' => $content,
-            'model' => (string) data_get($data, 'model', $cfg['model']),
+            'model' => (string) data_get($data, 'model', $profile['model']),
             'citations' => $this->extractResponsesCitations($data),
         ];
     }
@@ -493,16 +594,22 @@ class OpenAiCompatibleClient
     /**
      * @param  array<string, mixed>  $payload
      */
-    private function postChatWithRetry(string $url, string $apiKey, array $payload, bool $jsonMode, bool $reasoning): Response
-    {
-        $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning);
+    private function postChatWithRetry(
+        string $url,
+        string $apiKey,
+        array $payload,
+        bool $jsonMode,
+        bool $reasoning,
+        int $timeout
+    ): Response {
+        $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
         $attempt = 0;
         while (in_array($response->status(), self::OVERLOAD_STATUSES, true) && $attempt < self::OVERLOAD_RETRIES) {
             $wait = $this->retryAfterSeconds($response, $attempt);
             if ($wait > 0) {
                 sleep($wait);
             }
-            $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning);
+            $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
             $attempt++;
         }
 
@@ -544,8 +651,14 @@ class OpenAiCompatibleClient
     /**
      * @param  array<string, mixed>  $payload
      */
-    private function postChat(string $url, string $apiKey, array $payload, bool $jsonMode, bool $reasoning): Response
-    {
+    private function postChat(
+        string $url,
+        string $apiKey,
+        array $payload,
+        bool $jsonMode,
+        bool $reasoning,
+        int $timeout
+    ): Response {
         $attempts = [];
         if ($jsonMode) {
             $attempts[] = $payload + ['response_format' => ['type' => 'json_object']];
@@ -554,7 +667,7 @@ class OpenAiCompatibleClient
 
         $response = null;
         foreach ($attempts as $body) {
-            $response = $this->post($url, $apiKey, $body);
+            $response = $this->post($url, $apiKey, $body, $timeout);
             if (! in_array($response->status(), [400, 404, 422], true)) {
                 return $response;
             }
@@ -566,22 +679,22 @@ class OpenAiCompatibleClient
             $alt['max_completion_tokens'] = (int) ($payload['max_tokens'] ?? 8000);
             unset($alt['max_tokens']);
             $retry = $jsonMode ? ($alt + ['response_format' => ['type' => 'json_object']]) : $alt;
-            $response = $this->post($url, $apiKey, $retry);
+            $response = $this->post($url, $apiKey, $retry, $timeout);
             if ($response->successful() || ! $jsonMode) {
                 return $response;
             }
-            $response = $this->post($url, $apiKey, $alt);
+            $response = $this->post($url, $apiKey, $alt, $timeout);
         }
 
-        return $response ?? $this->post($url, $apiKey, $payload);
+        return $response ?? $this->post($url, $apiKey, $payload, $timeout);
     }
 
     /**
      * @param  array<string, mixed>  $payload
      */
-    private function post(string $url, string $apiKey, array $payload): Response
+    private function post(string $url, string $apiKey, array $payload, int $timeoutSeconds): Response
     {
-        $timeout = max(120, (int) ($this->settings->resolve()['timeout_seconds'] ?? 90));
+        $timeout = max(120, $timeoutSeconds);
         if ($this->isReasoningModel((string) ($payload['model'] ?? ''))) {
             $timeout = max(180, $timeout);
         }

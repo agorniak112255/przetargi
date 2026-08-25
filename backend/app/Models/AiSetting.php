@@ -36,6 +36,7 @@ class AiSetting extends Model
         'embedding_provider',
         'embedding_cloud_model',
         'embedding_cloud_api_key',
+        'model_profiles',
     ];
 
     protected function casts(): array
@@ -47,6 +48,7 @@ class AiSetting extends Model
             'qdrant_api_key' => 'encrypted',
             'embedding_api_key' => 'encrypted',
             'embedding_cloud_api_key' => 'encrypted',
+            'model_profiles' => 'encrypted:array',
             'timeout_seconds' => 'integer',
             'temperature' => 'float',
             'web_search_enabled' => 'boolean',

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Services\Ai\AiSettingsService;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\JsonResponseParser;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
@@ -334,7 +335,8 @@ final class PriceListSampleRoleResearcher
                 $raw = $this->llm->responsesWithWebSearch(
                     "Na podstawie wyszukiwania w internecie: co oznaczają kody/nazwy w zapytaniu „{$query}”? "
                     .'Krótko po polsku: który ciąg to model/reference, który to nazwa handlowa, który to article/SKU, który to rozmiar. Max 8 zdań.',
-                    22
+                    22,
+                    AiTask::WebSearch
                 );
 
                 return mb_substr(trim($raw['content']), 0, 1800);
@@ -408,14 +410,14 @@ PROMPT
             ],
         ];
 
-        $raw = $this->llm->chat($messages);
+        $raw = $this->llm->chat($messages, null, true, null, AiTask::PriceListPdf);
         try {
             $json = $this->jsonParser->parse($raw['content']);
         } catch (RuntimeException) {
             $json = $this->llm->chatJson([
                 ...$messages,
                 ['role' => 'user', 'content' => 'Zwróć WYŁĄCZNIE poprawny JSON ze schematem roles.'],
-            ]);
+            ], null, null, null, AiTask::PriceListPdf);
         }
 
         return $this->normalizeRolesPayload($json, $position);

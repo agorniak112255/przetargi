@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Ai\AiTask;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
@@ -78,8 +79,7 @@ final class ProductMatchService
         ?array $itemIds = null,
         int $progressOffset = 0,
         ?int $progressTotal = null,
-    ): array
-    {
+    ): array {
         $products = Product::query()->get();
         $matched = 0;
         $skipped = 0;
@@ -641,14 +641,17 @@ final class ProductMatchService
             }
             if ($manuf !== '' && str_contains($manuf, $token)) {
                 $score += 28;
+
                 continue;
             }
             if ($name !== '' && str_contains($name, $token)) {
                 $score += 26;
+
                 continue;
             }
             if ($sku !== '' && str_contains($sku, $token)) {
                 $score += 30;
+
                 continue;
             }
             // w opisie tylko tokeny „kodowe” (litery+cyfry) — nie ogólne słowa typu safety/szare
@@ -1131,7 +1134,7 @@ final class ProductMatchService
         }
 
         try {
-            $result = $this->aiSearch->search($requirement, $limit, false);
+            $result = $this->aiSearch->search($requirement, $limit, false, AiTask::TenderMatch);
         } catch (Throwable) {
             return [];
         }
@@ -1456,4 +1459,3 @@ final class ProductMatchService
         ];
     }
 }
-

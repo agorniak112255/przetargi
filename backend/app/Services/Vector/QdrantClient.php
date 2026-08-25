@@ -6,6 +6,7 @@ namespace App\Services\Vector;
 
 use App\Services\Ai\AiSettingsService;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -186,7 +187,7 @@ final class QdrantClient
         return $url;
     }
 
-    private function http(): \Illuminate\Http\Client\PendingRequest
+    private function http(): PendingRequest
     {
         $cfg = $this->settings->resolve();
         $req = Http::timeout(30)->acceptJson();

@@ -27,6 +27,7 @@ final class AssortmentGroupService
             $name = $this->normalizeGroupName($product['category'] ?? $product['group_name'] ?? null);
             if ($name === null) {
                 $ungrouped++;
+
                 continue;
             }
             $counts[$name] = ($counts[$name] ?? 0) + 1;
@@ -119,6 +120,7 @@ final class AssortmentGroupService
 
             if ($assigned === null || ! isset($resolvedGroups[$assigned])) {
                 $missing[] = $sku !== '' ? $sku : ($product['name'] ?? '?');
+
                 continue;
             }
 

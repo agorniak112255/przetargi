@@ -20,7 +20,7 @@ final class ProductDocumentFinder
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly ManufacturerDomainResolver $manufacturers,
-        private readonly ProductSearchIdentity $identity = new ProductSearchIdentity(),
+        private readonly ProductSearchIdentity $identity = new ProductSearchIdentity,
         private readonly DuckDuckGoHtmlSearch $duckDuckGo = new DuckDuckGoHtmlSearch,
     ) {}
 
@@ -307,6 +307,7 @@ final class ProductDocumentFinder
             // PDF z SKU w nazwie (CDN/dystrybutor) — gdy strona producenta (Ansell/Imperva) nie oddaje plików
             if ($isPdf && $this->matchesProduct($hay, $product)) {
                 $out[] = $url;
+
                 continue;
             }
 
@@ -317,6 +318,7 @@ final class ProductDocumentFinder
             // karty produktu /products/… tylko gdy widać SKU/nazwę
             if ($this->matchesProduct($hay, $product) && ($isDocPage || $this->looksLikeProductDocPage($url))) {
                 $out[] = $url;
+
                 continue;
             }
             // indeks deklaracji — NIE zwykłe karty produktów

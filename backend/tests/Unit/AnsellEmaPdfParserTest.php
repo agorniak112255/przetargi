@@ -11,7 +11,7 @@ final class AnsellEmaPdfParserTest extends TestCase
 {
     public function test_parses_ema_style_rows(): void
     {
-        $text = <<<TXT
+        $text = <<<'TXT'
 AlphaTecTM 1500 STANDARD Model 113, 138
 Short Base Style Long Base Style Sizing MTS MTO Carton Qty Price (EUR)
 N15S138 NV15S-00138 S-5XL S-3XL 4XL-5XL S-2XL 50 PCE / 3XL-5XL 40 PCE 2.62

@@ -176,6 +176,7 @@ class ProductSubstituteController extends Controller
                 if ((bool) $incoming !== (bool) $current) {
                     return true;
                 }
+
                 continue;
             }
             if ((string) $incoming !== (string) $current) {

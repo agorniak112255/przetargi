@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Services\Ai\AiTask;
 use App\Services\Ai\JsonResponseParser;
 use App\Services\Ai\OpenAiCompatibleClient;
 use RuntimeException;
@@ -61,7 +62,7 @@ final class TenderDocumentAiAnalyzer
             ],
         ];
 
-        $raw = $this->llm->chat($messages);
+        $raw = $this->llm->chat($messages, null, true, null, AiTask::TenderDocument);
         $parsed = $this->jsonParser->parse($raw['content'] ?? '');
         if (! is_array($parsed)) {
             throw new RuntimeException('AI nie zwróciło poprawnego JSON z pozycjami/warunkami.');
@@ -104,6 +105,7 @@ final class TenderDocumentAiAnalyzer
                     'category' => $this->guessCategory($lower),
                     'content' => $line,
                 ];
+
                 continue;
             }
 
@@ -138,7 +140,6 @@ final class TenderDocumentAiAnalyzer
     }
 
     /**
-     * @param  mixed  $raw
      * @return list<array{requirement: string, quantity: int}>
      */
     private function normalizeItems(mixed $raw): array
@@ -179,7 +180,6 @@ final class TenderDocumentAiAnalyzer
     }
 
     /**
-     * @param  mixed  $raw
      * @return list<array{category: ?string, content: string}>
      */
     private function normalizeConditions(mixed $raw): array
@@ -194,6 +194,7 @@ final class TenderDocumentAiAnalyzer
                 if ($content !== '') {
                     $out[] = ['category' => null, 'content' => mb_substr($content, 0, 5000)];
                 }
+
                 continue;
             }
             if (! is_array($row)) {

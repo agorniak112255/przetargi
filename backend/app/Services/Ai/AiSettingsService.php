@@ -89,6 +89,7 @@ final class AiSettingsService
      *     has_qdrant_api_key: bool,
      *     has_embedding_api_key: bool,
      *     has_embedding_cloud_api_key: bool,
+     *     model_profiles: list<array<string, mixed>>,
      *     source: string
      * }
      */
@@ -167,6 +168,7 @@ final class AiSettingsService
                 'has_qdrant_api_key' => $qdrantKey !== null && $qdrantKey !== '',
                 'has_embedding_api_key' => $embKey !== null && $embKey !== '',
                 'has_embedding_cloud_api_key' => $cloudEmbKey !== null && $cloudEmbKey !== '',
+                'model_profiles' => $this->safeProfiles($row),
                 'source' => 'database',
             ];
         }
@@ -215,6 +217,7 @@ final class AiSettingsService
             'has_qdrant_api_key' => $qdrantKey !== null,
             'has_embedding_api_key' => $embKey !== null,
             'has_embedding_cloud_api_key' => $cloudEmbKey !== null,
+            'model_profiles' => [],
             'source' => 'env',
         ];
     }
@@ -255,6 +258,8 @@ final class AiSettingsService
             'has_qdrant_api_key' => $cfg['has_qdrant_api_key'],
             'has_embedding_api_key' => $cfg['has_embedding_api_key'],
             'has_embedding_cloud_api_key' => $cfg['has_embedding_cloud_api_key'],
+            'model_profiles' => AiModelProfiles::publicView($cfg['model_profiles'], $this->maskKey(...)),
+            'ai_tasks' => AiTask::catalog(),
             'source' => $cfg['source'],
             'api_key_masked' => $this->maskKey($cfg['api_key']),
             'tavily_api_key_masked' => $this->maskKey($cfg['tavily_api_key']),
@@ -351,6 +356,10 @@ final class AiSettingsService
             if (array_key_exists('embedding_cloud_model', $data)) {
                 $row->embedding_cloud_model = $this->nullableString($data['embedding_cloud_model']);
             }
+        }
+
+        if (array_key_exists('model_profiles', $data) && Schema::hasColumn('ai_settings', 'model_profiles')) {
+            $row->model_profiles = AiModelProfiles::normalize($data['model_profiles'], $this->safeProfiles($row));
         }
 
         $this->applySecret($row, 'api_key', $data);
@@ -476,6 +485,78 @@ final class AiSettingsService
         return (bool) $cfg['vector_enabled']
             && is_string($cfg['qdrant_url'] ?? null)
             && trim((string) $cfg['qdrant_url']) !== '';
+    }
+
+    /**
+     * Profil obsługujący zadanie. Puste pola profilu schodzą do konfiguracji głównej,
+     * więc „ten sam serwer, inny model” to profil z wypełnionym samym modelem.
+     *
+     * @return array{
+     *     label: string,
+     *     base_url: string,
+     *     api_key: ?string,
+     *     model: string,
+     *     timeout_seconds: int,
+     *     temperature: float,
+     *     is_default: bool
+     * }
+     */
+    public function profileForTask(?AiTask $task): array
+    {
+        $cfg = $this->resolve();
+        $fallback = [
+            'label' => 'konfiguracja główna',
+            'base_url' => (string) $cfg['base_url'],
+            'api_key' => $cfg['api_key'],
+            'model' => (string) $cfg['model'],
+            'timeout_seconds' => (int) $cfg['timeout_seconds'],
+            'temperature' => (float) $cfg['temperature'],
+            'is_default' => true,
+        ];
+
+        if ($task === null) {
+            return $fallback;
+        }
+
+        $profile = AiModelProfiles::forTask($cfg['model_profiles'], $task);
+        if ($profile === null) {
+            return $fallback;
+        }
+
+        $baseUrl = $this->nullableUrl($profile['base_url'] ?? null) ?? $fallback['base_url'];
+        $apiKey = $this->nullableString($profile['api_key'] ?? null);
+
+        return [
+            'label' => $this->nullableString($profile['name'] ?? null) ?? 'profil bez nazwy',
+            'base_url' => $baseUrl,
+            // Własny klucz obowiązuje tylko przy własnym adresie — inaczej wysłalibyśmy
+            // klucz OpenRoutera na lokalny serwer albo odwrotnie.
+            'api_key' => $apiKey ?? ($baseUrl === $fallback['base_url'] ? $fallback['api_key'] : null),
+            'model' => $this->nullableString($profile['model'] ?? null) ?? $fallback['model'],
+            'timeout_seconds' => is_numeric($profile['timeout_seconds'] ?? null)
+                ? (int) $profile['timeout_seconds']
+                : $fallback['timeout_seconds'],
+            'temperature' => is_numeric($profile['temperature'] ?? null)
+                ? (float) $profile['temperature']
+                : $fallback['temperature'],
+            'is_default' => false,
+        ];
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function safeProfiles(AiSetting $row): array
+    {
+        if (! array_key_exists('model_profiles', $row->getAttributes())) {
+            return [];
+        }
+
+        try {
+            $value = $row->model_profiles;
+        } catch (DecryptException|Throwable) {
+            return [];
+        }
+
+        return is_array($value) ? array_values(array_filter($value, is_array(...))) : [];
     }
 
     /** Model do opisów produktów (tani); pusty enrichment_model → model główny. */

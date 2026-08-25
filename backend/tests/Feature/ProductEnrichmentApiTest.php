@@ -15,6 +15,7 @@ use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\HybridWebSearchService;
@@ -583,7 +584,8 @@ final class ProductEnrichmentApiTest extends TestCase
             ->once()
             ->with(
                 Mockery::on(static fn (string $prompt): bool => str_contains($prompt, 'URGENT-1005')),
-                Mockery::on(static fn (array $images): bool => count($images) === 2)
+                Mockery::on(static fn (array $images): bool => count($images) === 2),
+                AiTask::ImageVerification
             )
             ->andReturn([
                 'candidates' => [

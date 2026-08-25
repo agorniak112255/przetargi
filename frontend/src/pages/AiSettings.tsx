@@ -7,6 +7,15 @@ function isKeptSecret(value: string): boolean {
   return v === '' || v.includes('*')
 }
 
+/** Odpowiedź sprzed wdrożenia profili nie ma tych pól — bez tego lista by się wysypała. */
+function withProfileDefaults(next: AiSettings): AiSettings {
+  return {
+    ...next,
+    model_profiles: next.model_profiles ?? [],
+    ai_tasks: next.ai_tasks ?? [],
+  }
+}
+
 type SearchEngine = 'tavily' | 'duckduckgo' | 'searxng'
 
 type EmbeddingProvider = 'local' | 'openai' | 'openrouter'
@@ -25,6 +34,24 @@ const OPENAI_EMBEDDING_MODELS = [
   { id: 'text-embedding-3-small', hint: '1536 wymiarów, ~$0,02/1M' },
   { id: 'text-embedding-3-large', hint: '3072 wymiary, ~$0,13/1M' },
 ]
+
+type AiTaskInfo = {
+  key: string
+  label: string
+  hint: string
+}
+
+type AiModelProfile = {
+  id: string
+  name: string
+  base_url: string | null
+  model: string | null
+  timeout_seconds: number | null
+  temperature: number | null
+  tasks: string[]
+  has_api_key: boolean
+  api_key_masked: string | null
+}
 
 type AiSettings = {
   enabled: boolean
@@ -50,6 +77,8 @@ type AiSettings = {
   embedding_provider: EmbeddingProvider
   embedding_cloud_model: string | null
   embedding_collection: string
+  model_profiles: AiModelProfile[]
+  ai_tasks: AiTaskInfo[]
   has_api_key: boolean
   has_tavily_api_key: boolean
   has_qdrant_api_key: boolean
@@ -70,6 +99,7 @@ export function AiSettingsPage() {
   const [qdrantKey, setQdrantKey] = useState('')
   const [embeddingKey, setEmbeddingKey] = useState('')
   const [cloudEmbeddingKey, setCloudEmbeddingKey] = useState('')
+  const [profileKeys, setProfileKeys] = useState<Record<string, string>>({})
   const [showApiKey, setShowApiKey] = useState(false)
   const [showTavilyKey, setShowTavilyKey] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -84,12 +114,17 @@ export function AiSettingsPage() {
     setCloudEmbeddingKey(
       next.has_embedding_cloud_api_key ? (next.embedding_cloud_api_key_masked ?? '') : ''
     )
+    setProfileKeys(
+      Object.fromEntries(
+        (next.model_profiles ?? []).map((p) => [p.id, p.has_api_key ? (p.api_key_masked ?? '') : ''])
+      )
+    )
   }
 
   async function load() {
     setErr('')
     try {
-      const next = await api<AiSettings>('/ai-settings')
+      const next = withProfileDefaults(await api<AiSettings>('/ai-settings'))
       setCfg(next)
       hydrateSecrets(next)
     } catch (ex) {
@@ -101,6 +136,56 @@ export function AiSettingsPage() {
   useEffect(() => {
     void load()
   }, [])
+
+  function setProfiles(next: AiModelProfile[]) {
+    setCfg((prev) => (prev ? { ...prev, model_profiles: next } : prev))
+  }
+
+  function patchProfile(id: string, patch: Partial<AiModelProfile>) {
+    if (!cfg) return
+    setProfiles(cfg.model_profiles.map((p) => (p.id === id ? { ...p, ...patch } : p)))
+  }
+
+  /** Zadanie ma jednego właściciela — zaznaczenie tutaj zabiera je pozostałym profilom. */
+  function toggleTask(id: string, task: string, on: boolean) {
+    if (!cfg) return
+    setProfiles(
+      cfg.model_profiles.map((p) => {
+        if (p.id !== id) {
+          return on ? { ...p, tasks: p.tasks.filter((t) => t !== task) } : p
+        }
+        return {
+          ...p,
+          tasks: on ? [...p.tasks, task] : p.tasks.filter((t) => t !== task),
+        }
+      })
+    )
+  }
+
+  function addProfile() {
+    if (!cfg) return
+    const id = crypto.randomUUID().slice(0, 12)
+    setProfiles([
+      ...cfg.model_profiles,
+      {
+        id,
+        name: `Profil ${cfg.model_profiles.length + 1}`,
+        base_url: null,
+        model: null,
+        timeout_seconds: null,
+        temperature: null,
+        tasks: [],
+        has_api_key: false,
+        api_key_masked: null,
+      },
+    ])
+    setProfileKeys((prev) => ({ ...prev, [id]: '' }))
+  }
+
+  function removeProfile(id: string) {
+    if (!cfg) return
+    setProfiles(cfg.model_profiles.filter((p) => p.id !== id))
+  }
 
   async function onSave(e: FormEvent) {
     e.preventDefault()
@@ -132,6 +217,22 @@ export function AiSettingsPage() {
         embedding_base_url: cfg.embedding_base_url?.trim() || null,
         embedding_provider: cfg.embedding_provider || 'local',
         embedding_cloud_model: cfg.embedding_cloud_model?.trim() || null,
+        model_profiles: cfg.model_profiles.map((p) => {
+          const entry: Record<string, unknown> = {
+            id: p.id,
+            name: p.name.trim() || 'Profil',
+            base_url: p.base_url?.trim() || null,
+            model: p.model?.trim() || null,
+            timeout_seconds: p.timeout_seconds,
+            temperature: p.temperature,
+            tasks: p.tasks,
+          }
+          const key = profileKeys[p.id] ?? ''
+          if (!isKeptSecret(key)) {
+            entry.api_key = key.trim()
+          }
+          return entry
+        }),
       }
       if (!isKeptSecret(apiKey)) {
         body.api_key = apiKey.trim()
@@ -148,10 +249,12 @@ export function AiSettingsPage() {
       if (!isKeptSecret(cloudEmbeddingKey)) {
         body.embedding_cloud_api_key = cloudEmbeddingKey.trim()
       }
-      const saved = await api<AiSettings>('/ai-settings', {
-        method: 'PUT',
-        body: JSON.stringify(body),
-      })
+      const saved = withProfileDefaults(
+        await api<AiSettings>('/ai-settings', {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        })
+      )
       setCfg(saved)
       hydrateSecrets(saved)
       setMsg('Zapisano konfigurację AI.')
@@ -219,6 +322,14 @@ export function AiSettingsPage() {
   }
 
   const isOpenRouter = cfg.embedding_provider === 'openrouter'
+
+  const taskOwner = new Map<string, string>()
+  for (const profile of cfg.model_profiles) {
+    for (const task of profile.tasks) {
+      if (!taskOwner.has(task)) taskOwner.set(task, profile.id)
+    }
+  }
+  const defaultTasks = cfg.ai_tasks.filter((t) => !taskOwner.has(t.key))
 
   return (
     <div>
@@ -322,6 +433,152 @@ export function AiSettingsPage() {
               onChange={(e) => setCfg({ ...cfg, temperature: Number(e.target.value) })}
             />
           </label>
+        </div>
+
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-slate-700">Profile modeli</p>
+            <button
+              type="button"
+              onClick={addProfile}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
+            >
+              Dodaj profil
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            Każde zadanie obsługuje dokładnie jeden profil — zaznaczenie go tutaj zabiera je
+            pozostałym. Zadanie niezaznaczone nigdzie idzie do konfiguracji powyżej. Puste pole w
+            profilu też schodzi do konfiguracji głównej, więc profil z samym modelem użyje tego
+            samego serwera i klucza.
+          </p>
+
+          <div className="rounded border border-slate-200 bg-white p-2">
+            <p className="text-[11px] font-semibold text-slate-600">
+              Konfiguracja główna — {cfg.model || 'brak modelu'}
+            </p>
+            <p className="mt-1 text-[11px] text-slate-500">
+              {defaultTasks.length > 0
+                ? defaultTasks.map((t) => t.label).join(' · ')
+                : 'Wszystkie zadania przejęły profile.'}
+            </p>
+          </div>
+
+          {cfg.model_profiles.map((profile) => (
+            <div key={profile.id} className="rounded border border-slate-200 bg-white p-2 space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  className="flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+                  value={profile.name}
+                  onChange={(e) => patchProfile(profile.id, { name: e.target.value })}
+                  placeholder="Nazwa profilu"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeProfile(profile.id)}
+                  className="rounded border border-red-200 px-2 py-1 text-[11px] text-red-700"
+                >
+                  Usuń
+                </button>
+              </div>
+
+              <label className="block text-[11px]">
+                Base URL
+                <input
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
+                  value={profile.base_url ?? ''}
+                  onChange={(e) => patchProfile(profile.id, { base_url: e.target.value || null })}
+                  placeholder={cfg.base_url || 'jak w konfiguracji głównej'}
+                />
+              </label>
+
+              <label className="block text-[11px]">
+                Model
+                <input
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
+                  value={profile.model ?? ''}
+                  onChange={(e) => patchProfile(profile.id, { model: e.target.value || null })}
+                  placeholder={cfg.model || 'jak w konfiguracji głównej'}
+                  list="ai-models"
+                />
+              </label>
+
+              <label className="block text-[11px]">
+                Klucz API {profile.has_api_key ? '(zostaw puste, by nie zmieniać)' : ''}
+                <input
+                  type="password"
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1 font-mono"
+                  value={profileKeys[profile.id] ?? ''}
+                  onChange={(e) =>
+                    setProfileKeys((prev) => ({ ...prev, [profile.id]: e.target.value }))
+                  }
+                  placeholder={profile.has_api_key ? '••••••••' : 'puste = klucz z konfiguracji głównej'}
+                  autoComplete="new-password"
+                />
+              </label>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="block text-[11px]">
+                  Timeout (s)
+                  <input
+                    type="number"
+                    min={10}
+                    max={600}
+                    className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
+                    value={profile.timeout_seconds ?? ''}
+                    onChange={(e) =>
+                      patchProfile(profile.id, {
+                        timeout_seconds: e.target.value === '' ? null : Number(e.target.value),
+                      })
+                    }
+                    placeholder={String(cfg.timeout_seconds)}
+                  />
+                </label>
+                <label className="block text-[11px]">
+                  Temperature
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={0}
+                    max={2}
+                    className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
+                    value={profile.temperature ?? ''}
+                    onChange={(e) =>
+                      patchProfile(profile.id, {
+                        temperature: e.target.value === '' ? null : Number(e.target.value),
+                      })
+                    }
+                    placeholder={String(cfg.temperature)}
+                  />
+                </label>
+              </div>
+
+              <fieldset>
+                <legend className="text-[11px] font-semibold text-slate-600">Zadania</legend>
+                <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                  {cfg.ai_tasks.map((task) => {
+                    const owner = taskOwner.get(task.key)
+                    const takenByOther = owner !== undefined && owner !== profile.id
+                    return (
+                      <label
+                        key={task.key}
+                        title={task.hint}
+                        className="flex items-start gap-1.5 text-[11px] text-slate-700"
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={profile.tasks.includes(task.key)}
+                          onChange={(e) => toggleTask(profile.id, task.key, e.target.checked)}
+                        />
+                        <span className={takenByOther ? 'text-slate-400' : ''}>{task.label}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </fieldset>
+            </div>
+          ))}
         </div>
 
         <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">

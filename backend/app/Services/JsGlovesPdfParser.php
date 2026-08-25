@@ -40,6 +40,7 @@ final class JsGlovesPdfParser
 
             if ($this->looksLikeCategory($line)) {
                 $currentCategory = mb_substr($line, 0, 120);
+
                 continue;
             }
 

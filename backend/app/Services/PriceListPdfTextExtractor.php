@@ -92,6 +92,7 @@ final class PriceListPdfTextExtractor
                 if ($which !== []) {
                     return $which[0];
                 }
+
                 continue;
             }
             if (is_file($c)) {

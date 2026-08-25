@@ -18,7 +18,7 @@ final class ProductDocumentDownloader
     private const MAX_BYTES = 15_000_000;
 
     public function __construct(
-        private readonly BlockedPageReader $blockedPages = new BlockedPageReader(),
+        private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
     ) {}
 
     public static function looksLikePdfUrl(string $url): bool

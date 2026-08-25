@@ -65,10 +65,12 @@ final class ActivityLogger
             $keyStr = (string) $key;
             if ($this->isSensitiveKey($keyStr)) {
                 $out[$keyStr] = '[ukryte]';
+
                 continue;
             }
             if (is_array($value)) {
                 $out[$keyStr] = $this->sanitizePayload($value);
+
                 continue;
             }
             if (is_scalar($value) || $value === null) {

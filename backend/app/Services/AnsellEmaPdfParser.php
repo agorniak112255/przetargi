@@ -40,11 +40,13 @@ final class AnsellEmaPdfParser
 
             if ($this->looksLikeProductTitle($line)) {
                 $currentName = $this->cleanTitle($line);
+
                 continue;
             }
 
             if ($this->looksLikeSection($line)) {
                 $currentCategory = mb_substr($line, 0, 100);
+
                 continue;
             }
 

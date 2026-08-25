@@ -11,7 +11,7 @@ final class DuckDuckGoHtmlSearchTest extends TestCase
 {
     public function test_parses_result_links_and_decodes_uddg(): void
     {
-        $html = <<<HTML
+        $html = <<<'HTML'
 <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.uvex-safety.com%2Fpl%2Fproduct%2Fhg">UVEX HG</a>
 <a class="result__a" href="https://duckduckgo.com/about">About</a>
 <a rel="nofollow" href="https://bhp24.pl/uvex-hg">BHP24 UVEX</a>
@@ -67,7 +67,7 @@ HTML;
 
     public function test_parses_google_url_redirects(): void
     {
-        $html = <<<HTML
+        $html = <<<'HTML'
 <a href="/url?q=https%3A%2F%2Fwww.bhpnawigator.com.pl%2Fochrona-termiczna%2Frekawice-ochronne-robfm.html&amp;sa=U">Rękawice ROBFM JS Gloves</a>
 <a href="https://www.google.com/search?q=robfm">Więcej</a>
 HTML;

@@ -97,4 +97,3 @@ class Tender extends Model
         });
     }
 }
-

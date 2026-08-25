@@ -25,7 +25,7 @@ final class ProductImageDownloader
     ];
 
     public function __construct(
-        private readonly BlockedPageReader $blockedPages = new BlockedPageReader(),
+        private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
     ) {}
 
     /**

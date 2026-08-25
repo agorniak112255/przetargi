@@ -183,6 +183,7 @@ final class ActivityActionResolver
         foreach ($params as $key => $value) {
             if ($value instanceof Model) {
                 $out[(string) $key] = $value->getKey();
+
                 continue;
             }
             if (is_scalar($value)) {

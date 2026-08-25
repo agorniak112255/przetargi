@@ -92,6 +92,7 @@ final class JsonResponseParser
                 } elseif ($ch === '"') {
                     $inString = false;
                 }
+
                 continue;
             }
 
@@ -140,10 +141,12 @@ final class JsonResponseParser
                 } elseif ($ch === '"') {
                     $inString = false;
                 }
+
                 continue;
             }
             if ($ch === '"') {
                 $inString = true;
+
                 continue;
             }
             if ($ch === '[') {

@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Services\Vector;
 
 use App\Models\Product;
-use App\Support\BhpAttributeNormalizer;
 use App\Services\Ai\AiSettingsService;
+use App\Support\BhpAttributeNormalizer;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 

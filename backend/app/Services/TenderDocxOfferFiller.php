@@ -10,6 +10,7 @@ use App\Models\TenderItem;
 use DOMDocument;
 use DOMElement;
 use DOMXPath;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use ZipArchive;
@@ -109,7 +110,7 @@ final class TenderDocxOfferFiller
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int, TenderItem>  $items
+     * @param  Collection<int, TenderItem>  $items
      * @return array{sum_net: float}|null
      */
     private function fillOfferTable(DOMXPath $xp, DOMElement $tbl, $items): ?array
@@ -161,6 +162,7 @@ final class TenderDocxOfferFiller
             $joined = mb_strtolower(implode(' ', $texts));
             if (str_contains($joined, 'suma')) {
                 $this->setCellText($xp, $tr, $cols['line_total'] ?? $cols['unit_price'], $this->formatPl($sum));
+
                 continue;
             }
             if ($this->looksLikeColumnIndexRow($texts)) {
@@ -203,7 +205,7 @@ final class TenderDocxOfferFiller
     }
 
     /**
-     * @param  list<string>  $labels lowercase
+     * @param  list<string>  $labels  lowercase
      * @return array{lp: ?int, name: ?int, qty: ?int, unit_price: ?int, line_total: ?int}
      */
     private function mapOfferColumns(array $labels): array
@@ -235,7 +237,7 @@ final class TenderDocxOfferFiller
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int, TenderItem>  $items
+     * @param  Collection<int, TenderItem>  $items
      */
     private function matchByName($items, string $name): ?TenderItem
     {

@@ -29,7 +29,7 @@ class TenderExportController extends Controller
         $rows = $this->offerExport->rows($tender);
         $tender->loadMissing(['client', 'owner']);
 
-        $sheet = new Spreadsheet();
+        $sheet = new Spreadsheet;
         $sh = $sheet->getActiveSheet();
         $sh->setTitle('Oferta');
         $sh->fromArray([

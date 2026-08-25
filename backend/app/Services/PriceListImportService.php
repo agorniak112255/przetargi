@@ -134,6 +134,7 @@ final class PriceListImportService
                     'sku' => null,
                     'name' => null,
                 ];
+
                 continue;
             }
             $sku = trim((string) ($row['sku'] ?? ''));
@@ -150,6 +151,7 @@ final class PriceListImportService
                     'sku' => $sku !== '' ? $sku : null,
                     'name' => $name !== '' ? $name : null,
                 ];
+
                 continue;
             }
             $discount = is_numeric($row['discount_percent'] ?? $row['discount'] ?? null)
@@ -551,6 +553,7 @@ final class PriceListImportService
             if ($parsed['status'] === 'skip') {
                 $skipped++;
                 $emptySkips++;
+
                 continue;
             }
             if ($parsed['status'] === 'error') {
@@ -564,6 +567,7 @@ final class PriceListImportService
                     'sku' => null,
                     'name' => null,
                 ];
+
                 continue;
             }
             $products[] = $parsed['product'];
@@ -605,6 +609,7 @@ final class PriceListImportService
             $sheet = $spreadsheet->getSheetByName($sheetName);
             if ($sheet === null) {
                 $errors[] = "Brak arkusza: {$sheetName}";
+
                 continue;
             }
 
@@ -617,6 +622,7 @@ final class PriceListImportService
             }
             if (! isset($map['name'], $map['catalog_price'])) {
                 $errors[] = "Arkusz {$sheetName}: niepełne mapowanie kolumn (wymagane: nazwa + cena)";
+
                 continue;
             }
 
@@ -637,6 +643,7 @@ final class PriceListImportService
                 $excelRow = $headerExcelRow + $index + 1;
                 if ($this->isHeaderLikeRow($row, $map, $headerLabels, $repeating)) {
                     $skipped++;
+
                     continue;
                 }
 
@@ -652,11 +659,13 @@ final class PriceListImportService
                 );
                 if ($parsed['status'] === 'skip') {
                     $skipped++;
+
                     continue;
                 }
                 if ($parsed['status'] === 'error') {
                     $errors[] = $parsed['message'] ?? "Wiersz {$excelRow}: błąd";
                     $skipped++;
+
                     continue;
                 }
 
@@ -708,11 +717,13 @@ final class PriceListImportService
                 foreach ($items as $item) {
                     $out[] = $this->finalizeProductCode($item['product'], null);
                 }
+
                 continue;
             }
 
             if (count($items) === 1) {
                 $out[] = $this->finalizeProductCode($items[0]['product'], null);
+
                 continue;
             }
 
@@ -730,6 +741,7 @@ final class PriceListImportService
                 // Kod = model (Reference), nie Article Number rozmiaru
                 $out[] = $this->finalizeProductCode($chosen, null);
                 $removed += count($items) - 1;
+
                 continue;
             }
 

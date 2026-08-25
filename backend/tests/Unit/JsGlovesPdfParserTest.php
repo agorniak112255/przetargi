@@ -11,7 +11,7 @@ final class JsGlovesPdfParserTest extends TestCase
 {
     public function test_parses_glued_prices(): void
     {
-        $text = <<<TXT
+        $text = <<<'TXT'
 Cennik hurtowy JS GLOVES - obowiązuje od 01/01/2019
 -24%
 JS GLOVES COMFORT Line - Wysoka odporność na przecięcie

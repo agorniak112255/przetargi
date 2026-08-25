@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -100,7 +101,8 @@ final class ProductImageCandidateVerifier
                         'label' => $image['url'],
                     ],
                     $loaded
-                )
+                ),
+                AiTask::ImageVerification
             );
         } catch (Throwable $e) {
             Log::warning('Product image AI verification failed', [

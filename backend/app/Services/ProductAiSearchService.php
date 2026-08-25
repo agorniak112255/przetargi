@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Product;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Search\ProductTextSearch;
 use App\Services\Vector\ProductVectorSearch;
@@ -63,16 +64,23 @@ final class ProductAiSearchService
      *     external_hint: array{url: string, title: string}|null
      * }
      */
-    public function search(string $query, int $limit = 40, bool $withExternalHint = true): array
-    {
+    public function search(
+        string $query,
+        int $limit = 40,
+        bool $withExternalHint = true,
+        AiTask $task = AiTask::ProductSearch
+    ): array {
         $query = trim($query);
         if ($query === '') {
             throw new RuntimeException('Podaj treść wymagania dla AI.');
         }
         $limit = max(1, min(80, $limit));
 
-        $intent = $this->understandRequirement($query);
-        $candidates = $this->keepCompatible($query, $this->retrieveCandidates($query, $intent, self::CANDIDATE_POOL));
+        $intent = $this->understandRequirement($query, $task);
+        $candidates = $this->keepCompatible(
+            $this->assortmentText($query, $intent['needed']),
+            $this->retrieveCandidates($query, $intent, self::CANDIDATE_POOL)
+        );
         $named = $candidates->filter(
             fn (Product $p): bool => $this->modelFuzzy->matches($query, $p)
         )->values();
@@ -94,7 +102,7 @@ final class ProductAiSearchService
             return $this->emptyResult($query, $intent, $withExternalHint, 'Brak kart z opisem w katalogu do porównania. Nie dodano produktu z internetu.');
         }
 
-        $ranked = $this->rankWithLlm($query, $candidates->take(self::RANK_CARDS)->values(), $limit, $intent['needed']);
+        $ranked = $this->rankWithLlm($query, $candidates->take(self::RANK_CARDS)->values(), $limit, $intent['needed'], $task);
         if ($ranked === []) {
             return $this->emptyResult($query, $intent, $withExternalHint, 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.');
         }
@@ -114,19 +122,24 @@ final class ProductAiSearchService
      * @param  Collection<int, Product>  $candidates
      * @return list<array<string, mixed>>
      */
-    public function rankCandidates(string $query, Collection $candidates, int $limit = 5, ?string $needed = null): array
-    {
+    public function rankCandidates(
+        string $query,
+        Collection $candidates,
+        int $limit = 5,
+        ?string $needed = null,
+        AiTask $task = AiTask::TenderMatch
+    ): array {
         if ($candidates->isEmpty()) {
             return [];
         }
 
-        return $this->rankWithLlm($query, $candidates->values(), max(1, min(80, $limit)), $needed);
+        return $this->rankWithLlm($query, $candidates->values(), max(1, min(80, $limit)), $needed, $task);
     }
 
     /**
      * @return array{needed: string, search_phrases: list<string>}
      */
-    public function understandRequirement(string $query): array
+    public function understandRequirement(string $query, AiTask $task = AiTask::ProductSearch): array
     {
         try {
             $raw = $this->llm->chatJson([
@@ -138,14 +151,16 @@ final class ProductAiSearchService
                         .'Cechy (siatkowa, nadruk) i normy EN dopiero na końcu. '
                         .'Przymiotnik wspólny nie zastępuje nazwy: kamizelka ≠ osłona twarzy; rękawy ≠ rękawice. '
                         .'Synonimy: obuwie/buty/trzewiki, kurtka/bluza ochronna. '
-                        .'Popraw literówki modelu (TEPM-ICE → TEMP-ICE). Nie klasyfikuj sztywną listą typów. '
+                        .'Popraw literówki — w modelu (TEPM-ICE → TEMP-ICE) i w nazwie produktu '
+                        .'(podnie → spodnie, rekawice → rękawice, kamizelaka → kamizelka). '
+                        .'needed i pierwsze frazy zawsze w poprawnej pisowni. Nie klasyfikuj sztywną listą typów. '
                         .'JSON: {"needed":"nazwa szukanego produktu","search_phrases":["najpierw nazwa","potem cechy/normy"]}.',
                 ],
                 [
                     'role' => 'user',
                     'content' => $query,
                 ],
-            ], null, 4000);
+            ], null, 4000, null, $task);
 
             return $this->parseIntent($raw, $query);
         } catch (Throwable) {
@@ -239,12 +254,13 @@ final class ProductAiSearchService
     private function retrieveCandidates(string $query, array $intent, int $limit): Collection
     {
         $searchText = $intent['needed'] !== '' ? $intent['needed'] : $query;
+        $requirement = $this->assortmentText($query, $intent['needed']);
         $codeHits = $this->retrieveByModelCode($query.' '.$searchText, $limit);
         $fuzzyHits = $this->retrieveByFuzzyModel($query.' '.$searchText, $limit);
         $priority = $this->uniqueProducts($fuzzyHits->concat($codeHits), $limit);
 
         if ($this->modelFuzzy->hasNamedModel($query) && $priority->isNotEmpty()) {
-            $namedPriority = $this->keepCompatible($query, $priority);
+            $namedPriority = $this->keepCompatible($requirement, $priority);
             if ($namedPriority->isNotEmpty()) {
                 return $namedPriority;
             }
@@ -253,7 +269,7 @@ final class ProductAiSearchService
         // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
         // bez trafienia we frazę, tylko niżej. Wcześniej wymagał tego skan całego katalogu
         // po stronie PHP; teraz warunek idzie do WHERE.
-        $family = $this->assortment->family($query);
+        $family = $this->assortment->family($requirement);
         $rankings = [
             'priority' => $priority->pluck('id')->map(intval(...))->all(),
             'text' => $this->textSearch->search($intent['search_phrases'], $family, self::TEXT_POOL),
@@ -277,7 +293,23 @@ final class ProductAiSearchService
             $limit * 2,
         );
 
-        return $this->keepCompatible($query, $this->hydrate($fused))->take($limit)->values();
+        return $this->keepCompatible($requirement, $this->hydrate($fused))->take($limit)->values();
+    }
+
+    /**
+     * Literówka w rzeczowniku ("podnie" zamiast "spodnie") zeruje rozpoznanie rodziny,
+     * a wraz z nim zawężenie do zgodnego asortymentu i bramkę kompatybilności.
+     * Gdy surowe wymaganie nie wskazuje rodziny, dokładamy nazwę odczytaną przez model —
+     * ta jest już po korekcie pisowni.
+     */
+    private function assortmentText(string $query, ?string $needed): string
+    {
+        $needed = trim((string) $needed);
+        if ($needed === '' || $needed === $query || $this->assortment->family($query) !== null) {
+            return $query;
+        }
+
+        return $needed.' '.$query;
     }
 
     /**
@@ -561,8 +593,13 @@ final class ProductAiSearchService
      * @param  Collection<int, Product>  $candidates
      * @return list<array<string, mixed>>
      */
-    private function rankWithLlm(string $query, Collection $candidates, int $limit, ?string $needed = null): array
-    {
+    private function rankWithLlm(
+        string $query,
+        Collection $candidates,
+        int $limit,
+        ?string $needed = null,
+        AiTask $task = AiTask::ProductSearch
+    ): array {
         $cards = $candidates->map(function (Product $p): array {
             $payload = is_array($p->enrichment_payload) ? $p->enrichment_payload : [];
 
@@ -579,6 +616,7 @@ final class ProductAiSearchService
             ];
         })->values()->all();
 
+        $requirement = $this->assortmentText($query, $needed);
         $neededLine = is_string($needed) && trim($needed) !== ''
             ? "\nSzukany produkt (z analizy):\n".trim($needed)
             : '';
@@ -595,6 +633,8 @@ final class ProductAiSearchService
                     .'Wspólna cecha (siatkowa) albo ta sama norma EN NIE wystarczy. '
                     .'2) Dopiero potem cechy, materiał, klasa i normy — tylko wśród kart z kroku 1. '
                     .'Marka/model z SIWZ wygrywa przy literówce (TEPM-ICE=TEMP-ICE); nie zmieniaj marki przez EN. '
+                    .'Literówka w wymaganiu nie dyskwalifikuje karty — nazwę czytaj z linii "Szukany produkt (z analizy)" '
+                    .'(podnie = spodnie, rekawice = rękawice). '
                     .'Brak zgodnej nazwy: {"matches":[]}. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}. '
                     .'score>=40 tylko przy zgodnej nazwie. Max '.$maxMatches.'. '
@@ -605,7 +645,7 @@ final class ProductAiSearchService
                 'role' => 'user',
                 'content' => "Wymaganie:\n{$query}{$neededLine}\n\nKarty katalogu:\n{$json}",
             ],
-        ], null, 8000);
+        ], null, 8000, null, $task);
 
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
         $byId = $candidates->keyBy('id');
@@ -622,7 +662,7 @@ final class ProductAiSearchService
             }
             /** @var Product $product */
             $product = $byId->get($id);
-            if (! $this->assortment->compatibleProduct($query, $product)) {
+            if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
             $row = $this->productToRow($product);

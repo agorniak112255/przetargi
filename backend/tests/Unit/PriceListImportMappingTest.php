@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\PriceListImportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use Tests\TestCase;
 
 final class PriceListImportMappingTest extends TestCase
@@ -50,7 +51,7 @@ final class PriceListImportMappingTest extends TestCase
         ];
 
         // jeśli nazwa arkusza inna — wykryj
-        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($path);
+        $spreadsheet = IOFactory::load($path);
         $mapping['sheets'][0]['sheet'] = $spreadsheet->getActiveSheet()->getTitle();
 
         $result = $service->importWithMapping($file, 'Lebon', 'demo', $user, $mapping, 'rekawice');
