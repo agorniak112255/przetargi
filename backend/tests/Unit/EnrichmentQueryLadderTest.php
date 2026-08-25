@@ -405,13 +405,29 @@ final class EnrichmentQueryLadderTest extends TestCase
                 'title' => 'Maska MT 212/2',
                 'snippet' => 'MASKPOL',
             ],
+            // sklep skraca oznaczenie w adresie, człon z wariantem zostaje w treści karty
+            [
+                'url' => 'https://www.bezpieczni112.pl/maska-mt-212-p-8.html',
+                'title' => 'MASKA MT 212',
+                'snippet' => '',
+            ],
+            [
+                'url' => 'https://www.bron.pl/maska-przeciwgazowa-maskpol-mt-213-2-cl2-mt-0213',
+                'title' => 'Maska przeciwgazowa MASKPOL MT 213/2',
+                'snippet' => '',
+            ],
         ];
 
         /** @var list<array{url: string, title: string, snippet: string}> $confirmed */
         $confirmed = $confirm->invoke($service, $hits, $product);
 
-        $this->assertCount(1, $confirmed);
-        $this->assertSame('https://www.maskpol.com.pl/maski/maska-mt-212-2', $confirmed[0]['url']);
+        $this->assertSame(
+            [
+                'https://www.maskpol.com.pl/maski/maska-mt-212-2',
+                'https://www.bezpieczni112.pl/maska-mt-212-p-8.html',
+            ],
+            array_column($confirmed, 'url')
+        );
     }
 
     public function test_open_search_starts_from_short_queries(): void

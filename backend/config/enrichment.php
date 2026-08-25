@@ -109,6 +109,8 @@ return [
         'pol-aura.pl',
         'gloves.co.uk',
         'thesafetysupplycompany.co.uk',
+        // karty masek i sprzętu MASKPOL, których wyszukiwarki nie indeksują
+        'bezpieczni112.pl',
     ],
 
     /*

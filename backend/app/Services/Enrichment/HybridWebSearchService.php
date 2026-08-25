@@ -350,7 +350,10 @@ class HybridWebSearchService
             $url = (string) ($row['url'] ?? '');
             $title = (string) ($row['title'] ?? '');
             $hay = mb_strtolower($url.' '.$title.' '.($row['snippet'] ?? ''));
+            // sklepy skracają oznaczenie w adresie („maska-mt-212” zamiast MT 212/2),
+            // więc wystarczy kod z rodziny naszego — obcy model nadal odpada
             if ($this->identity->hayHasProductCode($hay, $product)
+                || $this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
                 || $this->identity->hayHasNamePhrase($url.' '.$title, $product)) {
                 $out[] = $row;
             }
