@@ -289,40 +289,62 @@ final class PpeAssortment
         return true;
     }
 
-    public function compatibleProduct(string $requirement, Product $product): bool
+    /**
+     * Rodzina, do której produkt należy — niezależna od wymagania, więc da się ją
+     * policzyć raz przy zapisie i trzymać w indeksowanej kolumnie zamiast liczyć
+     * dla każdego wiersza przy każdym wyszukiwaniu.
+     */
+    public function productFamily(Product $product): ?string
     {
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
         $kat = is_string($attrs['kategoria_bhp'] ?? null) ? $attrs['kategoria_bhp'] : null;
 
-        $identity = trim(implode(' ', array_filter([
-            (string) $product->name,
-            (string) ($product->category ?? ''),
-        ])));
-        $full = trim(implode(' ', array_filter([
-            $identity,
-            (string) ($product->description ?? ''),
-            (string) ($product->norms ?? ''),
-        ])));
-
         // Nazwa i kategoria mówią, czym produkt JEST. Opis wymienia też akcesoria i
         // sąsiednie środki ochrony („kieszenie na nakolanniki” w spodniach), więc o
         // rodzinie decyduje dopiero wtedy, gdy tamte milczą.
-        $familyText = $this->family($identity) !== null ? $identity : $full;
+        $identity = $this->productIdentityText($product);
+        $familyText = $this->family($identity) !== null ? $identity : $this->productFullText($product);
 
+        return $this->resolveFamily($familyText, $kat);
+    }
+
+    public function compatibleProduct(string $requirement, Product $product): bool
+    {
         $reqFamily = $this->family($requirement);
         if ($reqFamily === null) {
             return true;
         }
-        $prodFamily = $this->resolveFamily($familyText, $kat);
+
+        $prodFamily = $product->ppe_family !== null && $product->ppe_family !== ''
+            ? (string) $product->ppe_family
+            : $this->productFamily($product);
+
         if ($prodFamily === null || $reqFamily !== $prodFamily) {
             return false;
         }
         if ($reqFamily === self::FAMILY_APPAREL) {
-            return $this->apparelCompatible($requirement, $full);
+            return $this->apparelCompatible($requirement, $this->productFullText($product));
         }
 
         return true;
+    }
+
+    private function productIdentityText(Product $product): string
+    {
+        return trim(implode(' ', array_filter([
+            (string) $product->name,
+            (string) ($product->category ?? ''),
+        ])));
+    }
+
+    private function productFullText(Product $product): string
+    {
+        return trim(implode(' ', array_filter([
+            $this->productIdentityText($product),
+            (string) ($product->description ?? ''),
+            (string) ($product->norms ?? ''),
+        ])));
     }
 
     private function apparelCompatible(string $req, string $prodText): bool

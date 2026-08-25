@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Support\ProductSearchBlob;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -46,6 +47,24 @@ class Product extends Model
         'pack_qty',
         'packaging',
     ];
+
+    /**
+     * Indeks wyszukiwania jest wyliczany, nie podawany z zewnątrz — przeliczamy go
+     * przy każdej zmianie pól źródłowych, żeby import, enrichment i Presta nie
+     * musiały o nim pamiętać osobno.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (self $product): void {
+            if ($product->exists && ! $product->isDirty(ProductSearchBlob::SOURCE_COLUMNS)) {
+                return;
+            }
+
+            foreach (app(ProductSearchBlob::class)->build($product) as $column => $value) {
+                $product->setAttribute($column, $value);
+            }
+        });
+    }
 
     protected function casts(): array
     {

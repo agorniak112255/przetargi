@@ -627,6 +627,146 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertStringNotContainsString('GLOVE-OFFTOPIC', $cards);
     }
 
+    public function test_grammage_written_differently_in_siwz_and_in_card_still_ranks_first(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        for ($i = 1; $i <= 40; $i++) {
+            Product::query()->create([
+                'sku' => 'PLAIN-'.$i,
+                'name' => 'SPODNIE ROBOCZE model '.$i,
+                'manufacturer' => 'Delta Plus',
+                'category' => 'Odzież robocza',
+                'description' => 'Spodnie robocze z poliestru i bawełny, kieszenie boczne.',
+                'catalog_price_net' => 100 + $i,
+                'purchase_price' => 70,
+                'stock' => 3,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        $heavy = Product::query()->create([
+            'sku' => 'HEAVY-250',
+            'name' => 'SPODNIE ROBOCZE Canis',
+            'manufacturer' => 'CANIS SAFETY',
+            'category' => 'Odzież robocza',
+            'description' => 'Spodnie robocze z tkaniny o gramaturze 250 g/m².',
+            'catalog_price_net' => 95,
+            'purchase_price' => 60,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $heavy): array {
+                $call++;
+                if ($call === 1) {
+                    // SIWZ pisze „250 gr”, karta „250 g/m²” — dosłownie nic się nie zgadza.
+                    return [
+                        'needed' => 'spodnie robocze gramatura 250 gr',
+                        'search_phrases' => ['spodnie', 'spodnie robocze', '250 gr'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $heavy->id, 'score' => 93, 'reason' => 'Gramatura 250 g/m²'],
+                ]];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'spodnie robocze gramatura 250 gr',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'HEAVY-250');
+
+        $this->assertSame('HEAVY-250', $this->firstCardSku($cards));
+    }
+
+    public function test_card_matching_only_in_enrichment_payload_reaches_the_model(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        for ($i = 1; $i <= 30; $i++) {
+            Product::query()->create([
+                'sku' => 'GEN-'.$i,
+                'name' => 'Rękawice robocze '.$i,
+                'manufacturer' => 'Inna',
+                'category' => 'Rękawice',
+                'description' => 'Rękawice robocze ogólnego przeznaczenia, numer '.$i.'.',
+                'catalog_price_net' => 5 + $i,
+                'purchase_price' => 3,
+                'stock' => 2,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        // Ani nazwa, ani opis nie mówią o amoniaku — wie o tym wyłącznie payload.
+        $chemical = Product::query()->create([
+            'sku' => 'CHEM-58',
+            'name' => 'Rękawice AlphaTec',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice chemiczne wielokrotnego użytku.',
+            'enrichment_payload' => [
+                'use_cases' => ['praca z amoniakiem'],
+                'materials' => ['butyl'],
+            ],
+            'catalog_price_net' => 40,
+            'purchase_price' => 25,
+            'stock' => 6,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $chemical): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        'needed' => 'rękawice do pracy z amoniakiem',
+                        'search_phrases' => ['rękawice', 'amoniak'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $chemical->id, 'score' => 95, 'reason' => 'Zastosowanie: amoniak'],
+                ]];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'rękawice do pracy z amoniakiem',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'CHEM-58');
+
+        $this->assertSame('CHEM-58', $this->firstCardSku($cards));
+    }
+
+    private function firstCardSku(?string $prompt): ?string
+    {
+        $this->assertNotNull($prompt);
+        $this->assertSame(1, preg_match('/Karty katalogu:\s*(\[.*\])\s*$/s', (string) $prompt, $m));
+
+        $cards = json_decode($m[1], true);
+        $this->assertIsArray($cards);
+        $this->assertNotEmpty($cards);
+
+        return is_string($cards[0]['sku'] ?? null) ? $cards[0]['sku'] : null;
+    }
+
     public function test_ai_search_rejects_face_shield_for_vest_even_if_model_scores_it(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

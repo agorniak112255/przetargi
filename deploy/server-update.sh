@@ -69,6 +69,11 @@ fi
 echo "==> migrate"
 "$PHP_BIN" artisan migrate --force
 
+# Po migracji dodającej search_blob kolumna jest pusta, a wyszukiwarka AI opiera się
+# na niej w całości. Komenda jest idempotentna (hash), więc kolejne deploye są tanie.
+echo "==> indeks wyszukiwania produktów"
+"$PHP_BIN" artisan products:rebuild-search-index || true
+
 echo "==> cache"
 "$PHP_BIN" artisan config:cache || true
 "$PHP_BIN" artisan route:cache || true

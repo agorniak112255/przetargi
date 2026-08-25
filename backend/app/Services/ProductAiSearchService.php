@@ -6,10 +6,11 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Search\ProductTextSearch;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\PpeAssortment;
-use App\Support\ProductFeatureMatch;
 use App\Support\ProductModelFuzzy;
+use App\Support\RrfFusion;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use RuntimeException;
@@ -17,16 +18,10 @@ use Throwable;
 
 final class ProductAiSearchService
 {
-    private const LIKE_NAME_POOL = 80;
+    /** Retrieval ma być szeroki — do puli dla modelu zawęża dopiero fuzja rang. */
+    private const TEXT_POOL = 300;
 
-    private const LIKE_DESCRIBED_POOL = 160;
-
-    /** Na każde dwa trafienia z LIKE wchodzi jedno wektorowe — co trzecie miejsce w puli. */
-    private const LIKE_PER_VECTOR = 2;
-
-    private const SCAN_CHUNK = 500;
-
-    private const SCAN_KEEP = 120;
+    private const VECTOR_POOL = 150;
 
     private const CANDIDATE_POOL = 80;
 
@@ -34,10 +29,12 @@ final class ProductAiSearchService
 
     private const MAX_MATCHES = 20;
 
-    /** Cecha podana wprost w SIWZ waży więcej niż sam rzeczownik z nazwy. */
-    private const WEIGHT_GRAMMAGE = 30;
+    /** Trafienie w kod modelu jest pewniejsze niż podobieństwo tekstu czy wektora. */
+    private const RRF_WEIGHT_PRIORITY = 3.0;
 
-    private const WEIGHT_NORM = 8;
+    private const RRF_WEIGHT_TEXT = 1.0;
+
+    private const RRF_WEIGHT_VECTOR = 1.0;
 
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
@@ -45,7 +42,8 @@ final class ProductAiSearchService
         private readonly ExternalCatalogHintService $externalHints,
         private readonly ProductModelFuzzy $modelFuzzy,
         private readonly PpeAssortment $assortment,
-        private readonly ProductFeatureMatch $features,
+        private readonly ProductTextSearch $textSearch,
+        private readonly RrfFusion $rrf,
     ) {}
 
     /**
@@ -246,103 +244,27 @@ final class ProductAiSearchService
             }
         }
 
-        // Pełny przegląd zgodnego asortymentu; LIKE zostaje tylko wtedy, gdy nie da się
-        // rozpoznać rodzaju środka ochrony i nie ma czego przeskanować.
-        $scanHits = $this->retrieveAssortmentScan($query, $intent);
-        $textHits = $scanHits->isNotEmpty()
-            ? $scanHits
-            : $this->keepCompatible($query, $this->retrieveLike($intent['search_phrases'], $limit));
+        // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
+        // bez trafienia we frazę, tylko niżej. Wcześniej wymagał tego skan całego katalogu
+        // po stronie PHP; teraz warunek idzie do WHERE.
+        $family = $this->assortment->family($query);
+        $rankings = [
+            'priority' => $priority->pluck('id')->map(intval(...))->all(),
+            'text' => $this->textSearch->search($intent['search_phrases'], $family, self::TEXT_POOL),
+            'vector' => $this->retrieveVectorIds($searchText, self::VECTOR_POOL),
+        ];
 
-        // Filtr asortymentu przed obcięciem puli — inaczej niezgodne karty zajmują
-        // miejsca, które i tak zaraz stracą.
-        $vectorHits = $this->keepCompatible($query, $this->retrieveVector($searchText, max($limit, 80)));
-
-        return $this->mergeCandidates(
-            $this->keepCompatible($query, $priority),
-            $textHits,
-            $vectorHits,
-            $limit,
+        $fused = $this->rrf->fuse(
+            $rankings,
+            [
+                'priority' => self::RRF_WEIGHT_PRIORITY,
+                'text' => self::RRF_WEIGHT_TEXT,
+                'vector' => self::RRF_WEIGHT_VECTOR,
+            ],
+            $limit * 2,
         );
-    }
 
-    /**
-     * Przegląda cały katalog w obrębie rozpoznanej rodziny i kroju — wszystkie spodnie,
-     * a nie te, które akurat trafiły we frazę. Punktacja jedynie porządkuje wynik, więc
-     * karta z cechą, której nie było w zapytaniu, też ma szansę dojść do modelu.
-     *
-     * @param  array{needed: string, search_phrases: list<string>}  $intent
-     * @return Collection<int, Product>
-     */
-    private function retrieveAssortmentScan(string $query, array $intent): Collection
-    {
-        if ($this->assortment->family($query) === null) {
-            return collect();
-        }
-
-        $phrases = array_slice(array_values(array_filter(
-            $intent['search_phrases'],
-            static fn (string $p): bool => mb_strlen($p) >= 3
-        )), 0, 14);
-
-        $scored = [];
-        Product::query()
-            ->select([
-                'id', 'sku', 'name', 'manufacturer', 'category', 'norms',
-                'description', 'enrichment_payload', 'enrichment_status',
-            ])
-            ->chunkById(self::SCAN_CHUNK, function (Collection $chunk) use ($query, $phrases, &$scored): void {
-                foreach ($chunk as $product) {
-                    if (! $product instanceof Product
-                        || ! $this->assortment->compatibleProduct($query, $product)) {
-                        continue;
-                    }
-                    $scored[(int) $product->id] = $this->localScore($query, $product, $phrases);
-                }
-            });
-
-        if ($scored === []) {
-            return collect();
-        }
-
-        arsort($scored);
-
-        return $this->hydrate(array_slice(array_keys($scored), 0, self::SCAN_KEEP));
-    }
-
-    /**
-     * @param  list<string>  $phrases
-     */
-    private function localScore(string $query, Product $product, array $phrases): int
-    {
-        $identity = mb_strtolower((string) $product->name.' '.(string) $product->sku);
-        $text = $identity.' '.mb_strtolower(implode(' ', [
-            (string) ($product->manufacturer ?? ''),
-            (string) ($product->category ?? ''),
-            (string) ($product->norms ?? ''),
-            (string) ($product->description ?? ''),
-            json_encode($product->enrichment_payload ?? [], JSON_UNESCAPED_UNICODE) ?: '',
-        ]));
-
-        $count = count($phrases);
-        $score = 0;
-        $hits = 0;
-        foreach ($phrases as $i => $term) {
-            $weight = $count - $i;
-            $term = mb_strtolower($term);
-            if (str_contains($text, $term)) {
-                $hits++;
-                $score += $weight;
-            }
-            if (str_contains($identity, $term)) {
-                $score += $weight;
-            }
-        }
-
-        $overlap = $this->features->overlap($query, $text);
-        $score += $overlap['grammage'] * self::WEIGHT_GRAMMAGE;
-        $score += $overlap['norms'] * self::WEIGHT_NORM;
-
-        return $score + $hits * $hits;
+        return $this->keepCompatible($query, $this->hydrate($fused))->take($limit)->values();
     }
 
     /**
@@ -355,7 +277,7 @@ final class ProductAiSearchService
             return collect();
         }
 
-        $byId = $this->likeBaseQuery()->whereIn('id', $ids)->get()->keyBy('id');
+        $byId = $this->productBaseQuery()->whereIn('id', $ids)->get()->keyBy('id');
         $out = collect();
         foreach ($ids as $id) {
             $product = $byId->get($id);
@@ -365,64 +287,6 @@ final class ProductAiSearchService
         }
 
         return $out->values();
-    }
-
-    /**
-     * LIKE szuka dosłownie, więc „250gr” nie trafi w „250 g/m²” — po cechach z opisu
-     * potrafi szukać tylko warstwa wektorowa. Doklejana na końcu nigdy nie mieściła się
-     * w limicie, dlatego wchodzi przeplotem: co trzecie miejsce należy do wektora.
-     * Kolejność ma znaczenie, bo do modelu trafia tylko początek tej listy.
-     *
-     * @param  Collection<int, Product>  $priority
-     * @param  Collection<int, Product>  $likeHits
-     * @param  Collection<int, Product>  $vectorHits
-     * @return Collection<int, Product>
-     */
-    private function mergeCandidates(
-        Collection $priority,
-        Collection $likeHits,
-        Collection $vectorHits,
-        int $limit,
-    ): Collection {
-        $seen = [];
-        $out = [];
-
-        foreach ($priority as $product) {
-            if ($product instanceof Product && ! isset($seen[$product->id]) && count($out) < $limit) {
-                $seen[$product->id] = true;
-                $out[] = $product;
-            }
-        }
-
-        $unique = static function (Collection $products) use (&$seen): array {
-            $list = [];
-            foreach ($products as $product) {
-                if ($product instanceof Product && ! isset($seen[$product->id])) {
-                    $seen[$product->id] = true;
-                    $list[] = $product;
-                }
-            }
-
-            return $list;
-        };
-
-        $like = $unique($likeHits);
-        $vector = $unique($vectorHits);
-        $likeCount = count($like);
-        $vectorCount = count($vector);
-        $li = 0;
-        $vi = 0;
-
-        while (count($out) < $limit && ($li < $likeCount || $vi < $vectorCount)) {
-            for ($k = 0; $k < self::LIKE_PER_VECTOR && $li < $likeCount && count($out) < $limit; $k++) {
-                $out[] = $like[$li++];
-            }
-            if ($vi < $vectorCount && count($out) < $limit) {
-                $out[] = $vector[$vi++];
-            }
-        }
-
-        return collect($out);
     }
 
     /**
@@ -448,9 +312,7 @@ final class ProductAiSearchService
             return collect();
         }
 
-        $q = Product::query()
-            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
-            ->withCount(['substitutes', 'images']);
+        $q = $this->productBaseQuery();
 
         $q->where(function ($outer) use ($codes): void {
             foreach ($codes as $code) {
@@ -471,9 +333,7 @@ final class ProductAiSearchService
     private function retrieveByFuzzyModel(string $query, int $limit): Collection
     {
         $brands = $this->modelFuzzy->manufacturerHints($query);
-        $q = Product::query()
-            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
-            ->withCount(['substitutes', 'images']);
+        $q = $this->productBaseQuery();
 
         if ($brands !== []) {
             $q->where(function ($outer) use ($brands): void {
@@ -619,191 +479,36 @@ final class ProductAiSearchService
     }
 
     /**
-     * @return Collection<int, Product>
+     * Sam ranking id — o zgodności rodziny i o miejscu w puli decyduje dopiero fuzja,
+     * więc odsiewanie kart bez opisu na tym etapie tylko gubiłoby trafienia.
+     *
+     * @return list<int>
      */
-    private function retrieveVector(string $query, int $limit): Collection
+    private function retrieveVectorIds(string $query, int $limit): array
     {
         if (! $this->vectorSearch->enabled()) {
-            return collect();
-        }
-
-        $hits = $this->vectorSearch->similar($query, max($limit, 80));
-        if ($hits === []) {
-            return collect();
+            return [];
         }
 
         $ids = [];
-        foreach ($hits as $hit) {
+        foreach ($this->vectorSearch->similar($query, $limit) as $hit) {
             $id = (int) ($hit['id'] ?? 0);
             if ($id > 0) {
                 $ids[] = $id;
             }
         }
-        $ids = array_values(array_unique($ids));
-        if ($ids === []) {
-            return collect();
-        }
 
-        $byId = Product::query()
-            ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
-            ->withCount(['substitutes', 'images'])
-            ->whereIn('id', $ids)
-            ->get()
-            ->keyBy('id');
-
-        $ordered = collect();
-        foreach ($ids as $id) {
-            $product = $byId->get($id);
-            if (! $product instanceof Product || ! $product->hasUsableDescription()) {
-                continue;
-            }
-            $ordered->push($product);
-            if ($ordered->count() >= $limit) {
-                break;
-            }
-        }
-
-        return $ordered->values();
-    }
-
-    /**
-     * @param  list<string>  $phrases
-     * @return Collection<int, Product>
-     */
-    private function retrieveLike(array $phrases, int $limit): Collection
-    {
-        $phrases = array_values(array_filter(
-            $phrases,
-            static fn (string $p): bool => mb_strlen($p) >= 3
-        ));
-        if ($phrases === []) {
-            return collect();
-        }
-
-        $terms = array_slice($phrases, 0, 14);
-        $pool = $this->uniqueProducts(
-            $this->likeByNameOrSku($terms)->concat($this->likeByDescribedFields($terms)),
-            self::LIKE_NAME_POOL + self::LIKE_DESCRIBED_POOL,
-        );
-        if ($pool->isEmpty()) {
-            return collect();
-        }
-
-        $count = count($phrases);
-
-        return $pool->map(function (Product $p) use ($phrases, $count): array {
-            $identity = mb_strtolower((string) $p->name.' '.(string) $p->sku);
-            $hay = $identity.' '.mb_strtolower(implode(' ', [
-                (string) $p->category,
-                (string) ($p->norms ?? ''),
-                (string) ($p->description ?? ''),
-                json_encode($p->enrichment_payload ?? [], JSON_UNESCAPED_UNICODE) ?: '',
-            ]));
-            $hits = 0;
-            $score = 0;
-            $identityScore = 0;
-            foreach ($phrases as $i => $term) {
-                // Intent zwraca nazwę produktu w pierwszych frazach, cechy i normy na końcu.
-                $weight = $count - $i;
-                $term = mb_strtolower($term);
-                if (str_contains($hay, $term)) {
-                    $hits++;
-                    $score += $weight;
-                }
-                if (str_contains($identity, $term)) {
-                    $identityScore += $weight;
-                }
-            }
-
-            // Nazwa liczy się podwójnie, ale nie przebija karty, która spełnia więcej
-            // wymagań naraz — cechy, normy i gramatura z opisu muszą realnie ważyć.
-            return [
-                'product' => $p,
-                'hits' => $hits,
-                'rank' => $score + $identityScore + $hits * $hits,
-            ];
-        })
-            ->filter(static fn (array $row): bool => $row['hits'] >= 1)
-            ->sortByDesc(static fn (array $row): int => $row['rank'])
-            ->take($limit)
-            ->pluck('product')
-            ->values();
-    }
-
-    /**
-     * Trafienie w nazwę lub SKU jest wystarczająco mocne, żeby pominąć wymóg opisu.
-     *
-     * @param  list<string>  $terms
-     * @return Collection<int, Product>
-     */
-    private function likeByNameOrSku(array $terms): Collection
-    {
-        return $this->likeBaseQuery()
-            ->where(function ($outer) use ($terms): void {
-                foreach ($terms as $term) {
-                    $like = '%'.addcslashes($term, '%_\\').'%';
-                    $outer->orWhere('name', 'like', $like)
-                        ->orWhere('sku', 'like', $like);
-                }
-            })
-            ->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
-            ->orderByDesc('enriched_at')
-            ->limit(self::LIKE_NAME_POOL)
-            ->get();
-    }
-
-    /**
-     * Trafienie w opis, normy czy kategorię jest słabe — tylko karty z opisem.
-     *
-     * @param  list<string>  $terms
-     * @return Collection<int, Product>
-     */
-    private function likeByDescribedFields(array $terms): Collection
-    {
-        $q = $this->likeBaseQuery();
-        $this->constrainToDescribed($q);
-
-        return $q->where(function ($outer) use ($terms): void {
-            foreach ($terms as $term) {
-                $like = '%'.addcslashes($term, '%_\\').'%';
-                $outer->orWhere(function ($w) use ($like): void {
-                    $w->where('manufacturer', 'like', $like)
-                        ->orWhere('description', 'like', $like)
-                        ->orWhere('norms', 'like', $like)
-                        ->orWhere('category', 'like', $like)
-                        ->orWhere('enrichment_payload', 'like', $like);
-                });
-            }
-        })
-            ->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
-            ->orderByDesc('enriched_at')
-            ->limit(self::LIKE_DESCRIBED_POOL)
-            ->get();
+        return array_values(array_unique($ids));
     }
 
     /**
      * @return Builder<Product>
      */
-    private function likeBaseQuery()
+    private function productBaseQuery()
     {
         return Product::query()
             ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
             ->withCount(['substitutes', 'images']);
-    }
-
-    /**
-     * @param  Builder<Product>  $q
-     */
-    private function constrainToDescribed($q): void
-    {
-        $q->where(function ($w): void {
-            $w->where('enrichment_status', Product::ENRICHMENT_DONE)
-                ->orWhere(function ($d): void {
-                    $d->whereNotNull('description')
-                        ->where('description', '!=', '')
-                        ->whereRaw('LENGTH(TRIM(description)) >= 24');
-                });
-        });
     }
 
     /**

@@ -260,6 +260,80 @@ final class ProductVectorSearchApiTest extends TestCase
         $this->assertStringContainsString('CXS STRETCH', $cards);
     }
 
+    public function test_vector_hit_without_description_is_no_longer_dropped(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'vector_enabled' => true,
+            'qdrant_url' => 'http://qdrant.test:6333',
+            'qdrant_collection' => 'products',
+            'embedding_model' => 'text-embedding-3-small',
+        ]);
+
+        // Karta jest w Qdrancie, więc miała co zaindeksować; brak kolumny `description`
+        // nie może jej wykluczać z puli, bo o treści decyduje payload i nazwa.
+        $bare = Product::query()->create([
+            'sku' => '58-270',
+            'name' => 'AlphaTec 58-270',
+            'manufacturer' => 'Ansell',
+            'description' => null,
+            'catalog_price_net' => 30,
+            'purchase_price' => 20,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+
+        Http::fake([
+            'api.openai.com/v1/embeddings' => Http::response([
+                'data' => [['embedding' => array_fill(0, 8, 0.1)]],
+            ], 200),
+            'qdrant.test:6333/collections/products' => Http::response(['result' => ['status' => 'green']], 200),
+            'qdrant.test:6333/collections/products/points/search' => Http::response([
+                'result' => [['id' => $bare->id, 'score' => 0.93]],
+            ], 200),
+        ]);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $bare): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        // Fraza celowo nietrafiona w tekst, a zapytanie bez nazwy rodziny —
+                        // jedynym źródłem kandydata zostaje wektor.
+                        'needed' => 'ochrona dloni przed amoniakiem',
+                        'search_phrases' => ['zzz-brak-takiej-frazy'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $bare->id, 'score' => 90, 'reason' => 'Trafienie wektorowe'],
+                ]];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'ochrona dloni przed amoniakiem',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', '58-270');
+
+        $this->assertNotNull($cards);
+        $this->assertStringContainsString('58-270', $cards);
+    }
+
     public function test_test_vector_endpoint_pings_qdrant_and_embeddings(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
