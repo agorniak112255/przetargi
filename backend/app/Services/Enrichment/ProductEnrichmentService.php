@@ -1491,10 +1491,8 @@ final class ProductEnrichmentService
     {
         $hay = mb_strtolower($description);
 
-        foreach ($this->identityCodes($product) as $code) {
-            if ($this->hayHasToken($hay, $code)) {
-                return true;
-            }
+        if ($this->identity->hayHasProductCode($hay, $product)) {
+            return true;
         }
 
         $tokens = $this->discriminativeNameTokens($product);
@@ -1521,30 +1519,6 @@ final class ProductEnrichmentService
         }
 
         return false;
-    }
-
-    /**
-     * Kody, których obecność w tekście przesądza sprawę.
-     *
-     * @return list<string>
-     */
-    private function identityCodes(Product $product): array
-    {
-        $codes = [];
-        $sku = trim((string) $product->sku);
-        if ($sku !== '' && ! $this->identity->looksLikeInternalSku($product)) {
-            $codes[] = $sku;
-        }
-        foreach ([$this->identity->internalSkuCore($product), $this->identity->gloveCodeCore($product)] as $code) {
-            if (is_string($code) && mb_strlen($code) >= 4) {
-                $codes[] = $code;
-            }
-        }
-        foreach ($this->identity->skuSizeVariants($product) as $variant) {
-            $codes[] = $variant;
-        }
-
-        return array_values(array_unique(array_map('mb_strtolower', $codes)));
     }
 
     /**

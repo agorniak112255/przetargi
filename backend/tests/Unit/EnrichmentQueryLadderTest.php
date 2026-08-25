@@ -14,7 +14,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 {
     public function test_shortest_query_is_sku_with_manufacturer(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $queries = $identity->primaryQueries(new Product([
             'manufacturer' => 'Urgent',
             'sku' => 'URG-914',
@@ -27,7 +27,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_house_code_with_short_number_searches_by_name_and_brand_first(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $product = new Product([
             'manufacturer' => 'URGENT',
             'sku' => 'PROS-121-S1-GUMA',
@@ -45,7 +45,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_internal_sku_core_is_used_as_query(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $product = new Product([
             'manufacturer' => 'Urgent',
             'sku' => 'URG-C-SPODNIE',
@@ -63,7 +63,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_internal_sku_is_not_used_as_query(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $queries = $identity->primaryQueries(new Product([
             'manufacturer' => 'Urgent',
             'sku' => 'URG-HSV-WOR-BLUZA',
@@ -78,7 +78,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_descriptive_sku_matches_by_brand_and_name(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $product = new Product([
             'manufacturer' => 'Urgent',
             'sku' => 'SKARPETY-POMARANCZ-ZOLTE',
@@ -98,7 +98,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_two_word_descriptive_sku_is_internal_but_short_code_is_not(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
 
         $this->assertTrue($identity->looksLikeInternalSku(new Product([
             'manufacturer' => 'Urgent',
@@ -114,7 +114,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_model_name_from_sku_is_required_on_page(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $product = new Product([
             'manufacturer' => 'Rostaing',
             'sku' => 'COUPURE-IT11',
@@ -136,7 +136,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_model_glued_with_size_is_searched_without_the_size(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $product = new Product([
             'manufacturer' => 'Rostaing',
             'sku' => 'ERGOPRIMA45',
@@ -153,7 +153,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_french_size_marker_is_not_part_of_the_model_name(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
 
         $this->assertSame('BLACKTACTILTOUCH', $identity->internalSkuCore(new Product([
             'manufacturer' => 'Rostaing',
@@ -175,7 +175,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_size_suffix_gives_searchable_code_variants(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
 
         $this->assertContains('BLACKSTICK30', $identity->skuSizeVariants(new Product([
             'manufacturer' => 'Rostaing',
@@ -216,7 +216,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_page_with_model_without_size_matches_when_brand_present(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $product = new Product([
             'manufacturer' => 'Rostaing',
             'sku' => 'BLACK-FITT10',
@@ -240,7 +240,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_short_name_matches_as_whole_phrase_with_brand(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $product = new Product([
             'manufacturer' => 'Rostaing',
             'sku' => 'BLACK-FITT06',
@@ -260,7 +260,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_catalog_number_with_long_digits_keeps_full_code(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
 
         $this->assertSame('', $identity->internalSkuCore(new Product([
             'manufacturer' => 'ATG',
@@ -271,7 +271,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_word_like_sku_needs_brand_on_page(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $product = new Product([
             'manufacturer' => 'Rostaing',
             'sku' => 'CASQUE',
@@ -287,6 +287,39 @@ final class EnrichmentQueryLadderTest extends TestCase
             'https://sklep.example/rostaing-casque Rostaing casque',
             $product
         ));
+    }
+
+    public function test_catalog_index_hit_without_product_code_does_not_stop_web_search(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'MASKPOL',
+            'sku' => 'MT-212-2',
+            'name' => 'Maska MT 212/2',
+            'category' => 'Maski',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $confirm = $ref->getMethod('confirmedCatalogHits');
+        $confirm->setAccessible(true);
+
+        $hits = [
+            [
+                'url' => 'https://www.maskpol.com.pl/filtropochlaniacze/filtropochlaniacz-fp-211-1-p3-w-me-ts',
+                'title' => 'Filtropochłaniacz FP 211/1-P3/W-ME/TS',
+                'snippet' => 'MASKPOL',
+            ],
+            [
+                'url' => 'https://www.maskpol.com.pl/maski/maska-mt-212-2',
+                'title' => 'Maska MT 212/2',
+                'snippet' => 'MASKPOL',
+            ],
+        ];
+
+        /** @var list<array{url: string, title: string, snippet: string}> $confirmed */
+        $confirmed = $confirm->invoke($service, $hits, $product);
+
+        $this->assertCount(1, $confirmed);
+        $this->assertSame('https://www.maskpol.com.pl/maski/maska-mt-212-2', $confirmed[0]['url']);
     }
 
     public function test_open_search_starts_from_short_queries(): void
@@ -314,7 +347,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
     public function test_hi_vis_jacket_is_not_waterproof_clothing(): void
     {
-        $identity = new ProductSearchIdentity();
+        $identity = new ProductSearchIdentity;
         $phrase = $identity->productNameWithManufacturer(new Product([
             'manufacturer' => 'Urgent',
             'sku' => 'URG-914',

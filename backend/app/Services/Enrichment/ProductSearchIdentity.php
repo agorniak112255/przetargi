@@ -93,6 +93,7 @@ final class ProductSearchIdentity
         if ($this->imageUrlMentionsProduct($url, $product)) {
             return true;
         }
+
         // uvex/Ansell CDN galerii — tylko typowe ścieżki mediów produktu (bez słowa „product” w dowolnym sklepie)
         return $this->looksLikeManufacturerGalleryUrl($url, $product);
     }
@@ -215,7 +216,6 @@ final class ProductSearchIdentity
             || str_contains($u, 'large_default');
     }
 
-
     /**
      * NB27 w URL z NB27B/NB27S — to inny wariant, nie substring match.
      */
@@ -284,6 +284,7 @@ final class ProductSearchIdentity
         if ($compact === '' || mb_strlen($compact) < 3) {
             return false;
         }
+
         // litery i cyfry (NB27, C300) — nie same litery (rubiflex) ani same cyfry (60544)
         return preg_match('/[a-z]/u', $compact) === 1
             && preg_match('/\d/u', $compact) === 1;
@@ -799,6 +800,72 @@ final class ProductSearchIdentity
     }
 
     /**
+     * Kody, których obecność w tekście przesądza o tożsamości produktu.
+     *
+     * @return list<string>
+     */
+    public function productCodes(Product $product): array
+    {
+        $codes = [];
+        $sku = trim((string) $product->sku);
+        if ($sku !== '' && ! $this->looksLikeInternalSku($product)) {
+            $codes[] = $sku;
+        }
+        foreach ([$this->internalSkuCore($product), $this->gloveCodeCore($product)] as $code) {
+            if (is_string($code) && mb_strlen($code) >= 4) {
+                $codes[] = $code;
+            }
+        }
+        foreach ($this->skuSizeVariants($product) as $variant) {
+            $codes[] = $variant;
+        }
+
+        return array_values(array_unique(array_map('mb_strtolower', $codes)));
+    }
+
+    public function hayHasProductCode(string $hay, Product $product): bool
+    {
+        foreach ($this->productCodes($product) as $code) {
+            if ($this->codeInText($hay, $code)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Kod z separatorem pisze się wszędzie inaczej: nasz „MT-212-2” to w sieci
+     * „MT 212/2”, „MT212/2” albo „MT 212-2”. Dopasowanie ignoruje separatory,
+     * ale nie pozwala skleić dwóch członów liczbowych („212” + „2” ≠ „2122”).
+     */
+    public function codeInText(string $hay, string $code): bool
+    {
+        $pattern = $this->codePattern($code);
+
+        return $pattern !== null && preg_match($pattern, $hay) === 1;
+    }
+
+    private function codePattern(string $code): ?string
+    {
+        $chunks = preg_split('/[^\p{L}\d]+/u', mb_strtolower(trim($code)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if ($chunks === [] || mb_strlen(implode('', $chunks)) < 3) {
+            return null;
+        }
+
+        $parts = [];
+        foreach ($chunks as $i => $chunk) {
+            if ($i > 0) {
+                $glued = preg_match('/^\d+$/u', $chunks[$i - 1]) === 1 && preg_match('/^\d+$/u', $chunk) === 1;
+                $parts[] = $glued ? '[\s\-\/\\\\._]+' : '[\s\-\/\\\\._]*';
+            }
+            $parts[] = preg_quote($chunk, '/');
+        }
+
+        return '/(?<![\p{L}\d])'.implode('', $parts).'(?![\p{L}\d])/iu';
+    }
+
+    /**
      * Czy w tekście stoi marka produktu. Bez niej sam kod „1202” trafia w Apollo 11
      * albo w szerokość miniatury, a nie w rękawice Urgent.
      */
@@ -892,6 +959,7 @@ final class ProductSearchIdentity
         if ($token === '' || $hay === '') {
             return false;
         }
+
         // po kodzie nie może być cyfra ani litera jednostki (g/kg/ml…)
         return preg_match(
             '/(?<![0-9])'.preg_quote($token, '/').'(?![0-9a-z])/iu',

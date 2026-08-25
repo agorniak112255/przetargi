@@ -306,4 +306,39 @@ final class ProductSearchIdentityTest extends TestCase
             $product
         ));
     }
+
+    public function test_code_matches_regardless_of_separators(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'MT-212-2',
+            'name' => 'Maska MT 212/2',
+            'manufacturer' => 'MASKPOL',
+            'category' => 'Maski',
+        ]);
+
+        $this->assertTrue($id->hayHasProductCode('głównym zadaniem maski mt 212/2 jest ochrona', $product));
+        $this->assertTrue($id->hayHasProductCode('maska mt212/2 maskpol', $product));
+        $this->assertTrue($id->hayHasProductCode('maskpol.com.pl/maski/maska-mt-212-2', $product));
+        // dwa człony liczbowe bez separatora to już inny kod
+        $this->assertFalse($id->codeInText('maska mt 2122 maskpol', 'MT-212-2'));
+        // wariant bez ostatniego członu bywa innym modelem
+        $this->assertFalse($id->hayHasProductCode('maska mt 212 maskpol', $product));
+    }
+
+    public function test_code_match_does_not_swallow_longer_neighbour_codes(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'MT-212-2',
+            'name' => 'Maska MT 212/2',
+            'manufacturer' => 'MASKPOL',
+        ]);
+
+        $this->assertFalse($id->hayHasProductCode(
+            'filtropochłaniacz fp 211/1-p3/w-me/ts maskpol',
+            $product
+        ));
+        $this->assertFalse($id->hayHasProductCode('maska mt 212/23 maskpol', $product));
+    }
 }

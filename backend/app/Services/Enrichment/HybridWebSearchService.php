@@ -71,7 +71,7 @@ class HybridWebSearchService
         if ($this->settings->enrichmentUsesLargeModel()) {
             return $this->searchViaLargeModel($product, $phase, $queries);
         }
-        $catalogHits = $this->catalogHits($product);
+        $catalogHits = $this->confirmedCatalogHits($this->catalogHits($product), $product);
         if ($this->hasEnoughPageResults($catalogHits, 1)) {
             return [
                 'results' => array_slice($catalogHits, 0, 8),
@@ -137,7 +137,7 @@ class HybridWebSearchService
      */
     private function searchViaLargeModel(Product $product, string $phase, array $queries): array
     {
-        $catalogHits = $this->catalogHits($product);
+        $catalogHits = $this->confirmedCatalogHits($this->catalogHits($product), $product);
         if ($this->hasEnoughPageResults($catalogHits, 1)) {
             return [
                 'results' => array_slice($catalogHits, 0, 8),
@@ -332,6 +332,30 @@ class HybridWebSearchService
      *
      * @param  list<array{url: string, title: string, snippet: string}>  $results
      */
+    /**
+     * Trafienie z indeksu ucina szukanie w sieci, więc musi nieść kod produktu
+     * albo pełną nazwę. Sama marka wpuszczała inny model z tej samej domeny —
+     * „maskpol” siedzi w adresie każdej strony producenta.
+     *
+     * @param  list<array{url: string, title: string, snippet: string}>  $hits
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function confirmedCatalogHits(array $hits, Product $product): array
+    {
+        $out = [];
+        foreach ($hits as $row) {
+            $url = (string) ($row['url'] ?? '');
+            $title = (string) ($row['title'] ?? '');
+            $hay = mb_strtolower($url.' '.$title.' '.($row['snippet'] ?? ''));
+            if ($this->identity->hayHasProductCode($hay, $product)
+                || $this->identity->hayHasNamePhrase($url.' '.$title, $product)) {
+                $out[] = $row;
+            }
+        }
+
+        return $out;
+    }
+
     private function hasEnoughPageResults(array $results, int $threshold): bool
     {
         $pages = 0;
@@ -716,7 +740,7 @@ class HybridWebSearchService
             $hay = mb_strtolower($url.' '.$title.' '.$snippet);
             $hasCode = false;
             foreach ($codes as $code) {
-                if (preg_match('/(?<![a-z0-9])'.preg_quote($code, '/').'(?![a-z0-9])/u', $hay) === 1) {
+                if ($this->identity->codeInText($hay, $code)) {
                     $hasCode = true;
                     break;
                 }
