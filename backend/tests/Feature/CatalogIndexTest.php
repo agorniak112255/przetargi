@@ -192,6 +192,23 @@ final class CatalogIndexTest extends TestCase
         $this->assertCount(1, $hits);
     }
 
+    public function test_finds_page_where_shop_shortened_the_code(): void
+    {
+        $this->seedPage('https://www.bezpieczni112.pl/maska-mt-212-p-8.html');
+        $this->seedPage('https://www.bezpieczni112.pl/maska-mt-213-2-p-9.html');
+
+        $product = new Product([
+            'sku' => 'MT-212-2',
+            'name' => 'Maska MT 212/2',
+            'manufacturer' => 'MASKPOL',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+
+        $this->assertSame('https://www.bezpieczni112.pl/maska-mt-212-p-8.html', $hits[0]['url'] ?? null);
+        $this->assertCount(1, $hits);
+    }
+
     public function test_prefers_page_with_brand_when_code_matches_twice(): void
     {
         $this->seedPage('https://sklep-a.pl/lampka-1202');
