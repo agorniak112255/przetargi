@@ -144,8 +144,9 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
           <Stat
             label={
               report.vector.pending_jobs > 0
-                ? `Wektory (indeksuje się, w kolejce ${report.vector.pending_jobs})`
-                : 'Wektory'
+                ? // kolejka jest wspólna dla całego katalogu, licznik dotyczy filtra
+                  `Wektory${manufacturerFilter ? ` (${manufacturerFilter})` : ''} — indeksuje się, w kolejce ${report.vector.pending_jobs} z całego katalogu`
+                : `Wektory${manufacturerFilter ? ` (${manufacturerFilter})` : ''}`
             }
             value={report.vector.indexed}
           />
