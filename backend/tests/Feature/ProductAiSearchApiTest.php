@@ -442,6 +442,73 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertStringContainsString('KOMINIARKA Z POLARU POLIESTRU', $cards);
     }
 
+    public function test_ai_search_ranks_card_matching_description_details_over_name_only_hits(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        for ($i = 1; $i <= 40; $i++) {
+            Product::query()->create([
+                'sku' => 'MACH-'.$i,
+                'name' => 'SPODNIE MACH '.$i.' Z POLIESTRU I BAWEŁNY',
+                'manufacturer' => 'Delta Plus',
+                'category' => 'Odzież robocza',
+                'description' => 'Spodnie robocze Mach '.$i.' z poliestru i bawełny, kieszenie boczne.',
+                'catalog_price_net' => 100 + $i,
+                'purchase_price' => 70,
+                'stock' => 3,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        $cxs = Product::query()->create([
+            'sku' => 'CXS-STRETCH',
+            'name' => 'CXS STRETCH',
+            'manufacturer' => 'CANIS SAFETY',
+            'category' => 'Odzież robocza',
+            'norms' => 'EN 13688',
+            'description' => 'Spodnie robocze męskie CXS STRETCH marki CANIS SAFETY. '
+                .'Konstrukcja obejmuje podwyższony karczek z tyłu, przy gramaturze 250 g/m².',
+            'catalog_price_net' => 95,
+            'purchase_price' => 60,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $cxs): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        'needed' => 'spodnie robocze o gramaturze 250 g/m²',
+                        'search_phrases' => [
+                            'spodnie', 'spodnie robocze', 'gramatura 250 g/m²', '250 g/m²',
+                        ],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $cxs->id, 'score' => 88, 'reason' => 'Gramatura 250 g/m² w opisie'],
+                ]];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'spodnie o Gramaturze 250 g/m²',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'CXS-STRETCH');
+
+        $this->assertNotNull($cards);
+        $this->assertStringContainsString('CXS STRETCH', $cards);
+    }
+
     public function test_ai_search_still_skips_undescribed_card_matched_only_by_category(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

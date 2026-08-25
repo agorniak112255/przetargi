@@ -535,7 +535,13 @@ final class ProductAiSearchService
                 }
             }
 
-            return ['product' => $p, 'hits' => $hits, 'rank' => $identityScore * 100 + $score];
+            // Nazwa liczy się podwójnie, ale nie przebija karty, która spełnia więcej
+            // wymagań naraz — cechy, normy i gramatura z opisu muszą realnie ważyć.
+            return [
+                'product' => $p,
+                'hits' => $hits,
+                'rank' => $score + $identityScore + $hits * $hits,
+            ];
         })
             ->filter(static fn (array $row): bool => $row['hits'] >= 1)
             ->sortByDesc(static fn (array $row): int => $row['rank'])
