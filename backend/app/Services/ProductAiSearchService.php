@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\PpeAssortment;
+use App\Support\ProductFeatureMatch;
 use App\Support\ProductModelFuzzy;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -20,12 +21,31 @@ final class ProductAiSearchService
 
     private const LIKE_DESCRIBED_POOL = 160;
 
+    /** Na każde dwa trafienia z LIKE wchodzi jedno wektorowe — co trzecie miejsce w puli. */
+    private const LIKE_PER_VECTOR = 2;
+
+    private const SCAN_CHUNK = 500;
+
+    private const SCAN_KEEP = 120;
+
+    private const CANDIDATE_POOL = 80;
+
+    private const RANK_CARDS = 60;
+
+    private const MAX_MATCHES = 20;
+
+    /** Cecha podana wprost w SIWZ waży więcej niż sam rzeczownik z nazwy. */
+    private const WEIGHT_GRAMMAGE = 30;
+
+    private const WEIGHT_NORM = 8;
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductVectorSearch $vectorSearch,
         private readonly ExternalCatalogHintService $externalHints,
         private readonly ProductModelFuzzy $modelFuzzy,
         private readonly PpeAssortment $assortment,
+        private readonly ProductFeatureMatch $features,
     ) {}
 
     /**
@@ -48,7 +68,7 @@ final class ProductAiSearchService
         $limit = max(1, min(80, $limit));
 
         $intent = $this->understandRequirement($query);
-        $candidates = $this->keepCompatible($query, $this->retrieveCandidates($query, $intent, 40));
+        $candidates = $this->keepCompatible($query, $this->retrieveCandidates($query, $intent, self::CANDIDATE_POOL));
         $named = $candidates->filter(
             fn (Product $p): bool => $this->modelFuzzy->matches($query, $p)
         )->values();
@@ -70,7 +90,7 @@ final class ProductAiSearchService
             return $this->emptyResult($query, $intent, $withExternalHint, 'Brak kart z opisem w katalogu do porównania. Nie dodano produktu z internetu.');
         }
 
-        $ranked = $this->rankWithLlm($query, $candidates->take(30)->values(), $limit, $intent['needed']);
+        $ranked = $this->rankWithLlm($query, $candidates->take(self::RANK_CARDS)->values(), $limit, $intent['needed']);
         if ($ranked === []) {
             return $this->emptyResult($query, $intent, $withExternalHint, 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.');
         }
@@ -226,23 +246,183 @@ final class ProductAiSearchService
             }
         }
 
-        $likeHits = $this->retrieveLike($intent['search_phrases'], $limit);
-        $vectorHits = $this->retrieveVector($searchText, max($limit, 80));
+        // Pełny przegląd zgodnego asortymentu; LIKE zostaje tylko wtedy, gdy nie da się
+        // rozpoznać rodzaju środka ochrony i nie ma czego przeskanować.
+        $scanHits = $this->retrieveAssortmentScan($query, $intent);
+        $textHits = $scanHits->isNotEmpty()
+            ? $scanHits
+            : $this->keepCompatible($query, $this->retrieveLike($intent['search_phrases'], $limit));
 
-        $seen = [];
-        $merged = collect();
-        foreach ($priority->concat($likeHits)->concat($vectorHits) as $product) {
-            if (! $product instanceof Product || isset($seen[$product->id])) {
-                continue;
+        // Filtr asortymentu przed obcięciem puli — inaczej niezgodne karty zajmują
+        // miejsca, które i tak zaraz stracą.
+        $vectorHits = $this->keepCompatible($query, $this->retrieveVector($searchText, max($limit, 80)));
+
+        return $this->mergeCandidates(
+            $this->keepCompatible($query, $priority),
+            $textHits,
+            $vectorHits,
+            $limit,
+        );
+    }
+
+    /**
+     * Przegląda cały katalog w obrębie rozpoznanej rodziny i kroju — wszystkie spodnie,
+     * a nie te, które akurat trafiły we frazę. Punktacja jedynie porządkuje wynik, więc
+     * karta z cechą, której nie było w zapytaniu, też ma szansę dojść do modelu.
+     *
+     * @param  array{needed: string, search_phrases: list<string>}  $intent
+     * @return Collection<int, Product>
+     */
+    private function retrieveAssortmentScan(string $query, array $intent): Collection
+    {
+        if ($this->assortment->family($query) === null) {
+            return collect();
+        }
+
+        $phrases = array_slice(array_values(array_filter(
+            $intent['search_phrases'],
+            static fn (string $p): bool => mb_strlen($p) >= 3
+        )), 0, 14);
+
+        $scored = [];
+        Product::query()
+            ->select([
+                'id', 'sku', 'name', 'manufacturer', 'category', 'norms',
+                'description', 'enrichment_payload', 'enrichment_status',
+            ])
+            ->chunkById(self::SCAN_CHUNK, function (Collection $chunk) use ($query, $phrases, &$scored): void {
+                foreach ($chunk as $product) {
+                    if (! $product instanceof Product
+                        || ! $this->assortment->compatibleProduct($query, $product)) {
+                        continue;
+                    }
+                    $scored[(int) $product->id] = $this->localScore($query, $product, $phrases);
+                }
+            });
+
+        if ($scored === []) {
+            return collect();
+        }
+
+        arsort($scored);
+
+        return $this->hydrate(array_slice(array_keys($scored), 0, self::SCAN_KEEP));
+    }
+
+    /**
+     * @param  list<string>  $phrases
+     */
+    private function localScore(string $query, Product $product, array $phrases): int
+    {
+        $identity = mb_strtolower((string) $product->name.' '.(string) $product->sku);
+        $text = $identity.' '.mb_strtolower(implode(' ', [
+            (string) ($product->manufacturer ?? ''),
+            (string) ($product->category ?? ''),
+            (string) ($product->norms ?? ''),
+            (string) ($product->description ?? ''),
+            json_encode($product->enrichment_payload ?? [], JSON_UNESCAPED_UNICODE) ?: '',
+        ]));
+
+        $count = count($phrases);
+        $score = 0;
+        $hits = 0;
+        foreach ($phrases as $i => $term) {
+            $weight = $count - $i;
+            $term = mb_strtolower($term);
+            if (str_contains($text, $term)) {
+                $hits++;
+                $score += $weight;
             }
-            $seen[$product->id] = true;
-            $merged->push($product);
-            if ($merged->count() >= $limit) {
-                break;
+            if (str_contains($identity, $term)) {
+                $score += $weight;
             }
         }
 
-        return $this->keepCompatible($query, $merged->values());
+        $overlap = $this->features->overlap($query, $text);
+        $score += $overlap['grammage'] * self::WEIGHT_GRAMMAGE;
+        $score += $overlap['norms'] * self::WEIGHT_NORM;
+
+        return $score + $hits * $hits;
+    }
+
+    /**
+     * @param  list<int>  $ids
+     * @return Collection<int, Product>
+     */
+    private function hydrate(array $ids): Collection
+    {
+        if ($ids === []) {
+            return collect();
+        }
+
+        $byId = $this->likeBaseQuery()->whereIn('id', $ids)->get()->keyBy('id');
+        $out = collect();
+        foreach ($ids as $id) {
+            $product = $byId->get($id);
+            if ($product instanceof Product) {
+                $out->push($product);
+            }
+        }
+
+        return $out->values();
+    }
+
+    /**
+     * LIKE szuka dosłownie, więc „250gr” nie trafi w „250 g/m²” — po cechach z opisu
+     * potrafi szukać tylko warstwa wektorowa. Doklejana na końcu nigdy nie mieściła się
+     * w limicie, dlatego wchodzi przeplotem: co trzecie miejsce należy do wektora.
+     * Kolejność ma znaczenie, bo do modelu trafia tylko początek tej listy.
+     *
+     * @param  Collection<int, Product>  $priority
+     * @param  Collection<int, Product>  $likeHits
+     * @param  Collection<int, Product>  $vectorHits
+     * @return Collection<int, Product>
+     */
+    private function mergeCandidates(
+        Collection $priority,
+        Collection $likeHits,
+        Collection $vectorHits,
+        int $limit,
+    ): Collection {
+        $seen = [];
+        $out = [];
+
+        foreach ($priority as $product) {
+            if ($product instanceof Product && ! isset($seen[$product->id]) && count($out) < $limit) {
+                $seen[$product->id] = true;
+                $out[] = $product;
+            }
+        }
+
+        $unique = static function (Collection $products) use (&$seen): array {
+            $list = [];
+            foreach ($products as $product) {
+                if ($product instanceof Product && ! isset($seen[$product->id])) {
+                    $seen[$product->id] = true;
+                    $list[] = $product;
+                }
+            }
+
+            return $list;
+        };
+
+        $like = $unique($likeHits);
+        $vector = $unique($vectorHits);
+        $likeCount = count($like);
+        $vectorCount = count($vector);
+        $li = 0;
+        $vi = 0;
+
+        while (count($out) < $limit && ($li < $likeCount || $vi < $vectorCount)) {
+            for ($k = 0; $k < self::LIKE_PER_VECTOR && $li < $likeCount && count($out) < $limit; $k++) {
+                $out[] = $like[$li++];
+            }
+            if ($vi < $vectorCount && count($out) < $limit) {
+                $out[] = $vector[$vi++];
+            }
+        }
+
+        return collect($out);
     }
 
     /**
@@ -684,6 +864,7 @@ final class ProductAiSearchService
         $neededLine = is_string($needed) && trim($needed) !== ''
             ? "\nSzukany produkt (z analizy):\n".trim($needed)
             : '';
+        $maxMatches = max(1, min($limit, self::MAX_MATCHES));
 
         $json = json_encode($cards, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $raw = $this->llm->chatJson([
@@ -698,7 +879,9 @@ final class ProductAiSearchService
                     .'Marka/model z SIWZ wygrywa przy literówce (TEPM-ICE=TEMP-ICE); nie zmieniaj marki przez EN. '
                     .'Brak zgodnej nazwy: {"matches":[]}. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}. '
-                    .'score>=40 tylko przy zgodnej nazwie. Max 5. Tylko id z listy. Nie wymyślaj.',
+                    .'score>=40 tylko przy zgodnej nazwie. Max '.$maxMatches.'. '
+                    .'Zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
+                    .'Tylko id z listy. Nie wymyślaj.',
             ],
             [
                 'role' => 'user',

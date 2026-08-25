@@ -170,6 +170,96 @@ final class ProductVectorSearchApiTest extends TestCase
         Http::assertSent(static fn ($request): bool => str_contains($request->url(), '/points/search'));
     }
 
+    public function test_vector_hit_enters_pool_even_when_like_returns_full_page(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'vector_enabled' => true,
+            'qdrant_url' => 'http://qdrant.test:6333',
+            'qdrant_collection' => 'products',
+            'embedding_model' => 'text-embedding-3-small',
+        ]);
+
+        for ($i = 1; $i <= 60; $i++) {
+            Product::query()->create([
+                'sku' => 'MACH-'.$i,
+                'name' => 'SPODNIE MACH '.$i.' Z POLIESTRU',
+                'manufacturer' => 'Delta Plus',
+                'category' => 'Odzież robocza',
+                'description' => 'Spodnie robocze Mach '.$i.' z poliestru i bawełny.',
+                'catalog_price_net' => 100 + $i,
+                'purchase_price' => 70,
+                'stock' => 3,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        // Nazwa bez słowa „spodnie”, gramatura zapisana inaczej niż w zapytaniu —
+        // dla LIKE niewidoczny, znajduje go dopiero wektor.
+        $cxs = Product::query()->create([
+            'sku' => 'CXS-STRETCH',
+            'name' => 'CXS STRETCH',
+            'manufacturer' => 'CANIS SAFETY',
+            'category' => 'Odzież robocza',
+            'norms' => 'EN 13688',
+            'description' => 'Ubranie roboczé męskie CXS STRETCH, gramatura 250 g/m², elastan.',
+            'catalog_price_net' => 95,
+            'purchase_price' => 60,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        Http::fake([
+            'api.openai.com/v1/embeddings' => Http::response([
+                'data' => [['embedding' => array_fill(0, 8, 0.1)]],
+            ], 200),
+            'qdrant.test:6333/collections/products' => Http::response(['result' => ['status' => 'green']], 200),
+            'qdrant.test:6333/collections/products/points/search' => Http::response([
+                'result' => [['id' => $cxs->id, 'score' => 0.94]],
+            ], 200),
+        ]);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $cxs): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        'needed' => 'spodnie robocze o gramaturze 250',
+                        'search_phrases' => ['spodnie', 'spodnie robocze', '250gr'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $cxs->id, 'score' => 87, 'reason' => 'Gramatura 250 g/m²'],
+                ]];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'spodnie o gramatrzurze 250gr',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'CXS-STRETCH');
+
+        $this->assertNotNull($cards);
+        $this->assertStringContainsString('CXS STRETCH', $cards);
+    }
+
     public function test_test_vector_endpoint_pings_qdrant_and_embeddings(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

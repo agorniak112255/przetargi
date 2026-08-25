@@ -509,37 +509,122 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertStringContainsString('CXS STRETCH', $cards);
     }
 
-    public function test_ai_search_still_skips_undescribed_card_matched_only_by_category(): void
+    public function test_ai_search_sends_whole_assortment_even_without_phrase_hit(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        for ($i = 1; $i <= 5; $i++) {
+            Product::query()->create([
+                'sku' => 'MACH-'.$i,
+                'name' => 'SPODNIE MACH '.$i,
+                'manufacturer' => 'Delta Plus',
+                'category' => 'Odzież robocza',
+                'description' => 'Spodnie robocze Mach '.$i.' z poliestru.',
+                'catalog_price_net' => 100 + $i,
+                'purchase_price' => 70,
+                'stock' => 3,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        // Ani nazwa, ani opis nie zawierają żadnej frazy z intentu — o przynależności
+        // decyduje wyłącznie rodzina asortymentu odczytana z kategorii.
+        Product::query()->create([
+            'sku' => 'URG-A',
+            'name' => 'URG-A',
+            'manufacturer' => 'Urgent',
+            'category' => 'Odzież robocza',
+            'description' => 'Model z karczkiem, wstawkami z elastanu i kieszeniami cargo.',
+            'catalog_price_net' => 31.4,
+            'purchase_price' => 20,
+            'stock' => 7,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        'needed' => 'spodnie robocze',
+                        'search_phrases' => ['spodnie', 'spodnie robocze'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => []];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', ['query' => 'spodnie robocze do magazynu'])
+            ->assertOk();
+
+        $this->assertNotNull($cards);
+        $this->assertStringContainsString('URG-A', $cards);
+    }
+
+    public function test_ai_search_never_sends_cards_from_another_ppe_family(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
         Product::query()->create([
-            'sku' => 'WIESZAK-01',
-            'name' => 'Wieszak magazynowy stalowy',
+            'sku' => 'GLOVE-OFFTOPIC',
+            'name' => 'Rękawice robocze z polaru',
             'manufacturer' => 'X',
-            'category' => 'Kominiarki i czapki',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice ocieplane polarem, zimowe, do prac na zewnątrz.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 12,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $balaclava = Product::query()->create([
+            'sku' => 'BALTIC',
+            'name' => 'KOMINIARKA Z POLARU POLIESTRU',
+            'manufacturer' => 'Delta Plus',
+            'category' => 'EVOLUTION',
             'description' => null,
-            'catalog_price_net' => 50,
-            'purchase_price' => 30,
-            'stock' => 1,
+            'catalog_price_net' => 9.9,
+            'purchase_price' => 6,
+            'stock' => 12,
             'enrichment_status' => Product::ENRICHMENT_NONE,
         ]);
 
+        $cards = null;
+        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->once()
-            ->andReturn([
-                'needed' => 'kominiarka z polaru',
-                'search_phrases' => ['kominiarka', 'polar'],
-            ]);
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $balaclava): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        'needed' => 'kominiarka z polaru',
+                        'search_phrases' => ['kominiarka', 'polar'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $balaclava->id, 'score' => 90, 'reason' => 'Kominiarka z polaru'],
+                ]];
+            });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'CZAPKA KOMINIARKA Z POLARU czarna lub granatowa',
         ])
             ->assertOk()
-            ->assertJsonPath('total', 0)
-            ->assertJsonMissing(['sku' => 'WIESZAK-01']);
+            ->assertJsonPath('total', 1)
+            ->assertJsonMissing(['sku' => 'GLOVE-OFFTOPIC']);
+
+        $this->assertNotNull($cards);
+        $this->assertStringNotContainsString('GLOVE-OFFTOPIC', $cards);
     }
 
     public function test_ai_search_rejects_face_shield_for_vest_even_if_model_scores_it(): void
