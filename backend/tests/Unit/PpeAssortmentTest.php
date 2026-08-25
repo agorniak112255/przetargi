@@ -130,4 +130,33 @@ final class PpeAssortmentTest extends TestCase
             $shield
         ));
     }
+
+    #[Test]
+    public function accessory_mentioned_in_description_does_not_move_product_to_another_family(): void
+    {
+        $trousers = new Product;
+        $trousers->forceFill([
+            'name' => 'CXS STRETCH',
+            'sku' => 'CXS-STRETCH',
+            'category' => 'Odzież robocza',
+            'description' => 'Spodnie robocze męskie CXS STRETCH, gramatura 250 g/m². '
+                .'Wyposażone w kieszenie na nakolanniki i wzmocnienia z poliestru 600D.',
+        ]);
+
+        $this->assertTrue($this->assortment->compatibleProduct('spodnie o gramaturze 250gr', $trousers));
+    }
+
+    #[Test]
+    public function family_still_falls_back_to_description_when_name_says_nothing(): void
+    {
+        $gloves = new Product;
+        $gloves->forceFill([
+            'name' => 'TEMP-ICE 700',
+            'sku' => '34700018',
+            'category' => null,
+            'description' => 'Rękawice zimowe odporne na kontakt z zimnem.',
+        ]);
+
+        $this->assertTrue($this->assortment->compatibleProduct('rękawice zimowe MAPA', $gloves));
+    }
 }

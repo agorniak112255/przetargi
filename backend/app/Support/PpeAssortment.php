@@ -294,14 +294,35 @@ final class PpeAssortment
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
         $kat = is_string($attrs['kategoria_bhp'] ?? null) ? $attrs['kategoria_bhp'] : null;
-        $prodText = trim(implode(' ', array_filter([
+
+        $identity = trim(implode(' ', array_filter([
             (string) $product->name,
             (string) ($product->category ?? ''),
+        ])));
+        $full = trim(implode(' ', array_filter([
+            $identity,
             (string) ($product->description ?? ''),
             (string) ($product->norms ?? ''),
         ])));
 
-        return $this->compatible($requirement, $prodText, $kat);
+        // Nazwa i kategoria mówią, czym produkt JEST. Opis wymienia też akcesoria i
+        // sąsiednie środki ochrony („kieszenie na nakolanniki” w spodniach), więc o
+        // rodzinie decyduje dopiero wtedy, gdy tamte milczą.
+        $familyText = $this->family($identity) !== null ? $identity : $full;
+
+        $reqFamily = $this->family($requirement);
+        if ($reqFamily === null) {
+            return true;
+        }
+        $prodFamily = $this->resolveFamily($familyText, $kat);
+        if ($prodFamily === null || $reqFamily !== $prodFamily) {
+            return false;
+        }
+        if ($reqFamily === self::FAMILY_APPAREL) {
+            return $this->apparelCompatible($requirement, $full);
+        }
+
+        return true;
     }
 
     private function apparelCompatible(string $req, string $prodText): bool
