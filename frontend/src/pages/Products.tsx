@@ -206,6 +206,11 @@ export function Products() {
   const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
   const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
+  const [skipPrompt, setSkipPrompt] = useState<{
+    force: boolean
+    risky: Product[]
+    rest: number[]
+  } | null>(null)
   const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
   const [enrichConcurrency, setEnrichConcurrency] = useState(4)
 
@@ -370,6 +375,31 @@ export function Products() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batch, page, debouncedQ, sort, dir])
 
+  // „Ręcznie” i „Błąd” to pozycje, których kolejka normalnie nie rusza — przed
+  // wymuszeniem pytamy, bo każda kosztuje wywołanie Tavily i modelu.
+  function requestEnrich(ids: number[], force = false) {
+    const byId = new Map((result?.data ?? []).map((p) => [p.id, p]))
+    const risky: Product[] = []
+    const rest: number[] = []
+    for (const id of ids) {
+      const status = byId.get(id)?.enrichment_status ?? 'none'
+      if (status === 'manual' || status === 'failed') {
+        const product = byId.get(id)
+        if (product) risky.push(product)
+      } else {
+        rest.push(id)
+      }
+    }
+
+    if (risky.length === 0) {
+      void enrichIds(ids, force)
+
+      return
+    }
+
+    setSkipPrompt({ force, risky, rest })
+  }
+
   async function enrichIds(ids: number[], force = false) {
     if (ids.length === 0) return
     const capped = ids.slice(0, enrichBatchLimit)
@@ -521,7 +551,7 @@ export function Products() {
               <button
                 type="button"
                 disabled={enrichBusy || batchActive || selectedIds.length === 0}
-                onClick={() => void enrichIds(selectedIds)}
+                onClick={() => requestEnrich(selectedIds)}
                 className="rounded bg-blue-600 px-3 py-2 text-xs text-white disabled:opacity-50"
                 title="Pobierz opisy i zdjęcia dla zaznaczonych produktów"
               >
@@ -530,7 +560,7 @@ export function Products() {
               <button
                 type="button"
                 disabled={enrichBusy || batchActive || selectedIds.length === 0}
-                onClick={() => void enrichIds(selectedIds, true)}
+                onClick={() => requestEnrich(selectedIds, true)}
                 className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
                 title="Wymusza ponowne pobranie dla zaznaczonych"
               >
@@ -939,6 +969,83 @@ export function Products() {
                   }}
                 >
                   Pobierz ({Math.min(pendingVisible.length, enrichBatchLimit)})
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {skipPrompt && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setSkipPrompt(null)}
+          >
+            <div
+              className="w-full max-w-lg rounded-xl bg-white p-4 shadow-lg"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="text-sm font-semibold text-slate-800">
+                Pozycje pomijane przez kolejkę ({skipPrompt.risky.length})
+              </p>
+              <p className="mt-2 text-xs text-slate-600">
+                „Ręcznie” oznacza, że żadne źródło nie potwierdziło tego kodu — ponowienie
+                zwykle da ten sam wynik. „Błąd” warto ponowić. Każda pozycja kosztuje
+                zapytanie do Tavily i modelu.
+              </p>
+              <ul className="mt-3 max-h-56 divide-y overflow-auto rounded border border-slate-200 text-xs">
+                {skipPrompt.risky.map((p) => (
+                  <li key={p.id} className="flex items-center justify-between gap-3 p-2">
+                    <span className="truncate">
+                      <span className="font-medium text-slate-700">{p.sku}</span>
+                      <span className="text-slate-500"> · {p.name}</span>
+                    </span>
+                    <span
+                      className={
+                        p.enrichment_status === 'failed'
+                          ? 'shrink-0 text-red-600'
+                          : 'shrink-0 text-amber-700'
+                      }
+                    >
+                      {STATUS_LABEL[p.enrichment_status ?? 'none']}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-4 flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-slate-300 px-3 py-1.5 text-xs"
+                  onClick={() => setSkipPrompt(null)}
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="button"
+                  disabled={skipPrompt.rest.length === 0}
+                  className="rounded border border-slate-300 px-3 py-1.5 text-xs disabled:opacity-50"
+                  onClick={() => {
+                    const { rest, force } = skipPrompt
+                    setSkipPrompt(null)
+                    void enrichIds(rest, force)
+                  }}
+                >
+                  Pomiń je ({skipPrompt.rest.length})
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white"
+                  onClick={() => {
+                    const ids = [
+                      ...skipPrompt.rest,
+                      ...skipPrompt.risky.map((p) => p.id),
+                    ]
+                    setSkipPrompt(null)
+                    void enrichIds(ids, true)
+                  }}
+                >
+                  Pobierz mimo to ({skipPrompt.rest.length + skipPrompt.risky.length})
                 </button>
               </div>
             </div>
