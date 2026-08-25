@@ -72,16 +72,37 @@ chown "$OWNER:$GROUP" "$LOG_FILE" || true
 systemctl daemon-reload
 
 echo "==> workery: uruchamiam $WORKERS instancji"
-for ((i = 1; i <= SLOTS_MAX; i++)); do
-  if (( i <= WORKERS )); then
-    systemctl enable --now "${UNIT_NAME}${i}.service" >/dev/null 2>&1 \
-      || echo "    nie udało się wystartować ${UNIT_NAME}${i}"
-    systemctl restart "${UNIT_NAME}${i}.service" >/dev/null 2>&1 || true
-  else
-    systemctl disable --now "${UNIT_NAME}${i}.service" >/dev/null 2>&1 || true
-  fi
+wanted=()
+for ((i = 1; i <= WORKERS; i++)); do
+  wanted+=("${UNIT_NAME}${i}.service")
 done
+systemctl enable --now "${wanted[@]}" >/dev/null 2>&1 \
+  || echo "    część workerów nie wstała — sprawdź: systemctl status ${UNIT_NAME}1"
 
+# Nadwyżkę wyłączamy tylko wtedy, gdy jednostka faktycznie istnieje. Wołanie
+# systemctl po wszystkich 32 slotach kosztowało kilkanaście sekund na pusto.
+surplus=()
+while read -r unit; do
+  [[ -z "$unit" ]] && continue
+  idx="${unit#"$UNIT_NAME"}"
+  idx="${idx%.service}"
+  if [[ "$idx" =~ ^[0-9]+$ ]] && (( idx > WORKERS )); then
+    surplus+=("$unit")
+  fi
+done < <(
+  {
+    systemctl list-units --all --plain --no-legend "${UNIT_NAME}*.service" 2>/dev/null | awk '{print $1}'
+    systemctl list-unit-files --plain --no-legend "${UNIT_NAME}*.service" 2>/dev/null | awk '{print $1}'
+  } | sort -u
+)
+if (( ${#surplus[@]} > 0 )); then
+  echo "==> workery: wyłączam nadwyżkę (${#surplus[@]})"
+  systemctl disable --now "${surplus[@]}" >/dev/null 2>&1 || true
+fi
+
+# Nowy kod wchodzi przez queue:restart — worker kończy bieżące zadanie i wychodzi,
+# a Restart=always podnosi go z aktualnym kodem. „systemctl restart” blokowałby deploy
+# do końca zadania enrichmentu (timeout 420 s), po kolei dla każdego workera.
 echo "==> workery: sygnał restartu dla zadań w toku"
 cd "$BACKEND"
 "$PHP_BIN" artisan queue:restart || true
