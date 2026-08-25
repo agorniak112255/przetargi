@@ -64,6 +64,19 @@ final class ProductTextSearchMysqlQueryTest extends TestCase
         $this->assertSame(['kominiarka*', 'kominiarka*'], $query->getBindings());
     }
 
+    public function test_unclassified_scope_requires_a_text_hit(): void
+    {
+        $query = $this->app->make(ProductTextSearch::class)
+            ->fullTextQuery(['rekawice'], null, 40, true);
+
+        $sql = $query->toSql();
+
+        $this->assertStringContainsString('`ppe_family` is null', $sql);
+        // Rodzina bez rodziny liczy tysiące kart, więc wolno im wejść tylko z trafieniem.
+        $this->assertStringContainsString('where MATCH(search_blob) AGAINST (? IN BOOLEAN MODE)', $sql);
+        $this->assertStringNotContainsString('`ppe_family` = ?', $sql);
+    }
+
     public function test_tokens_are_normalized_and_canonicalized(): void
     {
         $tokens = $this->app->make(ProductTextSearch::class)

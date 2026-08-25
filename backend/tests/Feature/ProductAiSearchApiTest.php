@@ -755,6 +755,68 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertSame('CHEM-58', $this->firstCardSku($cards));
     }
 
+    public function test_card_without_recognisable_family_still_reaches_the_model(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        for ($i = 1; $i <= 10; $i++) {
+            Product::query()->create([
+                'sku' => 'PL-GLOVE-'.$i,
+                'name' => 'Rękawice robocze '.$i,
+                'manufacturer' => 'Inna',
+                'category' => 'Rękawice',
+                'description' => 'Rękawice robocze ogólnego przeznaczenia '.$i.'.',
+                'catalog_price_net' => 5 + $i,
+                'purchase_price' => 3,
+                'stock' => 2,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        // Czeska nazwa producenta, brak opisu i kategorii — reguły rodziny milczą,
+        // a mimo to karta ma trafienie w tekst i musi dojść do modelu.
+        $czech = Product::query()->create([
+            'sku' => '341006400007',
+            'name' => 'Rukavice ABRAK, s blistrem, polyes.úpl.povrstvené nitrilem, vel.7',
+            'manufacturer' => 'Canis',
+            'description' => null,
+            'catalog_price_net' => 4,
+            'purchase_price' => 2,
+            'stock' => 30,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+
+        $this->assertNull($czech->ppe_family);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $czech): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        'needed' => 'rękawice ABRAK',
+                        'search_phrases' => ['rękawice', 'abrak'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $czech->id, 'score' => 91, 'reason' => 'Model ABRAK'],
+                ]];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', ['query' => 'rękawice ABRAK rozmiar 7'])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', '341006400007');
+
+        $this->assertNotNull($cards);
+        $this->assertStringContainsString('ABRAK', $cards);
+    }
+
     private function firstCardSku(?string $prompt): ?string
     {
         $this->assertNotNull($prompt);

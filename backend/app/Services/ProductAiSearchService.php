@@ -23,6 +23,9 @@ final class ProductAiSearchService
 
     private const VECTOR_POOL = 150;
 
+    /** Kart bez rozpoznanej rodziny są tysiące — bierzemy tylko czubek trafień. */
+    private const UNCLASSIFIED_POOL = 120;
+
     private const CANDIDATE_POOL = 80;
 
     private const RANK_CARDS = 60;
@@ -35,6 +38,9 @@ final class ProductAiSearchService
     private const RRF_WEIGHT_TEXT = 1.0;
 
     private const RRF_WEIGHT_VECTOR = 1.0;
+
+    /** Karta bez opisu mówi o sobie mniej, więc jej trafienie waży mniej. */
+    private const RRF_WEIGHT_UNCLASSIFIED = 0.6;
 
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
@@ -251,6 +257,12 @@ final class ProductAiSearchService
         $rankings = [
             'priority' => $priority->pluck('id')->map(intval(...))->all(),
             'text' => $this->textSearch->search($intent['search_phrases'], $family, self::TEXT_POOL),
+            // Zawężenie do rodziny wycina karty, którym rodziny nie dało się ustalić —
+            // w tym katalogu to dwie trzecie pozycji. Wracają osobnym źródłem, ale
+            // wyłącznie z trafieniem w tekst, więc nie zalewają zgodnego asortymentu.
+            'unclassified' => $family === null
+                ? []
+                : $this->textSearch->searchUnclassified($intent['search_phrases'], self::UNCLASSIFIED_POOL),
             'vector' => $this->retrieveVectorIds($searchText, self::VECTOR_POOL),
         ];
 
@@ -259,6 +271,7 @@ final class ProductAiSearchService
             [
                 'priority' => self::RRF_WEIGHT_PRIORITY,
                 'text' => self::RRF_WEIGHT_TEXT,
+                'unclassified' => self::RRF_WEIGHT_UNCLASSIFIED,
                 'vector' => self::RRF_WEIGHT_VECTOR,
             ],
             $limit * 2,

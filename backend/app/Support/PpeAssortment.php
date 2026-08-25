@@ -309,6 +309,12 @@ final class PpeAssortment
         return $this->resolveFamily($familyText, $kat);
     }
 
+    /**
+     * Dwie trzecie katalogu nie ma opisu, z którego dałoby się odczytać rodzinę —
+     * zostaje sam kod producenta. Odrzucamy więc tylko wtedy, gdy wiemy, że produkt
+     * należy do innej rodziny; nierozpoznana rodzina to brak wiedzy, nie niezgodność.
+     * O takich kartach rozstrzyga trafienie w tekst i model, nie ta bramka.
+     */
     public function compatibleProduct(string $requirement, Product $product): bool
     {
         $reqFamily = $this->family($requirement);
@@ -320,7 +326,7 @@ final class PpeAssortment
             ? (string) $product->ppe_family
             : $this->productFamily($product);
 
-        if ($prodFamily === null || $reqFamily !== $prodFamily) {
+        if ($prodFamily !== null && $reqFamily !== $prodFamily) {
             return false;
         }
         if ($reqFamily === self::FAMILY_APPAREL) {

@@ -43,11 +43,38 @@ final class ProductTextSearch
             return [];
         }
 
+        return $this->run($tokens, $family, false, $limit);
+    }
+
+    /**
+     * Karty, którym nie udało się przypisać rodziny — w praktyce te bez opisu, sam
+     * kod producenta w nazwie. Nigdy nie wchodzą całą grupą, bo grupa to dwie trzecie
+     * katalogu; tylko z trafieniem w tekst.
+     *
+     * @param  list<string>  $phrases
+     * @return list<int>
+     */
+    public function searchUnclassified(array $phrases, int $limit): array
+    {
+        $tokens = $this->tokens($phrases);
+        if ($tokens === []) {
+            return [];
+        }
+
+        return $this->run($tokens, null, true, $limit);
+    }
+
+    /**
+     * @param  list<string>  $tokens
+     * @return list<int>
+     */
+    private function run(array $tokens, ?string $family, bool $unclassifiedOnly, int $limit): array
+    {
         $limit = max(1, $limit);
 
         return DB::connection()->getDriverName() === 'mysql'
-            ? $this->fullText($tokens, $family, $limit)
-            : $this->likeFallback($tokens, $family, $limit);
+            ? $this->fullText($tokens, $family, $unclassifiedOnly, $limit)
+            : $this->likeFallback($tokens, $family, $unclassifiedOnly, $limit);
     }
 
     /**
@@ -81,7 +108,7 @@ final class ProductTextSearch
      * @param  list<string>  $tokens
      * @return Builder<Product>
      */
-    public function fullTextQuery(array $tokens, ?string $family, int $limit): Builder
+    public function fullTextQuery(array $tokens, ?string $family, int $limit, bool $unclassifiedOnly = false): Builder
     {
         $query = Product::query()->select('id');
 
@@ -90,14 +117,16 @@ final class ProductTextSearch
             $query->selectRaw('MATCH(search_blob) AGAINST (? IN BOOLEAN MODE) AS relevance', [$against])
                 ->orderByDesc('relevance');
 
-            // Bez rozpoznanej rodziny nie ma czego pokazać poza trafieniami, więc
-            // to samo wyrażenie wraca jako warunek.
+            // Cały asortyment pokazujemy tylko w obrębie rozpoznanej rodziny. Poza nią
+            // liczy się wyłącznie trafienie, więc to samo wyrażenie wraca jako warunek.
             if ($family === null) {
                 $query->whereRaw('MATCH(search_blob) AGAINST (? IN BOOLEAN MODE)', [$against]);
             }
         }
 
-        if ($family !== null) {
+        if ($unclassifiedOnly) {
+            $query->whereNull('ppe_family');
+        } elseif ($family !== null) {
             $query->where('ppe_family', $family);
         }
 
@@ -108,9 +137,9 @@ final class ProductTextSearch
      * @param  list<string>  $tokens
      * @return list<int>
      */
-    private function fullText(array $tokens, ?string $family, int $limit): array
+    private function fullText(array $tokens, ?string $family, bool $unclassifiedOnly, int $limit): array
     {
-        return $this->fullTextQuery($tokens, $family, $limit)
+        return $this->fullTextQuery($tokens, $family, $limit, $unclassifiedOnly)
             ->get()
             ->pluck('id')
             ->map(intval(...))
@@ -121,13 +150,17 @@ final class ProductTextSearch
      * @param  list<string>  $tokens
      * @return list<int>
      */
-    private function likeFallback(array $tokens, ?string $family, int $limit): array
+    private function likeFallback(array $tokens, ?string $family, bool $unclassifiedOnly, int $limit): array
     {
         $query = Product::query()->select(['id', 'search_blob', 'enrichment_status']);
 
-        if ($family !== null) {
+        if ($unclassifiedOnly) {
+            $query->whereNull('ppe_family');
+        } elseif ($family !== null) {
             $query->where('ppe_family', $family);
-        } elseif ($tokens !== []) {
+        }
+
+        if ($tokens !== [] && ($unclassifiedOnly || $family === null)) {
             $query->where(function (Builder $outer) use ($tokens): void {
                 foreach ($tokens as $token) {
                     $outer->orWhere('search_blob', 'like', '%'.addcslashes($token, '%_\\').'%');
