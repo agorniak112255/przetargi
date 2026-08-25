@@ -13,6 +13,9 @@ use Illuminate\Support\Str;
  */
 final class ProductSearchIdentity
 {
+    /** Prefiksy norm i certyfikatów — „EN 166” to nie oznaczenie modelu. */
+    private const NORM_PREFIXES = ['en', 'iso', 'pn', 'din', 'ansi', 'astm', 'nfpa', 'ce', 'sr', 'nbr'];
+
     /**
      * Tokeny do dopasowania w URL/tytule/snippecie (lowercase, unikalne).
      *
@@ -821,6 +824,72 @@ final class ProductSearchIdentity
         }
 
         return array_values(array_unique(array_map('mb_strtolower', $codes)));
+    }
+
+    /**
+     * Karta innego modelu tej samej marki: strona filtropochłaniacza FP 211/1 wymienia
+     * w treści kompatybilne maski MT 212/2, ale kartą maski nie jest. O tym, czyja to
+     * karta, mówi adres i tytuł — nie wzmianka w akapicie.
+     */
+    public function pageClaimsAnotherCode(string $url, string $title, Product $product): bool
+    {
+        $codes = [];
+        foreach ($this->productCodes($product) as $code) {
+            $compact = $this->compactCode($code);
+            if (mb_strlen($compact) >= 4) {
+                $codes[] = $compact;
+            }
+        }
+        if ($codes === []) {
+            return false;
+        }
+
+        $foreign = false;
+        foreach ($this->codeLikeTokens($url, $title) as $token) {
+            foreach ($codes as $code) {
+                // „MT 212” w tytule to nasze „MT-212-2” bez członu z wariantem
+                if (str_starts_with($code, $token) || str_starts_with($token, $code)) {
+                    return false;
+                }
+            }
+            $foreign = true;
+        }
+
+        return $foreign;
+    }
+
+    /**
+     * Oznaczenia modelu z adresu i tytułu: „fp-211-1”, „mt 212/2”. Same liczby pomijamy,
+     * bo to roczniki i rozmiary, a normy (EN 166) nie są kodem produktu.
+     *
+     * @return list<string>
+     */
+    private function codeLikeTokens(string $url, string $title): array
+    {
+        $path = (string) parse_url(mb_strtolower($url), PHP_URL_PATH);
+        $path = (string) preg_replace('/\.[a-z]{2,5}$/u', '', $path);
+        $hay = mb_strtolower($title).' '.str_replace(['/', '_'], ' ', $path);
+
+        $out = [];
+        preg_match_all(
+            '/(?<![\p{L}\d])(\p{L}{1,4})[\s\-]?(\d{2,4})((?:[\s\-\/]\d{1,3})*)/u',
+            $hay,
+            $matches,
+            PREG_SET_ORDER
+        );
+        foreach ($matches as $hit) {
+            if (in_array($hit[1], self::NORM_PREFIXES, true)) {
+                continue;
+            }
+            $out[$this->compactCode($hit[0])] = true;
+        }
+
+        return array_keys($out);
+    }
+
+    private function compactCode(string $code): string
+    {
+        return (string) preg_replace('/[^\p{L}\d]+/u', '', mb_strtolower($code));
     }
 
     public function hayHasProductCode(string $hay, Product $product): bool

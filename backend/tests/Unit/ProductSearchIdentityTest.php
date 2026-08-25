@@ -341,4 +341,43 @@ final class ProductSearchIdentityTest extends TestCase
         ));
         $this->assertFalse($id->hayHasProductCode('maska mt 212/23 maskpol', $product));
     }
+
+    public function test_accessory_card_mentioning_our_model_is_not_our_card(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'MT-212-2',
+            'name' => 'Maska MT 212/2',
+            'manufacturer' => 'MASKPOL',
+        ]);
+
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://www.maskpol.com.pl/filtropochlaniacze/filtropochlaniacz-fp-211-1-p3-w-me-ts',
+            'Filtropochłaniacz FP 211/1-P3/W-ME/TS',
+            $product
+        ));
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://www.maskpol.com.pl/maski/maska-mt-212-2',
+            'Maska MT 212/2',
+            $product
+        ));
+        // tytuł bez członu z wariantem nadal opisuje nasz model
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://www.bezpieczni112.pl/maski/maska-mt-212',
+            'MASKA MT 212',
+            $product
+        ));
+        // karta bez żadnego oznaczenia w adresie i tytule zostaje w grze
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://sklep.example/maska-przeciwgazowa-maskpol',
+            'Maska przeciwgazowa MASKPOL',
+            $product
+        ));
+        // norma w tytule to nie kod innego modelu
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://sklep.example/maska-przeciwgazowa',
+            'Maska przeciwgazowa EN 136 MASKPOL',
+            $product
+        ));
+    }
 }

@@ -696,6 +696,9 @@ class HybridWebSearchService
             if ($this->isListingWithoutProduct($url, $product)) {
                 continue;
             }
+            if ($this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+                continue;
+            }
             $matched[] = [
                 'url' => $url,
                 'title' => $title !== '' ? $title : $url,
@@ -790,6 +793,10 @@ class HybridWebSearchService
                     $title = (string) ($row['title'] ?? '');
                     break;
                 }
+            }
+            // wzmianka w treści to za mało: karta akcesorium wymienia kompatybilne modele
+            if ($this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+                continue;
             }
             $out[] = [
                 'url' => $url,
