@@ -837,29 +837,81 @@ final class ProductSearchIdentity
      */
     public function pageClaimsAnotherCode(string $url, string $title, Product $product): bool
     {
-        $codes = [];
-        foreach ($this->productCodes($product) as $code) {
-            $compact = $this->compactCode($code);
-            if (mb_strlen($compact) >= 4) {
-                $codes[] = $compact;
-            }
-        }
+        $tokens = $this->codeLikeTokens($url, $title);
+
+        return $tokens !== []
+            && $this->compactProductCodes($product) !== []
+            && ! $this->urlOrTitleCarriesCodeFamily($url, $title, $product);
+    }
+
+    /**
+     * Czy adres albo tytuł niesie oznaczenie z rodziny naszego kodu. „MASKA MT 212”
+     * to nasze „MT-212-2” bez członu z wariantem, ale „MT 213/2” to już inny model.
+     */
+    public function urlOrTitleCarriesCodeFamily(string $url, string $title, Product $product): bool
+    {
+        $codes = $this->compactProductCodes($product);
         if ($codes === []) {
             return false;
         }
 
-        $foreign = false;
         foreach ($this->codeLikeTokens($url, $title) as $token) {
             foreach ($codes as $code) {
-                // „MT 212” w tytule to nasze „MT-212-2” bez członu z wariantem
                 if (str_starts_with($code, $token) || str_starts_with($token, $code)) {
-                    return false;
+                    return true;
                 }
             }
-            $foreign = true;
         }
 
-        return $foreign;
+        return false;
+    }
+
+    /**
+     * Ile obcych oznaczeń modeli niesie treść. Strona zbiorcza producenta wymienia cały
+     * katalog, karta produktu najwyżej akcesorium albo dwa. Liczymy tylko zapisy wielkimi
+     * literami, bo w zdaniu „odporne do 250C” kodu nie ma.
+     */
+    public function foreignCodeCount(string $text, Product $product): int
+    {
+        $codes = $this->compactProductCodes($product);
+        $seen = [];
+        preg_match_all(
+            '/(?<![\p{L}\d])(\p{Lu}{1,4})[\s\-]?(\d{2,4})((?:[\s\-\/]\d{1,3})*)/u',
+            $text,
+            $matches,
+            PREG_SET_ORDER
+        );
+
+        foreach ($matches as $hit) {
+            if (in_array(mb_strtolower($hit[1]), self::NORM_PREFIXES, true)) {
+                continue;
+            }
+            $token = $this->compactCode($hit[0]);
+            foreach ($codes as $code) {
+                if (str_starts_with($code, $token) || str_starts_with($token, $code)) {
+                    continue 2;
+                }
+            }
+            $seen[$token] = true;
+        }
+
+        return count($seen);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function compactProductCodes(Product $product): array
+    {
+        $out = [];
+        foreach ($this->productCodes($product) as $code) {
+            $compact = $this->compactCode($code);
+            if (mb_strlen($compact) >= 4) {
+                $out[] = $compact;
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**

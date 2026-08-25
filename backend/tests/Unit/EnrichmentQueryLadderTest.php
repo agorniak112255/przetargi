@@ -302,6 +302,62 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertNotContains('Maska MT 212/2 MT-212-2 MASKPOL', $queries);
     }
 
+    public function test_only_page_titled_with_our_model_counts_as_product_card(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'MASKPOL',
+            'sku' => 'MT-212-2',
+            'name' => 'Maska MT 212/2',
+            'category' => 'Maski',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $proves = $ref->getMethod('pageProvesProductIdentity');
+        $proves->setAccessible(true);
+
+        $body = 'Maska MT 212/2 zapewnia ochronę dróg oddechowych. MASKPOL.';
+
+        // strona zbiorcza producenta wymienia nasz kod, ale kartą produktu nie jest
+        $this->assertFalse($proves->invoke(
+            $service,
+            'https://www.maskpol.com.pl/oferta',
+            'Oferta',
+            'Maski MT-212/2, MT-213/2, MT-214. Filtropochłaniacze FP 211/1, FP 400. Hełmy HP-05. MASKPOL.',
+            $product
+        ));
+        // sklep bywa skąpy w tytule, ale karta opisuje jeden produkt
+        $this->assertTrue($proves->invoke(
+            $service,
+            'https://sklep.example/maski-przeciwgazowe-wojskowe',
+            'Maska przeciwgazowa wojskowa',
+            'Symbol: MT-212-2. Maska pełnotwarzowa MASKPOL do ochrony dróg oddechowych.',
+            $product
+        ));
+        $this->assertTrue($proves->invoke(
+            $service,
+            'https://www.maskpol.com.pl/maski/maska-mt-212-2',
+            'Maska MT 212/2',
+            $body,
+            $product
+        ));
+        // skrócone oznaczenie w adresie to nadal nasz model
+        $this->assertTrue($proves->invoke(
+            $service,
+            'https://www.bezpieczni112.pl/maski/maska-mt-212',
+            'MASKA MT 212',
+            $body,
+            $product
+        ));
+        // sąsiedni model tej samej marki odpada
+        $this->assertFalse($proves->invoke(
+            $service,
+            'https://faser.com.pl/produkty/maski-pochlaniacze/maska-pelnotwarzowa-mt-213-2-danka-s/',
+            'Maska pełnotwarzowa MT 213/2 DANKA S',
+            $body,
+            $product
+        ));
+    }
+
     public function test_catalog_index_hit_without_product_code_does_not_stop_web_search(): void
     {
         $product = new Product([

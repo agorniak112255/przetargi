@@ -28,6 +28,9 @@ class HybridWebSearchService
     /** Tyle kart produktu wystarcza, żeby przerwać drabinkę fraz. */
     private const OPEN_ENOUGH_PAGES = 3;
 
+    /** Tyle cudzych oznaczeń modeli w treści zdradza listę katalogową, nie kartę produktu. */
+    private const LISTING_FOREIGN_CODES = 3;
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly OpenAiCompatibleClient $llm,
@@ -790,9 +793,6 @@ class HybridWebSearchService
             if ($url === '' || $text === '') {
                 continue;
             }
-            if (! $this->identity->hayMentionsProduct($url.' '.$text, $product)) {
-                continue;
-            }
             $title = '';
             foreach ($results as $row) {
                 if (is_array($row) && mb_strtolower((string) ($row['url'] ?? '')) === mb_strtolower($url)) {
@@ -800,10 +800,7 @@ class HybridWebSearchService
                     break;
                 }
             }
-            // wzmianka w treści to za mało: karta akcesorium wymienia kompatybilne modele,
-            // a zbiorcza lista deklaracji zgodności wymienia cały katalog producenta
-            if ($this->identity->pageClaimsAnotherCode($url, $title, $product)
-                || $this->isListingWithoutProduct($url, $product)) {
+            if (! $this->pageProvesProductIdentity($url, $title, $text, $product)) {
                 continue;
             }
             $out[] = [
@@ -814,6 +811,38 @@ class HybridWebSearchService
         }
 
         return $out;
+    }
+
+    /**
+     * Kod w treści dowodzi tylko wzmianki — karta akcesorium wymienia kompatybilne modele,
+     * a „Oferta” czy „Deklaracje zgodności” wymieniają cały katalog producenta. Kartą tego
+     * produktu jest dopiero strona, która ma jego oznaczenie w adresie albo tytule.
+     */
+    private function pageProvesProductIdentity(
+        string $url,
+        string $title,
+        string $text,
+        Product $product,
+    ): bool {
+        if (! $this->identity->hayMentionsProduct($url.' '.$text, $product)) {
+            return false;
+        }
+        if ($this->isListingWithoutProduct($url, $product)) {
+            return false;
+        }
+        // tytuł z cudzym oznaczeniem („MT 213/2”) przesądza — to karta innego modelu
+        if ($this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+            return false;
+        }
+
+        if ($this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
+            || $this->identity->hayHasNamePhrase($url.' '.$title, $product)) {
+            return true;
+        }
+
+        // kod tylko w treści: sklep bywa skąpy w tytule, ale lista katalogowa zdradza się
+        // dziesiątkami cudzych oznaczeń
+        return $this->identity->foreignCodeCount($text, $product) < self::LISTING_FOREIGN_CODES;
     }
 
     private function isDistinctiveSku(Product $product): bool
