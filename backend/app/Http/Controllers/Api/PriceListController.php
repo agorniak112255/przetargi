@@ -35,25 +35,23 @@ class PriceListController extends Controller
         }
         $allIds = array_values(array_unique(array_filter($allIds)));
 
-        $doneSet = [];
-        $failedSet = [];
+        $statusSets = [
+            Product::ENRICHMENT_DONE => [],
+            Product::ENRICHMENT_FAILED => [],
+            Product::ENRICHMENT_QUEUED => [],
+            Product::ENRICHMENT_RUNNING => [],
+        ];
         if ($allIds !== []) {
-            $doneSet = array_fill_keys(
-                Product::query()
-                    ->whereIn('id', $allIds)
-                    ->where('enrichment_status', Product::ENRICHMENT_DONE)
-                    ->pluck('id')
-                    ->all(),
-                true
-            );
-            $failedSet = array_fill_keys(
-                Product::query()
-                    ->whereIn('id', $allIds)
-                    ->where('enrichment_status', Product::ENRICHMENT_FAILED)
-                    ->pluck('id')
-                    ->all(),
-                true
-            );
+            $statusRows = Product::query()
+                ->whereIn('id', $allIds)
+                ->whereIn('enrichment_status', array_keys($statusSets))
+                ->get(['id', 'enrichment_status']);
+            foreach ($statusRows as $product) {
+                $status = (string) $product->enrichment_status;
+                if (isset($statusSets[$status])) {
+                    $statusSets[$status][(int) $product->id] = true;
+                }
+            }
         }
 
         $latestBatchMsg = [];
@@ -61,31 +59,46 @@ class PriceListController extends Controller
             ->where('scope', ProductEnrichmentBatch::SCOPE_PRICE_LIST)
             ->whereIn('scope_id', $lists->pluck('id')->all())
             ->orderByDesc('id')
-            ->get(['id', 'scope_id', 'status', 'message', 'failed', 'done', 'total']);
+            ->get(['id', 'scope_id', 'status', 'message', 'failed', 'done', 'total', 'current_sku']);
         foreach ($batchRows as $batch) {
             $sid = (int) $batch->scope_id;
             if (! isset($latestBatchMsg[$sid])) {
                 $latestBatchMsg[$sid] = $batch;
+
+                continue;
+            }
+            $open = [
+                ProductEnrichmentBatch::STATUS_QUEUED,
+                ProductEnrichmentBatch::STATUS_RUNNING,
+            ];
+            $current = $latestBatchMsg[$sid];
+            if (! in_array((string) $current->status, $open, true)
+                && in_array((string) $batch->status, $open, true)) {
+                $latestBatchMsg[$sid] = $batch;
             }
         }
 
-        $payload = $lists->map(static function (PriceList $list) use ($doneSet, $failedSet, $latestBatchMsg): array {
+        $payload = $lists->map(static function (PriceList $list) use ($statusSets, $latestBatchMsg): array {
             $ids = array_map('intval', $list->product_ids ?? []);
-            $done = 0;
-            $failed = 0;
-            foreach ($ids as $id) {
-                if (isset($doneSet[$id])) {
-                    $done++;
+            $countStatus = static function (array $set) use ($ids): int {
+                $n = 0;
+                foreach ($ids as $id) {
+                    if (isset($set[$id])) {
+                        $n++;
+                    }
                 }
-                if (isset($failedSet[$id])) {
-                    $failed++;
-                }
-            }
+
+                return $n;
+            };
             $row = $list->toArray();
-            $row['enrichment_done'] = $done;
-            $row['enrichment_failed'] = $failed;
+            $row['enrichment_done'] = $countStatus($statusSets[Product::ENRICHMENT_DONE]);
+            $row['enrichment_failed'] = $countStatus($statusSets[Product::ENRICHMENT_FAILED]);
+            $row['enrichment_queued'] = $countStatus($statusSets[Product::ENRICHMENT_QUEUED]);
+            $row['enrichment_running'] = $countStatus($statusSets[Product::ENRICHMENT_RUNNING]);
             $row['enrichment_total'] = count($ids);
             $batch = $latestBatchMsg[$list->id] ?? null;
+            $row['enrichment_batch_status'] = $batch?->status;
+            $row['enrichment_current_sku'] = $batch?->current_sku;
             $row['enrichment_last_error'] = $batch && $batch->failed > 0
                 ? mb_substr((string) ($batch->message ?? ''), 0, 240)
                 : null;

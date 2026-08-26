@@ -87,7 +87,11 @@ type PriceList = {
   product_ids?: number[] | null
   enrichment_done?: number
   enrichment_failed?: number
+  enrichment_queued?: number
+  enrichment_running?: number
   enrichment_total?: number
+  enrichment_batch_status?: string | null
+  enrichment_current_sku?: string | null
   enrichment_last_error?: string | null
   created_at: string
   importer?: { name: string }
@@ -231,21 +235,45 @@ const HISTORY_SORT_DESC_FIRST: ReadonlySet<HistorySortKey> = new Set([
 function enrichmentCoverage(
   row: PriceList,
   cached: PriceList | undefined,
-  batch: EnrichmentBatch | undefined,
-): { total: number; done: number; failed: number; remaining: number } {
-  const live = batch?.status === 'queued' || batch?.status === 'running'
-  const total = live
-    ? batch.total
-    : (row.enrichment_total ?? (row.product_ids ?? cached?.product_ids ?? []).length)
-  const done = live ? batch.done : (row.enrichment_done ?? 0)
-  const failed = live ? batch.failed : (row.enrichment_failed ?? 0)
+): { total: number; done: number; failed: number; remaining: number; queued: number; running: number } {
+  const total = row.enrichment_total ?? (row.product_ids ?? cached?.product_ids ?? []).length
+  const done = row.enrichment_done ?? 0
+  const failed = row.enrichment_failed ?? 0
 
   return {
     total,
     done,
     failed,
     remaining: Math.max(0, total - done),
+    queued: row.enrichment_queued ?? 0,
+    running: row.enrichment_running ?? 0,
   }
+}
+
+function isPriceListDownloading(row: PriceList, batch: EnrichmentBatch | undefined): boolean {
+  if (batch?.status === 'queued' || batch?.status === 'running') {
+    return true
+  }
+  if ((row.enrichment_queued ?? 0) + (row.enrichment_running ?? 0) > 0) {
+    return true
+  }
+
+  return row.enrichment_batch_status === 'queued' || row.enrichment_batch_status === 'running'
+}
+
+function indexActiveBatches(list: EnrichmentBatch[]): Record<number, EnrichmentBatch> {
+  const next: Record<number, EnrichmentBatch> = {}
+  for (const batch of list) {
+    if (batch.status !== 'queued' && batch.status !== 'running') {
+      continue
+    }
+    const id = batch.scope === 'price_list' ? batch.scope_id : batch.price_list_id
+    if (id != null && id > 0) {
+      next[id] = batch
+    }
+  }
+
+  return next
 }
 
 function compareHistoryRows(
@@ -291,9 +319,11 @@ function compareHistoryRows(
       })
       break
     case 'enrichment': {
-      const ea = enrichmentCoverage(a, cache[a.id], batches[a.id])
-      const eb = enrichmentCoverage(b, cache[b.id], batches[b.id])
-      cmp = ea.remaining - eb.remaining || ea.done - eb.done || ea.total - eb.total
+      const ea = enrichmentCoverage(a, cache[a.id])
+      const eb = enrichmentCoverage(b, cache[b.id])
+      const da = isPriceListDownloading(a, batches[a.id]) ? 1 : 0
+      const db = isPriceListDownloading(b, batches[b.id]) ? 1 : 0
+      cmp = da - db || ea.remaining - eb.remaining || ea.done - eb.done || ea.total - eb.total
       break
     }
   }
@@ -431,52 +461,29 @@ export function PriceLists() {
   }, [canEnrich])
 
   useEffect(() => {
-    void api<unknown>('/product-enrichment-batches/active')
-      .then((res) => {
-        const list = parseActiveEnrichment(res).batches
-        const next: Record<number, EnrichmentBatch> = {}
-        for (const b of list) {
-          if (b.scope === 'price_list' && b.scope_id != null) {
-            next[b.scope_id] = b
-          }
-        }
-        if (Object.keys(next).length === 0) return
-        setEnrichBatches((prev) => ({ ...prev, ...next }))
-        const first = Object.values(next)[0]
-        if (first) {
-          setMsg(
-            `Pobieranie w tle trwa: ${first.done + first.failed}/${first.total}` +
-              (first.current_sku ? ` (teraz: ${first.current_sku})` : '') +
-              '. Możesz zamknąć stronę — postęp wróci po odświeżeniu.',
-          )
-        }
-      })
-      .catch(() => {
-        /* brak uprawnień / sieć — ignoruj */
-      })
-  }, [])
+    if (!canEnrich) return
 
-  useEffect(() => {
-    const active = Object.values(enrichBatches).filter(
-      (b) => b.status === 'queued' || b.status === 'running',
-    )
-    if (active.length === 0) return
-    const t = window.setInterval(() => {
-      void Promise.all(
-        active.map((b) => api<EnrichmentBatch>(`/product-enrichment-batches/${b.id}`)),
-      ).then((fresh) => {
-        setEnrichBatches((prev) => {
-          const next = { ...prev }
-          for (const b of fresh) {
-            next[b.scope_id] = b
-          }
-          return next
+    let cancelled = false
+    const pull = () => {
+      void api<unknown>('/product-enrichment-batches/active')
+        .then((res) => {
+          if (cancelled) return
+          const next = indexActiveBatches(parseActiveEnrichment(res).batches)
+          setEnrichBatches(next)
         })
-        void load()
-      })
-    }, 2500)
-    return () => window.clearInterval(t)
-  }, [enrichBatches])
+        .catch(() => {
+          /* brak uprawnień / sieć — zostaw ostatni stan */
+        })
+      void load().catch(() => {})
+    }
+
+    pull()
+    const t = window.setInterval(pull, 2500)
+    return () => {
+      cancelled = true
+      window.clearInterval(t)
+    }
+  }, [canEnrich])
 
   function startEditPriceList(row: PriceList) {
     setEditId(row.id)
@@ -1122,11 +1129,7 @@ export function PriceLists() {
             void load().catch(() => {})
             void api<unknown>('/product-enrichment-batches/active')
               .then((res) => {
-                const map: Record<number, EnrichmentBatch> = {}
-                for (const b of parseActiveEnrichment(res).batches) {
-                  if (b.scope === 'price_list' && b.scope_id) map[b.scope_id] = b
-                }
-                setEnrichBatches(map)
+                setEnrichBatches(indexActiveBatches(parseActiveEnrichment(res).batches))
               })
               .catch(() => {})
           }}
@@ -1629,17 +1632,17 @@ export function PriceLists() {
               const cached = historyCache[r.id] ?? r
               const kind = expandedHistory?.id === r.id ? expandedHistory.kind : null
               const enrichBatch = enrichBatches[r.id]
-              const { total: productCount, done: enrichDone, failed: enrichFailed, remaining } =
-                enrichmentCoverage(r, cached, enrichBatch)
-              const batchActive =
-                enrichBatch?.status === 'queued' || enrichBatch?.status === 'running'
+              const { total: productCount, done: enrichDone, failed: enrichFailed, remaining, queued, running } =
+                enrichmentCoverage(r, cached)
+              const batchActive = isPriceListDownloading(r, enrichBatch)
               const missing = remaining
               const donePct = productCount > 0 ? (enrichDone / productCount) * 100 : 0
               const failPct = productCount > 0 ? (enrichFailed / productCount) * 100 : 0
+              const nowSku = enrichBatch?.current_sku || r.enrichment_current_sku
               const editing = editId === r.id
               return (
               <Fragment key={r.id}>
-                <tr className="border-b">
+                <tr className={batchActive ? 'border-b bg-amber-50' : 'border-b'}>
                   <td className="p-2">{new Date(r.created_at).toLocaleString('pl-PL')}</td>
                   <td className="p-2 min-w-[10rem]">
                     {editing ? (
@@ -1731,6 +1734,13 @@ export function PriceLists() {
                           {enrichFailed > 0 && (
                             <p className="text-[10px] text-red-600">błędy {enrichFailed}</p>
                           )}
+                          {batchActive && (
+                            <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800">
+                              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+                              Pobieranie…
+                              {running + queued > 0 ? ` ${running + queued} w toku` : ''}
+                            </p>
+                          )}
                         </div>
                       )}
                       {enrichFailed > 0 && r.enrichment_last_error && (
@@ -1770,13 +1780,16 @@ export function PriceLists() {
                                   ? `Pobierz brak (${missing})`
                                   : 'Pobierz'}
                       </button>
-                      {batchActive && enrichBatch && (
-                        <p className="mt-0.5 max-w-[14rem] truncate text-[10px] text-slate-500" title={enrichBatch.message ?? ''}>
-                          {enrichBatch.current_sku
-                            ? enrichBatch.current_sku
-                            : enrichBatch.status === 'queued'
+                      {batchActive && (
+                        <p className="mt-0.5 max-w-[14rem] truncate text-[10px] text-amber-800" title={enrichBatch?.message ?? ''}>
+                          {nowSku
+                            ? `teraz: ${nowSku}`
+                            : enrichBatch?.status === 'queued' || r.enrichment_batch_status === 'queued'
                               ? 'W kolejce…'
                               : 'Przetwarzam…'}
+                          {enrichBatch && enrichBatch.total > 0
+                            ? ` · tura ${enrichBatch.done + enrichBatch.failed}/${enrichBatch.total}`
+                            : ''}
                         </p>
                       )}
                     </td>

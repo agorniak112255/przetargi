@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductEnrichmentBatch;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -132,7 +133,63 @@ final class PriceListDeleteApiTest extends TestCase
                 'version' => 'v-enrich',
                 'enrichment_done' => 1,
                 'enrichment_failed' => 0,
+                'enrichment_queued' => 0,
+                'enrichment_running' => 0,
                 'enrichment_total' => 2,
+            ]);
+    }
+
+    public function test_index_marks_price_list_with_queued_enrichment(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $queued = Product::query()->create([
+            'sku' => 'Q-1',
+            'name' => 'W kolejce',
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_QUEUED,
+        ]);
+        $running = Product::query()->create([
+            'sku' => 'R-1',
+            'name' => 'W toku',
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_RUNNING,
+        ]);
+
+        $list = PriceList::query()->create([
+            'manufacturer' => 'Ansell',
+            'version' => 'v-run',
+            'original_filename' => 'a.xlsx',
+            'rows_total' => 2,
+            'products_created' => 2,
+            'products_updated' => 0,
+            'rows_skipped' => 0,
+            'product_ids' => [$queued->id, $running->id],
+        ]);
+        ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRICE_LIST,
+            'scope_id' => $list->id,
+            'total' => 2,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'current_sku' => 'R-1',
+        ]);
+
+        $this->getJson('/api/price-lists')
+            ->assertOk()
+            ->assertJsonFragment([
+                'version' => 'v-run',
+                'enrichment_queued' => 1,
+                'enrichment_running' => 1,
+                'enrichment_batch_status' => ProductEnrichmentBatch::STATUS_RUNNING,
+                'enrichment_current_sku' => 'R-1',
             ]);
     }
 }
