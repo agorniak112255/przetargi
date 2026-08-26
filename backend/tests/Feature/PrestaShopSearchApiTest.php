@@ -45,6 +45,30 @@ final class PrestaShopSearchApiTest extends TestCase
         $this->assertSame(10.0, (float) $product->fresh()->catalog_price_net);
     }
 
+    public function test_search_falls_back_to_manufacturer_and_name(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct([
+            'sku' => 'INNY-SKU',
+            'manufacturer' => 'AJ Group',
+            'name' => 'TEMP-ICE 700',
+        ]);
+        $this->presta->rows = [
+            $this->card(10, '34700018', 'Rękawice TEMP-ICE 700', 'AJ Group'),
+            $this->card(11, '999', 'Rękawice lateksowe niebieskie', 'AJ Group'),
+            $this->card(12, '34700018', 'TEMP-ICE 700', 'MAPA'),
+        ];
+
+        $ids = $this->postJson("/api/products/{$product->id}/presta-search")
+            ->assertOk()
+            ->assertJsonPath('candidates.0.presta_id', 10)
+            ->assertJsonPath('candidates.0.manufacturer', 'AJ Group')
+            ->json('candidates');
+
+        $this->assertNotContains(11, collect($ids)->pluck('presta_id')->all());
+        $this->assertNotContains(12, collect($ids)->pluck('presta_id')->all());
+    }
+
     public function test_apply_copies_description_not_price(): void
     {
         Queue::fake();

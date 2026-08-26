@@ -6,6 +6,8 @@ namespace Tests\Support;
 
 use App\Models\Product;
 use App\Services\Presta\PrestaCatalogGateway;
+use App\Services\Presta\PrestaSearchQuery;
+use App\Support\ProductSizeVariant;
 
 final class FakePrestaCatalogGateway implements PrestaCatalogGateway
 {
@@ -16,6 +18,13 @@ final class FakePrestaCatalogGateway implements PrestaCatalogGateway
     public array $images = [];
 
     public bool $isConfigured = true;
+
+    private readonly PrestaSearchQuery $query;
+
+    public function __construct(?PrestaSearchQuery $query = null)
+    {
+        $this->query = $query ?? new PrestaSearchQuery(new ProductSizeVariant);
+    }
 
     public function configured(): bool
     {
@@ -34,7 +43,21 @@ final class FakePrestaCatalogGateway implements PrestaCatalogGateway
 
     public function findCandidates(Product $product, int $limit = 20): array
     {
-        return $this->rows;
+        $limit = max(1, min(40, $limit));
+        $code = array_values(array_filter(
+            $this->rows,
+            fn (array $row): bool => $this->query->rowMatchesCode($product, $row)
+        ));
+        if ($code !== []) {
+            return array_slice($code, 0, $limit);
+        }
+
+        $named = array_values(array_filter(
+            $this->rows,
+            fn (array $row): bool => $this->query->rowMatchesBrandAndName($product, $row)
+        ));
+
+        return array_slice($named, 0, $limit);
     }
 
     public function findCard(int $prestaId): ?array

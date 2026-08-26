@@ -604,7 +604,7 @@ export function Products() {
                 disabled={prestaBusy || selectedIds.length === 0}
                 onClick={() => void searchPrestaIds(selectedIds)}
                 className="rounded bg-emerald-700 px-3 py-2 text-xs text-white disabled:opacity-50"
-                title="Szuka kart w sklepie Presta — osobny cykl, nie AI"
+                title="Szuka w Preście: najpierw SKU/EAN, potem producent + nazwa"
               >
                 Wyszukaj w Presta
                 {selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}

@@ -15,6 +15,7 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
 {
     public function __construct(
         private readonly PrestaSettingsService $settings,
+        private readonly PrestaSearchQuery $query,
     ) {}
 
     public function configured(): bool
@@ -71,11 +72,6 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
         $lang = $this->idLang();
         $limit = max(1, min(40, $limit));
 
-        $sku = trim((string) $product->sku);
-        $ean = preg_replace('/\D+/', '', (string) $product->ean) ?? '';
-        $brand = trim((string) $product->manufacturer);
-        $name = trim((string) $product->name);
-
         $db = DB::connection('prestashop');
         try {
             $db->statement('SET SESSION group_concat_max_len = 32768');
@@ -83,38 +79,12 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
         }
 
         $hasEan = Schema::connection('prestashop')->hasColumn($prefix.'product', 'ean13');
-
-        $sql = $this->productSelectSql($prefix, $hasEan)
-            .' WHERE p.active = 1 AND (';
-
-        $bindings = [$lang, $lang];
-        $ors = [];
-        if ($hasEan && $ean !== '' && mb_strlen($ean) >= 8) {
-            $ors[] = 'p.ean13 = ?';
-            $bindings[] = $ean;
-        }
-        if ($sku !== '') {
-            $ors[] = 'p.reference = ?';
-            $bindings[] = $sku;
-            $ors[] = 'p.reference LIKE ?';
-            $bindings[] = $sku.'%';
-        }
-        if ($brand !== '') {
-            $ors[] = 'm.name LIKE ?';
-            $bindings[] = '%'.$brand.'%';
-        }
-        if ($name !== '' && mb_strlen($name) >= 4) {
-            $ors[] = 'pl.name LIKE ?';
-            $bindings[] = '%'.mb_substr($name, 0, 40).'%';
-        }
-        if ($ors === []) {
-            return [];
+        $codeHits = $this->selectByCode($product, $prefix, $hasEan, $lang, $limit);
+        if ($codeHits !== []) {
+            return $codeHits;
         }
 
-        $sql .= implode(' OR ', $ors).') ORDER BY p.id_product ASC LIMIT '.$limit;
-        $rows = $db->select($sql, $bindings);
-
-        return array_map(fn (object $row): array => $this->mapRow($row), $rows);
+        return $this->selectByBrandAndName($product, $prefix, $hasEan, $lang, $limit);
     }
 
     public function findCard(int $prestaId): ?array
@@ -190,6 +160,83 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
         if (! $this->configured()) {
             throw new RuntimeException('Sklep Presta nie jest skonfigurowany. Ustawienia → Administracja → Sklep Presta.');
         }
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function selectByCode(Product $product, string $prefix, bool $hasEan, int $lang, int $limit): array
+    {
+        $ors = [];
+        $bindings = [];
+        $ean = $this->query->ean($product);
+        if ($hasEan && $ean !== '') {
+            $ors[] = 'p.ean13 = ?';
+            $bindings[] = $ean;
+        }
+        $sku = $this->query->sku($product);
+        if ($sku !== '') {
+            $ors[] = 'p.reference = ?';
+            $bindings[] = $sku;
+            $ors[] = 'p.reference LIKE ?';
+            $bindings[] = $this->query->likePrefix($sku);
+        }
+        if ($ors === []) {
+            return [];
+        }
+
+        return $this->selectWhere($prefix, $hasEan, $lang, implode(' OR ', $ors), $bindings, $limit);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function selectByBrandAndName(Product $product, string $prefix, bool $hasEan, int $lang, int $limit): array
+    {
+        $brand = $this->query->brand($product);
+        $tokens = $this->query->nameTokens($product);
+        if ($brand === '' || $tokens === []) {
+            return [];
+        }
+
+        $nameOrs = [];
+        $bindings = [$this->query->likeContains($brand)];
+        foreach ($tokens as $token) {
+            $nameOrs[] = 'pl.name LIKE ?';
+            $bindings[] = $this->query->likeContains($token);
+        }
+
+        return $this->selectWhere(
+            $prefix,
+            $hasEan,
+            $lang,
+            'm.name LIKE ? AND ('.implode(' OR ', $nameOrs).')',
+            $bindings,
+            $limit
+        );
+    }
+
+    /**
+     * @param  list<mixed>  $whereBindings
+     * @return list<array<string, mixed>>
+     */
+    private function selectWhere(
+        string $prefix,
+        bool $hasEan,
+        int $lang,
+        string $whereSql,
+        array $whereBindings,
+        int $limit,
+    ): array {
+        $sql = $this->productSelectSql($prefix, $hasEan)
+            .' WHERE p.active = 1 AND ('.$whereSql.')'
+            .' ORDER BY p.id_product ASC LIMIT '.$limit;
+        $rows = DB::connection('prestashop')->select(
+            $sql,
+            array_merge([$lang, $lang], $whereBindings)
+        );
+
+        return array_map(fn (object $row): array => $this->mapRow($row), $rows);
     }
 
     private function productSelectSql(string $prefix, bool $hasEan): string
