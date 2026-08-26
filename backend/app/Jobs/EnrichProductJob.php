@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Exceptions\EnrichmentCancelledException;
+use App\Exceptions\ProductSourcesNotFoundException;
 use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
@@ -60,7 +61,13 @@ class EnrichProductJob implements ShouldQueue
             return;
         }
 
-        if (! $this->force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
+        if (! $this->force && in_array($product->enrichment_status, [
+            Product::ENRICHMENT_DONE,
+            Product::ENRICHMENT_MANUAL,
+        ], true)) {
+            $enrichment->markBatchItem($batch, true);
+            $this->refreshBatchProgress($batch);
+
             return;
         }
 
@@ -98,6 +105,15 @@ class EnrichProductJob implements ShouldQueue
                 'enrichment_error' => null,
             ]);
         if ($claimed === 0 && ! $this->force) {
+            $status = (string) $product->fresh()?->enrichment_status;
+            if (in_array($status, [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL], true)) {
+                $enrichment->markBatchItem($batch, true);
+                $this->refreshBatchProgress($batch);
+            } elseif ($status === Product::ENRICHMENT_FAILED) {
+                $enrichment->markBatchItem($batch, false);
+                $this->refreshBatchProgress($batch);
+            }
+
             return;
         }
 
@@ -133,14 +149,10 @@ class EnrichProductJob implements ShouldQueue
             }
 
             $enrichment->markBatchItem($batch, true);
-
-            $batch->refresh();
-            $processed = $batch->done + $batch->failed;
-            $batch->update([
-                'message' => "OK {$batch->done} · błędy {$batch->failed} · pozostało ".max(0, $batch->total - $processed),
-                'current_sku' => $processed >= $batch->total ? null : $batch->current_sku,
-                'current_name' => $processed >= $batch->total ? null : $batch->current_name,
-            ]);
+            $this->refreshBatchProgress($batch);
+        } catch (ProductSourcesNotFoundException $e) {
+            $enrichment->markBatchItem($batch, true);
+            $this->refreshBatchProgress($batch);
         } catch (EnrichmentCancelledException $e) {
             $this->abandonCancelled($product);
             $this->delete();
@@ -172,6 +184,18 @@ class EnrichProductJob implements ShouldQueue
             $message,
             'Błąd: '.mb_substr($message, 0, 200),
         );
+    }
+
+    private function refreshBatchProgress(ProductEnrichmentBatch $batch): void
+    {
+        $batch->refresh();
+        $processed = $batch->done + $batch->failed;
+        $done = $processed >= $batch->total;
+        $batch->update([
+            'message' => "OK {$batch->done} · błędy {$batch->failed} · pozostało ".max(0, $batch->total - $processed),
+            'current_sku' => $done ? null : $batch->current_sku,
+            'current_name' => $done ? null : $batch->current_name,
+        ]);
     }
 
     private function abandonCancelled(?Product $product): void

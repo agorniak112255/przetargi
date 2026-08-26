@@ -1636,6 +1636,62 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Batch zostaje na running, gdy job wrócił przy statusie manual/done bez zliczenia.
+     * Zamykamy tylko stare partie bez jobów w kolejce — świeżo zlecone jeszcze nie mają wierszy.
+     */
+    public function finalizeIfJobsGone(ProductEnrichmentBatch $batch): ProductEnrichmentBatch
+    {
+        if (! in_array($batch->status, [
+            ProductEnrichmentBatch::STATUS_QUEUED,
+            ProductEnrichmentBatch::STATUS_RUNNING,
+        ], true)) {
+            return $batch;
+        }
+
+        $processed = $batch->done + $batch->failed;
+        if ($processed >= $batch->total && $batch->total > 0) {
+            $batch->refreshStatus();
+
+            return $batch->refresh();
+        }
+
+        $staleAfter = now()->subSeconds(90);
+        if ($batch->updated_at !== null && $batch->updated_at->gt($staleAfter)) {
+            return $batch;
+        }
+
+        if ($this->batchHasPendingJobs((int) $batch->id)) {
+            return $batch;
+        }
+
+        $left = max(0, $batch->total - $processed);
+        if ($left > 0) {
+            $batch->increment('done', $left);
+            $batch->refresh();
+        }
+
+        $batch->update([
+            'message' => "OK {$batch->done} · pominięto już obsłużone (ręcznie/gotowe)",
+            'current_sku' => null,
+            'current_name' => null,
+        ]);
+        $batch->refreshStatus();
+
+        return $batch->refresh();
+    }
+
+    public function batchHasPendingJobs(int $batchId): bool
+    {
+        if (! Schema::hasTable('jobs')) {
+            return false;
+        }
+
+        $needle = 's:7:"batchId";i:'.$batchId.';';
+
+        return DB::table('jobs')->where('payload', 'like', '%'.$needle.'%')->exists();
+    }
+
+    /**
      * Natychmiastowe zatrzymanie batcha: flaga + usunięcie oczekujących jobów z kolejki.
      *
      * @return array{batch: ProductEnrichmentBatch, removed_jobs: int, marked_products: int}

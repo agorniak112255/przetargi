@@ -145,7 +145,12 @@ class ProductEnrichmentController extends Controller
             ])
             ->orderByDesc('id')
             ->limit(50)
-            ->get();
+            ->get()
+            ->map(fn (ProductEnrichmentBatch $batch): ProductEnrichmentBatch => $this->enrichment->finalizeIfJobsGone($batch))
+            ->filter(fn (ProductEnrichmentBatch $batch): bool => in_array($batch->status, [
+                ProductEnrichmentBatch::STATUS_QUEUED,
+                ProductEnrichmentBatch::STATUS_RUNNING,
+            ], true));
 
         return response()->json(
             $batches->map(fn (ProductEnrichmentBatch $batch): array => $this->batchPayload($batch))->values()->all()

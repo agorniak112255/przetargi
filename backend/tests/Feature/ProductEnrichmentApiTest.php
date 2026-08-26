@@ -21,6 +21,7 @@ use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\HybridWebSearchService;
 use App\Services\Enrichment\ManufacturerDomainResolver;
 use App\Services\Enrichment\ProductDocumentDownloader;
+use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductDocumentFinder;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\ProductImageCandidateVerifier;
@@ -260,6 +261,68 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->getJson('/api/product-enrichment-batches/active')
             ->assertOk()
             ->assertJsonFragment(['id' => $batch->id, 'status' => 'running']);
+    }
+
+    public function test_job_counts_already_manual_product_and_closes_batch(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'INT-001',
+            'enrichment_status' => Product::ENRICHMENT_MANUAL,
+        ]);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 6,
+            'total' => 2,
+            'done' => 1,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'force' => false,
+            'current_sku' => '3-60NM',
+        ]);
+
+        $job = new EnrichProductJob($product->id, $batch->id);
+        $job->handle(
+            app(ProductEnrichmentService::class),
+            app(AiSettingsService::class),
+            app(EnrichmentSlots::class),
+        );
+
+        $batch->refresh();
+        $this->assertSame(2, $batch->done);
+        $this->assertSame(ProductEnrichmentBatch::STATUS_DONE, $batch->status);
+        $this->assertNull($batch->current_sku);
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->fresh()?->enrichment_status);
+    }
+
+    public function test_active_batches_close_stale_running_batch_without_jobs(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 6,
+            'total' => 11,
+            'done' => 6,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'created_by' => $user->id,
+            'force' => false,
+            'current_sku' => '3-60NM',
+            'message' => 'OK 6 · błędy 0 · pozostało 5',
+        ]);
+        ProductEnrichmentBatch::query()->whereKey($batch->id)->update([
+            'updated_at' => now()->subMinutes(3),
+        ]);
+
+        $this->getJson('/api/product-enrichment-batches/active')
+            ->assertOk()
+            ->assertJsonMissing(['id' => $batch->id]);
+
+        $batch->refresh();
+        $this->assertSame(ProductEnrichmentBatch::STATUS_DONE, $batch->status);
+        $this->assertSame(11, $batch->done);
+        $this->assertNull($batch->current_sku);
     }
 
     public function test_handlowiec_cannot_enrich(): void
