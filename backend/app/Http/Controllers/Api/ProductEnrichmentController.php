@@ -41,7 +41,7 @@ class ProductEnrichmentController extends Controller
         ]);
 
         if (function_exists('set_time_limit')) {
-            @set_time_limit(180);
+            @set_time_limit(300);
         }
 
         try {
@@ -165,7 +165,7 @@ class ProductEnrichmentController extends Controller
     public function processBatchItem(ProductEnrichmentBatch $batch, Product $product): JsonResponse
     {
         if (function_exists('set_time_limit')) {
-            @set_time_limit(240);
+            @set_time_limit(300);
         }
 
         try {
