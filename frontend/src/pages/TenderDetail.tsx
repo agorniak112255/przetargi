@@ -465,6 +465,7 @@ export function TenderDetail() {
     const d = await api<Detail>(`/tenders/${id}`)
     setData(d)
     setDeadlineEdit(d.tender.deadline ? d.tender.deadline.slice(0, 10) : '')
+    return d
   }, [id])
 
   const loadMeta = useCallback(async () => {
@@ -1138,8 +1139,15 @@ export function TenderDetail() {
         scoreParts.length === 0
           ? 0
           : Math.round((scoreParts.reduce((a, b) => a + b, 0) / scoreParts.length) * 10) / 10
-      await load()
+      const fresh = await load()
       await loadMeta()
+      if (
+        coverageFilter &&
+        fresh?.coverage &&
+        fresh.coverage[coverageFilter] === 0
+      ) {
+        setCoverageFilter(null)
+      }
       const report: MatchReport = {
         processed: merged.processed ?? merged.matched + merged.skipped,
         changed: merged.changed ?? 0,
@@ -1155,9 +1163,7 @@ export function TenderDetail() {
       if (id) {
         sessionStorage.setItem(matchReportStorageKey(id), JSON.stringify(report))
       }
-      if (report.changed > 0) {
-        setShowAiChanges(true)
-      }
+      setShowAiChanges(false)
       setMsg(
         report.changed > 0
           ? `Dopasowanie zakończone: zmieniono ${report.changed} z ${report.processed} pozycji.`
@@ -2601,7 +2607,9 @@ function ItemRow({
         ? item.main_product
         : null
 
-  const hasSavedProduct = Boolean(selectedProduct || productId)
+  const hasSavedProduct = Boolean(
+    selectedProduct || productId || (item.custom_name ?? '').trim(),
+  )
 
   return (
     <>
@@ -2682,6 +2690,22 @@ function ItemRow({
                 setCustomName('')
                 setCustomUrl('')
                 setAiModalOpen(false)
+                void onSave(item.id, {
+                  main_product_id: p.id,
+                  custom_name: null,
+                  custom_url: null,
+                  quantity: Number(qty) || 1,
+                  offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
+                  ai_match_percent: p.score,
+                  match_source: 'ai',
+                  ai_match_reasons: [
+                    {
+                      code: 'ai',
+                      label: 'Wybór z wyszukiwania AI',
+                      points: p.score,
+                    },
+                  ],
+                })
               }}
               onAddExternal={(hint) => {
                 setCustomName(hint.title)
@@ -2701,24 +2725,30 @@ function ItemRow({
                 })
               }}
             />
-            {!hasSavedProduct && (
+            {(item.ai_match_reasons ?? []).some(
+              (r) => r.code === 'external_link' || r.code === 'custom_offer',
+            ) && (
               <ExternalHints
                 reasons={item.ai_match_reasons}
-                onAddToOffer={(hint) => {
-                  setCustomName(hint.title)
-                  setCustomUrl(hint.url)
-                  setProductId('')
-                  setPicked(null)
-                  void onSave(item.id, {
-                    main_product_id: null,
-                    custom_name: hint.title,
-                    custom_url: hint.url,
-                    quantity: Number(qty) || 1,
-                    offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
-                    match_source: 'custom',
-                    status: 'matched',
-                  })
-                }}
+                onAddToOffer={
+                  hasSavedProduct
+                    ? undefined
+                    : (hint) => {
+                        setCustomName(hint.title)
+                        setCustomUrl(hint.url)
+                        setProductId('')
+                        setPicked(null)
+                        void onSave(item.id, {
+                          main_product_id: null,
+                          custom_name: hint.title,
+                          custom_url: hint.url,
+                          quantity: Number(qty) || 1,
+                          offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
+                          match_source: 'custom',
+                          status: 'matched',
+                        })
+                      }
+                }
               />
             )}
             <details className="max-w-[280px] rounded border border-amber-200 bg-amber-50/70 px-2 py-1">

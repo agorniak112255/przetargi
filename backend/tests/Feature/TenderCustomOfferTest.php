@@ -379,12 +379,15 @@ final class TenderCustomOfferTest extends TestCase
 
         $this->postJson("/api/tenders/{$tender->id}/items/{$item->id}/match", ['force' => true])
             ->assertOk()
-            ->assertJsonPath('matched', false);
+            ->assertJsonPath('matched', true);
 
         $item->refresh();
         $this->assertNull($item->main_product_id);
         $this->assertNull($item->ai_match_percent);
         $this->assertSame('external', $item->match_source);
+        $this->assertSame('Czapka polarowa pod hełm', $item->custom_name);
+        $this->assertSame('https://sklep.example/czapka-polarowa', $item->custom_url);
+        $this->assertSame('matched', $item->status);
     }
 
     public function test_bulk_saves_custom_offer(): void
@@ -415,6 +418,103 @@ final class TenderCustomOfferTest extends TestCase
         $this->assertSame('https://sklep.example/czapka', $item->custom_url);
         $this->assertSame('matched', $item->status);
         $this->assertSame('custom', $item->match_source);
+    }
+
+    public function test_rematch_saves_first_external_hint_as_offer_and_keeps_link(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'tavily_api_key' => 'tvly-test',
+        ]);
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn(
+            [
+                'needed' => 'recznik 50x100',
+                'search_phrases' => ['recznik', 'bawelniany'],
+            ],
+            ['matches' => []],
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        Http::fake([
+            'api.tavily.com/search' => Http::response([
+                'results' => [[
+                    'url' => 'https://sklep.example/recznik-50x100',
+                    'title' => 'Ręcznik bawełniany 50x100 500 g/m2',
+                ]],
+            ], 200),
+        ]);
+
+        $tender = $this->makeTender();
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 18,
+            'requirement' => 'RECZNIK 50X100 GR. 500GM2 do suchego przetarcia powierzchni',
+            'quantity' => 50,
+            'status' => 'brak',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/match", [
+            'only_empty' => false,
+            'item_ids' => [$item->id],
+        ])
+            ->assertOk()
+            ->assertJsonPath('matched', 1)
+            ->assertJsonPath('changes.0.action', 'changed');
+
+        $item->refresh();
+        $this->assertSame('Ręcznik bawełniany 50x100 500 g/m2', $item->custom_name);
+        $this->assertSame('https://sklep.example/recznik-50x100', $item->custom_url);
+        $this->assertSame('external', $item->match_source);
+        $this->assertSame('matched', $item->status);
+        $this->assertNull($item->main_product_id);
+        $this->assertContains('external_link', array_column($item->ai_match_reasons ?? [], 'code'));
+    }
+
+    public function test_rematch_keeps_compatible_catalog_product_when_no_new_pick(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        Http::fake();
+
+        $product = Product::query()->create([
+            'sku' => 'RNITZ-KEEP',
+            'name' => 'Rękawice nitrylowe ze ściągaczem',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe RNITZ kat. 2 ze ściągaczem. Materiał: nitryl.',
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'catalog_price_net' => 3.5,
+            'purchase_price' => 2,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $tender = $this->makeTender();
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Rękawice robocze nitrylowe REJS RNITZ kat. 2 ze ściągaczem',
+            'quantity' => 10,
+            'status' => 'matched',
+            'main_product_id' => $product->id,
+            'ai_match_percent' => 80,
+            'match_source' => 'ai',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/match", [
+            'only_empty' => false,
+            'item_ids' => [$item->id],
+        ])->assertOk();
+
+        $item->refresh();
+        $this->assertSame($product->id, $item->main_product_id);
+        $this->assertSame('matched', $item->status);
     }
 
     private function makeTender(): Tender

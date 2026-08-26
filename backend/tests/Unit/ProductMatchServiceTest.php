@@ -495,6 +495,24 @@ final class ProductMatchServiceTest extends TestCase
         $this->assertGreaterThanOrEqual(ProductMatchService::MIN_MATCH_SCORE, $best['score']);
     }
 
+    #[Test]
+    public function persistable_score_accepts_first_ai_result_from_apply_threshold(): void
+    {
+        $product = $this->fakeProduct([
+            'sku' => 'RNITZ-9',
+            'name' => 'Rękawice nitrylowe ze ściągaczem',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe RNITZ kat. 2 ze ściągaczem. Materiał: nitryl.',
+            'enrichment_payload' => ['materials' => ['nitryl']],
+        ]);
+        $req = 'Rękawice robocze nitrylowe REJS RNITZ kat. 2 ze ściągaczem';
+        $method = new \ReflectionMethod(ProductMatchService::class, 'persistableScore');
+
+        $accepted = $method->invoke($this->matcher, $req, $product, 45);
+        $this->assertSame(45, $accepted);
+    }
+
     /**
      * @param  array<string, mixed>  $attrs
      */

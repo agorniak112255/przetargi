@@ -32,6 +32,7 @@ use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -312,7 +313,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'message' => 'OK 6 · błędy 0 · pozostało 5',
         ]);
         ProductEnrichmentBatch::query()->whereKey($batch->id)->update([
-            'updated_at' => now()->subMinutes(3),
+            'updated_at' => now()->subMinutes(15),
         ]);
 
         $this->getJson('/api/product-enrichment-batches/active')
@@ -323,6 +324,54 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(ProductEnrichmentBatch::STATUS_DONE, $batch->status);
         $this->assertSame(11, $batch->done);
         $this->assertNull($batch->current_sku);
+    }
+
+    public function test_active_batches_keep_running_when_json_job_payload_exists(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 6,
+            'total' => 11,
+            'done' => 2,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'created_by' => $user->id,
+            'force' => false,
+            'current_sku' => '420000300000',
+            'current_name' => 'Rękawice CXS',
+            'message' => 'DuckDuckGo + lokalny model…',
+        ]);
+        ProductEnrichmentBatch::query()->whereKey($batch->id)->update([
+            'updated_at' => now()->subMinutes(15),
+        ]);
+
+        $command = 'O:27:"App\\Jobs\\EnrichProductJob":2:{s:9:"productId";i:99;s:7:"batchId";i:'.$batch->id.';}';
+        DB::table('jobs')->insert([
+            'queue' => 'default',
+            'payload' => json_encode([
+                'displayName' => EnrichProductJob::class,
+                'data' => ['command' => $command],
+            ], JSON_UNESCAPED_SLASHES),
+            'attempts' => 1,
+            'reserved_at' => time(),
+            'available_at' => time(),
+            'created_at' => time(),
+        ]);
+
+        $this->getJson('/api/product-enrichment-batches/active')
+            ->assertOk()
+            ->assertJsonFragment([
+                'id' => $batch->id,
+                'status' => 'running',
+                'current_sku' => '420000300000',
+            ]);
+
+        $batch->refresh();
+        $this->assertSame(ProductEnrichmentBatch::STATUS_RUNNING, $batch->status);
+        $this->assertSame('420000300000', $batch->current_sku);
     }
 
     public function test_handlowiec_cannot_enrich(): void

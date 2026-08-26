@@ -23,7 +23,7 @@ export function EnrichmentQueuePanel({ onChanged }: Props) {
       const list = await api<EnrichmentBatch[]>('/product-enrichment-batches/active')
       setBatches(Array.isArray(list) ? list : [])
     } catch {
-      setBatches([])
+      /* zostaw ostatni postęp — chwilowy błąd API nie może schować paska */
     }
   }
 

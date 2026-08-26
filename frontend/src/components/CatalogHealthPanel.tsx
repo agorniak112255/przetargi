@@ -144,11 +144,10 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
           <Stat
             label={
               report.vector.pending_jobs > 0
-                ? // kolejka jest wspólna dla całego katalogu, licznik dotyczy filtra
-                  `Wektory${manufacturerFilter ? ` (${manufacturerFilter})` : ''} — indeksuje się, w kolejce ${report.vector.pending_jobs} z całego katalogu`
+                ? `Wektory${manufacturerFilter ? ` (${manufacturerFilter})` : ''} — indeksuje się, w kolejce ${report.vector.pending_jobs}`
                 : `Wektory${manufacturerFilter ? ` (${manufacturerFilter})` : ''}`
             }
-            value={report.vector.indexed}
+            value={`${report.vector.indexed}/${report.total}`}
           />
         )}
       </div>
@@ -191,7 +190,7 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
   )
 }
 
-function Stat({ label, value, warn }: { label: string; value: number; warn?: boolean }) {
+function Stat({ label, value, warn }: { label: string; value: number | string; warn?: boolean }) {
   return (
     <span
       className={`rounded border px-2 py-1 ${

@@ -18,6 +18,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -1655,12 +1656,18 @@ final class ProductEnrichmentService
             return $batch->refresh();
         }
 
-        $staleAfter = now()->subSeconds(90);
+        // Job enrichmentu trwa do ~7 min (timeout 420 s + slot). 90 s zamykało
+        // batch w trakcie pobierania i UI gubił SKU / pasek.
+        $staleAfter = now()->subMinutes(12);
         if ($batch->updated_at !== null && $batch->updated_at->gt($staleAfter)) {
             return $batch;
         }
 
         if ($this->batchHasPendingJobs((int) $batch->id)) {
+            return $batch;
+        }
+
+        if (Product::query()->where('enrichment_status', Product::ENRICHMENT_RUNNING)->exists()) {
             return $batch;
         }
 
@@ -1686,9 +1693,21 @@ final class ProductEnrichmentService
             return false;
         }
 
-        $needle = 's:7:"batchId";i:'.$batchId.';';
+        return $this->jobsPayloadQuery($batchId)->exists();
+    }
 
-        return DB::table('jobs')->where('payload', 'like', '%'.$needle.'%')->exists();
+    /**
+     * Payload w tabeli jobs to JSON — cudzysłowy w serializacji PHP są jako \".
+     * Szukanie dosłownego s:7:"batchId" nic nie znajdowało i UI znikał po 90 s.
+     */
+    private function jobsPayloadQuery(int $batchId): Builder
+    {
+        $id = (string) $batchId;
+
+        return DB::table('jobs')->where(function ($q) use ($id): void {
+            $q->where('payload', 'like', '%batchId%;i:'.$id.';%')
+                ->orWhere('payload', 'like', '%batchId%:'.$id.'%');
+        });
     }
 
     /**
@@ -1712,9 +1731,7 @@ final class ProductEnrichmentService
         $markedProducts = 0;
 
         if (Schema::hasTable('jobs')) {
-            $needle = 's:7:"batchId";i:'.(int) $batch->id.';';
-            $rows = DB::table('jobs')
-                ->where('payload', 'like', '%'.$needle.'%')
+            $rows = $this->jobsPayloadQuery((int) $batch->id)
                 ->orderBy('id')
                 ->get(['id', 'payload', 'reserved_at']);
 

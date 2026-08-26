@@ -23,6 +23,12 @@ final class ProductMatchService
     /** Minimalny wynik dopasowania, poniżej którego nie proponujemy produktu. */
     public const MIN_MATCH_SCORE = 65;
 
+    /** Od tego wyniku zapisujemy pierwszy trafiony produkt AI w ofercie. */
+    public const APPLY_MATCH_SCORE = 40;
+
+    /** @var array{url: string, title: string}|null */
+    private ?array $lastExternalHint = null;
+
     /** Tokeny zbyt ogólne — nie podbijają score overlap. */
     private const STOPWORDS = [
         'ochronne', 'ochronna', 'ochronny', 'robocze', 'robocza',
@@ -146,6 +152,7 @@ final class ProductMatchService
                 $skipped++;
                 $changes[] = $this->matchChangeRow($item, 'skipped_custom', $beforeSku, $beforeSku);
             } else {
+                $this->lastExternalHint = null;
                 $pick = $this->resolveBestPick($item->requirement, $products);
                 $applied = $pick !== null && $this->applyProduct(
                     $item,
@@ -155,9 +162,20 @@ final class ProductMatchService
                 );
                 if (! $applied) {
                     $this->applyNoCatalogMatch($item, $products);
-                    $skipped++;
-                    $action = $beforeId !== null ? 'cleared' : 'no_match';
-                    $changes[] = $this->matchChangeRow($item, $action, $beforeSku, null);
+                    $item->refresh();
+                    if ($item->hasCustomOffer()) {
+                        $matched++;
+                        $changes[] = $this->matchChangeRow($item, 'changed', $beforeSku, $item->custom_name);
+                    } elseif ($beforeId !== null && (int) $item->main_product_id === $beforeId) {
+                        $skipped++;
+                        $changes[] = $this->matchChangeRow($item, 'unchanged', $beforeSku, $beforeSku);
+                    } elseif ($beforeId !== null && $item->main_product_id === null) {
+                        $skipped++;
+                        $changes[] = $this->matchChangeRow($item, 'cleared', $beforeSku, null);
+                    } else {
+                        $skipped++;
+                        $changes[] = $this->matchChangeRow($item, 'no_match', $beforeSku, null);
+                    }
                 } else {
                     $matched++;
                     $scores[] = (int) $item->ai_match_percent;
@@ -856,6 +874,7 @@ final class ProductMatchService
         ];
 
         $candidates = $this->mergeCandidates($heuristic, $aiCandidates);
+        $this->lastExternalHint = null;
         $pick = $this->resolveBestPick($item->requirement, $products);
 
         if ($pick === null) {
@@ -874,15 +893,17 @@ final class ProductMatchService
                 ];
             }
             $this->applyNoCatalogMatch($item, $products);
+            $item->refresh();
 
             return [
-                'matched' => false,
+                'matched' => $item->hasOfferProduct(),
                 'score' => (int) ($item->ai_match_percent ?? 0),
-                'product_id' => null,
+                'product_id' => $item->main_product_id,
                 'offer_price' => $item->offer_price,
                 'sources' => $sources,
                 'candidates' => $candidates,
                 'ai_match_reasons' => $item->ai_match_reasons,
+                'match_source' => $item->match_source,
             ];
         }
 
@@ -897,15 +918,17 @@ final class ProductMatchService
         }
         if (! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason)) {
             $this->applyNoCatalogMatch($item, $products);
+            $item->refresh();
 
             return [
-                'matched' => false,
+                'matched' => $item->hasOfferProduct(),
                 'score' => (int) ($item->ai_match_percent ?? 0),
-                'product_id' => null,
+                'product_id' => $item->main_product_id,
                 'offer_price' => $item->offer_price,
                 'sources' => $sources,
                 'candidates' => $candidates,
                 'ai_match_reasons' => $item->ai_match_reasons,
+                'match_source' => $item->match_source,
             ];
         }
         $item->load(['mainProduct', 'tender']);
@@ -1080,7 +1103,7 @@ final class ProductMatchService
      */
     private function pickAuto(string $requirement, ?array $heuristic, array $aiCandidates, Collection $products): ?array
     {
-        if ($heuristic !== null && $heuristic['score'] >= self::MIN_MATCH_SCORE
+        if ($heuristic !== null && $heuristic['score'] >= self::APPLY_MATCH_SCORE
             && $this->hasStrongSkuInRequirement($requirement, $heuristic['product'])
             && $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']) !== null) {
             return [
@@ -1091,7 +1114,7 @@ final class ProductMatchService
         }
 
         foreach ($aiCandidates as $topAi) {
-            if ($topAi['score'] < self::MIN_MATCH_SCORE) {
+            if ($topAi['score'] < self::APPLY_MATCH_SCORE) {
                 continue;
             }
             $product = $products->firstWhere('id', $topAi['id'])
@@ -1134,9 +1157,17 @@ final class ProductMatchService
         }
 
         try {
-            $result = $this->aiSearch->search($requirement, $limit, false, AiTask::TenderMatch);
+            $result = $this->aiSearch->search($requirement, $limit, true, AiTask::TenderMatch);
         } catch (Throwable) {
             return [];
+        }
+
+        $hint = $result['external_hint'] ?? null;
+        if (is_array($hint) && isset($hint['url'], $hint['title'])) {
+            $this->lastExternalHint = [
+                'url' => (string) $hint['url'],
+                'title' => (string) $hint['title'],
+            ];
         }
 
         $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
@@ -1248,7 +1279,7 @@ final class ProductMatchService
             $this->modelFuzzy->score($requirement, $product)
         );
         $honest = min(max(0, $proposed), max($explained['score'], $skuish));
-        if ($honest >= self::MIN_MATCH_SCORE) {
+        if ($honest >= self::APPLY_MATCH_SCORE) {
             return $honest;
         }
         if ($skuish >= 70) {
@@ -1293,7 +1324,7 @@ final class ProductMatchService
         $item->custom_name = null;
         $item->custom_url = null;
         $item->ai_match_percent = $honest;
-        $item->ai_match_reasons = $reasons;
+        $item->ai_match_reasons = $this->appendExternalHint($reasons, $this->lastExternalHint);
         $item->match_source = $source;
         $item->status = 'matched';
         if ($item->offer_price === null) {
@@ -1315,31 +1346,92 @@ final class ProductMatchService
             return;
         }
 
+        $hint = $this->lastExternalHint ?? $this->externalHints->hint($item->requirement);
+        $item->loadMissing('mainProduct');
+        $existing = $item->mainProduct;
+        if ($existing instanceof Product) {
+            $proposed = max((int) ($item->ai_match_percent ?? 0), 100);
+            if ($this->persistableScore($item->requirement, $existing, $proposed) !== null) {
+                $reasons = is_array($item->ai_match_reasons) ? $item->ai_match_reasons : [];
+                $item->ai_match_reasons = $this->appendExternalHint($reasons, $hint);
+                $item->save();
+
+                return;
+            }
+        }
+
+        if ($hint !== null) {
+            $this->applyExternalHintAsOffer($item, $hint);
+
+            return;
+        }
+
         $item->main_product_id = null;
         $item->status = 'brak';
         $item->ai_match_percent = null;
-        $reasons = [
+        $item->match_source = null;
+        $item->ai_match_reasons = [
             [
                 'code' => 'no_match',
                 'label' => 'Brak produktu w katalogu (szukano w opisach). Nie dodano pozycji z internetu.',
                 'points' => 0,
             ],
         ];
-        $hint = $this->externalHints->hint($item->requirement);
-        if ($hint !== null) {
-            $reasons[] = [
-                'code' => 'external_link',
-                'label' => 'Link zewnętrzny (nie z katalogu SUPON): '.$hint['title'],
-                'points' => 0,
-                'url' => $hint['url'],
-            ];
-            $item->match_source = 'external';
-        } else {
-            $item->match_source = null;
-        }
-        $item->ai_match_reasons = $reasons;
         $item->save();
         $this->pricing->recalculateItemMargin($item);
+    }
+
+    /**
+     * @param  array{url: string, title: string}  $hint
+     */
+    private function applyExternalHintAsOffer(TenderItem $item, array $hint): void
+    {
+        $item->main_product_id = null;
+        $item->custom_name = mb_substr($hint['title'], 0, 500);
+        $item->custom_url = $hint['url'];
+        $item->status = 'matched';
+        $item->match_source = 'external';
+        $item->ai_match_percent = null;
+        $item->ai_match_reasons = $this->appendExternalHint([
+            [
+                'code' => 'no_match',
+                'label' => 'Brak produktu w katalogu (szukano w opisach). Zapisano pierwszy link jako propozycję.',
+                'points' => 0,
+            ],
+            [
+                'code' => 'custom_offer',
+                'label' => 'Własna propozycja (nie z katalogu SUPON): '.$hint['title'],
+                'points' => 0,
+                'url' => $hint['url'],
+            ],
+        ], $hint);
+        $item->save();
+        $this->pricing->recalculateItemMargin($item);
+    }
+
+    /**
+     * @param  list<array{code: string, label: string, points: int, url?: string}>  $reasons
+     * @param  array{url: string, title: string}|null  $hint
+     * @return list<array{code: string, label: string, points: int, url?: string}>
+     */
+    private function appendExternalHint(array $reasons, ?array $hint): array
+    {
+        if ($hint === null) {
+            return $reasons;
+        }
+        foreach ($reasons as $row) {
+            if (($row['code'] ?? '') === 'external_link' && ($row['url'] ?? '') === $hint['url']) {
+                return $reasons;
+            }
+        }
+        $reasons[] = [
+            'code' => 'external_link',
+            'label' => 'Podpowiedź / zamiennik (nie z katalogu): '.$hint['title'],
+            'points' => 0,
+            'url' => $hint['url'],
+        ];
+
+        return $reasons;
     }
 
     /**

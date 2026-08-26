@@ -235,6 +235,17 @@ export function Products() {
 
   useEffect(() => {
     if (!canEnrich) return
+    void api<EnrichmentBatch[]>('/product-enrichment-batches/active')
+      .then((list) => {
+        if (Array.isArray(list) && list.length > 0) {
+          setBatch(list[0])
+        }
+      })
+      .catch(() => {})
+  }, [canEnrich])
+
+  useEffect(() => {
+    if (!canEnrich) return
     void api<{ enrichment_batch_limit: number; match_concurrency?: number }>('/product-enrichment/limits')
       .then((res) => {
         setEnrichBatchLimit(clampEnrichmentBatchLimit(res.enrichment_batch_limit))
