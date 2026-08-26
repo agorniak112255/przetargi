@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductDocument;
 use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\ProductSizeMergeService;
@@ -139,5 +140,41 @@ final class ProductSizeMergeTest extends TestCase
             ->assertOk()
             ->assertJsonPath('groups', 1)
             ->assertJsonPath('deleted', 1);
+    }
+
+    public function test_merge_skips_duplicate_document_checksums(): void
+    {
+        Queue::fake();
+
+        $a = Product::query()->create([
+            'sku' => '37695VP070',
+            'name' => 'AlphaTec 37695VP Size 7.0',
+            'manufacturer' => 'Ansell',
+            'description' => str_repeat('Rękawice chemiczne Ansell AlphaTec. ', 3),
+            'catalog_price_net' => 2.85,
+            'purchase_price' => 2.85,
+        ]);
+        $b = Product::query()->create([
+            'sku' => '37695VP100',
+            'name' => 'AlphaTec 37695VP Size 10.0',
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => 2.85,
+            'purchase_price' => 2.85,
+        ]);
+        foreach ([$a, $b] as $p) {
+            ProductDocument::query()->create([
+                'product_id' => $p->id,
+                'path' => 'docs/karta-'.$p->id.'.pdf',
+                'kind' => 'datasheet',
+                'checksum' => '535cdb725db8d9f8bc82933bee426281ac6b673f',
+            ]);
+        }
+
+        $result = app(ProductSizeMergeService::class)->merge('Ansell', false);
+
+        $this->assertSame(1, $result['groups']);
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(1, Product::query()->count());
+        $this->assertSame(1, ProductDocument::query()->count());
     }
 }

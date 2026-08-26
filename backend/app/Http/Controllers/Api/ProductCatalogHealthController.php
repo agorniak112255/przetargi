@@ -115,6 +115,9 @@ class ProductCatalogHealthController extends Controller
 
         $prefix = $result['dry_run'] ? 'Podgląd: ' : '';
         $message = $prefix.'złączono '.$result['groups'].' modeli, usunięto '.$result['deleted'].' SKU-rozmiarów.';
+        if (($result['errors'] ?? []) !== []) {
+            $message .= ' Błędy: '.count($result['errors']).'.';
+        }
 
         return response()->json([
             ...$result,

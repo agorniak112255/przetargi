@@ -1188,15 +1188,8 @@ export function TenderDetail() {
         scoreParts.length === 0
           ? 0
           : Math.round((scoreParts.reduce((a, b) => a + b, 0) / scoreParts.length) * 10) / 10
-      const fresh = await load()
+      await load()
       await loadMeta()
-      if (
-        coverageFilter &&
-        fresh?.coverage &&
-        fresh.coverage[coverageFilter] === 0
-      ) {
-        setCoverageFilter(null)
-      }
       const report: MatchReport = {
         processed: merged.processed ?? merged.matched + merged.skipped,
         changed: merged.changed ?? 0,
@@ -1212,10 +1205,11 @@ export function TenderDetail() {
       if (id) {
         sessionStorage.setItem(matchReportStorageKey(id), JSON.stringify(report))
       }
-      setShowAiChanges(false)
+      setCoverageFilter(null)
+      setShowAiChanges(report.changed > 0)
       setMsg(
         report.changed > 0
-          ? `Dopasowanie zakończone: zmieniono ${report.changed} z ${report.processed} pozycji.`
+          ? `Zapisano od razu ${report.changed} z ${report.processed} pozycji (nie trzeba klikać Zapisz). Poniżej tylko te zmienione.`
           : `Dopasowanie zakończone: brak zmian w ofercie (${report.processed} przerobionych, ${report.unchanged} bez zmiany, ${report.skipped_custom} własnych, ${report.no_match} bez produktu).`,
       )
       setTab('pozycje')
@@ -1263,6 +1257,7 @@ export function TenderDetail() {
     return itemMatchesQuery(it, itemQuery)
   })
   const listNarrowed = itemQuery.trim() !== '' || coverageFilter != null
+  const listFiltered = listNarrowed || showAiChanges
 
   return (
     <div>
@@ -1424,13 +1419,21 @@ export function TenderDetail() {
                 {matchReport.unchanged} · zdjęto produkt {matchReport.cleared} · własne pominięte{' '}
                 {matchReport.skipped_custom} · bez produktu {matchReport.no_match}
               </p>
+              <p className="mt-1 text-violet-800/80">
+                AI zapisuje produkt od razu. <strong>Zapisz</strong> / <strong>Zapisz całość</strong> jest
+                tylko do ręcznych poprawek (cena, ilość).
+              </p>
             </div>
             <div className="flex flex-wrap gap-1">
               {matchReport.changed > 0 && (
                 <button
                   type="button"
                   onClick={() => {
-                    setShowAiChanges((v) => !v)
+                    setShowAiChanges((v) => {
+                      const next = !v
+                      if (next) setCoverageFilter(null)
+                      return next
+                    })
                     setTab('pozycje')
                   }}
                   className={`rounded px-2 py-1 ${
@@ -1661,7 +1664,7 @@ export function TenderDetail() {
                 className="min-w-[240px] flex-1 rounded border border-slate-300 px-2 py-1.5 text-xs"
               />
               <span className="text-[11px] text-slate-500">
-                {listNarrowed
+                {listFiltered
                   ? `${filteredItems.length} / ${tender.items.length} pozycji`
                   : `${tender.items.length} pozycji`}
               </span>

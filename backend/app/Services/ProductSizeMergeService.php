@@ -28,7 +28,8 @@ final class ProductSizeMergeService
      *     groups: int,
      *     deleted: int,
      *     dry_run: bool,
-     *     examples: list<array{keep: string, drop: list<string>}>
+     *     examples: list<array{keep: string, drop: list<string>}>,
+     *     errors: list<string>
      * }
      */
     public function merge(?string $manufacturer = null, bool $dryRun = false): array
@@ -57,6 +58,7 @@ final class ProductSizeMergeService
         $mergedGroups = 0;
         $deleted = 0;
         $examples = [];
+        $errors = [];
         foreach ($groups as $items) {
             if (count($items) < 2) {
                 continue;
@@ -78,7 +80,16 @@ final class ProductSizeMergeService
                 ];
             }
             if (! $dryRun) {
-                $this->absorb($winner, $losers);
+                try {
+                    $this->absorb($winner, $losers);
+                } catch (Throwable $e) {
+                    $mergedGroups--;
+                    $deleted -= count($losers);
+                    if (count($examples) > 0) {
+                        array_pop($examples);
+                    }
+                    $errors[] = $winner->sku.': '.$e->getMessage();
+                }
             }
         }
 
@@ -87,6 +98,7 @@ final class ProductSizeMergeService
             'deleted' => $deleted,
             'dry_run' => $dryRun,
             'examples' => $examples,
+            'errors' => $errors,
         ];
     }
 
@@ -240,11 +252,43 @@ final class ProductSizeMergeService
         if ($loserIds === []) {
             return;
         }
-        if (Schema::hasTable('product_images') && $winner->images()->count() === 0) {
-            ProductImage::query()->whereIn('product_id', $loserIds)->update(['product_id' => $winner->id]);
+        if (Schema::hasTable('product_images')) {
+            $this->reassignUniqueChecksums(
+                ProductImage::query()->whereIn('product_id', $loserIds)->get(),
+                $winner->images()->pluck('checksum')->filter()->map(static fn ($c): string => (string) $c)->all(),
+                (int) $winner->id,
+            );
         }
-        if (Schema::hasTable('product_documents') && $winner->documents()->count() === 0) {
-            ProductDocument::query()->whereIn('product_id', $loserIds)->update(['product_id' => $winner->id]);
+        if (Schema::hasTable('product_documents')) {
+            $this->reassignUniqueChecksums(
+                ProductDocument::query()->whereIn('product_id', $loserIds)->get(),
+                $winner->documents()->pluck('checksum')->filter()->map(static fn ($c): string => (string) $c)->all(),
+                (int) $winner->id,
+            );
+        }
+    }
+
+    /**
+     * Ten sam PDF/zdjęcie na wielu rozmiarach — przenosimy raz, resztę kasujemy.
+     *
+     * @param  \Illuminate\Support\Collection<int, ProductImage|ProductDocument>  $rows
+     * @param  list<string>  $takenChecksums
+     */
+    private function reassignUniqueChecksums($rows, array $takenChecksums, int $winnerId): void
+    {
+        $seen = array_fill_keys($takenChecksums, true);
+        foreach ($rows as $row) {
+            $sum = trim((string) ($row->checksum ?? ''));
+            if ($sum !== '' && isset($seen[$sum])) {
+                $row->delete();
+
+                continue;
+            }
+            if ($sum !== '') {
+                $seen[$sum] = true;
+            }
+            $row->product_id = $winnerId;
+            $row->save();
         }
     }
 
