@@ -32,6 +32,14 @@ final class ProductSearchBlobTest extends TestCase
         }
     }
 
+    public function test_hyphenated_filter_class_lands_in_canonical_blob(): void
+    {
+        $this->assertStringContainsString(
+            'a2b2e2k2hgconop3',
+            $this->builder()->canonicalFeatures('Filtr 203 UP3 A2-B2-E2-K2-Hg-CO-NO-P3')
+        );
+    }
+
     public function test_norm_variants_collapse_to_one_token(): void
     {
         $builder = $this->builder();

@@ -10,6 +10,7 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Search\ProductTextSearch;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\PpeAssortment;
+use App\Support\PpeFilterType;
 use App\Support\ProductModelFuzzy;
 use App\Support\RrfFusion;
 use Illuminate\Database\Eloquent\Builder;
@@ -49,6 +50,7 @@ final class ProductAiSearchService
         private readonly ExternalCatalogHintService $externalHints,
         private readonly ProductModelFuzzy $modelFuzzy,
         private readonly PpeAssortment $assortment,
+        private readonly PpeFilterType $filterType,
         private readonly ProductTextSearch $textSearch,
         private readonly RrfFusion $rrf,
     ) {}
@@ -76,6 +78,24 @@ final class ProductAiSearchService
         }
         $limit = max(1, min(80, $limit));
 
+        $filterHits = $this->keepCompatible($query, $this->retrieveByFilterType($query, $limit));
+        if ($filterHits->isNotEmpty()) {
+            $ranked = $this->rowsFromFilterMatches($query, $filterHits, $limit);
+
+            return [
+                'query' => $query,
+                'total' => count($ranked),
+                'products' => $ranked,
+                'needed' => $query,
+                'search_phrases' => array_values(array_unique([
+                    ...$this->filterType->compactCodes($query),
+                    ...$this->fallbackPhrases($query),
+                ])),
+                'ai_note' => null,
+                'external_hint' => null,
+            ];
+        }
+
         $intent = $this->understandRequirement($query, $task);
         $candidates = $this->keepCompatible(
             $this->assortmentText($query, $intent['needed']),
@@ -83,6 +103,7 @@ final class ProductAiSearchService
         );
         $named = $candidates->filter(
             fn (Product $p): bool => $this->modelFuzzy->matches($query, $p)
+                && $this->filterType->covers($query, $this->filterHaystack($p))
         )->values();
         if ($named->isNotEmpty()) {
             $ranked = $this->rowsFromNamedModels($query, $named, $limit);
@@ -204,6 +225,10 @@ final class ProductAiSearchService
         if ($phrases === []) {
             $phrases = $this->fallbackPhrases($query);
         }
+        foreach ($this->filterType->compactCodes($query) as $code) {
+            $phrases[] = $code;
+            $phrases[] = $this->filterType->hyphenated($code);
+        }
 
         return [
             'needed' => $needed,
@@ -257,7 +282,8 @@ final class ProductAiSearchService
         $requirement = $this->assortmentText($query, $intent['needed']);
         $codeHits = $this->retrieveByModelCode($query.' '.$searchText, $limit);
         $fuzzyHits = $this->retrieveByFuzzyModel($query.' '.$searchText, $limit);
-        $priority = $this->uniqueProducts($fuzzyHits->concat($codeHits), $limit);
+        $filterHits = $this->retrieveByFilterType($query, $limit);
+        $priority = $this->uniqueProducts($filterHits->concat($fuzzyHits)->concat($codeHits), $limit);
 
         if ($this->modelFuzzy->hasNamedModel($query) && $priority->isNotEmpty()) {
             $namedPriority = $this->keepCompatible($requirement, $priority);
@@ -343,6 +369,62 @@ final class ProductAiSearchService
         return $products
             ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p))
             ->values();
+    }
+
+    /**
+     * EN 14387 w nazwie/SKU/opisie — A2-B2-E2-K2-Hg-CO-NO-P3 i a2b2e2k2no to ten sam filtr.
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByFilterType(string $query, int $limit): Collection
+    {
+        $likes = $this->filterType->sqlLikes($query);
+        if ($likes === []) {
+            return collect();
+        }
+
+        $q = $this->productBaseQuery();
+        $q->where(function ($outer) use ($likes): void {
+            foreach ($likes as $like) {
+                $esc = '%'.$like.'%';
+                $outer->orWhere('name', 'like', $esc)
+                    ->orWhere('sku', 'like', $esc)
+                    ->orWhere('description', 'like', $esc)
+                    ->orWhere('norms', 'like', $esc)
+                    ->orWhere('search_blob', 'like', $esc);
+            }
+        });
+
+        return $q->limit(200)
+            ->get()
+            ->filter(fn (Product $p): bool => $this->filterType->covers($query, $this->filterHaystack($p)))
+            ->sortByDesc(fn (Product $p): int => $this->filterType->coverageScore($query, $this->filterHaystack($p)))
+            ->take(max(8, $limit))
+            ->values();
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromFilterMatches(string $query, Collection $products, int $limit): array
+    {
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $score = $this->filterType->coverageScore($query, $this->filterHaystack($product));
+            $row['ai_match_percent'] = min(99, max(72, 70 + intdiv($score, 3)));
+            $row['ai_match_reason'] = 'Klasa pochłaniacza EN 14387 z katalogu — w tym wymagane typy (np. NO).';
+            $out[] = $row;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -572,7 +654,7 @@ final class ProductAiSearchService
     {
         $hint = null;
         if ($withExternalHint) {
-            $hint = $this->externalHints->hint($intent['needed'] !== '' ? $intent['needed'] : $query);
+            $hint = $this->externalHints->hint($query);
             if ($hint !== null) {
                 $note .= ' Podpowiedź spoza katalogu (link).';
             }
@@ -633,6 +715,7 @@ final class ProductAiSearchService
                     .'Wspólna cecha (siatkowa) albo ta sama norma EN NIE wystarczy. '
                     .'2) Dopiero potem cechy, materiał, klasa i normy — tylko wśród kart z kroku 1. '
                     .'Marka/model z SIWZ wygrywa przy literówce (TEPM-ICE=TEMP-ICE); nie zmieniaj marki przez EN. '
+                    .'Pochłaniacz/filtr EN 14387: A2B2E2K2 ≠ A2B2E2K2NO — bez NO/Hg/CO z wymagania nie zwracaj karty. '
                     .'Literówka w wymaganiu nie dyskwalifikuje karty — nazwę czytaj z linii "Szukany produkt (z analizy)" '
                     .'(podnie = spodnie, rekawice = rękawice). '
                     .'Brak zgodnej nazwy: {"matches":[]}. '
@@ -665,6 +748,9 @@ final class ProductAiSearchService
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
+            if (! $this->filterType->covers($requirement, $this->filterHaystack($product))) {
+                continue;
+            }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(0, $score));
             $row['ai_match_reason'] = is_string($m['reason'] ?? null) ? $m['reason'] : null;
@@ -677,6 +763,16 @@ final class ProductAiSearchService
         usort($out, static fn (array $a, array $b): int => ($b['ai_match_percent'] <=> $a['ai_match_percent']));
 
         return $out;
+    }
+
+    private function filterHaystack(Product $product): string
+    {
+        return trim(implode(' ', array_filter([
+            (string) $product->name,
+            (string) $product->sku,
+            (string) ($product->description ?? ''),
+            (string) ($product->norms ?? ''),
+        ])));
     }
 
     /**

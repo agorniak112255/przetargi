@@ -41,6 +41,8 @@ final class PpeAssortmentTest extends TestCase
             ['Gogle chemiczne', PpeAssortment::FAMILY_EYES],
             ['Nauszniki przeciwhałasowe', PpeAssortment::FAMILY_HEARING],
             ['Półmaska 3M 6503 część twarzowa', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Pochłaniacz wielogazowy A2B2E2K2NO', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Filtropochłaniacz FP 211/1', PpeAssortment::FAMILY_RESPIRATORY],
             ['Hełm przemysłowy z osłoną', PpeAssortment::FAMILY_HEAD],
             ['Kominiarka antyelektrostatyczna', PpeAssortment::FAMILY_HEAD],
             ['Szelki bezpieczeństwa z linką', PpeAssortment::FAMILY_FALL],

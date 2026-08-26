@@ -380,6 +380,96 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('external_hint.url', 'https://example.com/kurtka-ochronna');
     }
 
+    public function test_ai_search_finds_catalog_filter_with_no_and_skips_a2b2e2k2(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'OXY-203-UP3',
+            'name' => 'Filtr 203 UP3 A2-B2-E2-K2-Hg-CO-NO-P3',
+            'manufacturer' => 'Oxyline',
+            'category' => 'Drogi oddechowe',
+            'norms' => 'EN 14387',
+            'description' => 'Pochłaniacz wielogazowy z ochroną na tlenki azotu NO.',
+            'catalog_price_net' => 45,
+            'purchase_price' => 28,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'KWASEK-202',
+            'name' => 'Pochłaniacz wielogazowy 202 A2B2E2K2',
+            'manufacturer' => 'Kwasek',
+            'category' => 'Drogi oddechowe',
+            'norms' => 'EN 14387',
+            'description' => 'Pochłaniacz wielogazowy A2B2E2K2 bez NO.',
+            'catalog_price_net' => 30,
+            'purchase_price' => 18,
+            'stock' => 6,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'pochłaniacz wielogazowy a2b2e2k2no dodatkowa ochrona na tlenki azoty NO',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'OXY-203-UP3')
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('external_hint', null);
+    }
+
+    public function test_empty_catalog_skips_web_hint_without_no_class(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'tavily_api_key' => 'tvly-test',
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn(
+            [
+                'needed' => 'pochłaniacz wielogazowy',
+                'search_phrases' => ['pochłaniacz', 'wielogazowy'],
+            ],
+            ['matches' => []],
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        Http::fake([
+            'api.tavily.com/search' => Http::response([
+                'results' => [
+                    [
+                        'url' => 'https://kwasek.pl/produkt/pochlaniacz-202-a2b2e2k2',
+                        'title' => 'Pochłaniacz wielogazowy 202 A2B2E2K2 kwasek.pl',
+                    ],
+                    [
+                        'url' => 'https://oxyline.eu/pl/product/275/filter-203-up3-a2-b2-e2-k2-hg-co-no-p3',
+                        'title' => 'Filtr 203 UP3 A2 B2 E2 K2 Hg CO NO P3',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'pochłaniacz wielogazowy a2b2e2k2no dodatkowa ochrona na tlenki azoty NO',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 0)
+            ->assertJsonPath(
+                'external_hint.url',
+                'https://oxyline.eu/pl/product/275/filter-203-up3-a2-b2-e2-k2-hg-co-no-p3'
+            );
+    }
+
     public function test_ai_search_finds_balaclava_without_description_among_described_caps(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

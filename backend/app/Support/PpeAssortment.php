@@ -89,7 +89,8 @@ final class PpeAssortment
 
         if (preg_match(
             '/\b(polmask|respirator|aparat\w*\s+oddech|drog[iy]\s+oddech|filtrow?\w*\s+oddech'
-            .'|maska\s+(twarzow|pelnotwarz)|czesc\s+twarzow)\w*/u',
+            .'|maska\s+(twarzow|pelnotwarz)|czesc\s+twarzow'
+            .'|pochlaniacz|filtropochlaniacz)\w*/u',
             $t
         ) === 1) {
             return self::FAMILY_RESPIRATORY;

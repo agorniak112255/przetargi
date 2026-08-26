@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\TavilyQuotaGuard;
+use App\Support\PpeFilterType;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -20,6 +21,7 @@ final class ExternalCatalogHintService
 
     public function __construct(
         private readonly AiSettingsService $settings,
+        private readonly PpeFilterType $filterType = new PpeFilterType,
         private readonly DuckDuckGoHtmlSearch $duckDuckGo = new DuckDuckGoHtmlSearch,
     ) {}
 
@@ -37,14 +39,16 @@ final class ExternalCatalogHintService
             return $this->cache[$cacheKey];
         }
 
+        $search = $this->webQuery($query);
+
         if ($this->settings->usesFreeWebSearch()) {
             try {
-                $hits = $this->duckDuckGo->search(mb_substr($query, 0, 400), 8);
+                $hits = $this->duckDuckGo->search($search, 8);
             } catch (Throwable) {
                 return $this->remember($cacheKey, null);
             }
 
-            return $this->remember($cacheKey, $this->pickBestResult($hits));
+            return $this->remember($cacheKey, $this->pickBestResult($hits, $query));
         }
 
         $cfg = $this->settings->resolve();
@@ -65,7 +69,7 @@ final class ExternalCatalogHintService
                 ->connectTimeout(5)
                 ->post('https://api.tavily.com/search', [
                     'api_key' => $key,
-                    'query' => mb_substr($query, 0, 400),
+                    'query' => $search,
                     'search_depth' => 'basic',
                     'include_answer' => false,
                     'max_results' => 8,
@@ -84,16 +88,17 @@ final class ExternalCatalogHintService
             return $this->remember($cacheKey, null);
         }
 
-        return $this->remember($cacheKey, $this->pickBestResult($rows));
+        return $this->remember($cacheKey, $this->pickBestResult($rows, $query));
     }
 
     /**
      * Strona produktu przed PDF-em / świadectwem / deklaracją.
+     * Przy klasie EN 14387 odrzuca kartę bez wymaganych typów (A2B2E2K2 ≠ A2B2E2K2NO).
      *
      * @param  list<mixed>  $rows
      * @return array{url: string, title: string}|null
      */
-    public function pickBestResult(array $rows): ?array
+    public function pickBestResult(array $rows, string $requirement = ''): ?array
     {
         $candidates = [];
         foreach ($rows as $row) {
@@ -105,10 +110,14 @@ final class ExternalCatalogHintService
                 continue;
             }
             $title = trim((string) ($row['title'] ?? $url));
+            $hay = $url.' '.$title;
+            if (! $this->filterType->covers($requirement, $hay)) {
+                continue;
+            }
             $candidates[] = [
                 'url' => $url,
                 'title' => $title !== '' ? $title : $url,
-                'score' => $this->scoreResult($url, $title),
+                'score' => $this->scoreResult($url, $title, $requirement),
             ];
         }
         if ($candidates === []) {
@@ -124,7 +133,22 @@ final class ExternalCatalogHintService
         ];
     }
 
-    private function scoreResult(string $url, string $title): int
+    private function webQuery(string $requirement): string
+    {
+        $bits = [];
+        foreach ($this->filterType->compactCodes($requirement) as $code) {
+            $bits[] = $code;
+            $hyphen = $this->filterType->hyphenated($code);
+            if (mb_strtolower($hyphen) !== $code) {
+                $bits[] = $hyphen;
+            }
+        }
+        $bits[] = $requirement;
+
+        return mb_substr(implode(' ', array_unique($bits)), 0, 400);
+    }
+
+    private function scoreResult(string $url, string $title, string $requirement = ''): int
     {
         $hay = mb_strtolower($url.' '.$title);
         $score = 50;
@@ -138,6 +162,7 @@ final class ExternalCatalogHintService
         if ($this->looksLikeProductPage($url, $hay)) {
             $score += 40;
         }
+        $score += $this->filterType->coverageScore($requirement, $url.' '.$title);
 
         return $score;
     }

@@ -25,6 +25,7 @@ final class ProductSearchBlob
         private readonly ProductFeatureMatch $features,
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly PpeAssortment $assortment,
+        private readonly PpeFilterType $filterType = new PpeFilterType,
     ) {}
 
     /**
@@ -58,6 +59,10 @@ final class ProductSearchBlob
         }
         foreach ($this->features->norms($text) as $norm) {
             $tokens[] = 'en'.$norm;
+        }
+        foreach ($this->filterType->compactCodes($text) as $code) {
+            $tokens[] = $code;
+            $tokens[] = strtolower($this->filterType->hyphenated($code));
         }
 
         return implode(' ', array_values(array_unique($tokens)));
