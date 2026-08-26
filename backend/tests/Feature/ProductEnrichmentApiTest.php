@@ -232,9 +232,60 @@ final class ProductEnrichmentApiTest extends TestCase
             ->assertStatus(202)
             ->assertJsonPath('batch.total', 1)
             ->assertJsonPath('batch.scope', 'price_list')
+            ->assertJsonPath('batch.manufacturer', 'Ansell')
+            ->assertJsonPath('batch.price_list_id', $priceList->id)
             ->assertJsonPath('product_ids.0', $p1->id);
 
         Queue::assertPushed(EnrichProductJob::class, 1);
+    }
+
+    public function test_batch_payload_includes_manufacturer_and_current_product(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+
+        $product = $this->makeProduct([
+            'sku' => 'RS20164',
+            'name' => 'RUSH ESD S3 CI SRC',
+            'manufacturer' => 'Honeywell',
+        ]);
+        $priceList = PriceList::query()->create([
+            'manufacturer' => 'Honeywell',
+            'version' => '2026',
+            'imported_by' => $user->id,
+            'rows_total' => 1,
+            'products_created' => 1,
+            'products_updated' => 0,
+            'prices_changed' => 0,
+            'rows_skipped' => 0,
+            'product_ids' => [$product->id],
+        ]);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRICE_LIST,
+            'scope_id' => $priceList->id,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'created_by' => $user->id,
+            'force' => false,
+            'current_sku' => 'RS20164',
+            'current_name' => $product->name,
+        ]);
+
+        $this->getJson("/api/product-enrichment-batches/{$batch->id}")
+            ->assertOk()
+            ->assertJsonPath('manufacturer', 'Honeywell')
+            ->assertJsonPath('current_product_id', $product->id)
+            ->assertJsonPath('price_list_id', $priceList->id);
+
+        $this->getJson('/api/product-enrichment-batches/active')
+            ->assertOk()
+            ->assertJsonFragment([
+                'id' => $batch->id,
+                'manufacturer' => 'Honeywell',
+                'current_product_id' => $product->id,
+            ]);
     }
 
     public function test_batch_status_endpoint(): void

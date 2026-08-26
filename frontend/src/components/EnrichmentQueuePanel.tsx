@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import { api, parseActiveEnrichment, type EnrichmentBatch } from '../lib/api'
+import {
+  api,
+  enrichmentPriceListHref,
+  enrichmentProductHref,
+  parseActiveEnrichment,
+  type EnrichmentBatch,
+} from '../lib/api'
 
 const SCOPE_LABEL: Record<string, string> = {
   product: 'Produkt',
@@ -10,6 +16,83 @@ const SCOPE_LABEL: Record<string, string> = {
 type Props = {
   /** Odśwież listę produktów / cenników po zatrzymaniu */
   onChanged?: () => void
+}
+
+function EnrichmentJobRow({
+  batch,
+  busy,
+  onCancel,
+}: {
+  batch: EnrichmentBatch
+  busy: boolean
+  onCancel: () => void
+}) {
+  const priceHref = enrichmentPriceListHref(batch)
+  const productHref = enrichmentProductHref(batch)
+  const header = (
+    <>
+      #{batch.id} · {SCOPE_LABEL[batch.scope] ?? batch.scope}
+      {batch.scope_id ? ` #${batch.scope_id}` : ''}
+      {batch.manufacturer ? ` · ${batch.manufacturer}` : ''} · {batch.status}
+    </>
+  )
+
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-2 rounded border border-amber-200 bg-white px-2 py-1.5">
+      <div className="min-w-0 text-[11px] text-slate-700">
+        {priceHref ? (
+          <a
+            href={priceHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block font-medium text-blue-800 hover:underline"
+            title={`Cennik: ${batch.manufacturer}`}
+          >
+            {header}
+          </a>
+        ) : (
+          <p className="font-medium">{header}</p>
+        )}
+        {batch.manufacturer && <p className="text-slate-600">Producent: {batch.manufacturer}</p>}
+        <p className="truncate text-slate-500" title={batch.message ?? ''}>
+          {batch.done + batch.failed}/{batch.total}
+          {batch.current_sku ? (
+            <>
+              {' · teraz: '}
+              {productHref ? (
+                <a
+                  href={productHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-blue-700 hover:underline"
+                  title={`Produkt ${batch.current_sku}`}
+                >
+                  {batch.current_sku}
+                </a>
+              ) : (
+                batch.current_sku
+              )}
+            </>
+          ) : null}
+          {batch.message ? ` · ${batch.message}` : ''}
+        </p>
+        <div className="mt-1 h-1.5 w-40 overflow-hidden rounded bg-slate-200">
+          <div
+            className="h-full bg-amber-500 transition-all"
+            style={{ width: `${Math.max(4, batch.progress_percent)}%` }}
+          />
+        </div>
+      </div>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onCancel}
+        className="rounded border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
+      >
+        {busy ? 'Zatrzymuję…' : 'Zatrzymaj'}
+      </button>
+    </li>
+  )
 }
 
 export function EnrichmentQueuePanel({ onChanged }: Props) {
@@ -140,36 +223,12 @@ export function EnrichmentQueuePanel({ onChanged }: Props) {
       ) : (
         <ul className="space-y-2">
           {batches.map((b) => (
-            <li
+            <EnrichmentJobRow
               key={b.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded border border-amber-200 bg-white px-2 py-1.5"
-            >
-              <div className="min-w-0 text-[11px] text-slate-700">
-                <p className="font-medium">
-                  #{b.id} · {SCOPE_LABEL[b.scope] ?? b.scope}
-                  {b.scope_id ? ` #${b.scope_id}` : ''} · {b.status}
-                </p>
-                <p className="truncate text-slate-500" title={b.message ?? ''}>
-                  {b.done + b.failed}/{b.total}
-                  {b.current_sku ? ` · teraz: ${b.current_sku}` : ''}
-                  {b.message ? ` · ${b.message}` : ''}
-                </p>
-                <div className="mt-1 h-1.5 w-40 overflow-hidden rounded bg-slate-200">
-                  <div
-                    className="h-full bg-amber-500 transition-all"
-                    style={{ width: `${Math.max(4, b.progress_percent)}%` }}
-                  />
-                </div>
-              </div>
-              <button
-                type="button"
-                disabled={busyId === b.id}
-                onClick={() => void cancelBatch(b)}
-                className="rounded border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
-              >
-                {busyId === b.id ? 'Zatrzymuję…' : 'Zatrzymaj'}
-              </button>
-            </li>
+              batch={b}
+              busy={busyId === b.id}
+              onCancel={() => void cancelBatch(b)}
+            />
           ))}
         </ul>
       )}

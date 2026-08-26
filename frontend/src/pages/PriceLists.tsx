@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { api, can, parseActiveEnrichment, type EnrichmentBatch } from '../lib/api'
@@ -195,6 +196,17 @@ function guessMetaFromFilename(name: string): { manufacturer: string; version: s
   return { manufacturer, version }
 }
 
+function matchesHistoryQuery(row: PriceList, q: string): boolean {
+  const needle = q.trim().toLocaleLowerCase('pl')
+  if (needle === '') {
+    return true
+  }
+  const manufacturer = row.manufacturer.toLocaleLowerCase('pl')
+  const file = (row.original_filename ?? '').toLocaleLowerCase('pl')
+
+  return manufacturer.includes(needle) || file.includes(needle)
+}
+
 const btnPrimary =
   'inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50'
 const btnAi =
@@ -204,10 +216,12 @@ const btnSecondary =
 
 export function PriceLists() {
   const { user } = useAuth()
+  const [searchParams] = useSearchParams()
   const canEnrich = can(user, 'price_lists.import')
   const canDelete = can(user, 'price_lists.delete')
   const historyColSpan = 9 + (canEnrich ? 1 : 0) + (canEnrich || canDelete ? 1 : 0)
   const [rows, setRows] = useState<PriceList[]>([])
+  const [historyQuery, setHistoryQuery] = useState(() => searchParams.get('manufacturer') ?? '')
   const [deleteBusyId, setDeleteBusyId] = useState<number | null>(null)
   const [editId, setEditId] = useState<number | null>(null)
   const [editManufacturer, setEditManufacturer] = useState('')
@@ -246,7 +260,18 @@ export function PriceLists() {
     force: boolean
   } | null>(null)
   const [enrichConfirmAck, setEnrichConfirmAck] = useState(false)
+  const visibleHistory = useMemo(
+    () => rows.filter((row) => matchesHistoryQuery(row, historyQuery)),
+    [rows, historyQuery],
+  )
   const progressTimer = useRef<number | null>(null)
+
+  useEffect(() => {
+    const manufacturer = searchParams.get('manufacturer')
+    if (manufacturer !== null) {
+      setHistoryQuery(manufacturer)
+    }
+  }, [searchParams])
 
   useEffect(() => {
     if (!canEnrich) return
@@ -1409,34 +1434,26 @@ export function PriceLists() {
       {Object.values(enrichBatches).some(
         (b) => b.status === 'queued' || b.status === 'running',
       ) && (
-        <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900">
-          {Object.values(enrichBatches)
-            .filter((b) => b.status === 'queued' || b.status === 'running')
-            .map((b) => (
-              <div key={b.id} className="mb-2 last:mb-0">
-                <p className="font-semibold">
-                  Pobieranie opisów/zdjęć — {b.done + b.failed}/{b.total} (
-                  {b.progress_percent}%)
-                </p>
-                <div className="mt-1 h-2 overflow-hidden rounded bg-blue-100">
-                  <div
-                    className="h-full animate-pulse bg-blue-500 transition-all"
-                    style={{ width: `${Math.max(6, b.progress_percent)}%` }}
-                  />
-                </div>
-                <p className="mt-1 text-blue-800">
-                  {b.current_sku
-                    ? `Teraz: ${b.current_sku}${b.current_name ? ` — ${b.current_name}` : ''}`
-                    : 'Startuję worker kolejki…'}
-                  {b.message ? ` · ${b.message}` : ''}
-                </p>
-              </div>
-            ))}
-        </div>
+        <EnrichmentProgressBanner
+          batches={Object.values(enrichBatches).filter(
+            (b) => b.status === 'queued' || b.status === 'running',
+          )}
+          idleLabel="Startuję worker kolejki…"
+        />
       )}
 
       <div className="rounded-xl bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-sm font-semibold">Historia importów</h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">Historia importów</h2>
+          <input
+            type="search"
+            className="w-full max-w-sm rounded border border-slate-300 px-3 py-1.5 text-sm"
+            placeholder="Szukaj producent lub plik…"
+            value={historyQuery}
+            onChange={(e) => setHistoryQuery(e.target.value)}
+            title="Filtruje listę po producencie albo nazwie pliku"
+          />
+        </div>
         <p className="mb-2 text-[11px] text-slate-500">
           Kliknij liczbę w kolumnie Update / Zmiany cen / Skip, aby zobaczyć listę pozycji.
           Kliknij producenta, aby otworzyć jego produkty.
@@ -1461,7 +1478,7 @@ export function PriceLists() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {visibleHistory.map((r) => {
               const cached = historyCache[r.id] ?? r
               const kind = expandedHistory?.id === r.id ? expandedHistory.kind : null
               const enrichBatch = enrichBatches[r.id]
@@ -1696,6 +1713,13 @@ export function PriceLists() {
               <tr>
                 <td colSpan={historyColSpan} className="p-3 text-slate-400">
                   Brak importów — wgraj pierwszy cennik.
+                </td>
+              </tr>
+            )}
+            {rows.length > 0 && visibleHistory.length === 0 && (
+              <tr>
+                <td colSpan={historyColSpan} className="p-3 text-slate-400">
+                  Brak importów dla „{historyQuery.trim()}”.
                 </td>
               </tr>
             )}

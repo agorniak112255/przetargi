@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { CrossRefPanel } from '../components/CrossRefPanel'
+import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
@@ -708,26 +709,7 @@ export function Products() {
         </div>
       )}
 
-      {batchActive && batch && (
-        <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900">
-          <p className="font-semibold">
-            Pobieranie opisów/zdjęć — {batch.done + batch.failed}/{batch.total} (
-            {batch.progress_percent}%)
-          </p>
-          <div className="mt-1 h-2 overflow-hidden rounded bg-blue-100">
-            <div
-              className="h-full animate-pulse bg-blue-500 transition-all"
-              style={{ width: `${Math.max(6, batch.progress_percent)}%` }}
-            />
-          </div>
-          <p className="mt-1">
-            {batch.current_sku
-              ? `Teraz: ${batch.current_sku}${batch.current_name ? ` — ${batch.current_name}` : ''}`
-              : 'W kolejce…'}
-            {batch.message ? ` · ${batch.message}` : ''}
-          </p>
-        </div>
-      )}
+      {batchActive && batch && <EnrichmentProgressBanner batches={[batch]} />}
 
       <div className="rounded-xl bg-white p-4 shadow-sm overflow-x-auto">
         {result && (

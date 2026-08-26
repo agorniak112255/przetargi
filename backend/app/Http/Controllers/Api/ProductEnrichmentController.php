@@ -152,8 +152,13 @@ class ProductEnrichmentController extends Controller
                 ProductEnrichmentBatch::STATUS_RUNNING,
             ], true));
 
+        $ctx = $this->batchLinkContext($batches);
+
         return response()->json([
-            'batches' => $batches->map(fn (ProductEnrichmentBatch $batch): array => $this->batchPayload($batch))->values()->all(),
+            'batches' => $batches
+                ->map(fn (ProductEnrichmentBatch $batch): array => $this->batchPayload($batch, $ctx[(int) $batch->id] ?? null))
+                ->values()
+                ->all(),
             ...$this->enrichment->enrichmentProductCounts(),
         ]);
     }
@@ -222,12 +227,18 @@ class ProductEnrichmentController extends Controller
     }
 
     /**
+     * @param  array{manufacturer: ?string, current_product_id: ?int, price_list_id: ?int}|null  $ctx
      * @return array<string, mixed>
      */
-    private function batchPayload(ProductEnrichmentBatch $batch): array
+    private function batchPayload(ProductEnrichmentBatch $batch, ?array $ctx = null): array
     {
         $processed = $batch->done + $batch->failed;
         $pct = $batch->total > 0 ? round(100 * $processed / $batch->total, 1) : 0.0;
+        $ctx ??= $this->batchLinkContext([$batch])[(int) $batch->id] ?? [
+            'manufacturer' => null,
+            'current_product_id' => null,
+            'price_list_id' => null,
+        ];
 
         return [
             'id' => $batch->id,
@@ -242,8 +253,83 @@ class ProductEnrichmentController extends Controller
             'current_sku' => $batch->current_sku,
             'current_name' => $batch->current_name,
             'message' => $batch->message,
+            'manufacturer' => $ctx['manufacturer'],
+            'current_product_id' => $ctx['current_product_id'],
+            'price_list_id' => $ctx['price_list_id'],
             'created_at' => $batch->created_at?->toIso8601String(),
             'updated_at' => $batch->updated_at?->toIso8601String(),
         ];
+    }
+
+    /**
+     * @param  iterable<int, ProductEnrichmentBatch>  $batches
+     * @return array<int, array{manufacturer: ?string, current_product_id: ?int, price_list_id: ?int}>
+     */
+    private function batchLinkContext(iterable $batches): array
+    {
+        $list = collect($batches);
+        $priceListIds = $list
+            ->where('scope', ProductEnrichmentBatch::SCOPE_PRICE_LIST)
+            ->pluck('scope_id')
+            ->filter()
+            ->unique()
+            ->values();
+        $priceLists = $priceListIds->isEmpty()
+            ? collect()
+            : PriceList::query()->whereIn('id', $priceListIds)->get(['id', 'manufacturer'])->keyBy('id');
+
+        $skus = $list->pluck('current_sku')->filter()->unique()->values();
+        $productsBySku = $skus->isEmpty()
+            ? collect()
+            : Product::query()->whereIn('sku', $skus)->get(['id', 'sku', 'manufacturer'])->groupBy('sku');
+
+        $productScopeIds = $list
+            ->where('scope', ProductEnrichmentBatch::SCOPE_PRODUCT)
+            ->pluck('scope_id')
+            ->filter()
+            ->unique()
+            ->values();
+        $productsById = $productScopeIds->isEmpty()
+            ? collect()
+            : Product::query()->whereIn('id', $productScopeIds)->get(['id', 'manufacturer'])->keyBy('id');
+
+        $out = [];
+        foreach ($list as $batch) {
+            $manufacturer = null;
+            $priceListId = null;
+            $currentProductId = null;
+
+            if ($batch->scope === ProductEnrichmentBatch::SCOPE_PRICE_LIST) {
+                $priceListId = (int) $batch->scope_id;
+                $manufacturer = $priceLists->get($priceListId)?->manufacturer;
+            }
+
+            if (is_string($batch->current_sku) && $batch->current_sku !== '') {
+                $candidates = $productsBySku->get($batch->current_sku, collect());
+                $product = is_string($manufacturer) && $manufacturer !== ''
+                    ? ($candidates->firstWhere('manufacturer', $manufacturer) ?? $candidates->first())
+                    : $candidates->first();
+                if ($product !== null) {
+                    $currentProductId = (int) $product->id;
+                    $manufacturer = $manufacturer ?: $product->manufacturer;
+                }
+            }
+
+            if ($manufacturer === null && $batch->scope === ProductEnrichmentBatch::SCOPE_PRODUCT) {
+                $product = $productsById->get((int) $batch->scope_id);
+                if ($product !== null) {
+                    $manufacturer = $product->manufacturer;
+                    $currentProductId ??= (int) $product->id;
+                }
+            }
+
+            $out[(int) $batch->id] = [
+                'manufacturer' => is_string($manufacturer) && $manufacturer !== '' ? $manufacturer : null,
+                'current_product_id' => $currentProductId,
+                'price_list_id' => $priceListId,
+            ];
+        }
+
+        return $out;
     }
 }

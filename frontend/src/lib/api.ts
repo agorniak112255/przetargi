@@ -154,6 +154,30 @@ export type EnrichmentBatch = {
   current_sku?: string | null
   current_name?: string | null
   message?: string | null
+  manufacturer?: string | null
+  current_product_id?: number | null
+  price_list_id?: number | null
+}
+
+export function appHref(path: string): string {
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+  const p = path.startsWith('/') ? path : `/${path}`
+  return `${base}${p}`
+}
+
+export function enrichmentPriceListHref(batch: EnrichmentBatch): string | null {
+  const manufacturer = batch.manufacturer?.trim()
+  if (!manufacturer) {
+    return null
+  }
+  return appHref(`/price-lists?manufacturer=${encodeURIComponent(manufacturer)}`)
+}
+
+export function enrichmentProductHref(batch: EnrichmentBatch): string | null {
+  if (batch.current_product_id == null) {
+    return null
+  }
+  return appHref(`/products/${batch.current_product_id}`)
 }
 
 export type ActiveEnrichmentState = {
