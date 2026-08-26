@@ -7,7 +7,7 @@ import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
-import { api, can, type EnrichmentBatch, type Product } from '../lib/api'
+import { api, can, parseActiveEnrichment, type EnrichmentBatch, type Product } from '../lib/api'
 
 type Page = {
   data: Product[]
@@ -235,9 +235,10 @@ export function Products() {
 
   useEffect(() => {
     if (!canEnrich) return
-    void api<EnrichmentBatch[]>('/product-enrichment-batches/active')
-      .then((list) => {
-        if (Array.isArray(list) && list.length > 0) {
+    void api<unknown>('/product-enrichment-batches/active')
+      .then((res) => {
+        const list = parseActiveEnrichment(res).batches
+        if (list.length > 0) {
           setBatch(list[0])
         }
       })

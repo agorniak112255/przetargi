@@ -152,9 +152,21 @@ class ProductEnrichmentController extends Controller
                 ProductEnrichmentBatch::STATUS_RUNNING,
             ], true));
 
-        return response()->json(
-            $batches->map(fn (ProductEnrichmentBatch $batch): array => $this->batchPayload($batch))->values()->all()
-        );
+        return response()->json([
+            'batches' => $batches->map(fn (ProductEnrichmentBatch $batch): array => $this->batchPayload($batch))->values()->all(),
+            ...$this->enrichment->enrichmentProductCounts(),
+        ]);
+    }
+
+    public function stopAll(): JsonResponse
+    {
+        $result = $this->enrichment->stopAllEnrichment();
+
+        return response()->json([
+            'message' => 'Zatrzymano pobieranie opisów.',
+            ...$result,
+            ...$this->enrichment->enrichmentProductCounts(),
+        ]);
     }
 
     public function showBatch(ProductEnrichmentBatch $batch): JsonResponse

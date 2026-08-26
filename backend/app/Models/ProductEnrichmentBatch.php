@@ -55,9 +55,16 @@ class ProductEnrichmentBatch extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public const HALT_CACHE_KEY = 'enrichment:halt-all';
+
     public static function cancelCacheKey(int $batchId): string
     {
         return 'enrich_batch_cancelled:'.$batchId;
+    }
+
+    public static function haltAllWorkers(): void
+    {
+        Cache::put(self::HALT_CACHE_KEY, now()->getTimestamp(), now()->addHours(6));
     }
 
     public function isCancelled(): bool
@@ -66,7 +73,16 @@ class ProductEnrichmentBatch extends Model
             return true;
         }
 
-        return Cache::has(self::cancelCacheKey((int) $this->id));
+        if (Cache::has(self::cancelCacheKey((int) $this->id))) {
+            return true;
+        }
+
+        $haltAt = Cache::get(self::HALT_CACHE_KEY);
+        if (is_numeric($haltAt) && $this->created_at !== null && $this->created_at->getTimestamp() < (int) $haltAt) {
+            return true;
+        }
+
+        return false;
     }
 
     public function markCancelledFlag(): void

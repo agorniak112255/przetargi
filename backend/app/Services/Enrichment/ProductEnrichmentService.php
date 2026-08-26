@@ -19,6 +19,7 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -1667,7 +1668,10 @@ final class ProductEnrichmentService
             return $batch;
         }
 
-        if (Product::query()->where('enrichment_status', Product::ENRICHMENT_RUNNING)->exists()) {
+        if (Product::query()->whereIn('enrichment_status', [
+            Product::ENRICHMENT_RUNNING,
+            Product::ENRICHMENT_QUEUED,
+        ])->exists()) {
             return $batch;
         }
 
@@ -1717,14 +1721,6 @@ final class ProductEnrichmentService
      */
     public function cancelBatch(ProductEnrichmentBatch $batch): array
     {
-        if (in_array($batch->status, [
-            ProductEnrichmentBatch::STATUS_DONE,
-            ProductEnrichmentBatch::STATUS_FAILED,
-            ProductEnrichmentBatch::STATUS_CANCELLED,
-        ], true)) {
-            throw new RuntimeException('Ten batch jest już zakończony.');
-        }
-
         $batch->markCancelledFlag();
 
         $removedJobs = 0;
@@ -1780,25 +1776,99 @@ final class ProductEnrichmentService
         ];
     }
 
+    /**
+     * Zatrzymuje WSZYSTKIE pobierania opisów — nie tylko chowa batch z listy.
+     *
+     * @return array{removed_jobs: int, marked_products: int, cancelled_batches: int}
+     */
+    public function stopAllEnrichment(): array
+    {
+        $removedJobs = 0;
+        if (Schema::hasTable('jobs')) {
+            $ids = DB::table('jobs')
+                ->where('payload', 'like', '%EnrichProductJob%')
+                ->pluck('id');
+            foreach ($ids as $id) {
+                DB::table('jobs')->where('id', $id)->delete();
+                $removedJobs++;
+            }
+        }
+
+        ProductEnrichmentBatch::haltAllWorkers();
+        foreach (ProductEnrichmentBatch::query()
+            ->where('updated_at', '>', now()->subDay())
+            ->pluck('id') as $batchId) {
+            Cache::put(ProductEnrichmentBatch::cancelCacheKey((int) $batchId), true, now()->addDay());
+        }
+
+        $markedProducts = Product::query()
+            ->whereIn('enrichment_status', [
+                Product::ENRICHMENT_QUEUED,
+                Product::ENRICHMENT_RUNNING,
+            ])
+            ->update([
+                'enrichment_status' => Product::ENRICHMENT_FAILED,
+                'enrichment_error' => 'Zatrzymano wszystkie pobierania opisów',
+            ]);
+
+        $cancelledBatches = 0;
+        $open = ProductEnrichmentBatch::query()
+            ->whereIn('status', [
+                ProductEnrichmentBatch::STATUS_QUEUED,
+                ProductEnrichmentBatch::STATUS_RUNNING,
+            ])
+            ->get();
+        foreach ($open as $batch) {
+            $processed = $batch->done + $batch->failed;
+            $remaining = max(0, $batch->total - $processed);
+            if ($remaining > 0) {
+                $batch->increment('failed', $remaining);
+                $batch->refresh();
+            }
+            $batch->update([
+                'status' => ProductEnrichmentBatch::STATUS_CANCELLED,
+                'message' => 'Zatrzymano wszystko · usunięto jobów '.$removedJobs,
+                'current_sku' => null,
+                'current_name' => null,
+            ]);
+            $cancelledBatches++;
+        }
+
+        return [
+            'removed_jobs' => $removedJobs,
+            'marked_products' => (int) $markedProducts,
+            'cancelled_batches' => $cancelledBatches,
+        ];
+    }
+
+    public function enrichmentProductCounts(): array
+    {
+        return [
+            'queued_products' => Product::query()
+                ->where('enrichment_status', Product::ENRICHMENT_QUEUED)
+                ->count(),
+            'running_products' => Product::query()
+                ->where('enrichment_status', Product::ENRICHMENT_RUNNING)
+                ->count(),
+        ];
+    }
+
     public function assertBatchNotCancelled(?int $batchId): void
     {
         if ($batchId === null || $batchId <= 0) {
             return;
         }
 
-        if (cache()->has(ProductEnrichmentBatch::cancelCacheKey($batchId))) {
-            throw new EnrichmentCancelledException('Enrichment anulowany przez użytkownika.');
-        }
-
-        $status = ProductEnrichmentBatch::query()->whereKey($batchId)->value('status');
-        if ($status === ProductEnrichmentBatch::STATUS_CANCELLED) {
+        $batch = ProductEnrichmentBatch::query()->find($batchId);
+        if ($batch !== null && $batch->isCancelled()) {
             throw new EnrichmentCancelledException('Enrichment anulowany przez użytkownika.');
         }
     }
 
     private function productIdFromJobPayload(string $payload): ?int
     {
-        if (preg_match('/s:9:"productId";i:(\d+);/', $payload, $m) === 1) {
+        $plain = str_replace('\\', '', $payload);
+        if (preg_match('/productId";i:(\d+);/', $plain, $m) === 1) {
             return (int) $m[1];
         }
 

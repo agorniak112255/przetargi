@@ -128,6 +128,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:price_lists.import|products.view');
     Route::get('/product-enrichment-batches/active', [ProductEnrichmentController::class, 'activeBatches'])
         ->middleware('permission:price_lists.import|products.view');
+    Route::post('/product-enrichment-batches/stop-all', [ProductEnrichmentController::class, 'stopAll'])
+        ->middleware('permission:price_lists.import');
     Route::get('/product-enrichment-batches/{batch}', [ProductEnrichmentController::class, 'showBatch'])
         ->middleware('permission:price_lists.import|products.view');
     Route::post('/product-enrichment-batches/{batch}/items/{product}', [ProductEnrichmentController::class, 'processBatchItem'])

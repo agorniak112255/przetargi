@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
-import { api, can, type EnrichmentBatch } from '../lib/api'
+import { api, can, parseActiveEnrichment, type EnrichmentBatch } from '../lib/api'
 
 type ProgressMode = 'analyze' | 'import' | null
 
@@ -262,8 +262,9 @@ export function PriceLists() {
   }, [canEnrich])
 
   useEffect(() => {
-    void api<EnrichmentBatch[]>('/product-enrichment-batches/active')
-      .then((list) => {
+    void api<unknown>('/product-enrichment-batches/active')
+      .then((res) => {
+        const list = parseActiveEnrichment(res).batches
         const next: Record<number, EnrichmentBatch> = {}
         for (const b of list) {
           if (b.scope === 'price_list' && b.scope_id != null) {
@@ -950,10 +951,10 @@ export function PriceLists() {
         <EnrichmentQueuePanel
           onChanged={() => {
             void load().catch(() => {})
-            void api<EnrichmentBatch[]>('/product-enrichment-batches/active')
-              .then((list) => {
+            void api<unknown>('/product-enrichment-batches/active')
+              .then((res) => {
                 const map: Record<number, EnrichmentBatch> = {}
-                for (const b of list) {
+                for (const b of parseActiveEnrichment(res).batches) {
                   if (b.scope === 'price_list' && b.scope_id) map[b.scope_id] = b
                 }
                 setEnrichBatches(map)

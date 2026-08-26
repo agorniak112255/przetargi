@@ -374,6 +374,92 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame('420000300000', $batch->current_sku);
     }
 
+    public function test_active_batches_keep_stale_when_products_still_queued(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+
+        $this->makeProduct([
+            'sku' => 'Q-STALE',
+            'enrichment_status' => Product::ENRICHMENT_QUEUED,
+        ]);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 6,
+            'total' => 11,
+            'done' => 6,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'created_by' => $user->id,
+            'force' => false,
+            'current_sku' => 'Q-STALE',
+        ]);
+        ProductEnrichmentBatch::query()->whereKey($batch->id)->update([
+            'updated_at' => now()->subMinutes(15),
+        ]);
+
+        $this->getJson('/api/product-enrichment-batches/active')
+            ->assertOk()
+            ->assertJsonPath('queued_products', 1)
+            ->assertJsonFragment(['id' => $batch->id, 'status' => 'running']);
+
+        $batch->refresh();
+        $this->assertSame(ProductEnrichmentBatch::STATUS_RUNNING, $batch->status);
+        $this->assertSame(6, $batch->done);
+    }
+
+    public function test_stop_all_kills_jobs_of_hidden_done_batch(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+
+        $product = $this->makeProduct([
+            'sku' => 'GHOST-1',
+            'enrichment_status' => Product::ENRICHMENT_QUEUED,
+        ]);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 6,
+            'total' => 11,
+            'done' => 11,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_DONE,
+            'created_by' => $user->id,
+            'force' => false,
+        ]);
+
+        $command = 'O:27:"App\\Jobs\\EnrichProductJob":2:{s:9:"productId";i:'.$product->id.';s:7:"batchId";i:'.$batch->id.';}';
+        $jobId = DB::table('jobs')->insertGetId([
+            'queue' => 'default',
+            'payload' => json_encode([
+                'displayName' => EnrichProductJob::class,
+                'data' => ['command' => $command],
+            ], JSON_UNESCAPED_SLASHES),
+            'attempts' => 0,
+            'reserved_at' => null,
+            'available_at' => time(),
+            'created_at' => time(),
+        ]);
+
+        $this->postJson('/api/product-enrichment-batches/stop-all')
+            ->assertOk()
+            ->assertJsonPath('removed_jobs', 1)
+            ->assertJsonPath('marked_products', 1)
+            ->assertJsonPath('queued_products', 0)
+            ->assertJsonPath('running_products', 0);
+
+        $this->assertDatabaseMissing('jobs', ['id' => $jobId]);
+        $this->assertSame(Product::ENRICHMENT_FAILED, $product->fresh()?->enrichment_status);
+        $this->assertTrue($batch->fresh()?->isCancelled());
+    }
+
+    public function test_handlowiec_cannot_stop_all_enrichment(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+
+        $this->postJson('/api/product-enrichment-batches/stop-all')->assertForbidden();
+    }
+
     public function test_handlowiec_cannot_enrich(): void
     {
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());

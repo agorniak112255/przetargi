@@ -156,6 +156,27 @@ export type EnrichmentBatch = {
   message?: string | null
 }
 
+export type ActiveEnrichmentState = {
+  batches: EnrichmentBatch[]
+  queued_products: number
+  running_products: number
+}
+
+export function parseActiveEnrichment(res: unknown): ActiveEnrichmentState {
+  if (Array.isArray(res)) {
+    return { batches: res as EnrichmentBatch[], queued_products: 0, running_products: 0 }
+  }
+  if (res && typeof res === 'object' && 'batches' in res) {
+    const o = res as ActiveEnrichmentState
+    return {
+      batches: Array.isArray(o.batches) ? o.batches : [],
+      queued_products: Number(o.queued_products ?? 0),
+      running_products: Number(o.running_products ?? 0),
+    }
+  }
+  return { batches: [], queued_products: 0, running_products: 0 }
+}
+
 export type Substitute = {
   id: number
   main_product_id?: number

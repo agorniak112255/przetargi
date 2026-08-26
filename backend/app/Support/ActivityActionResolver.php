@@ -99,6 +99,7 @@ final class ActivityActionResolver
             ['POST', '#^products/catalog-health/queue$#', 'product.catalog_health_queued', 'Kolejka health katalogu'],
             ['POST', '#^products/catalog-health/backfill-attributes$#', 'product.attributes_backfilled', 'Uzupełnianie atrybutów BHP'],
             ['POST', '#^product-enrichment-batches/\d+/cancel$#', 'product.enrichment_cancelled', 'Anulowano wzbogacanie'],
+            ['POST', '#^product-enrichment-batches/stop-all$#', 'product.enrichment_cancelled', 'Zatrzymano wszystkie pobierania opisów'],
             ['POST', '#^products/ai-search$#', 'product.ai_search', 'Wyszukiwanie AI produktów'],
             ['PUT', '#^ai-settings$#', 'ai_settings.updated', 'Zmiana ustawień AI'],
             ['POST', '#^ai-settings/test$#', 'ai_settings.tested', 'Test połączenia AI'],

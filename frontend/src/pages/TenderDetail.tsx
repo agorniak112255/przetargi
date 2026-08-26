@@ -36,6 +36,45 @@ function ExternalHintLink({ reason }: { reason: MatchReason }) {
   )
 }
 
+function isExternalOfferItem(item: Item, productId = ''): boolean {
+  if (productId || item.main_product_id || item.main_product) {
+    return false
+  }
+  const src = item.match_source ?? ''
+  return (
+    (item.custom_name ?? '').trim() !== '' ||
+    src === 'external' ||
+    src === 'custom'
+  )
+}
+
+function ExternalOfferBanner({
+  name,
+  url,
+}: {
+  name: string
+  url?: string | null
+}) {
+  return (
+    <div className="max-w-[280px] rounded-md border-2 border-orange-500 bg-orange-100 px-2 py-1.5">
+      <span className="inline-block rounded bg-orange-600 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-white">
+        Link zewnętrzny — nie z katalogu
+      </span>
+      <p className="mt-1 text-[11px] font-semibold text-orange-950">{name}</p>
+      {url ? (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-0.5 block truncate text-[10px] font-medium text-orange-800 underline"
+        >
+          {url}
+        </a>
+      ) : null}
+    </div>
+  )
+}
+
 function ExternalHints({
   reasons,
   onAddToOffer,
@@ -550,15 +589,11 @@ export function TenderDetail() {
     }
     void pull()
     const poll = window.setInterval(() => void pull(), 1000)
-    const refresh = window.setInterval(() => {
-      void load()
-    }, 8000)
     return () => {
       cancelled = true
       window.clearInterval(poll)
-      window.clearInterval(refresh)
     }
-  }, [matchBusy, id, load])
+  }, [matchBusy, id])
 
   useEffect(() => {
     if (tab === 'zaproszenia') void loadDirectory(inviteQ)
@@ -1101,6 +1136,8 @@ export function TenderDetail() {
     const concurrency = clampAiConcurrency(data?.coverage?.thresholds.match_concurrency)
     try {
       await mapPool(chunks, concurrency, async (chunk) => {
+        const ac = new AbortController()
+        const abortTimer = window.setTimeout(() => ac.abort(), 180_000)
         try {
           const res = await api<MatchApiRes>(`/tenders/${id}/match`, {
             method: 'POST',
@@ -1109,6 +1146,7 @@ export function TenderDetail() {
               item_ids: chunk,
               progress_total: estimated,
             }),
+            signal: ac.signal,
           })
           merged.matched += res.matched
           merged.skipped += res.skipped
@@ -1123,7 +1161,18 @@ export function TenderDetail() {
             scoreParts.push(res.avg_score)
           }
         } catch (e) {
-          errors.push(e instanceof Error ? e.message : 'Błąd dopasowania')
+          const aborted =
+            (e instanceof DOMException && e.name === 'AbortError') ||
+            (e instanceof Error && /abort/i.test(e.message))
+          errors.push(
+            aborted
+              ? 'Pozycja przekroczyła 180 s (model / wyszukiwarka). Reszta poszła dalej.'
+              : e instanceof Error
+                ? e.message
+                : 'Błąd dopasowania',
+          )
+        } finally {
+          window.clearTimeout(abortTimer)
         }
         matchDoneRef.current += chunk.length
         setMatchProgress({
@@ -1344,12 +1393,17 @@ export function TenderDetail() {
                   </div>
                   {matchProgress?.line_no != null && (
                     <p className="mt-2 truncate text-xs text-slate-600">
-                      Ostatnia: poz. {matchProgress.line_no}
+                      Teraz: poz. {matchProgress.line_no}
                       {matchProgress.requirement ? ` · ${matchProgress.requirement}` : ''}
                     </p>
                   )}
+                  {total > 0 && done === total - 1 && (
+                    <p className="mt-2 text-xs text-amber-800">
+                      Ostatnia pozycja czeka na model — to bywa 2–4 min, ETA z średniej kłamie.
+                    </p>
+                  )}
                   <p className="mt-2 font-mono text-sm text-violet-800">
-                    {matchElapsed} s{eta ? ` · zostało ${eta}` : ''}
+                    {matchElapsed} s{eta && done < total - 1 ? ` · zostało ${eta}` : ''}
                   </p>
                 </>
               )
@@ -2202,7 +2256,18 @@ export function TenderDetail() {
                   item.offer_price != null ? Number(item.offer_price) * item.quantity : null
                 return (
                   <tr key={item.id} className="border-b">
-                    <td className="p-2">{item.main_product?.sku ?? item.custom_name ?? '—'}</td>
+                    <td className="p-2">
+                      {isExternalOfferItem(item) ? (
+                        <span className="inline-flex flex-col gap-0.5">
+                          <span className="w-fit rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase text-white">
+                            Zewn.
+                          </span>
+                          <span>{item.custom_name}</span>
+                        </span>
+                      ) : (
+                        (item.main_product?.sku ?? item.custom_name ?? '—')
+                      )}
+                    </td>
                     <td className="p-2">{item.offer_price ?? '—'}</td>
                     <td className="p-2">{item.margin_percent ?? '—'}%</td>
                     <td className="p-2">
@@ -2610,18 +2675,28 @@ function ItemRow({
   const hasSavedProduct = Boolean(
     selectedProduct || productId || (item.custom_name ?? '').trim(),
   )
+  const isExternal = isExternalOfferItem(item, productId)
 
   return (
     <>
     <tr
       className={`${showComment ? 'align-top' : 'border-b align-top'} ${
-        changedByAi ? 'bg-violet-50 ring-1 ring-inset ring-violet-200' : ''
+        isExternal
+          ? 'bg-orange-50 ring-1 ring-inset ring-orange-400'
+          : changedByAi
+            ? 'bg-violet-50 ring-1 ring-inset ring-violet-200'
+            : ''
       }`}
     >
       <td className="p-2">
         <span className="inline-flex items-center gap-1">
           {item.line_no}
-          {changedByAi && (
+          {isExternal && (
+            <span className="rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase text-white">
+              Zewn.
+            </span>
+          )}
+          {changedByAi && !isExternal && (
             <span className="rounded bg-violet-700 px-1 py-px text-[9px] font-bold uppercase text-white">
               AI
             </span>
@@ -2725,32 +2800,35 @@ function ItemRow({
                 })
               }}
             />
-            {(item.ai_match_reasons ?? []).some(
-              (r) => r.code === 'external_link' || r.code === 'custom_offer',
-            ) && (
-              <ExternalHints
-                reasons={item.ai_match_reasons}
-                onAddToOffer={
-                  hasSavedProduct
-                    ? undefined
-                    : (hint) => {
-                        setCustomName(hint.title)
-                        setCustomUrl(hint.url)
-                        setProductId('')
-                        setPicked(null)
-                        void onSave(item.id, {
-                          main_product_id: null,
-                          custom_name: hint.title,
-                          custom_url: hint.url,
-                          quantity: Number(qty) || 1,
-                          offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
-                          match_source: 'custom',
-                          status: 'matched',
-                        })
-                      }
-                }
+            {isExternal && (customName || item.custom_name) && (
+              <ExternalOfferBanner
+                name={customName || item.custom_name || ''}
+                url={customUrl || item.custom_url}
               />
             )}
+            {!isExternal &&
+              (item.ai_match_reasons ?? []).some(
+                (r) => r.code === 'external_link' || r.code === 'custom_offer',
+              ) && (
+                <ExternalHints
+                  reasons={item.ai_match_reasons}
+                  onAddToOffer={(hint) => {
+                    setCustomName(hint.title)
+                    setCustomUrl(hint.url)
+                    setProductId('')
+                    setPicked(null)
+                    void onSave(item.id, {
+                      main_product_id: null,
+                      custom_name: hint.title,
+                      custom_url: hint.url,
+                      quantity: Number(qty) || 1,
+                      offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
+                      match_source: 'custom',
+                      status: 'matched',
+                    })
+                  }}
+                />
+              )}
             <details className="max-w-[280px] rounded border border-amber-200 bg-amber-50/70 px-2 py-1">
               <summary className="cursor-pointer text-[10px] font-semibold text-amber-950">
                 Własna propozycja{customName ? `: ${customName}` : ''}
@@ -2773,7 +2851,7 @@ function ItemRow({
                 <p className="text-[10px] text-amber-900">Cenę wpisz w kolumnie Cena i zapisz.</p>
               </div>
             </details>
-            {hasSavedProduct && (
+            {hasSavedProduct && !isExternal && (
               <details
                 open
                 className="max-w-[280px] rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] text-violet-900"
@@ -2852,22 +2930,7 @@ function ItemRow({
                 </span>
               </button>
             ) : item.custom_name ? (
-              <div className="max-w-[280px] rounded border border-amber-300 bg-amber-50 px-2 py-1.5">
-                <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
-                  Własna propozycja — nie z katalogu
-                </span>
-                <span className="mt-1 block text-[11px] font-medium text-amber-950">{item.custom_name}</span>
-                {item.custom_url && (
-                  <a
-                    href={item.custom_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-0.5 block truncate text-[10px] text-amber-900 underline"
-                  >
-                    {item.custom_url}
-                  </a>
-                )}
-              </div>
+              <ExternalOfferBanner name={item.custom_name} url={item.custom_url} />
             ) : (
               <ExternalHints reasons={item.ai_match_reasons} />
             )}
