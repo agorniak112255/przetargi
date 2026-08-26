@@ -207,6 +207,134 @@ function matchesHistoryQuery(row: PriceList, q: string): boolean {
   return manufacturer.includes(needle) || file.includes(needle)
 }
 
+type HistorySortKey =
+  | 'created_at'
+  | 'manufacturer'
+  | 'version'
+  | 'original_filename'
+  | 'products_created'
+  | 'products_updated'
+  | 'prices_changed'
+  | 'rows_skipped'
+  | 'importer'
+  | 'enrichment'
+
+const HISTORY_SORT_DESC_FIRST: ReadonlySet<HistorySortKey> = new Set([
+  'created_at',
+  'products_created',
+  'products_updated',
+  'prices_changed',
+  'rows_skipped',
+  'enrichment',
+])
+
+function enrichmentCoverage(
+  row: PriceList,
+  cached: PriceList | undefined,
+  batch: EnrichmentBatch | undefined,
+): { total: number; done: number; failed: number; remaining: number } {
+  const live = batch?.status === 'queued' || batch?.status === 'running'
+  const total = live
+    ? batch.total
+    : (row.enrichment_total ?? (row.product_ids ?? cached?.product_ids ?? []).length)
+  const done = live ? batch.done : (row.enrichment_done ?? 0)
+  const failed = live ? batch.failed : (row.enrichment_failed ?? 0)
+
+  return {
+    total,
+    done,
+    failed,
+    remaining: Math.max(0, total - done),
+  }
+}
+
+function compareHistoryRows(
+  a: PriceList,
+  b: PriceList,
+  key: HistorySortKey,
+  dir: 'asc' | 'desc',
+  cache: Record<number, PriceList>,
+  batches: Record<number, EnrichmentBatch>,
+): number {
+  const mul = dir === 'asc' ? 1 : -1
+  let cmp = 0
+  switch (key) {
+    case 'created_at':
+      cmp = Date.parse(a.created_at) - Date.parse(b.created_at)
+      break
+    case 'manufacturer':
+      cmp = a.manufacturer.localeCompare(b.manufacturer, 'pl', { sensitivity: 'base' })
+      break
+    case 'version':
+      cmp = a.version.localeCompare(b.version, 'pl', { numeric: true, sensitivity: 'base' })
+      break
+    case 'original_filename':
+      cmp = (a.original_filename ?? '').localeCompare(b.original_filename ?? '', 'pl', {
+        sensitivity: 'base',
+      })
+      break
+    case 'products_created':
+      cmp = a.products_created - b.products_created
+      break
+    case 'products_updated':
+      cmp = a.products_updated - b.products_updated
+      break
+    case 'prices_changed':
+      cmp = (a.prices_changed ?? 0) - (b.prices_changed ?? 0)
+      break
+    case 'rows_skipped':
+      cmp = a.rows_skipped - b.rows_skipped
+      break
+    case 'importer':
+      cmp = (a.importer?.name ?? '').localeCompare(b.importer?.name ?? '', 'pl', {
+        sensitivity: 'base',
+      })
+      break
+    case 'enrichment': {
+      const ea = enrichmentCoverage(a, cache[a.id], batches[a.id])
+      const eb = enrichmentCoverage(b, cache[b.id], batches[b.id])
+      cmp = ea.remaining - eb.remaining || ea.done - eb.done || ea.total - eb.total
+      break
+    }
+  }
+  if (cmp === 0) {
+    cmp = a.id - b.id
+  }
+
+  return cmp * mul
+}
+
+function HistorySortTh({
+  label,
+  col,
+  sort,
+  dir,
+  onSort,
+}: {
+  label: string
+  col: HistorySortKey
+  sort: HistorySortKey
+  dir: 'asc' | 'desc'
+  onSort: (col: HistorySortKey) => void
+}) {
+  const active = sort === col
+
+  return (
+    <th className="p-2">
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        className={`inline-flex items-center gap-1 font-semibold hover:text-blue-700 ${
+          active ? 'text-blue-700' : 'text-slate-700'
+        }`}
+      >
+        {label}
+        <span className="text-[10px] text-slate-400">{active ? (dir === 'asc' ? '▲' : '▼') : '◇'}</span>
+      </button>
+    </th>
+  )
+}
+
 const btnPrimary =
   'inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50'
 const btnAi =
@@ -260,10 +388,26 @@ export function PriceLists() {
     force: boolean
   } | null>(null)
   const [enrichConfirmAck, setEnrichConfirmAck] = useState(false)
+  const [historySort, setHistorySort] = useState<HistorySortKey>('created_at')
+  const [historyDir, setHistoryDir] = useState<'asc' | 'desc'>('desc')
   const visibleHistory = useMemo(
-    () => rows.filter((row) => matchesHistoryQuery(row, historyQuery)),
-    [rows, historyQuery],
+    () =>
+      rows
+        .filter((row) => matchesHistoryQuery(row, historyQuery))
+        .sort((a, b) =>
+          compareHistoryRows(a, b, historySort, historyDir, historyCache, enrichBatches),
+        ),
+    [rows, historyQuery, historySort, historyDir, historyCache, enrichBatches],
   )
+
+  function onHistorySort(col: HistorySortKey) {
+    if (historySort === col) {
+      setHistoryDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setHistorySort(col)
+    setHistoryDir(HISTORY_SORT_DESC_FIRST.has(col) ? 'desc' : 'asc')
+  }
   const progressTimer = useRef<number | null>(null)
 
   useEffect(() => {
@@ -1455,25 +1599,28 @@ export function PriceLists() {
           />
         </div>
         <p className="mb-2 text-[11px] text-slate-500">
-          Kliknij liczbę w kolumnie Update / Zmiany cen / Skip, aby zobaczyć listę pozycji.
-          Kliknij producenta, aby otworzyć jego produkty.
+          Kliknij nagłówek kolumny, aby posortować. Kliknij liczbę w Update / Zmiany cen / Skip,
+          aby zobaczyć listę pozycji. Kliknij producenta, aby otworzyć jego produkty.
           {canEnrich
             ? ' Producenta/wersję edytujesz przyciskiem „Edytuj” — zmiana producenta aktualizuje wszystkie produkty z tego importu.'
             : ''}
         </p>
-        <table className="w-full text-left text-xs">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[72rem] text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50">
-              <th className="p-2">Data</th>
-              <th className="p-2">Producent</th>
-              <th className="p-2">Wersja</th>
-              <th className="p-2">Plik</th>
-              <th className="p-2">Nowe</th>
-              <th className="p-2">Update</th>
-              <th className="p-2">Zmiany cen</th>
-              <th className="p-2">Skip</th>
-              <th className="p-2">Kto</th>
-              {canEnrich && <th className="p-2">Opisy/zdjęcia</th>}
+              <HistorySortTh label="Data" col="created_at" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              <HistorySortTh label="Producent" col="manufacturer" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              <HistorySortTh label="Wersja" col="version" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              <HistorySortTh label="Plik" col="original_filename" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              <HistorySortTh label="Nowe" col="products_created" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              <HistorySortTh label="Update" col="products_updated" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              <HistorySortTh label="Zmiany cen" col="prices_changed" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              <HistorySortTh label="Skip" col="rows_skipped" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              <HistorySortTh label="Kto" col="importer" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              {canEnrich && (
+                <HistorySortTh label="Opisy/zdjęcia" col="enrichment" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              )}
               {(canEnrich || canDelete) && <th className="p-2">Akcja</th>}
             </tr>
           </thead>
@@ -1482,13 +1629,13 @@ export function PriceLists() {
               const cached = historyCache[r.id] ?? r
               const kind = expandedHistory?.id === r.id ? expandedHistory.kind : null
               const enrichBatch = enrichBatches[r.id]
-              const productCount =
-                r.enrichment_total ?? (r.product_ids ?? cached.product_ids ?? []).length
-              const enrichDone = r.enrichment_done ?? 0
-              const enrichFailed = r.enrichment_failed ?? 0
+              const { total: productCount, done: enrichDone, failed: enrichFailed, remaining } =
+                enrichmentCoverage(r, cached, enrichBatch)
               const batchActive =
                 enrichBatch?.status === 'queued' || enrichBatch?.status === 'running'
-              const missing = Math.max(0, productCount - enrichDone)
+              const missing = remaining
+              const donePct = productCount > 0 ? (enrichDone / productCount) * 100 : 0
+              const failPct = productCount > 0 ? (enrichFailed / productCount) * 100 : 0
               const editing = editId === r.id
               return (
               <Fragment key={r.id}>
@@ -1539,23 +1686,53 @@ export function PriceLists() {
                   </td>
                   <td className="p-2">{r.importer?.name ?? '—'}</td>
                   {canEnrich && (
-                    <td className="p-2 min-w-[9rem]">
-                      <p
-                        className={
-                          'mb-1 text-[11px] tabular-nums ' +
-                          (productCount > 0 && enrichDone >= productCount
-                            ? 'font-medium text-green-700'
-                            : enrichDone > 0
-                              ? 'text-slate-700'
-                              : 'text-slate-400')
-                        }
-                        title="Produkty z pobranym opisem / wszystkie z tego importu"
-                      >
-                        {productCount > 0 ? `${enrichDone}/${productCount}` : '—'}
-                        {enrichFailed > 0 ? (
-                          <span className="text-red-600"> · err {enrichFailed}</span>
-                        ) : null}
-                      </p>
+                    <td className="p-2 min-w-[12rem]">
+                      {productCount === 0 ? (
+                        <p className="mb-1 text-[11px] text-slate-400">—</p>
+                      ) : (
+                        <div className="mb-1 w-44">
+                          <div
+                            className="flex h-2 overflow-hidden rounded bg-slate-200"
+                            title={`Ściągnięte ${enrichDone} z ${productCount}, zostało ${remaining}${
+                              enrichFailed > 0 ? `, błędy ${enrichFailed}` : ''
+                            }`}
+                          >
+                            <div
+                              className="bg-emerald-500 transition-all"
+                              style={{ width: `${donePct}%` }}
+                            />
+                            <div
+                              className="bg-red-400 transition-all"
+                              style={{ width: `${failPct}%` }}
+                            />
+                          </div>
+                          <p
+                            className={
+                              'mt-1 tabular-nums text-[11px] ' +
+                              (enrichDone >= productCount
+                                ? 'font-medium text-emerald-700'
+                                : enrichDone > 0
+                                  ? 'text-emerald-700'
+                                  : 'text-slate-400')
+                            }
+                          >
+                            ściągnięte {enrichDone}
+                            <span className="font-normal text-slate-400"> / {productCount}</span>
+                          </p>
+                          <p
+                            className={
+                              remaining > 0
+                                ? 'text-[12px] font-semibold tabular-nums text-slate-900'
+                                : 'text-[11px] tabular-nums text-slate-400'
+                            }
+                          >
+                            zostało {remaining}
+                          </p>
+                          {enrichFailed > 0 && (
+                            <p className="text-[10px] text-red-600">błędy {enrichFailed}</p>
+                          )}
+                        </div>
+                      )}
                       {enrichFailed > 0 && r.enrichment_last_error && (
                         <p
                           className="mb-1 max-w-[14rem] truncate text-[10px] text-red-600"
@@ -1584,7 +1761,7 @@ export function PriceLists() {
                         {enrichBusyId === r.id
                           ? 'Start…'
                           : batchActive
-                            ? `${enrichBatch.done + enrichBatch.failed}/${enrichBatch.total}`
+                            ? 'Pobieranie…'
                             : enrichFailed > 0
                               ? `Ponów err (${enrichFailed})`
                               : enrichDone >= productCount && productCount > 0
@@ -1594,27 +1771,14 @@ export function PriceLists() {
                                   : 'Pobierz'}
                       </button>
                       {batchActive && enrichBatch && (
-                          <div className="mt-1 w-36">
-                            <div className="h-1.5 overflow-hidden rounded bg-slate-200">
-                              <div
-                                className="h-full bg-blue-500 transition-all duration-500"
-                                style={{
-                                  width: `${Math.max(4, enrichBatch.progress_percent)}%`,
-                                }}
-                              />
-                            </div>
-                            <p className="mt-0.5 truncate text-[10px] text-slate-500" title={enrichBatch.message ?? ''}>
-                              {enrichBatch.current_sku
-                                ? `${enrichBatch.current_sku}`
-                                : enrichBatch.status === 'queued'
-                                  ? 'W kolejce…'
-                                  : 'Przetwarzam…'}
-                              {enrichBatch.done > 0 || enrichBatch.failed > 0
-                                ? ` · OK ${enrichBatch.done}${enrichBatch.failed ? ` / err ${enrichBatch.failed}` : ''}`
-                                : ''}
-                            </p>
-                          </div>
-                        )}
+                        <p className="mt-0.5 max-w-[14rem] truncate text-[10px] text-slate-500" title={enrichBatch.message ?? ''}>
+                          {enrichBatch.current_sku
+                            ? enrichBatch.current_sku
+                            : enrichBatch.status === 'queued'
+                              ? 'W kolejce…'
+                              : 'Przetwarzam…'}
+                        </p>
+                      )}
                     </td>
                   )}
                   {(canEnrich || canDelete) && (
@@ -1725,6 +1889,7 @@ export function PriceLists() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {enrichConfirm && (

@@ -741,6 +741,7 @@ export function AiSettingsPage() {
               Dopasowanie SIWZ oraz twardy limit produktów liczonych naraz przy pobieraniu opisów —
               wspólny dla wszystkich cenników. Zwolniony slot od razu bierze następny produkt.
               Ustaw tyle, ile slotów ma model (llama.cpp <code>--parallel</code>).
+              Workery kolejki: stałe 16 — ten limit działa od razu do 16.
             </span>
           </label>
           <label className="flex items-center gap-2 text-xs">

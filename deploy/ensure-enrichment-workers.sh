@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Instaluje / odświeża workery kolejki (systemd). Liczba równolegle
-# przetwarzanych produktów = liczba workerów, wspólna dla wszystkich cenników.
-# Zmiana liczby: WORKERS=12 bash deploy/ensure-enrichment-workers.sh
+# Instaluje / odświeża workery kolejki (systemd).
+# Stała pula 16 procesów — limit „Ile zapytań AI naraz” w panelu tylko
+# zajmuje sloty, bez restartu. Więcej niż 16: WORKERS=20 bash deploy/ensure-enrichment-workers.sh
 set -euo pipefail
 
 APP_ROOT="${1:-/var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl}"
@@ -20,12 +20,9 @@ if [[ ! -f "$BACKEND/artisan" ]]; then
   exit 1
 fi
 
-# Domyślnie tyle workerów, ile ustawiono w panelu („Ile zapytań AI naraz”).
-if [[ -z "${WORKERS:-}" ]]; then
-  WORKERS="$("$PHP_BIN" "$BACKEND/artisan" enrichment:concurrency 2>/dev/null | tr -cd '0-9')"
-  echo "==> workery: limit z Ustawień AI = ${WORKERS:-brak odczytu}"
-fi
-WORKERS="${WORKERS:-8}"
+# Stała pula. Panel (EnrichmentSlots) ogranicza, ile z nich naraz woła LLM.
+WORKERS="${WORKERS:-16}"
+echo "==> workery: pula ${WORKERS} (sloty AI z panelu, niezależnie)"
 
 if (( WORKERS < 1 || WORKERS > SLOTS_MAX )); then
   echo "ERR: WORKERS=$WORKERS poza zakresem 1-$SLOTS_MAX" >&2
@@ -70,6 +67,7 @@ touch "$LOG_FILE"
 chown "$OWNER:$GROUP" "$LOG_FILE" || true
 
 systemctl daemon-reload
+systemctl reset-failed "${UNIT_NAME}"*.service 2>/dev/null || true
 
 echo "==> workery: uruchamiam $WORKERS instancji"
 wanted=()
@@ -108,6 +106,5 @@ cd "$BACKEND"
 "$PHP_BIN" artisan queue:restart || true
 
 systemctl --no-pager --plain list-units "${UNIT_NAME}*" || true
-echo "==> workery: OK ($WORKERS równolegle, log: $LOG_FILE)"
-echo "    Obniżenie limitu w Ustawieniach AI działa od razu; podniesienie powyżej"
-echo "    $WORKERS wymaga ponownego uruchomienia tego skryptu."
+echo "==> workery: OK ($WORKERS w puli, log: $LOG_FILE)"
+echo "    Limit w Ustawieniach AI zmienia tylko sloty (do $WORKERS). Powyżej: WORKERS=N $0"
