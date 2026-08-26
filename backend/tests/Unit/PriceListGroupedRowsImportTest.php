@@ -55,6 +55,59 @@ final class PriceListGroupedRowsImportTest extends TestCase
         }
     }
 
+    public function test_ansell_same_price_sizes_collapse_to_one_product(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'ansell').'.xlsx';
+        $spreadsheet = new Spreadsheet;
+        $spreadsheet->getActiveSheet()->fromArray([
+            ['sku', 'nazwa', 'cena'],
+            ['37695VP070', 'AlphaTec 37695VP Size 7.0', 2.85],
+            ['37695VP080', 'AlphaTec 37695VP Size 8.0', 2.85],
+            ['37695VP100', 'AlphaTec 37695VP Size 10.0', 2.85],
+            ['37900VP100', 'AlphaTec 37900VP Size 10.0', 3.96],
+        ]);
+        (new Xlsx($spreadsheet))->save($path);
+
+        try {
+            $service = app(PriceListImportService::class);
+            $preview = $service->previewFromMapping($path, $this->flatMapping($spreadsheet->getActiveSheet()->getTitle()), 20);
+            $skus = array_column($preview['products'], 'sku');
+
+            $this->assertContains('37695VP', $skus);
+            $this->assertNotContains('37695VP070', $skus);
+            $this->assertContains('37900VP', $skus);
+            $this->assertSame(2, $preview['products_found']);
+            $names = array_column($preview['products'], 'name');
+            $this->assertContains('AlphaTec 37695VP', $names);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_ansell_different_price_keeps_each_size(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'ansellp').'.xlsx';
+        $spreadsheet = new Spreadsheet;
+        $spreadsheet->getActiveSheet()->fromArray([
+            ['sku', 'nazwa', 'cena'],
+            ['37695VP070', 'AlphaTec 37695VP Size 7.0', 2.85],
+            ['37695VP100', 'AlphaTec 37695VP Size 10.0', 4.10],
+        ]);
+        (new Xlsx($spreadsheet))->save($path);
+
+        try {
+            $service = app(PriceListImportService::class);
+            $preview = $service->previewFromMapping($path, $this->flatMapping($spreadsheet->getActiveSheet()->getTitle()), 10);
+            $skus = array_column($preview['products'], 'sku');
+
+            $this->assertContains('37695VP-7', $skus);
+            $this->assertContains('37695VP-10', $skus);
+            $this->assertSame(2, $preview['products_found']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_flat_price_list_still_imports(): void
     {
         $path = tempnam(sys_get_temp_dir(), 'flat').'.xlsx';
@@ -99,6 +152,37 @@ final class PriceListGroupedRowsImportTest extends TestCase
         } finally {
             @unlink($path);
         }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function flatMapping(string $sheet): array
+    {
+        return [
+            'currency' => 'PLN',
+            'sheets' => [
+                [
+                    'sheet' => $sheet,
+                    'include' => true,
+                    'header_excel_row' => 1,
+                    'columns' => [
+                        'sku' => 0,
+                        'name' => 1,
+                        'catalog_price' => 2,
+                        'discount' => null,
+                        'purchase' => null,
+                        'pack_qty' => null,
+                        'packaging' => null,
+                        'currency' => null,
+                        'ean' => null,
+                        'category' => null,
+                    ],
+                    'repeating_headers' => false,
+                    'confidence' => 1.0,
+                ],
+            ],
+        ];
     }
 
     /**

@@ -20,9 +20,10 @@ type Props = {
   canQueue: boolean
   manufacturerFilter?: string
   onQueued?: (batch: EnrichmentBatch) => void
+  onChanged?: () => void
 }
 
-export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued }: Props) {
+export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued, onChanged }: Props) {
   const [report, setReport] = useState<Report | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
@@ -80,6 +81,38 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
       await load()
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd kolejki')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function mergeSizes() {
+    if (
+      !window.confirm(
+        'Złączyć produkty różniące się tylko rozmiarem? Zostaje karta z opisem i zdjęciem; przy różnej cenie warianty zostają osobno.',
+      )
+    ) {
+      return
+    }
+    setBusy(true)
+    setMsg('')
+    setErr('')
+    try {
+      const res = await api<{ message: string }>(
+        '/products/catalog-health/merge-sizes',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            manufacturer: manufacturerFilter || null,
+            dry_run: false,
+          }),
+        },
+      )
+      setMsg(res.message)
+      await load()
+      onChanged?.()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd scalania rozmiarów')
     } finally {
       setBusy(false)
     }
@@ -176,6 +209,14 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
             className="rounded border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-800 disabled:opacity-50"
           >
             Uzupełnij atrybuty lokalnie ({report.missing_attributes})
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void mergeSizes()}
+            className="rounded border border-orange-300 bg-orange-50 px-2 py-1.5 text-[11px] font-semibold text-orange-950 disabled:opacity-50"
+          >
+            Scal rozmiary
           </button>
         </div>
       )}

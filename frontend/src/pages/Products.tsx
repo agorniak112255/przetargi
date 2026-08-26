@@ -546,6 +546,9 @@ export function Products() {
           setBatch(b)
           setMsg(b.message || `W kolejce enrichment: ${b.total} produktów`)
         }}
+        onChanged={() => {
+          void api<Page>(`/products?${buildParams()}`).then(setResult).catch(() => {})
+        }}
       />
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>

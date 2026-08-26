@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\ProductCatalogHealthService;
+use App\Services\ProductSizeMergeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use RuntimeException;
@@ -14,6 +15,7 @@ class ProductCatalogHealthController extends Controller
 {
     public function __construct(
         private readonly ProductCatalogHealthService $health,
+        private readonly ProductSizeMergeService $sizeMerge,
     ) {}
 
     public function show(Request $request): JsonResponse
@@ -95,6 +97,27 @@ class ProductCatalogHealthController extends Controller
             'updated' => $result['updated'],
             'filled' => $result['filled'],
             'pending' => $result['pending'],
+            'message' => $message,
+        ]);
+    }
+
+    public function mergeSizes(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'manufacturer' => ['sometimes', 'nullable', 'string', 'max:120'],
+            'dry_run' => ['sometimes', 'boolean'],
+        ]);
+
+        $result = $this->sizeMerge->merge(
+            $data['manufacturer'] ?? null,
+            (bool) ($data['dry_run'] ?? false),
+        );
+
+        $prefix = $result['dry_run'] ? 'Podgląd: ' : '';
+        $message = $prefix.'złączono '.$result['groups'].' modeli, usunięto '.$result['deleted'].' SKU-rozmiarów.';
+
+        return response()->json([
+            ...$result,
             'message' => $message,
         ]);
     }

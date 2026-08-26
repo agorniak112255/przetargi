@@ -9,6 +9,7 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\User;
+use App\Support\ProductSizeVariant;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -18,6 +19,7 @@ final class PriceListImportService
     public function __construct(
         private readonly CurrencyDetector $currencyDetector,
         private readonly AssortmentGroupService $assortmentGroups,
+        private readonly ProductSizeVariant $sizes,
     ) {}
 
     /**
@@ -191,6 +193,10 @@ final class PriceListImportService
             return $this->emptyResult('Brak poprawnych pozycji do importu z PDF/AI.');
         }
 
+        $collapsed = $this->collapseSamePriceVariants($normalized);
+        $normalized = $collapsed['products'];
+        $skipped += $collapsed['removed'];
+
         $collected = [
             'products' => $normalized,
             'skipped' => $skipped,
@@ -295,6 +301,7 @@ final class PriceListImportService
         $productIds = [];
 
         DB::transaction(function () use ($collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds): void {
+            $byManufacturer = [];
             foreach ($collected['products'] as $payload) {
                 $sku = (string) $payload['sku'];
                 unset($payload['sku']);
@@ -302,7 +309,7 @@ final class PriceListImportService
                 if (($payload['description'] ?? null) === null) {
                     unset($payload['description']);
                 }
-                $existing = Product::query()->where('sku', $sku)->first();
+                $existing = $this->findExistingProduct($sku, $payload, $byManufacturer);
                 if ($existing !== null) {
                     $change = $this->detectPriceChange($existing, $payload, $sku);
                     if ($change !== null) {
@@ -729,8 +736,10 @@ final class PriceListImportService
 
             $priceKeys = [];
             foreach ($items as $item) {
-                $price = round((float) ($item['product']['catalog_price_net'] ?? 0), 2);
-                $priceKeys[number_format($price, 2, '.', '')] = true;
+                $priceKeys[$this->sizes->priceBucket(
+                    $item['product']['catalog_price_net'] ?? 0,
+                    $item['product']['purchase_price'] ?? 0,
+                )] = true;
             }
 
             if (count($priceKeys) === 1) {
@@ -747,6 +756,13 @@ final class PriceListImportService
 
             foreach ($items as $item) {
                 $pack = trim((string) ($item['product']['packaging'] ?? ''));
+                if ($pack === '') {
+                    $pack = (string) ($this->sizes->extractSize(
+                        (string) ($item['product']['name'] ?? ''),
+                        (string) ($item['product']['sku'] ?? ''),
+                        null,
+                    ) ?? '');
+                }
                 $out[] = $this->finalizeProductCode(
                     $item['product'],
                     $pack !== '' ? $pack : null,
@@ -766,7 +782,13 @@ final class PriceListImportService
      */
     private function finalizeProductCode(array $product, ?string $sizeSuffix): array
     {
-        $model = trim((string) ($product['_model_key'] ?? ''));
+        $model = trim((string) ($product['_model_key'] ?? $product['_size_core'] ?? ''));
+        if ($model === '') {
+            $model = (string) ($this->sizes->skuCore(
+                (string) ($product['sku'] ?? ''),
+                (string) ($product['name'] ?? ''),
+            ) ?? '');
+        }
         if ($model !== '') {
             $product['sku'] = $sizeSuffix !== null && $sizeSuffix !== ''
                 ? $model.'-'.$sizeSuffix
@@ -782,14 +804,25 @@ final class PriceListImportService
     private function collapseGroupKey(array $product): string
     {
         $modelKey = trim((string) ($product['_model_key'] ?? ''));
-        $name = mb_strtolower(trim((string) ($product['name'] ?? '')));
+        $name = trim((string) ($product['name'] ?? ''));
+        $nameKey = mb_strtolower($this->sizes->stripSizeFromName($name) ?: $name);
         if ($modelKey !== '') {
-            return 'model:'.mb_strtolower($modelKey).'|'.$name;
+            return 'model:'.mb_strtolower($modelKey).'|'.$nameKey;
+        }
+
+        $sizeKey = $this->sizes->groupKey(
+            (string) ($product['manufacturer'] ?? ''),
+            $name,
+            (string) ($product['sku'] ?? ''),
+            isset($product['packaging']) ? (string) $product['packaging'] : null,
+        );
+        if ($sizeKey !== null) {
+            return $sizeKey;
         }
 
         $packaging = (string) ($product['packaging'] ?? '');
-        if ($name !== '' && $this->isSizePackaging($packaging)) {
-            return 'name:'.$name;
+        if ($nameKey !== '' && $this->isSizePackaging($packaging)) {
+            return 'name:'.$nameKey;
         }
 
         return 'sku:'.(string) ($product['sku'] ?? uniqid('p', true));
@@ -825,8 +858,12 @@ final class PriceListImportService
             }
         }
 
-        // jedna pozycja modelu — bez konkretnego rozmiaru w cenniku wyceny
+        $core = $this->sizes->skuCore((string) ($best['sku'] ?? ''), (string) ($best['name'] ?? ''));
+        $best['name'] = $this->sizes->stripSizeFromName((string) ($best['name'] ?? '')) ?: (string) ($best['name'] ?? '');
         $best['packaging'] = null;
+        if ($core !== null) {
+            $best['_size_core'] = $core;
+        }
 
         return $best;
     }
@@ -845,12 +882,56 @@ final class PriceListImportService
     }
 
     /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, \Illuminate\Support\Collection<int, Product>>  $byManufacturer
+     */
+    private function findExistingProduct(string $sku, array $payload, array &$byManufacturer): ?Product
+    {
+        $hit = Product::query()->where('sku', $sku)->first();
+        if ($hit !== null) {
+            return $hit;
+        }
+
+        $mfr = trim((string) ($payload['manufacturer'] ?? ''));
+        $key = $this->sizes->groupKey(
+            $mfr,
+            (string) ($payload['name'] ?? ''),
+            $sku,
+            isset($payload['packaging']) ? (string) $payload['packaging'] : null,
+        );
+        if ($key === null || $mfr === '') {
+            return null;
+        }
+
+        $price = $this->sizes->priceBucket(
+            $payload['catalog_price_net'] ?? 0,
+            $payload['purchase_price'] ?? 0,
+        );
+        if (! isset($byManufacturer[$mfr])) {
+            $byManufacturer[$mfr] = Product::query()->where('manufacturer', $mfr)->get();
+        }
+        foreach ($byManufacturer[$mfr] as $product) {
+            $pk = $this->sizes->groupKey(
+                (string) $product->manufacturer,
+                (string) $product->name,
+                (string) $product->sku,
+                $product->packaging !== null ? (string) $product->packaging : null,
+            );
+            if ($pk === $key && $this->sizes->priceBucket($product->catalog_price_net, $product->purchase_price) === $price) {
+                return $product;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @param  array<string, mixed>  $product
      * @return array<string, mixed>
      */
     private function stripInternalProductKeys(array $product): array
     {
-        unset($product['_model_key']);
+        unset($product['_model_key'], $product['_size_core']);
 
         return $product;
     }
