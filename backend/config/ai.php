@@ -12,7 +12,7 @@ return [
     'enrichment_model' => env('AI_ENRICHMENT_MODEL'),
     // true = wyszukiwanie i opis tylko modelem głównym (AI web search, bez Tavily)
     'enrichment_use_large_model' => (bool) env('AI_ENRICHMENT_USE_LARGE_MODEL', false),
-    'timeout_seconds' => (int) env('AI_TIMEOUT', 90),
+    'timeout_seconds' => (int) env('AI_TIMEOUT', 240),
     'temperature' => (float) env('AI_TEMPERATURE', 0.1),
     // Domyślnie WYŁĄCZONE — drogie. Główne źródło: Tavily.
     'web_search_enabled' => (bool) env('AI_WEB_SEARCH_ENABLED', false),

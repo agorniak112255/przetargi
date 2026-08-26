@@ -281,7 +281,7 @@ final class AiSettingsService
             'model' => 'gpt-4o-mini',
             'enrichment_model' => null,
             'enrichment_use_large_model' => false,
-            'timeout_seconds' => 90,
+            'timeout_seconds' => 240,
             'temperature' => 0.1,
             'web_search_enabled' => false,
             'search_engine' => self::SEARCH_ENGINE_TAVILY,

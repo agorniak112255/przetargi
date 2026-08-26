@@ -694,9 +694,9 @@ class OpenAiCompatibleClient
      */
     private function post(string $url, string $apiKey, array $payload, int $timeoutSeconds): Response
     {
-        $timeout = max(120, $timeoutSeconds);
+        $timeout = max(240, $timeoutSeconds);
         if ($this->isReasoningModel((string) ($payload['model'] ?? ''))) {
-            $timeout = max(180, $timeout);
+            $timeout = max(240, $timeout);
         }
 
         return Http::withToken($apiKey)
