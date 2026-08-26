@@ -194,7 +194,7 @@ function Stat({ label, value, warn }: { label: string; value: number | string; w
   return (
     <span
       className={`rounded border px-2 py-1 ${
-        warn && value > 0
+        warn && typeof value === 'number' && value > 0
           ? 'border-amber-300 bg-white text-amber-900'
           : 'border-slate-200 bg-white text-slate-700'
       }`}
