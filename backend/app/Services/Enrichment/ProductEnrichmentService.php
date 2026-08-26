@@ -1918,7 +1918,7 @@ SYS,
                     'role' => 'user',
                     'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}\n\nStrony:\n{$pagesJson}",
                 ],
-            ], 0.0, 1800);
+            ], 0.0, 6000);
         } catch (Throwable $e) {
             Log::info('AI page sanitize failed, using heuristic text', [
                 'product_id' => $product->id,

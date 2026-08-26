@@ -103,7 +103,7 @@ final class OpenAiRateLimitTest extends TestCase
             ['role' => 'user', 'content' => 'ping'],
         ]);
 
-        Http::assertSent(fn ($request) => ($request->data()['max_tokens'] ?? null) === 8000);
+        Http::assertSent(fn ($request) => ($request->data()['max_tokens'] ?? null) === 6000);
     }
 
     public function test_exhausted_429_explains_openrouter_not_tavily(): void

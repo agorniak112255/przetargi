@@ -18,6 +18,9 @@ class OpenAiCompatibleClient
 
     private const OVERLOAD_RETRIES = 5;
 
+    /** vLLM odrzuca prompt + max_tokens > --max-model-len (16128). 6000 + prompt ~4.7k mieści się w limicie. */
+    private const DEFAULT_MAX_TOKENS = 6000;
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly JsonResponseParser $jsonParser,
@@ -100,10 +103,10 @@ class OpenAiCompatibleClient
             : $profile['model'];
         $reasoning = $this->isReasoningModel($model);
         // Mniejszy budżet = mniejszy kontekst na slot, czyli więcej równoległych
-        // slotów lokalnego modelu w tym samym VRAM. Przy urwaniu i tak ponawiamy z 16000.
-        $maxTokens = (int) ($extra['max_tokens'] ?? 8000);
+        // slotów lokalnego modelu w tym samym VRAM. Przy urwaniu ponawiamy do DEFAULT_MAX_TOKENS.
+        $maxTokens = (int) ($extra['max_tokens'] ?? self::DEFAULT_MAX_TOKENS);
         if ($reasoning) {
-            $maxTokens = max($maxTokens, 8000);
+            $maxTokens = max($maxTokens, self::DEFAULT_MAX_TOKENS);
         }
 
         $basePayload = [
@@ -132,8 +135,8 @@ class OpenAiCompatibleClient
         $content = $this->contentReader->fromPayload($payload);
 
         // reasoning zjadł budżet tokenów — powtórz z większym limitem
-        if ($content === '' && $this->contentReader->finishReason($payload) === 'length' && $maxTokens < 16000) {
-            $basePayload['max_tokens'] = 16000;
+        if ($content === '' && $this->contentReader->finishReason($payload) === 'length' && $maxTokens < self::DEFAULT_MAX_TOKENS) {
+            $basePayload['max_tokens'] = self::DEFAULT_MAX_TOKENS;
             try {
                 $response = $this->postChat($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
             } catch (ConnectionException $e) {
@@ -676,7 +679,7 @@ class OpenAiCompatibleClient
         // GPT-5 / o-series: max_tokens bywa odrzucane — spróbuj max_completion_tokens
         if ($reasoning && $response !== null && in_array($response->status(), [400, 422], true)) {
             $alt = $payload;
-            $alt['max_completion_tokens'] = (int) ($payload['max_tokens'] ?? 8000);
+            $alt['max_completion_tokens'] = (int) ($payload['max_tokens'] ?? self::DEFAULT_MAX_TOKENS);
             unset($alt['max_tokens']);
             $retry = $jsonMode ? ($alt + ['response_format' => ['type' => 'json_object']]) : $alt;
             $response = $this->post($url, $apiKey, $retry, $timeout);

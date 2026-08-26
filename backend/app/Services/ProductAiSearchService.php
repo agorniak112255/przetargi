@@ -766,7 +766,7 @@ final class ProductAiSearchService
                 'role' => 'user',
                 'content' => "Wymaganie:\n{$query}{$neededLine}\n\nKarty katalogu:\n{$json}",
             ],
-        ], null, 8000, null, $task);
+        ], null, 6000, null, $task);
 
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
         $byId = $candidates->keyBy('id');
