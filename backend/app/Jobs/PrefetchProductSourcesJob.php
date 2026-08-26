@@ -1,0 +1,100 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Jobs;
+
+use App\Exceptions\EnrichmentCancelledException;
+use App\Models\Product;
+use App\Models\ProductEnrichmentBatch;
+use App\Services\Enrichment\ProductEnrichmentService;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use Throwable;
+
+/**
+ * Szuka kart i grzeje cache HTML zanim EnrichProductJob weźmie slot vLLM.
+ * Jedna bramka na cały serwer — SearXNG nie dostaje 8 zapytań naraz.
+ */
+class PrefetchProductSourcesJob implements ShouldQueue
+{
+    use Dispatchable;
+    use InteractsWithQueue;
+    use Queueable;
+    use SerializesModels;
+
+    public int $tries = 8;
+
+    /** @var list<int> */
+    public array $backoff = [5, 5, 10];
+
+    public int $timeout = 180;
+
+    private const GATE_KEY = 'enrichment_prefetch_gate';
+
+    public function __construct(
+        public readonly int $productId,
+        public readonly int $batchId,
+        public readonly bool $force = false,
+    ) {}
+
+    public function handle(ProductEnrichmentService $enrichment): void
+    {
+        $product = Product::query()->find($this->productId);
+        $batch = ProductEnrichmentBatch::query()->find($this->batchId);
+        if ($product === null || $batch === null) {
+            return;
+        }
+
+        if ($batch->isCancelled()) {
+            $this->delete();
+
+            return;
+        }
+
+        if (! $this->force && in_array($product->enrichment_status, [
+            Product::ENRICHMENT_DONE,
+            Product::ENRICHMENT_MANUAL,
+        ], true)) {
+            return;
+        }
+
+        $lock = Cache::lock(self::GATE_KEY, $this->timeout);
+        if (! $lock->get()) {
+            self::dispatch($this->productId, $this->batchId, $this->force)
+                ->delay(now()->addSeconds(5));
+            $this->delete();
+
+            return;
+        }
+
+        try {
+            $batch->update([
+                'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+                'current_sku' => $product->sku,
+                'current_name' => mb_substr($product->name, 0, 255),
+                'message' => 'Prefetch źródeł (wyszukiwarka)…',
+            ]);
+            $enrichment->prefetchProductSources($product, $this->force, $this->batchId);
+        } catch (EnrichmentCancelledException) {
+            $this->delete();
+
+            return;
+        } catch (Throwable $e) {
+            Log::info('Product source prefetch failed, enrich will search live', [
+                'product_id' => $product->id,
+                'sku' => $product->sku,
+                'error' => $e->getMessage(),
+            ]);
+        } finally {
+            $lock->release();
+        }
+
+        EnrichProductJob::dispatch($this->productId, $this->batchId, $this->force);
+    }
+}

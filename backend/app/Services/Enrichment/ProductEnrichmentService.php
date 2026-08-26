@@ -7,6 +7,7 @@ namespace App\Services\Enrichment;
 use App\Exceptions\EnrichmentCancelledException;
 use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\EnrichProductJob;
+use App\Jobs\PrefetchProductSourcesJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\PriceList;
 use App\Models\Product;
@@ -79,7 +80,7 @@ final class ProductEnrichmentService
             'enrichment_error' => null,
         ]);
 
-        EnrichProductJob::dispatch($product->id, $batch->id, $force);
+        PrefetchProductSourcesJob::dispatch($product->id, $batch->id, $force);
 
         return $batch;
     }
@@ -176,7 +177,7 @@ final class ProductEnrichmentService
 
         if ($dispatchJobs) {
             foreach ($productIds as $productId) {
-                EnrichProductJob::dispatch($productId, $batch->id, $force);
+                PrefetchProductSourcesJob::dispatch($productId, $batch->id, $force);
             }
         }
 
@@ -184,6 +185,68 @@ final class ProductEnrichmentService
             'batch' => $batch,
             'product_ids' => $productIds,
         ];
+    }
+
+    /**
+     * Szukanie + pobranie HTML do cache. Bez LLM — EnrichProductJob korzysta z ciepłego cache.
+     */
+    public function prefetchProductSources(Product $product, bool $force = false, ?int $batchId = null): void
+    {
+        $started = microtime(true);
+        $this->assertBatchNotCancelled($batchId);
+
+        if (! $force && $this->hasSkuCacheRow($product)) {
+            Log::info('Product source prefetch', [
+                'product_id' => $product->id,
+                'sku' => $product->sku,
+                'skipped' => 'sku_cache',
+                'total_ms' => $this->elapsedMs($started),
+            ]);
+
+            return;
+        }
+
+        $this->pages->bypassCache($force);
+        try {
+            if ($force) {
+                $this->search->forgetProductCache($product);
+            }
+
+            $t = microtime(true);
+            $searchPack = $this->search->searchBothPhases($product);
+            $searchMs = $this->elapsedMs($t);
+            $results = $searchPack['results'] ?? [];
+
+            $fetchMs = 0;
+            if ($results !== []) {
+                if ($this->manufacturers->domainsFor($product) === []) {
+                    $this->manufacturers->discoverOfficialDomains($product);
+                }
+                $mfrDomains = $this->manufacturers->discoverFromResults(
+                    $product,
+                    array_column($results, 'url')
+                );
+                $descResults = $this->rankResultsForDescription($results, $product, $mfrDomains);
+                $t = microtime(true);
+                $this->pages->fetch($descResults, (string) $product->sku, 3, []);
+                $mfrResults = $this->manufacturerSearchResults($results, $product, $mfrDomains);
+                if ($mfrResults !== []) {
+                    $this->pages->fetch($mfrResults, (string) $product->sku, 3, $mfrDomains);
+                }
+                $fetchMs = $this->elapsedMs($t);
+            }
+
+            Log::info('Product source prefetch', [
+                'product_id' => $product->id,
+                'sku' => $product->sku,
+                'search_ms' => $searchMs,
+                'fetch_ms' => $fetchMs,
+                'urls' => count($results),
+                'total_ms' => $this->elapsedMs($started),
+            ]);
+        } finally {
+            $this->pages->bypassCache(false);
+        }
     }
 
     /**
@@ -246,8 +309,23 @@ final class ProductEnrichmentService
         ]);
 
         $this->pages->bypassCache($force);
+        $started = microtime(true);
+        $timing = [
+            'product_id' => $product->id,
+            'sku' => $product->sku,
+            'from_cache' => false,
+            'search_ms' => 0,
+            'fetch_ms' => 0,
+            'llm_sanitize_ms' => 0,
+            'llm_extract_ms' => 0,
+            'supplement_ms' => 0,
+            'images_ms' => 0,
+            'docs_ms' => 0,
+        ];
         try {
             if (! $force && $this->applyFromSkuCache($product)) {
+                $this->logEnrichmentTiming($timing, $started, extra: ['from_cache' => true]);
+
                 return;
             }
             if ($force) {
@@ -258,6 +336,7 @@ final class ProductEnrichmentService
             }
 
             $this->assertBatchNotCancelled($batchId);
+            $t = microtime(true);
             $searchPack = $this->search->searchBothPhases($product);
             $searchResults = $searchPack['results'];
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
@@ -278,7 +357,9 @@ final class ProductEnrichmentService
                 $product,
                 array_column($searchResults, 'url')
             );
+            $timing['search_ms'] = $this->elapsedMs($t);
             $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
+            $t = microtime(true);
             $fetched = $this->pages->fetch($descResults, (string) $product->sku, 3, []);
             $pageSnippets = $fetched['pages'];
             if ($pageSnippets === []) {
@@ -301,21 +382,26 @@ final class ProductEnrichmentService
                 }
                 $mfrPageSnippets = $mfrFetched['pages'];
             }
+            $timing['fetch_ms'] = $this->elapsedMs($t);
 
             $this->assertBatchNotCancelled($batchId);
 
             // sklep → opis PL; producent → normy/materiały — jedno sanitize, żeby nie dublować vLLM
+            $t = microtime(true);
             $pageSnippets = $this->sanitizePagesWithLlm(
                 $product,
                 $this->mergePageSnippets($pageSnippets, $mfrPageSnippets)
             );
+            $timing['llm_sanitize_ms'] = $this->elapsedMs($t);
 
+            $t = microtime(true);
             $extracted = $this->extractWithLlm(
                 $product,
                 array_slice($descResults, 0, 4),
                 array_slice($pageSnippets, 0, 5)
             );
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets);
+            $timing['llm_extract_ms'] = $this->elapsedMs($t);
 
             $rawDescription = $this->composeFullDescription($extracted);
             $description = $rawDescription;
@@ -335,6 +421,7 @@ final class ProductEnrichmentService
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)
                 || $this->looksLikeIncompleteDescription($description)
                 || $this->looksLikeSparsePayload($extracted)) {
+                $t = microtime(true);
                 $supplement = $this->supplementDescriptionFromOtherSites(
                     $product,
                     $descResults,
@@ -357,6 +444,7 @@ final class ProductEnrichmentService
                 foreach ($supplement['document_urls'] as $url) {
                     $fetched['document_urls'][] = $url;
                 }
+                $timing['supplement_ms'] = $this->elapsedMs($t);
             }
 
             // Fallback ze stron i doszukiwanie omijają walidację LLM, więc tożsamość
@@ -386,6 +474,7 @@ final class ProductEnrichmentService
 
             // Zdjęcia z kart produktu: pewne URL-e przechodzą po SKU, pozostałe ocenia AI Vision.
             // Tavily include_images pozostaje wyłączone — kandydat musi pochodzić z pobranej karty.
+            $t = microtime(true);
             $imageUrls = $this->imageVerifier->select(
                 $product,
                 $fetched['image_urls'],
@@ -532,6 +621,8 @@ final class ProductEnrichmentService
                     'manufacturer_urls' => array_slice(array_column($mfrResults, 'url'), 0, 5),
                 ]);
             }
+            $timing['images_ms'] = $this->elapsedMs($t);
+            $t = microtime(true);
             $documentUrls = [];
             foreach ($extracted['document_urls'] ?? [] as $url) {
                 if (is_string($url) && ProductDocumentDownloader::looksLikeDocumentUrl($url)) {
@@ -632,7 +723,10 @@ final class ProductEnrichmentService
                 $cachedImageUrls, // tylko realnie pobrane — nie cache'uj 404
                 $sourceUrls
             );
+            $timing['docs_ms'] = $this->elapsedMs($t);
+            $this->logEnrichmentTiming($timing, $started);
         } catch (Throwable $e) {
+            $this->logEnrichmentTiming($timing, $started, $e->getMessage());
             Log::warning('Product enrichment failed', [
                 'product_id' => $product->id,
                 'error' => $e->getMessage(),
@@ -651,6 +745,39 @@ final class ProductEnrichmentService
         } finally {
             $this->pages->bypassCache(false);
         }
+    }
+
+    private function elapsedMs(float $started): int
+    {
+        return (int) round((microtime(true) - $started) * 1000);
+    }
+
+    /**
+     * @param  array<string, mixed>  $timing
+     * @param  array<string, mixed>  $extra
+     */
+    private function logEnrichmentTiming(array $timing, float $started, ?string $error = null, array $extra = []): void
+    {
+        $payload = array_merge($timing, $extra, [
+            'total_ms' => $this->elapsedMs($started),
+        ]);
+        if ($error !== null && $error !== '') {
+            $payload['error'] = mb_substr($error, 0, 200);
+        }
+        Log::info('Product enrichment timing', $payload);
+    }
+
+    private function hasSkuCacheRow(Product $product): bool
+    {
+        $key = ProductEnrichmentCache::normalizeKey(
+            (string) $product->manufacturer,
+            (string) $product->sku
+        );
+
+        return ProductEnrichmentCache::query()
+            ->where('manufacturer', $key['manufacturer'])
+            ->where('sku', $key['sku'])
+            ->exists();
     }
 
     private function forgetSkuCache(Product $product): void
@@ -1805,7 +1932,10 @@ final class ProductEnrichmentService
         $removedJobs = 0;
         if (Schema::hasTable('jobs')) {
             $ids = DB::table('jobs')
-                ->where('payload', 'like', '%EnrichProductJob%')
+                ->where(function ($q): void {
+                    $q->where('payload', 'like', '%EnrichProductJob%')
+                        ->orWhere('payload', 'like', '%PrefetchProductSourcesJob%');
+                })
                 ->pluck('id');
             foreach ($ids as $id) {
                 DB::table('jobs')->where('id', $id)->delete();

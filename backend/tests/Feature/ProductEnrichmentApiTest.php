@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\EnrichProductJob;
+use App\Jobs\PrefetchProductSourcesJob;
 use App\Models\AiSetting;
 use App\Models\PriceList;
 use App\Models\Product;
@@ -141,6 +142,7 @@ final class ProductEnrichmentApiTest extends TestCase
             ->assertJsonPath('product.enrichment_status', Product::ENRICHMENT_DONE);
 
         Queue::assertNotPushed(EnrichProductJob::class);
+        Queue::assertNotPushed(PrefetchProductSourcesJob::class);
     }
 
     public function test_skip_done_product_without_force(): void
@@ -222,6 +224,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertStringContainsString('Nowy opis po force', (string) $product->description);
 
         Queue::assertNotPushed(EnrichProductJob::class);
+        Queue::assertNotPushed(PrefetchProductSourcesJob::class);
     }
 
     public function test_enqueue_price_list_enrichment(): void
@@ -253,7 +256,8 @@ final class ProductEnrichmentApiTest extends TestCase
             ->assertJsonPath('batch.price_list_id', $priceList->id)
             ->assertJsonPath('product_ids.0', $p1->id);
 
-        Queue::assertPushed(EnrichProductJob::class, 1);
+        Queue::assertPushed(PrefetchProductSourcesJob::class, 1);
+        Queue::assertNotPushed(EnrichProductJob::class);
     }
 
     public function test_batch_payload_includes_manufacturer_and_current_product(): void
@@ -553,7 +557,75 @@ final class ProductEnrichmentApiTest extends TestCase
             ->assertJsonPath('product_ids.0', $p1->id)
             ->assertJsonPath('product_ids.1', $p2->id);
 
-        Queue::assertPushed(EnrichProductJob::class, 2);
+        Queue::assertPushed(PrefetchProductSourcesJob::class, 2);
+        Queue::assertNotPushed(EnrichProductJob::class);
+    }
+
+    public function test_prefetch_job_dispatches_enrich_after_search(): void
+    {
+        Queue::fake();
+        $product = $this->makeProduct(['sku' => 'PF-1', 'manufacturer' => 'Uvex']);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCT,
+            'scope_id' => $product->id,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_QUEUED,
+            'force' => false,
+        ]);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [[
+                    'url' => 'https://shop.example.com/pf-1',
+                    'title' => 'PF-1',
+                    'snippet' => 'Rękawice PF-1',
+                ]],
+                'errors' => [],
+            ]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        Http::fake([
+            'https://shop.example.com/*' => Http::response(
+                '<html><body><h1>PF-1</h1><p>'.str_repeat('Rękawice PF-1 EN 388. ', 40).'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        (new PrefetchProductSourcesJob($product->id, $batch->id))
+            ->handle(app(ProductEnrichmentService::class));
+
+        Queue::assertPushed(EnrichProductJob::class, 1);
+        Http::assertSentCount(1);
+    }
+
+    public function test_prefetch_waits_when_search_gate_busy(): void
+    {
+        Queue::fake();
+        $product = $this->makeProduct(['sku' => 'PF-2']);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCT,
+            'scope_id' => $product->id,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_QUEUED,
+            'force' => false,
+        ]);
+
+        $busy = \Illuminate\Support\Facades\Cache::lock('enrichment_prefetch_gate', 180);
+        $this->assertTrue((bool) $busy->get());
+
+        (new PrefetchProductSourcesJob($product->id, $batch->id))
+            ->handle(app(ProductEnrichmentService::class));
+
+        Queue::assertPushed(PrefetchProductSourcesJob::class, 1);
+        Queue::assertNotPushed(EnrichProductJob::class);
+        $busy->release();
     }
 
     public function test_process_batch_item_uses_sku_cache(): void
