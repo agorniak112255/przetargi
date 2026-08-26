@@ -121,4 +121,28 @@ final class ExternalCatalogHintServiceTest extends TestCase
         $this->assertNotNull($best);
         $this->assertSame('https://oxyline.eu/pl/product/275/filter-203-up3', $best['url']);
     }
+
+    #[Test]
+    public function rank_results_returns_unique_urls_best_first(): void
+    {
+        $svc = $this->app->make(ExternalCatalogHintService::class);
+
+        $ranked = $svc->rankResults([
+            [
+                'url' => 'https://files.cnop.pl/swiadectwa/gp-4x-abc.pdf',
+                'title' => 'Świadectwo dopuszczenia Gaśnica 4kg',
+            ],
+            [
+                'url' => 'https://sklep-bhp.example/produkt/gasnica-4kg',
+                'title' => 'Gaśnica proszkowa 4 kg',
+            ],
+            [
+                'url' => 'https://sklep-bhp.example/produkt/gasnica-4kg',
+                'title' => 'duplikat',
+            ],
+        ]);
+
+        $this->assertCount(2, $ranked);
+        $this->assertSame('https://sklep-bhp.example/produkt/gasnica-4kg', $ranked[0]['url']);
+    }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\Ai\AiTask;
 use App\Services\ProductAiSearchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,16 +23,22 @@ class ProductAiSearchController extends Controller
         $data = $request->validate([
             'query' => ['required', 'string', 'min:3', 'max:2000'],
             'limit' => ['sometimes', 'integer', 'min:1', 'max:80'],
+            'web' => ['sometimes', 'boolean'],
         ]);
 
         if (function_exists('set_time_limit')) {
             @set_time_limit(180);
         }
 
+        $webOnly = (bool) ($data['web'] ?? false);
+
         try {
             $result = $this->search->search(
                 (string) $data['query'],
-                (int) ($data['limit'] ?? 40),
+                (int) ($data['limit'] ?? ($webOnly ? 8 : 40)),
+                true,
+                AiTask::ProductSearch,
+                $webOnly,
             );
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);

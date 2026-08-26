@@ -1114,4 +1114,50 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('products.0.sku', 'VEST-HV')
             ->assertJsonMissing(['sku' => '12-0423']);
     }
+
+    public function test_web_search_returns_external_hints_without_catalog(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'tavily_api_key' => 'tvly-test',
+            'search_engine' => 'tavily',
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        Http::fake([
+            'api.tavily.com/search' => Http::response([
+                'results' => [
+                    [
+                        'url' => 'https://sklep.example/produkt/rekawice-cxs',
+                        'title' => 'Rękawice CXS ocieplane',
+                    ],
+                    [
+                        'url' => 'https://bhp.example/produkt/bluza-kolpeo',
+                        'title' => 'Bluza KOLPEO',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'rękawice ocieplane EN 342',
+            'web' => true,
+            'limit' => 8,
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 0)
+            ->assertJsonPath('products', [])
+            ->assertJsonPath('external_hint.url', 'https://sklep.example/produkt/rekawice-cxs')
+            ->assertJsonPath('external_hints.1.title', 'Bluza KOLPEO');
+    }
 }

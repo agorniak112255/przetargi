@@ -63,20 +63,26 @@ final class ProductAiSearchService
      *     needed: string,
      *     search_phrases: list<string>,
      *     ai_note: string|null,
-     *     external_hint: array{url: string, title: string}|null
+     *     external_hint: array{url: string, title: string}|null,
+     *     external_hints: list<array{url: string, title: string}>
      * }
      */
     public function search(
         string $query,
         int $limit = 40,
         bool $withExternalHint = true,
-        AiTask $task = AiTask::ProductSearch
+        AiTask $task = AiTask::ProductSearch,
+        bool $webOnly = false,
     ): array {
         $query = trim($query);
         if ($query === '') {
             throw new RuntimeException('Podaj treść wymagania dla AI.');
         }
         $limit = max(1, min(80, $limit));
+
+        if ($webOnly) {
+            return $this->webOnlyResult($query, $limit);
+        }
 
         $filterHits = $this->retrieveByFilterType($query, $limit);
         if ($filterHits->isNotEmpty()) {
@@ -668,6 +674,38 @@ final class ProductAiSearchService
             'search_phrases' => $intent['search_phrases'],
             'ai_note' => $note,
             'external_hint' => $hint,
+            'external_hints' => $hint !== null ? [$hint] : [],
+        ];
+    }
+
+    /**
+     * @return array{
+     *     query: string,
+     *     total: int,
+     *     products: list<array<string, mixed>>,
+     *     needed: string,
+     *     search_phrases: list<string>,
+     *     ai_note: string|null,
+     *     external_hint: array{url: string, title: string}|null,
+     *     external_hints: list<array{url: string, title: string}>
+     * }
+     */
+    private function webOnlyResult(string $query, int $limit): array
+    {
+        $hints = $this->externalHints->hints($query, min(8, $limit));
+        $first = $hints[0] ?? null;
+
+        return [
+            'query' => $query,
+            'total' => 0,
+            'products' => [],
+            'needed' => $query,
+            'search_phrases' => [],
+            'ai_note' => $hints === []
+                ? 'Nie znaleziono strony produktu w internecie.'
+                : null,
+            'external_hint' => $first,
+            'external_hints' => $hints,
         ];
     }
 

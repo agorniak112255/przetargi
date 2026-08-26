@@ -14,28 +14,38 @@ export type AiMatchPick = {
   reason?: string | null
 }
 
+type ExternalHint = { url: string; title: string }
+
 type Props = {
   open: boolean
   initialQuery: string
+  initialWeb?: boolean
   onClose: () => void
   onSelect: (product: AiMatchPick) => void
-  onAddExternal?: (hint: { url: string; title: string }) => void
+  onAddExternal?: (hint: ExternalHint) => void
 }
 
-export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect, onAddExternal }: Props) {
+export function ProductAiMatchModal({
+  open,
+  initialQuery,
+  initialWeb = false,
+  onClose,
+  onSelect,
+  onAddExternal,
+}: Props) {
   const [query, setQuery] = useState(initialQuery)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<'catalog' | 'web' | false>(false)
   const [error, setError] = useState('')
   const [results, setResults] = useState<AiMatchPick[]>([])
-  const [externalHint, setExternalHint] = useState<{ url: string; title: string } | null>(null)
+  const [externalHints, setExternalHints] = useState<ExternalHint[]>([])
 
   useEffect(() => {
     if (!open) return
     setQuery(initialQuery)
     setError('')
     setResults([])
-    setExternalHint(null)
-  }, [open, initialQuery])
+    setExternalHints([])
+  }, [open, initialQuery, initialWeb])
 
   useEffect(() => {
     if (!open) return
@@ -46,24 +56,25 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect, onA
     return () => document.removeEventListener('keydown', onKey)
   }, [open, busy, onClose])
 
-  async function runSearch() {
-    const q = query.trim()
+  async function runSearch(web: boolean, text = query) {
+    const q = text.trim()
     if (q.length < 3) {
       setError('Wpisz co najmniej 3 znaki zapytania.')
       return
     }
-    setBusy(true)
+    setBusy(web ? 'web' : 'catalog')
     setError('')
     setResults([])
-    setExternalHint(null)
+    setExternalHints([])
     try {
       const res = await api<{
         products: Product[]
         ai_note?: string | null
-        external_hint?: { url: string; title: string } | null
+        external_hint?: ExternalHint | null
+        external_hints?: ExternalHint[]
       }>('/products/ai-search', {
         method: 'POST',
-        body: JSON.stringify({ query: q, limit: 5 }),
+        body: JSON.stringify({ query: q, limit: web ? 8 : 5, web }),
       })
       const mapped: AiMatchPick[] = (res.products ?? []).slice(0, 5).map((p) => ({
         id: p.id,
@@ -76,10 +87,17 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect, onA
         score: p.ai_match_percent ?? 0,
         reason: p.ai_match_reason ?? null,
       }))
+      const hints =
+        res.external_hints ?? (res.external_hint ? [res.external_hint] : [])
       setResults(mapped)
-      setExternalHint(res.external_hint ?? null)
-      if (mapped.length === 0) {
-        setError(res.ai_note ?? 'AI nie znalazło pasującego produktu w katalogu.')
+      setExternalHints(hints)
+      if (mapped.length === 0 && hints.length === 0) {
+        setError(
+          res.ai_note ??
+            (web
+              ? 'Nie znaleziono strony produktu w internecie.'
+              : 'AI nie znalazło pasującego produktu w katalogu.'),
+        )
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Błąd wyszukiwania AI')
@@ -87,6 +105,12 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect, onA
       setBusy(false)
     }
   }
+
+  useEffect(() => {
+    if (!open || !initialWeb) return
+    void runSearch(true, initialQuery)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tylko przy otwarciu w trybie internet
+  }, [open, initialWeb, initialQuery])
 
   if (!open) return null
 
@@ -107,12 +131,12 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect, onA
           <div>
             <p className="text-sm font-semibold text-slate-900">Wyszukiwanie AI</p>
             <p className="text-xs text-slate-500">
-              Wpisz wymaganie — model zaproponuje do 5 produktów z bazy.
+              AI — katalog (top 5). AI Internet — strony produktu spoza bazy.
             </p>
           </div>
           <button
             type="button"
-            disabled={busy}
+            disabled={Boolean(busy)}
             onClick={onClose}
             className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-50"
           >
@@ -126,48 +150,66 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect, onA
             <textarea
               className="min-h-[88px] w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
               value={query}
-              disabled={busy}
+              disabled={Boolean(busy)}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="np. rękawice nitrylowe ze ściągaczem RNITZ…"
             />
           </label>
 
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void runSearch()}
-            className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
-          >
-            {busy ? 'Szukam…' : 'Szukaj AI (top 5)'}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => void runSearch(false)}
+              className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              {busy === 'catalog' ? 'Szukam…' : 'Szukaj AI (top 5)'}
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => void runSearch(true)}
+              className="rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {busy === 'web' ? 'Szukam w sieci…' : 'AI Internet'}
+            </button>
+          </div>
 
           {error && <p className="text-xs text-red-600">{error}</p>}
 
-          {externalHint && (
-            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
-              <a
-                href={externalHint.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block text-left"
-              >
-                <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
-                  Link zewnętrzny — nie z katalogu
-                </span>
-                <span className="mt-1 block text-xs font-medium text-amber-950 underline">
-                  {externalHint.title}
-                </span>
-              </a>
-              {onAddExternal && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onAddExternal(externalHint)}
-                  className="mt-2 rounded bg-amber-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+          {externalHints.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-slate-600">Wyniki z internetu:</p>
+              {externalHints.map((hint) => (
+                <div
+                  key={hint.url}
+                  className="rounded-md border border-orange-300 bg-orange-50 px-3 py-2"
                 >
-                  Dodaj do oferty
-                </button>
-              )}
+                  <a
+                    href={hint.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block text-left"
+                  >
+                    <span className="rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-white">
+                      Link zewnętrzny
+                    </span>
+                    <span className="mt-1 block text-xs font-medium text-orange-950 underline">
+                      {hint.title}
+                    </span>
+                  </a>
+                  {onAddExternal && (
+                    <button
+                      type="button"
+                      disabled={Boolean(busy)}
+                      onClick={() => onAddExternal(hint)}
+                      className="mt-2 rounded bg-orange-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-orange-800 disabled:opacity-50"
+                    >
+                      Dodaj do oferty
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 
@@ -178,7 +220,7 @@ export function ProductAiMatchModal({ open, initialQuery, onClose, onSelect, onA
                 <button
                   key={r.id}
                   type="button"
-                  disabled={busy}
+                  disabled={Boolean(busy)}
                   onClick={() => onSelect(r)}
                   className="flex w-full flex-col rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-left transition hover:border-violet-400 hover:bg-violet-100"
                 >

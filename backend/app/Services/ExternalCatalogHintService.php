@@ -39,18 +39,36 @@ final class ExternalCatalogHintService
             return $this->cache[$cacheKey];
         }
 
+        $ranked = $this->hints($query, 1);
+
+        return $this->remember($cacheKey, $ranked[0] ?? null);
+    }
+
+    /**
+     * Jawne „AI Internet” — kilka stron produktu, bez progu 12 znaków.
+     *
+     * @return list<array{url: string, title: string}>
+     */
+    public function hints(string $requirement, int $limit = 5): array
+    {
+        $query = trim($requirement);
+        $limit = max(1, min(8, $limit));
+        if (mb_strlen($query) < 3) {
+            return [];
+        }
+
         $rows = [];
         foreach ($this->webQueries($query) as $search) {
             foreach ($this->searchWeb($search) as $row) {
                 $rows[] = $row;
             }
-            $best = $this->pickBestResult($rows, $query);
-            if ($best !== null) {
-                return $this->remember($cacheKey, $best);
+            $ranked = $this->rankResults($rows, $query);
+            if (count($ranked) >= $limit) {
+                return array_slice($ranked, 0, $limit);
             }
         }
 
-        return $this->remember($cacheKey, null);
+        return array_slice($this->rankResults($rows, $query), 0, $limit);
     }
 
     /**
@@ -62,7 +80,17 @@ final class ExternalCatalogHintService
      */
     public function pickBestResult(array $rows, string $requirement = ''): ?array
     {
+        return $this->rankResults($rows, $requirement)[0] ?? null;
+    }
+
+    /**
+     * @param  list<mixed>  $rows
+     * @return list<array{url: string, title: string}>
+     */
+    public function rankResults(array $rows, string $requirement = ''): array
+    {
         $candidates = [];
+        $seen = [];
         foreach ($rows as $row) {
             if (! is_array($row)) {
                 continue;
@@ -71,12 +99,17 @@ final class ExternalCatalogHintService
             if ($url === '' || ! str_starts_with($url, 'http')) {
                 continue;
             }
+            $key = mb_strtolower($url);
+            if (isset($seen[$key])) {
+                continue;
+            }
             $title = trim((string) ($row['title'] ?? $url));
             $extra = trim((string) ($row['content'] ?? $row['snippet'] ?? $row['body'] ?? ''));
             $hay = trim($url.' '.$title.' '.$extra);
             if (! $this->filterType->covers($requirement, $hay)) {
                 continue;
             }
+            $seen[$key] = true;
             $candidates[] = [
                 'url' => $url,
                 'title' => $title !== '' ? $title : $url,
@@ -84,16 +117,15 @@ final class ExternalCatalogHintService
             ];
         }
         if ($candidates === []) {
-            return null;
+            return [];
         }
 
         usort($candidates, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
-        $best = $candidates[0];
 
-        return [
-            'url' => $best['url'],
-            'title' => $best['title'],
-        ];
+        return array_values(array_map(static fn (array $c): array => [
+            'url' => $c['url'],
+            'title' => $c['title'],
+        ], $candidates));
     }
 
     /**

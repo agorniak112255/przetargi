@@ -2630,6 +2630,7 @@ function ItemRow({
   const [matchHint, setMatchHint] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [aiModalOpen, setAiModalOpen] = useState(false)
+  const [aiModalWeb, setAiModalWeb] = useState(false)
   const [pendingAiScore, setPendingAiScore] = useState<number | null>(null)
   const [commentText, setCommentText] = useState('')
   const [showComment, setShowComment] = useState(false)
@@ -2740,18 +2741,37 @@ function ItemRow({
               />
               <button
                 type="button"
-                title="Otwórz wyszukiwanie AI (własne zapytanie → top 5)"
+                title="Otwórz wyszukiwanie AI (katalog → top 5)"
                 disabled={busy}
-                onClick={() => setAiModalOpen(true)}
+                onClick={() => {
+                  setAiModalWeb(false)
+                  setAiModalOpen(true)
+                }}
                 className="shrink-0 rounded bg-violet-600 px-2 py-1 text-[10px] text-white hover:bg-violet-700 disabled:opacity-50"
               >
                 AI
+              </button>
+              <button
+                type="button"
+                title="Szukaj produktu w internecie (nie w katalogu)"
+                disabled={busy}
+                onClick={() => {
+                  setAiModalWeb(true)
+                  setAiModalOpen(true)
+                }}
+                className="shrink-0 rounded bg-red-600 px-2 py-1 text-[10px] text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                AI Internet
               </button>
             </div>
             <ProductAiMatchModal
               open={aiModalOpen}
               initialQuery={item.requirement}
-              onClose={() => setAiModalOpen(false)}
+              initialWeb={aiModalWeb}
+              onClose={() => {
+                setAiModalOpen(false)
+                setAiModalWeb(false)
+              }}
               onSelect={(p) => {
                 setProductId(String(p.id))
                 setPicked({

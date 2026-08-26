@@ -185,8 +185,8 @@ export function Products() {
   const [manufacturers, setManufacturers] = useState<string[]>([])
   const [aiQuery, setAiQuery] = useState('')
   const [aiMode, setAiMode] = useState(false)
-  const [aiBusy, setAiBusy] = useState(false)
-  const [externalHint, setExternalHint] = useState<{ url: string; title: string } | null>(null)
+  const [aiBusy, setAiBusy] = useState<'catalog' | 'web' | false>(false)
+  const [externalHints, setExternalHints] = useState<{ url: string; title: string }[]>([])
   const [page, setPage] = useState(1)
   const [sort, setSort] = useState<SortKey>('name')
   const [dir, setDir] = useState<'asc' | 'desc'>('asc')
@@ -305,15 +305,15 @@ export function Products() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer
   }, [debouncedQ, manufacturer, page, sort, dir, aiMode])
 
-  async function runAiSearch() {
+  async function runAiSearch(web = false) {
     const query = aiQuery.trim()
     if (query.length < 3) {
       setErr('Podaj wymaganie (min. 3 znaki), np. rękawice do pracy z amoniakiem')
       return
     }
-    setAiBusy(true)
+    setAiBusy(web ? 'web' : 'catalog')
     setErr('')
-    setMsg('Szukam w katalogu przez AI…')
+    setMsg(web ? 'Szukam w internecie…' : 'Szukam w katalogu przez AI…')
     const controller = new AbortController()
     const timer = window.setTimeout(() => controller.abort(), 180_000)
     try {
@@ -323,16 +323,19 @@ export function Products() {
         products: Product[]
         ai_note?: string | null
         external_hint?: { url: string; title: string } | null
+        external_hints?: { url: string; title: string }[]
       }>(
         '/products/ai-search',
         {
           method: 'POST',
-          body: JSON.stringify({ query, limit: 40 }),
+          body: JSON.stringify({ query, limit: web ? 8 : 40, web }),
           signal: controller.signal,
         },
       )
+      const hints =
+        res.external_hints ?? (res.external_hint ? [res.external_hint] : [])
       setAiMode(true)
-      setExternalHint(res.external_hint ?? null)
+      setExternalHints(hints)
       setResult({
         data: res.products,
         current_page: 1,
@@ -345,7 +348,9 @@ export function Products() {
       setMsg(
         res.total > 0
           ? `AI znalazło ${res.total} produktów dla: „${res.query}”`
-          : (res.ai_note ?? 'Model nie znalazł pasującego produktu w katalogu.'),
+          : hints.length > 0
+            ? `Internet: ${hints.length} linków dla: „${res.query}”`
+            : (res.ai_note ?? 'Model nie znalazł pasującego produktu w katalogu.'),
       )
     } catch (ex) {
       const aborted =
@@ -370,7 +375,7 @@ export function Products() {
     setAiQuery('')
     setMsg('')
     setErr('')
-    setExternalHint(null)
+    setExternalHints([])
   }
 
   useEffect(() => {
@@ -652,16 +657,24 @@ export function Products() {
           />
           <button
             type="button"
-            disabled={aiBusy || aiQuery.trim().length < 3}
-            onClick={() => void runAiSearch()}
+            disabled={Boolean(aiBusy) || aiQuery.trim().length < 3}
+            onClick={() => void runAiSearch(false)}
             className="rounded bg-indigo-600 px-3 py-2 text-xs text-white disabled:opacity-50"
           >
-            {aiBusy ? 'Szukam…' : 'Szukaj AI'}
+            {aiBusy === 'catalog' ? 'Szukam…' : 'Szukaj AI'}
+          </button>
+          <button
+            type="button"
+            disabled={Boolean(aiBusy) || aiQuery.trim().length < 3}
+            onClick={() => void runAiSearch(true)}
+            className="rounded bg-red-600 px-3 py-2 text-xs text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {aiBusy === 'web' ? 'Szukam…' : 'AI Internet'}
           </button>
           {aiMode && (
             <button
               type="button"
-              disabled={aiBusy}
+              disabled={Boolean(aiBusy)}
               onClick={clearAiSearch}
               className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
             >
@@ -673,18 +686,23 @@ export function Products() {
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
-      {externalHint && (
-        <a
-          href={externalHint.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mb-2 block rounded border border-amber-300 bg-amber-50 px-3 py-2"
-        >
-          <span className="rounded bg-amber-200 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-amber-950">
-            Link zewnętrzny — nie z katalogu
-          </span>
-          <span className="mt-1 block text-xs font-medium text-amber-950 underline">{externalHint.title}</span>
-        </a>
+      {externalHints.length > 0 && (
+        <div className="mb-2 space-y-1.5">
+          {externalHints.map((hint) => (
+            <a
+              key={hint.url}
+              href={hint.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded border border-orange-300 bg-orange-50 px-3 py-2"
+            >
+              <span className="rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-white">
+                Link zewnętrzny — nie z katalogu
+              </span>
+              <span className="mt-1 block text-xs font-medium text-orange-950 underline">{hint.title}</span>
+            </a>
+          ))}
+        </div>
       )}
 
       {batchActive && batch && (
