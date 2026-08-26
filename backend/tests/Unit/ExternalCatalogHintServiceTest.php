@@ -104,4 +104,21 @@ final class ExternalCatalogHintServiceTest extends TestCase
 
         $this->assertNull($best);
     }
+
+    #[Test]
+    public function accepts_no_class_from_snippet_when_title_omits_it(): void
+    {
+        $svc = $this->app->make(ExternalCatalogHintService::class);
+
+        $best = $svc->pickBestResult([
+            [
+                'url' => 'https://oxyline.eu/pl/product/275/filter-203-up3',
+                'title' => 'Filtr 203 UP3',
+                'content' => 'A2-B2-E2-K2-Hg-CO-NO-P3 pochłaniacz wielogazowy',
+            ],
+        ], 'pochłaniacz wielogazowy a2b2e2k2no (dodatkowa ochrona na tlenki azotu)');
+
+        $this->assertNotNull($best);
+        $this->assertSame('https://oxyline.eu/pl/product/275/filter-203-up3', $best['url']);
+    }
 }

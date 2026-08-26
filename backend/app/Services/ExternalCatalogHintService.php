@@ -39,56 +39,18 @@ final class ExternalCatalogHintService
             return $this->cache[$cacheKey];
         }
 
-        $search = $this->webQuery($query);
-
-        if ($this->settings->usesFreeWebSearch()) {
-            try {
-                $hits = $this->duckDuckGo->search($search, 8);
-            } catch (Throwable) {
-                return $this->remember($cacheKey, null);
+        $rows = [];
+        foreach ($this->webQueries($query) as $search) {
+            foreach ($this->searchWeb($search) as $row) {
+                $rows[] = $row;
             }
-
-            return $this->remember($cacheKey, $this->pickBestResult($hits, $query));
+            $best = $this->pickBestResult($rows, $query);
+            if ($best !== null) {
+                return $this->remember($cacheKey, $best);
+            }
         }
 
-        $cfg = $this->settings->resolve();
-        $key = $cfg['tavily_api_key'] ?? null;
-        if (! is_string($key) || $key === '') {
-            return $this->remember($cacheKey, null);
-        }
-
-        try {
-            TavilyQuotaGuard::assertAllowed();
-        } catch (Throwable) {
-            return $this->remember($cacheKey, null);
-        }
-
-        try {
-            $response = Http::acceptJson()
-                ->timeout(12)
-                ->connectTimeout(5)
-                ->post('https://api.tavily.com/search', [
-                    'api_key' => $key,
-                    'query' => $search,
-                    'search_depth' => 'basic',
-                    'include_answer' => false,
-                    'max_results' => 8,
-                    'include_images' => false,
-                ]);
-        } catch (Throwable) {
-            return $this->remember($cacheKey, null);
-        }
-
-        if (! $response->successful() || $response->status() === 429) {
-            return $this->remember($cacheKey, null);
-        }
-
-        $rows = $response->json('results');
-        if (! is_array($rows)) {
-            return $this->remember($cacheKey, null);
-        }
-
-        return $this->remember($cacheKey, $this->pickBestResult($rows, $query));
+        return $this->remember($cacheKey, null);
     }
 
     /**
@@ -110,7 +72,8 @@ final class ExternalCatalogHintService
                 continue;
             }
             $title = trim((string) ($row['title'] ?? $url));
-            $hay = $url.' '.$title;
+            $extra = trim((string) ($row['content'] ?? $row['snippet'] ?? $row['body'] ?? ''));
+            $hay = trim($url.' '.$title.' '.$extra);
             if (! $this->filterType->covers($requirement, $hay)) {
                 continue;
             }
@@ -133,6 +96,30 @@ final class ExternalCatalogHintService
         ];
     }
 
+    /**
+     * Najpierw ciasne zapytanie z klasą (A2-B2-E2-K2-NO), potem pełne wymaganie.
+     *
+     * @return list<string>
+     */
+    private function webQueries(string $requirement): array
+    {
+        $out = [];
+        foreach ($this->filterType->compactCodes($requirement) as $code) {
+            $hyphen = $this->filterType->hyphenated($code);
+            $out[] = $hyphen.' pochłaniacz filtr';
+            $out[] = $code.' pochłaniacz';
+        }
+        if (in_array('no', $this->filterType->required($requirement), true)) {
+            $out[] = 'A2-B2-E2-K2-NO-P3 pochłaniacz wielogazowy';
+            $out[] = 'A2-B2-E2-K2-Hg-CO-NO-P3 filtr';
+        }
+        $out[] = $this->webQuery($requirement);
+
+        return array_values(array_unique(array_filter(
+            array_map(static fn (string $q): string => mb_substr(trim($q), 0, 400), $out)
+        )));
+    }
+
     private function webQuery(string $requirement): string
     {
         $bits = [];
@@ -146,6 +133,56 @@ final class ExternalCatalogHintService
         $bits[] = $requirement;
 
         return mb_substr(implode(' ', array_unique($bits)), 0, 400);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function searchWeb(string $search): array
+    {
+        if ($this->settings->usesFreeWebSearch()) {
+            try {
+                return $this->duckDuckGo->search($search, 8);
+            } catch (Throwable) {
+                return [];
+            }
+        }
+
+        $cfg = $this->settings->resolve();
+        $key = $cfg['tavily_api_key'] ?? null;
+        if (! is_string($key) || $key === '') {
+            return [];
+        }
+
+        try {
+            TavilyQuotaGuard::assertAllowed();
+        } catch (Throwable) {
+            return [];
+        }
+
+        try {
+            $response = Http::acceptJson()
+                ->timeout(12)
+                ->connectTimeout(5)
+                ->post('https://api.tavily.com/search', [
+                    'api_key' => $key,
+                    'query' => $search,
+                    'search_depth' => 'basic',
+                    'include_answer' => false,
+                    'max_results' => 8,
+                    'include_images' => false,
+                ]);
+        } catch (Throwable) {
+            return [];
+        }
+
+        if (! $response->successful() || $response->status() === 429) {
+            return [];
+        }
+
+        $rows = $response->json('results');
+
+        return is_array($rows) ? $rows : [];
     }
 
     private function scoreResult(string $url, string $title, string $requirement = ''): int

@@ -78,7 +78,7 @@ final class ProductAiSearchService
         }
         $limit = max(1, min(80, $limit));
 
-        $filterHits = $this->keepCompatible($query, $this->retrieveByFilterType($query, $limit));
+        $filterHits = $this->retrieveByFilterType($query, $limit);
         if ($filterHits->isNotEmpty()) {
             $ranked = $this->rowsFromFilterMatches($query, $filterHits, $limit);
 
@@ -767,11 +767,19 @@ final class ProductAiSearchService
 
     private function filterHaystack(Product $product): string
     {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+
         return trim(implode(' ', array_filter([
             (string) $product->name,
             (string) $product->sku,
+            (string) ($product->manufacturer ?? ''),
             (string) ($product->description ?? ''),
             (string) ($product->norms ?? ''),
+            (string) ($product->search_blob ?? ''),
+            ...$this->stringList($payload['features'] ?? null),
+            ...$this->stringList($payload['use_cases'] ?? null),
+            ...$this->stringList($payload['norms'] ?? null),
+            ...$this->stringList($payload['specs'] ?? null),
         ])));
     }
 

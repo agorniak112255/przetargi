@@ -420,6 +420,86 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('external_hint', null);
     }
 
+    public function test_ai_search_finds_filter_when_no_is_only_in_description(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $product = Product::query()->create([
+            'sku' => 'OXY-203',
+            'name' => 'Pochłaniacz 203 UP3 Oxyline',
+            'manufacturer' => 'Oxyline',
+            'category' => 'Drogi oddechowe',
+            'norms' => 'EN 14387',
+            'description' => 'Wielogazowy A2B2E2K2 z dodatkową ochroną na tlenki azotu.',
+            'catalog_price_net' => 45,
+            'purchase_price' => 28,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $product->ppe_family = 'apparel';
+        $product->save();
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'pochłaniacz wielogazowy a2b2e2k2no (dodatkowa ochrona na tlenki azotu)',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'OXY-203')
+            ->assertJsonPath('external_hint', null);
+    }
+
+    public function test_empty_catalog_retries_web_until_no_class_appears(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'tavily_api_key' => 'tvly-test',
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn(
+            [
+                'needed' => 'pochłaniacz wielogazowy',
+                'search_phrases' => ['pochłaniacz'],
+            ],
+            ['matches' => []],
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        Http::fake([
+            'api.tavily.com/search' => Http::sequence()
+                ->push([
+                    'results' => [[
+                        'url' => 'https://kwasek.pl/produkt/pochlaniacz-202-a2b2e2k2',
+                        'title' => 'Pochłaniacz wielogazowy 202 A2B2E2K2',
+                    ]],
+                ], 200)
+                ->push([
+                    'results' => [[
+                        'url' => 'https://oxyline.eu/pl/product/275/filter-203-up3-a2-b2-e2-k2-hg-co-no-p3',
+                        'title' => 'Filtr 203 UP3',
+                        'content' => 'A2-B2-E2-K2-Hg-CO-NO-P3',
+                    ]],
+                ], 200),
+        ]);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'pochłaniacz wielogazowy a2b2e2k2no (dodatkowa ochrona na tlenki azotu)',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 0)
+            ->assertJsonPath(
+                'external_hint.url',
+                'https://oxyline.eu/pl/product/275/filter-203-up3-a2-b2-e2-k2-hg-co-no-p3'
+            );
+    }
+
     public function test_empty_catalog_skips_web_hint_without_no_class(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

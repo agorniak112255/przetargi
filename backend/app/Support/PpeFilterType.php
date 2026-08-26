@@ -122,6 +122,9 @@ final class PpeFilterType
         if ($this->compactCodes($requirement) === [] && count($need) >= 2) {
             $out[] = implode('%', array_map($this->likeLiteral(...), $need));
         }
+        if (in_array('no', $need, true)) {
+            $out[] = 'tlenk%azot';
+        }
 
         return array_values(array_unique(array_filter($out)));
     }
