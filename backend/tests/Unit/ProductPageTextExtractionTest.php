@@ -273,6 +273,49 @@ HTML;
         $this->assertNotContains($dead, $urls);
     }
 
+    public function test_second_fetch_of_same_url_uses_html_cache(): void
+    {
+        $pageUrl = 'https://shop.example.com/produkt/uvex-60549';
+        Http::fake([
+            $pageUrl => Http::response(
+                '<html><body><h1>Uvex 60549</h1><p>'
+                .str_repeat('Rękawice ochronne Uvex 60549 EN 388. ', 40)
+                .'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $fetcher = new ProductPageFetcher;
+        $row = ['url' => $pageUrl, 'title' => 'Uvex 60549', 'snippet' => '60549'];
+        $first = $fetcher->fetch([$row], '60549', 1);
+        $second = $fetcher->fetch([$row], '60549', 1);
+
+        $this->assertSame($first['pages'][0]['text'] ?? '', $second['pages'][0]['text'] ?? '');
+        Http::assertSentCount(1);
+    }
+
+    public function test_force_bypass_reads_html_again(): void
+    {
+        $pageUrl = 'https://shop.example.com/produkt/uvex-60550';
+        Http::fake([
+            $pageUrl => Http::response(
+                '<html><body><h1>Uvex 60550</h1><p>'
+                .str_repeat('Rękawice ochronne Uvex 60550 EN 388. ', 40)
+                .'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $fetcher = new ProductPageFetcher;
+        $row = ['url' => $pageUrl, 'title' => 'Uvex 60550', 'snippet' => '60550'];
+        $fetcher->fetch([$row], '60550', 1);
+        $fetcher->bypassCache(true)->fetch([$row], '60550', 1);
+
+        Http::assertSentCount(2);
+    }
+
     public function test_manufacturer_page_keeps_product_pdfs_and_skips_csr(): void
     {
         $html = <<<'HTML'

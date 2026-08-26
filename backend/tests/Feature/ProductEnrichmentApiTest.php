@@ -73,6 +73,23 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertTrue($method->invoke($service, $productPage, 1));
     }
 
+    public function test_skips_document_search_only_when_pdf_url_mentions_sku(): void
+    {
+        $reflection = new \ReflectionClass(ProductEnrichmentService::class);
+        $service = $reflection->newInstanceWithoutConstructor();
+        $method = $reflection->getMethod('alreadyHasProductPdf');
+        $method->setAccessible(true);
+        $product = new Product(['sku' => '60549', 'name' => 'Uvex C500', 'manufacturer' => 'Uvex']);
+
+        $this->assertTrue($method->invoke($service, [
+            'https://cdn.example.com/DATASHEET/60549_PDB_EN.pdf',
+        ], $product));
+        $this->assertFalse($method->invoke($service, [
+            'https://cdn.example.com/katalog-ogolny.pdf',
+        ], $product));
+        $this->assertFalse($method->invoke($service, [], $product));
+    }
+
     public function test_single_product_enrichment_runs_synchronously(): void
     {
         Queue::fake();
@@ -541,6 +558,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
     public function test_process_batch_item_uses_sku_cache(): void
     {
+        Queue::fake();
         Storage::fake('public');
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 

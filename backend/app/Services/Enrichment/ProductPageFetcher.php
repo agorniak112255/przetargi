@@ -5,17 +5,36 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use GuzzleHttp\Cookie\CookieJar;
+use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 final class ProductPageFetcher
 {
+    private const HTML_CACHE_PREFIX = 'enrich_page_html_v1:';
+
+    private const READER_CACHE_PREFIX = 'enrich_page_reader_v1:';
+
+    private const CACHE_TTL_HOURS = 24;
+
+    private const MAX_CACHED_HTML_BYTES = 1_500_000;
+
+    private bool $bypassCache = false;
+
     public function __construct(
         private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
     ) {}
+
+    public function bypassCache(bool $bypass = true): self
+    {
+        $this->bypassCache = $bypass;
+
+        return $this;
+    }
 
     /**
      * @param  list<array{url: string, title?: string, snippet?: string}>  $results
@@ -89,9 +108,24 @@ final class ProductPageFetcher
      */
     private function fetchWave(array $htmlRows): array
     {
+        $responses = [];
+        $pending = [];
+        foreach ($htmlRows as $i => $row) {
+            $cached = $this->cachedHtml((string) ($row['url'] ?? ''));
+            if ($cached !== null) {
+                $responses[(string) $i] = $this->htmlResponse($cached);
+
+                continue;
+            }
+            $pending[$i] = $row;
+        }
+        if ($pending === []) {
+            return $responses;
+        }
+
         try {
-            return Http::pool(function (Pool $pool) use ($htmlRows) {
-                foreach ($htmlRows as $i => $row) {
+            $live = Http::pool(function (Pool $pool) use ($pending) {
+                foreach ($pending as $i => $row) {
                     $pool->as((string) $i)
                         ->timeout(10)
                         ->connectTimeout(4)
@@ -114,8 +148,57 @@ final class ProductPageFetcher
                 'error' => $e->getMessage(),
             ]);
 
-            return [];
+            return $responses;
         }
+
+        foreach ($live as $key => $response) {
+            $responses[(string) $key] = $response;
+            $url = (string) ($pending[(int) $key]['url'] ?? '');
+            if ($url === '' || ! $response instanceof Response || ! $response->successful()) {
+                continue;
+            }
+            $html = $response->body();
+            if ($html !== '' && ! $this->looksLikeBotWall($html)) {
+                $this->storeHtml($url, $html);
+            }
+        }
+
+        return $responses;
+    }
+
+    private function cachedHtml(string $url): ?string
+    {
+        if ($this->bypassCache || $url === '') {
+            return null;
+        }
+        $cached = Cache::get($this->htmlCacheKey($url));
+
+        return is_string($cached) && $cached !== '' ? $cached : null;
+    }
+
+    private function storeHtml(string $url, string $html): void
+    {
+        if ($url === '' || strlen($html) > self::MAX_CACHED_HTML_BYTES) {
+            return;
+        }
+        Cache::put($this->htmlCacheKey($url), $html, now()->addHours(self::CACHE_TTL_HOURS));
+    }
+
+    private function htmlCacheKey(string $url): string
+    {
+        return self::HTML_CACHE_PREFIX.hash('sha256', $url);
+    }
+
+    private function readerCacheKey(string $url): string
+    {
+        return self::READER_CACHE_PREFIX.hash('sha256', $url);
+    }
+
+    private function htmlResponse(string $html): Response
+    {
+        return new Response(new Psr7Response(200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+        ], $html));
     }
 
     /** Kody, którymi WAF-y odsyłają boty, zanim w ogóle dojdzie do treści karty. */
@@ -135,9 +218,23 @@ final class ProductPageFetcher
         array &$images,
         array &$documents,
     ): bool {
-        $viaReader = $this->blockedPages->fetch($url);
+        $viaReader = null;
+        if (! $this->bypassCache) {
+            $cached = Cache::get($this->readerCacheKey($url));
+            if (is_array($cached) && isset($cached['text'])) {
+                $viaReader = [
+                    'text' => (string) ($cached['text'] ?? ''),
+                    'image_urls' => is_array($cached['image_urls'] ?? null) ? $cached['image_urls'] : [],
+                    'document_urls' => is_array($cached['document_urls'] ?? null) ? $cached['document_urls'] : [],
+                ];
+            }
+        }
         if ($viaReader === null) {
-            return false;
+            $viaReader = $this->blockedPages->fetch($url);
+            if ($viaReader === null) {
+                return false;
+            }
+            Cache::put($this->readerCacheKey($url), $viaReader, now()->addHours(self::CACHE_TTL_HOURS));
         }
 
         $used = false;

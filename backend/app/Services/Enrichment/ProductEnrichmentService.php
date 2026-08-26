@@ -245,6 +245,7 @@ final class ProductEnrichmentService
             'enrichment_error' => null,
         ]);
 
+        $this->pages->bypassCache($force);
         try {
             if (! $force && $this->applyFromSkuCache($product)) {
                 return;
@@ -303,12 +304,11 @@ final class ProductEnrichmentService
 
             $this->assertBatchNotCancelled($batchId);
 
-            // sklep → opis PL; producent → normy/materiały (doklejone do kontekstu LLM)
-            $pageSnippets = $this->sanitizePagesWithLlm($product, $pageSnippets);
-            if ($mfrPageSnippets !== []) {
-                $mfrClean = $this->sanitizePagesWithLlm($product, $mfrPageSnippets);
-                $pageSnippets = $this->mergePageSnippets($pageSnippets, $mfrClean);
-            }
+            // sklep → opis PL; producent → normy/materiały — jedno sanitize, żeby nie dublować vLLM
+            $pageSnippets = $this->sanitizePagesWithLlm(
+                $product,
+                $this->mergePageSnippets($pageSnippets, $mfrPageSnippets)
+            );
 
             $extracted = $this->extractWithLlm(
                 $product,
@@ -551,9 +551,12 @@ final class ProductEnrichmentService
             }
             $this->assertBatchNotCancelled($batchId);
 
-            // PDF tylko ze stron producenta (+ indeksy deklaracji)
-            $docHits = $this->documentFinder->findDocumentUrls($product);
+            // PDF z karty (SKU w URL) wystarcza — nie odpalamy kolejnego SearXNG
+            $docHits = [];
             $docPages = [];
+            if (! $this->alreadyHasProductPdf($documentUrls, $product)) {
+                $docHits = $this->documentFinder->findDocumentUrls($product);
+            }
             foreach ($docHits as $url) {
                 if (ProductDocumentDownloader::looksLikeDocumentUrl($url) && (
                     ProductDocumentDownloader::looksLikePdfUrl($url)
@@ -645,6 +648,8 @@ final class ProductEnrichmentService
                 // np. padnięte MySQL — status może zostać "running"; UI pozwala odblokować
             }
             throw $e;
+        } finally {
+            $this->pages->bypassCache(false);
         }
     }
 
@@ -1360,6 +1365,20 @@ final class ProductEnrichmentService
         return $otherPdf;
     }
 
+    /**
+     * @param  list<string>  $documentUrls
+     */
+    private function alreadyHasProductPdf(array $documentUrls, Product $product): bool
+    {
+        foreach ($documentUrls as $url) {
+            if (is_string($url) && $this->pdfUrlMentionsProduct($url, $product)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function pdfUrlMentionsProduct(string $url, Product $product): bool
     {
         if (! ProductDocumentDownloader::looksLikePdfUrl($url)) {
@@ -1887,7 +1906,10 @@ final class ProductEnrichmentService
             return [];
         }
 
-        $compact = $this->fitPagesToBudget($pageSnippets, 4, 4500, 14000);
+        $pageCount = count($pageSnippets);
+        $compact = $pageCount > 4
+            ? $this->fitPagesToBudget($pageSnippets, 6, 3500, 16000)
+            : $this->fitPagesToBudget($pageSnippets, 4, 4500, 14000);
         if ($compact === []) {
             return $pageSnippets;
         }
