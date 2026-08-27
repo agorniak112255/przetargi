@@ -418,6 +418,82 @@ final class ProductCrossRefCompareTest extends TestCase
         $this->assertNotContains('GOG-1', $skus);
     }
 
+    public function test_cross_ref_scans_whole_catalog_not_a_family_slice(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'MASK-A',
+            'name' => 'Półmaska filtrująca FFP2 A',
+            'manufacturer' => 'Secura',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Jednorazowa FFP2 EN 149 włóknina.',
+            'catalog_price_net' => 2,
+            'purchase_price' => 1,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['włóknina'],
+                'norms' => ['EN 149'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'włóknina',
+                    'normy_en' => ['EN 149'],
+                    'klasa_ochrony' => 'FFP2',
+                    'kod_producenta' => 'MASK-A',
+                    'materialy' => ['włóknina'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        for ($i = 1; $i <= 12; $i++) {
+            Product::query()->create([
+                'sku' => 'SHOE-'.$i,
+                'name' => 'Trzewiki S3 model '.$i,
+                'manufacturer' => 'DEMAR',
+                'category' => 'Obuwie',
+                'description' => 'Trzewiki skórzane S3.',
+                'catalog_price_net' => 80,
+                'purchase_price' => 40,
+                'stock' => 1,
+            ]);
+        }
+
+        $other = Product::query()->create([
+            'sku' => 'MASK-B',
+            'name' => 'Półmaska filtrująca FFP2 B',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Jednorazowa FFP2 EN 149 polipropylen.',
+            'catalog_price_net' => 3,
+            'purchase_price' => 2,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['polipropylen'],
+                'norms' => ['EN 149'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'polipropylen',
+                    'normy_en' => ['EN 149'],
+                    'klasa_ochrony' => 'FFP2',
+                    'kod_producenta' => 'MASK-B',
+                    'materialy' => ['polipropylen'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $this->getJson('/api/products/cross-ref?code=MASK-A')
+            ->assertOk()
+            ->assertJsonFragment(['sku' => 'MASK-B', 'product_id' => $other->id]);
+    }
+
     public function test_compare_highlights_attribute_diffs_and_siwz_scores(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

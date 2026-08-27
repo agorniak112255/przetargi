@@ -6,7 +6,6 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
-use App\Support\PpeAssortment;
 
 /**
  * Cross-reference: kod/SKU → ten sam wyrób u innego producenta.
@@ -43,7 +42,6 @@ final class ProductCrossRefService
 
     public function __construct(
         private readonly BhpAttributeNormalizer $bhpAttributes,
-        private readonly PpeAssortment $assortment,
     ) {}
 
     /**
@@ -71,7 +69,8 @@ final class ProductCrossRefService
         $seedAttrs = $this->bhpAttributes->forProduct($seed);
         $seedMfr = mb_strtolower(trim((string) $seed->manufacturer));
 
-        $pool = $this->candidatePool($seed);
+        // Cały katalog — bez limitu i bez wycinania po rodzinie (ppe_family bywa puste).
+        $pool = Product::query()->where('id', '!=', $seed->id)->get();
 
         $matches = [];
         foreach ($pool as $product) {
@@ -237,29 +236,6 @@ final class ProductCrossRefService
         }
 
         return true;
-    }
-
-    /**
-     * @param  array<string, mixed>  $seed
-     * @param  array<string, mixed>  $cand
-     */
-    /**
-     * @return \Illuminate\Support\Collection<int, Product>
-     */
-    private function candidatePool(Product $seed)
-    {
-        $family = is_string($seed->ppe_family) && $seed->ppe_family !== ''
-            ? $seed->ppe_family
-            : $this->assortment->productFamily($seed);
-
-        $query = Product::query()->where('id', '!=', $seed->id);
-        if ($family !== null) {
-            $query->where(function ($q) use ($family): void {
-                $q->where('ppe_family', $family)->orWhereNull('ppe_family');
-            })->orderByRaw('ppe_family is null');
-        }
-
-        return $query->limit(2500)->get();
     }
 
     /**
