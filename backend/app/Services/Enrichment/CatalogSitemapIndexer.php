@@ -165,13 +165,9 @@ final class CatalogSitemapIndexer
     {
         $out = [];
         $robots = $this->fetch('https://'.$host.'/robots.txt');
-        if ($robots !== null && preg_match_all('/^\s*sitemap:\s*(\S+)/mi', $robots, $m) > 0) {
-            foreach ($m[1] as $url) {
-                $url = trim((string) $url);
-                if ($url !== '') {
-                    $out[] = $url;
-                }
-            }
+        $this->collectRobotSitemaps($robots, $out);
+        if ($out === [] && ! app()->environment('testing')) {
+            $this->collectRobotSitemaps($this->fetchViaCurl('https://'.$host.'/robots.txt'), $out);
         }
 
         if ($out === []) {
@@ -222,7 +218,7 @@ final class CatalogSitemapIndexer
         // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
         // bez tego pobralibyśmy 130 kB HTML-a dla każdej zgadywanej ścieżki
         if (str_contains(mb_strtolower((string) $response->header('Content-Type')), 'text/html')) {
-            return false;
+            return $this->streamFromCurl($url, $onLocation);
         }
 
         $body = $response->toPsrResponse()->getBody();
@@ -261,7 +257,7 @@ final class CatalogSitemapIndexer
                 $chunk = (string) inflate_add($inflate, $chunk);
             }
             if ($buffer === '' && $this->looksLikeHtml($chunk)) {
-                return false;
+                return $this->streamFromCurl($url, $onLocation);
             }
 
             $buffer .= $chunk;
@@ -346,12 +342,36 @@ final class CatalogSitemapIndexer
         return $body;
     }
 
+    /**
+     * @param  list<string>  $out
+     */
+    private function collectRobotSitemaps(?string $robots, array &$out): void
+    {
+        if ($robots === null || $this->looksLikeHtml($robots)) {
+            return;
+        }
+        if (preg_match_all('/^\s*sitemap:\s*(\S+)/mi', $robots, $m) === 0) {
+            return;
+        }
+        foreach ($m[1] as $url) {
+            $url = trim((string) $url);
+            if ($url !== '') {
+                $out[] = $url;
+            }
+        }
+    }
+
     private function curlBinary(): ?string
     {
         if (PHP_OS_FAMILY === 'Windows') {
             $candidate = 'C:\\Windows\\System32\\curl.exe';
 
             return is_file($candidate) ? $candidate : null;
+        }
+        foreach (['/usr/bin/curl', '/bin/curl'] as $candidate) {
+            if (is_file($candidate) && is_executable($candidate)) {
+                return $candidate;
+            }
         }
 
         return 'curl';
