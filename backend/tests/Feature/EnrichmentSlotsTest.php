@@ -75,7 +75,7 @@ final class EnrichmentSlotsTest extends TestCase
         $job = new EnrichProductJob($product->id, $batch->id);
         $job->handle(app(ProductEnrichmentService::class), app(AiSettingsService::class), $slots);
 
-        Queue::assertPushed(EnrichProductJob::class, 1);
+        Queue::assertPushedOn('enrich', EnrichProductJob::class);
         $this->assertSame(
             Product::ENRICHMENT_QUEUED,
             $product->fresh()?->enrichment_status,

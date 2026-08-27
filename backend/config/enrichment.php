@@ -160,15 +160,14 @@ return [
     ],
 
     /*
-    | Odstęp w sekundach między kolejnymi zapytaniami do SearXNG — wspólny dla
-    | wszystkich workerów. Darmowe silniki blokują szybkie serie, więc przy
-    | kilkunastu workerach to jedyne, co trzyma je przy życiu.
+    | Odstęp między zapytaniami do SearXNG (Google/Qwant liczą ruch z instancji).
+    | To jest ochrona przed 429 — nie liczba workerów LLM.
     */
     'search_min_interval' => (float) env('ENRICHMENT_SEARCH_MIN_INTERVAL', 2.0),
 
     /*
-    | Ile produktów naraz szuka stron i grzeje cache HTML (nie LLM).
-    | 1 = najbezpieczniej dla SearXNG; 3 karmi szybszy model lokalny.
+    | Ile produktów naraz szuka stron (kolejka prefetch). Model ma osobną pulę
+    | (kolejka enrich, limit z Ustawień AI). Nie podnoś tego do 16 — dostaniesz 429.
     */
     'prefetch_concurrency' => max(1, min(8, (int) env('ENRICHMENT_PREFETCH_CONCURRENCY', 3))),
 

@@ -559,6 +559,7 @@ final class ProductEnrichmentApiTest extends TestCase
             ->assertJsonPath('product_ids.1', $p2->id);
 
         Queue::assertPushed(PrefetchProductSourcesJob::class, 2);
+        Queue::assertPushedOn('prefetch', PrefetchProductSourcesJob::class);
         Queue::assertNotPushed(EnrichProductJob::class);
     }
 
@@ -601,6 +602,7 @@ final class ProductEnrichmentApiTest extends TestCase
             ->handle(app(ProductEnrichmentService::class), app(PrefetchSlots::class));
 
         Queue::assertPushed(EnrichProductJob::class, 1);
+        Queue::assertPushedOn('enrich', EnrichProductJob::class);
         Http::assertSentCount(1);
     }
 

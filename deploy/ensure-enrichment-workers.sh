@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Instaluje / odświeża workery kolejki (systemd).
-# Stała pula 16 procesów — limit „Ile zapytań AI naraz” w panelu tylko
-# zajmuje sloty, bez restartu. Więcej niż 16: WORKERS=20 bash deploy/ensure-enrichment-workers.sh
+# Dwie pule workerów:
+#   - enrich (domyślnie 16) — tylko vLLM / opisy
+#   - prefetch (domyślnie 3) — SearXNG + HTML
+# Limit „Ile zapytań AI naraz” w panelu zajmuje sloty enrich, bez restartu.
+# Więcej LLM: WORKERS=20 bash deploy/ensure-enrichment-workers.sh
+# Więcej wyszukiwań (ryzyko 429): PREFETCH_WORKERS=5 bash deploy/ensure-enrichment-workers.sh
 set -euo pipefail
 
 APP_ROOT="${1:-/var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl}"
@@ -9,10 +12,9 @@ PHP_BIN="${PHP_BIN:-/opt/plesk/php/8.3/bin/php}"
 OWNER="${OWNER:-supon}"
 GROUP="${GROUP:-psacln}"
 BACKEND="$APP_ROOT/backend"
-UNIT_NAME="przetargi-enrichment@"
-UNIT_FILE="/etc/systemd/system/${UNIT_NAME}.service"
+ENRICH_UNIT="przetargi-enrichment@"
+PREFETCH_UNIT="przetargi-prefetch@"
 LOG_FILE="/var/log/przetargi-enrichment.log"
-# Górna granica pętli wyłączającej nadwyżkę po zmniejszeniu WORKERS
 SLOTS_MAX=32
 
 if [[ ! -f "$BACKEND/artisan" ]]; then
@@ -20,18 +22,23 @@ if [[ ! -f "$BACKEND/artisan" ]]; then
   exit 1
 fi
 
-# Stała pula. Panel (EnrichmentSlots) ogranicza, ile z nich naraz woła LLM.
 WORKERS="${WORKERS:-16}"
-echo "==> workery: pula ${WORKERS} (sloty AI z panelu, niezależnie)"
+PREFETCH_WORKERS="${PREFETCH_WORKERS:-3}"
+echo "==> workery: LLM ${WORKERS} (kolejka enrich) + wyszukiwanie ${PREFETCH_WORKERS} (kolejka prefetch)"
 
 if (( WORKERS < 1 || WORKERS > SLOTS_MAX )); then
   echo "ERR: WORKERS=$WORKERS poza zakresem 1-$SLOTS_MAX" >&2
   exit 1
 fi
+if (( PREFETCH_WORKERS < 1 || PREFETCH_WORKERS > 8 )); then
+  echo "ERR: PREFETCH_WORKERS=$PREFETCH_WORKERS poza zakresem 1-8" >&2
+  exit 1
+fi
 
 if ! command -v systemctl >/dev/null 2>&1; then
-  echo "UWAGA: brak systemd — workery trzeba uruchomić ręcznie, np. $WORKERS razy:"
-  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=default,embeddings --tries=3 --timeout=420 --max-time=3600 &"
+  echo "UWAGA: brak systemd — workery trzeba uruchomić ręcznie:"
+  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=enrich,default,embeddings --tries=3 --timeout=420 --max-time=3600 &"
+  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=prefetch --tries=3 --timeout=180 --max-time=3600 &"
   exit 0
 fi
 
@@ -40,10 +47,14 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 0
 fi
 
-echo "==> workery: zapis $UNIT_FILE"
-cat > "$UNIT_FILE" <<EOF
+write_unit() {
+  local unit_file="$1"
+  local description="$2"
+  local queues="$3"
+  local timeout="$4"
+  cat > "$unit_file" <<EOF
 [Unit]
-Description=Przetargi enrichment queue worker %i
+Description=$description %i
 After=network.target
 
 [Service]
@@ -51,9 +62,7 @@ Type=simple
 User=$OWNER
 Group=$GROUP
 WorkingDirectory=$BACKEND
-# --max-time: worker kończy się co godzinę, systemd wstaje z nowym kodem i czystą pamięcią
-# kolejność kolejek = priorytet: opisy zawsze przed reindeksem embeddingów
-ExecStart=$PHP_BIN artisan queue:work --queue=default,embeddings --sleep=2 --tries=3 --timeout=420 --max-time=3600
+ExecStart=$PHP_BIN artisan queue:work --queue=$queues --sleep=1 --tries=3 --timeout=$timeout --max-time=3600
 Restart=always
 RestartSec=5
 StandardOutput=append:$LOG_FILE
@@ -62,49 +71,72 @@ StandardError=append:$LOG_FILE
 [Install]
 WantedBy=multi-user.target
 EOF
+}
+
+echo "==> workery: zapis jednostek systemd"
+write_unit "/etc/systemd/system/${ENRICH_UNIT}.service" \
+  "Przetargi enrichment LLM worker" \
+  "enrich,default,embeddings" \
+  420
+write_unit "/etc/systemd/system/${PREFETCH_UNIT}.service" \
+  "Przetargi enrichment prefetch worker" \
+  "prefetch" \
+  180
 
 touch "$LOG_FILE"
 chown "$OWNER:$GROUP" "$LOG_FILE" || true
 
 systemctl daemon-reload
-systemctl reset-failed "${UNIT_NAME}"*.service 2>/dev/null || true
+systemctl reset-failed "${ENRICH_UNIT}"*.service 2>/dev/null || true
+systemctl reset-failed "${PREFETCH_UNIT}"*.service 2>/dev/null || true
 
-echo "==> workery: uruchamiam $WORKERS instancji"
-wanted=()
-for ((i = 1; i <= WORKERS; i++)); do
-  wanted+=("${UNIT_NAME}${i}.service")
-done
-systemctl enable --now "${wanted[@]}" >/dev/null 2>&1 \
-  || echo "    część workerów nie wstała — sprawdź: systemctl status ${UNIT_NAME}1"
+enable_pool() {
+  local prefix="$1"
+  local count="$2"
+  local wanted=()
+  local i
+  for ((i = 1; i <= count; i++)); do
+    wanted+=("${prefix}${i}.service")
+  done
+  systemctl enable --now "${wanted[@]}" >/dev/null 2>&1 \
+    || echo "    część ${prefix} nie wstała — sprawdź: systemctl status ${prefix}1"
+}
 
-# Nadwyżkę wyłączamy tylko wtedy, gdy jednostka faktycznie istnieje. Wołanie
-# systemctl po wszystkich 32 slotach kosztowało kilkanaście sekund na pusto.
-surplus=()
-while read -r unit; do
-  [[ -z "$unit" ]] && continue
-  idx="${unit#"$UNIT_NAME"}"
-  idx="${idx%.service}"
-  if [[ "$idx" =~ ^[0-9]+$ ]] && (( idx > WORKERS )); then
-    surplus+=("$unit")
+stop_surplus() {
+  local prefix="$1"
+  local keep="$2"
+  local surplus=()
+  local unit idx
+  while read -r unit; do
+    [[ -z "$unit" ]] && continue
+    idx="${unit#"$prefix"}"
+    idx="${idx%.service}"
+    if [[ "$idx" =~ ^[0-9]+$ ]] && (( idx > keep )); then
+      surplus+=("$unit")
+    fi
+  done < <(
+    {
+      systemctl list-units --all --plain --no-legend "${prefix}*.service" 2>/dev/null | awk '{print $1}'
+      systemctl list-unit-files --plain --no-legend "${prefix}*.service" 2>/dev/null | awk '{print $1}'
+    } | sort -u
+  )
+  if (( ${#surplus[@]} > 0 )); then
+    echo "==> workery: wyłączam nadwyżkę ${prefix} (${#surplus[@]})"
+    systemctl disable --now "${surplus[@]}" >/dev/null 2>&1 || true
   fi
-done < <(
-  {
-    systemctl list-units --all --plain --no-legend "${UNIT_NAME}*.service" 2>/dev/null | awk '{print $1}'
-    systemctl list-unit-files --plain --no-legend "${UNIT_NAME}*.service" 2>/dev/null | awk '{print $1}'
-  } | sort -u
-)
-if (( ${#surplus[@]} > 0 )); then
-  echo "==> workery: wyłączam nadwyżkę (${#surplus[@]})"
-  systemctl disable --now "${surplus[@]}" >/dev/null 2>&1 || true
-fi
+}
 
-# Nowy kod wchodzi przez queue:restart — worker kończy bieżące zadanie i wychodzi,
-# a Restart=always podnosi go z aktualnym kodem. „systemctl restart” blokowałby deploy
-# do końca zadania enrichmentu (timeout 420 s), po kolei dla każdego workera.
+echo "==> workery: uruchamiam pule"
+enable_pool "$ENRICH_UNIT" "$WORKERS"
+enable_pool "$PREFETCH_UNIT" "$PREFETCH_WORKERS"
+stop_surplus "$ENRICH_UNIT" "$WORKERS"
+stop_surplus "$PREFETCH_UNIT" "$PREFETCH_WORKERS"
+
 echo "==> workery: sygnał restartu dla zadań w toku"
 cd "$BACKEND"
 "$PHP_BIN" artisan queue:restart || true
 
-systemctl --no-pager --plain list-units "${UNIT_NAME}*" || true
-echo "==> workery: OK ($WORKERS w puli, log: $LOG_FILE)"
-echo "    Limit w Ustawieniach AI zmienia tylko sloty (do $WORKERS). Powyżej: WORKERS=N $0"
+systemctl --no-pager --plain list-units "${ENRICH_UNIT}*" "${PREFETCH_UNIT}*" || true
+echo "==> workery: OK (LLM $WORKERS + prefetch $PREFETCH_WORKERS, log: $LOG_FILE)"
+echo "    Panel AI zmienia tylko sloty modelu (do $WORKERS). Więcej LLM: WORKERS=N $0"
+echo "    Więcej wyszukiwań (ostrożnie, 429): PREFETCH_WORKERS=N $0"

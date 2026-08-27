@@ -35,11 +35,16 @@ class PrefetchProductSourcesJob implements ShouldQueue
 
     public int $timeout = 180;
 
+    /** Osobna kolejka — szukanie nie blokuje slotów vLLM. */
+    public const QUEUE = 'prefetch';
+
     public function __construct(
         public readonly int $productId,
         public readonly int $batchId,
         public readonly bool $force = false,
-    ) {}
+    ) {
+        $this->onQueue(self::QUEUE);
+    }
 
     public function handle(ProductEnrichmentService $enrichment, PrefetchSlots $slots): void
     {

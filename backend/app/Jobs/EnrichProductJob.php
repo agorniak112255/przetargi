@@ -36,11 +36,16 @@ class EnrichProductJob implements ShouldQueue
     // wyszukiwanie i pobieranie stron — 240 s ucinało robotę w połowie.
     public int $timeout = 420;
 
+    /** Osobna kolejka — workery LLM nie stoją w kolejce za SearXNG. */
+    public const QUEUE = 'enrich';
+
     public function __construct(
         public readonly int $productId,
         public readonly int $batchId,
         public readonly bool $force = false,
-    ) {}
+    ) {
+        $this->onQueue(self::QUEUE);
+    }
 
     public function handle(
         ProductEnrichmentService $enrichment,
