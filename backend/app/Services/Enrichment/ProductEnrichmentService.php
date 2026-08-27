@@ -189,8 +189,9 @@ final class ProductEnrichmentService
 
     /**
      * Szukanie + pobranie HTML do cache. Bez LLM — EnrichProductJob korzysta z ciepłego cache.
+     * $onSearchReady wołane zaraz po zapisie packa, żeby model nie czekał na HTML.
      */
-    public function prefetchProductSources(Product $product, bool $force = false, ?int $batchId = null): void
+    public function prefetchProductSources(Product $product, bool $force = false, ?int $batchId = null, ?callable $onSearchReady = null): void
     {
         $started = microtime(true);
         $this->assertBatchNotCancelled($batchId);
@@ -202,6 +203,7 @@ final class ProductEnrichmentService
                 'skipped' => 'sku_cache',
                 'total_ms' => $this->elapsedMs($started),
             ]);
+            $onSearchReady !== null && $onSearchReady();
 
             return;
         }
@@ -215,6 +217,7 @@ final class ProductEnrichmentService
             $t = microtime(true);
             $searchPack = $this->search->searchBothPhases($product);
             $this->rememberPrefetchPack($product, $searchPack);
+            $onSearchReady !== null && $onSearchReady();
             $searchMs = $this->elapsedMs($t);
             $results = $searchPack['results'] ?? [];
 

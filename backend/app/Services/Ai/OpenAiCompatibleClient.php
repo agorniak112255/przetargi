@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Ai;
 
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
+use App\Support\QueueWorkerIdentity;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -873,6 +874,7 @@ class OpenAiCompatibleClient
             ->withHeaders([
                 'HTTP-Referer' => config('app.url', 'http://localhost'),
                 'X-Title' => 'SUPON AI',
+                'User-Agent' => QueueWorkerIdentity::userAgent('SUPON-AI/1.0'),
                 'Expect' => '',
             ])
             ->withOptions(['expect' => false])

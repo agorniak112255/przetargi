@@ -805,10 +805,9 @@ export function AiSettingsPage() {
               }
             />
             <span className="mt-1 block text-[11px] text-slate-500">
-              Dopasowanie SIWZ oraz twardy limit produktów liczonych naraz przy pobieraniu opisów —
-              wspólny dla wszystkich cenników. Zwolniony slot od razu bierze następny produkt.
-              Ustaw tyle, ile slotów ma model (llama.cpp <code>--parallel</code>).
-              Workery kolejki: stałe 16 — ten limit działa od razu do 16.
+              To jest limit równoległych zapytań do modelu (llama-swap), nie liczba workerów
+              wyszukiwarki. Ustaw 16, jeśli model ma 16 slotów — przy 1–2 w panelu llama-swap
+              pokaże 1–2 in-flight niezależnie od 16 workerów.
             </span>
           </label>
           <label className="flex items-center gap-2 text-xs">

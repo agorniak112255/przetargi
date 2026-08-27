@@ -76,6 +76,15 @@ class PrefetchProductSourcesJob implements ShouldQueue
             return;
         }
 
+        $dispatched = false;
+        $dispatchEnrich = function () use (&$dispatched): void {
+            if ($dispatched) {
+                return;
+            }
+            $dispatched = true;
+            EnrichProductJob::dispatch($this->productId, $this->batchId, $this->force);
+        };
+
         try {
             $batch->update([
                 'status' => ProductEnrichmentBatch::STATUS_RUNNING,
@@ -83,7 +92,7 @@ class PrefetchProductSourcesJob implements ShouldQueue
                 'current_name' => mb_substr($product->name, 0, 255),
                 'message' => 'Prefetch źródeł (wyszukiwarka)…',
             ]);
-            $enrichment->prefetchProductSources($product, $this->force, $this->batchId);
+            $enrichment->prefetchProductSources($product, $this->force, $this->batchId, $dispatchEnrich);
         } catch (EnrichmentCancelledException) {
             $this->delete();
 
@@ -98,6 +107,6 @@ class PrefetchProductSourcesJob implements ShouldQueue
             $lock->release();
         }
 
-        EnrichProductJob::dispatch($this->productId, $this->batchId, $this->force);
+        $dispatchEnrich();
     }
 }

@@ -37,8 +37,8 @@ fi
 
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "UWAGA: brak systemd — workery trzeba uruchomić ręcznie:"
-  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=enrich,default,embeddings --tries=3 --timeout=420 --max-time=3600 &"
-  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=prefetch --tries=3 --timeout=180 --max-time=3600 &"
+  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=enrich,embeddings --tries=3 --timeout=420 --max-time=3600 &"
+  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=prefetch,default --tries=3 --timeout=180 --max-time=3600 &"
   exit 0
 fi
 
@@ -52,6 +52,8 @@ write_unit() {
   local description="$2"
   local queues="$3"
   local timeout="$4"
+  local pool="$5"
+  local count="$6"
   cat > "$unit_file" <<EOF
 [Unit]
 Description=$description %i
@@ -62,6 +64,9 @@ Type=simple
 User=$OWNER
 Group=$GROUP
 WorkingDirectory=$BACKEND
+Environment=QUEUE_WORKER_POOL=$pool
+Environment=QUEUE_WORKER_INDEX=%i
+Environment=QUEUE_WORKER_COUNT=$count
 ExecStart=$PHP_BIN artisan queue:work --queue=$queues --sleep=1 --tries=3 --timeout=$timeout --max-time=3600
 Restart=always
 RestartSec=5
@@ -76,12 +81,16 @@ EOF
 echo "==> workery: zapis jednostek systemd"
 write_unit "/etc/systemd/system/${ENRICH_UNIT}.service" \
   "Przetargi enrichment LLM worker" \
-  "enrich,default,embeddings" \
-  420
+  "enrich,embeddings" \
+  420 \
+  enrich \
+  "$WORKERS"
 write_unit "/etc/systemd/system/${PREFETCH_UNIT}.service" \
   "Przetargi enrichment prefetch worker" \
-  "prefetch" \
-  180
+  "prefetch,default" \
+  180 \
+  prefetch \
+  "$PREFETCH_WORKERS"
 
 touch "$LOG_FILE"
 chown "$OWNER:$GROUP" "$LOG_FILE" || true

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Services\Ai\AiSettingsService;
+use App\Support\QueueWorkerIdentity;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -133,7 +134,7 @@ final class DuckDuckGoHtmlSearch
         $url = rtrim($baseUrl, '/').'/search';
 
         try {
-            $response = Http::withHeaders($this->browserHeaders())
+            $response = Http::withHeaders($this->searxngHeaders())
                 ->timeout(25)
                 ->connectTimeout(6)
                 ->get($url, [
@@ -575,6 +576,18 @@ final class DuckDuckGoHtmlSearch
         }
 
         return $this->parseBingHtml((string) $response->body());
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function searxngHeaders(): array
+    {
+        return [
+            'User-Agent' => QueueWorkerIdentity::userAgent('SUPON-Prefetch/1.0'),
+            'Accept' => 'application/json,text/html;q=0.8',
+            'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.6',
+        ];
     }
 
     /**
