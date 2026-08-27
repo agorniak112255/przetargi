@@ -24,6 +24,10 @@ final class PriceListMetaDetectorTest extends TestCase
         $deb = $d->fromFilename('cennik debstoko 15.02.2020..pdf');
         $this->assertSame('Debstoko', $deb['manufacturer']);
         $this->assertSame('2020-02', $deb['version']);
+
+        $ppo = $d->fromFilename('Strzelce Opolskie - 2018-02-01.pdf');
+        $this->assertSame('PPO', $ppo['manufacturer']);
+        $this->assertSame('2018-02', $ppo['version']);
     }
 
     public function test_resolve_prefers_ai_then_filename_over_stale_hint(): void

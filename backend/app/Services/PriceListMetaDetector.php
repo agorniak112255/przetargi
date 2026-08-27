@@ -37,6 +37,7 @@ final class PriceListMetaDetector
         'Ardon' => ['ardon', 'ardon.cz'],
         'Bogaro' => ['bogaro'],
         'JS GLOVES' => ['js gloves', 'js-gloves', 'szewczyk'],
+        'PPO' => ['ppo strzelce', 'strzelce opolskie'],
     ];
 
     /**

@@ -15,7 +15,11 @@ final class PriceListPdfTextExtractor
      */
     public function extract(string $path, ?int $maxChars = null): string
     {
-        $text = $this->extractViaPdfToText($path) ?? $this->extractViaSmalot($path);
+        try {
+            $text = $this->extractViaPdfToText($path) ?? $this->extractViaSmalot($path);
+        } catch (\Throwable $e) {
+            throw $this->scanOrRethrow($path, $e);
+        }
         $text = $this->ensureUtf8($text);
         $text = $this->normalizeWhitespace($text);
 
@@ -105,11 +109,47 @@ final class PriceListPdfTextExtractor
 
     private function extractViaSmalot(string $path): string
     {
+        $bytes = file_get_contents($path);
+        if ($bytes === false) {
+            throw new RuntimeException('Nie można odczytać pliku PDF.');
+        }
+        $bytes = $this->repairBrokenXref($bytes);
         try {
-            return trim((new Parser)->parseFile($path)->getText());
+            return trim((new Parser)->parseContent($bytes)->getText());
         } catch (\Throwable $e) {
             throw new RuntimeException('Nie udało się odczytać PDF: '.$e->getMessage(), 0, $e);
         }
+    }
+
+    /**
+     * Stare skany (np. PPO Strzelce) mają xref „1 N” z wpisem free obiektu 0 — smalot wtedy nie widzi Catalog.
+     */
+    private function repairBrokenXref(string $pdf): string
+    {
+        $repaired = preg_replace(
+            '/(xref[\r\n]+)1(\s+\d+[\r\n]+0000000000 65535 f)/',
+            '${1}0${2}',
+            $pdf,
+            1
+        );
+
+        return is_string($repaired) ? $repaired : $pdf;
+    }
+
+    private function scanOrRethrow(string $path, \Throwable $e): RuntimeException
+    {
+        $msg = $e->getMessage();
+        if (str_contains($msg, 'Missing catalog') || (new PdfEmbeddedImageExtractor)->extract($path) !== []) {
+            return new RuntimeException(
+                'PDF nie zawiera odczytywalnego tekstu (prawdopodobnie skan). Wgraj XLSX albo PDF z warstwą tekstową.',
+                0,
+                $e
+            );
+        }
+
+        return $e instanceof RuntimeException
+            ? $e
+            : new RuntimeException('Nie udało się odczytać PDF: '.$msg, 0, $e);
     }
 
     private function ensureUtf8(string $text): string

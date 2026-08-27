@@ -241,6 +241,47 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * Skan PDF jako strony-obrazy (gdy native parser nie widzi katalogu / warstwy tekstowej).
+     *
+     * @param  list<array{bytes: string, mime: string, label?: string}>  $images
+     * @return array{content: string, model: string, usage: array<string, mixed>|null}
+     */
+    public function chatWithPageImages(string $prompt, array $images, ?AiTask $task = null): array
+    {
+        if ($images === []) {
+            throw new RuntimeException('Brak stron-obrazów do analizy PDF.');
+        }
+
+        $content = [
+            ['type' => 'text', 'text' => $prompt],
+        ];
+        foreach ($images as $image) {
+            $label = trim((string) ($image['label'] ?? ''));
+            if ($label !== '') {
+                $content[] = ['type' => 'text', 'text' => $label];
+            }
+            $content[] = [
+                'type' => 'image_url',
+                'image_url' => [
+                    'url' => 'data:'.$image['mime'].';base64,'.base64_encode($image['bytes']),
+                    'detail' => 'high',
+                ],
+            ];
+        }
+
+        return $this->chat([
+            [
+                'role' => 'system',
+                'content' => 'Jesteś ekspertem od cenników BHP. Odczytujesz tabele ze skanów. Zwracasz WYŁĄCZNIE JSON (bez markdown).',
+            ],
+            [
+                'role' => 'user',
+                'content' => $content,
+            ],
+        ], 0.1, true, null, $task);
+    }
+
+    /**
      * @param  list<array{role: string, content: mixed}>  $messages
      * @return array<string, mixed>
      */

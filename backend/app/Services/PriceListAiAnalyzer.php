@@ -16,6 +16,7 @@ final class PriceListAiAnalyzer
         private readonly PriceListStructureSampler $sampler,
         private readonly OpenAiCompatibleClient $llm,
         private readonly PriceListPdfTextExtractor $pdfExtractor,
+        private readonly PdfEmbeddedImageExtractor $pdfImageExtractor,
         private readonly PdfPriceRowParser $priceRowParser,
         private readonly AnsellEmaPdfParser $ansellEmaParser,
         private readonly JsGlovesPdfParser $jsGlovesParser,
@@ -205,8 +206,31 @@ final class PriceListAiAnalyzer
         $visionError = null;
         $aiReady = app(AiSettingsService::class)->isReady();
 
-        // 1) Vision tylko dla mniejszych PDF (gdy AI skonfigurowane)
-        if ($aiReady && $fileSize > 0 && $fileSize <= 4_000_000) {
+        $text = null;
+        $extractError = null;
+        try {
+            $text = $this->pdfExtractor->extract($path);
+        } catch (\Throwable $e) {
+            $extractError = $e->getMessage();
+        }
+        $isScan = $text === null || mb_strlen($text) < 40;
+
+        // Skan / zepsuty xref: native PDF parser nie da tekstu — strony jako obrazy.
+        if ($aiReady && $isScan) {
+            $fromImages = $this->analyzePdfViaPageImages(
+                $path,
+                $prompt,
+                $manufacturerHint,
+                $originalName,
+                $fileSize,
+            );
+            if ($fromImages !== null) {
+                return $fromImages;
+            }
+        }
+
+        // 1) Vision tylko dla mniejszych PDF z warstwą tekstową (gdy AI skonfigurowane)
+        if ($aiReady && ! $isScan && $fileSize > 0 && $fileSize <= 4_000_000) {
             try {
                 @set_time_limit(240);
                 $raw = $this->llm->chatWithPdf($prompt, $path, basename($path), AiTask::PriceListPdf);
@@ -234,9 +258,15 @@ final class PriceListAiAnalyzer
             $visionError = 'PDF '.round($fileSize / 1_000_000, 1).' MB — analiza tekstowa w częściach (bez vision).';
         }
 
+        if ($text === null) {
+            throw new RuntimeException(
+                $extractError
+                    ?? 'Nie udało się odczytać PDF (brak warstwy tekstowej). Skonfiguruj AI z modelem vision albo wgraj XLSX.'
+            );
+        }
+
         // 2) Pełny tekst + heurystyki (Ansell/EMA, PROS) + opcjonalnie AI w chunkach
         @set_time_limit(600);
-        $text = $this->pdfExtractor->extract($path);
         $heuristicPros = $this->priceRowParser->parse($text, $manufacturerHint);
         $heuristicEma = $this->ansellEmaParser->parse($text, $manufacturerHint);
         $heuristicJs = $this->jsGlovesParser->looksLike($text)
@@ -385,6 +415,76 @@ final class PriceListAiAnalyzer
     }
 
     /**
+     * @return array<string, mixed>|null
+     */
+    private function analyzePdfViaPageImages(
+        string $path,
+        string $prompt,
+        ?string $manufacturerHint,
+        ?string $originalName,
+        int $fileSize,
+    ): ?array {
+        $images = $this->pdfImageExtractor->extract($path);
+        if ($images === []) {
+            return null;
+        }
+
+        $aiProducts = [];
+        $model = 'pdf-vision-images';
+        $json = [
+            'notes' => '',
+            'manufacturer_detected' => $manufacturerHint,
+            'currency' => 'PLN',
+        ];
+        foreach (array_chunk($images, 4) as $batch) {
+            try {
+                @set_time_limit(240);
+                $raw = $this->llm->chatWithPageImages($prompt, $batch, AiTask::PriceListPdf);
+                $model = $raw['model'];
+                $partJson = $this->jsonParser->parse($raw['content']);
+                if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
+                    $json['manufacturer_detected'] = $partJson['manufacturer_detected'];
+                }
+                if (is_string($partJson['currency'] ?? null)) {
+                    $json['currency'] = $partJson['currency'];
+                }
+                if (is_string($partJson['notes'] ?? null) && ($json['notes'] ?? '') === '') {
+                    $json['notes'] = $partJson['notes'];
+                }
+                $aiProducts = array_merge(
+                    $aiProducts,
+                    $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint)
+                );
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+
+        $products = $this->uniqueBySku($aiProducts);
+        if ($products === [] || ! $this->looksLikeGoodPdfExtract($products)) {
+            return null;
+        }
+
+        $json['notes'] = trim((string) ($json['notes'] ?? '').' Odczyt skanu PDF: '.count($products).' SKU.');
+
+        return $this->pdfResult(
+            $products,
+            $json,
+            $model,
+            'pdf-vision-images',
+            [
+                'mode' => 'page-images',
+                'file_mb' => round($fileSize / 1_000_000, 2),
+                'pages' => count($images),
+            ],
+            $originalName,
+            null,
+            null,
+            $manufacturerHint,
+        );
+    }
+
+    /**
      * @param  list<array<string, mixed>>  $products
      * @return list<array<string, mixed>>
      */
@@ -419,6 +519,11 @@ Format B (Ansell / EMA / AlphaTec):
 - Price (EUR) = catalog_price
 - Carton Qty = pack_qty (np. 50 PCE)
 - purchase = null, discount = 0 jeśli brak upustu
+Format C (tabela skan, np. PPO / obuwie):
+- Model (np. 305 albo Model 0157) = sku
+- Wyszczególnienie = name
+- Cena = catalog_price, discount = 0, purchase = catalog_price
+- Norma / sekcja = category
 Oraz opcjonalnie: opakowanie, kategoria/sekcja.
 
 Zwróć JSON:
@@ -650,7 +755,7 @@ PROMPT;
             }
             $i++;
             $name = trim((string) ($row['name'] ?? $row['opis'] ?? ''));
-            $sku = trim((string) ($row['sku'] ?? $row['symbol'] ?? $row['kod'] ?? ''));
+            $sku = trim((string) ($row['sku'] ?? $row['symbol'] ?? $row['kod'] ?? $row['model'] ?? ''));
             // odrzuć SKU będące ceną (np. 80.92 albo 3280.92)
             if ($sku !== '' && preg_match('/^\d+[.,]\d{2}$/', $sku) === 1) {
                 $sku = '';
