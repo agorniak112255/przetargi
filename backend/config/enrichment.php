@@ -121,6 +121,12 @@ return [
     'search_min_interval' => (float) env('ENRICHMENT_SEARCH_MIN_INTERVAL', 4.0),
 
     /*
+    | Ile produktów naraz szuka stron i grzeje cache HTML (nie LLM).
+    | 1 = najbezpieczniej dla SearXNG; 3 karmi szybszy model lokalny.
+    */
+    'prefetch_concurrency' => max(1, min(8, (int) env('ENRICHMENT_PREFETCH_CONCURRENCY', 3))),
+
+    /*
     | Domeny pomijane przy „catalog:index” — globalne serwisy korporacyjne mają
     | sitemapy liczone w setkach MB i prawie nic po polsku. Nadal można je
     | zaindeksować, podając host wprost: „artisan catalog:index 3m.com”.

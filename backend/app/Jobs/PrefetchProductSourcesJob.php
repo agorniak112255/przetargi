@@ -7,19 +7,19 @@ namespace App\Jobs;
 use App\Exceptions\EnrichmentCancelledException;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Services\Enrichment\PrefetchSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
  * Szuka kart i grzeje cache HTML zanim EnrichProductJob weźmie slot vLLM.
- * Jedna bramka na cały serwer — SearXNG nie dostaje 8 zapytań naraz.
+ * Limit równoległości: enrichment.prefetch_concurrency (domyślnie 3).
  */
 class PrefetchProductSourcesJob implements ShouldQueue
 {
@@ -35,15 +35,13 @@ class PrefetchProductSourcesJob implements ShouldQueue
 
     public int $timeout = 180;
 
-    private const GATE_KEY = 'enrichment_prefetch_gate';
-
     public function __construct(
         public readonly int $productId,
         public readonly int $batchId,
         public readonly bool $force = false,
     ) {}
 
-    public function handle(ProductEnrichmentService $enrichment): void
+    public function handle(ProductEnrichmentService $enrichment, PrefetchSlots $slots): void
     {
         $product = Product::query()->find($this->productId);
         $batch = ProductEnrichmentBatch::query()->find($this->batchId);
@@ -64,8 +62,8 @@ class PrefetchProductSourcesJob implements ShouldQueue
             return;
         }
 
-        $lock = Cache::lock(self::GATE_KEY, $this->timeout);
-        if (! $lock->get()) {
+        $lock = $slots->acquire($this->timeout);
+        if ($lock === null) {
             self::dispatch($this->productId, $this->batchId, $this->force)
                 ->delay(now()->addSeconds(5));
             $this->delete();

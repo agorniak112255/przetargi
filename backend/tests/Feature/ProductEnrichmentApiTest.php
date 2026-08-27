@@ -23,6 +23,7 @@ use App\Services\Enrichment\HybridWebSearchService;
 use App\Services\Enrichment\ManufacturerDomainResolver;
 use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\EnrichmentSlots;
+use App\Services\Enrichment\PrefetchSlots;
 use App\Services\Enrichment\ProductDocumentFinder;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\ProductImageCandidateVerifier;
@@ -597,13 +598,13 @@ final class ProductEnrichmentApiTest extends TestCase
         ]);
 
         (new PrefetchProductSourcesJob($product->id, $batch->id))
-            ->handle(app(ProductEnrichmentService::class));
+            ->handle(app(ProductEnrichmentService::class), app(PrefetchSlots::class));
 
         Queue::assertPushed(EnrichProductJob::class, 1);
         Http::assertSentCount(1);
     }
 
-    public function test_prefetch_waits_when_search_gate_busy(): void
+    public function test_prefetch_waits_when_all_search_slots_busy(): void
     {
         Queue::fake();
         $product = $this->makeProduct(['sku' => 'PF-2']);
@@ -617,15 +618,52 @@ final class ProductEnrichmentApiTest extends TestCase
             'force' => false,
         ]);
 
-        $busy = \Illuminate\Support\Facades\Cache::lock('enrichment_prefetch_gate', 180);
-        $this->assertTrue((bool) $busy->get());
+        $busy = [];
+        for ($i = 0; $i < app(PrefetchSlots::class)->limit(); $i++) {
+            $lock = \Illuminate\Support\Facades\Cache::lock('enrichment_prefetch_gate:'.$i, 180);
+            $this->assertTrue((bool) $lock->get());
+            $busy[] = $lock;
+        }
 
         (new PrefetchProductSourcesJob($product->id, $batch->id))
-            ->handle(app(ProductEnrichmentService::class));
+            ->handle(app(ProductEnrichmentService::class), app(PrefetchSlots::class));
 
         Queue::assertPushed(PrefetchProductSourcesJob::class, 1);
         Queue::assertNotPushed(EnrichProductJob::class);
-        $busy->release();
+        foreach ($busy as $lock) {
+            $lock->release();
+        }
+    }
+
+    public function test_prefetch_runs_when_one_of_three_slots_is_free(): void
+    {
+        Queue::fake();
+        $product = $this->makeProduct(['sku' => 'PF-3', 'manufacturer' => 'Uvex']);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCT,
+            'scope_id' => $product->id,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_QUEUED,
+            'force' => false,
+        ]);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => []]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        $held = \Illuminate\Support\Facades\Cache::lock('enrichment_prefetch_gate:0', 180);
+        $this->assertTrue((bool) $held->get());
+
+        (new PrefetchProductSourcesJob($product->id, $batch->id))
+            ->handle(app(ProductEnrichmentService::class), app(PrefetchSlots::class));
+
+        Queue::assertPushed(EnrichProductJob::class, 1);
+        Queue::assertNotPushed(PrefetchProductSourcesJob::class);
+        $held->release();
     }
 
     public function test_process_batch_item_uses_sku_cache(): void
