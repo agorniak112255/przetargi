@@ -106,6 +106,47 @@ final class OpenAiRateLimitTest extends TestCase
         Http::assertSent(fn ($request) => ($request->data()['max_tokens'] ?? null) === 6000);
     }
 
+    public function test_disables_expect_100_continue_on_chat_requests(): void
+    {
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response([
+                'choices' => [[
+                    'message' => ['content' => '{"ok":true}'],
+                ]],
+            ], 200),
+        ]);
+
+        app(OpenAiCompatibleClient::class)->chatJson([
+            ['role' => 'user', 'content' => 'ping'],
+        ]);
+
+        Http::assertSent(function ($request): bool {
+            $expect = $request->header('Expect')[0] ?? '';
+
+            return $expect === '' || strtolower($expect) !== '100-continue';
+        });
+    }
+
+    public function test_retries_http_100_continue_then_succeeds(): void
+    {
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::sequence()
+                ->push(['error' => ['message' => 'continue']], 100)
+                ->push([
+                    'choices' => [[
+                        'message' => ['content' => '{"ok":true}'],
+                    ]],
+                ], 200),
+        ]);
+
+        $json = app(OpenAiCompatibleClient::class)->chatJson([
+            ['role' => 'user', 'content' => 'ping'],
+        ]);
+
+        $this->assertTrue($json['ok'] ?? false);
+        Http::assertSentCount(2);
+    }
+
     public function test_exhausted_429_explains_openrouter_not_tavily(): void
     {
         Http::fake([

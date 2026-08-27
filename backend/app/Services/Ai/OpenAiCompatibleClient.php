@@ -13,8 +13,8 @@ use RuntimeException;
 
 class OpenAiCompatibleClient
 {
-    /** Model przeciążony / limit zapytań — warto poczekać i ponowić. */
-    private const OVERLOAD_STATUSES = [429, 503, 529];
+    /** Model przeciążony / limit zapytań albo urwane 100 Continue — warto poczekać i ponowić. */
+    private const OVERLOAD_STATUSES = [100, 429, 503, 529];
 
     private const OVERLOAD_RETRIES = 5;
 
@@ -410,13 +410,7 @@ class OpenAiCompatibleClient
         );
 
         try {
-            $response = Http::withToken($profile['api_key'])
-                ->acceptJson()
-                ->withHeaders([
-                    'HTTP-Referer' => config('app.url', 'http://localhost'),
-                    'X-Title' => 'SUPON AI',
-                ])
-                ->timeout(max(30, $timeoutSeconds))
+            $response = $this->aiHttp($profile['api_key'], max(30, $timeoutSeconds))
                 ->connectTimeout(15)
                 ->post($url, $payload);
         } catch (ConnectionException $e) {
@@ -487,12 +481,7 @@ class OpenAiCompatibleClient
         ];
 
         try {
-            $response = Http::withToken($profile['api_key'])
-                ->acceptJson()
-                ->withHeaders([
-                    'HTTP-Referer' => config('app.url', 'http://localhost'),
-                    'X-Title' => 'SUPON AI',
-                ])
+            $response = $this->aiHttp($profile['api_key'], max(10, $timeoutSeconds))
                 ->timeout(max(10, $timeoutSeconds))
                 ->connectTimeout(10)
                 ->post($url, $payload);
@@ -675,6 +664,9 @@ class OpenAiCompatibleClient
     {
         if (app()->environment('testing')) {
             return 0;
+        }
+        if ($response->status() === 100) {
+            return app()->environment('testing') ? 0 : 1;
         }
         $header = $response->header('Retry-After');
         if (is_numeric($header)) {
@@ -868,14 +860,30 @@ class OpenAiCompatibleClient
             $timeout = max(240, $timeout);
         }
 
-        return Http::withToken($apiKey)
-            ->acceptJson()
+        return $this->aiHttp($apiKey, $timeout)->post($url, $payload);
+    }
+
+    /**
+     * Guzzle przy ciele >1 MB dodaje Expect: 100-continue — llama-swap/vLLM
+     * zapisuje wtedy status 100 i 0 tokenów, a klient urywa połączenie (~2 s).
+     */
+    private function aiHttp(?string $apiKey, int $timeoutSeconds): \Illuminate\Http\Client\PendingRequest
+    {
+        $request = Http::acceptJson()
             ->withHeaders([
                 'HTTP-Referer' => config('app.url', 'http://localhost'),
                 'X-Title' => 'SUPON AI',
+                'Expect' => '',
             ])
-            ->timeout($timeout)
-            ->post($url, $payload);
+            ->withOptions(['expect' => false])
+            ->timeout($timeoutSeconds)
+            ->connectTimeout(15);
+
+        if (is_string($apiKey) && $apiKey !== '') {
+            $request = $request->withToken($apiKey);
+        }
+
+        return $request;
     }
 
     /**
