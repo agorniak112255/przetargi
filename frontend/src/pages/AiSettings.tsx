@@ -726,10 +726,10 @@ export function AiSettingsPage() {
           <label className="block text-xs">
             Klucz Tavily{' '}
             {cfg.search_engine !== 'tavily'
-              ? '(nieużywany w trybie darmowym)'
+              ? '(nieużywany — Tavily jest wyłączone)'
               : cfg.has_tavily_api_key
                 ? '(zostaw puste, by nie zmieniać)'
-                : '* (wymagany do pobierania)'}
+                : '* (wymagany tylko przy silniku Tavily)'}
             <input
               type={showTavilyKey ? 'text' : 'password'}
               className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono disabled:bg-slate-100"

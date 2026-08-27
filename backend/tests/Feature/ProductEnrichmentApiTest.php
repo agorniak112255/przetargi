@@ -1320,6 +1320,53 @@ final class ProductEnrichmentApiTest extends TestCase
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
     }
 
+    public function test_searxng_blocked_does_not_call_tavily(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8081/v1',
+            'api_key' => 'local',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'search_engine' => 'searxng',
+            'searxng_url' => 'http://127.0.0.1:8088',
+            'search_fallback' => 'tavily',
+            'tavily_api_key' => 'tvly-test-key-1234567890',
+            'web_search_enabled' => false,
+        ]);
+        $product = $this->makeProduct([
+            'sku' => '2205',
+            'name' => 'Kurtka robocza',
+            'manufacturer' => 'Portwest',
+        ]);
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), '127.0.0.1:8088/search')) {
+                return Http::response([
+                    'results' => [],
+                    'unresponsive_engines' => [
+                        ['brave', 'Zawieszone: za dużo zapytań'],
+                        ['duckduckgo', 'CAPTCHA'],
+                        ['google cse', 'Zawieszone: za dużo zapytań'],
+                        ['qwant', 'CAPTCHA'],
+                    ],
+                ], 200);
+            }
+
+            return Http::response('blocked', 403);
+        });
+
+        try {
+            app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+            $this->fail('Oczekiwano wyjątku bez wyników SearXNG.');
+        } catch (RuntimeException $e) {
+            $this->assertStringNotContainsString('tavily', strtolower($e->getMessage()));
+        }
+
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
+    }
+
     public function test_domain_narrowed_query_uses_single_site_operator(): void
     {
         AiSetting::query()->create([

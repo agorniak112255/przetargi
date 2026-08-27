@@ -133,7 +133,7 @@ final class AiSettingsService
                 'searxng_url' => Schema::hasColumn('ai_settings', 'searxng_url')
                     ? $this->nullableUrl($row->searxng_url ?? null)
                     : null,
-                'search_fallback' => (string) ($row->search_fallback ?: 'tavily'),
+                'search_fallback' => (string) ($row->search_fallback ?: 'none'),
                 'tavily_search_mode' => $this->normalizeTavilySearchMode(
                     Schema::hasColumn('ai_settings', 'tavily_search_mode')
                         ? ($row->tavily_search_mode ?? null)
@@ -203,7 +203,7 @@ final class AiSettingsService
             'tavily_api_key' => $tavily,
             'search_engine' => $this->normalizeSearchEngine(config('ai.search_engine')),
             'searxng_url' => $this->nullableUrl(config('ai.searxng_url')),
-            'search_fallback' => (string) config('ai.search_fallback', 'tavily'),
+            'search_fallback' => (string) config('ai.search_fallback', 'none'),
             'tavily_search_mode' => $this->normalizeTavilySearchMode(config('ai.tavily_search_mode')),
             'enrichment_batch_limit' => $this->normalizeEnrichmentBatchLimit(config('ai.enrichment_batch_limit')),
             'match_concurrency' => $this->normalizeMatchConcurrency(config('ai.match_concurrency')),
@@ -292,7 +292,7 @@ final class AiSettingsService
             'reasoning_effort' => ReasoningEffort::AUTO,
             'web_search_enabled' => false,
             'search_engine' => self::SEARCH_ENGINE_TAVILY,
-            'search_fallback' => 'tavily',
+            'search_fallback' => 'none',
             'tavily_search_mode' => TavilySearchProfile::MODE_BALANCED,
             'enrichment_batch_limit' => 5,
             'match_concurrency' => 4,

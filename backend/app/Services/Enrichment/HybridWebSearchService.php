@@ -645,9 +645,10 @@ class HybridWebSearchService
                     'urls' => array_slice(array_column($pack['results'], 'url'), 0, 10),
                 ]);
             }
-            $provider = $includeDomains !== []
-                ? $this->searchProviderName().'_manufacturer'
-                : $this->searchProviderName();
+            $provider = (string) ($pack['provider'] ?? $this->searchProviderName());
+            if ($includeDomains !== [] && ! str_contains($provider, 'manufacturer')) {
+                $provider .= '_manufacturer';
+            }
             if ($packResults !== []) {
                 Cache::put($cacheKey, [
                     'results' => $packResults,
@@ -1140,27 +1141,31 @@ PROMPT;
     ): array {
         if ($this->settings->usesFreeWebSearch()) {
             $engine = $this->searchProviderName();
-            // Darmowe szukanie nic nie kosztuje, a SearXNG miesza trafne karty z szumem —
-            // bierzemy szerszą listę i zawężamy ją dopiero filtrem tożsamości produktu.
-            $results = $this->duckDuckGo->search(
-                $query,
-                max($profile->maxResults, self::FREE_SEARCH_CANDIDATES),
-                $includeDomains
-            );
-            if ($results === []) {
-                throw new RuntimeException(
-                    $includeDomains !== []
-                        ? 'Brak wyników ('.$engine.') na stronie producenta.'
-                        : $engine.' nie zwrócił wyników.'
+            $freeError = null;
+            try {
+                // Darmowe szukanie nic nie kosztuje, a SearXNG miesza trafne karty z szumem —
+                // bierzemy szerszą listę i zawężamy ją dopiero filtrem tożsamości produktu.
+                $results = $this->duckDuckGo->search(
+                    $query,
+                    max($profile->maxResults, self::FREE_SEARCH_CANDIDATES),
+                    $includeDomains
                 );
+                if ($results !== []) {
+                    return [
+                        'results' => $results,
+                        'images' => [],
+                        'provider' => $includeDomains !== [] ? $engine.'_preferred' : $engine,
+                        'raw_content' => null,
+                    ];
+                }
+                $freeError = $includeDomains !== []
+                    ? 'Brak wyników ('.$engine.') na stronie producenta.'
+                    : $engine.' nie zwrócił wyników.';
+            } catch (Throwable $e) {
+                $freeError = $e->getMessage();
             }
 
-            return [
-                'results' => $results,
-                'images' => [],
-                'provider' => $includeDomains !== [] ? $engine.'_preferred' : $engine,
-                'raw_content' => null,
-            ];
+            throw new RuntimeException($freeError ?? $engine.' nie zwrócił wyników.');
         }
 
         return $this->searchViaTavily($query, $includeDomains, $profile, false);

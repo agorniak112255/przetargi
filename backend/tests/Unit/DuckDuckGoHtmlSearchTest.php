@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 final class DuckDuckGoHtmlSearchTest extends TestCase
@@ -24,6 +25,35 @@ HTML;
         $urls = array_column($results, 'url');
         $this->assertContains('https://bhp24.pl/uvex-hg', $urls);
         $this->assertNotContains('https://duckduckgo.com/about', $urls);
+    }
+
+    public function test_searxng_retries_fallback_engines_when_blocked(): void
+    {
+        $hit = 'https://shop.example/portwest-2205';
+        Http::fake([
+            'http://127.0.0.1:8088/search*' => Http::sequence()
+                ->push([
+                    'results' => [],
+                    'unresponsive_engines' => [
+                        ['brave', 'Suspended: too many requests'],
+                        ['qwant', 'CAPTCHA'],
+                    ],
+                ], 200)
+                ->push([
+                    'results' => [[
+                        'url' => $hit,
+                        'title' => 'Portwest 2205',
+                        'content' => 'Portwest 2205 kurtka',
+                    ]],
+                ], 200),
+        ]);
+
+        $results = (new DuckDuckGoHtmlSearch)->searchSearxng('http://127.0.0.1:8088', '2205 Portwest');
+
+        $this->assertSame($hit, $results[0]['url'] ?? null);
+        Http::assertSent(static function ($request): bool {
+            return str_contains(urldecode($request->url()), 'engines=yep,startpage');
+        });
     }
 
     public function test_reads_blocked_engines_from_searxng_json(): void

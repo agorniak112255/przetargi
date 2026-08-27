@@ -27,6 +27,11 @@ final class DuckDuckGoHtmlSearch
 
     private const SEARXNG_LAST_AT_KEY = 'searxng_search_last_at';
 
+    private const SEARXNG_BLOCKED_KEY = 'searxng_engines_blocked_v1';
+
+    /** Gdy domyślne silniki padną (captcha / 429), jedna próba na tych, które zwykle jeszcze żyją. */
+    private const SEARXNG_FALLBACK_ENGINES = 'yep,startpage';
+
     /** Najdłuższe oczekiwanie w kolejce zapytań — dalej czekanie zjadłoby limit czasu zadania. */
     private const SEARXNG_MAX_WAIT = 90.0;
 
@@ -62,16 +67,23 @@ final class DuckDuckGoHtmlSearch
         }
 
         $searxng = $this->searxngBaseUrl();
-        if ($searxng !== null) {
+        if ($searxng !== null && ! $this->searxngRecentlyBlocked()) {
             // Instancja jest nasza, ale Google/Qwant liczą zapytania z niej wychodzące —
             // 8 workerów naraz wyczerpuje ich limit w kilka minut.
-            $this->reserveSearchSlot();
-            $results = $this->searchSearxng($searxng, $query);
-            if ($results !== []) {
-                Cache::put($cacheKey, $results, now()->addHours(6));
-            }
+            try {
+                $this->reserveSearchSlot();
+                $results = $this->searchSearxng($searxng, $query);
+                if ($results !== []) {
+                    Cache::put($cacheKey, $results, now()->addHours(6));
 
-            return $this->limitResults($results, $maxResults, $includeDomains);
+                    return $this->limitResults($results, $maxResults, $includeDomains);
+                }
+            } catch (Throwable $e) {
+                if (! $this->isSearxngBlockedMessage($e->getMessage())) {
+                    throw $e;
+                }
+                $this->markSearxngBlocked();
+            }
         }
 
         $this->acquireGate();
@@ -129,21 +141,48 @@ final class DuckDuckGoHtmlSearch
     /**
      * @return list<array{url: string, title: string, snippet: string}>
      */
-    public function searchSearxng(string $baseUrl, string $query): array
+    public function searchSearxng(string $baseUrl, string $query, ?string $engines = null): array
+    {
+        $body = $this->fetchSearxngJson($baseUrl, $query, $engines);
+        $results = $this->parseSearxngJson($body);
+        if ($results !== []) {
+            return $results;
+        }
+
+        $blocked = $this->searxngBlockedEngines($body);
+        if ($engines === null && $blocked !== '') {
+            $retry = $this->searchSearxng($baseUrl, $query, self::SEARXNG_FALLBACK_ENGINES);
+            if ($retry !== []) {
+                return $retry;
+            }
+        }
+
+        throw new RuntimeException(
+            $blocked !== ''
+                ? 'SearXNG: silniki zablokowane ('.$blocked.') — nic nie odpowiedziało na "'.$query.'".'
+                : 'SearXNG: brak wyników dla "'.$query.'".'
+        );
+    }
+
+    private function fetchSearxngJson(string $baseUrl, string $query, ?string $engines): string
     {
         $url = rtrim($baseUrl, '/').'/search';
+        $params = [
+            'q' => $query,
+            'format' => 'json',
+            'language' => 'pl',
+            'safesearch' => 0,
+            'categories' => 'general',
+        ];
+        if ($engines !== null && trim($engines) !== '') {
+            $params['engines'] = $engines;
+        }
 
         try {
             $response = Http::withHeaders($this->searxngHeaders())
                 ->timeout(25)
                 ->connectTimeout(6)
-                ->get($url, [
-                    'q' => $query,
-                    'format' => 'json',
-                    'language' => 'pl',
-                    'safesearch' => 0,
-                    'categories' => 'general',
-                ]);
+                ->get($url, $params);
         } catch (Throwable $e) {
             throw new RuntimeException('SearXNG ('.$url.') nie odpowiada: '.$e->getMessage());
         }
@@ -155,19 +194,22 @@ final class DuckDuckGoHtmlSearch
             );
         }
 
-        $body = (string) $response->body();
-        $results = $this->parseSearxngJson($body);
-        if ($results === []) {
-            $blocked = $this->searxngBlockedEngines($body);
+        return (string) $response->body();
+    }
 
-            throw new RuntimeException(
-                $blocked !== ''
-                    ? 'SearXNG: silniki zablokowane ('.$blocked.') — nic nie odpowiedziało na "'.$query.'".'
-                    : 'SearXNG: brak wyników dla "'.$query.'".'
-            );
-        }
+    public function isSearxngBlockedMessage(string $message): bool
+    {
+        return str_contains($message, 'silniki zablokowane');
+    }
 
-        return $results;
+    private function markSearxngBlocked(): void
+    {
+        Cache::put(self::SEARXNG_BLOCKED_KEY, 1, now()->addMinutes(10));
+    }
+
+    private function searxngRecentlyBlocked(): bool
+    {
+        return Cache::has(self::SEARXNG_BLOCKED_KEY);
     }
 
     /** „google cse: too many requests, qwant: CAPTCHA” — od razu widać, że to nie nasz filtr. */
