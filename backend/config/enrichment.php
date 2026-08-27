@@ -163,13 +163,13 @@ return [
     | Odstęp między zapytaniami do SearXNG (Google/Qwant liczą ruch z instancji).
     | To jest ochrona przed 429 — nie liczba workerów LLM.
     */
-    'search_min_interval' => (float) env('ENRICHMENT_SEARCH_MIN_INTERVAL', 2.0),
+    'search_min_interval' => (float) env('ENRICHMENT_SEARCH_MIN_INTERVAL', 1.5),
 
     /*
     | Ile produktów naraz szuka stron (kolejka prefetch). Model ma osobną pulę
     | (kolejka enrich, limit z Ustawień AI). Nie podnoś tego do 16 — dostaniesz 429.
     */
-    'prefetch_concurrency' => max(1, min(8, (int) env('ENRICHMENT_PREFETCH_CONCURRENCY', 3))),
+    'prefetch_concurrency' => max(1, min(8, (int) env('ENRICHMENT_PREFETCH_CONCURRENCY', 5))),
 
     /*
     | Domeny pomijane przy „catalog:index” — globalne serwisy korporacyjne mają

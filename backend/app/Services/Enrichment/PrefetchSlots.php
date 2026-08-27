@@ -30,6 +30,6 @@ final class PrefetchSlots
 
     public function limit(): int
     {
-        return max(1, min(self::MAX, (int) config('enrichment.prefetch_concurrency', 3)));
+        return max(1, min(self::MAX, (int) config('enrichment.prefetch_concurrency', 5)));
     }
 }

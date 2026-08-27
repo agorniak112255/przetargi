@@ -686,7 +686,7 @@ final class ProductEnrichmentApiTest extends TestCase
         }
     }
 
-    public function test_prefetch_runs_when_one_of_three_slots_is_free(): void
+    public function test_prefetch_runs_when_one_slot_is_busy(): void
     {
         Queue::fake();
         $product = $this->makeProduct(['sku' => 'PF-3', 'manufacturer' => 'Uvex']);

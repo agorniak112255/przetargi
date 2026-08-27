@@ -629,7 +629,7 @@ final class DuckDuckGoHtmlSearch
             return;
         }
 
-        $interval = max(0.2, (float) config('enrichment.search_min_interval', 2.0));
+        $interval = max(0.2, (float) config('enrichment.search_min_interval', 1.5));
         $wait = 0.0;
         $lock = Cache::lock(self::SEARXNG_LAST_AT_KEY.'_lock', 10);
 

@@ -19,7 +19,7 @@ use Throwable;
 
 /**
  * Szuka kart i grzeje cache HTML zanim EnrichProductJob weźmie slot vLLM.
- * Limit równoległości: enrichment.prefetch_concurrency (domyślnie 3).
+ * Limit równoległości: enrichment.prefetch_concurrency (domyślnie 5).
  */
 class PrefetchProductSourcesJob implements ShouldQueue
 {

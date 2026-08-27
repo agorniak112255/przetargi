@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Dwie pule workerów:
 #   - enrich (domyślnie 16) — tylko vLLM / opisy
-#   - prefetch (domyślnie 3) — SearXNG + HTML
+#   - prefetch (domyślnie 5) — SearXNG + HTML
 # Limit „Ile zapytań AI naraz” w panelu zajmuje sloty enrich, bez restartu.
 # Więcej LLM: WORKERS=20 bash deploy/ensure-enrichment-workers.sh
-# Więcej wyszukiwań (ryzyko 429): PREFETCH_WORKERS=5 bash deploy/ensure-enrichment-workers.sh
+# Mniej/więcej wyszukiwań (ryzyko 429): PREFETCH_WORKERS=3 bash deploy/ensure-enrichment-workers.sh
 set -euo pipefail
 
 APP_ROOT="${1:-/var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl}"
@@ -23,7 +23,7 @@ if [[ ! -f "$BACKEND/artisan" ]]; then
 fi
 
 WORKERS="${WORKERS:-16}"
-PREFETCH_WORKERS="${PREFETCH_WORKERS:-3}"
+PREFETCH_WORKERS="${PREFETCH_WORKERS:-5}"
 echo "==> workery: LLM ${WORKERS} (kolejka enrich) + wyszukiwanie ${PREFETCH_WORKERS} (kolejka prefetch)"
 
 if (( WORKERS < 1 || WORKERS > SLOTS_MAX )); then

@@ -21,10 +21,10 @@ final class QueueWorkerIdentityTest extends TestCase
     {
         putenv('QUEUE_WORKER_POOL=prefetch');
         putenv('QUEUE_WORKER_INDEX=2');
-        putenv('QUEUE_WORKER_COUNT=3');
+        putenv('QUEUE_WORKER_COUNT=5');
 
-        $this->assertSame('prefetch/2/3', QueueWorkerIdentity::label());
-        $this->assertSame('SUPON-Prefetch/1.0 (prefetch/2/3)', QueueWorkerIdentity::userAgent('SUPON-Prefetch/1.0'));
+        $this->assertSame('prefetch/2/5', QueueWorkerIdentity::label());
+        $this->assertSame('SUPON-Prefetch/1.0 (prefetch/2/5)', QueueWorkerIdentity::userAgent('SUPON-Prefetch/1.0'));
     }
 
     public function test_falls_back_outside_queue_worker(): void
