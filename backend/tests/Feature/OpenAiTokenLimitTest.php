@@ -107,4 +107,26 @@ final class OpenAiTokenLimitTest extends TestCase
             ->all();
         $this->assertLessThan($payloads[0], $payloads[array_key_last($payloads)] ?? 0);
     }
+
+    public function test_page_images_keep_output_token_budget(): void
+    {
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response([
+                'choices' => [[
+                    'message' => ['content' => '{"products":[]}'],
+                    'finish_reason' => 'stop',
+                ]],
+                'model' => 'openai/gpt-4o',
+            ], 200),
+        ]);
+
+        app(OpenAiCompatibleClient::class)->chatWithPageImages(
+            'Odczytaj cennik',
+            [['bytes' => str_repeat("\xFF", 400_000), 'mime' => 'image/jpeg', 'label' => 'Strona 1']]
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            return (int) ($request->data()['max_tokens'] ?? 0) >= 4000;
+        });
+    }
 }

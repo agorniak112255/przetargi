@@ -72,6 +72,67 @@ final class PdfEmbeddedImageExtractor
     }
 
     /**
+     * @param  list<array{bytes: string, mime: string, label: string}>  $images
+     * @return list<array{bytes: string, mime: string, label: string}>
+     */
+    public function prepareForVision(array $images, int $maxEdge = 1400, int $quality = 72): array
+    {
+        $out = [];
+        foreach ($images as $image) {
+            $out[] = $this->downscaleImage($image, $maxEdge, $quality);
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array{bytes: string, mime: string, label: string}  $image
+     * @return array{bytes: string, mime: string, label: string}
+     */
+    private function downscaleImage(array $image, int $maxEdge, int $quality): array
+    {
+        if (! function_exists('imagecreatefromstring')) {
+            return $image;
+        }
+        $src = @imagecreatefromstring($image['bytes']);
+        if ($src === false) {
+            return $image;
+        }
+        $width = imagesx($src);
+        $height = imagesy($src);
+        $edge = max($width, $height);
+        if ($edge <= $maxEdge) {
+            imagedestroy($src);
+
+            return $image;
+        }
+        $scale = $maxEdge / $edge;
+        $dstW = max(1, (int) round($width * $scale));
+        $dstH = max(1, (int) round($height * $scale));
+        $dst = imagecreatetruecolor($dstW, $dstH);
+        if ($dst === false) {
+            imagedestroy($src);
+
+            return $image;
+        }
+        imagecopyresampled($dst, $src, 0, 0, 0, 0, $dstW, $dstH, $width, $height);
+        ob_start();
+        imagejpeg($dst, null, $quality);
+        $bytes = (string) ob_get_clean();
+        imagedestroy($src);
+        imagedestroy($dst);
+        if ($bytes === '' || strlen($bytes) >= strlen($image['bytes'])) {
+            return $image;
+        }
+
+        return [
+            'bytes' => $bytes,
+            'mime' => 'image/jpeg',
+            'label' => $image['label'],
+        ];
+    }
+
+    /**
      * @return array{0: int, 1: int}|null
      */
     private function nextImageMarker(string $data, int $offset): ?array

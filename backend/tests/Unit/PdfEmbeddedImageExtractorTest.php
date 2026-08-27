@@ -27,6 +27,26 @@ final class PdfEmbeddedImageExtractorTest extends TestCase
         }
     }
 
+    public function test_prepare_for_vision_downscales_large_page(): void
+    {
+        $im = imagecreatetruecolor(2000, 2800);
+        $this->assertNotFalse($im);
+        imagefilledrectangle($im, 0, 0, 1999, 2799, imagecolorallocate($im, 255, 255, 255));
+        ob_start();
+        imagejpeg($im, null, 90);
+        $jpeg = (string) ob_get_clean();
+        imagedestroy($im);
+
+        $out = (new PdfEmbeddedImageExtractor)->prepareForVision([
+            ['bytes' => $jpeg, 'mime' => 'image/jpeg', 'label' => 'Strona 1'],
+        ], 1400, 72);
+
+        $info = getimagesizefromstring($out[0]['bytes']);
+        $this->assertIsArray($info);
+        $this->assertLessThanOrEqual(1400, max((int) $info[0], (int) $info[1]));
+        $this->assertLessThan(strlen($jpeg), strlen($out[0]['bytes']));
+    }
+
     public function test_strzelce_scan_has_two_jpeg_pages_and_no_missing_catalog(): void
     {
         $path = 'c:/xampp/htdocs/Przetargi/Cenniki/Strzelce Opolskie - 2018-02-01.pdf';

@@ -278,7 +278,7 @@ class OpenAiCompatibleClient
                 'role' => 'user',
                 'content' => $content,
             ],
-        ], 0.1, true, null, $task);
+        ], 0.1, true, ['max_tokens' => 8000], $task);
     }
 
     /**
@@ -815,15 +815,46 @@ class OpenAiCompatibleClient
     {
         $chars = 0;
         foreach ($messages as $message) {
-            $content = $message['content'] ?? '';
-            if (is_string($content)) {
-                $chars += mb_strlen($content);
-            } elseif (is_array($content)) {
-                $chars += mb_strlen((string) json_encode($content, JSON_UNESCAPED_UNICODE));
-            }
+            $chars += $this->estimateContentChars($message['content'] ?? '');
         }
 
         return max(1, (int) ceil($chars / 4) + 48);
+    }
+
+    private function estimateContentChars(mixed $content): int
+    {
+        if (is_string($content)) {
+            return mb_strlen($content);
+        }
+        if (! is_array($content) || $content === [] || ! array_is_list($content)) {
+            return is_array($content)
+                ? mb_strlen((string) json_encode($content, JSON_UNESCAPED_UNICODE))
+                : 0;
+        }
+
+        $chars = 0;
+        foreach ($content as $part) {
+            if (! is_array($part)) {
+                $chars += mb_strlen((string) $part);
+
+                continue;
+            }
+            $type = (string) ($part['type'] ?? '');
+            if ($type === 'text') {
+                $chars += mb_strlen((string) ($part['text'] ?? ''));
+
+                continue;
+            }
+            // base64 obrazu/PDF nie jest tekstem slota vLLM — stały budżet enkodera vision
+            if ($type === 'image_url' || $type === 'file') {
+                $chars += 2500;
+
+                continue;
+            }
+            $chars += 40;
+        }
+
+        return $chars;
     }
 
     private function isContextOverflow(Response $response): bool

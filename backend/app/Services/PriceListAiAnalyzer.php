@@ -217,15 +217,20 @@ final class PriceListAiAnalyzer
 
         // Skan / zepsuty xref: native PDF parser nie da tekstu — strony jako obrazy.
         if ($aiReady && $isScan) {
-            $fromImages = $this->analyzePdfViaPageImages(
-                $path,
-                $prompt,
-                $manufacturerHint,
-                $originalName,
-                $fileSize,
-            );
-            if ($fromImages !== null) {
-                return $fromImages;
+            try {
+                $fromImages = $this->analyzePdfViaPageImages(
+                    $path,
+                    $prompt,
+                    $manufacturerHint,
+                    $originalName,
+                    $fileSize,
+                );
+                if ($fromImages !== null) {
+                    return $fromImages;
+                }
+                $visionError = 'Model nie rozpoznał pozycji w skanie PDF.';
+            } catch (\Throwable $e) {
+                $visionError = $e->getMessage();
             }
         }
 
@@ -259,9 +264,14 @@ final class PriceListAiAnalyzer
         }
 
         if ($text === null) {
+            if (! $aiReady) {
+                throw new RuntimeException(
+                    'PDF jest skanem (brak warstwy tekstowej). Skonfiguruj AI z modelem vision albo wgraj XLSX.'
+                );
+            }
             throw new RuntimeException(
-                $extractError
-                    ?? 'Nie udało się odczytać PDF (brak warstwy tekstowej). Skonfiguruj AI z modelem vision albo wgraj XLSX.'
+                'Nie udało się odczytać skanu PDF. '
+                .($visionError ?? $extractError ?? 'Spróbuj ponownie albo wgraj XLSX.')
             );
         }
 
@@ -424,7 +434,7 @@ final class PriceListAiAnalyzer
         ?string $originalName,
         int $fileSize,
     ): ?array {
-        $images = $this->pdfImageExtractor->extract($path);
+        $images = $this->pdfImageExtractor->prepareForVision($this->pdfImageExtractor->extract($path));
         if ($images === []) {
             return null;
         }
@@ -436,10 +446,11 @@ final class PriceListAiAnalyzer
             'manufacturer_detected' => $manufacturerHint,
             'currency' => 'PLN',
         ];
-        foreach (array_chunk($images, 4) as $batch) {
+        $lastError = null;
+        foreach ($images as $image) {
             try {
                 @set_time_limit(240);
-                $raw = $this->llm->chatWithPageImages($prompt, $batch, AiTask::PriceListPdf);
+                $raw = $this->llm->chatWithPageImages($prompt, [$image], AiTask::PriceListPdf);
                 $model = $raw['model'];
                 $partJson = $this->jsonParser->parse($raw['content']);
                 if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
@@ -455,14 +466,22 @@ final class PriceListAiAnalyzer
                     $aiProducts,
                     $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint)
                 );
-            } catch (\Throwable) {
-                continue;
+            } catch (\Throwable $e) {
+                $lastError = $e->getMessage();
             }
         }
 
         $products = $this->uniqueBySku($aiProducts);
-        if ($products === [] || ! $this->looksLikeGoodPdfExtract($products)) {
-            return null;
+        if ($products === []) {
+            throw new RuntimeException(
+                $lastError ?? 'Model nie zwrócił pozycji ze skanu PDF.'
+            );
+        }
+        if (! $this->looksLikeGoodPdfExtract($products)) {
+            throw new RuntimeException(
+                'Model źle odczytał skan PDF (brak nazw/cen).'
+                .($lastError !== null ? ' '.$lastError : '')
+            );
         }
 
         $json['notes'] = trim((string) ($json['notes'] ?? '').' Odczyt skanu PDF: '.count($products).' SKU.');
