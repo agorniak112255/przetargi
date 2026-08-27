@@ -27,7 +27,11 @@ final class BhpAttributeNormalizer
      *     normy_en: list<string>,
      *     klasa_ochrony: ?string,
      *     rozmiar: ?string,
-     *     poziomy_en388: ?string
+     *     poziomy_en388: ?string,
+     *     typ_wyrobu: ?string,
+     *     przeznaczenie: ?string,
+     *     oznaczenia: list<string>,
+     *     rodzina_materialu: ?string
      * }
      */
     public function empty(): array
@@ -41,6 +45,10 @@ final class BhpAttributeNormalizer
             'klasa_ochrony' => null,
             'rozmiar' => null,
             'poziomy_en388' => null,
+            'typ_wyrobu' => null,
+            'przeznaczenie' => null,
+            'oznaczenia' => [],
+            'rodzina_materialu' => null,
         ];
     }
 
@@ -55,17 +63,25 @@ final class BhpAttributeNormalizer
      *     normy_en: list<string>,
      *     klasa_ochrony: ?string,
      *     rozmiar: ?string,
-     *     poziomy_en388: ?string
+     *     poziomy_en388: ?string,
+     *     typ_wyrobu: ?string,
+     *     przeznaczenie: ?string,
+     *     oznaczenia: list<string>,
+     *     rodzina_materialu: ?string
      * }
      */
     public function forProduct(Product $product): array
     {
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $useCases = $this->stringList($payload['use_cases'] ?? null);
+        $features = $this->stringList($payload['features'] ?? null);
         $haystack = trim(implode("\n", array_filter([
             (string) ($product->name ?? ''),
             (string) ($product->description ?? ''),
             (string) ($product->category ?? ''),
             (string) ($product->norms ?? ''),
+            ...$useCases,
+            ...$features,
         ])));
 
         return $this->normalize(
@@ -81,6 +97,7 @@ final class BhpAttributeNormalizer
                 ))),
                 'specs' => $this->stringList($payload['specs'] ?? null),
                 'certificates' => $this->stringList($payload['certificates'] ?? null),
+                'use_cases' => $useCases,
                 'category' => (string) ($product->category ?? ''),
                 'sku' => (string) ($product->sku ?? ''),
                 'name' => (string) ($product->name ?? ''),
@@ -111,7 +128,11 @@ final class BhpAttributeNormalizer
      *     normy_en: list<string>,
      *     klasa_ochrony: ?string,
      *     rozmiar: ?string,
-     *     poziomy_en388: ?string
+     *     poziomy_en388: ?string,
+     *     typ_wyrobu: ?string,
+     *     przeznaczenie: ?string,
+     *     oznaczenia: list<string>,
+     *     rodzina_materialu: ?string
      * }
      */
     public function normalize(?array $raw, array $context = []): array
@@ -119,14 +140,14 @@ final class BhpAttributeNormalizer
         $out = $this->empty();
         $raw = $raw ?? [];
 
+        $identity = ($context['category'] ?? '').' '
+            .($context['name'] ?? '').' '
+            .($context['sku'] ?? '').' '
+            .($context['description'] ?? '');
+
         $out['kategoria_bhp'] = $this->normalizeKategoria(
             $this->nullableString($raw['kategoria_bhp'] ?? null)
-            ?? $this->detectKategoria(
-                ($context['category'] ?? '').' '
-                .($context['name'] ?? '').' '
-                .($context['sku'] ?? '').' '
-                .($context['description'] ?? '')
-            )
+            ?? $this->detectKategoria($identity)
         );
 
         $out['kod_producenta'] = $this->nullableString($raw['kod_producenta'] ?? null)
@@ -157,11 +178,16 @@ final class BhpAttributeNormalizer
             $normy,
             $this->stringList($context['specs'] ?? null),
             $this->stringList($context['certificates'] ?? null),
-            [$context['name'] ?? '', $context['description'] ?? ''],
+            $this->stringList($context['use_cases'] ?? null),
+            [$context['name'] ?? '', $context['description'] ?? '', $context['norms_column'] ?? ''],
         ));
 
-        $out['klasa_ochrony'] = $this->nullableString($raw['klasa_ochrony'] ?? null)
-            ?? $this->detectKlasa($descBlob);
+        $parsed = $this->parseKlasaAndMarkings(
+            $this->nullableString($raw['klasa_ochrony'] ?? null),
+            $descBlob
+        );
+        $out['klasa_ochrony'] = $parsed['klasa'];
+        $out['oznaczenia'] = $parsed['oznaczenia'];
 
         $out['rozmiar'] = $this->nullableString($raw['rozmiar'] ?? null)
             ?? $this->detectRozmiar(
@@ -170,6 +196,14 @@ final class BhpAttributeNormalizer
 
         $out['poziomy_en388'] = $this->nullableString($raw['poziomy_en388'] ?? null)
             ?? $this->detectEn388($descBlob);
+
+        $assortment = new PpeAssortment;
+        $typeBlob = $identity.' '.$descBlob;
+        $out['typ_wyrobu'] = $this->nullableString($raw['typ_wyrobu'] ?? null)
+            ?? $assortment->articleType($typeBlob, $assortment->familyFromKategoria($out['kategoria_bhp']));
+        $out['przeznaczenie'] = $this->nullableString($raw['przeznaczenie'] ?? null)
+            ?? $assortment->purpose($typeBlob);
+        $out['rodzina_materialu'] = $this->materialFamily($primary, $materials, $typeBlob);
 
         return $out;
     }
@@ -242,9 +276,14 @@ final class BhpAttributeNormalizer
             $attrs['kod_producenta'] ?? null,
             $attrs['material'] ?? null,
             $attrs['klasa_ochrony'] ?? null,
+            $attrs['typ_wyrobu'] ?? null,
+            $attrs['przeznaczenie'] ?? null,
             $attrs['rozmiar'] ?? null,
             $attrs['poziomy_en388'] ?? null,
         ];
+        if (is_array($attrs['oznaczenia'] ?? null)) {
+            $parts = array_merge($parts, $attrs['oznaczenia']);
+        }
         if (is_array($attrs['materialy'] ?? null)) {
             $parts = array_merge($parts, $attrs['materialy']);
         }
@@ -303,25 +342,96 @@ final class BhpAttributeNormalizer
         return (new PpeAssortment)->kategoria($text);
     }
 
+    /**
+     * @return array{klasa: ?string, oznaczenia: list<string>}
+     */
+    private function parseKlasaAndMarkings(?string $rawKlasa, string $blob): array
+    {
+        $hay = trim(($rawKlasa ?? '').' '.$blob);
+        $oznaczenia = $this->extractMarkings($hay);
+        $klasa = $this->extractFootwearClass($rawKlasa ?? '')
+            ?? $this->detectKlasa($hay);
+
+        return ['klasa' => $klasa, 'oznaczenia' => $oznaczenia];
+    }
+
+    /** @return list<string> */
+    private function extractMarkings(string $text): array
+    {
+        if (preg_match_all('/\b(SRA|SRB|SRC|HRO|WR|CI|HI|FO|AN)\b/u', $text, $m) < 1) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($m[1] as $tag) {
+            $out[] = mb_strtoupper((string) $tag);
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    private function extractFootwearClass(string $text): ?string
+    {
+        if (preg_match('/\b(S7|S5|S4|S3|S2|S1P|S1|SB|OB)\b/u', $text, $m) === 1) {
+            return mb_strtoupper($m[1]);
+        }
+
+        return null;
+    }
+
     private function detectKlasa(string $text): ?string
     {
-        $t = $text;
-        if (preg_match('/\b(S1P?|S2|S3|SB|OB|SRC|HRO)\b/u', $t, $m) === 1) {
-            $cls = mb_strtoupper($m[1]);
+        $footwearClass = $this->extractFootwearClass($text);
+        if ($footwearClass !== null) {
             $norm = $this->normalizeText($text);
             $footwear = preg_match(
-                '/\b(trzewik|polbut|sandal|obuwie|buty|footwear|podeszw|podnosek)\b/u',
+                '/\b(trzewik|polbut|sandal|obuwie|buty|footwear|podeszw|podnosek|kalosz|purofort)\w*/u',
                 $norm
             ) === 1;
-            if (in_array($cls, ['S1', 'S1P', 'S2', 'S3'], true) || $footwear) {
-                return $cls;
+            if ($footwear) {
+                return $footwearClass;
             }
         }
-        if (preg_match('/\bkat(?:egoria)?\.?\s*(I{1,3}|[123])\b/iu', $t, $m) === 1) {
+        if (preg_match('/\bkat(?:egoria)?\.?\s*(I{1,3}|[123])\b/iu', $text, $m) === 1) {
             return 'kat. '.$m[1];
         }
-        if (preg_match('/\bPPE\s*kat(?:egoria)?\.?\s*(I{1,3}|[123])\b/iu', $t, $m) === 1) {
+        if (preg_match('/\bPPE\s*kat(?:egoria)?\.?\s*(I{1,3}|[123])\b/iu', $text, $m) === 1) {
             return 'PPE kat. '.$m[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  list<string>  $materials
+     */
+    private function materialFamily(?string $primary, array $materials, string $text): ?string
+    {
+        $blob = $this->normalizeText(implode(' ', array_filter([$primary, ...$materials, $text])));
+        // kalosz / Purofort zanim „PU w podeszwie” skórzanego trzewika
+        if (preg_match('/\b(purofort|kalosz|wellington|gumowc|gumiak)\w*/u', $blob) === 1) {
+            return 'guma';
+        }
+        if (preg_match('/\b(skora|leather|welur|licow|nubuk)\w*/u', $blob) === 1) {
+            return 'skora';
+        }
+        if (preg_match('/\b(guma|rubber|pvc|eva|tpe)\w*/u', $blob) === 1) {
+            return 'guma';
+        }
+        if (preg_match('/\b(nitryl|nitrile|nbr)\w*/u', $blob) === 1) {
+            return 'nitryl';
+        }
+        if (preg_match('/\b(lateks|latex)\w*/u', $blob) === 1) {
+            return 'lateks';
+        }
+        if (preg_match('/\b(hppe|dyneema)\w*/u', $blob) === 1) {
+            return 'cut';
+        }
+        if (preg_match('/\bpoliuretan\w*|\bpu\b/u', $blob) === 1) {
+            return 'pu';
+        }
+        if (preg_match('/\b(bawelna|cotton|nylon|tekstyl)\w*/u', $blob) === 1) {
+            return 'tkanina';
         }
 
         return null;

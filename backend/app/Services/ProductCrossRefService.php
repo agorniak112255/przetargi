@@ -8,15 +8,31 @@ use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
 
 /**
- * Cross-reference: kod/SKU → ekwiwalenty między producentami.
- * Ranking po atrybutach BHP (kategoria, materiał, normy, klasa) — nie po nazwie/SKU.
+ * Cross-reference: kod/SKU → ten sam wyrób u innego producenta.
+ * Twarde: typ (kalosz≠trzewik), materiał, klasa (S5≠S3), przeznaczenie, oznaczenia.
  */
 final class ProductCrossRefService
 {
     private const LIMIT = 12;
 
-    /** Minimalny wynik atrybutowy (bez bonusów marki). */
-    private const MIN_SCORE = 28;
+    /** Minimalny wynik atrybutowy po twardych filtrach. */
+    private const MIN_SCORE = 36;
+
+    /** Oznaczenia z bazy, bez których kandydat nie jest ekwiwalentem. */
+    private const REQUIRED_MARKINGS = ['CI', 'HI', 'HRO', 'WR'];
+
+    /** @var array<string, int> */
+    private const FOOTWEAR_CLASS_RANK = [
+        'OB' => 1,
+        'SB' => 2,
+        'S1' => 3,
+        'S1P' => 4,
+        'S2' => 5,
+        'S3' => 6,
+        'S4' => 7,
+        'S5' => 8,
+        'S7' => 9,
+    ];
 
     public function __construct(
         private readonly BhpAttributeNormalizer $bhpAttributes,
@@ -45,7 +61,6 @@ final class ProductCrossRefService
         }
 
         $seedAttrs = $this->bhpAttributes->forProduct($seed);
-        $seedKat = $seedAttrs['kategoria_bhp'] ?? null;
         $seedMfr = mb_strtolower(trim((string) $seed->manufacturer));
 
         $pool = Product::query()
@@ -57,14 +72,7 @@ final class ProductCrossRefService
         foreach ($pool as $product) {
             $attrs = $this->bhpAttributes->forProduct($product);
 
-            // twarde: inna kategoria BHP = nie zamiennik (buty ≠ rękawice)
-            if ($seedKat !== null && ($attrs['kategoria_bhp'] ?? null) !== null
-                && $seedKat !== $attrs['kategoria_bhp']) {
-                continue;
-            }
-
-            // gdy seed ma kategorię, a kandydat nie — odrzuć (za słaby sygnał)
-            if ($seedKat !== null && ($attrs['kategoria_bhp'] ?? null) === null) {
+            if (! $this->isEquivalentArticle($seedAttrs, $attrs)) {
                 continue;
             }
 
@@ -114,14 +122,20 @@ final class ProductCrossRefService
             && ($seed['kategoria_bhp'] === ($cand['kategoria_bhp'] ?? null))) {
             $score += 20;
         } else {
-            // bez wspólnej kategorii nie ma sensu iść dalej
             return 0;
+        }
+
+        if (($seed['typ_wyrobu'] ?? null) && ($seed['typ_wyrobu'] === ($cand['typ_wyrobu'] ?? null))) {
+            $score += 16;
         }
 
         $sm = $this->norm((string) ($seed['material'] ?? ''));
         $cm = $this->norm((string) ($cand['material'] ?? ''));
         if ($sm !== '' && $cm !== '' && ($sm === $cm || str_contains($cm, $sm) || str_contains($sm, $cm))) {
             $score += 22;
+        } elseif (($seed['rodzina_materialu'] ?? null)
+            && ($seed['rodzina_materialu'] === ($cand['rodzina_materialu'] ?? null))) {
+            $score += 18;
         } else {
             $seedMats = array_map(fn ($m) => $this->norm((string) $m), is_array($seed['materialy'] ?? null) ? $seed['materialy'] : []);
             $candMats = array_map(fn ($m) => $this->norm((string) $m), is_array($cand['materialy'] ?? null) ? $cand['materialy'] : []);
@@ -132,6 +146,10 @@ final class ProductCrossRefService
 
         if (($seed['klasa_ochrony'] ?? null) && ($seed['klasa_ochrony'] === ($cand['klasa_ochrony'] ?? null))) {
             $score += 18;
+        }
+
+        if (($seed['przeznaczenie'] ?? null) && ($seed['przeznaczenie'] === ($cand['przeznaczenie'] ?? null))) {
+            $score += 12;
         }
 
         if (($seed['poziomy_en388'] ?? null) && ($seed['poziomy_en388'] === ($cand['poziomy_en388'] ?? null))) {
@@ -145,13 +163,18 @@ final class ProductCrossRefService
             $score += min(24, 8 * count($sharedNorms));
         }
 
-        // rozmiar — tylko lekki bonus (nie decyduje)
+        $markSeed = $this->markingSet($seed);
+        $markCand = $this->markingSet($cand);
+        $sharedMarks = array_intersect($markSeed, $markCand);
+        if ($sharedMarks !== []) {
+            $score += min(12, 4 * count($sharedMarks));
+        }
+
         if (($seed['rozmiar'] ?? null) && ($seed['rozmiar'] === ($cand['rozmiar'] ?? null))) {
             $score += 4;
         }
 
-        // bez żadnego wspólnego sygnału technicznego (materiał/norma/klasa/en388) → 0
-        $tech = $score - 20; // odjąć punkty za samą kategorię
+        $tech = $score - 20;
         if ($tech < 8) {
             return 0;
         }
@@ -162,6 +185,89 @@ final class ProductCrossRefService
         }
 
         return min(99, $score);
+    }
+
+    /**
+     * @param  array<string, mixed>  $seed
+     * @param  array<string, mixed>  $cand
+     */
+    private function isEquivalentArticle(array $seed, array $cand): bool
+    {
+        $seedKat = $seed['kategoria_bhp'] ?? null;
+        $candKat = $cand['kategoria_bhp'] ?? null;
+        if ($seedKat !== null && $candKat !== null && $seedKat !== $candKat) {
+            return false;
+        }
+        if ($seedKat !== null && $candKat === null) {
+            return false;
+        }
+
+        $seedType = $seed['typ_wyrobu'] ?? null;
+        $candType = $cand['typ_wyrobu'] ?? null;
+        if ($seedType !== null && $candType !== null && $seedType !== $candType) {
+            return false;
+        }
+
+        $seedMat = $seed['rodzina_materialu'] ?? null;
+        $candMat = $cand['rodzina_materialu'] ?? null;
+        if ($seedMat !== null && $candMat !== null && $seedMat !== $candMat) {
+            return false;
+        }
+
+        $seedUse = $seed['przeznaczenie'] ?? null;
+        $candUse = $cand['przeznaczenie'] ?? null;
+        if ($seedUse !== null && $candUse !== null && $seedUse !== $candUse) {
+            return false;
+        }
+
+        if (! $this->footwearClassMeetsSeed($seed, $cand)) {
+            return false;
+        }
+
+        $need = array_intersect($this->markingSet($seed), self::REQUIRED_MARKINGS);
+        if ($need !== [] && array_diff($need, $this->markingSet($cand)) !== []) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $seed
+     * @param  array<string, mixed>  $cand
+     */
+    private function footwearClassMeetsSeed(array $seed, array $cand): bool
+    {
+        $seedClass = isset($seed['klasa_ochrony']) ? mb_strtoupper((string) $seed['klasa_ochrony']) : '';
+        $candClass = isset($cand['klasa_ochrony']) ? mb_strtoupper((string) $cand['klasa_ochrony']) : '';
+        $seedRank = self::FOOTWEAR_CLASS_RANK[$seedClass] ?? null;
+        if ($seedRank === null) {
+            return true;
+        }
+        $candRank = self::FOOTWEAR_CLASS_RANK[$candClass] ?? null;
+        if ($candRank === null) {
+            return false;
+        }
+
+        return $candRank >= $seedRank;
+    }
+
+    /**
+     * @param  array<string, mixed>  $attrs
+     * @return list<string>
+     */
+    private function markingSet(array $attrs): array
+    {
+        $raw = is_array($attrs['oznaczenia'] ?? null) ? $attrs['oznaczenia'] : [];
+        $out = [];
+        foreach ($raw as $tag) {
+            $t = mb_strtoupper(trim((string) $tag));
+            if ($t !== '') {
+                $out[] = $t;
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     private function looksLikeSiblingSku(Product $a, Product $b): bool

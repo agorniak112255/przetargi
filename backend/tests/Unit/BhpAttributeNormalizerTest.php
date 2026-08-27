@@ -107,4 +107,49 @@ final class BhpAttributeNormalizerTest extends TestCase
             ['name' => 'Kamizelka odblaskowa siatkowa', 'category' => '']
         )['kategoria_bhp']);
     }
+
+    public function test_parses_s5_ci_sra_and_purofort_as_wellington(): void
+    {
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            [
+                'kategoria_bhp' => 'obuwie',
+                'material' => 'Purofort',
+                'klasa_ochrony' => 'S5.CI.SRA',
+                'normy_en' => ['EN ISO 20345:2011'],
+            ],
+            [
+                'name' => 'DUNLOP 462933 PUROFORT',
+                'description' => 'Kalosz do rolnictwa, izolacja -20°C.',
+                'category' => 'Obuwie',
+                'use_cases' => ['rolnictwo'],
+            ]
+        );
+
+        $this->assertSame('S5', $attrs['klasa_ochrony']);
+        $this->assertContains('CI', $attrs['oznaczenia']);
+        $this->assertContains('SRA', $attrs['oznaczenia']);
+        $this->assertSame('kalosz', $attrs['typ_wyrobu']);
+        $this->assertSame('guma', $attrs['rodzina_materialu']);
+        $this->assertSame('agriculture', $attrs['przeznaczenie']);
+        $this->assertNotContains('SRC', $attrs['oznaczenia']);
+    }
+
+    public function test_does_not_treat_src_or_hro_as_protection_class(): void
+    {
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'obuwie'],
+            [
+                'name' => 'Trzewiki spawalnicze S3 HRO SRC',
+                'description' => 'Skóra wodoodporna, spawanie.',
+                'category' => 'Obuwie',
+            ]
+        );
+
+        $this->assertSame('S3', $attrs['klasa_ochrony']);
+        $this->assertContains('HRO', $attrs['oznaczenia']);
+        $this->assertContains('SRC', $attrs['oznaczenia']);
+        $this->assertSame('trzewik', $attrs['typ_wyrobu']);
+        $this->assertSame('skora', $attrs['rodzina_materialu']);
+        $this->assertSame('welding', $attrs['przeznaczenie']);
+    }
 }

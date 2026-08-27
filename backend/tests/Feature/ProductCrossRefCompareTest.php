@@ -141,6 +141,131 @@ final class ProductCrossRefCompareTest extends TestCase
         $this->assertNotContains('PROS-1001', $skus);
     }
 
+    public function test_cross_ref_rejects_purofort_s5_vs_welding_s3(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => '462933',
+            'name' => 'Obuwie ochronne DUNLOP 462933 PUROFORT',
+            'manufacturer' => 'DUNLOP',
+            'category' => 'Obuwie',
+            'description' => 'Kalosz z materiału Purofort S5.CI.SRA, rolnictwo, izolacja -20°C.',
+            'catalog_price_net' => 200,
+            'purchase_price' => 120,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['Purofort'],
+                'use_cases' => ['rolnictwo', 'trudny teren'],
+                'attributes' => [
+                    'kategoria_bhp' => 'obuwie',
+                    'material' => 'Purofort',
+                    'normy_en' => ['EN ISO 20345:2011'],
+                    'klasa_ochrony' => 'S5.CI.SRA',
+                    'kod_producenta' => '462933',
+                    'materialy' => ['Purofort'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        Product::query()->create([
+            'sku' => '9-075',
+            'name' => 'Trzewiki spawalnicze DEMAR 9-075 S3 HRO SRC',
+            'manufacturer' => 'DEMAR',
+            'category' => 'Obuwie',
+            'description' => 'Trzewiki spawalnicze, skóra wodoodporna, klapka na sznurówki, HRO SRC.',
+            'catalog_price_net' => 115,
+            'purchase_price' => 70,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['skóra', 'PU'],
+                'use_cases' => ['spawanie', 'przemysł'],
+                'attributes' => [
+                    'kategoria_bhp' => 'obuwie',
+                    'material' => 'PU',
+                    'normy_en' => ['EN ISO 20345'],
+                    'klasa_ochrony' => 'S3',
+                    'kod_producenta' => '9-075',
+                    'materialy' => ['skóra', 'PU'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $res = $this->getJson('/api/products/cross-ref?code=462933')->assertOk();
+        $this->assertNotContains('9-075', collect($res->json('matches'))->pluck('sku')->all());
+    }
+
+    public function test_cross_ref_matches_other_brand_s5_wellington(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'PURO-SEED',
+            'name' => 'Kalosz Purofort S5 CI',
+            'manufacturer' => 'DUNLOP',
+            'category' => 'Obuwie',
+            'description' => 'Kalosz Purofort S5.CI.SRA do rolnictwa.',
+            'catalog_price_net' => 200,
+            'purchase_price' => 120,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['Purofort'],
+                'use_cases' => ['rolnictwo'],
+                'attributes' => [
+                    'kategoria_bhp' => 'obuwie',
+                    'material' => 'Purofort',
+                    'normy_en' => ['EN ISO 20345'],
+                    'klasa_ochrony' => 'S5',
+                    'kod_producenta' => 'PURO-SEED',
+                    'materialy' => ['Purofort'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $other = Product::query()->create([
+            'sku' => 'PURO-ALT',
+            'name' => 'Kalosz gumowy S5 CI rolniczy',
+            'manufacturer' => 'BEKINA',
+            'category' => 'Obuwie',
+            'description' => 'Kalosz Purofort-like S5.CI.SRA, rolnictwo, -20°C.',
+            'catalog_price_net' => 180,
+            'purchase_price' => 100,
+            'stock' => 3,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['guma'],
+                'use_cases' => ['rolnictwo'],
+                'attributes' => [
+                    'kategoria_bhp' => 'obuwie',
+                    'material' => 'guma',
+                    'normy_en' => ['EN ISO 20345'],
+                    'klasa_ochrony' => 'S5',
+                    'kod_producenta' => 'PURO-ALT',
+                    'materialy' => ['guma'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $this->getJson('/api/products/cross-ref?code=PURO-SEED')
+            ->assertOk()
+            ->assertJsonFragment(['sku' => 'PURO-ALT', 'product_id' => $other->id]);
+    }
+
     public function test_compare_highlights_attribute_diffs_and_siwz_scores(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

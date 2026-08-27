@@ -31,6 +31,14 @@ final class PpeAssortment
 
     public const FAMILY_KNEE = 'knee';
 
+    public const TYPE_KALOSZ = 'kalosz';
+
+    public const TYPE_TRZEWIK = 'trzewik';
+
+    public const TYPE_POLBUT = 'polbut';
+
+    public const TYPE_SANDAL = 'sandal';
+
     /** @var array<string, string> */
     private const KATEGORIA_TO_FAMILY = [
         'rekawice' => self::FAMILY_GLOVES,
@@ -246,6 +254,59 @@ final class PpeAssortment
         }
 
         return null;
+    }
+
+    /**
+     * Krój / konstrukcja: kalosz ≠ trzewik, kurtka ≠ kalesony.
+     */
+    public function articleType(string $text, ?string $family = null): ?string
+    {
+        $family ??= $this->family($text);
+        if ($family === self::FAMILY_APPAREL) {
+            return $this->garment($text);
+        }
+
+        $t = $this->normalize($text);
+        if ($family !== null && $family !== self::FAMILY_FOOTWEAR) {
+            return null;
+        }
+
+        if (preg_match('/\b(kalosz|wellington|gumowc|gumiak|purofort|wader|gumboot)\w*/u', $t) === 1) {
+            return self::TYPE_KALOSZ;
+        }
+        if (preg_match('/\b(sandal)\w*/u', $t) === 1) {
+            return self::TYPE_SANDAL;
+        }
+        if (preg_match('/\b(trzewik|ankle\s*boot)\w*/u', $t) === 1) {
+            return self::TYPE_TRZEWIK;
+        }
+        if (preg_match('/\b(polbut|polbuty|low\s*shoe)\w*/u', $t) === 1) {
+            return self::TYPE_POLBUT;
+        }
+
+        return null;
+    }
+
+    /**
+     * Przeznaczenie / branża — spawanie ≠ rolnictwo.
+     */
+    public function purpose(string $text): ?string
+    {
+        $t = $this->normalize($text);
+        if (preg_match('/\bspawal|11611|welding|welder/u', $t) === 1) {
+            return 'welding';
+        }
+        if (preg_match('/\b(rolnict|agro|ogrodnict|gospodarstw|gnojow|farma|mleczar)/u', $t) === 1) {
+            return 'agriculture';
+        }
+        if (preg_match('/\b(spozywc|food|haccp|gastronom|miesn)/u', $t) === 1) {
+            return 'food';
+        }
+        if (preg_match('/\b(chemiczn|kwasow|rozpuszczaln)/u', $t) === 1) {
+            return 'chemical';
+        }
+
+        return $this->role($text);
     }
 
     public function role(string $text): ?string

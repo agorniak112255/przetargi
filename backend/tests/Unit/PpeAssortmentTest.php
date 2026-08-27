@@ -149,6 +149,21 @@ final class PpeAssortmentTest extends TestCase
     }
 
     #[Test]
+    public function article_type_splits_wellington_from_welding_boot(): void
+    {
+        $this->assertSame(
+            PpeAssortment::TYPE_KALOSZ,
+            $this->assortment->articleType('DUNLOP 462933 PUROFORT kalosz S5', PpeAssortment::FAMILY_FOOTWEAR)
+        );
+        $this->assertSame(
+            PpeAssortment::TYPE_TRZEWIK,
+            $this->assortment->articleType('Trzewiki spawalnicze DEMAR 9-075', PpeAssortment::FAMILY_FOOTWEAR)
+        );
+        $this->assertSame('agriculture', $this->assortment->purpose('Kalosz do rolnictwa i gospodarstw'));
+        $this->assertSame('welding', $this->assortment->purpose('Trzewiki spawalnicze HRO'));
+    }
+
+    #[Test]
     public function family_still_falls_back_to_description_when_name_says_nothing(): void
     {
         $gloves = new Product;

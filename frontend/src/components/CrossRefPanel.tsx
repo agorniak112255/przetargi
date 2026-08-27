@@ -14,6 +14,8 @@ type CrossRefProduct = {
     material?: string | null
     klasa_ochrony?: string | null
     poziomy_en388?: string | null
+    typ_wyrobu?: string | null
+    przeznaczenie?: string | null
   } | null
 }
 
@@ -100,7 +102,7 @@ export function CrossRefPanel({
   return (
     <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/40 p-3 shadow-sm">
       <label className="mb-1 block text-xs font-medium text-slate-700">
-        Cross-ref po kodzie / SKU — zamienniki tej samej kategorii BHP (materiał, normy, klasa; nie po nazwie)
+        Cross-ref po kodzie / SKU — ten sam wyrób (typ, materiał, klasa, przeznaczenie, normy)
       </label>
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -242,7 +244,13 @@ export function CrossRefPanel({
                         </td>
                         <td className="p-2 whitespace-nowrap">{fmtPrice(m.catalog_price_net)}</td>
                         <td className="p-2 text-[10px] text-slate-500">
-                          {[m.attributes?.material, m.attributes?.klasa_ochrony, m.attributes?.poziomy_en388]
+                          {[
+                            m.attributes?.typ_wyrobu,
+                            m.attributes?.material,
+                            m.attributes?.klasa_ochrony,
+                            m.attributes?.przeznaczenie,
+                            m.attributes?.poziomy_en388,
+                          ]
                             .filter(Boolean)
                             .join(' · ') || '—'}
                         </td>

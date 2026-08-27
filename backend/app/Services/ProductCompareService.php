@@ -84,8 +84,10 @@ final class ProductCompareService
             $this->rowMany('name', 'Nazwa', array_column($cards, 'name'), null),
             $this->rowMany('price', 'Cena katalogowa', array_column($cards, 'catalog_price_net'), null),
             $this->attributeRow($cards, 'kategoria_bhp', 'Kategoria BHP', $this->reqHint($requirement, 'kategoria')),
+            $this->attributeRow($cards, 'typ_wyrobu', 'Typ wyrobu', $this->reqHint($requirement, 'typ')),
             $this->attributeRow($cards, 'material', 'Materiał', $this->reqHint($requirement, 'material')),
             $this->attributeRow($cards, 'klasa_ochrony', 'Klasa ochrony', $this->reqHint($requirement, 'klasa')),
+            $this->attributeRow($cards, 'przeznaczenie', 'Przeznaczenie', $this->reqHint($requirement, 'przeznaczenie')),
             $this->attributeRow($cards, 'poziomy_en388', 'EN 388', $this->reqHint($requirement, 'en388')),
             $this->rowMany(
                 'normy_en',
