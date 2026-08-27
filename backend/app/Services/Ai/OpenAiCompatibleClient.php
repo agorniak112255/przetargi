@@ -21,6 +21,11 @@ class OpenAiCompatibleClient
     /** vLLM odrzuca prompt + max_tokens > --max-model-len (16128). 6000 + prompt ~4.7k mieści się w limicie. */
     private const DEFAULT_MAX_TOKENS = 6000;
 
+    /** Konserwatywny budżet slota (llama.cpp -np 12 / vLLM 16k). */
+    private const SLOT_TOKEN_BUDGET = 12000;
+
+    private const SLOT_RESERVE = 256;
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly JsonResponseParser $jsonParser,
@@ -32,7 +37,7 @@ class OpenAiCompatibleClient
      * $task wskazuje profil modelu z Ustawień AI; bez niego działa konfiguracja główna.
      *
      * @param  list<array{role: string, content: mixed}>  $messages
-     * @return array{content: string, model: string, usage: array<string, mixed>|null}
+     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string}
      */
     public function chat(
         array $messages,
@@ -78,7 +83,7 @@ class OpenAiCompatibleClient
     /**
      * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, is_default: bool}  $profile
      * @param  list<array{role: string, content: mixed}>  $messages
-     * @return array{content: string, model: string, usage: array<string, mixed>|null}
+     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string}
      */
     private function chatWithProfile(
         array $profile,
@@ -108,6 +113,7 @@ class OpenAiCompatibleClient
         if ($reasoning) {
             $maxTokens = max($maxTokens, self::DEFAULT_MAX_TOKENS);
         }
+        $maxTokens = $this->fitMaxTokens($maxTokens, $messages);
 
         $basePayload = [
             'model' => $model,
@@ -127,6 +133,22 @@ class OpenAiCompatibleClient
             throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
         }
 
+        if (! $response->successful() && $this->isContextOverflow($response)) {
+            $compacted = $this->compactMessages($messages, 0.65);
+            $maxTokens = $this->fitMaxTokens(max(512, (int) floor($maxTokens * 0.7)), $compacted);
+            $basePayload['messages'] = $compacted;
+            $basePayload['max_tokens'] = $maxTokens;
+            Log::info('AI przepełniony kontekst slota — ponawiam ze skróconymi źródłami', [
+                'model' => $model,
+                'max_tokens' => $maxTokens,
+            ]);
+            try {
+                $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
+            } catch (ConnectionException $e) {
+                throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
+            }
+        }
+
         if (! $response->successful()) {
             throw new RuntimeException($this->formatHttpError($response));
         }
@@ -134,17 +156,20 @@ class OpenAiCompatibleClient
         $payload = $response->json();
         $content = $this->contentReader->fromPayload($payload);
 
-        // reasoning zjadł budżet tokenów — powtórz z większym limitem
+        // reasoning zjadł budżet tokenów — powtórz z większym limitem, o ile slot jeszcze ma miejsce
         if ($content === '' && $this->contentReader->finishReason($payload) === 'length' && $maxTokens < self::DEFAULT_MAX_TOKENS) {
-            $basePayload['max_tokens'] = self::DEFAULT_MAX_TOKENS;
-            try {
-                $response = $this->postChat($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
-            } catch (ConnectionException $e) {
-                throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
-            }
-            if ($response->successful()) {
-                $payload = $response->json();
-                $content = $this->contentReader->fromPayload($payload);
+            $bumped = $this->fitMaxTokens(self::DEFAULT_MAX_TOKENS, $basePayload['messages'] ?? $messages);
+            if ($bumped > $maxTokens) {
+                $basePayload['max_tokens'] = $bumped;
+                try {
+                    $response = $this->postChat($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
+                } catch (ConnectionException $e) {
+                    throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
+                }
+                if ($response->successful()) {
+                    $payload = $response->json();
+                    $content = $this->contentReader->fromPayload($payload);
+                }
             }
         }
 
@@ -157,6 +182,7 @@ class OpenAiCompatibleClient
             'content' => $content,
             'model' => (string) data_get($payload, 'model', $profile['model']),
             'usage' => data_get($payload, 'usage'),
+            'finish_reason' => $this->contentReader->finishReason($payload),
         ];
     }
 
@@ -228,23 +254,41 @@ class OpenAiCompatibleClient
             $extra['model'] = trim($model);
         }
         $result = $this->chat($messages, $temperature, true, $extra !== [] ? $extra : null, $task);
-
-        try {
-            return $this->jsonParser->parse($result['content']);
-        } catch (RuntimeException) {
-            $repair = $this->chat([
-                [
-                    'role' => 'system',
-                    'content' => 'Napraw odpowiedź do poprawnego JSON obiektu. Zwróć TYLKO JSON, bez markdown i komentarzy.',
-                ],
-                [
-                    'role' => 'user',
-                    'content' => "Popraw poniższy tekst do walidnego JSON:\n\n".$result['content'],
-                ],
-            ], 0.0, true, $extra !== [] ? $extra : null, $task);
-
-            return $this->jsonParser->parse($repair['content']);
+        $parsed = $this->tryParseJson($result['content']);
+        if ($this->shouldRetryTruncated($result, $parsed)) {
+            Log::info('AI JSON ucięty (finish_reason=length) — ponawiam ze skróconymi źródłami', [
+                'content_len' => mb_strlen($result['content']),
+            ]);
+            $retryExtra = $extra;
+            if (isset($retryExtra['max_tokens'])) {
+                $retryExtra['max_tokens'] = max(512, (int) floor(((int) $retryExtra['max_tokens']) * 0.85));
+            }
+            $result = $this->chat(
+                $this->messagesForLengthRetry($messages),
+                $temperature,
+                true,
+                $retryExtra !== [] ? $retryExtra : null,
+                $task
+            );
+            $parsed = $this->tryParseJson($result['content']);
         }
+
+        if ($parsed !== null) {
+            return $parsed;
+        }
+
+        $repair = $this->chat([
+            [
+                'role' => 'system',
+                'content' => 'Napraw odpowiedź do poprawnego JSON obiektu. Zwróć TYLKO JSON, bez markdown i komentarzy.',
+            ],
+            [
+                'role' => 'user',
+                'content' => "Popraw poniższy tekst do walidnego JSON:\n\n".$result['content'],
+            ],
+        ], 0.0, true, $extra !== [] ? $extra : null, $task);
+
+        return $this->jsonParser->parse($repair['content']);
     }
 
     /**
@@ -634,6 +678,120 @@ class OpenAiCompatibleClient
         $base = [3, 8, 15, 25, 40][$attempt] ?? 40;
 
         return $base + random_int(0, intdiv($base, 2));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function tryParseJson(string $content): ?array
+    {
+        try {
+            return $this->jsonParser->parse($content);
+        } catch (RuntimeException) {
+            return null;
+        }
+    }
+
+    /**
+     * @param  array{content?: string, finish_reason?: string}  $result
+     * @param  array<string, mixed>|null  $parsed
+     */
+    private function shouldRetryTruncated(array $result, ?array $parsed): bool
+    {
+        if (($result['finish_reason'] ?? '') !== 'length') {
+            return false;
+        }
+        if ($parsed === null || ($parsed['_partial'] ?? false) === true) {
+            return true;
+        }
+
+        return ! $this->jsonParser->looksComplete((string) ($result['content'] ?? ''));
+    }
+
+    /**
+     * @param  list<array{role: string, content: mixed}>  $messages
+     * @return list<array{role: string, content: mixed}>
+     */
+    private function messagesForLengthRetry(array $messages): array
+    {
+        $out = [[
+            'role' => 'system',
+            'content' => 'Poprzednia odpowiedź została ucięta limitem tokenów. '
+                .'Zwróć kompletny, domknięty JSON. Opis produktu zostaw pełny (wszystkie fakty i normy); '
+                .'skróć tylko powtórzenia i cytaty ze stron.',
+        ]];
+        foreach ($this->compactMessages($messages, 0.74) as $message) {
+            $out[] = $message;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<array{role: string, content: mixed}>  $messages
+     * @return list<array{role: string, content: mixed}>
+     */
+    private function compactMessages(array $messages, float $keep): array
+    {
+        $out = [];
+        foreach ($messages as $message) {
+            $copy = $message;
+            $content = $copy['content'] ?? null;
+            if (is_string($content) && mb_strlen($content) > 1800) {
+                $copy['content'] = $this->shrinkPromptText($content, $keep);
+            }
+            $out[] = $copy;
+        }
+
+        return $out;
+    }
+
+    private function shrinkPromptText(string $text, float $keep): string
+    {
+        $limit = max(1200, (int) floor(mb_strlen($text) * $keep));
+        if (mb_strlen($text) <= $limit) {
+            return $text;
+        }
+
+        return mb_substr($text, 0, $limit)."\n[… skrócono źródła — zachowaj pełny opis produktu …]";
+    }
+
+    /**
+     * @param  list<array{role: string, content: mixed}>  $messages
+     */
+    private function fitMaxTokens(int $requested, array $messages): int
+    {
+        $room = self::SLOT_TOKEN_BUDGET - $this->estimatePromptTokens($messages) - self::SLOT_RESERVE;
+
+        return max(512, min($requested, $room));
+    }
+
+    /**
+     * @param  list<array{role: string, content: mixed}>  $messages
+     */
+    private function estimatePromptTokens(array $messages): int
+    {
+        $chars = 0;
+        foreach ($messages as $message) {
+            $content = $message['content'] ?? '';
+            if (is_string($content)) {
+                $chars += mb_strlen($content);
+            } elseif (is_array($content)) {
+                $chars += mb_strlen((string) json_encode($content, JSON_UNESCAPED_UNICODE));
+            }
+        }
+
+        return max(1, (int) ceil($chars / 4) + 48);
+    }
+
+    private function isContextOverflow(Response $response): bool
+    {
+        if (! in_array($response->status(), [400, 413], true)) {
+            return false;
+        }
+        $detail = strtolower((string) (data_get($response->json(), 'error.message') ?? $response->body()));
+
+        return preg_match('/context|max_model_len|n_ctx|too many tokens|maximum context|requested .+ tokens/i', $detail) === 1;
     }
 
     private function formatHttpError(Response $response): string

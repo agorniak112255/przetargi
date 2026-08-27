@@ -2038,8 +2038,8 @@ final class ProductEnrichmentService
 
         $pageCount = count($pageSnippets);
         $compact = $pageCount > 4
-            ? $this->fitPagesToBudget($pageSnippets, 6, 3500, 16000)
-            : $this->fitPagesToBudget($pageSnippets, 4, 4500, 14000);
+            ? $this->fitPagesToBudget($pageSnippets, 6, 3000, 14000)
+            : $this->fitPagesToBudget($pageSnippets, 4, 3800, 12000);
         if ($compact === []) {
             return $pageSnippets;
         }
@@ -2057,12 +2057,13 @@ Zadanie: WSTĘPNA ANALIZA — wyrzuć śmieci sklepowe, zostaw wyłącznie infor
 WYRZUĆ całkowicie: logowanie, rejestracja, konto, obserwowane, koszyk, suma, zamówienie, menu kategorii, breadcrumby („jesteś tutaj”), wyszukiwanie, telefon/e-mail sklepu, wysyłka, koszty dostawy, płatności, prowizje, regulamin, polityka prywatności, odstąpienie od umowy, zwroty 14 dni, punkty lojalnościowe, porównanie, cookies, ceny marketingowe bez kontekstu produktu.
 
 ZOSTAW / przepisz zwięźle: nazwa modelu, producent, kod/SKU, normy (S3, SRC, EN ISO…), materiały, podnosek, podeszwa, cholewka, przeznaczenie, cechy techniczne, kolory/rozmiary jeśli produktowe.
+Nie cytuj całych akapitów ze strony i nie powtarzaj tego samego faktu.
 
 JĘZYK: źródła bywają po francusku, niemiecku, czesku czy angielsku. ZAWSZE tłumacz fakty na polski.
 Nigdy nie przepisuj zdań w języku oryginału — nazwy własne modeli i oznaczenia norm zostaw bez zmian.
 
 Zwróć TYLKO JSON:
-{"pages":[{"url":"…","text":"oczyszczone fakty o produkcie po polsku, 2–12 zdań lub punktów"}]}
+{"pages":[{"url":"…","text":"oczyszczone fakty po polsku, 4–10 zdań: parametry, materiały, normy, przeznaczenie"}]}
 Jeśli na stronie nie ma faktów o produkcie → "text":"". Nie zmyślaj cech.
 SYS,
                 ],
@@ -2070,7 +2071,7 @@ SYS,
                     'role' => 'user',
                     'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}\n\nStrony:\n{$pagesJson}",
                 ],
-            ], 0.0, 6000);
+            ], 0.0, 4000);
         } catch (Throwable $e) {
             Log::info('AI page sanitize failed, using heuristic text', [
                 'product_id' => $product->id,
@@ -2142,7 +2143,7 @@ SYS,
      */
     private function extractWithLlm(Product $product, array $searchResults, array $pageSnippets): array
     {
-        $compactPages = $this->fitPagesToBudget($pageSnippets, 5, 3500, 13000);
+        $compactPages = $this->fitPagesToBudget($pageSnippets, 5, 3000, 11500);
         $compactSources = array_map(static function (array $r): array {
             return [
                 'url' => mb_substr((string) ($r['url'] ?? ''), 0, 300),
@@ -2186,6 +2187,7 @@ Zwróć WYŁĄCZNIE JSON:
 JĘZYK: cały tekst wyjściowy po polsku, także gdy źródła są francuskie, niemieckie, czeskie czy angielskie.
 Bez zdań w języku oryginału i bez etykiet typu „Produit”, „Matériaux”, „Usage” — tłumacz je na polskie odpowiedniki.
 WYPEŁNIJ tablice features/specs/norms/materials/use_cases oraz attributes, gdy fakty są w tekście — nie zostawiaj ich pustych „dla skrótu”.
+Nie powtarzaj tych samych zdań w description, features i specs — description zostaje pełny (6–12 zdań).
 attributes: używaj wyłącznie wartości ze źródeł; brak danych → null / [].
 Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
 Pomiń reklamy, nieruchomości, leasing, biura, inwestycje i inny tekst niezwiązany z tym produktem BHP.

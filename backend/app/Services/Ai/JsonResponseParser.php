@@ -38,6 +38,65 @@ final class JsonResponseParser
         );
     }
 
+    /** Czy surowa odpowiedź to domknięty JSON (nie urwany w środku stringa / obiektu). */
+    public function looksComplete(string $content): bool
+    {
+        $raw = trim($content);
+        if (preg_match('/```(?:json)?\s*([\s\S]*?)```/i', $raw, $m) === 1) {
+            $raw = trim($m[1]);
+        }
+        $start = strpos($raw, '{');
+        if ($start === false) {
+            $start = strpos($raw, '[');
+        }
+        if ($start === false) {
+            return false;
+        }
+
+        $body = substr($raw, $start);
+        $depthObj = 0;
+        $depthArr = 0;
+        $inString = false;
+        $escape = false;
+        $seenOpen = false;
+        $len = strlen($body);
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $body[$i];
+            if ($inString) {
+                if ($escape) {
+                    $escape = false;
+                } elseif ($ch === '\\') {
+                    $escape = true;
+                } elseif ($ch === '"') {
+                    $inString = false;
+                }
+
+                continue;
+            }
+            if ($ch === '"') {
+                $inString = true;
+
+                continue;
+            }
+            if ($ch === '{') {
+                $depthObj++;
+                $seenOpen = true;
+            } elseif ($ch === '}') {
+                $depthObj--;
+            } elseif ($ch === '[') {
+                $depthArr++;
+                $seenOpen = true;
+            } elseif ($ch === ']') {
+                $depthArr--;
+            }
+            if ($depthObj < 0 || $depthArr < 0) {
+                return false;
+            }
+        }
+
+        return $seenOpen && ! $inString && $depthObj === 0 && $depthArr === 0;
+    }
+
     /**
      * @return list<string>
      */

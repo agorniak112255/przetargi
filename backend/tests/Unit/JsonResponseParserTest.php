@@ -36,4 +36,11 @@ final class JsonResponseParserTest extends TestCase
         $this->assertGreaterThanOrEqual(1, count($json['products']));
         $this->assertSame('ROC5', $json['products'][0]['sku']);
     }
+
+    public function test_looks_complete_accepts_closed_object(): void
+    {
+        $parser = new JsonResponseParser;
+        $this->assertTrue($parser->looksComplete('{"description":"ok","features":["a"]}'));
+        $this->assertFalse($parser->looksComplete('{"description":"buty ochronne S3 z podnoskiem'));
+    }
 }
