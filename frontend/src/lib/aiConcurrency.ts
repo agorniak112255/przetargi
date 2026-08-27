@@ -1,6 +1,5 @@
 export const AI_CONCURRENCY_DEFAULT = 4
 export const AI_CONCURRENCY_MAX = 100
-export const ENRICHMENT_BATCH_MAX = 1000
 
 export function clampAiConcurrency(value: number | undefined): number {
   const n = Number(value)
@@ -17,7 +16,7 @@ export function clampEnrichmentBatchLimit(value: number | undefined): number {
     return 5
   }
 
-  return Math.max(1, Math.min(ENRICHMENT_BATCH_MAX, Math.round(n)))
+  return Math.max(1, Math.round(n))
 }
 
 export async function mapPool<T>(

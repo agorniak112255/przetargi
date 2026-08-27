@@ -14,8 +14,6 @@ use Throwable;
 
 final class AiSettingsService
 {
-    public const ENRICHMENT_BATCH_MAX = 1000;
-
     public const CONCURRENCY_MAX = 100;
 
     public const SEARCH_ENGINE_TAVILY = 'tavily';
@@ -694,7 +692,7 @@ final class AiSettingsService
     {
         $n = is_numeric($value) ? (int) $value : 5;
 
-        return max(1, min(self::ENRICHMENT_BATCH_MAX, $n));
+        return max(1, $n);
     }
 
     private function normalizeMatchConcurrency(mixed $value): int

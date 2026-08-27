@@ -25,7 +25,7 @@ return [
     'search_fallback' => env('AI_SEARCH_FALLBACK', 'tavily'),
     // eco | balanced | full — zużycie kredytów Tavily przy opisach produktów
     'tavily_search_mode' => env('AI_TAVILY_SEARCH_MODE', 'balanced'),
-    // Max produktów do kolejki enrichmentu na jedno kliknięcie (cenniki / lista)
+    // Max produktów do kolejki enrichmentu na jedno kliknięcie (cenniki / lista); min. 1, bez górnego limitu
     'enrichment_batch_limit' => (int) env('AI_ENRICHMENT_BATCH_LIMIT', 5),
     // Ile zapytań AI naraz (1–100): SIWZ i Pobierz z cennika. Zależy od FPM i modelu.
     'match_concurrency' => (int) env('AI_MATCH_CONCURRENCY', 4),

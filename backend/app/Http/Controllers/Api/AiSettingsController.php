@@ -50,7 +50,7 @@ class AiSettingsController extends Controller
             'searxng_url' => ['nullable', 'url', 'max:255'],
             'search_fallback' => ['sometimes', 'string', 'in:tavily,none'],
             'tavily_search_mode' => ['sometimes', 'string', 'in:eco,balanced,full'],
-            'enrichment_batch_limit' => ['sometimes', 'integer', 'min:1', 'max:'.AiSettingsService::ENRICHMENT_BATCH_MAX],
+            'enrichment_batch_limit' => ['sometimes', 'integer', 'min:1'],
             'match_concurrency' => ['sometimes', 'integer', 'min:1', 'max:'.AiSettingsService::CONCURRENCY_MAX],
             'vector_enabled' => ['sometimes', 'boolean'],
             'qdrant_url' => ['nullable', 'url', 'max:255'],

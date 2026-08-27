@@ -115,7 +115,7 @@ class ProductEnrichmentController extends Controller
     public function enrichProducts(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'product_ids' => ['required', 'array', 'min:1', 'max:'.AiSettingsService::ENRICHMENT_BATCH_MAX],
+            'product_ids' => ['required', 'array', 'min:1', 'max:'.$this->aiSettings->enrichmentBatchLimit()],
             'product_ids.*' => ['integer', 'exists:products,id'],
             'force' => ['sometimes', 'boolean'],
         ]);

@@ -11,7 +11,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('ai_settings', function (Blueprint $table): void {
-            $table->unsignedSmallInteger('enrichment_batch_limit')
+            $table->unsignedInteger('enrichment_batch_limit')
                 ->default(5)
                 ->after('tavily_search_mode');
         });

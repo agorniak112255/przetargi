@@ -64,6 +64,13 @@ final class AiSettingsApiTest extends TestCase
         $this->putJson('/api/ai-settings', ['match_concurrency' => 101])
             ->assertStatus(422);
 
+        $this->putJson('/api/ai-settings', ['enrichment_batch_limit' => 5000])
+            ->assertOk()
+            ->assertJsonPath('enrichment_batch_limit', 5000);
+
+        $this->putJson('/api/ai-settings', ['enrichment_batch_limit' => 0])
+            ->assertStatus(422);
+
         $this->putJson('/api/ai-settings', ['reasoning_effort' => 'high'])
             ->assertStatus(422);
 
