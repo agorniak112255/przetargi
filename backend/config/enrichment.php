@@ -92,6 +92,18 @@ return [
         'canis' => ['cxs.net.pl', 'www.cxs.net.pl', 'cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
         'medibut' => ['medibut.pl', 'www.medibut.pl'],
         'panther' => ['panther-safety.com', 'www.panther-safety.com'],
+        'ejendals' => [
+            'ejendals.com',
+            'www.ejendals.com',
+            'jalas.com',
+            'www.jalas.com',
+        ],
+        'jalas' => [
+            'jalas.com',
+            'www.jalas.com',
+            'ejendals.com',
+            'www.ejendals.com',
+        ],
     ],
 
     /*
@@ -223,5 +235,9 @@ return [
         'natare.pl',
         'sklep.arsel-bhp.pl',
         'roboczebhp.pl',
+        'ejendals.com',
+        'www.ejendals.com',
+        'jalas.com',
+        'www.jalas.com',
     ],
 ];

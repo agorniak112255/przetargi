@@ -449,4 +449,46 @@ final class ProductSearchIdentityTest extends TestCase
             $product
         ));
     }
+
+    public function test_jalas_sku_is_not_cas_registry_number(): void
+    {
+        $id = new ProductSearchIdentity;
+        $king = new Product([
+            'sku' => '1868',
+            'name' => 'Obuwie ochronne - obuwie JALAS® 1868 KING',
+            'manufacturer' => 'Ejendals',
+        ]);
+        $offRoad = new Product([
+            'sku' => '1878',
+            'name' => 'Obuwie ochronne - wysokie JALAS® 1878 OFF ROAD',
+            'manufacturer' => 'Ejendals',
+        ]);
+
+        $this->assertFalse($id->codeInText(
+            'cas 1868-00-4 3,3-bis(trifluoromethyl)benzophenone',
+            '1868'
+        ));
+        $this->assertTrue($id->codeInText('jalas 1868 king obuwie ochronne', '1868'));
+
+        $tci = 'https://www.tcichemicals.com/PL/pl/p/B3336 '
+            .'3,3\'-Bis(trifluoromethyl)benzophenone CAS 1868-00-4 TCI '
+            .'Obuwie ochronne obuwie JALAS 1868 KING Ejendals';
+        $this->assertTrue($id->looksLikeChemicalCatalogHit($tci));
+        $this->assertFalse($id->hayMentionsProduct($tci, $king));
+
+        $acros = 'https://www.acros.com/product/1878-68-8 '
+            .'Kwas 4-bromofenylooctowy CAS 1878-68-8 Acros Organics '
+            .'Obuwie ochronne wysokie JALAS 1878 OFF ROAD';
+        $this->assertFalse($id->hayMentionsProduct($acros, $offRoad));
+
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.ejendals.com/pl/produkty/jalas-1868-king '
+            .'Obuwie ochronne Jalas 1868 KING Ejendals S3',
+            $king
+        ));
+        $this->assertFalse($id->imageUrlMentionsProduct(
+            'https://www.tcichemicals.com/assets/structure/1868-00-4.png',
+            $king
+        ));
+    }
 }

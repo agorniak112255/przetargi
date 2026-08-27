@@ -132,7 +132,10 @@ final class ProductSearchIdentity
         $hay .= ' '.$this->decodeEmbeddedUrls($hay);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
-        if ($this->looksLikeJunkMediaPath($hay)) {
+        if ($this->looksLikeJunkMediaPath($hay) || $this->looksLikeChemicalCatalogHit($hay)) {
+            return false;
+        }
+        if ($this->urlSkuOnlyAsCasNumber($hay, $product)) {
             return false;
         }
 
@@ -297,10 +300,22 @@ final class ProductSearchIdentity
             return false;
         }
 
-        return preg_match(
+        $count = preg_match_all(
             '/(?<![0-9])'.preg_quote($token, '/').'(?!\s*(?:px|x\s*\d))/iu',
-            $hay
-        ) === 1;
+            $hay,
+            $matches,
+            PREG_OFFSET_CAPTURE
+        );
+        if ($count === 0 || ($matches[0] ?? []) === []) {
+            return false;
+        }
+        foreach ($matches[0] as [$match, $offset]) {
+            if (! $this->numericMatchIsCasRegistry($hay, (int) $offset, (string) $match)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function isAlphanumericProductCode(string $token): bool
@@ -323,7 +338,13 @@ final class ProductSearchIdentity
             || str_contains($hay, '01_menue')
             || str_contains($hay, 'lego')
             || str_contains($hay, 'beer')
-            || str_contains($hay, 'world-map');
+            || str_contains($hay, 'world-map')
+            || str_contains($hay, 'tcichemicals')
+            || str_contains($hay, 'tci-chemicals')
+            || str_contains($hay, 'acrosorganics')
+            || str_contains($hay, 'acros-organics')
+            || str_contains($hay, 'sigmaaldrich')
+            || str_contains($hay, 'merckmillipore');
     }
 
     private function decodeEmbeddedUrls(string $hay): string
@@ -666,6 +687,9 @@ final class ProductSearchIdentity
     public function hayMentionsProduct(string $hay, Product $product): bool
     {
         $hay = mb_strtolower($hay);
+        if ($this->looksLikeChemicalCatalogHit($hay)) {
+            return false;
+        }
         if (! $this->hayHasRequiredTypeFromName($hay, $product)) {
             return false;
         }
@@ -1022,8 +1046,54 @@ final class ProductSearchIdentity
     public function codeInText(string $hay, string $code): bool
     {
         $pattern = $this->codePattern($code);
+        if ($pattern === null) {
+            return false;
+        }
+        if (preg_match_all($pattern, $hay, $matches, PREG_OFFSET_CAPTURE) < 1) {
+            return false;
+        }
+        if (preg_match('/^\d{2,7}$/', trim($code)) !== 1) {
+            return true;
+        }
+        foreach ($matches[0] as [$match, $offset]) {
+            if (! $this->numericMatchIsCasRegistry($hay, (int) $offset, (string) $match)) {
+                return true;
+            }
+        }
 
-        return $pattern !== null && preg_match($pattern, $hay) === 1;
+        return false;
+    }
+
+    /**
+     * Katalog odczynników (TCI, Acros, CAS) — nie karta BHP, nawet gdy snippet powtarza frazę z zapytania.
+     */
+    public function looksLikeChemicalCatalogHit(string $hay): bool
+    {
+        $n = mb_strtolower($hay);
+        foreach ([
+            'tcichemicals', 'tci-chemicals', 'tci chemicals',
+            'acrosorganics', 'acros-organics', 'acros organics',
+            'sigmaaldrich', 'sigma-aldrich', 'merckmillipore',
+            'fishersci.com', 'alfa-aesar', 'alfa aesar',
+        ] as $marker) {
+            if (str_contains($n, $marker)) {
+                return true;
+            }
+        }
+        if (preg_match('/\bcas(?:\s*(?:nr|no\.?|number|numer))?\s*[:.]?\s*\d{2,7}-\d{2}-\d\b/u', $n) === 1) {
+            return true;
+        }
+        foreach ([
+            'benzophenon', 'fenylooctow', 'odczynnik chemiczny', 'odczynniki syntetyczne',
+            'reagent grade', 'molecular formula', 'wzor sumaryczny', 'wzór sumaryczny',
+            'trifluoromethyl', 'trifluoromethylo', 'substancja chemiczna',
+        ] as $word) {
+            if (str_contains($n, $word)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function codePattern(string $code): ?string
@@ -1076,7 +1146,18 @@ final class ProductSearchIdentity
     private function textHasTypeStem(string $normalized, array $stems): bool
     {
         foreach ($stems as $stem) {
-            if ($stem !== '' && str_contains($normalized, $stem)) {
+            if ($stem === '') {
+                continue;
+            }
+            // „buty” ≠ butyl / butyric na karcie odczynnika
+            if ($stem === 'buty') {
+                if (preg_match('/\bbuty\b/u', $normalized) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if (str_contains($normalized, $stem)) {
                 return true;
             }
         }
@@ -1186,11 +1267,47 @@ final class ProductSearchIdentity
             return false;
         }
 
-        // po kodzie nie może być cyfra ani litera jednostki (g/kg/ml…)
-        return preg_match(
+        $count = preg_match_all(
             '/(?<![0-9])'.preg_quote($token, '/').'(?![0-9a-z])/iu',
-            $hay
-        ) === 1;
+            $hay,
+            $matches,
+            PREG_OFFSET_CAPTURE
+        );
+        if ($count === 0 || ($matches[0] ?? []) === []) {
+            return false;
+        }
+        foreach ($matches[0] as [$match, $offset]) {
+            if (! $this->numericMatchIsCasRegistry($hay, (int) $offset, (string) $match)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Numer CAS (1868-00-4) nie jest SKU „1868”. */
+    private function numericMatchIsCasRegistry(string $hay, int $offset, string $match): bool
+    {
+        if (preg_match('/^\d{2,7}$/', $match) !== 1) {
+            return false;
+        }
+        $after = substr($hay, $offset + strlen($match), 8);
+
+        return preg_match('/^-\d{2}-\d(?:\D|$)/', $after) === 1;
+    }
+
+    /** W URL SKU występuje tylko jako CAS (…/1868-00-4.png), nie jako model. */
+    private function urlSkuOnlyAsCasNumber(string $hay, Product $product): bool
+    {
+        $sku = preg_replace('/\D+/u', '', mb_strtolower(trim((string) $product->sku))) ?? '';
+        if (preg_match('/^\d{2,7}$/', $sku) !== 1) {
+            return false;
+        }
+        $quoted = preg_quote($sku, '/');
+        $hasCas = preg_match('/(?<![0-9])'.$quoted.'-\d{2}-\d(?![0-9])/u', $hay) === 1;
+        $hasStandalone = preg_match('/(?<![0-9])'.$quoted.'(?![0-9\-])/u', $hay) === 1;
+
+        return $hasCas && ! $hasStandalone;
     }
 
     /** Wszystkie wystąpienia rdzenia w tekście to tylko „1000g”, „500ml” itd. */
@@ -1498,6 +1615,7 @@ final class ProductSearchIdentity
             'tekstylne', 'maska', 'buty', 'kombinezon', 'kurtka', 'spodnie', 'bluza',
             'kamizelka', 'ochronna', 'ochronne', 'ochronny', 'robocza', 'robocze', 'roboczy',
             'wodoochronny', 'wodoochronna', 'odziez', 'odzież', 'ubranie',
+            'king', 'road',
         ], true);
     }
 

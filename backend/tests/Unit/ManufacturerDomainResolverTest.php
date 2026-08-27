@@ -89,6 +89,32 @@ final class ManufacturerDomainResolverTest extends TestCase
         ));
     }
 
+    public function test_resolves_ejendals_jalas_domains(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $product = new Product([
+            'manufacturer' => 'Ejendals',
+            'sku' => '1868',
+            'name' => 'JALAS 1868 KING',
+        ]);
+
+        $domains = $resolver->domainsFor($product);
+        $this->assertContains('ejendals.com', $domains);
+        $this->assertTrue($resolver->isManufacturerUrl(
+            'https://www.ejendals.com/pl/products/jalas-1868-king',
+            $product,
+            $domains
+        ));
+        $this->assertContains(
+            'jalas.com',
+            $resolver->domainsFor(new Product([
+                'manufacturer' => 'Jalas',
+                'sku' => '1868',
+                'name' => '1868 KING',
+            ]))
+        );
+    }
+
     public function test_resolves_msa_safety_and_auer_aliases(): void
     {
         $resolver = app(ManufacturerDomainResolver::class);

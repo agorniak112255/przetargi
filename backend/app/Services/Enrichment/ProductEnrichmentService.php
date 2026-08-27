@@ -2105,6 +2105,7 @@ Nigdy nie przepisuj zdań w języku oryginału — nazwy własne modeli i oznacz
 Zwróć TYLKO JSON:
 {"pages":[{"url":"…","text":"oczyszczone fakty po polsku, 4–10 zdań: parametry, materiały, normy, przeznaczenie"}]}
 Jeśli na stronie nie ma faktów o produkcie → "text":"". Nie zmyślaj cech.
+Jeśli nazwa to PPE (obuwie, rękawice, odzież…), a tekst dotyczy odczynnika / numeru CAS / wzoru chemicznego — "text":"".
 SYS,
                 ],
                 [
@@ -2231,6 +2232,7 @@ Nie powtarzaj tych samych zdań w description, features i specs — description 
 attributes: używaj wyłącznie wartości ze źródeł; brak danych → null / [].
 Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
 Pomiń reklamy, nieruchomości, leasing, biura, inwestycje i inny tekst niezwiązany z tym produktem BHP.
+Jeśli źródła opisują substancję chemiczną / CAS, a nazwa produktu to PPE (obuwie, rękawice, odzież…) — description="" i confidence=0.
 SYS,
             ],
             [

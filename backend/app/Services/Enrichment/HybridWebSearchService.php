@@ -355,6 +355,7 @@ class HybridWebSearchService
             $hay = mb_strtolower($url.' '.$title.' '.($row['snippet'] ?? ''));
             if ($this->isListingWithoutProduct($url, $product)
                 || $this->identity->pageClaimsAnotherCode($url, $title, $product)
+                || $this->identity->looksLikeChemicalCatalogHit($hay)
                 || ! $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
                 continue;
             }
@@ -772,6 +773,10 @@ class HybridWebSearchService
                 }
             }
             if (! $hasCode) {
+                continue;
+            }
+            if ($this->identity->looksLikeChemicalCatalogHit($hay)
+                || ! $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
                 continue;
             }
             // sam kod to za mało: „1202” to też alarm Apollo 11 i szerokość zdjęcia
