@@ -354,7 +354,8 @@ class HybridWebSearchService
             $title = (string) ($row['title'] ?? '');
             $hay = mb_strtolower($url.' '.$title.' '.($row['snippet'] ?? ''));
             if ($this->isListingWithoutProduct($url, $product)
-                || $this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+                || $this->identity->pageClaimsAnotherCode($url, $title, $product)
+                || ! $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
                 continue;
             }
             // ten sam filtr co w wyszukiwarce: sam kod „104” bez marki to kombinezon PROS,

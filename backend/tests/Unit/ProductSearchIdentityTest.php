@@ -100,6 +100,38 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_name_type_must_appear_on_page(): void
+    {
+        $id = new ProductSearchIdentity;
+        $gloves = new Product([
+            'sku' => '104',
+            'name' => 'Rękawica tekstylna TEGERA 104',
+            'manufacturer' => 'Ejendals',
+        ]);
+        $coverall = new Product([
+            'sku' => '104',
+            'name' => 'Kombinezon wodoochronny 104',
+            'manufacturer' => 'PROS',
+        ]);
+
+        $this->assertFalse($id->hayHasRequiredTypeFromName(
+            'https://shop.example/tegera-104 Ejendals Tegera 104',
+            $gloves
+        ));
+        $this->assertTrue($id->hayHasRequiredTypeFromName(
+            'https://shop.example/rekawice-tegera-104 Rękawice Tegera 104',
+            $gloves
+        ));
+        $this->assertFalse($id->hayHasRequiredTypeFromName(
+            'https://shop.example/rekawice-104 Rękawice 104 PROS',
+            $coverall
+        ));
+        $this->assertTrue($id->hayHasRequiredTypeFromName(
+            'https://shop.example/kombinezon-104 Kombinezon 104 PROS',
+            $coverall
+        ));
+    }
+
     public function test_tegera_104_does_not_match_pros_coverall(): void
     {
         $id = new ProductSearchIdentity;

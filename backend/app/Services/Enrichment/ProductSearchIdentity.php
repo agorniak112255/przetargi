@@ -17,6 +17,28 @@ final class ProductSearchIdentity
     private const NORM_PREFIXES = ['en', 'iso', 'pn', 'din', 'ansi', 'astm', 'nfpa', 'ce', 'sr', 'nbr'];
 
     /**
+     * Typ z nazwy produktu (rękawice, kombinezon…) musi wrócić w URL/tekście karty.
+     *
+     * @var array<string, list<string>>
+     */
+    private const TYPE_STEMS = [
+        'gloves' => ['rekawic', 'glove', 'handschuh', 'gant'],
+        'coverall' => ['kombinezon', 'coverall', 'overall'],
+        'jacket' => ['kurtk', 'jacket', 'plaszcz'],
+        'trousers' => ['spodn', 'trouser', 'pant'],
+        'sweatshirt' => ['bluza', 'sweatshirt'],
+        'vest' => ['kamizelk', 'vest'],
+        'mask' => ['maska', 'maski', 'maske'],
+        'footwear' => ['buty', 'butow', 'obuwie', 'trzewik', 'polbut', 'footwear'],
+        'helmet' => ['kask', 'helm', 'casque'],
+        'goggles' => ['okular', 'gogl'],
+        'apron' => ['fartuch', 'apron'],
+        'hearing' => ['nausznik'],
+        'harness' => ['szelk'],
+        'clothing' => ['ubranie', 'odziez'],
+    ];
+
+    /**
      * Tokeny do dopasowania w URL/tytule/snippecie (lowercase, unikalne).
      *
      * @return list<string>
@@ -644,6 +666,9 @@ final class ProductSearchIdentity
     public function hayMentionsProduct(string $hay, Product $product): bool
     {
         $hay = mb_strtolower($hay);
+        if (! $this->hayHasRequiredTypeFromName($hay, $product)) {
+            return false;
+        }
         $brands = $this->acceptedBrands($product);
         $tokens = $this->matchTokens($product);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
@@ -1021,9 +1046,55 @@ final class ProductSearchIdentity
     }
 
     /**
-     * Czy w tekście stoi marka produktu. Bez niej sam kod „1202” trafia w Apollo 11
-     * albo w szerokość miniatury, a nie w rękawice Urgent.
+     * Gdy nazwa mówi „rękawice” / „kombinezon”, karta bez tego typu odpada.
      */
+    public function hayHasRequiredTypeFromName(string $hay, Product $product): bool
+    {
+        $name = $this->normalizeTypeText((string) $product->name);
+        $page = $this->normalizeTypeText($hay);
+        $required = [];
+        foreach (self::TYPE_STEMS as $stems) {
+            if ($this->textHasTypeStem($name, $stems)) {
+                $required[] = $stems;
+            }
+        }
+        if ($required === []) {
+            return true;
+        }
+        foreach ($required as $stems) {
+            if (! $this->textHasTypeStem($page, $stems)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  list<string>  $stems
+     */
+    private function textHasTypeStem(string $normalized, array $stems): bool
+    {
+        foreach ($stems as $stem) {
+            if ($stem !== '' && str_contains($normalized, $stem)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function normalizeTypeText(string $text): string
+    {
+        $text = mb_strtolower($text);
+        $text = strtr($text, [
+            'ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n',
+            'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z',
+        ]);
+
+        return (string) preg_replace('/[^a-z0-9]+/u', ' ', $text);
+    }
+
     public function hayHasBrand(string $hay, Product $product): bool
     {
         $brands = $this->acceptedBrands($product);
