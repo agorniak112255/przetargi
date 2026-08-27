@@ -60,8 +60,16 @@ final class ProductPageFetcher
         }
 
         $htmlRows = [];
+        $images = [];
+        $trustedImages = [];
         foreach ($ranked as $row) {
-            if (! ProductDocumentDownloader::looksLikePdfUrl((string) ($row['url'] ?? ''))) {
+            $u = (string) ($row['url'] ?? '');
+            if (ProductImageDownloader::looksLikeImageUrl($u)) {
+                $images[] = $u;
+
+                continue;
+            }
+            if (! ProductDocumentDownloader::looksLikePdfUrl($u)) {
                 $htmlRows[] = $row;
             }
         }
@@ -69,8 +77,6 @@ final class ProductPageFetcher
 
         $goodPages = [];
         $fallbackPages = [];
-        $images = [];
-        $trustedImages = [];
 
         for ($offset = 0; $offset < count($htmlRows) && count($goodPages) < $wanted; $offset += $wanted) {
             $wave = array_values(array_slice($htmlRows, $offset, $wanted));
@@ -294,6 +300,17 @@ final class ProductPageFetcher
         }
 
         $html = $response->body();
+        $contentType = strtolower((string) $response->header('Content-Type'));
+        if (str_contains($contentType, 'image/') || str_contains($contentType, 'application/pdf')
+            || self::looksLikeBinaryMedia($html)) {
+            if (str_contains($contentType, 'pdf') || str_starts_with(ltrim($html), '%PDF')) {
+                $documents[] = $url;
+            } else {
+                $images[] = $url;
+            }
+
+            return;
+        }
         if ($this->looksLikeBotWall($html)) {
             if (! $this->ingestViaReader($url, $goodPages, $images, $documents)) {
                 $snippet = trim((string) ($row['snippet'] ?? ''));
@@ -519,6 +536,29 @@ final class ProductPageFetcher
             || str_contains($hay, 'cf-browser-verification')
             || str_contains($hay, 'attention required! | cloudflare')
             || (str_contains($hay, 'captcha') && strlen($trim) < 4000);
+    }
+
+    /** JPEG/PNG/GIF/PDF wklejone jako „tekst strony” — llama-swap odpowiada 400. */
+    public static function looksLikeBinaryMedia(string $body): bool
+    {
+        if ($body === '') {
+            return false;
+        }
+        $head = substr($body, 0, 24);
+        if (str_starts_with($head, "\xFF\xD8\xFF")
+            || str_starts_with($head, "\x89PNG")
+            || str_starts_with($head, 'GIF87a')
+            || str_starts_with($head, 'GIF89a')
+            || str_starts_with($head, '%PDF')
+            || str_contains($head, 'JFIF')
+            || str_contains($head, 'PNG')
+            || str_contains($head, 'IHDR')) {
+            return true;
+        }
+        $sample = substr($body, 0, 800);
+        $controls = preg_match_all('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', $sample);
+
+        return is_int($controls) && $controls > 8;
     }
 
     /**

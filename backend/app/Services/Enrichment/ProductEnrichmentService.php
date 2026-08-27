@@ -1213,7 +1213,8 @@ final class ProductEnrichmentService
                 continue;
             }
             // uzupełnienie opisu wyłącznie ze sklepów — nie z karty producenta
-            if ($this->manufacturers->isManufacturerUrl((string) ($row['url'] ?? ''), $product)) {
+            if (ProductImageDownloader::looksLikeImageUrl((string) ($row['url'] ?? ''))
+                || $this->manufacturers->isManufacturerUrl((string) ($row['url'] ?? ''), $product)) {
                 continue;
             }
             $extraResults[] = $row;
@@ -2075,6 +2076,10 @@ final class ProductEnrichmentService
         if ($pageSnippets === []) {
             return [];
         }
+        $pageSnippets = $this->dropBinaryPageSnippets($pageSnippets);
+        if ($pageSnippets === []) {
+            return [];
+        }
 
         $pageCount = count($pageSnippets);
         $compact = $pageCount > 4
@@ -2148,6 +2153,25 @@ SYS,
         }
 
         return $cleaned !== [] ? $cleaned : $pageSnippets;
+    }
+
+    /**
+     * @param  list<array{url: string, text: string}>  $pages
+     * @return list<array{url: string, text: string}>
+     */
+    private function dropBinaryPageSnippets(array $pages): array
+    {
+        $out = [];
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            $text = (string) ($page['text'] ?? '');
+            if (ProductImageDownloader::looksLikeImageUrl($url) || ProductPageFetcher::looksLikeBinaryMedia($text)) {
+                continue;
+            }
+            $out[] = $page;
+        }
+
+        return $out;
     }
 
     /**
@@ -2283,6 +2307,9 @@ SYS,
         $out = [];
         foreach ($results as $row) {
             $url = $row['url'];
+            if (ProductImageDownloader::looksLikeImageUrl($url)) {
+                continue;
+            }
             $snippet = trim($row['snippet'] ?? '');
             if ($snippet !== '') {
                 $out[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 1200)];

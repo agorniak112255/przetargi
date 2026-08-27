@@ -343,4 +343,25 @@ HTML;
         $this->assertTrue(collect($docs)->contains(fn (string $u): bool => str_contains($u, 'product-info.pdf')));
         $this->assertFalse(collect($docs)->contains(fn (string $u): bool => str_contains($u, 'sustainability')));
     }
+
+    public function test_image_search_hit_is_not_read_as_product_page(): void
+    {
+        $imageUrl = 'https://balticbhp.pl/33141-large_default/buty-robocze-jalas-zenit-1718.jpg';
+        $jpeg = "\xFF\xD8\xFF\xE0\x00\x10JFIF".str_repeat("\x00", 40);
+        Http::fake([
+            $imageUrl => Http::response($jpeg, 200, ['Content-Type' => 'image/jpeg']),
+        ]);
+
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $imageUrl,
+            'title' => 'buty robocze jalas zenit',
+            'snippet' => '',
+        ]], '7168', 1);
+
+        $this->assertSame([], $result['pages']);
+        $this->assertContains($imageUrl, $result['image_urls']);
+        $this->assertTrue(ProductPageFetcher::looksLikeBinaryMedia($jpeg));
+        $this->assertTrue(ProductPageFetcher::looksLikeBinaryMedia("????\x10JFIF creator: gd-jpeg"));
+        $this->assertFalse(ProductPageFetcher::looksLikeBinaryMedia('Obuwie ochronne Jalas 7168 Zenit Evo S3'));
+    }
 }

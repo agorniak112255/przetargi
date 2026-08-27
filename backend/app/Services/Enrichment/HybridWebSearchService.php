@@ -379,7 +379,9 @@ class HybridWebSearchService
         $pages = 0;
         foreach ($results as $row) {
             $url = (string) ($row['url'] ?? '');
-            if ($url === '' || ProductDocumentDownloader::looksLikeDocumentUrl($url)) {
+            if ($url === ''
+                || ProductDocumentDownloader::looksLikeDocumentUrl($url)
+                || ProductImageDownloader::looksLikeImageUrl($url)) {
                 continue;
             }
 
