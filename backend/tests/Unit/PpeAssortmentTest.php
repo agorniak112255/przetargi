@@ -168,6 +168,22 @@ final class PpeAssortmentTest extends TestCase
         $this->assertSame('goggles', $this->assortment->articleType('Gogle chemiczne', PpeAssortment::FAMILY_EYES));
         $this->assertSame('glasses', $this->assortment->articleType('Okulary ochronne', PpeAssortment::FAMILY_EYES));
         $this->assertSame('earmuff', $this->assortment->articleType('Nauszniki przeciwhałasowe', PpeAssortment::FAMILY_HEARING));
+        $this->assertSame(
+            'filter',
+            $this->assortment->articleTypePreferIdentity(
+                'Pochłaniacz 3031 A2',
+                'Pochłaniacz do półmasek SECURA i masek pełnotwarzowych EN 14387',
+                PpeAssortment::FAMILY_RESPIRATORY
+            )
+        );
+        $this->assertSame(
+            'fullface',
+            $this->assortment->articleTypePreferIdentity(
+                'Maska pełnotwarzowa 3M 6800',
+                'Kompatybilna z filtrami serii 2000 oraz 500, pochłaniacze bagnetowe.',
+                PpeAssortment::FAMILY_RESPIRATORY
+            )
+        );
     }
 
     #[Test]

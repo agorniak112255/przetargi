@@ -259,6 +259,18 @@ final class PpeAssortment
     /**
      * Krój / konstrukcja: kalosz ≠ trzewik, kurtka ≠ kalesony.
      */
+    /**
+     * Nazwa/SKU decydują, czym produkt JEST. Opis często wymienia kompatybilne
+     * półmaski albo filtry — to nie zmienia typu.
+     */
+    public function articleTypePreferIdentity(string $identity, string $fullText, ?string $family = null): ?string
+    {
+        $family ??= $this->family($identity) ?? $this->family($fullText);
+
+        return $this->articleType($identity, $family)
+            ?? $this->articleType($fullText, $family);
+    }
+
     public function articleType(string $text, ?string $family = null): ?string
     {
         $family ??= $this->family($text);
@@ -299,10 +311,15 @@ final class PpeAssortment
 
     private function respiratoryType(string $t): ?string
     {
-        if (preg_match('/\b(pochlaniacz|filtropochlaniacz)\w*/u', $t) === 1
-            && preg_match('/\b(polmask|ffp|maska\s+filtruj)\w*/u', $t) !== 1) {
+        $isFilterNoun = preg_match(
+            '/\b(pochlaniacz|filtropochlaniacz|wklad\w*|element\w*\s+oczyszcz)\w*/u',
+            $t
+        ) === 1;
+        $isMaskNoun = preg_match('/\b(polmask|maska|ffp|pelnotwarz|respirator)\w*/u', $t) === 1;
+        if ($isFilterNoun && ! $isMaskNoun) {
             return 'filter';
         }
+
         if (preg_match('/\b(pelnotwarz|full\s*face)\w*/u', $t) === 1) {
             return 'fullface';
         }
@@ -311,6 +328,9 @@ final class PpeAssortment
         }
         if (preg_match('/\b(polmask|czesci?\s+twarzow|elastomer|silikon)\w*/u', $t) === 1) {
             return 'reusable_half';
+        }
+        if ($isFilterNoun) {
+            return 'filter';
         }
 
         return null;

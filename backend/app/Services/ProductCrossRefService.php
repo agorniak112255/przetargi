@@ -206,9 +206,12 @@ final class ProductCrossRefService
             return false;
         }
 
-        $seedType = $seed['typ_wyrobu'] ?? null;
-        $candType = $cand['typ_wyrobu'] ?? null;
+        $seedType = is_string($seed['typ_wyrobu'] ?? null) ? $seed['typ_wyrobu'] : null;
+        $candType = is_string($cand['typ_wyrobu'] ?? null) ? $cand['typ_wyrobu'] : null;
         if ($seedType !== null && $candType !== null && $seedType !== $candType) {
+            return false;
+        }
+        if ($this->respiratoryMaskVsFilter($seedType, $candType)) {
             return false;
         }
 
@@ -236,6 +239,16 @@ final class ProductCrossRefService
         }
 
         return true;
+    }
+
+    private function respiratoryMaskVsFilter(?string $a, ?string $b): bool
+    {
+        $masks = ['ffp', 'reusable_half', 'fullface'];
+        $filters = ['filter'];
+
+        return $a !== null && $b !== null
+            && ((in_array($a, $masks, true) && in_array($b, $filters, true))
+                || (in_array($a, $filters, true) && in_array($b, $masks, true)));
     }
 
     /**

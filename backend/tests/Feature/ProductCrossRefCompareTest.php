@@ -418,6 +418,98 @@ final class ProductCrossRefCompareTest extends TestCase
         $this->assertNotContains('GOG-1', $skus);
     }
 
+    public function test_cross_ref_rejects_filter_cartridge_for_fullface_mask(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => '6800',
+            'name' => 'Maska pełnotwarzowa 3M 6800',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Maska pełnotwarzowa wielorazowa, złącze bagnetowe, filtry serii 2000 i 500, EN 136.',
+            'catalog_price_net' => 400,
+            'purchase_price' => 250,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['silikon'],
+                'norms' => ['EN 136', 'EN 166'],
+                'use_cases' => ['gazy', 'pary', 'pyły'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'silikon',
+                    'normy_en' => ['EN 136', 'EN 166'],
+                    'klasa_ochrony' => null,
+                    'kod_producenta' => '6800',
+                    'materialy' => ['silikon'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        Product::query()->create([
+            'sku' => '3031',
+            'name' => 'Pochłaniacz 3031 A2',
+            'manufacturer' => 'SECURA',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Pochłaniacz do półmasek SECURA 2000/3000 i masek pełnotwarzowych, EN 14387, klasa A2.',
+            'catalog_price_net' => 33,
+            'purchase_price' => 20,
+            'stock' => 8,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['tworzywo sztuczne'],
+                'norms' => ['EN 14387'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'tworzywo sztuczne',
+                    'normy_en' => ['EN 14387'],
+                    'klasa_ochrony' => 'A2',
+                    'kod_producenta' => '3031',
+                    'materialy' => ['tworzywo sztuczne'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $alt = Product::query()->create([
+            'sku' => 'ADV-3000',
+            'name' => 'Maska pełnotwarzowa Advantage 3000',
+            'manufacturer' => 'MSA',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Maska pełnotwarzowa EN 136, wielorazowa.',
+            'catalog_price_net' => 393,
+            'purchase_price' => 250,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['silikon'],
+                'norms' => ['EN 136'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'silikon',
+                    'normy_en' => ['EN 136'],
+                    'klasa_ochrony' => null,
+                    'kod_producenta' => 'ADV-3000',
+                    'materialy' => ['silikon'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $matches = collect($this->getJson('/api/products/cross-ref?code=6800')->assertOk()->json('matches'));
+        $this->assertNotContains('3031', $matches->pluck('sku')->all());
+        $this->assertContains('ADV-3000', $matches->pluck('sku')->all());
+        $this->assertSame($alt->id, $matches->firstWhere('sku', 'ADV-3000')['product_id']);
+    }
+
     public function test_cross_ref_scans_whole_catalog_not_a_family_slice(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

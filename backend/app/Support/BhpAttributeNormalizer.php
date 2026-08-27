@@ -142,12 +142,12 @@ final class BhpAttributeNormalizer
 
         $identity = ($context['category'] ?? '').' '
             .($context['name'] ?? '').' '
-            .($context['sku'] ?? '').' '
-            .($context['description'] ?? '');
+            .($context['sku'] ?? '');
+        $katText = $identity.' '.($context['description'] ?? '');
 
         $out['kategoria_bhp'] = $this->normalizeKategoria(
             $this->nullableString($raw['kategoria_bhp'] ?? null)
-            ?? $this->detectKategoria($identity)
+            ?? $this->detectKategoria($katText)
         );
 
         $out['kod_producenta'] = $this->nullableString($raw['kod_producenta'] ?? null)
@@ -199,8 +199,9 @@ final class BhpAttributeNormalizer
 
         $assortment = new PpeAssortment;
         $typeBlob = $identity.' '.$descBlob;
+        $family = $assortment->familyFromKategoria($out['kategoria_bhp']);
         $out['typ_wyrobu'] = $this->nullableString($raw['typ_wyrobu'] ?? null)
-            ?? $assortment->articleType($typeBlob, $assortment->familyFromKategoria($out['kategoria_bhp']));
+            ?? $assortment->articleTypePreferIdentity($identity, $typeBlob, $family);
         $out['przeznaczenie'] = $this->nullableString($raw['przeznaczenie'] ?? null)
             ?? $assortment->purpose($typeBlob);
         $out['rodzina_materialu'] = $this->materialFamily($primary, $materials, $typeBlob);
