@@ -44,20 +44,22 @@ final class PriceListImportService
             return $this->emptyResult('Plik jest pusty.');
         }
 
-        $header = array_map(
-            static fn ($v) => mb_strtolower(trim((string) $v)),
-            $rows[0] ?? []
-        );
-        $map = $this->resolveColumns($header);
-
-        if (! isset($map['sku'], $map['name'], $map['catalog_price'])) {
+        $headerHit = $this->findSimpleHeaderRow($rows);
+        if ($headerHit === null) {
             return $this->emptyResult(
                 'Wymagane kolumny: sku (kod), nazwa, cena (katalogowa). Opcjonalnie: ean, kategoria, normy, rabat, zakup, stan, producent. '
                 .'Dla cenników producentów użyj „Analizuj AI”.'
             );
         }
+        [$headerIdx, $map] = $headerHit;
 
-        $collected = $this->collectFromSimpleRows(array_slice($rows, 1), $map, $defaultCategory, $manufacturer);
+        $collected = $this->collectFromSimpleRows(
+            array_slice($rows, $headerIdx + 1),
+            $map,
+            $defaultCategory,
+            $manufacturer,
+            $headerIdx + 2,
+        );
         try {
             $collected = $this->applyGroupOptions($collected, $manufacturer, $groupOptions);
         } catch (\InvalidArgumentException $e) {
@@ -535,6 +537,7 @@ final class PriceListImportService
         array $map,
         ?string $defaultCategory,
         string $manufacturer,
+        int $firstDataExcelRow = 2,
     ): array {
         $products = [];
         $skipped = 0;
@@ -546,7 +549,7 @@ final class PriceListImportService
         $defaultCurrency = $this->currencyDetector->normalize(null, 'PLN');
         $carry = ['name' => null, 'category' => null, 'group' => null];
         foreach ($dataRows as $index => $row) {
-            $excelRow = $index + 2;
+            $excelRow = $firstDataExcelRow + $index;
             $parsed = $this->parseRow(
                 $row,
                 $map,
@@ -1039,10 +1042,12 @@ final class PriceListImportService
             return ['status' => 'skip'];
         }
 
-        // wiersze-sekcje typu „ODZIEŻ SPAWALNICZA…” bez ceny
-        if ($name !== '' && ($priceRaw === null || $priceRaw === '') && $sku === '') {
+        // wiersze-sekcje / uwagi bez ceny (tytuł w kodzie albo w nazwie)
+        if ($priceRaw === null || $priceRaw === '') {
             if ($rawName !== '' && ! $this->isDescriptionLike($rawName)) {
                 $carry['name'] = $rawName;
+            } elseif ($sku !== '' && $name === '') {
+                $carry['category'] = $sku;
             }
             if (isset($map['category'])) {
                 $cat = trim((string) ($row[$map['category']] ?? ''));
@@ -1054,7 +1059,7 @@ final class PriceListImportService
             return ['status' => 'skip'];
         }
 
-        if ($name === '' || $priceRaw === null || $priceRaw === '') {
+        if ($name === '') {
             return [
                 'status' => 'error',
                 'message' => "{$prefix}Wiersz {$excelRow}: brak nazwy/ceny — pominięto",
@@ -1339,21 +1344,108 @@ final class PriceListImportService
         return $map;
     }
 
+    /**
+     * @param  list<array<int, mixed>>  $rows
+     * @return array{0: int, 1: array<string, int>}|null
+     */
+    private function findSimpleHeaderRow(array $rows): ?array
+    {
+        $limit = min(25, count($rows));
+        $best = null;
+        $bestScore = 0;
+
+        for ($i = 0; $i < $limit; $i++) {
+            $header = array_map(
+                static fn ($v) => mb_strtolower(trim((string) $v)),
+                $rows[$i] ?? []
+            );
+            $map = $this->resolveColumns($header);
+            if (! isset($map['sku'], $map['name'], $map['catalog_price'])) {
+                continue;
+            }
+
+            $dataHits = 0;
+            $scanTo = min($i + 12, count($rows) - 1);
+            for ($j = $i + 1; $j <= $scanTo; $j++) {
+                $name = trim((string) ($rows[$j][$map['name']] ?? ''));
+                $price = $this->toFloat($rows[$j][$map['catalog_price']] ?? null);
+                if ($name !== '' && $price !== null) {
+                    $dataHits++;
+                }
+            }
+            if ($dataHits === 0) {
+                continue;
+            }
+
+            $score = $dataHits;
+            if (isset($map['discount'])) {
+                $score++;
+            }
+            if (isset($map['purchase'])) {
+                $score++;
+            }
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = [$i, $map];
+            }
+        }
+
+        return $best;
+    }
+
     private function toFloat(mixed $value): ?float
     {
         if ($value === null || $value === '') {
             return null;
         }
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
         if (is_numeric($value)) {
             return (float) $value;
         }
-        $s = str_replace([' ', "\xc2\xa0", '€', 'EUR', 'PLN', '%'], '', (string) $value);
-        $s = str_replace(',', '.', $s);
-        if (! is_numeric($s)) {
+
+        $s = trim((string) $value);
+        $s = str_replace(["\xc2\xa0", "\xe2\x80\xaf"], ' ', $s);
+        $s = preg_replace('/\s+/u', '', $s) ?? $s;
+        $s = mb_strtolower($s);
+        $s = str_replace(
+            ['zł.', 'zł', 'zl', 'pln', '€', 'eur', 'usd', 'gbp', '%', '$', '£'],
+            '',
+            $s
+        );
+        $s = $this->normalizeDecimalString($s);
+        if ($s === '' || $s === '-' || $s === '.') {
             return null;
+        }
+        if (! is_numeric($s)) {
+            $s = preg_replace('/[^\d.\-]/u', '', $s) ?? '';
+            if ($s === '' || $s === '-' || ! is_numeric($s)) {
+                return null;
+            }
         }
 
         return (float) $s;
+    }
+
+    private function normalizeDecimalString(string $s): string
+    {
+        $hasComma = str_contains($s, ',');
+        $hasDot = str_contains($s, '.');
+        if ($hasComma && $hasDot) {
+            $lastComma = (int) strrpos($s, ',');
+            $lastDot = (int) strrpos($s, '.');
+            if ($lastDot > $lastComma) {
+                return str_replace(',', '', $s);
+            }
+
+            return str_replace(',', '.', str_replace('.', '', $s));
+        }
+        if ($hasComma) {
+            return str_replace(',', '.', $s);
+        }
+
+        return $s;
     }
 
     /**
