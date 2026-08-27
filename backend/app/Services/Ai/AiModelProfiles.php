@@ -18,6 +18,7 @@ use Illuminate\Support\Str;
  *     api_key: ?string,
  *     timeout_seconds: ?int,
  *     temperature: ?float,
+ *     reasoning_effort: ?string,
  *     tasks: list<string>
  * }
  */
@@ -59,6 +60,7 @@ final class AiModelProfiles
                 'api_key' => self::secret($item['api_key'] ?? null, $keysById[$id] ?? null),
                 'timeout_seconds' => self::boundedInt($item['timeout_seconds'] ?? null, 10, 600),
                 'temperature' => self::boundedFloat($item['temperature'] ?? null, 0.0, 2.0),
+                'reasoning_effort' => ReasoningEffort::optional($item['reasoning_effort'] ?? null),
                 'tasks' => self::tasks($item['tasks'] ?? null, $claimed),
             ];
 
@@ -89,6 +91,7 @@ final class AiModelProfiles
                 'model' => $profile['model'] ?? null,
                 'timeout_seconds' => $profile['timeout_seconds'] ?? null,
                 'temperature' => $profile['temperature'] ?? null,
+                'reasoning_effort' => $profile['reasoning_effort'] ?? null,
                 'tasks' => array_values((array) ($profile['tasks'] ?? [])),
                 'has_api_key' => $key !== '',
                 'api_key_masked' => $key !== '' && $mask !== null ? $mask($key) : null,

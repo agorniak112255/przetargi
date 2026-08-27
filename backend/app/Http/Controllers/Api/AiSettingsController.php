@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Services\Ai\AiModelProfiles;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
+use App\Services\Ai\ReasoningEffort;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Vector\EmbeddingClient;
 use App\Services\Vector\QdrantClient;
@@ -42,6 +43,7 @@ class AiSettingsController extends Controller
             'enrichment_use_large_model' => ['sometimes', 'boolean'],
             'timeout_seconds' => ['sometimes', 'integer', 'min:10', 'max:300'],
             'temperature' => ['sometimes', 'numeric', 'min:0', 'max:2'],
+            'reasoning_effort' => ['sometimes', 'string', 'in:'.implode(',', ReasoningEffort::ALL)],
             'web_search_enabled' => ['sometimes', 'boolean'],
             'tavily_api_key' => ['nullable', 'string', 'max:500'],
             'search_engine' => ['sometimes', 'string', 'in:tavily,duckduckgo,searxng'],
@@ -68,6 +70,7 @@ class AiSettingsController extends Controller
             'model_profiles.*.api_key' => ['nullable', 'string', 'max:500'],
             'model_profiles.*.timeout_seconds' => ['nullable', 'integer', 'min:10', 'max:600'],
             'model_profiles.*.temperature' => ['nullable', 'numeric', 'min:0', 'max:2'],
+            'model_profiles.*.reasoning_effort' => ['nullable', 'string', 'in:'.implode(',', ReasoningEffort::ALL)],
             'model_profiles.*.tasks' => ['nullable', 'array'],
             'model_profiles.*.tasks.*' => ['string', 'in:'.implode(',', AiTask::keys())],
         ]);

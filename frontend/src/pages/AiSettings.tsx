@@ -7,11 +7,26 @@ function isKeptSecret(value: string): boolean {
   return v === '' || v.includes('*')
 }
 
+type ReasoningEffort = 'auto' | 'off' | 'none' | 'low' | 'medium' | 'xhigh'
+
+const REASONING_EFFORTS: { id: ReasoningEffort; label: string }[] = [
+  { id: 'auto', label: 'Auto (Qwen 3.8 → low)' },
+  { id: 'off', label: 'Nie wysyłaj' },
+  { id: 'none', label: 'Wyłącz myślenie' },
+  { id: 'low', label: 'low' },
+  { id: 'medium', label: 'medium' },
+  { id: 'xhigh', label: 'xhigh' },
+]
+
 /** Odpowiedź sprzed wdrożenia profili nie ma tych pól — bez tego lista by się wysypała. */
 function withProfileDefaults(next: AiSettings): AiSettings {
   return {
     ...next,
-    model_profiles: next.model_profiles ?? [],
+    reasoning_effort: next.reasoning_effort ?? 'auto',
+    model_profiles: (next.model_profiles ?? []).map((p) => ({
+      ...p,
+      reasoning_effort: p.reasoning_effort ?? null,
+    })),
     ai_tasks: next.ai_tasks ?? [],
   }
 }
@@ -48,6 +63,7 @@ type AiModelProfile = {
   model: string | null
   timeout_seconds: number | null
   temperature: number | null
+  reasoning_effort: ReasoningEffort | null
   tasks: string[]
   has_api_key: boolean
   api_key_masked: string | null
@@ -62,6 +78,7 @@ type AiSettings = {
   enrichment_use_large_model: boolean
   timeout_seconds: number
   temperature: number
+  reasoning_effort: ReasoningEffort
   web_search_enabled: boolean
   search_engine: SearchEngine
   searxng_url: string | null
@@ -174,6 +191,7 @@ export function AiSettingsPage() {
         model: null,
         timeout_seconds: null,
         temperature: null,
+        reasoning_effort: null,
         tasks: [],
         has_api_key: false,
         api_key_masked: null,
@@ -203,6 +221,7 @@ export function AiSettingsPage() {
         enrichment_use_large_model: Boolean(cfg.enrichment_use_large_model),
         timeout_seconds: cfg.timeout_seconds,
         temperature: cfg.temperature,
+        reasoning_effort: cfg.reasoning_effort,
         web_search_enabled: cfg.web_search_enabled,
         search_engine: cfg.search_engine || 'tavily',
         searxng_url: cfg.searxng_url?.trim() || null,
@@ -225,6 +244,7 @@ export function AiSettingsPage() {
             model: p.model?.trim() || null,
             timeout_seconds: p.timeout_seconds,
             temperature: p.temperature,
+            reasoning_effort: p.reasoning_effort,
             tasks: p.tasks,
           }
           const key = profileKeys[p.id] ?? ''
@@ -435,6 +455,27 @@ export function AiSettingsPage() {
           </label>
         </div>
 
+        <label className="block text-xs">
+          Głębokość myślenia
+          <select
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+            value={cfg.reasoning_effort}
+            onChange={(e) =>
+              setCfg({ ...cfg, reasoning_effort: e.target.value as ReasoningEffort })
+            }
+          >
+            {REASONING_EFFORTS.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 block text-[11px] text-slate-500">
+            Qwen 3.8 domyślnie myśli w xhigh. Auto ustawia low tylko dla Qwen 3.8 — przy zmianie
+            na GPT/Gemini nic nie wysyła. Profil może to nadpisać.
+          </span>
+        </label>
+
         <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-semibold text-slate-700">Profile modeli</p>
@@ -552,6 +593,32 @@ export function AiSettingsPage() {
                   />
                 </label>
               </div>
+
+              <label className="block text-[11px]">
+                Głębokość myślenia
+                <select
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
+                  value={profile.reasoning_effort ?? ''}
+                  onChange={(e) =>
+                    patchProfile(profile.id, {
+                      reasoning_effort:
+                        e.target.value === '' ? null : (e.target.value as ReasoningEffort),
+                    })
+                  }
+                >
+                  <option value="">
+                    jak główna (
+                    {REASONING_EFFORTS.find((o) => o.id === cfg.reasoning_effort)?.label ??
+                      cfg.reasoning_effort}
+                    )
+                  </option>
+                  {REASONING_EFFORTS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
               <fieldset>
                 <legend className="text-[11px] font-semibold text-slate-600">Zadania</legend>

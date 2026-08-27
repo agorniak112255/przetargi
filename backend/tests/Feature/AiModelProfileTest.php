@@ -105,6 +105,114 @@ final class AiModelProfileTest extends TestCase
             && $request['model'] === 'qwen38-27b-fast');
     }
 
+    public function test_auto_reasoning_sends_low_only_for_qwen38(): void
+    {
+        $this->seedMainConfig();
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']]
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return ($data['reasoning_effort'] ?? null) === 'low'
+                && ($data['chat_template_kwargs']['reasoning_effort'] ?? null) === 'low';
+        });
+    }
+
+    public function test_auto_reasoning_omits_field_for_other_models(): void
+    {
+        $this->seedMainConfig();
+        $this->saveProfiles([[
+            'id' => 'fast',
+            'name' => 'OpenRouter szybki',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'google/gemini-flash',
+            'api_key' => 'sk-or-profile-123',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::ProductSearch
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return $request['model'] === 'google/gemini-flash'
+                && ! array_key_exists('reasoning_effort', $data)
+                && ! array_key_exists('chat_template_kwargs', $data);
+        });
+    }
+
+    public function test_profile_can_force_low_on_non_qwen_model(): void
+    {
+        $this->seedMainConfig();
+        $this->saveProfiles([[
+            'id' => 'fast',
+            'name' => 'OpenRouter z low',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'google/gemini-flash',
+            'api_key' => 'sk-or-profile-123',
+            'reasoning_effort' => 'low',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::ProductSearch
+        );
+
+        Http::assertSent(fn (Request $request): bool => ($request->data()['reasoning_effort'] ?? null) === 'low');
+    }
+
+    public function test_off_reasoning_omits_field_even_for_qwen38(): void
+    {
+        $this->seedMainConfig();
+        AiSetting::query()->first()?->forceFill(['reasoning_effort' => 'off'])->save();
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']]
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return ! array_key_exists('reasoning_effort', $data)
+                && ! array_key_exists('chat_template_kwargs', $data);
+        });
+    }
+
+    public function test_none_reasoning_disables_thinking(): void
+    {
+        $this->seedMainConfig();
+        AiSetting::query()->first()?->forceFill(['reasoning_effort' => 'none'])->save();
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']]
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return ! array_key_exists('reasoning_effort', $data)
+                && ($data['chat_template_kwargs']['enable_thinking'] ?? null) === false;
+        });
+    }
+
     public function test_profile_with_only_a_model_reuses_main_url_and_key(): void
     {
         $this->seedMainConfig();

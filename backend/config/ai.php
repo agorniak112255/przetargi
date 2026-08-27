@@ -14,6 +14,8 @@ return [
     'enrichment_use_large_model' => (bool) env('AI_ENRICHMENT_USE_LARGE_MODEL', false),
     'timeout_seconds' => (int) env('AI_TIMEOUT', 240),
     'temperature' => (float) env('AI_TEMPERATURE', 0.1),
+    // auto | off | none | low | medium | xhigh — auto = low tylko dla Qwen 3.8
+    'reasoning_effort' => env('AI_REASONING_EFFORT', 'auto'),
     // Domyślnie WYŁĄCZONE — drogie. Główne źródło: Tavily.
     'web_search_enabled' => (bool) env('AI_WEB_SEARCH_ENABLED', false),
     'tavily_api_key' => env('AI_TAVILY_API_KEY'),

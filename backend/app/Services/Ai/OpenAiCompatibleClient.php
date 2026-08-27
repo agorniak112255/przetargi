@@ -81,7 +81,7 @@ class OpenAiCompatibleClient
     }
 
     /**
-     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, is_default: bool}  $profile
+     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $profile
      * @param  list<array{role: string, content: mixed}>  $messages
      * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string}
      */
@@ -125,6 +125,10 @@ class OpenAiCompatibleClient
         }
         unset($extra['max_tokens'], $extra['model']);
         $basePayload = array_merge($basePayload, $extra);
+        $basePayload = $this->applyReasoningEffort(
+            $basePayload,
+            (string) ($profile['reasoning_effort'] ?? ReasoningEffort::AUTO)
+        );
         $timeout = $profile['timeout_seconds'];
 
         try {
@@ -369,7 +373,7 @@ class OpenAiCompatibleClient
     }
 
     /**
-     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, is_default: bool}  $profile
+     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $profile
      * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
      */
     private function webSearchWithProfile(array $profile, string $prompt, int $timeoutSeconds): array
@@ -400,6 +404,10 @@ class OpenAiCompatibleClient
                 ],
             ],
         ];
+        $payload = $this->applyReasoningEffort(
+            $payload,
+            (string) ($profile['reasoning_effort'] ?? ReasoningEffort::AUTO)
+        );
 
         try {
             $response = Http::withToken($profile['api_key'])
@@ -901,5 +909,45 @@ class OpenAiCompatibleClient
     private function isReasoningModel(string $model): bool
     {
         return preg_match('/gpt-5|o1|o3|o4|tera|reasoning|r1|think/i', $model) === 1;
+    }
+
+    private function isQwen38Model(string $model): bool
+    {
+        return preg_match('/qwen3[\.\-_]?8/i', $model) === 1;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function applyReasoningEffort(array $payload, string $effort): array
+    {
+        $effort = ReasoningEffort::normalize($effort);
+        if ($effort === ReasoningEffort::OFF) {
+            return $payload;
+        }
+        if ($effort === ReasoningEffort::AUTO) {
+            if (! $this->isQwen38Model((string) ($payload['model'] ?? ''))) {
+                return $payload;
+            }
+            $effort = ReasoningEffort::LOW;
+        }
+
+        $kwargs = is_array($payload['chat_template_kwargs'] ?? null)
+            ? $payload['chat_template_kwargs']
+            : [];
+
+        if ($effort === ReasoningEffort::NONE) {
+            $kwargs['enable_thinking'] = false;
+            $payload['chat_template_kwargs'] = $kwargs;
+
+            return $payload;
+        }
+
+        $payload['reasoning_effort'] = $effort;
+        $kwargs['reasoning_effort'] = $effort;
+        $payload['chat_template_kwargs'] = $kwargs;
+
+        return $payload;
     }
 }

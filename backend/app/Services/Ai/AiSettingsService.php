@@ -66,6 +66,7 @@ final class AiSettingsService
      *     enrichment_use_large_model: bool,
      *     timeout_seconds: int,
      *     temperature: float,
+     *     reasoning_effort: string,
      *     web_search_enabled: bool,
      *     tavily_api_key: ?string,
      *     search_engine: string,
@@ -119,6 +120,11 @@ final class AiSettingsService
                 ),
                 'timeout_seconds' => (int) $row->timeout_seconds,
                 'temperature' => (float) $row->temperature,
+                'reasoning_effort' => $this->normalizeReasoningEffort(
+                    Schema::hasColumn('ai_settings', 'reasoning_effort')
+                        ? ($row->reasoning_effort ?? null)
+                        : null
+                ),
                 'web_search_enabled' => (bool) ($row->web_search_enabled ?? true),
                 'tavily_api_key' => $tavily !== null && $tavily !== '' ? (string) $tavily : null,
                 'search_engine' => $this->normalizeSearchEngine(
@@ -194,6 +200,7 @@ final class AiSettingsService
             'enrichment_use_large_model' => (bool) config('ai.enrichment_use_large_model', false),
             'timeout_seconds' => (int) config('ai.timeout_seconds'),
             'temperature' => (float) config('ai.temperature'),
+            'reasoning_effort' => $this->normalizeReasoningEffort(config('ai.reasoning_effort')),
             'web_search_enabled' => (bool) config('ai.web_search_enabled', true),
             'tavily_api_key' => $tavily,
             'search_engine' => $this->normalizeSearchEngine(config('ai.search_engine')),
@@ -238,6 +245,7 @@ final class AiSettingsService
             'enrichment_use_large_model' => $cfg['enrichment_use_large_model'],
             'timeout_seconds' => $cfg['timeout_seconds'],
             'temperature' => $cfg['temperature'],
+            'reasoning_effort' => $cfg['reasoning_effort'],
             'web_search_enabled' => $cfg['web_search_enabled'],
             'search_engine' => $cfg['search_engine'],
             'searxng_url' => $cfg['searxng_url'],
@@ -283,6 +291,7 @@ final class AiSettingsService
             'enrichment_use_large_model' => false,
             'timeout_seconds' => 240,
             'temperature' => 0.1,
+            'reasoning_effort' => ReasoningEffort::AUTO,
             'web_search_enabled' => false,
             'search_engine' => self::SEARCH_ENGINE_TAVILY,
             'search_fallback' => 'tavily',
@@ -316,6 +325,11 @@ final class AiSettingsService
             if (array_key_exists($field, $data)) {
                 $row->{$field} = $data[$field];
             }
+        }
+
+        if (array_key_exists('reasoning_effort', $data)
+            && Schema::hasColumn('ai_settings', 'reasoning_effort')) {
+            $row->reasoning_effort = $this->normalizeReasoningEffort($data['reasoning_effort']);
         }
 
         if (array_key_exists('enrichment_model', $data)) {
@@ -498,6 +512,7 @@ final class AiSettingsService
      *     model: string,
      *     timeout_seconds: int,
      *     temperature: float,
+     *     reasoning_effort: string,
      *     is_default: bool
      * }
      */
@@ -511,6 +526,7 @@ final class AiSettingsService
             'model' => (string) $cfg['model'],
             'timeout_seconds' => (int) $cfg['timeout_seconds'],
             'temperature' => (float) $cfg['temperature'],
+            'reasoning_effort' => $this->normalizeReasoningEffort($cfg['reasoning_effort'] ?? null),
             'is_default' => true,
         ];
 
@@ -539,6 +555,8 @@ final class AiSettingsService
             'temperature' => is_numeric($profile['temperature'] ?? null)
                 ? (float) $profile['temperature']
                 : $fallback['temperature'],
+            'reasoning_effort' => ReasoningEffort::optional($profile['reasoning_effort'] ?? null)
+                ?? $fallback['reasoning_effort'],
             'is_default' => false,
         ];
     }
@@ -684,6 +702,11 @@ final class AiSettingsService
         $n = is_numeric($value) ? (int) $value : 4;
 
         return max(1, min(self::CONCURRENCY_MAX, $n));
+    }
+
+    private function normalizeReasoningEffort(mixed $value): string
+    {
+        return ReasoningEffort::normalize($value);
     }
 
     private function nullableString(mixed $value): ?string

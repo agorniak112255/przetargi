@@ -18,6 +18,7 @@ class AiSetting extends Model
         'enrichment_use_large_model',
         'timeout_seconds',
         'temperature',
+        'reasoning_effort',
         'web_search_enabled',
         'tavily_api_key',
         'search_fallback',
