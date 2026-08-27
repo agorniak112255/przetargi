@@ -97,8 +97,8 @@ final class PpeAssortment
 
         if (preg_match(
             '/\b(polmask|respirator|aparat\w*\s+oddech|drog[iy]\s+oddech|filtrow?\w*\s+oddech'
-            .'|maska\s+(twarzow|pelnotwarz)|czesc\s+twarzow'
-            .'|pochlaniacz|filtropochlaniacz)\w*/u',
+            .'|maska\s+(twarzow|pelnotwarz|filtruj|przeciwpyl)|czesc\s+twarzow'
+            .'|pochlaniacz|filtropochlaniacz|ffp[123]?)\w*/u',
             $t
         ) === 1) {
             return self::FAMILY_RESPIRATORY;
@@ -262,15 +262,25 @@ final class PpeAssortment
     public function articleType(string $text, ?string $family = null): ?string
     {
         $family ??= $this->family($text);
-        if ($family === self::FAMILY_APPAREL) {
-            return $this->garment($text);
-        }
-
         $t = $this->normalize($text);
-        if ($family !== null && $family !== self::FAMILY_FOOTWEAR) {
-            return null;
-        }
 
+        return match ($family) {
+            self::FAMILY_APPAREL => $this->garment($text),
+            self::FAMILY_FOOTWEAR => $this->footwearType($t),
+            self::FAMILY_RESPIRATORY => $this->respiratoryType($t),
+            self::FAMILY_GLOVES => $this->gloveType($t),
+            self::FAMILY_EYES => $this->eyeType($t),
+            self::FAMILY_HEARING => $this->hearingType($t),
+            self::FAMILY_HEAD => $this->headType($t),
+            self::FAMILY_FACE => $this->faceType($t),
+            self::FAMILY_FALL => $this->fallType($t),
+            self::FAMILY_KNEE => 'kneepad',
+            default => $family === null ? $this->footwearType($t) : null,
+        };
+    }
+
+    private function footwearType(string $t): ?string
+    {
         if (preg_match('/\b(kalosz|wellington|gumowc|gumiak|purofort|wader|gumboot)\w*/u', $t) === 1) {
             return self::TYPE_KALOSZ;
         }
@@ -282,6 +292,112 @@ final class PpeAssortment
         }
         if (preg_match('/\b(polbut|polbuty|low\s*shoe)\w*/u', $t) === 1) {
             return self::TYPE_POLBUT;
+        }
+
+        return null;
+    }
+
+    private function respiratoryType(string $t): ?string
+    {
+        if (preg_match('/\b(pochlaniacz|filtropochlaniacz)\w*/u', $t) === 1
+            && preg_match('/\b(polmask|ffp|maska\s+filtruj)\w*/u', $t) !== 1) {
+            return 'filter';
+        }
+        if (preg_match('/\b(pelnotwarz|full\s*face)\w*/u', $t) === 1) {
+            return 'fullface';
+        }
+        if (preg_match('/\b(ffp[123]?|jednorazow|przeciwpyl|filtrujac)\w*/u', $t) === 1) {
+            return 'ffp';
+        }
+        if (preg_match('/\b(polmask|czesci?\s+twarzow|elastomer|silikon)\w*/u', $t) === 1) {
+            return 'reusable_half';
+        }
+
+        return null;
+    }
+
+    private function gloveType(string $t): ?string
+    {
+        if (preg_match('/\b(jednorazow|winyl|vinyl|examinat)\w*/u', $t) === 1) {
+            return 'disposable';
+        }
+        if (preg_match('/\bspawal|11611|welding/u', $t) === 1) {
+            return 'welding';
+        }
+        if (preg_match('/\b(przeciec|cut|hppe|dyneema|powermask)\w*/u', $t) === 1) {
+            return 'cut';
+        }
+        if (preg_match('/\b(chemiczn|374|kwasow)\w*/u', $t) === 1) {
+            return 'chemical';
+        }
+        if (preg_match('/\b(skorz|leather|welur|licow)\w*/u', $t) === 1) {
+            return 'leather';
+        }
+        if (preg_match('/\b(powlek|powlok)\w*/u', $t) === 1) {
+            return 'coated';
+        }
+
+        return null;
+    }
+
+    private function eyeType(string $t): ?string
+    {
+        if (preg_match('/\b(gogl)\w*/u', $t) === 1) {
+            return 'goggles';
+        }
+        if (preg_match('/\b(okular)\w*/u', $t) === 1) {
+            return 'glasses';
+        }
+
+        return null;
+    }
+
+    private function hearingType(string $t): ?string
+    {
+        if (preg_match('/\b(nausznik|sluchawk\w*\s+ochron)\w*/u', $t) === 1) {
+            return 'earmuff';
+        }
+        if (preg_match('/\b(wkladk\w*\s+sluch|stoper)\w*/u', $t) === 1) {
+            return 'earplug';
+        }
+
+        return null;
+    }
+
+    private function headType(string $t): ?string
+    {
+        if (preg_match('/\b(kominiark|balaclava)\w*/u', $t) === 1) {
+            return 'balaclava';
+        }
+        if (preg_match('/\b(helm|kask)\w*/u', $t) === 1) {
+            return 'helmet';
+        }
+        if (preg_match('/\b(czapk|czepek)\w*/u', $t) === 1) {
+            return 'cap';
+        }
+
+        return null;
+    }
+
+    private function faceType(string $t): ?string
+    {
+        if (preg_match('/\b(przylbic|maska\s+spawal)\w*/u', $t) === 1) {
+            return 'welding_helmet';
+        }
+        if (preg_match('/\b(oslon\w*\s+twarz|face\s*shield)\w*/u', $t) === 1) {
+            return 'shield';
+        }
+
+        return null;
+    }
+
+    private function fallType(string $t): ?string
+    {
+        if (preg_match('/\b(szelk)\w*/u', $t) === 1) {
+            return 'harness';
+        }
+        if (preg_match('/\b(linka|lonza|amortyzator)\w*/u', $t) === 1) {
+            return 'lanyard';
         }
 
         return null;

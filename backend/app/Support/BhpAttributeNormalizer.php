@@ -349,7 +349,8 @@ final class BhpAttributeNormalizer
     {
         $hay = trim(($rawKlasa ?? '').' '.$blob);
         $oznaczenia = $this->extractMarkings($hay);
-        $klasa = $this->extractFootwearClass($rawKlasa ?? '')
+        $klasa = $this->extractFfpClass($rawKlasa ?? '')
+            ?? $this->extractFootwearClass($rawKlasa ?? '')
             ?? $this->detectKlasa($hay);
 
         return ['klasa' => $klasa, 'oznaczenia' => $oznaczenia];
@@ -358,7 +359,7 @@ final class BhpAttributeNormalizer
     /** @return list<string> */
     private function extractMarkings(string $text): array
     {
-        if (preg_match_all('/\b(SRA|SRB|SRC|HRO|WR|CI|HI|FO|AN)\b/u', $text, $m) < 1) {
+        if (preg_match_all('/\b(SRA|SRB|SRC|HRO|WR|CI|HI|FO|AN|NR)\b/u', $text, $m) < 1) {
             return [];
         }
 
@@ -379,16 +380,34 @@ final class BhpAttributeNormalizer
         return null;
     }
 
+    private function extractFfpClass(string $text): ?string
+    {
+        if (preg_match('/\bFFP\s*[-]?([123])\b/iu', $text, $m) === 1) {
+            return 'FFP'.$m[1];
+        }
+
+        return null;
+    }
+
     private function detectKlasa(string $text): ?string
     {
+        $norm = $this->normalizeText($text);
+        $respiratory = preg_match(
+            '/\b(polmask|ffp|respirator|filtrujac|przeciwpyl|drog[iy]\s+oddech)\w*/u',
+            $norm
+        ) === 1;
+        $ffp = $this->extractFfpClass($text);
+        if ($ffp !== null && $respiratory) {
+            return $ffp;
+        }
+
         $footwearClass = $this->extractFootwearClass($text);
         if ($footwearClass !== null) {
-            $norm = $this->normalizeText($text);
             $footwear = preg_match(
                 '/\b(trzewik|polbut|sandal|obuwie|buty|footwear|podeszw|podnosek|kalosz|purofort)\w*/u',
                 $norm
             ) === 1;
-            if ($footwear) {
+            if ($footwear && ! $respiratory) {
                 return $footwearClass;
             }
         }
@@ -426,6 +445,9 @@ final class BhpAttributeNormalizer
         }
         if (preg_match('/\b(hppe|dyneema)\w*/u', $blob) === 1) {
             return 'cut';
+        }
+        if (preg_match('/\b(wloknin|meltblown|polipropylen|polypropylen)\w*/u', $blob) === 1) {
+            return 'wloknina';
         }
         if (preg_match('/\bpoliuretan\w*|\bpu\b/u', $blob) === 1) {
             return 'pu';

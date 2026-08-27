@@ -152,4 +152,23 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertSame('skora', $attrs['rodzina_materialu']);
         $this->assertSame('welding', $attrs['przeznaczenie']);
     }
+
+    public function test_parses_ffp_class_for_filtering_half_mask(): void
+    {
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            [
+                'kategoria_bhp' => 'drogi_oddechowe',
+                'normy_en' => ['EN 149'],
+            ],
+            [
+                'name' => 'Półmaska filtrująca 9914',
+                'description' => 'FFP1 z węglem, EN 149.',
+                'category' => 'Ochrona dróg oddechowych',
+            ]
+        );
+
+        $this->assertSame('FFP1', $attrs['klasa_ochrony']);
+        $this->assertSame('ffp', $attrs['typ_wyrobu']);
+        $this->assertSame('drogi_oddechowe', $attrs['kategoria_bhp']);
+    }
 }

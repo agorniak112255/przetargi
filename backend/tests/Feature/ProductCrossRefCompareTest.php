@@ -266,6 +266,158 @@ final class ProductCrossRefCompareTest extends TestCase
             ->assertJsonFragment(['sku' => 'PURO-ALT', 'product_id' => $other->id]);
     }
 
+    public function test_cross_ref_matches_ffp_half_masks_and_rejects_reusable(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => '9914',
+            'name' => 'Półmaska filtrująca 9914',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Półmaska filtrująca FFP1 z węglem i zaworem, EN 149.',
+            'catalog_price_net' => 4.99,
+            'purchase_price' => 4.29,
+            'stock' => 20,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['włóknina'],
+                'norms' => ['EN 149'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'włóknina',
+                    'normy_en' => ['EN 149'],
+                    'klasa_ochrony' => 'FFP1',
+                    'kod_producenta' => '9914',
+                    'materialy' => ['włóknina'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $ffp = Product::query()->create([
+            'sku' => '8822',
+            'name' => 'Półmaska filtrująca FFP2',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Jednorazowa maska FFP2 EN 149, włóknina.',
+            'catalog_price_net' => 3.5,
+            'purchase_price' => 2.5,
+            'stock' => 30,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['polipropylen'],
+                'norms' => ['EN 149'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'polipropylen',
+                    'normy_en' => ['EN 149'],
+                    'klasa_ochrony' => 'FFP2',
+                    'kod_producenta' => '8822',
+                    'materialy' => ['polipropylen'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        Product::query()->create([
+            'sku' => '6500',
+            'name' => 'Półmaska wielorazowa 6500 silikon',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Półmaska wielorazowa, część twarzowa z silikonu, filtry osobno.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 25,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['silikon'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'silikon',
+                    'normy_en' => ['EN 140'],
+                    'klasa_ochrony' => null,
+                    'kod_producenta' => '6500',
+                    'materialy' => ['silikon'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $res = $this->getJson('/api/products/cross-ref?code=9914')->assertOk();
+        $skus = collect($res->json('matches'))->pluck('sku')->all();
+        $this->assertContains('8822', $skus);
+        $this->assertNotContains('6500', $skus);
+        $this->assertSame($ffp->id, collect($res->json('matches'))->firstWhere('sku', '8822')['product_id']);
+    }
+
+    public function test_cross_ref_rejects_goggles_as_glasses_substitute(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'OKU-1',
+            'name' => 'Okulary ochronne przezroczyste',
+            'manufacturer' => 'uvex',
+            'category' => 'Ochrona oczu',
+            'description' => 'Okulary EN 166.',
+            'catalog_price_net' => 10,
+            'purchase_price' => 6,
+            'stock' => 8,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'norms' => ['EN 166'],
+                'attributes' => [
+                    'kategoria_bhp' => 'ochrona_oczu',
+                    'normy_en' => ['EN 166'],
+                    'kod_producenta' => 'OKU-1',
+                    'materialy' => [],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                    'klasa_ochrony' => null,
+                    'material' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        Product::query()->create([
+            'sku' => 'GOG-1',
+            'name' => 'Gogle chemiczne',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona oczu',
+            'description' => 'Gogle EN 166.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 12,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'norms' => ['EN 166'],
+                'attributes' => [
+                    'kategoria_bhp' => 'ochrona_oczu',
+                    'normy_en' => ['EN 166'],
+                    'kod_producenta' => 'GOG-1',
+                    'materialy' => [],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                    'klasa_ochrony' => null,
+                    'material' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $skus = collect($this->getJson('/api/products/cross-ref?code=OKU-1')->assertOk()->json('matches'))
+            ->pluck('sku')->all();
+        $this->assertNotContains('GOG-1', $skus);
+    }
+
     public function test_compare_highlights_attribute_diffs_and_siwz_scores(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

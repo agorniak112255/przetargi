@@ -49,6 +49,8 @@ final class PpeAssortmentTest extends TestCase
             ['Nakolanniki żelowe', PpeAssortment::FAMILY_KNEE],
             ['Rękawice nitrylowe RNITZ', PpeAssortment::FAMILY_GLOVES],
             ['Trzewiki S3 ocieplane', PpeAssortment::FAMILY_FOOTWEAR],
+            ['Półmaska filtrująca 9914', PpeAssortment::FAMILY_RESPIRATORY],
+            ['3M 8822 FFP2', PpeAssortment::FAMILY_RESPIRATORY],
             ['Kurtka ochronna ocieplana z kapturem', PpeAssortment::FAMILY_APPAREL],
             ['POLA - EN 420 KAT. II, EN 388 - 3131', PpeAssortment::FAMILY_GLOVES],
             ['Kalesony bawełniane męskie', PpeAssortment::FAMILY_APPAREL],
@@ -161,6 +163,11 @@ final class PpeAssortmentTest extends TestCase
         );
         $this->assertSame('agriculture', $this->assortment->purpose('Kalosz do rolnictwa i gospodarstw'));
         $this->assertSame('welding', $this->assortment->purpose('Trzewiki spawalnicze HRO'));
+        $this->assertSame('ffp', $this->assortment->articleType('Półmaska filtrująca 9914 FFP1', PpeAssortment::FAMILY_RESPIRATORY));
+        $this->assertSame('reusable_half', $this->assortment->articleType('Półmaska wielorazowa 6500 silikon', PpeAssortment::FAMILY_RESPIRATORY));
+        $this->assertSame('goggles', $this->assortment->articleType('Gogle chemiczne', PpeAssortment::FAMILY_EYES));
+        $this->assertSame('glasses', $this->assortment->articleType('Okulary ochronne', PpeAssortment::FAMILY_EYES));
+        $this->assertSame('earmuff', $this->assortment->articleType('Nauszniki przeciwhałasowe', PpeAssortment::FAMILY_HEARING));
     }
 
     #[Test]

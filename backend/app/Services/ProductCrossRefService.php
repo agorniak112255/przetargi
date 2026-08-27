@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\PpeAssortment;
 
 /**
  * Cross-reference: kod/SKU → ten sam wyrób u innego producenta.
@@ -21,21 +22,28 @@ final class ProductCrossRefService
     /** Oznaczenia z bazy, bez których kandydat nie jest ekwiwalentem. */
     private const REQUIRED_MARKINGS = ['CI', 'HI', 'HRO', 'WR'];
 
-    /** @var array<string, int> */
-    private const FOOTWEAR_CLASS_RANK = [
-        'OB' => 1,
-        'SB' => 2,
-        'S1' => 3,
-        'S1P' => 4,
-        'S2' => 5,
-        'S3' => 6,
-        'S4' => 7,
-        'S5' => 8,
-        'S7' => 9,
+    /** @var array<string, array{group: string, rank: int}> */
+    private const CLASS_RANKS = [
+        'OB' => ['group' => 'footwear', 'rank' => 1],
+        'SB' => ['group' => 'footwear', 'rank' => 2],
+        'S1' => ['group' => 'footwear', 'rank' => 3],
+        'S1P' => ['group' => 'footwear', 'rank' => 4],
+        'S2' => ['group' => 'footwear', 'rank' => 5],
+        'S3' => ['group' => 'footwear', 'rank' => 6],
+        'S4' => ['group' => 'footwear', 'rank' => 7],
+        'S5' => ['group' => 'footwear', 'rank' => 8],
+        'S7' => ['group' => 'footwear', 'rank' => 9],
+        'FFP1' => ['group' => 'ffp', 'rank' => 1],
+        'FFP2' => ['group' => 'ffp', 'rank' => 2],
+        'FFP3' => ['group' => 'ffp', 'rank' => 3],
+        'KAT1' => ['group' => 'ppe_kat', 'rank' => 1],
+        'KAT2' => ['group' => 'ppe_kat', 'rank' => 2],
+        'KAT3' => ['group' => 'ppe_kat', 'rank' => 3],
     ];
 
     public function __construct(
         private readonly BhpAttributeNormalizer $bhpAttributes,
+        private readonly PpeAssortment $assortment,
     ) {}
 
     /**
@@ -63,10 +71,7 @@ final class ProductCrossRefService
         $seedAttrs = $this->bhpAttributes->forProduct($seed);
         $seedMfr = mb_strtolower(trim((string) $seed->manufacturer));
 
-        $pool = Product::query()
-            ->where('id', '!=', $seed->id)
-            ->limit(800)
-            ->get();
+        $pool = $this->candidatePool($seed);
 
         $matches = [];
         foreach ($pool as $product) {
@@ -220,13 +225,15 @@ final class ProductCrossRefService
             return false;
         }
 
-        if (! $this->footwearClassMeetsSeed($seed, $cand)) {
+        if (! $this->classMeetsSeed($seed, $cand)) {
             return false;
         }
 
-        $need = array_intersect($this->markingSet($seed), self::REQUIRED_MARKINGS);
-        if ($need !== [] && array_diff($need, $this->markingSet($cand)) !== []) {
-            return false;
+        if (($seed['kategoria_bhp'] ?? null) === 'obuwie') {
+            $need = array_intersect($this->markingSet($seed), self::REQUIRED_MARKINGS);
+            if ($need !== [] && array_diff($need, $this->markingSet($cand)) !== []) {
+                return false;
+            }
         }
 
         return true;
@@ -236,20 +243,70 @@ final class ProductCrossRefService
      * @param  array<string, mixed>  $seed
      * @param  array<string, mixed>  $cand
      */
-    private function footwearClassMeetsSeed(array $seed, array $cand): bool
+    /**
+     * @return \Illuminate\Support\Collection<int, Product>
+     */
+    private function candidatePool(Product $seed)
     {
-        $seedClass = isset($seed['klasa_ochrony']) ? mb_strtoupper((string) $seed['klasa_ochrony']) : '';
-        $candClass = isset($cand['klasa_ochrony']) ? mb_strtoupper((string) $cand['klasa_ochrony']) : '';
-        $seedRank = self::FOOTWEAR_CLASS_RANK[$seedClass] ?? null;
-        if ($seedRank === null) {
-            return true;
-        }
-        $candRank = self::FOOTWEAR_CLASS_RANK[$candClass] ?? null;
-        if ($candRank === null) {
-            return false;
+        $family = is_string($seed->ppe_family) && $seed->ppe_family !== ''
+            ? $seed->ppe_family
+            : $this->assortment->productFamily($seed);
+
+        $query = Product::query()->where('id', '!=', $seed->id);
+        if ($family !== null) {
+            $query->where(function ($q) use ($family): void {
+                $q->where('ppe_family', $family)->orWhereNull('ppe_family');
+            })->orderByRaw('ppe_family is null');
         }
 
-        return $candRank >= $seedRank;
+        return $query->limit(2500)->get();
+    }
+
+    /**
+     * @param  array<string, mixed>  $seed
+     * @param  array<string, mixed>  $cand
+     */
+    private function classMeetsSeed(array $seed, array $cand): bool
+    {
+        $seedKey = $this->classRankKey((string) ($seed['klasa_ochrony'] ?? ''));
+        if ($seedKey === null) {
+            return true;
+        }
+        $candKey = $this->classRankKey((string) ($cand['klasa_ochrony'] ?? ''));
+        if ($candKey === null) {
+            return $seedKey['group'] !== 'footwear';
+        }
+        if ($seedKey['group'] !== $candKey['group']) {
+            return true;
+        }
+
+        return $candKey['rank'] >= $seedKey['rank'];
+    }
+
+    /**
+     * @return array{group: string, rank: int}|null
+     */
+    private function classRankKey(string $class): ?array
+    {
+        $c = mb_strtoupper(trim($class));
+        if ($c === '') {
+            return null;
+        }
+        if (isset(self::CLASS_RANKS[$c])) {
+            return self::CLASS_RANKS[$c];
+        }
+        if (preg_match('/KAT\.?\s*(I{1,3}|[123])/u', $c, $m) === 1) {
+            $n = $m[1];
+            $key = match ($n) {
+                'I', '1' => 'KAT1',
+                'II', '2' => 'KAT2',
+                default => 'KAT3',
+            };
+
+            return self::CLASS_RANKS[$key];
+        }
+
+        return null;
     }
 
     /**
