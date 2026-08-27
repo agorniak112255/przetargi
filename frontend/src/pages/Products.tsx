@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
@@ -8,6 +8,7 @@ import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
+import { applyCheckboxRange } from '../lib/checkboxRange'
 import { api, can, parseActiveEnrichment, type EnrichmentBatch, type Product } from '../lib/api'
 
 type Page = {
@@ -81,6 +82,7 @@ function ProductListControls({
             />
             Zaznacz widoczne ({visibleCount})
             {selectedCount > 0 ? ` · zaznaczono ${selectedCount}` : ''}
+            <span className="text-slate-400"> · Shift+klik: zakres</span>
           </label>
         )}
         <p className="text-xs text-slate-500">
@@ -197,6 +199,7 @@ export function Products() {
   const [enrichRowId, setEnrichRowId] = useState<number | null>(null)
   const [batch, setBatch] = useState<EnrichmentBatch | null>(null)
   const [selected, setSelected] = useState<Record<number, boolean>>({})
+  const lastSelectIndex = useRef<number | null>(null)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
@@ -233,6 +236,10 @@ export function Products() {
     setManufacturer(searchParams.get('manufacturer') ?? '')
     setPage(1)
   }, [searchParams])
+
+  useEffect(() => {
+    lastSelectIndex.current = null
+  }, [page, sort, dir, manufacturer, debouncedQ, aiMode])
 
   useEffect(() => {
     if (!canEnrich) return
@@ -446,12 +453,14 @@ export function Products() {
     }
   }
 
-  function toggleSelected(id: number) {
+  function toggleSelected(id: number, shiftKey = false) {
+    const ids = (result?.data ?? []).map((p) => p.id)
+    const index = ids.indexOf(id)
+    if (index < 0) return
     setSelected((prev) => {
-      const next = { ...prev }
-      if (next[id]) delete next[id]
-      else next[id] = true
-      return next
+      const applied = applyCheckboxRange(ids, prev, lastSelectIndex.current, index, shiftKey)
+      lastSelectIndex.current = applied.anchorIndex
+      return applied.selected
     })
   }
 
@@ -468,6 +477,7 @@ export function Products() {
       }
       return next
     })
+    lastSelectIndex.current = allOn ? null : ids.length - 1
   }
 
   async function enrichOne(p: Product, force = false) {
@@ -733,7 +743,7 @@ export function Products() {
                     type="checkbox"
                     checked={allVisibleSelected}
                     onChange={toggleSelectAllVisible}
-                    title="Zaznacz / odznacz widoczne"
+                    title="Zaznacz / odznacz widoczne. Na wierszu: Shift+klik zaznacza zakres."
                     aria-label="Zaznacz wszystkie widoczne"
                   />
                 </th>
@@ -757,11 +767,20 @@ export function Products() {
               return (
                 <tr key={p.id} className={`border-b ${selected[p.id] ? 'bg-blue-50/40' : ''}`}>
                   {canEnrich && (
-                    <td className="p-2">
+                    <td className="p-2 select-none">
                       <input
                         type="checkbox"
                         checked={Boolean(selected[p.id])}
-                        onChange={() => toggleSelected(p.id)}
+                        title="Shift+klik zaznacza wszystkie od ostatnio klikniętej"
+                        onMouseDown={(e) => {
+                          if (!e.shiftKey) return
+                          e.preventDefault()
+                          toggleSelected(p.id, true)
+                        }}
+                        onChange={(e) => {
+                          if ((e.nativeEvent as MouseEvent).shiftKey) return
+                          toggleSelected(p.id, false)
+                        }}
                         aria-label={`Zaznacz ${p.sku}`}
                       />
                     </td>
@@ -898,6 +917,7 @@ export function Products() {
                 <td colSpan={tableCols - 1} className="p-2 text-xs text-slate-600">
                   Zaznacz widoczne ({visibleIds.length})
                   {selectedIds.length > 0 ? ` · zaznaczono ${selectedIds.length}` : ''}
+                  {' · Shift+klik: zakres'}
                 </td>
               </tr>
             </tfoot>
