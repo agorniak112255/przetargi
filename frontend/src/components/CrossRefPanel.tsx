@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
+import {
+  CrossRefFilterModal,
+  type CrossRefAppliedFilter,
+  type CrossRefFilterGroup,
+} from './CrossRefFilterModal'
 
 type CrossRefProduct = {
   product_id: number
@@ -10,6 +15,7 @@ type CrossRefProduct = {
   catalog_price_net: number | null
   match_percent: number
   cross_brand: boolean
+  matched_filters?: CrossRefAppliedFilter[]
   attributes?: {
     material?: string | null
     klasa_ochrony?: string | null
@@ -24,6 +30,13 @@ type CrossRefResponse = {
   seed: CrossRefProduct | null
   matches: CrossRefProduct[]
   total: number
+  applied_filters?: CrossRefAppliedFilter[]
+}
+
+type CrossRefOptionsResponse = {
+  code: string
+  seed: CrossRefProduct | null
+  groups: CrossRefFilterGroup[]
 }
 
 function fmtPrice(v: number | null): string {
@@ -35,6 +48,10 @@ function compareUrl(ids: number[]): string {
   const params = new URLSearchParams()
   ids.forEach((id) => params.append('ids[]', String(id)))
   return `/products/compare?${params.toString()}`
+}
+
+function defaultMust(groups: CrossRefFilterGroup[]): string[] {
+  return groups.flatMap((g) => g.items.filter((i) => i.default).map((i) => i.id))
 }
 
 export function CrossRefPanel({
@@ -49,8 +66,14 @@ export function CrossRefPanel({
   const [err, setErr] = useState('')
   const [result, setResult] = useState<CrossRefResponse | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [modalOpen, setModalOpen] = useState(false)
+  const [groups, setGroups] = useState<CrossRefFilterGroup[]>([])
+  const [must, setMust] = useState<string[]>([])
+  const [optionsBusy, setOptionsBusy] = useState(false)
+  const [optionsErr, setOptionsErr] = useState('')
+  const [seedLabel, setSeedLabel] = useState('')
 
-  async function run(override?: string) {
+  async function run(override?: string, filterIds: string[] = []) {
     const q = (override ?? code).trim()
     if (q.length < 2) {
       setErr('Podaj kod / SKU (min. 2 znaki)')
@@ -59,11 +82,13 @@ export function CrossRefPanel({
     setBusy(true)
     setErr('')
     try {
-      const res = await api<CrossRefResponse>(
-        `/products/cross-ref?code=${encodeURIComponent(q)}&limit=12`,
-      )
+      const qs = new URLSearchParams({ code: q, limit: '12' })
+      for (const id of filterIds) qs.append('must[]', id)
+      const res = await api<CrossRefResponse>(`/products/cross-ref?${qs.toString()}`)
       setResult(res)
+      setMust(filterIds)
       setSelectedIds(res.seed ? [res.seed.product_id] : [])
+      setModalOpen(false)
     } catch (e: unknown) {
       setResult(null)
       setErr(e instanceof Error ? e.message : 'Błąd cross-ref')
@@ -72,17 +97,53 @@ export function CrossRefPanel({
     }
   }
 
+  async function openRefine() {
+    const q = code.trim()
+    if (q.length < 2) {
+      setErr('Podaj kod / SKU (min. 2 znaki)')
+      return
+    }
+    setModalOpen(true)
+    setOptionsBusy(true)
+    setOptionsErr('')
+    try {
+      const res = await api<CrossRefOptionsResponse>(
+        `/products/cross-ref/options?code=${encodeURIComponent(q)}`,
+      )
+      setGroups(res.groups)
+      setSeedLabel(
+        res.seed ? `${res.seed.manufacturer} · ${res.seed.name}`.replace(/^ · /, '') : '',
+      )
+      if (must.length === 0) {
+        setMust(defaultMust(res.groups))
+      } else {
+        const known = new Set(res.groups.flatMap((g) => g.items.map((i) => i.id)))
+        const kept = must.filter((id) => known.has(id))
+        setMust(kept.length > 0 ? kept : defaultMust(res.groups))
+      }
+      if (!res.seed) {
+        setOptionsErr(`Nie znaleziono produktu „${q}”.`)
+      }
+    } catch (e: unknown) {
+      setGroups([])
+      setOptionsErr(e instanceof Error ? e.message : 'Nie udało się pobrać filtrów')
+    } finally {
+      setOptionsBusy(false)
+    }
+  }
+
   useEffect(() => {
     if (initialCode && initialCode !== code) {
       setCode(initialCode)
     }
     if (autoRun && initialCode.trim().length >= 2) {
-      void run(initialCode)
+      void run(initialCode, [])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on mount / initialCode from URL
   }, [initialCode, autoRun])
 
   const seedId = result?.seed?.product_id
+  const applied = result?.applied_filters ?? []
   const selectedProducts = result
     ? [result.seed, ...result.matches].filter(
         (product): product is CrossRefProduct =>
@@ -125,6 +186,14 @@ export function CrossRefPanel({
         >
           {busy ? 'Szukam…' : 'Znajdź zamienniki'}
         </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void openRefine()}
+          className="rounded border border-emerald-700 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
+        >
+          Doprecyzuj
+        </button>
       </div>
       {err && <p className="mt-2 text-xs text-rose-700">{err}</p>}
       {result && (
@@ -142,6 +211,35 @@ export function CrossRefPanel({
             <p className="text-xs text-amber-800">
               Brak dokładnego SKU „{result.code}” — wyniki na podstawie podobieństwa tekstu.
             </p>
+          )}
+          {applied.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Musi mieć
+              </span>
+              {applied.map((f) => (
+                <span
+                  key={f.id}
+                  className="rounded-full border border-emerald-300 bg-white px-2 py-0.5 text-[10px] text-emerald-900"
+                >
+                  {f.label}
+                </span>
+              ))}
+              <button
+                type="button"
+                className="text-[11px] text-emerald-800 hover:underline"
+                onClick={() => void openRefine()}
+              >
+                Zmień
+              </button>
+              <button
+                type="button"
+                className="text-[11px] text-slate-600 hover:underline"
+                onClick={() => void run(code, [])}
+              >
+                Szukaj wszystko
+              </button>
+            </div>
           )}
           <div className="rounded-lg border border-emerald-200 bg-white p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -193,7 +291,11 @@ export function CrossRefPanel({
             )}
           </div>
           {result.matches.length === 0 ? (
-            <p className="text-xs text-slate-500">Brak ekwiwalentów powyżej progu podobieństwa.</p>
+            <p className="text-xs text-slate-500">
+              {applied.length > 0
+                ? 'Brak zamienników spełniających zaznaczone warunki. Odznacz część filtrów.'
+                : 'Brak ekwiwalentów powyżej progu podobieństwa.'}
+            </p>
           ) : (
             <div className="overflow-x-auto rounded-lg border border-emerald-100 bg-white">
               <table className="w-full text-left text-xs">
@@ -205,13 +307,14 @@ export function CrossRefPanel({
                     <th className="p-2">Producent</th>
                     <th className="p-2">Nazwa</th>
                     <th className="p-2">Cena</th>
-                    <th className="p-2">Atrybuty</th>
+                    <th className="p-2">{applied.length > 0 ? 'Spełnia / atrybuty' : 'Atrybuty'}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {result.matches.map((m) => {
                     const checked = selectedIds.includes(m.product_id)
                     const disabled = !checked && selectedIds.length >= 5
+                    const hits = m.matched_filters ?? applied
                     return (
                       <tr
                         key={m.product_id}
@@ -244,6 +347,18 @@ export function CrossRefPanel({
                         </td>
                         <td className="p-2 whitespace-nowrap">{fmtPrice(m.catalog_price_net)}</td>
                         <td className="p-2 text-[10px] text-slate-500">
+                          {hits.length > 0 && (
+                            <div className="mb-1 flex flex-wrap gap-1">
+                              {hits.map((f) => (
+                                <span
+                                  key={f.id}
+                                  className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-900"
+                                >
+                                  {f.label}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           {[
                             m.attributes?.typ_wyrobu,
                             m.attributes?.material,
@@ -252,7 +367,7 @@ export function CrossRefPanel({
                             m.attributes?.poziomy_en388,
                           ]
                             .filter(Boolean)
-                            .join(' · ') || '—'}
+                            .join(' · ') || (hits.length > 0 ? '' : '—')}
                         </td>
                       </tr>
                     )
@@ -263,6 +378,19 @@ export function CrossRefPanel({
           )}
         </div>
       )}
+      <CrossRefFilterModal
+        open={modalOpen}
+        code={code.trim()}
+        seedLabel={seedLabel}
+        groups={groups}
+        selected={must}
+        loading={optionsBusy}
+        error={optionsErr}
+        onChange={setMust}
+        onSearchAll={() => void run(code, [])}
+        onSearchMust={(ids) => void run(code, ids)}
+        onClose={() => setModalOpen(false)}
+      />
     </div>
   )
 }

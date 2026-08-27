@@ -107,6 +107,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:price_lists.import');
     Route::post('/products/catalog-health/merge-sizes', [ProductCatalogHealthController::class, 'mergeSizes'])
         ->middleware('permission:price_lists.import');
+    Route::get('/products/cross-ref/options', [ProductCrossRefController::class, 'options'])->middleware('permission:products.view');
     Route::get('/products/cross-ref', [ProductCrossRefController::class, 'crossRef'])->middleware('permission:products.view');
     Route::get('/products/compare', [ProductCrossRefController::class, 'compare'])->middleware('permission:products.view');
     Route::post('/products/ai-search', ProductAiSearchController::class)->middleware('permission:products.view');

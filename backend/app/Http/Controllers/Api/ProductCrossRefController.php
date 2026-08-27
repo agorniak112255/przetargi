@@ -19,17 +19,29 @@ class ProductCrossRefController extends Controller
         private readonly ProductCompareService $compare,
     ) {}
 
+    public function options(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'code' => ['required', 'string', 'min:2', 'max:120'],
+        ]);
+
+        return response()->json($this->crossRef->optionsForCode($data['code']));
+    }
+
     public function crossRef(Request $request): JsonResponse
     {
         $data = $request->validate([
             'code' => ['required', 'string', 'min:2', 'max:120'],
             'limit' => ['sometimes', 'integer', 'min:1', 'max:40'],
+            'must' => ['sometimes', 'array', 'max:40'],
+            'must.*' => ['string', 'max:120'],
         ]);
 
         return response()->json(
             $this->crossRef->findByCode(
                 $data['code'],
-                (int) ($data['limit'] ?? 12)
+                (int) ($data['limit'] ?? 12),
+                is_array($data['must'] ?? null) ? $data['must'] : []
             )
         );
     }

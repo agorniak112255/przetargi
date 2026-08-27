@@ -675,4 +675,237 @@ final class ProductCrossRefCompareTest extends TestCase
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['ids']);
     }
+
+    public function test_cross_ref_options_expose_hard_facts_not_marketing(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => '9322P',
+            'name' => 'Półmaska filtrująca Aura 9322+',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Półmaska filtrująca FFP2 NR D z zaworem, składana, EN 149.',
+            'catalog_price_net' => 8,
+            'purchase_price' => 5,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'specs' => ['SKU: 9322+', 'Producent: 3M', 'Klasa ochrony: FFP2 NR D'],
+                'features' => ['Zawór Cool Flow', 'Konstrukcja składana, wygodna do kieszeni'],
+                'materials' => ['włóknina'],
+                'norms' => ['EN 149:2001+A1:2009'],
+                'certificates' => ['CE'],
+                'use_cases' => ['praca w pyle', 'szlifowanie'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'włóknina',
+                    'normy_en' => ['EN 149'],
+                    'klasa_ochrony' => 'FFP2 NR D',
+                    'kod_producenta' => '9322+',
+                    'materialy' => ['włóknina'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $res = $this->getJson('/api/products/cross-ref/options?code=9322P')->assertOk();
+        $items = collect($res->json('groups'))->pluck('items')->flatten(1);
+        $ids = $items->pluck('id');
+
+        $this->assertContains('spec:typ:ffp', $ids);
+        $this->assertContains('spec:klasa:FFP2', $ids);
+        $this->assertContains('spec:zawor:1', $ids);
+        $this->assertContains('norm:en:149', $ids);
+        $this->assertContains('use:v:praca-w-pyle', $ids);
+        $this->assertFalse($ids->contains(fn (string $id): bool => str_contains($id, '9322')));
+        $this->assertTrue($items->firstWhere('id', 'spec:typ:ffp')['default']);
+        $this->assertTrue($items->firstWhere('id', 'norm:en:149')['default']);
+        $this->assertFalse($items->firstWhere('id', 'spec:zawor:1')['default']);
+    }
+
+    public function test_cross_ref_must_filters_keep_only_matching_substitutes(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'FFP-SEED',
+            'name' => 'Półmaska filtrująca FFP2 z zaworem',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Jednorazowa FFP2 NR D z zaworem, EN 149, praca w pyle.',
+            'catalog_price_net' => 8,
+            'purchase_price' => 5,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['włóknina'],
+                'norms' => ['EN 149'],
+                'use_cases' => ['praca w pyle'],
+                'features' => ['zawór wydechowy'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'włóknina',
+                    'normy_en' => ['EN 149'],
+                    'klasa_ochrony' => 'FFP2',
+                    'kod_producenta' => 'FFP-SEED',
+                    'materialy' => ['włóknina'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        Product::query()->create([
+            'sku' => 'FFP-PLAIN',
+            'name' => 'Półmaska filtrująca FFP2 bez zaworu',
+            'manufacturer' => 'Honeywell',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Jednorazowa FFP2 EN 149, bez zaworu, włóknina.',
+            'catalog_price_net' => 4,
+            'purchase_price' => 2,
+            'stock' => 20,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['włóknina'],
+                'norms' => ['EN 149'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'włóknina',
+                    'normy_en' => ['EN 149'],
+                    'klasa_ochrony' => 'FFP2',
+                    'kod_producenta' => 'FFP-PLAIN',
+                    'materialy' => ['włóknina'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        Product::query()->create([
+            'sku' => 'FFP-VALVE',
+            'name' => 'Półmaska filtrująca FFP2 z zaworem Honeywell',
+            'manufacturer' => 'Honeywell',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Jednorazowa FFP2 z zaworem, EN 149, włóknina.',
+            'catalog_price_net' => 6,
+            'purchase_price' => 3,
+            'stock' => 15,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['włóknina'],
+                'norms' => ['EN 149'],
+                'features' => ['zawór'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'włóknina',
+                    'normy_en' => ['EN 149'],
+                    'klasa_ochrony' => 'FFP2',
+                    'kod_producenta' => 'FFP-VALVE',
+                    'materialy' => ['włóknina'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        Product::query()->create([
+            'sku' => 'FFP-EN140',
+            'name' => 'Półmaska filtrująca FFP2 EN 140',
+            'manufacturer' => 'Secura',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Jednorazowa FFP2 z zaworem, EN 140, włóknina.',
+            'catalog_price_net' => 5,
+            'purchase_price' => 3,
+            'stock' => 8,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['włóknina'],
+                'norms' => ['EN 140'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'włóknina',
+                    'normy_en' => ['EN 140'],
+                    'klasa_ochrony' => 'FFP2',
+                    'kod_producenta' => 'FFP-EN140',
+                    'materialy' => ['włóknina'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $dust = Product::query()->create([
+            'sku' => 'FFP-DUST',
+            'name' => 'Półmaska filtrująca FFP3 do pyłu',
+            'manufacturer' => 'uvex',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Jednorazowa FFP3 z zaworem, EN 149, praca w pyle.',
+            'catalog_price_net' => 9,
+            'purchase_price' => 5,
+            'stock' => 6,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['włóknina'],
+                'norms' => ['EN 149'],
+                'use_cases' => ['praca w pyle'],
+                'features' => ['zawór'],
+                'attributes' => [
+                    'kategoria_bhp' => 'drogi_oddechowe',
+                    'material' => 'włóknina',
+                    'normy_en' => ['EN 149'],
+                    'klasa_ochrony' => 'FFP3',
+                    'kod_producenta' => 'FFP-DUST',
+                    'materialy' => ['włóknina'],
+                    'rozmiar' => null,
+                    'poziomy_en388' => null,
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $normMust = $this->getJson(
+            '/api/products/cross-ref?'.http_build_query([
+                'code' => 'FFP-SEED',
+                'must' => ['spec:klasa:FFP2', 'norm:en:149'],
+            ])
+        )->assertOk();
+        $normSkus = collect($normMust->json('matches'))->pluck('sku')->all();
+        $this->assertContains('FFP-PLAIN', $normSkus);
+        $this->assertContains('FFP-VALVE', $normSkus);
+        $this->assertContains('FFP-DUST', $normSkus);
+        $this->assertNotContains('FFP-EN140', $normSkus);
+        $this->assertSame('Klasa: FFP2', collect($normMust->json('applied_filters'))->firstWhere('id', 'spec:klasa:FFP2')['label'] ?? null);
+        $this->assertSame($dust->id, collect($normMust->json('matches'))->firstWhere('sku', 'FFP-DUST')['product_id']);
+
+        $valveSkus = collect(
+            $this->getJson(
+                '/api/products/cross-ref?'.http_build_query([
+                    'code' => 'FFP-SEED',
+                    'must' => ['spec:zawor:1'],
+                ])
+            )->assertOk()->json('matches')
+        )->pluck('sku')->all();
+        $this->assertContains('FFP-VALVE', $valveSkus);
+        $this->assertContains('FFP-DUST', $valveSkus);
+        $this->assertNotContains('FFP-PLAIN', $valveSkus);
+
+        $useSkus = collect(
+            $this->getJson(
+                '/api/products/cross-ref?'.http_build_query([
+                    'code' => 'FFP-SEED',
+                    'must' => ['use:v:praca-w-pyle'],
+                ])
+            )->assertOk()->json('matches')
+        )->pluck('sku')->all();
+        $this->assertContains('FFP-DUST', $useSkus);
+        $this->assertNotContains('FFP-PLAIN', $useSkus);
+        $this->assertNotContains('FFP-VALVE', $useSkus);
+    }
 }

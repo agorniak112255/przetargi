@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\ProductCrossRefFilters;
 
 /**
  * Cross-reference: kod/SKU → ten sam wyrób u innego producenta.
@@ -42,31 +43,65 @@ final class ProductCrossRefService
 
     public function __construct(
         private readonly BhpAttributeNormalizer $bhpAttributes,
+        private readonly ProductCrossRefFilters $filters,
     ) {}
 
     /**
      * @return array{
      *     code: string,
      *     seed: ?array<string, mixed>,
-     *     matches: list<array<string, mixed>>,
-     *     total: int
+     *     groups: list<array<string, mixed>>
      * }
      */
-    public function findByCode(string $code, int $limit = self::LIMIT): array
+    public function optionsForCode(string $code): array
     {
         $code = trim($code);
-        $limit = max(1, min(40, $limit));
-
         if ($code === '') {
-            return ['code' => $code, 'seed' => null, 'matches' => [], 'total' => 0];
+            return ['code' => $code, 'seed' => null, 'groups' => []];
         }
 
         $seed = $this->resolveSeed($code);
         if ($seed === null) {
-            return ['code' => $code, 'seed' => null, 'matches' => [], 'total' => 0];
+            return ['code' => $code, 'seed' => null, 'groups' => []];
         }
 
         $seedAttrs = $this->bhpAttributes->forProduct($seed);
+
+        return [
+            'code' => $code,
+            'seed' => $this->productCard($seed, 100, false, $seedAttrs),
+            'groups' => $this->filters->groupsFor($seed, $seedAttrs),
+        ];
+    }
+
+    /**
+     * @param  list<string>  $must
+     * @return array{
+     *     code: string,
+     *     seed: ?array<string, mixed>,
+     *     matches: list<array<string, mixed>>,
+     *     total: int,
+     *     applied_filters: list<array<string, mixed>>
+     * }
+     */
+    public function findByCode(string $code, int $limit = self::LIMIT, array $must = []): array
+    {
+        $code = trim($code);
+        $limit = max(1, min(40, $limit));
+        $must = $this->filters->sanitizeMust($must);
+
+        if ($code === '') {
+            return ['code' => $code, 'seed' => null, 'matches' => [], 'total' => 0, 'applied_filters' => []];
+        }
+
+        $seed = $this->resolveSeed($code);
+        if ($seed === null) {
+            return ['code' => $code, 'seed' => null, 'matches' => [], 'total' => 0, 'applied_filters' => []];
+        }
+
+        $seedAttrs = $this->bhpAttributes->forProduct($seed);
+        $groups = $this->filters->groupsFor($seed, $seedAttrs);
+        $applied = $this->filters->resolveApplied($must, $groups);
         $seedMfr = mb_strtolower(trim((string) $seed->manufacturer));
 
         // Cały katalog — bez limitu i bez wycinania po rodzinie (ppe_family bywa puste).
@@ -80,20 +115,27 @@ final class ProductCrossRefService
                 continue;
             }
 
-            $score = $this->attributeScore($seedAttrs, $attrs, $seed, $product);
-            if ($score < self::MIN_SCORE) {
+            if ($must !== [] && ! $this->filters->matchesAll($must, $product, $attrs)) {
                 continue;
+            }
+
+            $score = $this->attributeScore($seedAttrs, $attrs, $seed, $product);
+            if ($must === [] && $score < self::MIN_SCORE) {
+                continue;
+            }
+            if ($must !== [] && $score < 20) {
+                $score = 20 + min(24, 4 * count($must));
             }
 
             $mfr = mb_strtolower(trim((string) $product->manufacturer));
             $crossBrand = $seedMfr !== '' && $mfr !== '' && $mfr !== $seedMfr;
 
             // ten sam producent + prawie ten sam SKU numeryczny bez wspólnych atrybutów technicznych
-            if (! $crossBrand && $this->looksLikeSiblingSku($seed, $product) && $score < 45) {
+            if ($must === [] && ! $crossBrand && $this->looksLikeSiblingSku($seed, $product) && $score < 45) {
                 continue;
             }
 
-            $matches[] = $this->productCard($product, $score, $crossBrand, $attrs);
+            $matches[] = $this->productCard($product, $score, $crossBrand, $attrs, $applied);
         }
 
         usort($matches, static function (array $a, array $b): int {
@@ -111,6 +153,7 @@ final class ProductCrossRefService
             'seed' => $this->productCard($seed, 100, false, $seedAttrs),
             'matches' => array_values($matches),
             'total' => count($matches),
+            'applied_filters' => $applied,
         ];
     }
 
@@ -392,10 +435,16 @@ final class ProductCrossRefService
 
     /**
      * @param  array<string, mixed>  $attrs
+     * @param  list<array<string, mixed>>  $matchedFilters
      * @return array<string, mixed>
      */
-    private function productCard(Product $product, int $score, bool $crossBrand, array $attrs): array
-    {
+    private function productCard(
+        Product $product,
+        int $score,
+        bool $crossBrand,
+        array $attrs,
+        array $matchedFilters = [],
+    ): array {
         return [
             'product_id' => $product->id,
             'sku' => $product->sku,
@@ -408,6 +457,7 @@ final class ProductCrossRefService
             'match_percent' => $score,
             'cross_brand' => $crossBrand,
             'attributes' => $attrs,
+            'matched_filters' => $matchedFilters,
         ];
     }
 }
