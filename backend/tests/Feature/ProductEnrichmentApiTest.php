@@ -604,6 +604,55 @@ final class ProductEnrichmentApiTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_enrich_reuses_prefetch_search_pack_without_second_search(): void
+    {
+        Storage::fake('public');
+        $product = $this->makeProduct(['sku' => 'PF-REUSE', 'manufacturer' => 'Uvex']);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [[
+                    'url' => 'https://shop.example.com/pf-reuse',
+                    'title' => 'PF-REUSE',
+                    'snippet' => 'Rękawice PF-REUSE',
+                ]],
+                'errors' => [],
+            ]);
+        $search->shouldReceive('forgetProductCache')->zeroOrMoreTimes();
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        $llm = $this->mockLlmWithSanitize([
+            'description' => 'Rękawice PF-REUSE do montażu. Spełniają EN 388. Chronią przed ścieraniem w suchych warunkach. Trwała powłoka do codziennej pracy w zakładzie. Przeznaczone do prac precyzyjnych i kompletacji. Wygodny mankiet nie ogranicza ruchów.',
+            'features' => ['nitryl'],
+            'specs' => ['SKU: PF-REUSE'],
+            'norms' => ['EN 388'],
+            'certificates' => [],
+            'materials' => ['nitryl'],
+            'use_cases' => ['montaż'],
+            'image_urls' => [],
+            'source_urls' => ['https://shop.example.com/pf-reuse'],
+            'confidence' => 0.8,
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        Http::fake([
+            'https://shop.example.com/*' => Http::response(
+                '<html><body><h1>PF-REUSE</h1><p>'.str_repeat('Rękawice PF-REUSE EN 388. ', 40).'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $service = app(ProductEnrichmentService::class);
+        $service->prefetchProductSources($product, false);
+        $service->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+    }
+
     public function test_prefetch_waits_when_all_search_slots_busy(): void
     {
         Queue::fake();

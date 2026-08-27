@@ -55,6 +55,54 @@ final class ManufacturerDomainResolverTest extends TestCase
         $this->assertFalse($resolver->isManufacturerUrl('https://icd.pl/x-1', $product, $domains));
     }
 
+    public function test_resolves_msa_pl_catalog_domains(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $product = new Product([
+            'manufacturer' => 'MSA',
+            'sku' => '10160056',
+            'name' => 'ALTAIR 2XT CO-H2/H2S',
+        ]);
+
+        $domains = $resolver->domainsFor($product);
+        $this->assertContains('pl.msasafety.com', $domains);
+        $this->assertContains('msasafety.com', $domains);
+        $this->assertTrue($resolver->isManufacturerUrl(
+            'https://pl.msasafety.com/p/altair-2xt?locale=pl',
+            $product,
+            $domains
+        ));
+        $this->assertFalse($resolver->isManufacturerUrl(
+            'https://strefa998.pl/msa?id=7',
+            $product,
+            $domains
+        ));
+        $this->assertFalse($resolver->isManufacturerUrl(
+            'https://bhp.pl/marki/msa',
+            $product,
+            $domains
+        ));
+        $this->assertFalse($resolver->isManufacturerUrl(
+            'https://sklep.arpapol.pl/sklep,11,msa-auer.html',
+            $product,
+            $domains
+        ));
+    }
+
+    public function test_resolves_msa_safety_and_auer_aliases(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+
+        $this->assertContains(
+            'pl.msasafety.com',
+            $resolver->domainsFor(new Product(['manufacturer' => 'MSA Safety', 'sku' => 'X', 'name' => 'X']))
+        );
+        $this->assertContains(
+            'pl.msasafety.com',
+            $resolver->domainsFor(new Product(['manufacturer' => 'MSA Auer', 'sku' => 'X', 'name' => 'X']))
+        );
+    }
+
     public function test_pilne_gloves_use_urgent_manufacturer_domains(): void
     {
         $resolver = app(ManufacturerDomainResolver::class);

@@ -52,6 +52,21 @@ return [
         ],
         '3m' => ['3m.com', 'www.3m.com'],
         'honeywell' => ['honeywell.com', 'www.honeywell.com', 'sps.honeywell.com'],
+        'msa' => [
+            'pl.msasafety.com',
+            'msasafety.com',
+            'www.msasafety.com',
+        ],
+        'msa-safety' => [
+            'pl.msasafety.com',
+            'msasafety.com',
+            'www.msasafety.com',
+        ],
+        'msa-auer' => [
+            'pl.msasafety.com',
+            'msasafety.com',
+            'www.msasafety.com',
+        ],
         'portwest' => ['portwest.com', 'www.portwest.com'],
         'coverguard' => ['coverguard.com', 'www.coverguard.com'],
         'singer' => ['singer.fr', 'www.singer.fr'],
@@ -111,6 +126,10 @@ return [
         'thesafetysupplycompany.co.uk',
         // karty masek i sprzętu MASKPOL, których wyszukiwarki nie indeksują
         'bezpieczni112.pl',
+        // sklepy z szerokim katalogiem MSA
+        'strefa998.pl',
+        'bhp.pl',
+        'sklep.arpapol.pl',
     ],
 
     /*
@@ -118,7 +137,7 @@ return [
     | wszystkich workerów. Darmowe silniki blokują szybkie serie, więc przy
     | kilkunastu workerach to jedyne, co trzyma je przy życiu.
     */
-    'search_min_interval' => (float) env('ENRICHMENT_SEARCH_MIN_INTERVAL', 4.0),
+    'search_min_interval' => (float) env('ENRICHMENT_SEARCH_MIN_INTERVAL', 2.0),
 
     /*
     | Ile produktów naraz szuka stron i grzeje cache HTML (nie LLM).
@@ -167,5 +186,11 @@ return [
         'www.optimumbhp.pl',
         'urgent.com.pl',
         'www.urgent.com.pl',
+        'pl.msasafety.com',
+        'msasafety.com',
+        'www.msasafety.com',
+        'strefa998.pl',
+        'bhp.pl',
+        'sklep.arpapol.pl',
     ],
 ];

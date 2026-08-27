@@ -214,6 +214,7 @@ final class ProductEnrichmentService
 
             $t = microtime(true);
             $searchPack = $this->search->searchBothPhases($product);
+            $this->rememberPrefetchPack($product, $searchPack);
             $searchMs = $this->elapsedMs($t);
             $results = $searchPack['results'] ?? [];
 
@@ -247,6 +248,45 @@ final class ProductEnrichmentService
         } finally {
             $this->pages->bypassCache(false);
         }
+    }
+
+    /**
+     * Wyniki z prefetchu — bez drugiego round-tripu do SearXNG/Tavily.
+     *
+     * @return array{results: list<array<string, mixed>>, errors?: list<string>, images?: list<string>}
+     */
+    private function searchPackForEnrichment(Product $product): array
+    {
+        $pack = $this->prefetchPack($product);
+        if ($pack !== null) {
+            return $pack;
+        }
+
+        return $this->search->searchBothPhases($product);
+    }
+
+    /** @param  array<string, mixed>  $pack */
+    private function rememberPrefetchPack(Product $product, array $pack): void
+    {
+        Cache::put($this->prefetchPackKey($product), $pack, now()->addHours(2));
+    }
+
+    /**
+     * @return array{results: list<mixed>, errors?: list<string>}|null
+     */
+    private function prefetchPack(Product $product): ?array
+    {
+        $pack = Cache::get($this->prefetchPackKey($product));
+        if (! is_array($pack) || ! array_key_exists('results', $pack) || ! is_array($pack['results'])) {
+            return null;
+        }
+
+        return $pack;
+    }
+
+    private function prefetchPackKey(Product $product): string
+    {
+        return 'enrich_prefetch_pack:'.$product->id;
     }
 
     /**
@@ -337,11 +377,11 @@ final class ProductEnrichmentService
 
             $this->assertBatchNotCancelled($batchId);
             $t = microtime(true);
-            $searchPack = $this->search->searchBothPhases($product);
+            $searchPack = $this->searchPackForEnrichment($product);
             $searchResults = $searchPack['results'];
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
             if ($searchResults === []) {
-                $detail = $searchPack['errors'] !== []
+                $detail = ($searchPack['errors'] ?? []) !== []
                     ? implode(' | ', array_slice($searchPack['errors'], 0, 2))
                     : 'brak wyników';
                 throw new ProductSourcesNotFoundException(

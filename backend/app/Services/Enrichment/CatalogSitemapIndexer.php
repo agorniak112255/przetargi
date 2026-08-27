@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Symfony\Component\Process\Process;
 use Throwable;
 
 /**
@@ -24,6 +25,13 @@ final class CatalogSitemapIndexer
     private const CHUNK_BYTES = 262144;
 
     private const MAX_BUFFER_BYTES = 2097152;
+
+    /** Limit pobrania przez curl.exe, gdy Guzzle dostaje 403 od WAF. */
+    private const CURL_MAX_BYTES = 20971520;
+
+    private const MAX_CURL_ATTEMPTS = 2;
+
+    private int $curlAttempts = 0;
 
     /** Sklepy za WAF-em odrzucają nagłówki botów, więc przedstawiamy się jak przeglądarka. */
     private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -41,6 +49,7 @@ final class CatalogSitemapIndexer
         '/sitemap/index.xml',
         // PrestaShop, WordPress/Yoast, Shoper i sklepy z prefiksem języka
         '/1_pl_0_sitemap.xml',
+        '/1_index_sitemap.xml',
         '/wp-sitemap.xml',
         '/sitemap.php',
         '/pl/sitemap.xml',
@@ -56,6 +65,7 @@ final class CatalogSitemapIndexer
             throw new RuntimeException('Pusty host.');
         }
 
+        $this->curlAttempts = 0;
         $sitemaps = $this->discoverSitemaps($host);
         if ($sitemaps === []) {
             throw new RuntimeException('Nie znalazłem sitemapy dla '.$host.'.');
@@ -183,6 +193,7 @@ final class CatalogSitemapIndexer
             $response = Http::withHeaders([
                 'User-Agent' => self::USER_AGENT,
                 'Accept' => 'application/xml,text/xml,text/plain,*/*',
+                'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
             ])->timeout(180)->connectTimeout(8)
                 // read_timeout działa tylko na StreamHandlerze, więc pod cURL-em
                 // zrywamy transfer wolniejszy niż 1 kB/s przez 20 s
@@ -198,11 +209,11 @@ final class CatalogSitemapIndexer
         } catch (Throwable $e) {
             Log::info('Sitemap stream failed', ['url' => $url, 'error' => $e->getMessage()]);
 
-            return false;
+            return $this->streamFromCurl($url, $onLocation);
         }
 
         if (! $response->successful()) {
-            return false;
+            return $this->streamFromCurl($url, $onLocation);
         }
         // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
         // bez tego pobralibyśmy 130 kB HTML-a dla każdej zgadywanej ścieżki
@@ -260,6 +271,86 @@ final class CatalogSitemapIndexer
         $this->drainLocations($buffer, $onLocation);
 
         return true;
+    }
+
+    /**
+     * Cloudflare blokuje Guzzle (JA3), a systemowy curl przechodzi — np. bhp.pl.
+     *
+     * @param  callable(string): bool  $onLocation
+     */
+    private function streamFromCurl(string $url, callable $onLocation): bool
+    {
+        if (app()->environment('testing') || $this->curlAttempts >= self::MAX_CURL_ATTEMPTS) {
+            return false;
+        }
+        $this->curlAttempts++;
+
+        $body = $this->fetchViaCurl($url);
+        if ($body === null || $this->looksLikeHtml($body)) {
+            return false;
+        }
+        if (str_starts_with($body, "\x1f\x8b")) {
+            $decoded = @gzdecode($body);
+            $body = is_string($decoded) && $decoded !== '' ? $decoded : $body;
+        }
+
+        $this->drainLocations($body, $onLocation);
+
+        return true;
+    }
+
+    private function fetchViaCurl(string $url): ?string
+    {
+        if (preg_match('#^https?://#i', $url) !== 1) {
+            return null;
+        }
+        $binary = $this->curlBinary();
+        if ($binary === null) {
+            return null;
+        }
+
+        $process = new Process([
+            $binary,
+            '-sL',
+            '--max-time', '180',
+            '--connect-timeout', '8',
+            '--compressed',
+            '-A', self::USER_AGENT,
+            '-H', 'Accept: application/xml,text/xml,text/plain,*/*',
+            '-H', 'Accept-Language: pl-PL,pl;q=0.9,en;q=0.8',
+            $url,
+        ]);
+        $process->setTimeout(180);
+
+        try {
+            $process->run();
+        } catch (Throwable $e) {
+            Log::info('Sitemap curl failed', ['url' => $url, 'error' => $e->getMessage()]);
+
+            return null;
+        }
+
+        if (! $process->isSuccessful()) {
+            return null;
+        }
+
+        $body = $process->getOutput();
+        if ($body === '' || strlen($body) > self::CURL_MAX_BYTES) {
+            return null;
+        }
+
+        return $body;
+    }
+
+    private function curlBinary(): ?string
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $candidate = 'C:\\Windows\\System32\\curl.exe';
+
+            return is_file($candidate) ? $candidate : null;
+        }
+
+        return 'curl';
     }
 
     /**
