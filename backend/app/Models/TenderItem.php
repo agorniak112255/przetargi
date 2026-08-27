@@ -49,6 +49,16 @@ class TenderItem extends Model
         return trim((string) ($this->custom_name ?? '')) !== '';
     }
 
+    public function isExternalHintOffer(): bool
+    {
+        return $this->hasCustomOffer() && $this->match_source === 'external';
+    }
+
+    public function isManualCustomOffer(): bool
+    {
+        return $this->hasCustomOffer() && $this->match_source !== 'external';
+    }
+
     public function hasOfferProduct(): bool
     {
         return $this->main_product_id !== null || $this->hasCustomOffer();

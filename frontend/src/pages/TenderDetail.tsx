@@ -1300,8 +1300,8 @@ export function TenderDetail() {
                     return
                   }
                   const confirmMsg = listNarrowed
-                    ? `Ponownie przeszukać ${filteredItems.length} pozycji z filtra? Własne propozycje zostaną zachowane.`
-                    : 'Ponownie przeszukać wszystkie pozycje (także te z produktem z katalogu)? Własne propozycje zostaną zachowane.'
+                    ? `Ponownie przeszukać ${filteredItems.length} pozycji z filtra? Ręczne własne oferty zostaną zachowane; linki z AI Internet wrócą do wyszukiwania w katalogu.`
+                    : 'Ponownie przeszukać wszystkie pozycje (także te z produktem z katalogu)? Ręczne własne oferty zostaną zachowane; linki z AI Internet wrócą do wyszukiwania w katalogu.'
                   if (!window.confirm(confirmMsg)) {
                     return
                   }

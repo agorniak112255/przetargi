@@ -148,7 +148,7 @@ final class ProductMatchService
         foreach ($items as $item) {
             $beforeId = $item->main_product_id !== null ? (int) $item->main_product_id : null;
             $beforeSku = $item->mainProduct?->sku;
-            if ($item->hasCustomOffer()) {
+            if ($item->isManualCustomOffer()) {
                 $skipped++;
                 $changes[] = $this->matchChangeRow($item, 'skipped_custom', $beforeSku, $beforeSku);
             } else {

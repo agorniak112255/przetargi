@@ -115,6 +115,48 @@ final class TenderCustomOfferTest extends TestCase
         $this->assertSame('matched', $item->status);
     }
 
+    public function test_rematch_searches_catalog_for_external_ai_link(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        Http::fake();
+
+        $product = Product::query()->create([
+            'sku' => '60028',
+            'name' => 'ATHLETIC ALLROUND',
+            'manufacturer' => 'uvex',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice montażowe ATHLETIC ALLROUND.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 8,
+            'stock' => 10,
+        ]);
+        $tender = $this->makeTender();
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Rękawice ATHLETIC art. 60028 rozmiar 9',
+            'quantity' => 1,
+            'status' => 'matched',
+            'custom_name' => 'Kominiarka ze sklepu internetowego',
+            'custom_url' => 'https://sklep.example/kominiarka',
+            'match_source' => 'external',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/match", [
+            'only_empty' => false,
+            'item_ids' => [$item->id],
+        ])
+            ->assertOk()
+            ->assertJsonPath('skipped_custom', 0)
+            ->assertJsonPath('changed', 1);
+
+        $item->refresh();
+        $this->assertSame($product->id, $item->main_product_id);
+        $this->assertNull($item->custom_name);
+        $this->assertNull($item->custom_url);
+        $this->assertNotSame('external', $item->match_source);
+    }
+
     public function test_rematch_all_reprocesses_existing_catalog_product(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
