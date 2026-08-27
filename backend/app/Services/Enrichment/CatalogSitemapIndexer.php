@@ -53,6 +53,10 @@ final class CatalogSitemapIndexer
         '/wp-sitemap.xml',
         '/sitemap.php',
         '/pl/sitemap.xml',
+        // Shoper / Shoparena
+        '/console/integration/execute/name/GoogleSitemap',
+        // Joomla OSMap
+        '/index.php?option=com_osmap&view=xml&id=1&format=xml',
     ];
 
     /**
@@ -217,7 +221,7 @@ final class CatalogSitemapIndexer
         }
         // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
         // bez tego pobralibyśmy 130 kB HTML-a dla każdej zgadywanej ścieżki
-        if (str_contains(mb_strtolower((string) $response->header('Content-Type')), 'html')) {
+        if (str_contains(mb_strtolower((string) $response->header('Content-Type')), 'text/html')) {
             return false;
         }
 
@@ -467,8 +471,17 @@ final class CatalogSitemapIndexer
     private function looksLikeSitemap(string $url): bool
     {
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        $query = mb_strtolower((string) (parse_url($url, PHP_URL_QUERY) ?? ''));
+        $hay = $path.' '.$query;
+        if (str_contains($hay, 'googlesitemap') || str_contains($hay, 'osmap')) {
+            return true;
+        }
 
-        return str_contains($path, 'sitemap') && (str_ends_with($path, '.xml') || str_ends_with($path, '.gz'));
+        return str_contains($path, 'sitemap') && (
+            str_ends_with($path, '.xml')
+            || str_ends_with($path, '.gz')
+            || str_ends_with($path, '.php')
+        );
     }
 
     /** Portale społecznościowe i wyszukiwarki bywają linkowane w sitemapach — do indeksu nie wnoszą nic. */

@@ -103,6 +103,35 @@ final class ManufacturerDomainResolverTest extends TestCase
         );
     }
 
+    public function test_retailer_domains_include_listed_bhp_shops(): void
+    {
+        $retailers = config('enrichment.retailer_domains');
+        $this->assertIsArray($retailers);
+
+        foreach ([
+            'tmbhp.pl',
+            'glovex.com.pl',
+            'bhpsupply.pl',
+            'marketbhp.pl',
+            'bhponline-24.pl',
+            'balticbhp.pl',
+            'esklep.krisbhp.pl',
+            'aitbhp.pl',
+            'bhp-gabi.pl',
+            'bhp-sklep.com.pl',
+            'specto.com.pl',
+            'kingbhp.pl',
+            'filimar.pl',
+            'elmar-bhp.pl',
+            'sklep.prohaccp.pl',
+            'natare.pl',
+            'sklep.arsel-bhp.pl',
+            'roboczebhp.pl',
+        ] as $host) {
+            $this->assertContains($host, $retailers);
+        }
+    }
+
     public function test_pilne_gloves_use_urgent_manufacturer_domains(): void
     {
         $resolver = app(ManufacturerDomainResolver::class);

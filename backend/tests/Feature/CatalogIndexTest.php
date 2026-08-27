@@ -61,6 +61,35 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame(1, CatalogPage::query()->count());
     }
 
+    public function test_follows_shoper_google_sitemap_children(): void
+    {
+        Http::fake([
+            'https://tmbhp.pl/robots.txt' => Http::response(
+                "Sitemap: https://tmbhp.pl/console/integration/execute/name/GoogleSitemap\n",
+                200
+            ),
+            'https://tmbhp.pl/console/integration/execute/name/GoogleSitemap' => Http::response(
+                '<?xml version="1.0"?><sitemapindex>'
+                .'<sitemap><loc>https://tmbhp.pl/console/integration/execute/name/GoogleSitemap/list/products/locale/pl_PL/page/1</loc></sitemap>'
+                .'</sitemapindex>',
+                200,
+                ['Content-Type' => 'application/force-download']
+            ),
+            'https://tmbhp.pl/console/integration/execute/name/GoogleSitemap/list/products/locale/pl_PL/page/1' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://tmbhp.pl/pl/p/Rekawice-MSA/123</loc></url>'
+                .'</urlset>',
+                200,
+                ['Content-Type' => 'application/force-download']
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('tmbhp.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://tmbhp.pl/pl/p/Rekawice-MSA/123']);
+    }
+
     public function test_waf_403_html_is_not_counted_as_sitemap(): void
     {
         Http::fake([
