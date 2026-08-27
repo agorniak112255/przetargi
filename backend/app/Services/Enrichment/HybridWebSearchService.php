@@ -357,12 +357,10 @@ class HybridWebSearchService
                 || $this->identity->pageClaimsAnotherCode($url, $title, $product)) {
                 continue;
             }
-            // sklepy skracają oznaczenie w adresie („maska-mt-212” zamiast MT 212/2),
-            // więc wystarczy kod z rodziny naszego — obcy model nadal odpada
-            if ($this->identity->hayHasProductCode($hay, $product)
-                || $this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
-                || $this->identity->hayHasNamePhrase($url.' '.$title, $product)
-                || $this->identity->nameTokensMatch($url.' '.$title, $product)) {
+            // ten sam filtr co w wyszukiwarce: sam kod „104” bez marki to kombinezon PROS,
+            // nie rękawica Tegera. Skrócone MT-212 zostaje przez rodzinę kodu.
+            if ($this->identity->hayMentionsProduct($hay, $product)
+                || $this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)) {
                 $out[] = [
                     'url' => $url,
                     'title' => $title !== '' ? $title : $url,

@@ -100,6 +100,27 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_tegera_104_does_not_match_pros_coverall(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '104',
+            'name' => 'Rękawica tekstylna TEGERA 104',
+            'manufacturer' => 'Ejendals',
+        ]);
+
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://bogarobhp.pl/kombinezon-wodoochronny-model-104-aj-group-pros '
+            .'Kombinezon wodoochronny model 104 produkcji AJ Group / PROS PLAVITEX',
+            $product
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://icd.pl/rekawice-tegera-104 '
+            .'Rękawice Tegera 104 Ejendals',
+            $product
+        ));
+    }
+
     public function test_rejects_short_numeric_without_brand(): void
     {
         $id = new ProductSearchIdentity;

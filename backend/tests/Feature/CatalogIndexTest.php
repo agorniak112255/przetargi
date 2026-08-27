@@ -278,6 +278,23 @@ final class CatalogIndexTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_short_sku_does_not_match_other_brand_same_number(): void
+    {
+        $this->seedPage('https://bogarobhp.pl/kombinezon-wodoochronny-model-104-aj-group-pros');
+        $this->seedPage('https://icd.pl/rekawice-tegera-104-ejendals');
+
+        $product = new Product([
+            'sku' => '104',
+            'name' => 'Rękawica tekstylna TEGERA 104',
+            'manufacturer' => 'Ejendals',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+
+        $this->assertSame('https://icd.pl/rekawice-tegera-104-ejendals', $hits[0]['url'] ?? null);
+        $this->assertCount(1, $hits);
+    }
+
     public function test_prefers_page_with_brand_when_code_matches_twice(): void
     {
         $this->seedPage('https://sklep-a.pl/lampka-1202');

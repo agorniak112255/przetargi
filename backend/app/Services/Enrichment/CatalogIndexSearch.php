@@ -142,6 +142,7 @@ final class CatalogIndexSearch
             ->get(['url', 'title', 'haystack']);
 
         $brand = $this->brandToken($product);
+        $ambiguous = $this->isAmbiguousNumericSku($product);
         $withBrand = [];
         $rest = [];
         foreach ($pages as $page) {
@@ -154,15 +155,24 @@ final class CatalogIndexSearch
                 'title' => (string) ($page->title ?? ''),
                 'snippet' => '',
             ];
+            $hay = (string) $page->haystack;
             // strona z marką w adresie jest pewniejsza niż sam zgodny kod
-            if ($brand !== '' && str_contains((string) $page->haystack, $brand)) {
+            if ($this->identity->hayHasBrand($hay, $product)
+                || ($brand !== '' && str_contains($hay, $brand))) {
                 $withBrand[] = $row;
-            } else {
+            } elseif (! $ambiguous) {
                 $rest[] = $row;
             }
         }
 
         return array_slice(array_merge($withBrand, $rest), 0, self::MAX_HITS);
+    }
+
+    private function isAmbiguousNumericSku(Product $product): bool
+    {
+        $sku = mb_strtolower(trim((string) $product->sku));
+
+        return preg_match('/^\d{3,4}$/', $sku) === 1;
     }
 
     private function brandToken(Product $product): string

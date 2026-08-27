@@ -430,6 +430,37 @@ final class EnrichmentQueryLadderTest extends TestCase
         );
     }
 
+    public function test_catalog_hit_with_shared_short_sku_requires_brand(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'Ejendals',
+            'sku' => '104',
+            'name' => 'Rękawica tekstylna TEGERA 104',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $confirm = $ref->getMethod('confirmedCatalogHits');
+        $confirm->setAccessible(true);
+
+        $confirmed = $confirm->invoke($service, [
+            [
+                'url' => 'https://bogarobhp.pl/kombinezon-wodoochronny-model-104-aj-group-pros',
+                'title' => 'Kombinezon wodoochronny model 104',
+                'snippet' => 'AJ Group / PROS',
+            ],
+            [
+                'url' => 'https://icd.pl/rekawice-tegera-104',
+                'title' => 'Rękawice Tegera 104',
+                'snippet' => 'Ejendals',
+            ],
+        ], $product);
+
+        $this->assertSame(
+            ['https://icd.pl/rekawice-tegera-104'],
+            array_column($confirmed, 'url')
+        );
+    }
+
     public function test_open_search_starts_from_short_queries(): void
     {
         $product = new Product([

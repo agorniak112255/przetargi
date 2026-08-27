@@ -1396,11 +1396,38 @@ final class ProductSearchIdentity
         if ($main !== '') {
             $out[] = $main;
         }
+        foreach (preg_split('/[^a-z0-9]+/u', $main) ?: [] as $part) {
+            if ($this->looksLikeBrandToken($part)) {
+                $out[] = $part;
+            }
+        }
+        // „Rękawica … TEGERA 104” przy producencie Ejendals — sklepy piszą Tegera, nie Ejendals
+        foreach (preg_split('/[^\p{L}\p{N}]+/u', (string) $product->name) ?: [] as $raw) {
+            if (preg_match('/^\p{Lu}{4,}$/u', $raw) === 1 && $this->looksLikeBrandToken(mb_strtolower($raw))) {
+                $out[] = mb_strtolower($raw);
+            }
+        }
         if ($this->looksLikeUrgentGloveSeries($product)) {
             $out[] = 'urgent';
         }
 
         return array_values(array_unique($out));
+    }
+
+    /** Słowo z nazwy/producenta, które jest linią produktu, nie typem PPE. */
+    private function looksLikeBrandToken(string $word): bool
+    {
+        $word = mb_strtolower(trim($word));
+        if ($word === '' || mb_strlen($word) < 4 || preg_match('/\d/u', $word) === 1) {
+            return false;
+        }
+
+        return ! in_array($word, [
+            'gloves', 'group', 'safety', 'rekawica', 'rekawice', 'rekawiczki', 'tekstylna',
+            'tekstylne', 'maska', 'buty', 'kombinezon', 'kurtka', 'spodnie', 'bluza',
+            'kamizelka', 'ochronna', 'ochronne', 'ochronny', 'robocza', 'robocze', 'roboczy',
+            'wodoochronny', 'wodoochronna', 'odziez', 'odzież', 'ubranie',
+        ], true);
     }
 
     /**
