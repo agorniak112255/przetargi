@@ -83,6 +83,40 @@ final class ProductIndexApiTest extends TestCase
             ->assertExactJson(['data' => ['Alpha', 'Zebra']]);
     }
 
+    public function test_products_can_be_filtered_by_enrichment_status(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'OK-1',
+            'name' => 'Gotowy',
+            'manufacturer' => 'Uvex',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        Product::query()->create([
+            'sku' => 'NONE-1',
+            'name' => 'Pusty',
+            'manufacturer' => 'Uvex',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+
+        $this->getJson('/api/products?enrichment_status=done')
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.sku', 'OK-1');
+
+        $this->getJson('/api/products?enrichment_status=none')
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.sku', 'NONE-1');
+    }
+
     public function test_products_index_accepts_per_page_up_to_500(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

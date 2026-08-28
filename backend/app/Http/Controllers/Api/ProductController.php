@@ -61,6 +61,19 @@ class ProductController extends Controller
             $query->where('manufacturer', (string) $request->string('manufacturer'));
         }
 
+        $status = trim((string) $request->string('enrichment_status'));
+        $allowedStatus = [
+            Product::ENRICHMENT_NONE,
+            Product::ENRICHMENT_QUEUED,
+            Product::ENRICHMENT_RUNNING,
+            Product::ENRICHMENT_DONE,
+            Product::ENRICHMENT_FAILED,
+            Product::ENRICHMENT_MANUAL,
+        ];
+        if ($status !== '' && in_array($status, $allowedStatus, true)) {
+            $query->where('enrichment_status', $status);
+        }
+
         $allowedSort = [
             'sku' => 'sku',
             'name' => 'name',

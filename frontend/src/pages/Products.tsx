@@ -29,6 +29,8 @@ const STATUS_LABEL: Record<string, string> = {
   manual: 'Ręcznie',
 }
 
+const STATUS_FILTERS = ['', 'none', 'queued', 'running', 'done', 'failed', 'manual'] as const
+
 function pageNumbers(current: number, last: number): Array<number | '…'> {
   if (last <= 7) {
     return Array.from({ length: last }, (_, i) => i + 1)
@@ -184,6 +186,7 @@ export function Products() {
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
   const [manufacturer, setManufacturer] = useState(() => searchParams.get('manufacturer') ?? '')
+  const [statusFilter, setStatusFilter] = useState('')
   const [manufacturers, setManufacturers] = useState<string[]>([])
   const [aiQuery, setAiQuery] = useState('')
   const [aiMode, setAiMode] = useState(false)
@@ -235,7 +238,7 @@ export function Products() {
 
   useEffect(() => {
     lastSelectIndex.current = null
-  }, [page, sort, dir, manufacturer, debouncedQ, aiMode])
+  }, [page, sort, dir, manufacturer, statusFilter, debouncedQ, aiMode])
 
   useEffect(() => {
     if (!canEnrich) return
@@ -284,6 +287,7 @@ export function Products() {
     })
     if (debouncedQ) params.set('q', debouncedQ)
     if (manufacturer) params.set('manufacturer', manufacturer)
+    if (statusFilter) params.set('enrichment_status', statusFilter)
     return params
   }
 
@@ -306,8 +310,8 @@ export function Products() {
         /* ignore */
       })
       .finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer
-  }, [debouncedQ, manufacturer, page, sort, dir, aiMode])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer/status
+  }, [debouncedQ, manufacturer, statusFilter, page, sort, dir, aiMode])
 
   async function runAiSearch(web = false, raw = aiQuery) {
     const query = raw.trim()
@@ -550,17 +554,52 @@ export function Products() {
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            disabled={aiMode}
-            onClick={() => onSort('enrichment_status')}
-            className={`rounded border px-3 py-2 text-xs ${
-              sort === 'enrichment_status'
-                ? 'border-blue-400 bg-blue-50 font-semibold text-blue-800'
-                : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+            disabled={Boolean(aiBusy)}
+            onClick={() => setAiModalOpen(true)}
+            className={`max-w-xs rounded-lg border-2 border-dashed px-3 py-1.5 text-left ${
+              aiMode
+                ? 'border-indigo-400 bg-indigo-50'
+                : 'border-indigo-300 bg-indigo-50/70 hover:border-indigo-400 hover:bg-indigo-50'
             }`}
-            title="Sortuj po statusie opisów/zdjęć"
+            title="Szuka po opisie, nie po kodzie — otwiera okno wymagania"
           >
-            Status AI {sort === 'enrichment_status' ? (dir === 'asc' ? '▲' : '▼') : '◇'}
+            <span className="block text-[10px] font-semibold uppercase tracking-wide text-indigo-600">
+              Wymaganie AI
+            </span>
+            <span className={`block truncate text-xs ${aiMode ? 'font-medium text-indigo-950' : 'text-indigo-800'}`}>
+              {aiBusy
+                ? 'Szukam…'
+                : aiMode && aiQuery
+                  ? aiQuery
+                  : 'Opisz zastosowanie, normę…'}
+            </span>
           </button>
+          {aiMode && (
+            <button
+              type="button"
+              disabled={Boolean(aiBusy)}
+              onClick={clearAiSearch}
+              className="rounded border border-indigo-200 px-2 py-1.5 text-[11px] text-indigo-800 hover:bg-indigo-50 disabled:opacity-50"
+            >
+              Wyczyść
+            </button>
+          )}
+          <select
+            className="rounded border border-slate-300 px-3 py-2 text-sm"
+            value={statusFilter}
+            disabled={aiMode}
+            onChange={(e) => {
+              setStatusFilter(e.target.value)
+              setPage(1)
+            }}
+            title="Filtr statusu opisów/zdjęć"
+          >
+            {STATUS_FILTERS.map((s) => (
+              <option key={s || 'all'} value={s}>
+                {s ? `Status AI: ${STATUS_LABEL[s]}` : 'Status AI: wszystkie'}
+              </option>
+            ))}
+          </select>
           {canEnrich && (
             <>
               <button
@@ -620,24 +659,6 @@ export function Products() {
             disabled={aiMode}
             onChange={(e) => setQ(e.target.value)}
           />
-          <button
-            type="button"
-            disabled={Boolean(aiBusy)}
-            onClick={() => setAiModalOpen(true)}
-            className="rounded bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {aiBusy ? 'Szukam…' : 'Szukaj AI'}
-          </button>
-          {aiMode && (
-            <button
-              type="button"
-              disabled={Boolean(aiBusy)}
-              onClick={clearAiSearch}
-              className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50"
-            >
-              Wyczyść AI
-            </button>
-          )}
         </div>
       </div>
 
