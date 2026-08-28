@@ -53,6 +53,9 @@ final class CatalogIndexSearch
         foreach ($this->identity->variantBaseCodes($product) as $base) {
             $raw[] = $base;
         }
+        foreach ($this->identity->modelAliases($product) as $alias) {
+            $raw[] = $alias;
+        }
 
         $out = [];
         foreach ($raw as $code) {

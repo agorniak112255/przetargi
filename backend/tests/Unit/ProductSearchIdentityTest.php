@@ -199,6 +199,38 @@ final class ProductSearchIdentityTest extends TestCase
         }
     }
 
+    public function test_ansell_coverall_queries_target_bpbhp_and_style_code(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'GR40T-00121-09',
+            'name' => '4000-GR CVRL HOOD 121-G02.5XL',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $this->assertContains('121', $id->ansellStyleCodes($product));
+        $this->assertContains('4000', $id->ansellStyleCodes($product));
+
+        $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('site:bpbhp.pl', $joined);
+        $this->assertStringContainsString('121', $joined);
+
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121 ANSELL 4000 CVRL HOOD 121',
+            $product
+        ));
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-111',
+            'Kombinezon AlphaTec 4000 model 111',
+            $product
+        ));
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121',
+            'Kombinezon AlphaTec 4000 model 121',
+            $product
+        ));
+    }
+
     public function test_ardon_search_queries_target_official_and_shop_sites(): void
     {
         $id = new ProductSearchIdentity;

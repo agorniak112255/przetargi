@@ -214,6 +214,8 @@ return [
         'www.pros.pl',
         'optimumbhp.pl',
         'www.optimumbhp.pl',
+        'bpbhp.pl',
+        'www.bpbhp.pl',
         'urgent.com.pl',
         'www.urgent.com.pl',
         'pl.msasafety.com',

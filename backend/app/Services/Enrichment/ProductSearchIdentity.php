@@ -23,7 +23,7 @@ final class ProductSearchIdentity
      */
     private const TYPE_STEMS = [
         'gloves' => ['rekawic', 'glove', 'handschuh', 'gant'],
-        'coverall' => ['kombinezon', 'coverall', 'overall'],
+        'coverall' => ['kombinezon', 'coverall', 'overall', 'cvrl'],
         'jacket' => ['kurtk', 'jacket', 'plaszcz'],
         'trousers' => ['spodn', 'trouser', 'pant'],
         'sweatshirt' => ['bluza', 'sweatshirt'],
@@ -444,8 +444,52 @@ final class ProductSearchIdentity
         }
 
         // uvex C300 / HyFlex w nazwie już w strongImageTokens
+        foreach ($this->ansellStyleCodes($product) as $style) {
+            $out[] = $style;
+        }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Ansell GR40T-00121-09 i „4000-GR CVRL HOOD 121-G02” → 121 / 4000 / gr40t.
+     * Sklepy (bpbhp.pl) trzymają model w slugu, nie pełny article number.
+     *
+     * @return list<string>
+     */
+    public function ansellStyleCodes(Product $product): array
+    {
+        $sku = strtoupper(trim((string) $product->sku));
+        $name = strtoupper(trim((string) $product->name));
+        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        $looksAnsell = str_contains($brand, 'ansell')
+            || str_contains($name, 'ALPHATEC')
+            || str_contains($name, 'HYFLEX')
+            || preg_match('/^[A-Z]{2}\d{2}[A-Z]?-\d{5}(?:-\d{2})?$/', $sku) === 1;
+        if (! $looksAnsell) {
+            return [];
+        }
+
+        $out = [];
+        if (preg_match('/^[A-Z]{2}\d{2}[A-Z]?-0*(\d{3,5})(?:-\d{2})?$/', $sku, $m) === 1) {
+            $style = ltrim($m[1], '0');
+            if ($style !== '') {
+                $out[] = $style;
+            }
+            $out[] = $m[1];
+            $out[] = mb_strtolower(explode('-', $sku)[0] ?? '');
+        }
+        if (preg_match('/\b(\d{3})-G\d{2}\b/', $name, $m) === 1) {
+            $out[] = $m[1];
+        }
+        if (preg_match('/\b([456]\d{3})\b/', $name, $m) === 1) {
+            $out[] = $m[1];
+        }
+
+        return array_values(array_unique(array_filter(
+            array_map(static fn (mixed $v): string => (string) $v, $out),
+            static fn (string $v): bool => $v !== ''
+        )));
     }
 
     /**
@@ -484,6 +528,32 @@ final class ProductSearchIdentity
             && str_contains(mb_strtolower($brand), 'uvex')) {
             $queries[] = 'site:uvex-safety.com '.$sku.' glove OR handschuh';
             $queries[] = 'site:uvex-safety.com/products '.$sku;
+        }
+
+        if ($phase === 'manufacturer'
+            && (str_contains(mb_strtolower($brand), 'ansell') || $this->ansellStyleCodes($product) !== [])) {
+            $styles = $this->ansellStyleCodes($product);
+            $series = null;
+            $model = null;
+            foreach ($styles as $style) {
+                if (preg_match('/^[456]\d{3}$/', $style) === 1) {
+                    $series = $style;
+                }
+                if (preg_match('/^\d{3}$/', $style) === 1) {
+                    $model = $style;
+                }
+            }
+            $needle = trim(($series ?? '').' '.($model ?? $sku));
+            if ($needle !== '') {
+                $queries[] = 'site:bpbhp.pl Ansell '.$needle;
+            }
+            if ($model !== null) {
+                $queries[] = 'site:bpbhp.pl Ansell AlphaTec '.$model;
+                $queries[] = 'Ansell AlphaTec '.trim(($series ?? '').' '.$model).' kombinezon';
+            }
+            if ($sku !== '') {
+                $queries[] = 'site:bpbhp.pl '.$sku;
+            }
         }
 
         if ($phase === 'manufacturer' && str_contains(mb_strtolower($brand), 'ardon')) {
@@ -893,6 +963,9 @@ final class ProductSearchIdentity
         foreach ($this->skuSizeVariants($product) as $variant) {
             $codes[] = $variant;
         }
+        foreach ($this->ansellStyleCodes($product) as $style) {
+            $codes[] = $style;
+        }
 
         return array_values(array_unique(array_map('mb_strtolower', $codes)));
     }
@@ -923,7 +996,12 @@ final class ProductSearchIdentity
         }
 
         foreach ($this->codeLikeTokens($url, $title) as $token) {
+            $token = (string) $token;
             foreach ($codes as $code) {
+                $code = (string) $code;
+                if ($token === '' || $code === '') {
+                    continue;
+                }
                 if (str_starts_with($code, $token) || str_starts_with($token, $code)) {
                     return true;
                 }
@@ -995,8 +1073,9 @@ final class ProductSearchIdentity
     {
         $out = [];
         foreach ($this->productCodes($product) as $code) {
-            $compact = $this->compactCode($code);
-            if (mb_strlen($compact) >= 4) {
+            $compact = $this->compactCode((string) $code);
+            $min = preg_match('/^\d{3}$/u', $compact) === 1 ? 3 : 4;
+            if (mb_strlen($compact) >= $min) {
                 $out[] = $compact;
             }
         }
@@ -1028,10 +1107,15 @@ final class ProductSearchIdentity
             if (in_array($hit[1], self::NORM_PREFIXES, true)) {
                 continue;
             }
-            $out[$this->compactCode($hit[0])] = true;
+            $out[(string) $this->compactCode($hit[0])] = true;
+        }
+        if (preg_match_all('/\bmodel[\s\-]?(\d{2,4})\b/u', $hay, $modelHits)) {
+            foreach ($modelHits[1] as $n) {
+                $out[(string) $n] = true;
+            }
         }
 
-        return array_keys($out);
+        return array_map(static fn (string|int $k): string => (string) $k, array_keys($out));
     }
 
     private function compactCode(string $code): string

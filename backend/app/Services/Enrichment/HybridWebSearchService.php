@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v26';
+    private const SEARCH_CACHE_VERSION = 'v28';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -462,6 +462,14 @@ class HybridWebSearchService
     private function openSearchQueries(Product $product, array $queries): array
     {
         $ladder = [];
+        // site: sklepu (bpbhp / Ardon) musi iść przed pełnym SKU — sklepy nie indeksują
+        // article number typu GR40T-00121-09, tylko model w slugu.
+        foreach ($queries as $query) {
+            if (preg_match('/\bsite:/i', $query) === 1) {
+                $ladder[] = $query;
+            }
+        }
+        $ladder = array_slice($ladder, 0, 2);
         $legacy = $this->legacySafetyShoePhrase($product);
         if ($legacy !== '') {
             $ladder[] = $this->identity->queryWithManufacturer(
@@ -473,6 +481,9 @@ class HybridWebSearchService
             $ladder[] = $query;
         }
         foreach ($queries as $query) {
+            if (preg_match('/\bsite:/i', $query) === 1) {
+                continue;
+            }
             $ladder[] = $query;
         }
 
@@ -994,6 +1005,14 @@ class HybridWebSearchService
         $brand = mb_strtolower($this->identity->shortBrand((string) $product->manufacturer));
         if ($brand !== '' && (str_contains($url, $brand) || str_contains($title, $brand))) {
             $score += 25;
+        }
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $host = preg_replace('/^www\./', '', $host) ?? $host;
+        foreach ($this->preferredDomains() as $domain) {
+            if ($host === $domain || str_ends_with($host, '.'.$domain)) {
+                $score += 35;
+                break;
+            }
         }
 
         return $score;

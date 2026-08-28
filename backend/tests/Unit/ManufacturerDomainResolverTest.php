@@ -149,6 +149,7 @@ final class ManufacturerDomainResolverTest extends TestCase
             'bhp-sklep.com.pl',
             'specto.com.pl',
             'optimumbhp.pl',
+            'bpbhp.pl',
             'kingbhp.pl',
             'filimar.pl',
             'elmar-bhp.pl',

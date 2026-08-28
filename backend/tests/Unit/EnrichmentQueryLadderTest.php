@@ -484,6 +484,28 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertContains('Kurtka ostrzegawcza URG-914 Urgent', $ladder);
     }
 
+    public function test_ansell_open_search_starts_on_bpbhp(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'Ansell',
+            'sku' => 'GR40T-00121-09',
+            'name' => '4000-GR CVRL HOOD 121-G02.5XL',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+
+        /** @var list<string> $ladder */
+        $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
+
+        $this->assertNotEmpty($ladder);
+        $this->assertStringContainsString('site:bpbhp.pl', $ladder[0] ?? '');
+        $this->assertStringContainsString('121', $ladder[0] ?? '');
+    }
+
     public function test_hi_vis_jacket_is_not_waterproof_clothing(): void
     {
         $identity = new ProductSearchIdentity;
