@@ -234,8 +234,8 @@ final class PriceListAiAnalyzer
             }
         }
 
-        // 1) Vision tylko dla mniejszych PDF z warstwą tekstową (gdy AI skonfigurowane)
-        if ($aiReady && ! $isScan && $fileSize > 0 && $fileSize <= 4_000_000) {
+        // 1) Vision: PDF z tekstem albo skan po nieudanym wycięciu stron (plik ≤ 4 MB)
+        if ($aiReady && $fileSize > 0 && $fileSize <= 4_000_000) {
             try {
                 @set_time_limit(240);
                 $raw = $this->llm->chatWithPdf($prompt, $path, basename($path), AiTask::PriceListPdf);
@@ -259,7 +259,7 @@ final class PriceListAiAnalyzer
             }
         } elseif (! $aiReady) {
             $visionError = 'AI wyłączone — tylko odczyt heurystyczny z tekstu PDF.';
-        } else {
+        } elseif ($fileSize > 4_000_000) {
             $visionError = 'PDF '.round($fileSize / 1_000_000, 1).' MB — analiza tekstowa w częściach (bez vision).';
         }
 

@@ -47,6 +47,37 @@ final class PdfEmbeddedImageExtractorTest extends TestCase
         $this->assertLessThan(strlen($jpeg), strlen($out[0]['bytes']));
     }
 
+    public function test_extracts_jpeg_when_length_is_indirect_and_contents_is_flate(): void
+    {
+        $jpeg = $this->tinyJpeg();
+        $path = $this->writeIndirectLengthImagePdf($jpeg);
+
+        try {
+            $images = (new PdfEmbeddedImageExtractor)->extract($path);
+            $this->assertCount(1, $images);
+            $this->assertSame('image/jpeg', $images[0]['mime']);
+            $this->assertSame($jpeg, $images[0]['bytes']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_medibut_ppo_scan_has_two_jpeg_pages(): void
+    {
+        $dir = 'c:/xampp/htdocs/Przetargi/Cenniki/MEDIBUT';
+        $matches = glob($dir.'/PPO CENNIK*.pdf') ?: [];
+        if ($matches === []) {
+            $this->markTestSkipped('Brak lokalnego cennika MEDIBUT PPO');
+        }
+
+        $images = (new PdfEmbeddedImageExtractor)->extract($matches[0]);
+        $this->assertCount(2, $images);
+        $this->assertSame('image/jpeg', $images[0]['mime']);
+        $this->assertGreaterThan(100_000, strlen($images[0]['bytes']));
+        $this->assertGreaterThan(100_000, strlen($images[1]['bytes']));
+        $this->assertStringStartsWith("\xFF\xD8", $images[0]['bytes']);
+    }
+
     public function test_strzelce_scan_has_two_jpeg_pages_and_no_missing_catalog(): void
     {
         $path = 'c:/xampp/htdocs/Przetargi/Cenniki/Strzelce Opolskie - 2018-02-01.pdf';
@@ -66,6 +97,31 @@ final class PdfEmbeddedImageExtractorTest extends TestCase
             $this->assertStringNotContainsString('Missing catalog', $e->getMessage());
             $this->assertStringContainsStringIgnoringCase('skan', $e->getMessage());
         }
+    }
+
+    /**
+     * Jak MEDIBUT PPO: Contents /FlateDecode przed Image, /Length N 0 R.
+     */
+    private function writeIndirectLengthImagePdf(string $jpeg): string
+    {
+        $len = strlen($jpeg);
+        $objects = [];
+        $objects[5] = "5 0 obj\n<</Length 7 0 R/Filter/FlateDecode>>\nstream\nx\x9c\nendstream\nendobj\n";
+        $objects[7] = "7 0 obj\n3\nendobj\n";
+        $objects[8] = "8 0 obj\n{$len}\nendobj\n";
+        $objects[9] = "9 0 obj\n<</Type/XObject/Subtype/Image/Width 32/Height 32/ColorSpace/DeviceRGB"
+            ."/BitsPerComponent 8/Length 8 0 R/Filter/DCTDecode>>\nstream\n"
+            .$jpeg
+            ."\nendstream\nendobj\n";
+
+        $body = "%PDF-1.4\n";
+        foreach ($objects as $obj) {
+            $body .= $obj;
+        }
+        $path = tempnam(sys_get_temp_dir(), 'ppoind').'.pdf';
+        file_put_contents($path, $body);
+
+        return $path;
     }
 
     private function writeBrokenXrefImagePdf(string $jpeg): string

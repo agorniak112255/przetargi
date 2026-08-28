@@ -38,22 +38,26 @@ final class PdfEmbeddedImageExtractor
                 continue;
             }
 
-            $dictFrom = max(0, $markerAt - 400);
-            $dict = substr($data, $dictFrom, $streamKw - $dictFrom);
+            $dict = $this->imageDictionary($data, $markerAt, $streamKw);
+            if ($dict === null) {
+                $offset = $markerAt + $markerLen;
+
+                continue;
+            }
             $filter = $this->filterName($dict);
             $mime = match ($filter) {
                 'DCTDecode' => 'image/jpeg',
                 'JPXDecode' => 'image/jp2',
                 default => null,
             };
-            if ($mime === null || preg_match('/\/Length\s+(\d+)/', $dict, $lenMatch) !== 1) {
+            $length = $this->streamLength($data, $dict);
+            if ($mime === null || $length === null || $length < 32) {
                 $offset = $streamKw + 6;
 
                 continue;
             }
 
             $start = $this->streamPayloadStart($data, $streamKw);
-            $length = (int) $lenMatch[1];
             $bytes = substr($data, $start, $length);
             $offset = $start + $length;
             if ($bytes === '' || ($mime === 'image/jpeg' && ! str_starts_with($bytes, "\xFF\xD8"))) {
@@ -150,6 +154,58 @@ final class PdfEmbeddedImageExtractor
         }
 
         return [$b, strlen('/Subtype/Image')];
+    }
+
+    /**
+     * Słownik obiektu Image — nie okno wstecz (tam bywa /Filter /FlateDecode z Contents).
+     */
+    private function imageDictionary(string $data, int $markerAt, int $streamKw): ?string
+    {
+        $searchFrom = max(0, $markerAt - 800);
+        $region = substr($data, $searchFrom, $markerAt - $searchFrom);
+        $dictOpen = strrpos($region, '<<');
+        if ($dictOpen === false) {
+            return null;
+        }
+        $start = $searchFrom + $dictOpen;
+        if ($streamKw <= $start) {
+            return null;
+        }
+
+        return substr($data, $start, $streamKw - $start);
+    }
+
+    private function streamLength(string $data, string $dict): ?int
+    {
+        if (preg_match('/\/Length\s+(\d+)\s+(\d+)\s+R/', $dict, $m) === 1) {
+            return $this->resolveIndirectInteger($data, (int) $m[1], (int) $m[2]);
+        }
+        if (preg_match('/\/Length\s+(\d+)/', $dict, $m) === 1) {
+            return (int) $m[1];
+        }
+
+        return null;
+    }
+
+    private function resolveIndirectInteger(string $data, int $objectId, int $generation): ?int
+    {
+        $needle = $objectId.' '.$generation.' obj';
+        $offset = 0;
+        while (($pos = strpos($data, $needle, $offset)) !== false) {
+            $before = $pos === 0 ? '' : $data[$pos - 1];
+            if ($pos > 0 && ctype_digit($before)) {
+                $offset = $pos + 1;
+
+                continue;
+            }
+            $after = substr($data, $pos + strlen($needle), 80);
+            if (preg_match('/^\s+(\d+)\s+endobj/', $after, $m) === 1) {
+                return (int) $m[1];
+            }
+            $offset = $pos + 1;
+        }
+
+        return null;
     }
 
     private function filterName(string $dict): string
