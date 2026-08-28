@@ -1,10 +1,41 @@
 #!/usr/bin/env bash
-# Uruchom na serwerze (najlepiej jako root), w katalogu projektu lub podaj ścieżkę.
+# Uruchom na serwerze (najlepiej jako root).
 # Aktualizuje kod z GitHub + migracje. NIE kopiuje lokalnej bazy.
 # .htaccess na serwerze jest lokalny — pull go NIE nadpisuje.
+#
+#   bash deploy/server-update.sh              # sam kod (szybko)
+#   bash deploy/server-update.sh --katalog    # + indeks sitemap sklepów (kilka–kilkanaście min)
+#   bash deploy/server-update.sh /ścieżka
 set -euo pipefail
 
-APP_ROOT="${1:-/var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl}"
+usage() {
+  cat <<'EOF'
+Użycie: server-update.sh [--katalog|--bez-katalogu] [katalog_aplikacji]
+
+  (bez flagi)       pull, migracje, cache — bez indeksu kart sklepów
+  --katalog         dodatkowo catalog:index --missing-only (długo)
+  --bez-katalogu    to samo co bez flagi (na wszelki wypadek)
+  --help            ten tekst
+EOF
+}
+
+APP_ROOT="/var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl"
+INDEX_CATALOG=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --katalog|--catalog) INDEX_CATALOG=1 ;;
+    --bez-katalogu|--skip-catalog) INDEX_CATALOG=0 ;;
+    --help|-h) usage; exit 0 ;;
+    /*) APP_ROOT="$arg" ;;
+    *)
+      echo "Nieznany argument: $arg" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
 PHP_BIN="${PHP_BIN:-/opt/plesk/php/8.3/bin/php}"
 OWNER="${OWNER:-supon}"
 GROUP="${GROUP:-psacln}"
@@ -79,9 +110,14 @@ echo "==> cache"
 echo "==> indeks wyszukiwania produktów"
 "$PHP_BIN" artisan products:rebuild-search-index || true
 
-# Nowe sklepy z config/enrichment.php (np. Ardon) — bez tego enrichment nie ma kart z sitemapy.
-echo "==> indeks kart sklepów (tylko nowe domeny)"
-"$PHP_BIN" artisan catalog:index --missing-only --seconds=180 --max=20000 || true
+if [[ "$INDEX_CATALOG" -eq 1 ]]; then
+  echo "==> indeks kart sklepów (tylko nowe domeny)"
+  "$PHP_BIN" artisan catalog:index --missing-only --seconds=180 --max=20000 || true
+else
+  echo "==> indeks kart sklepów pominięty (szybszy update)"
+  echo "    gdy trzeba:  bash $APP_ROOT/deploy/server-update.sh --katalog"
+  echo "    albo jedna domena:  $PHP_BIN artisan catalog:index bpbhp.pl"
+fi
 
 echo "==> laravel scheduler (cron schedule:run)"
 if [[ -x "$APP_ROOT/deploy/ensure-laravel-scheduler.sh" ]]; then
