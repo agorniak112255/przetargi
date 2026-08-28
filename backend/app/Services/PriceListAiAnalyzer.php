@@ -34,6 +34,7 @@ final class PriceListAiAnalyzer
         private readonly SpreadsheetMappingHeuristic $spreadsheetHeuristic,
         private readonly PriceListSampleRoleResearcher $sampleRoleResearcher,
         private readonly EnrichmentSlots $enrichmentSlots,
+        private readonly PdfDocumentGroupAssigner $groupAssigner,
     ) {}
 
     /**
@@ -325,6 +326,14 @@ final class PriceListAiAnalyzer
 
         $aiProducts = $this->uniqueBySku($aiProducts);
         $products = $this->mergePdfProducts($aiProducts, $heuristic, $manufacturerHint);
+        $manufForGroups = $this->metaDetector->resolve(
+            $manufacturerHint,
+            $originalName,
+            null,
+            mb_substr($text, 0, 4000),
+            $fromName['version'] ?? null,
+        )['manufacturer'];
+        $products = $this->groupAssigner->assign($products, $text, $manufForGroups);
 
         if ($products === []) {
             $msg = 'Nie udało się odczytać pozycji z PDF (duży plik: '
@@ -532,12 +541,16 @@ final class PriceListAiAnalyzer
             }
             if (array_is_list($row) && isset($row[0], $row[2])) {
                 $price = $row[2];
+                $group = isset($row[3]) && is_string($row[3]) && trim($row[3]) !== ''
+                    ? trim($row[3])
+                    : null;
                 $out[] = [
                     'sku' => (string) $row[0],
                     'name' => (string) ($row[1] ?? $row[0]),
                     'catalog_price' => $price,
                     'discount' => 0,
                     'purchase' => $price,
+                    'category' => $group,
                 ];
 
                 continue;
@@ -712,6 +725,7 @@ final class PriceListAiAnalyzer
         foreach ($heuristic as $i => $row) {
             $heuristic[$i]['manufacturer'] = $meta['manufacturer'];
         }
+        $heuristic = $this->groupAssigner->assign($heuristic, $text, $meta['manufacturer']);
         $docCurrency = $this->majorityCurrency($heuristic)
             ?? $this->currencyDetector->detect($text)
             ?? ($heuristicEma !== [] ? 'EUR' : 'PLN');
@@ -743,8 +757,8 @@ final class PriceListAiAnalyzer
         return <<<PROMPT
 {$hint}
 Wypisz produkty z tekstu. Tylko JSON:
-{"c":"PLN","p":[["SKU","nazwa",12.5]]}
-p = [kod, nazwa, cena]. Bez markdown.
+{"c":"PLN","p":[["SKU","nazwa",12.5,"grupa"]]}
+p = [kod, nazwa, cena, grupa z nagłówka sekcji]. Bez markdown.
 PROMPT;
     }
 

@@ -615,16 +615,6 @@ export function PriceLists() {
       return
     }
     const fromDetected = summary.detected.map((g) => ({ ...g }))
-    const detectedNames = new Set(fromDetected.map((g) => g.name))
-    for (const ex of summary.existing) {
-      if (ex.is_global || detectedNames.has(ex.name)) continue
-      fromDetected.push({
-        name: ex.name,
-        product_count: 0,
-        discount_percent: ex.discount_percent,
-        id: ex.id,
-      })
-    }
     setGroupRows(fromDetected)
     setDefaultDiscount(
       summary.global_discount_percent > 0 ? String(summary.global_discount_percent) : '',
@@ -1340,9 +1330,9 @@ export function PriceLists() {
               Upusty przy potwierdzeniu importu
             </h3>
             <p className="mb-3 text-[11px] text-amber-900/80">
-              Grupy biorą się z kolumny kategoria/klasa/grupa w cenniku. Możesz dodać grupy ręcznie.
-              Przy grupowaniu każdy towar musi mieć grupę; bez grup — jeden upust na cały cennik /
-              producenta.
+              Grupy biorą się z sekcji w tym pliku (nagłówki / kolumna kategoria). Puste grupy
+              z poprzednich cenników nie są dokładane. Przy grupowaniu każdy towar musi mieć grupę;
+              bez grup — jeden upust na cały cennik.
             </p>
 
             {groupRows.length > 0 ? (
