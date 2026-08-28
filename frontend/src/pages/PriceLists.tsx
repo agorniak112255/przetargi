@@ -156,6 +156,7 @@ type Analysis = {
   rows_total: number
   skipped: number
   errors_count: number
+  products_truncated?: boolean
   model: string
   meta?: { manufacturer: string; version: string; source: string }
   assortment_groups?: AssortmentGroupsSummary
@@ -1014,7 +1015,10 @@ export function PriceLists() {
           ` Poniżej przykłady ${res.preview.length} z ${res.products_found}.` +
           (detectedManuf ? ` · producent: ${detectedManuf}` : '') +
           (res.meta?.version ? ` · wersja: ${res.meta.version}` : '') +
-          groupsHint,
+          groupsHint +
+          (res.products_truncated
+            ? ' Lista w podglądzie jest ucięta — do importu idzie maksymalnie 12 tys. SKU; resztę wgraj z XLSX.'
+            : ''),
       )
       finishProgress(true)
     } catch (ex) {

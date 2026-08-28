@@ -50,4 +50,17 @@ TKANINA 065
 TXT;
         $this->assertTrue((new PriceListPdfTextExtractor)->looksLikePricelist($text));
     }
+
+    public function test_sungboo_cards_without_decimal_prices_are_pricelist(): void
+    {
+        $text = <<<'TXT'
+SUNGBOO CENNIK DLA ODBIORCÓW HURTOWYCH
+Cena netto Rozmiar EN388 Ilo par/opakowanie
+SPECIAL CUT 926 4X42B 6/120 Rkawice antyprzeciciowe
+Cena netto 1054 EXTRA CUT
+Cena netto 1628 PREMIUM CUT
+Cena netto 354 11N-N08
+TXT;
+        $this->assertTrue((new PriceListPdfTextExtractor)->looksLikePricelist($text));
+    }
 }

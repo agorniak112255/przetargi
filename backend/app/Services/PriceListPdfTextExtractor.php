@@ -39,6 +39,28 @@ final class PriceListPdfTextExtractor
     }
 
     /**
+     * pdftotext -layout: karty katalogowe (np. SUNGBOO), gdy -raw gubi kolumny.
+     */
+    public function extractLayout(string $path, ?int $maxChars = null): ?string
+    {
+        $text = $this->extractViaPdfToText($path, true);
+        if ($text === null) {
+            return null;
+        }
+        $text = $this->ensureUtf8($text);
+        $text = $this->normalizeWhitespace($text);
+        if (mb_strlen($text) < 40) {
+            return null;
+        }
+        $limit = $maxChars ?? 2_000_000;
+        if ($limit > 0 && mb_strlen($text) > $limit) {
+            $text = mb_substr($text, 0, $limit);
+        }
+
+        return $text;
+    }
+
+    /**
      * @return list<string>
      */
     public function chunk(string $text, int $chunkChars = 28000, int $overlap = 800): array
@@ -79,17 +101,23 @@ final class PriceListPdfTextExtractor
             return true;
         }
 
+        $netto = preg_match_all('/cena\s*netto/ui', $text);
+        if ($netto >= 3 && preg_match('/sungboo|r[ęe]kawic|rkawic|en388|en420/ui', $text) === 1) {
+            return true;
+        }
+
         return $prices >= 6 && ($articles >= 2 || $skuish >= 4 || $prices >= 16 || $ceCodes >= 3);
     }
 
-    private function extractViaPdfToText(string $path): ?string
+    private function extractViaPdfToText(string $path, bool $layout = false): ?string
     {
         $bin = $this->findPdfToText();
         if ($bin === null) {
             return null;
         }
 
-        $cmd = escapeshellarg($bin).' -raw '.escapeshellarg($path).' -';
+        $mode = $layout ? '-layout' : '-raw';
+        $cmd = escapeshellarg($bin).' '.$mode.' '.escapeshellarg($path).' -';
         $out = [];
         $code = 0;
         exec($cmd.' 2>NUL', $out, $code);

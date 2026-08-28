@@ -20,6 +20,8 @@ final class PriceListAiAnalyzer
         private readonly AnsellEmaPdfParser $ansellEmaParser,
         private readonly JsGlovesPdfParser $jsGlovesParser,
         private readonly RenexPdfParser $renexPdfParser,
+        private readonly SungbooPdfParser $sungbooPdfParser,
+        private readonly PdfGenericSkuPriceParser $genericSkuPriceParser,
         private readonly JsonResponseParser $jsonParser,
         private readonly CurrencyDetector $currencyDetector,
         private readonly PriceListMetaDetector $metaDetector,
@@ -217,7 +219,10 @@ final class PriceListAiAnalyzer
         $heuristicEma = [];
         $heuristicJs = [];
         $heuristicRenex = [];
+        $heuristicSungboo = [];
+        $heuristicGeneric = [];
         $heuristic = [];
+        $sungbooText = is_string($text) ? $text : '';
         if (is_string($text)) {
             $heuristicPros = $this->priceRowParser->parse($text, $manufacturerHint);
             $heuristicEma = $this->ansellEmaParser->parse($text, $manufacturerHint);
@@ -225,6 +230,15 @@ final class PriceListAiAnalyzer
                 ? $this->jsGlovesParser->parse($text, $manufacturerHint)
                 : [];
             $heuristicRenex = $this->renexPdfParser->parse($text);
+            $heuristicGeneric = $this->genericSkuPriceParser->parse($text);
+            $sungbooText = $text;
+            if ($this->sungbooPdfParser->looksLike($text)) {
+                $layout = $this->pdfExtractor->extractLayout($path);
+                if (is_string($layout) && $layout !== '') {
+                    $sungbooText = $layout;
+                }
+                $heuristicSungboo = $this->sungbooPdfParser->parse($sungbooText);
+            }
             $heuristic = $this->uniqueBySku(array_merge(
                 $this->normalizeProducts($heuristicEma, $manufacturerHint ?: 'Ansell'),
                 $this->normalizeProducts($heuristicPros, $manufacturerHint),
@@ -236,15 +250,22 @@ final class PriceListAiAnalyzer
                     )),
                     $manufacturerHint ?: 'RENEX'
                 ),
+                $this->normalizeProducts($heuristicSungboo, $manufacturerHint ?: 'SUNGBOO'),
+                $this->normalizeProducts($heuristicGeneric, $manufacturerHint),
             ));
         }
-        if ($heuristic !== [] && count($heuristic) >= 5) {
+        $priceHits = is_string($text) ? (preg_match_all('/\b\d+[.,]\d{2}\b/u', $text) ?: 0) : 0;
+        $textLen = is_string($text) ? mb_strlen($text) : 0;
+        $largeList = $textLen > 40000 || $priceHits >= 80;
+        $minHeuristic = $largeList ? max(20, (int) floor($priceHits * 0.2)) : 5;
+        if ($heuristic !== [] && count($heuristic) >= $minHeuristic) {
             return $this->heuristicPdfResult(
                 $heuristic,
                 $heuristicEma,
                 $heuristicPros,
                 $heuristicJs,
-                $text ?? '',
+                $heuristicSungboo,
+                $heuristicSungboo !== [] ? $sungbooText : ($text ?? ''),
                 $fileSize,
                 $manufacturerHint,
                 $originalName,
@@ -272,21 +293,15 @@ final class PriceListAiAnalyzer
             throw new RuntimeException($msg);
         }
 
-        if ($heuristic !== [] && count($heuristic) >= 5) {
-            return $this->heuristicPdfResult(
-                $heuristic,
-                $heuristicEma,
-                $heuristicPros,
-                $heuristicJs,
-                $text,
-                $fileSize,
-                $manufacturerHint,
-                $originalName,
-                $fromName['version'] ?? null,
+        if ($largeList) {
+            throw new RuntimeException(
+                'Duży cennik PDF (~'.$priceHits.' cen, '.$textLen.' znaków, odczytano '
+                .count($heuristic).' SKU). Model AI nie wypisze tysięcy pozycji. '
+                .'Wgraj XLSX albo PDF z kodem i ceną w jednym wierszu.'
             );
         }
 
-        $chunks = $aiReady ? array_slice($this->pdfExtractor->chunk($text, 8000, 200), 0, 1) : [];
+        $chunks = $aiReady ? array_slice($this->pdfExtractor->chunk($text, 12000, 400), 0, 8) : [];
         $aiProducts = [];
         $model = $aiReady ? 'text-chunks' : 'heuristic-only';
         $json = [
@@ -321,7 +336,7 @@ final class PriceListAiAnalyzer
                             ."\n\nWzorce: (A) 119.00 32 80.92; (B) NV15S-00138 … 50 PCE … 2.62.",
                     ],
                 ];
-                $raw = $this->llm->chat($messages, null, true, ['max_tokens' => 1500], AiTask::PriceListPdf);
+                $raw = $this->llm->chat($messages, null, true, ['max_tokens' => 6000], AiTask::PriceListPdf);
                 $model = $raw['model'];
                 $partJson = $this->jsonParser->parse($raw['content']);
                 if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
@@ -399,6 +414,7 @@ final class PriceListAiAnalyzer
      * @param  list<array<string, mixed>>  $heuristicEma
      * @param  list<array<string, mixed>>  $heuristicPros
      * @param  list<array<string, mixed>>  $heuristicJs
+     * @param  list<array<string, mixed>>  $heuristicSungboo
      * @return array<string, mixed>
      */
     private function heuristicPdfResult(
@@ -406,6 +422,7 @@ final class PriceListAiAnalyzer
         array $heuristicEma,
         array $heuristicPros,
         array $heuristicJs,
+        array $heuristicSungboo,
         string $text,
         int $fileSize,
         ?string $manufacturerHint,
@@ -414,7 +431,9 @@ final class PriceListAiAnalyzer
     ): array {
         $aiGuess = $heuristicEma !== []
             ? 'Ansell'
-            : ($heuristicJs !== [] ? 'JS GLOVES' : ($heuristicPros !== [] ? 'PROS' : 'RENEX'));
+            : ($heuristicJs !== [] ? 'JS GLOVES'
+                : ($heuristicSungboo !== [] ? 'SUNGBOO'
+                    : ($heuristicPros !== [] ? 'PROS' : ($manufacturerHint ?: ''))));
         $meta = $this->metaDetector->resolve(
             $manufacturerHint,
             $originalName,
@@ -631,7 +650,7 @@ PROMPT;
         }
 
         // Ogranicz payload HTTP — bardzo duże listy PDF mogą psuć JSON w przeglądarce.
-        $maxProductsPayload = 2500;
+        $maxProductsPayload = 12000;
         $payloadProducts = count($products) > $maxProductsPayload
             ? array_slice($products, 0, $maxProductsPayload)
             : $products;
