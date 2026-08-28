@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { InquiryClarifyModal, type InquiryAnswer } from '../components/InquiryClarifyModal'
+import { BusyLabel, InquiryClarifyModal, useBusySeconds, type InquiryAnswer } from '../components/InquiryClarifyModal'
 import { api, appHref } from '../lib/api'
 import type { InquiryPayload } from './Inquiries'
 
@@ -14,6 +14,7 @@ export function InquiryReply() {
   const [loading, setLoading] = useState(true)
   const [composeBusy, setComposeBusy] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const composeSec = useBusySeconds(composeBusy)
 
   useEffect(() => {
     if (!id) return
@@ -78,14 +79,25 @@ export function InquiryReply() {
             {inquiry.client?.name ? `${inquiry.client.name} · ` : ''}
             edytuj jeśli trzeba, potem Kopiuj.
           </p>
+          <Link
+            to="/inquiries"
+            className="mt-1 inline-block text-xs text-blue-600 hover:underline"
+          >
+            ← Powrót do zapytań
+          </Link>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
+            disabled={composeBusy}
             onClick={() => setModalOpen(true)}
-            className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
+            className={`rounded px-3 py-1.5 text-xs ${
+              composeBusy
+                ? 'cursor-wait bg-violet-600 text-white'
+                : 'border border-slate-300 hover:bg-slate-50'
+            }`}
           >
-            Doprecyzuj
+            {composeBusy ? <BusyLabel label="Piszę" seconds={composeSec} /> : 'Doprecyzuj'}
           </button>
           <button
             type="button"
@@ -163,11 +175,27 @@ export function InquiryReply() {
         </div>
       )}
 
-      <p className="text-[11px] text-slate-400">
-        <Link className="text-blue-600 hover:underline" to="/inquiries">
-          Nowe zapytanie
+      <div className="flex flex-wrap gap-2">
+        <Link
+          to="/inquiries"
+          className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
+        >
+          Powrót
         </Link>
-      </p>
+        <button
+          type="button"
+          onClick={() => {
+            if (window.opener) {
+              window.close()
+              return
+            }
+            window.location.assign(appHref('/inquiries'))
+          }}
+          className="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700"
+        >
+          Zamknij
+        </button>
+      </div>
 
       <InquiryClarifyModal
         open={modalOpen}

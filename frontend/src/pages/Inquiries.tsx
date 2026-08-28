@@ -1,6 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { InquiryClarifyModal, type InquiryAnswer, type InquiryCard } from '../components/InquiryClarifyModal'
+import {
+  BusyLabel,
+  InquiryClarifyModal,
+  useBusySeconds,
+  type InquiryAnswer,
+  type InquiryCard,
+} from '../components/InquiryClarifyModal'
 import { useAuth } from '../auth'
 import { api, appHref, can } from '../lib/api'
 
@@ -63,6 +69,8 @@ export function Inquiries() {
   const [busy, setBusy] = useState(false)
   const [composeBusy, setComposeBusy] = useState(false)
   const [err, setErr] = useState('')
+  const prepareSec = useBusySeconds(busy)
+  const composeSec = useBusySeconds(composeBusy)
   const [inquiry, setInquiry] = useState<InquiryPayload | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
 
@@ -196,10 +204,25 @@ export function Inquiries() {
             <button
               type="submit"
               disabled={busy || composeBusy || body.trim().length < 20}
-              className="w-full rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className={`w-full rounded px-3 py-2 text-xs font-medium text-white ${
+                busy || composeBusy
+                  ? 'cursor-wait bg-violet-600'
+                  : 'bg-blue-600 hover:bg-blue-700 disabled:opacity-50'
+              }`}
             >
-              {busy ? 'Analizuję…' : 'Przygotuj odpowiedź'}
+              {busy ? (
+                <BusyLabel label="Analizuję zapytanie" seconds={prepareSec} />
+              ) : composeBusy ? (
+                <BusyLabel label="Piszę odpowiedź" seconds={composeSec} />
+              ) : (
+                'Przygotuj odpowiedź'
+              )}
             </button>
+            {(busy || composeBusy) && (
+              <p className="text-center text-[11px] text-violet-800">
+                Model liczy — poczekaj, nie odświeżaj strony.
+              </p>
+            )}
           </div>
         </div>
       </form>

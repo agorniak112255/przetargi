@@ -1,6 +1,6 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { can, canAny } from '../lib/api'
+import { appHref, can, canAny } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
 
 type NavLinkItem = {
@@ -32,8 +32,29 @@ export function Layout() {
   if (replyWindow) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <div className="border-b border-slate-200 bg-white px-5 py-2 text-sm font-semibold text-slate-800">
-          Przetargi Supon · odpowiedź
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-2">
+          <span className="text-sm font-semibold text-slate-800">Przetargi Supon · odpowiedź</span>
+          <div className="flex items-center gap-2">
+            <Link
+              to="/inquiries"
+              className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
+            >
+              Powrót
+            </Link>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.opener) {
+                  window.close()
+                  return
+                }
+                window.location.assign(appHref('/inquiries'))
+              }}
+              className="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700"
+            >
+              Zamknij
+            </button>
+          </div>
         </div>
         <main className="p-5">
           <Outlet />

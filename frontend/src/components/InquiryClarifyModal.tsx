@@ -1,5 +1,30 @@
 import { useEffect, useState } from 'react'
 
+export function useBusySeconds(busy: boolean): number {
+  const [sec, setSec] = useState(0)
+  useEffect(() => {
+    if (!busy) {
+      setSec(0)
+      return
+    }
+    const id = window.setInterval(() => setSec((s) => s + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [busy])
+  return sec
+}
+
+export function BusyLabel({ label, seconds }: { label: string; seconds: number }) {
+  return (
+    <span className="inline-flex items-center justify-center gap-2">
+      <span
+        className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+        aria-hidden
+      />
+      {label} · {seconds}s
+    </span>
+  )
+}
+
 export type InquiryCardOption = {
   id: string
   label: string
@@ -41,6 +66,7 @@ export function InquiryClarifyModal({
 }: Props) {
   const [answers, setAnswers] = useState<Record<string, InquiryAnswer>>(initialAnswers)
   const [note, setNote] = useState(initialNote)
+  const seconds = useBusySeconds(open && busy)
 
   useEffect(() => {
     if (!open) return
@@ -61,12 +87,7 @@ export function InquiryClarifyModal({
 
   if (!open) return null
 
-  const ready =
-    cards.length === 0 ||
-    cards.every((card) => {
-      const picked = answers[card.id]?.option_id
-      return Boolean(picked)
-    })
+  const missing = cards.filter((card) => !answers[card.id]?.option_id).map((c) => c.title)
 
   return (
     <div
@@ -78,9 +99,16 @@ export function InquiryClarifyModal({
       }}
     >
       <div
-        className="flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-xl bg-white"
+        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-xl bg-white"
         onClick={(e) => e.stopPropagation()}
       >
+        {busy && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/85">
+            <span className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-violet-600 border-t-transparent" />
+            <p className="mt-3 text-sm font-semibold text-violet-900">Model pisze list…</p>
+            <p className="mt-1 text-xs text-slate-500">{seconds}s — nie zamykaj okna</p>
+          </div>
+        )}
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
           <div>
             <p className="text-sm font-semibold text-slate-900">Doprecyzowanie</p>
@@ -163,13 +191,20 @@ export function InquiryClarifyModal({
         </div>
 
         <div className="border-t border-slate-100 px-4 py-3">
+          {!busy && missing.length > 0 && (
+            <p className="mb-2 text-center text-[11px] text-slate-500">
+              Nie wybrane: {missing.join(', ')} — możesz i tak wysłać.
+            </p>
+          )}
           <button
             type="button"
-            disabled={busy || !ready}
+            disabled={busy}
             onClick={() => onSubmit(answers, note.trim())}
-            className="w-full rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className={`w-full rounded px-3 py-2 text-xs font-medium text-white ${
+              busy ? 'cursor-wait bg-violet-600' : 'bg-blue-600 hover:bg-blue-700'
+            }`}
           >
-            {busy ? 'Piszę odpowiedź…' : 'Napisz odpowiedź'}
+            {busy ? <BusyLabel label="Piszę odpowiedź" seconds={seconds} /> : 'Napisz odpowiedź'}
           </button>
         </div>
       </div>
