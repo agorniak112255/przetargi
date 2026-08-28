@@ -4,11 +4,16 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Jobs\AnalyzePriceListPdfChunkJob;
+use App\Jobs\EnrichProductJob;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\JsonResponseParser;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\EnrichmentSlots;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 
 final class PriceListAiAnalyzer
@@ -308,11 +313,117 @@ final class PriceListAiAnalyzer
             );
         }
 
+        $ran = $this->runPdfChunksOnWorkers($chunks, $prompt, $manufacturerHint);
+        if ($ran === null) {
+            $ran = $this->runPdfChunksInProcess($chunks, $prompt, $manufacturerHint);
+        }
+        $aiProducts = $ran['products'];
+        $model = $ran['model'] !== '' ? $ran['model'] : $model;
+        $json['manufacturer_detected'] = $ran['manufacturer'] ?? $json['manufacturer_detected'];
+        $json['currency'] = $ran['currency'] ?? $json['currency'];
+        $chunkErrors = $ran['errors'];
+
+        $aiProducts = $this->uniqueBySku($aiProducts);
+        $products = $this->mergePdfProducts($aiProducts, $heuristic, $manufacturerHint);
+
+        if ($products === []) {
+            $msg = 'Nie udało się odczytać pozycji z PDF (duży plik: '
+                .round($fileSize / 1_000_000, 1).' MB, tekst: '.mb_strlen($text)
+                .' znaków, części: '.count($chunks)
+                .', błędy AI: '.$chunkErrors
+                .', heurystyka EMA: '.count($heuristicEma)
+                .', PROS: '.count($heuristicPros).').';
+            throw new RuntimeException($msg);
+        }
+
+        $notes = trim(($json['notes'] ?? '').' Analiza PDF: '.count($products).' SKU w '.count($chunks).' częściach.');
+        $json['notes'] = $notes;
+
+        return $this->pdfResult(
+            $products,
+            $json,
+            $model,
+            'pdf-chunks',
+            [
+                'file_mb' => round($fileSize / 1_000_000, 2),
+                'pdf_chars' => mb_strlen($text),
+                'chunks' => count($chunks),
+                'heuristic_ema' => count($heuristicEma),
+                'heuristic_pros' => count($heuristicPros),
+            ],
+            $originalName,
+            null,
+            mb_substr($text, 0, 4000),
+            $manufacturerHint,
+        );
+    }
+
+    /**
+     * @param  list<string>  $chunks
+     * @return array{products: list<array<string, mixed>>, model: string, manufacturer: mixed, currency: mixed, errors: int}|null
+     */
+    private function runPdfChunksOnWorkers(array $chunks, string $prompt, ?string $manufacturerHint): ?array
+    {
+        if ($chunks === [] || config('queue.default') === 'sync') {
+            return null;
+        }
+        $runId = 'pdfai_'.bin2hex(random_bytes(8));
+        foreach ($chunks as $i => $chunk) {
+            AnalyzePriceListPdfChunkJob::dispatch(
+                $runId,
+                $i,
+                count($chunks),
+                $chunk,
+                $prompt,
+                $manufacturerHint,
+            );
+        }
+        $deadline = microtime(true) + 4.0;
+        $taken = false;
+        while (microtime(true) < $deadline) {
+            if ($this->pdfRunTouchedByWorker($runId, count($chunks))) {
+                $taken = true;
+                break;
+            }
+            usleep(200_000);
+        }
+        if (! $taken) {
+            $this->discardPdfChunkJobs($runId);
+
+            return null;
+        }
+
+        $waitUntil = microtime(true) + 3300;
+        while (microtime(true) < $waitUntil) {
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(600);
+            }
+            if ($this->pdfRunResultsReady($runId, count($chunks))) {
+                return $this->collectPdfChunkResults($runId, count($chunks), $manufacturerHint);
+            }
+            usleep(400_000);
+        }
+        $this->discardPdfChunkJobs($runId);
+
+        return $this->collectPdfChunkResults($runId, count($chunks), $manufacturerHint);
+    }
+
+    /**
+     * @param  list<string>  $chunks
+     * @return array{products: list<array<string, mixed>>, model: string, manufacturer: mixed, currency: mixed, errors: int}
+     */
+    private function runPdfChunksInProcess(array $chunks, string $prompt, ?string $manufacturerHint): array
+    {
         $pending = [];
         foreach ($chunks as $idx => $chunk) {
             $pending[] = ['idx' => $idx, 'text' => $chunk];
         }
         $total = count($chunks);
+        $aiProducts = [];
+        $model = '';
+        $manufacturer = null;
+        $currency = null;
+        $chunkErrors = 0;
         while ($pending !== []) {
             if (function_exists('set_time_limit')) {
                 @set_time_limit(600);
@@ -336,22 +447,16 @@ final class PriceListAiAnalyzer
                             continue;
                         }
                     }
-                    try {
-                        $model = (string) ($result['model'] ?? $model);
-                        $partJson = $this->jsonParser->parse((string) ($result['content'] ?? ''));
-                        if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
-                            $json['manufacturer_detected'] = $partJson['manufacturer_detected'];
-                        }
-                        if (is_string($partJson['currency'] ?? null)) {
-                            $json['currency'] = $partJson['currency'];
-                        }
-                        $aiProducts = array_merge(
-                            $aiProducts,
-                            $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint)
-                        );
-                    } catch (\Throwable) {
-                        $chunkErrors++;
-                    }
+                    $parsed = $this->productsFromChunkContent(
+                        (string) ($result['content'] ?? ''),
+                        (string) ($result['model'] ?? ''),
+                        $manufacturerHint
+                    );
+                    $model = $parsed['model'] !== '' ? $parsed['model'] : $model;
+                    $manufacturer ??= $parsed['manufacturer'];
+                    $currency ??= $parsed['currency'];
+                    $aiProducts = array_merge($aiProducts, $parsed['products']);
+                    $chunkErrors += $parsed['errors'];
                 }
             } finally {
                 foreach ($locks as $lock) {
@@ -363,39 +468,119 @@ final class PriceListAiAnalyzer
             }
         }
 
-        $aiProducts = $this->uniqueBySku($aiProducts);
-        $products = $this->mergePdfProducts($aiProducts, $heuristic, $manufacturerHint);
+        return [
+            'products' => $aiProducts,
+            'model' => $model,
+            'manufacturer' => $manufacturer,
+            'currency' => $currency,
+            'errors' => $chunkErrors,
+        ];
+    }
 
-        if ($products === []) {
-            $msg = 'Nie udało się odczytać pozycji z PDF (duży plik: '
-                .round($fileSize / 1_000_000, 1).' MB, tekst: '.mb_strlen($text)
-                .' znaków, części: '.count($chunks)
-                .', błędy AI: '.$chunkErrors
-                .', heurystyka EMA: '.count($heuristicEma)
-                .', PROS: '.count($heuristicPros).').';
-            throw new RuntimeException($msg);
+    /**
+     * @return array{products: list<array<string, mixed>>, model: string, manufacturer: mixed, currency: mixed, errors: int}
+     */
+    private function collectPdfChunkResults(string $runId, int $total, ?string $manufacturerHint): array
+    {
+        $aiProducts = [];
+        $model = '';
+        $manufacturer = null;
+        $currency = null;
+        $chunkErrors = 0;
+        for ($i = 0; $i < $total; $i++) {
+            $raw = Cache::get(AnalyzePriceListPdfChunkJob::resultKey($runId, $i));
+            if (! is_array($raw) || ! ($raw['ok'] ?? false)) {
+                $chunkErrors++;
+
+                continue;
+            }
+            $parsed = $this->productsFromChunkContent(
+                (string) ($raw['content'] ?? ''),
+                (string) ($raw['model'] ?? ''),
+                $manufacturerHint
+            );
+            $model = $parsed['model'] !== '' ? $parsed['model'] : $model;
+            $manufacturer ??= $parsed['manufacturer'];
+            $currency ??= $parsed['currency'];
+            $aiProducts = array_merge($aiProducts, $parsed['products']);
+            $chunkErrors += $parsed['errors'];
         }
 
-        $notes = trim(($json['notes'] ?? '').' Analiza PDF: '.count($products).' SKU.');
-        $json['notes'] = $notes;
+        return [
+            'products' => $aiProducts,
+            'model' => $model,
+            'manufacturer' => $manufacturer,
+            'currency' => $currency,
+            'errors' => $chunkErrors,
+        ];
+    }
 
-        return $this->pdfResult(
-            $products,
-            $json,
-            $model,
-            'pdf-chunks',
-            [
-                'file_mb' => round($fileSize / 1_000_000, 2),
-                'pdf_chars' => mb_strlen($text),
-                'chunks' => count($chunks),
-                'heuristic_ema' => count($heuristicEma),
-                'heuristic_pros' => count($heuristicPros),
-            ],
-            $originalName,
-            null,
-            mb_substr($text, 0, 4000),
-            $manufacturerHint,
-        );
+    /**
+     * @return array{products: list<array<string, mixed>>, model: string, manufacturer: mixed, currency: mixed, errors: int}
+     */
+    private function productsFromChunkContent(string $content, string $model, ?string $manufacturerHint): array
+    {
+        try {
+            $partJson = $this->jsonParser->parse($content);
+
+            return [
+                'products' => $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint),
+                'model' => $model,
+                'manufacturer' => is_string($partJson['manufacturer_detected'] ?? null)
+                    ? $partJson['manufacturer_detected']
+                    : null,
+                'currency' => is_string($partJson['currency'] ?? null) ? $partJson['currency'] : null,
+                'errors' => 0,
+            ];
+        } catch (\Throwable) {
+            return [
+                'products' => [],
+                'model' => $model,
+                'manufacturer' => null,
+                'currency' => null,
+                'errors' => 1,
+            ];
+        }
+    }
+
+    private function pdfRunTouchedByWorker(string $runId, int $total): bool
+    {
+        for ($i = 0; $i < $total; $i++) {
+            if (Cache::has(AnalyzePriceListPdfChunkJob::resultKey($runId, $i))) {
+                return true;
+            }
+        }
+        if (! Schema::hasTable('jobs')) {
+            return false;
+        }
+
+        return DB::table('jobs')
+            ->where('queue', EnrichProductJob::QUEUE)
+            ->whereNotNull('reserved_at')
+            ->where('payload', 'like', '%'.$runId.'%')
+            ->exists();
+    }
+
+    private function pdfRunResultsReady(string $runId, int $total): bool
+    {
+        for ($i = 0; $i < $total; $i++) {
+            if (! Cache::has(AnalyzePriceListPdfChunkJob::resultKey($runId, $i))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function discardPdfChunkJobs(string $runId): void
+    {
+        if (! Schema::hasTable('jobs')) {
+            return;
+        }
+        DB::table('jobs')
+            ->where('queue', EnrichProductJob::QUEUE)
+            ->where('payload', 'like', '%'.$runId.'%')
+            ->delete();
     }
 
     /**

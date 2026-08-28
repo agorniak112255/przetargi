@@ -98,23 +98,67 @@ final class PriceListPdfTextExtractor
         $prices = 0;
         $chars = 0;
         foreach ($lines as $line) {
-            $linePrices = preg_match_all('/\b\d+[.,]\d{2}\b/u', $line) ?: 0;
-            $lineLen = mb_strlen($line) + 1;
-            if ($buf !== [] && ($prices + $linePrices > $maxPrices || $chars + $lineLen > $maxChars)) {
-                $chunks[] = implode("\n", $buf);
-                $buf = [];
-                $prices = 0;
-                $chars = 0;
+            foreach ($this->splitOversizedLine($line, $maxPrices, $maxChars) as $piece) {
+                $linePrices = preg_match_all('/\b\d+[.,]\d{2}\b/u', $piece) ?: 0;
+                $lineLen = mb_strlen($piece) + 1;
+                if ($buf !== [] && ($prices + $linePrices > $maxPrices || $chars + $lineLen > $maxChars)) {
+                    $chunks[] = implode("\n", $buf);
+                    $buf = [];
+                    $prices = 0;
+                    $chars = 0;
+                }
+                $buf[] = $piece;
+                $prices += $linePrices;
+                $chars += $lineLen;
             }
-            $buf[] = $line;
-            $prices += $linePrices;
-            $chars += $lineLen;
         }
         if ($buf !== []) {
             $chunks[] = implode("\n", $buf);
         }
 
         return $chunks === [] ? [$text] : $chunks;
+    }
+
+    /**
+     * pdftotext często skleja stronę w jedną linię — bez cięcia byłby 1 kawałek.
+     *
+     * @return list<string>
+     */
+    private function splitOversizedLine(string $line, int $maxPrices, int $maxChars): array
+    {
+        $linePrices = preg_match_all('/\b\d+[.,]\d{2}\b/u', $line) ?: 0;
+        $len = mb_strlen($line);
+        if ($len === 0) {
+            return [];
+        }
+        if ($linePrices <= $maxPrices && $len <= $maxChars) {
+            return [$line];
+        }
+
+        $tokens = preg_split('/(\b\d+[.,]\d{2}\b)/u', $line, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [$line];
+        $out = [];
+        $buf = '';
+        $prices = 0;
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            $isPrice = preg_match('/^\d+[.,]\d{2}$/u', $token) === 1;
+            if ($buf !== '' && (($isPrice && $prices >= $maxPrices) || mb_strlen($buf) + mb_strlen($token) > $maxChars)) {
+                $out[] = $buf;
+                $buf = '';
+                $prices = 0;
+            }
+            $buf .= $token;
+            if ($isPrice) {
+                $prices++;
+            }
+        }
+        if ($buf !== '') {
+            $out[] = $buf;
+        }
+
+        return $out === [] ? [$line] : $out;
     }
 
     /**

@@ -77,4 +77,16 @@ TXT;
         $this->assertSame(159, preg_match_all('/\b12,50\b/u', $joined));
         $this->assertStringContainsString('HW00159', $joined);
     }
+
+    public function test_splits_single_long_line_into_many_chunks(): void
+    {
+        $parts = [];
+        for ($i = 1; $i <= 159; $i++) {
+            $parts[] = sprintf('HW%05d Pozycja %d 12,50', $i, $i);
+        }
+        $text = implode(' ', $parts);
+        $chunks = (new PriceListPdfTextExtractor)->chunkByPriceBudget($text, 45, 7000);
+        $this->assertGreaterThan(2, count($chunks));
+        $this->assertSame(159, preg_match_all('/\b12,50\b/u', implode("\n", $chunks)));
+    }
 }
