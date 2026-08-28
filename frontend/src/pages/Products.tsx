@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
+import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductAiSearchModal } from '../components/ProductAiSearchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
@@ -207,6 +208,10 @@ export function Products() {
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [imageModal, setImageModal] = useState<{ name: string; url: string } | null>(null)
   const [aiModalOpen, setAiModalOpen] = useState(false)
+  const [prestaOpen, setPrestaOpen] = useState(false)
+  const [prestaBusy, setPrestaBusy] = useState(false)
+  const [prestaErr, setPrestaErr] = useState('')
+  const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
   const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
   const [skipPrompt, setSkipPrompt] = useState<{
@@ -502,6 +507,33 @@ export function Products() {
     }
   }
 
+  async function searchPrestaIds(ids: number[]) {
+    if (ids.length === 0) return
+    setPrestaBusy(true)
+    setPrestaErr('')
+    setPrestaOpen(true)
+    try {
+      if (ids.length === 1) {
+        const res = await api<PrestaSearchResult>(`/products/${ids[0]}/presta-search`, {
+          method: 'POST',
+          body: '{}',
+        })
+        setPrestaItems([res])
+        return
+      }
+      const res = await api<{ items: PrestaSearchResult[] }>('/products/presta-search', {
+        method: 'POST',
+        body: JSON.stringify({ product_ids: ids.slice(0, 80) }),
+      })
+      setPrestaItems(res.items ?? [])
+    } catch (ex) {
+      setPrestaItems([])
+      setPrestaErr(ex instanceof Error ? ex.message : 'Błąd wyszukiwania w Preście')
+    } finally {
+      setPrestaBusy(false)
+    }
+  }
+
   const pages = result ? pageNumbers(result.current_page, result.last_page) : []
   const visibleIds = (result?.data ?? []).map((p) => p.id)
   const pendingVisible = (result?.data ?? []).filter(
@@ -610,6 +642,17 @@ export function Products() {
                 title="Pobierz opisy i zdjęcia dla zaznaczonych produktów"
               >
                 Pobierz zaznaczone{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
+              </button>
+              <button
+                type="button"
+                disabled={prestaBusy || selectedIds.length === 0}
+                onClick={() => void searchPrestaIds(selectedIds)}
+                className="rounded bg-emerald-700 px-3 py-2 text-xs text-white disabled:opacity-50"
+                title="Szuka zaznaczonych w sklepie Presta (SKU/EAN, potem nazwa)"
+              >
+                {prestaBusy
+                  ? 'Szukam…'
+                  : `Wyszukaj zaznaczone${selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}`}
               </button>
               <button
                 type="button"
@@ -888,6 +931,16 @@ export function Products() {
           initialQuery={aiQuery}
           onClose={() => setAiModalOpen(false)}
           onSearch={(query, web) => void runAiSearch(web, query)}
+        />
+        <PrestaSearchModal
+          open={prestaOpen}
+          items={prestaItems}
+          loading={prestaBusy}
+          error={prestaErr}
+          onClose={() => setPrestaOpen(false)}
+          onApplied={() => {
+            void api<Page>(`/products?${buildParams()}`).then(setResult).catch(() => {})
+          }}
         />
 
         {visibleEnrichOpen && (
