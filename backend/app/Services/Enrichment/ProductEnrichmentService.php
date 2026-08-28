@@ -261,7 +261,7 @@ final class ProductEnrichmentService
     private function searchPackForEnrichment(Product $product): array
     {
         $pack = $this->prefetchPack($product);
-        if ($pack !== null) {
+        if (is_array($pack) && ($pack['results'] ?? []) !== []) {
             return $pack;
         }
 
@@ -314,6 +314,8 @@ final class ProductEnrichmentService
             'current_name' => mb_substr($product->name, 0, 255),
             'message' => 'Pobieranie synchroniczne…',
         ]);
+
+        Cache::forget($this->prefetchPackKey($product));
 
         try {
             $this->enrichProduct($product, $force);
@@ -372,6 +374,7 @@ final class ProductEnrichmentService
                 return;
             }
             if ($force) {
+                Cache::forget($this->prefetchPackKey($product));
                 $this->search->forgetProductCache($product);
                 $this->forgetSkuCache($product);
                 $this->clearProductImages($product);

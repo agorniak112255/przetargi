@@ -214,6 +214,12 @@ final class ProductSearchIdentityTest extends TestCase
         $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
         $this->assertStringContainsString('site:bpbhp.pl', $joined);
         $this->assertStringContainsString('121', $joined);
+        $this->assertStringNotContainsString('rękawice', $joined);
+
+        $primary = implode(' | ', $id->primaryQueries($product));
+        $this->assertStringContainsString('121', $primary);
+        $this->assertStringContainsString('kombinezon', $primary);
+        $this->assertStringNotContainsString('rękawice', $primary);
 
         $this->assertTrue($id->hayMentionsProduct(
             'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121 ANSELL 4000 CVRL HOOD 121',

@@ -19,6 +19,7 @@ const STATUS_LABEL: Record<string, string> = {
   running: 'Pobieranie…',
   done: 'Gotowe',
   failed: 'Błąd',
+  manual: 'Ręcznie',
 }
 
 /** Opis tekstowy bez list — listy są osobno z enrichment_payload. */
@@ -177,7 +178,12 @@ export function ProductDetail() {
               type="button"
               disabled={busy || status === 'queued'}
               onClick={() =>
-                void enrich(status === 'done' || status === 'failed' || status === 'running')
+                void enrich(
+                  status === 'done'
+                    || status === 'failed'
+                    || status === 'running'
+                    || status === 'manual',
+                )
               }
               className="rounded bg-blue-600 px-3 py-2 text-xs text-white disabled:opacity-50"
             >

@@ -663,6 +663,25 @@ final class ProductSearchIdentity
         $out = $composedSku
             ? array_merge($nameQueries, $skuQueries)
             : array_merge($skuQueries, $nameQueries);
+        $styleQueries = [];
+        $styles = $this->ansellStyleCodes($product);
+        if ($styles !== []) {
+            $series = null;
+            $model = null;
+            foreach ($styles as $style) {
+                if (preg_match('/^[456]\d{3}$/', $style) === 1) {
+                    $series = $style;
+                }
+                if (preg_match('/^\d{3}$/', $style) === 1) {
+                    $model = $style;
+                }
+            }
+            if ($model !== null) {
+                $styleQueries[] = trim($brand.' '.($series ?? '').' '.$model.' kombinezon');
+                $styleQueries[] = trim($brand.' '.$model.' CVRL HOOD');
+            }
+        }
+        $out = array_merge($styleQueries, $out);
         // „URG-C-SPODNIE” w sklepie występuje jako „URG-C”, a „ERGOPRIMA45” jako „ERGOPRIMA”
         $core = $this->internalSkuCore($product);
         if ($core !== '' && mb_strtolower($core) !== mb_strtolower($sku)) {
@@ -1467,6 +1486,11 @@ final class ProductSearchIdentity
             $nameSku
         ) || preg_match('#(demar|befado)#u', $brand)) {
             return 'buty ochronne';
+        }
+
+        // CVRL / AlphaTec 4000 to kombinezon — zanim Ansell spadnie na domyślne „rękawice”
+        if (preg_match('#(cvrl|coverall|kombinezon|overall|alphatec)#u', $blob) === 1) {
+            return 'kombinezon';
         }
 
         // Rękawice ocieplane polarem muszą wygrać z regułą odzieży niżej

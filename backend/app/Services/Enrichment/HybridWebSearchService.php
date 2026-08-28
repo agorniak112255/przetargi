@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v28';
+    private const SEARCH_CACHE_VERSION = 'v29';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -40,6 +40,7 @@ class HybridWebSearchService
         private readonly ProductSearchIdentity $identity,
         private readonly ProductPageFetcher $pages,
         private readonly CatalogIndexSearch $catalog,
+        private readonly RetailerOnSiteSearch $retailerSearch,
     ) {}
 
     /**
@@ -86,6 +87,15 @@ class HybridWebSearchService
                 'raw_content' => null,
             ];
         }
+        $shopHits = $this->confirmedCatalogHits($this->retailerSearch->find($product), $product);
+        if ($this->hasEnoughPageResults($shopHits, 1)) {
+            return [
+                'results' => array_slice($shopHits, 0, 8),
+                'images' => [],
+                'provider' => 'retailer_search',
+                'raw_content' => null,
+            ];
+        }
 
         $cfg = $this->settings->resolve();
         $profile = $this->settings->tavilySearchProfile();
@@ -103,7 +113,7 @@ class HybridWebSearchService
 
         if ($merged === [] && $cfg['web_search_enabled']) {
             try {
-                $pack = $this->searchViaAiWeb($skuQuery, $product, $phase);
+                $pack = $this->searchViaProviderWeb($skuQuery, $product, $phase);
                 $merged = $this->filterResultsByIdentity($pack['results'], $product);
                 $provider = 'ai_web_search';
             } catch (Throwable $e) {
@@ -152,6 +162,15 @@ class HybridWebSearchService
                 'raw_content' => null,
             ];
         }
+        $shopHits = $this->confirmedCatalogHits($this->retailerSearch->find($product), $product);
+        if ($this->hasEnoughPageResults($shopHits, 1)) {
+            return [
+                'results' => array_slice($shopHits, 0, 8),
+                'images' => [],
+                'provider' => 'retailer_search',
+                'raw_content' => null,
+            ];
+        }
 
         $skuQuery = $this->primarySkuQuery($product, $queries);
         $profile = $this->settings->tavilySearchProfile();
@@ -166,7 +185,7 @@ class HybridWebSearchService
         $errors = $found['errors'];
         $provider = $found['provider'];
 
-        if ($merged === [] && ! $this->settings->usesFreeWebSearch()) {
+        if ($merged === []) {
             $cacheKey = $this->searchCacheKey('large_model', $phase, $skuQuery, 'ai');
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
@@ -174,7 +193,7 @@ class HybridWebSearchService
                 $provider = (string) ($cached['provider'] ?? 'ai_web_search_cache');
             } else {
                 try {
-                    $pack = $this->searchViaAiWeb($skuQuery, $product, $phase);
+                    $pack = $this->searchViaProviderWeb($skuQuery, $product, $phase);
                     $merged = $this->filterResultsByIdentity($pack['results'], $product);
                     if ($merged !== []) {
                         $provider = 'ai_web_search';
@@ -1092,13 +1111,28 @@ class HybridWebSearchService
             ];
         }
 
+        return $this->searchViaProviderWeb($query, $product, $phase);
+    }
+
+    /**
+     * Web u dostawcy AI — omija SearXNG/DDG, gdy te zwracają 429 / captcha.
+     *
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     provider: string,
+     *     raw_content: ?string
+     * }
+     */
+    private function searchViaProviderWeb(string $query, Product $product, string $phase): array
+    {
         $prompt = <<<PROMPT
 Znajdź kartę produktu BHP ze SKU {$product->sku} ({$product->manufacturer} {$product->name}).
-Zapytanie: {$query}. Zwróć tylko URL stron z tym kodem produktu.
+Szukaj też po modelu ze sklepu (np. AlphaTec 4000 model 121), nie tylko po pełnym article number.
+Zapytanie: {$query}. Zwróć tylko URL stron z tym kodem albo modelem produktu.
 PROMPT;
 
         $seconds = (int) ($this->settings->resolve()['timeout_seconds'] ?? 90);
-        $response = $this->llm->chatWithWebSearch($prompt, max(60, min(120, $seconds)), AiTask::WebSearch);
+        $response = $this->llm->chatWithProviderWebSearch($prompt, max(60, min(120, $seconds)), AiTask::WebSearch);
         $results = [];
 
         foreach ($response['citations'] as $citation) {

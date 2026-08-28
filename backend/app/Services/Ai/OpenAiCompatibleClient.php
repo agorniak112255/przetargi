@@ -405,6 +405,21 @@ class OpenAiCompatibleClient
             return $this->phpDuckDuckGoCitations($prompt);
         }
 
+        return $this->chatWithProviderWebSearch($prompt, $timeoutSeconds, $task);
+    }
+
+    /**
+     * Web search u dostawcy (OpenRouter plugin), nawet gdy w ustawieniach jest SearXNG/DDG.
+     * Używane gdy darmowe silniki zwracają 429 / captcha.
+     *
+     * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
+     */
+    public function chatWithProviderWebSearch(string $prompt, int $timeoutSeconds = 60, ?AiTask $task = null): array
+    {
+        if (! $this->settings->resolve()['enabled']) {
+            throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
+        }
+
         /** @var array{content: string, model: string, citations: list<array{url: string, title: string}>} $result */
         $result = $this->withProfileFallback(
             $task,
