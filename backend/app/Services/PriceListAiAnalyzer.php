@@ -16,7 +16,6 @@ final class PriceListAiAnalyzer
         private readonly PriceListStructureSampler $sampler,
         private readonly OpenAiCompatibleClient $llm,
         private readonly PriceListPdfTextExtractor $pdfExtractor,
-        private readonly PdfEmbeddedImageExtractor $pdfImageExtractor,
         private readonly PdfPriceRowParser $priceRowParser,
         private readonly AnsellEmaPdfParser $ansellEmaParser,
         private readonly JsGlovesPdfParser $jsGlovesParser,
@@ -204,7 +203,6 @@ final class PriceListAiAnalyzer
 
         $prompt = $this->pdfProductPrompt($hint);
         $fileSize = is_file($path) ? (int) filesize($path) : 0;
-        $visionError = null;
         $aiReady = app(AiSettingsService::class)->isReady();
 
         $text = null;
@@ -251,42 +249,13 @@ final class PriceListAiAnalyzer
                 $manufacturerHint,
                 $originalName,
                 $fromName['version'] ?? null,
-                $visionError,
             );
         }
 
-        // Vision tylko przy skanie (brak warstwy tekstu). Zwykły PDF = tekst, zero obrazów.
-        if ($aiReady && $isScan) {
-            try {
-                $fromImages = $this->analyzePdfViaPageImages(
-                    $path,
-                    $prompt,
-                    $manufacturerHint,
-                    $originalName,
-                    $fileSize,
-                    'pages',
-                    2,
-                );
-                if ($fromImages !== null) {
-                    return $fromImages;
-                }
-                $visionError = 'Model nie rozpoznał pozycji w skanie PDF.';
-            } catch (\Throwable $e) {
-                $visionError = $e->getMessage();
-            }
-        } elseif (! $aiReady) {
-            $visionError = 'AI wyłączone — tylko odczyt heurystyczny z tekstu PDF.';
-        }
-
-        if ($text === null) {
-            if (! $aiReady) {
-                throw new RuntimeException(
-                    'PDF jest skanem (brak warstwy tekstowej). Skonfiguruj AI z modelem vision albo wgraj XLSX.'
-                );
-            }
+        if ($isScan) {
             throw new RuntimeException(
-                'Nie udało się odczytać skanu PDF. '
-                .($visionError ?? $extractError ?? 'Spróbuj ponownie albo wgraj XLSX.')
+                'PDF jest skanem (brak warstwy tekstowej). Wgraj XLSX albo PDF z zaznaczalnym tekstem. '
+                .($extractError ?? '')
             );
         }
 
@@ -314,7 +283,6 @@ final class PriceListAiAnalyzer
                 $manufacturerHint,
                 $originalName,
                 $fromName['version'] ?? null,
-                $visionError,
             );
         }
 
@@ -383,9 +351,6 @@ final class PriceListAiAnalyzer
                 .', błędy AI: '.$chunkErrors
                 .', heurystyka EMA: '.count($heuristicEma)
                 .', PROS: '.count($heuristicPros).').';
-            if ($visionError !== null) {
-                $msg .= ' '.$visionError;
-            }
             throw new RuntimeException($msg);
         }
 
@@ -407,93 +372,6 @@ final class PriceListAiAnalyzer
             $originalName,
             null,
             mb_substr($text, 0, 4000),
-            $manufacturerHint,
-        );
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    private function analyzePdfViaPageImages(
-        string $path,
-        string $prompt,
-        ?string $manufacturerHint,
-        ?string $originalName,
-        int $fileSize,
-        string $kind = 'pages',
-        int $maxImages = 4,
-    ): ?array {
-        $maxEdge = $kind === 'price_bitmaps' ? 800 : 1024;
-        $images = $this->pdfImageExtractor->prepareForVision(
-            $this->pdfImageExtractor->extract($path, $maxImages, $kind),
-            $maxEdge,
-            60,
-        );
-        if ($images === []) {
-            return null;
-        }
-
-        $aiProducts = [];
-        $model = 'pdf-vision-images';
-        $json = [
-            'notes' => '',
-            'manufacturer_detected' => $manufacturerHint,
-            'currency' => 'PLN',
-        ];
-        $lastError = null;
-        $batches = [$images];
-        foreach ($batches as $batch) {
-            try {
-                @set_time_limit(240);
-                $raw = $this->llm->chatWithPageImages($prompt, $batch, AiTask::PriceListPdf);
-                $model = $raw['model'];
-                $partJson = $this->jsonParser->parse($raw['content']);
-                if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
-                    $json['manufacturer_detected'] = $partJson['manufacturer_detected'];
-                }
-                if (is_string($partJson['currency'] ?? null)) {
-                    $json['currency'] = $partJson['currency'];
-                }
-                if (is_string($partJson['notes'] ?? null) && ($json['notes'] ?? '') === '') {
-                    $json['notes'] = $partJson['notes'];
-                }
-                $aiProducts = array_merge(
-                    $aiProducts,
-                    $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint)
-                );
-            } catch (\Throwable $e) {
-                $lastError = $e->getMessage();
-            }
-        }
-
-        $products = $this->uniqueBySku($aiProducts);
-        if ($products === []) {
-            throw new RuntimeException(
-                $lastError ?? 'Model nie zwrócił pozycji ze skanu PDF.'
-            );
-        }
-        if (! $this->looksLikeGoodPdfExtract($products)) {
-            throw new RuntimeException(
-                'Model źle odczytał skan PDF (brak nazw/cen).'
-                .($lastError !== null ? ' '.$lastError : '')
-            );
-        }
-
-        $json['notes'] = trim((string) ($json['notes'] ?? '').' Odczyt skanu PDF: '.count($products).' SKU.');
-
-        return $this->pdfResult(
-            $products,
-            $json,
-            $model,
-            'pdf-vision-images',
-            [
-                'mode' => 'page-images',
-                'file_mb' => round($fileSize / 1_000_000, 2),
-                'pages' => count($images),
-            ],
-            $originalName,
-            null,
-            null,
             $manufacturerHint,
         );
     }
@@ -533,7 +411,6 @@ final class PriceListAiAnalyzer
         ?string $manufacturerHint,
         ?string $originalName,
         ?string $versionHint,
-        ?string $visionError,
     ): array {
         $aiGuess = $heuristicEma !== []
             ? 'Ansell'
@@ -557,8 +434,7 @@ final class PriceListAiAnalyzer
             [
                 'manufacturer_detected' => $meta['manufacturer'],
                 'currency' => $docCurrency,
-                'notes' => 'Odczyt heurystyczny z tekstu PDF ('.count($heuristic).' SKU). '
-                    .($visionError ?? ''),
+                'notes' => 'Odczyt heurystyczny z tekstu PDF ('.count($heuristic).' SKU).',
                 'sheets' => [],
             ],
             'heuristic-pdf',

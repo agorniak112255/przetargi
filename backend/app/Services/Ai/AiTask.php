@@ -51,7 +51,7 @@ enum AiTask: string
             self::TenderMatch => 'Największy wolumen — pozycje przetargu lecą równolegle.',
             self::Enrichment => 'Bez własnego profilu działa pole „Model do opisów”.',
             self::WebSearch => 'Wymaga dostawcy z pluginem web (OpenRouter).',
-            self::PriceListPdf => 'Wymaga modelu multimodalnego (odczyt PDF).',
+            self::PriceListPdf => 'Tylko tekst z PDF (bez vision). Skan → wgraj XLSX.',
             self::ImageVerification => 'Wymaga modelu z obsługą obrazu.',
             self::TenderDocument => 'Długie dokumenty — liczy się duży kontekst.',
             self::SpreadsheetExtract => 'Długie arkusze — liczy się duży kontekst.',
