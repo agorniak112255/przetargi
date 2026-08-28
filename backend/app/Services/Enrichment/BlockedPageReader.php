@@ -96,6 +96,10 @@ final class BlockedPageReader
         if (str_contains(mb_strtolower($markdown), 'incapsula') && mb_strlen($markdown) < 1200) {
             return null;
         }
+        $head = mb_strtolower(mb_substr($markdown, 0, 500));
+        if (str_contains($head, 'product not found') || str_contains($head, 'nie znaleziono produktu')) {
+            return null;
+        }
 
         return [
             'text' => mb_substr($this->stripReaderChrome($markdown), 0, 5000),

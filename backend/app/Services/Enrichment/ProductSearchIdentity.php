@@ -23,7 +23,7 @@ final class ProductSearchIdentity
      */
     private const TYPE_STEMS = [
         'gloves' => ['rekawic', 'glove', 'handschuh', 'gant'],
-        'coverall' => ['kombinezon', 'coverall', 'overall', 'cvrl'],
+        'coverall' => ['kombinezon', 'coverall', 'overall', 'cvrl', 'protective suit', 'protection suit'],
         'jacket' => ['kurtk', 'jacket', 'plaszcz'],
         'trousers' => ['spodn', 'trouser', 'pant'],
         'sweatshirt' => ['bluza', 'sweatshirt'],
@@ -554,6 +554,10 @@ final class ProductSearchIdentity
 
         if ($when === 'early') {
             $out = [];
+            $series = $bits['series'] ?? '';
+            if ($series !== '') {
+                $out[] = 'AlphaTec '.$series.' '.$model;
+            }
             if ($label !== '') {
                 $out[] = 'Ansell '.$label.' '.$padded;
             }
@@ -577,6 +581,59 @@ final class ProductSearchIdentity
         }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Oficjalne karty AlphaTec: sklepy często nie mają modelu, a slug Ansell jest stały.
+     *
+     * @return list<string>
+     */
+    public function ansellOfficialProductUrls(Product $product): array
+    {
+        $bits = $this->ansellCatalogBits($product);
+        $series = $bits['series'];
+        $model = $bits['model'];
+        if ($series === null || $model === null) {
+            return [];
+        }
+        $series = mb_strtolower($series);
+        $model = mb_strtolower($model);
+        $slugs = [
+            'alphatec-'.$series.'-ultrasonically-welded-taped-model-'.$model,
+            'alphatec-'.$series.'-standard-model-'.$model,
+            'alphatec-'.$series.'-plus-model-'.$model,
+            'alphatec-'.$series.'-standard-bound-model-'.$model,
+            'alphatec-'.$series.'-stitched-taped-model-'.$model,
+        ];
+        $out = [];
+        foreach (['pl/pl', 'gb/en'] as $locale) {
+            foreach ($slugs as $slug) {
+                $out[] = 'https://www.ansell.com/'.$locale.'/products/'.$slug;
+            }
+        }
+
+        return $out;
+    }
+
+    /** Karta ansell.com/…/alphatec-4000-…-model-121 — typ (CVRL) nie musi być w slugu. */
+    public function ansellOfficialPathHasModel(string $hay, Product $product): bool
+    {
+        $bits = $this->ansellCatalogBits($product);
+        $series = $bits['series'];
+        $model = $bits['model'];
+        if ($series === null || $model === null) {
+            return false;
+        }
+        $hay = mb_strtolower($hay);
+        if (! str_contains($hay, 'ansell.com') && ! str_contains($hay, 'alphatec-'.$series)) {
+            return false;
+        }
+
+        return preg_match(
+            '/alphatec[-_]?'.preg_quote($series, '/').'\b/u',
+            $hay
+        ) === 1
+            && preg_match('/(?:^|[^0-9])model[-_ ]'.preg_quote($model, '/').'(?:[^0-9]|$)/u', $hay) === 1;
     }
 
     /** OR15S-00138-06 → OR15S-138-06 (zera tylko z długich członów, nie z rozmiaru 06). */
@@ -638,6 +695,7 @@ final class ProductSearchIdentity
             $early = $this->ansellSearchPhrases($product, 'early');
             $late = $this->ansellSearchPhrases($product, 'late');
             if (($early[0] ?? '') !== '') {
+                $queries[] = 'site:ansell.com '.$early[0];
                 $queries[] = 'site:bpbhp.pl '.$early[0];
             }
             // druga fraza site: musi być bez zer — drabinka bierze tylko 2× site:
@@ -1337,6 +1395,9 @@ final class ProductSearchIdentity
      */
     public function hayHasRequiredTypeFromName(string $hay, Product $product): bool
     {
+        if ($this->ansellOfficialPathHasModel($hay, $product)) {
+            return true;
+        }
         $name = $this->normalizeTypeText((string) $product->name);
         $page = $this->normalizeTypeText($hay);
         $required = [];

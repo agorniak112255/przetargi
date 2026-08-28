@@ -212,8 +212,22 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertContains('4000', $id->ansellStyleCodes($product));
 
         $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('site:ansell.com', $joined);
         $this->assertStringContainsString('site:bpbhp.pl', $joined);
         $this->assertStringContainsString('121', $joined);
+        $this->assertStringContainsString('AlphaTec', $joined);
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-4000-ultrasonically-welded-taped-model-121',
+            $id->ansellOfficialProductUrls($product)
+        );
+        $this->assertTrue($id->hayHasRequiredTypeFromName(
+            'https://www.ansell.com/gb/en/products/alphatec-4000-ultrasonically-welded-taped-model-121',
+            $product
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.ansell.com/gb/en/products/alphatec-4000-ultrasonically-welded-taped-model-121 Ansell AlphaTec 4000 Model 121',
+            $product
+        ));
         $this->assertStringNotContainsString('rękawice', $joined);
 
         $primary = implode(' | ', $id->primaryQueries($product));

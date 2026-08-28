@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v31';
+    private const SEARCH_CACHE_VERSION = 'v32';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -41,6 +41,7 @@ class HybridWebSearchService
         private readonly ProductPageFetcher $pages,
         private readonly CatalogIndexSearch $catalog,
         private readonly RetailerOnSiteSearch $retailerSearch,
+        private readonly AnsellOfficialCatalog $ansellOfficial,
     ) {}
 
     /**
@@ -70,20 +71,25 @@ class HybridWebSearchService
      *     images: list<string>,
      *     provider: string,
      *     raw_content: ?string
-     * }
+     * }|null
      */
-    public function searchProduct(Product $product, string $phase = 'manufacturer'): array
+    private function hitsFromLocalSources(Product $product): ?array
     {
-        $queries = $this->buildQueries($product, $phase);
-        if ($this->settings->enrichmentUsesLargeModel()) {
-            return $this->searchViaLargeModel($product, $phase, $queries);
-        }
         $catalogHits = $this->confirmedCatalogHits($this->catalogHits($product), $product);
         if ($this->hasEnoughPageResults($catalogHits, 1)) {
             return [
                 'results' => array_slice($catalogHits, 0, 8),
                 'images' => [],
                 'provider' => 'catalog_index',
+                'raw_content' => null,
+            ];
+        }
+        $official = $this->confirmedCatalogHits($this->ansellOfficial->find($product), $product);
+        if ($this->hasEnoughPageResults($official, 1)) {
+            return [
+                'results' => array_slice($official, 0, 8),
+                'images' => [],
+                'provider' => 'ansell_official',
                 'raw_content' => null,
             ];
         }
@@ -95,6 +101,28 @@ class HybridWebSearchService
                 'provider' => 'retailer_search',
                 'raw_content' => null,
             ];
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     images: list<string>,
+     *     provider: string,
+     *     raw_content: ?string
+     * }
+     */
+    public function searchProduct(Product $product, string $phase = 'manufacturer'): array
+    {
+        $queries = $this->buildQueries($product, $phase);
+        if ($this->settings->enrichmentUsesLargeModel()) {
+            return $this->searchViaLargeModel($product, $phase, $queries);
+        }
+        $local = $this->hitsFromLocalSources($product);
+        if ($local !== null) {
+            return $local;
         }
 
         $cfg = $this->settings->resolve();
@@ -153,23 +181,9 @@ class HybridWebSearchService
      */
     private function searchViaLargeModel(Product $product, string $phase, array $queries): array
     {
-        $catalogHits = $this->confirmedCatalogHits($this->catalogHits($product), $product);
-        if ($this->hasEnoughPageResults($catalogHits, 1)) {
-            return [
-                'results' => array_slice($catalogHits, 0, 8),
-                'images' => [],
-                'provider' => 'catalog_index',
-                'raw_content' => null,
-            ];
-        }
-        $shopHits = $this->confirmedCatalogHits($this->retailerSearch->find($product), $product);
-        if ($this->hasEnoughPageResults($shopHits, 1)) {
-            return [
-                'results' => array_slice($shopHits, 0, 8),
-                'images' => [],
-                'provider' => 'retailer_search',
-                'raw_content' => null,
-            ];
+        $local = $this->hitsFromLocalSources($product);
+        if ($local !== null) {
+            return $local;
         }
 
         $skuQuery = $this->primarySkuQuery($product, $queries);

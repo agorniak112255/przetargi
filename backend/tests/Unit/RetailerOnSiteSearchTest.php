@@ -43,8 +43,9 @@ final class RetailerOnSiteSearchTest extends TestCase
             'manufacturer' => 'Ansell',
         ]));
 
-        $this->assertStringContainsString('00121', $query);
+        $this->assertStringContainsString('AlphaTec', $query);
         $this->assertStringContainsString('4000', $query);
+        $this->assertStringContainsString('121', $query);
         $this->assertStringNotContainsString('GR40T', $query);
         $this->assertStringContainsString('121', $search->queryBareModel(new Product([
             'sku' => 'GR40T-00121-07',
