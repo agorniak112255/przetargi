@@ -42,6 +42,33 @@ final class EnrichmentSlots
         return null;
     }
 
+    /**
+     * Bierze od razu tyle wolnych slotów, ile jest — bez czekania i bez wchodzenia
+     * na workery już zajęte (enrichment / inna analiza).
+     *
+     * @return list<Lock>
+     */
+    public function tryAcquireMany(int $want, int $ttlSeconds): array
+    {
+        $want = max(0, min($want, $this->limit()));
+        if ($want === 0) {
+            return [];
+        }
+
+        $locks = [];
+        for ($i = 0; $i < $this->limit(); $i++) {
+            if (count($locks) >= $want) {
+                break;
+            }
+            $lock = Cache::lock(self::KEY_PREFIX.$i, max(60, $ttlSeconds));
+            if ($lock->get()) {
+                $locks[] = $lock;
+            }
+        }
+
+        return $locks;
+    }
+
     public function limit(): int
     {
         return max(1, min(self::MAX, $this->settings->matchConcurrency()));

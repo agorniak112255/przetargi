@@ -7,6 +7,7 @@ namespace App\Services\Ai;
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Support\QueueWorkerIdentity;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -54,6 +55,48 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * Równoległe chat/completions (curl_multi) — tyle requestów, ile caller trzyma slotów.
+     *
+     * @param  list<list<array{role: string, content: mixed}>>  $messageSets
+     * @return list<array{ok: bool, content?: string, model?: string, error?: string}>
+     */
+    public function chatMany(
+        array $messageSets,
+        bool $jsonMode = true,
+        ?array $extra = null,
+        ?AiTask $task = null
+    ): array {
+        if ($messageSets === []) {
+            return [];
+        }
+        if (count($messageSets) === 1) {
+            try {
+                $raw = $this->chat($messageSets[0], null, $jsonMode, $extra, $task);
+
+                return [['ok' => true, 'content' => $raw['content'], 'model' => $raw['model']]];
+            } catch (RuntimeException $e) {
+                return [['ok' => false, 'error' => $e->getMessage()]];
+            }
+        }
+
+        $profile = $this->settings->profileForTask($task);
+        try {
+            return $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra);
+        } catch (RuntimeException $e) {
+            if ($profile['is_default']) {
+                $failed = [];
+                foreach ($messageSets as $_) {
+                    $failed[] = ['ok' => false, 'error' => $e->getMessage()];
+                }
+
+                return $failed;
+            }
+
+            return $this->chatManyWithProfile($this->settings->profileForTask(null), $messageSets, $jsonMode, $extra);
+        }
+    }
+
+    /**
      * Cichy fallback: brak środków, limit 429 albo padnięty endpoint profilu nie może
      * zatrzymać funkcji, która przed wprowadzeniem profili działała na modelu głównym.
      *
@@ -79,6 +122,129 @@ class OpenAiCompatibleClient
 
             return $run($this->settings->profileForTask(null));
         }
+    }
+
+    /**
+     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $profile
+     * @param  list<list<array{role: string, content: mixed}>>  $messageSets
+     * @return list<array{ok: bool, content?: string, model?: string, error?: string}>
+     */
+    private function chatManyWithProfile(
+        array $profile,
+        array $messageSets,
+        bool $jsonMode,
+        ?array $extra
+    ): array {
+        if (! $this->settings->resolve()['enabled']) {
+            throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
+        }
+        if ($profile['api_key'] === null || $profile['api_key'] === '') {
+            throw new RuntimeException($profile['is_default']
+                ? 'Brak klucza API AI. Uzupełnij go w Ustawieniach AI.'
+                : 'Brak klucza API dla profilu „'.$profile['label'].'”.');
+        }
+
+        $url = $profile['base_url'].'/chat/completions';
+        $apiKey = $profile['api_key'];
+        $timeout = max(240, $profile['timeout_seconds']);
+        $bodies = [];
+        foreach ($messageSets as $messages) {
+            $bodies[] = $this->buildChatPayload($profile, $messages, null, $extra, $jsonMode);
+        }
+
+        $responses = Http::pool(function (Pool $pool) use ($bodies, $url, $apiKey, $timeout) {
+            foreach ($bodies as $i => $body) {
+                $req = $pool->as((string) $i)
+                    ->acceptJson()
+                    ->withHeaders([
+                        'HTTP-Referer' => config('app.url', 'http://localhost'),
+                        'X-Title' => 'SUPON AI',
+                        'User-Agent' => QueueWorkerIdentity::userAgent('SUPON-AI/1.0'),
+                        'Expect' => '',
+                    ])
+                    ->withOptions(['expect' => false])
+                    ->timeout($timeout)
+                    ->connectTimeout(15);
+                if ($apiKey !== '') {
+                    $req = $req->withToken($apiKey);
+                }
+                $req->post($url, $body);
+            }
+        });
+
+        $out = [];
+        foreach ($messageSets as $i => $_) {
+            $response = $responses[(string) $i] ?? $responses[$i] ?? null;
+            if ($response instanceof \Throwable) {
+                $out[] = ['ok' => false, 'error' => $response->getMessage()];
+
+                continue;
+            }
+            if (! $response instanceof Response || ! $response->successful()) {
+                $out[] = ['ok' => false, 'error' => $response instanceof Response
+                    ? $this->formatHttpError($response)
+                    : 'Brak odpowiedzi AI'];
+
+                continue;
+            }
+            $payload = $response->json();
+            $content = $this->contentReader->fromPayload(is_array($payload) ? $payload : []);
+            if ($content === '') {
+                $out[] = ['ok' => false, 'error' => 'API AI zwróciło pustą odpowiedź.'];
+
+                continue;
+            }
+            $out[] = [
+                'ok' => true,
+                'content' => $content,
+                'model' => (string) data_get($payload, 'model', $profile['model']),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $profile
+     * @param  list<array{role: string, content: mixed}>  $messages
+     * @return array<string, mixed>
+     */
+    private function buildChatPayload(
+        array $profile,
+        array $messages,
+        ?float $temperature,
+        ?array $extra,
+        bool $jsonMode
+    ): array {
+        $extra = is_array($extra) ? $extra : [];
+        $model = is_string($extra['model'] ?? null) && trim((string) $extra['model']) !== ''
+            ? trim((string) $extra['model'])
+            : $profile['model'];
+        $reasoning = $this->isReasoningModel($model);
+        $maxTokens = (int) ($extra['max_tokens'] ?? self::DEFAULT_MAX_TOKENS);
+        if ($reasoning) {
+            $maxTokens = max($maxTokens, self::DEFAULT_MAX_TOKENS);
+        }
+        $maxTokens = $this->fitMaxTokens($maxTokens, $messages);
+        $payload = [
+            'model' => $model,
+            'messages' => $messages,
+            'max_tokens' => $maxTokens,
+        ];
+        if (! $reasoning) {
+            $payload['temperature'] = $temperature ?? $profile['temperature'];
+        }
+        unset($extra['max_tokens'], $extra['model']);
+        $payload = array_merge($payload, $extra);
+        $payload = $this->applyReasoningEffort(
+            $payload,
+            (string) ($profile['reasoning_effort'] ?? ReasoningEffort::AUTO)
+        );
+        if ($jsonMode) {
+            $payload['response_format'] = ['type' => 'json_object'];
+        }
+
+        return $payload;
     }
 
     /**

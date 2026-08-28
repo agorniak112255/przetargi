@@ -8,6 +8,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\JsonResponseParser;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Enrichment\EnrichmentSlots;
 use RuntimeException;
 
 final class PriceListAiAnalyzer
@@ -27,6 +28,7 @@ final class PriceListAiAnalyzer
         private readonly PriceListMetaDetector $metaDetector,
         private readonly SpreadsheetMappingHeuristic $spreadsheetHeuristic,
         private readonly PriceListSampleRoleResearcher $sampleRoleResearcher,
+        private readonly EnrichmentSlots $enrichmentSlots,
     ) {}
 
     /**
@@ -306,50 +308,58 @@ final class PriceListAiAnalyzer
             );
         }
 
+        $pending = [];
         foreach ($chunks as $idx => $chunk) {
+            $pending[] = ['idx' => $idx, 'text' => $chunk];
+        }
+        $total = count($chunks);
+        while ($pending !== []) {
             if (function_exists('set_time_limit')) {
                 @set_time_limit(600);
             }
-            $part = $idx + 1;
-            $total = count($chunks);
-            $ok = false;
-            for ($attempt = 1; $attempt <= 2; $attempt++) {
-                try {
-                    $messages = [
-                        [
-                            'role' => 'system',
-                            'content' => 'Jesteś ekspertem od cenników BHP. Zwracasz WYŁĄCZNIE JSON z tablicą products.',
-                        ],
-                        [
-                            'role' => 'user',
-                            'content' => $prompt
-                                ."\n\nTo jest CZĘŚĆ {$part}/{$total} tekstu PDF. "
-                                .'Wypisz KAŻDĄ pozycję z tej części — nie streszczaj i nie pomijaj wierszy.'
-                                ."\n\nTEKST:\n".$chunk
-                                ."\n\nWzorce: (A) 119.00 32 80.92; (B) NV15S-00138 … 50 PCE … 2.62.",
-                        ],
-                    ];
-                    $raw = $this->llm->chat($messages, null, true, ['max_tokens' => 8000], AiTask::PriceListPdf);
-                    $model = $raw['model'];
-                    $partJson = $this->jsonParser->parse($raw['content']);
-                    if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
-                        $json['manufacturer_detected'] = $partJson['manufacturer_detected'];
-                    }
-                    if (is_string($partJson['currency'] ?? null)) {
-                        $json['currency'] = $partJson['currency'];
-                    }
-                    $aiProducts = array_merge(
-                        $aiProducts,
-                        $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint)
-                    );
-                    $ok = true;
-                    break;
-                } catch (\Throwable) {
-                    continue;
-                }
+            $locks = $this->acquirePdfWaveSlots(min(count($pending), $this->enrichmentSlots->limit()));
+            $batch = array_splice($pending, 0, count($locks));
+            $messageSets = [];
+            foreach ($batch as $item) {
+                $messageSets[] = $this->pdfChunkMessages($prompt, $item['idx'] + 1, $total, $item['text']);
             }
-            if (! $ok) {
-                $chunkErrors++;
+            try {
+                $results = $this->llm->chatMany($messageSets, true, ['max_tokens' => 8000], AiTask::PriceListPdf);
+                foreach ($results as $i => $result) {
+                    if (! ($result['ok'] ?? false)) {
+                        try {
+                            $raw = $this->llm->chat($messageSets[$i], null, true, ['max_tokens' => 8000], AiTask::PriceListPdf);
+                            $result = ['ok' => true, 'content' => $raw['content'], 'model' => $raw['model']];
+                        } catch (\Throwable) {
+                            $chunkErrors++;
+
+                            continue;
+                        }
+                    }
+                    try {
+                        $model = (string) ($result['model'] ?? $model);
+                        $partJson = $this->jsonParser->parse((string) ($result['content'] ?? ''));
+                        if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
+                            $json['manufacturer_detected'] = $partJson['manufacturer_detected'];
+                        }
+                        if (is_string($partJson['currency'] ?? null)) {
+                            $json['currency'] = $partJson['currency'];
+                        }
+                        $aiProducts = array_merge(
+                            $aiProducts,
+                            $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint)
+                        );
+                    } catch (\Throwable) {
+                        $chunkErrors++;
+                    }
+                }
+            } finally {
+                foreach ($locks as $lock) {
+                    try {
+                        $lock->release();
+                    } catch (\Throwable) {
+                    }
+                }
             }
         }
 
@@ -386,6 +396,51 @@ final class PriceListAiAnalyzer
             mb_substr($text, 0, 4000),
             $manufacturerHint,
         );
+    }
+
+    /**
+     * @return list<\Illuminate\Contracts\Cache\Lock>
+     */
+    private function acquirePdfWaveSlots(int $want): array
+    {
+        $want = max(1, $want);
+        $locks = $this->enrichmentSlots->tryAcquireMany($want, 600);
+        if ($locks !== []) {
+            return $locks;
+        }
+        $wait = (float) config('ai.enrichment_slot_wait_seconds', 120);
+        $one = $this->enrichmentSlots->acquire(600, $wait);
+        if ($one === null) {
+            $one = $this->enrichmentSlots->acquire(600, 180.0);
+        }
+        if ($one === null) {
+            throw new RuntimeException(
+                'Wszystkie sloty AI są zajęte (limit z Ustawień AI). Poczekaj, aż skończy się enrichment, i ponów analizę.'
+            );
+        }
+
+        return [$one];
+    }
+
+    /**
+     * @return list<array{role: string, content: string}>
+     */
+    private function pdfChunkMessages(string $prompt, int $part, int $total, string $chunk): array
+    {
+        return [
+            [
+                'role' => 'system',
+                'content' => 'Jesteś ekspertem od cenników BHP. Zwracasz WYŁĄCZNIE JSON z tablicą products.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $prompt
+                    ."\n\nTo jest CZĘŚĆ {$part}/{$total} tekstu PDF. "
+                    .'Wypisz KAŻDĄ pozycję z tej części — nie streszczaj i nie pomijaj wierszy.'
+                    ."\n\nTEKST:\n".$chunk
+                    ."\n\nWzorce: (A) 119.00 32 80.92; (B) NV15S-00138 … 50 PCE … 2.62.",
+            ],
+        ];
     }
 
     /**

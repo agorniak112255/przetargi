@@ -29,6 +29,24 @@ final class EnrichmentSlotsTest extends TestCase
         $this->assertNull($slots->acquire(60, 0.0), 'Trzeci slot poza limitem 2');
     }
 
+    public function test_try_acquire_many_skips_busy_slots(): void
+    {
+        $this->setConcurrency(4);
+        $slots = app(EnrichmentSlots::class);
+
+        $busy = $slots->acquire(60, 0.0);
+        $this->assertNotNull($busy);
+
+        $wave = $slots->tryAcquireMany(4, 60);
+        $this->assertCount(3, $wave, '3 wolne z limitu 4, jeden już zajęty');
+        $this->assertNull($slots->acquire(60, 0.0));
+
+        foreach ($wave as $lock) {
+            $lock->release();
+        }
+        $busy->release();
+    }
+
     public function test_freed_slot_is_reused(): void
     {
         $this->setConcurrency(1);
