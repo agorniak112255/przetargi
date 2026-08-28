@@ -215,21 +215,21 @@ final class PriceListAiAnalyzer
         }
         $isScan = $text === null || mb_strlen($text) < 40;
         $pricesInText = is_string($text) && $this->textHasDecimalPrices($text);
+        $needsPriceBitmaps = is_string($text) && ! $isScan && ! $pricesInText
+            && $this->pdfExtractor->looksLikePricelist($text);
 
-        // Skan albo tabela bez cen w tekście (ceny jako bitmapy, np. RENEX).
-        if ($aiReady && ($isScan || ! $pricesInText)) {
-            $imagePrompt = $prompt;
-            if (is_string($text) && $text !== '') {
-                $imagePrompt .= "\n\nTekst z PDF (nazwy/kody; ceny bywają TYLKO na obrazach):\n"
-                    .mb_substr($text, 0, 6000);
-            }
+        // Vision tylko gdy trzeba: skan (max 4 strony JPEG) albo bitmapy cen (RENEX).
+        // Nie wysyłamy całego PDF ani zdjęć katalogowych — to zjada kredyty.
+        if ($aiReady && $isScan) {
             try {
                 $fromImages = $this->analyzePdfViaPageImages(
                     $path,
-                    $imagePrompt,
+                    $prompt,
                     $manufacturerHint,
                     $originalName,
                     $fileSize,
+                    'pages',
+                    4,
                 );
                 if ($fromImages !== null) {
                     return $fromImages;
@@ -238,35 +238,52 @@ final class PriceListAiAnalyzer
             } catch (\Throwable $e) {
                 $visionError = $e->getMessage();
             }
-        }
-
-        // 1) Vision: PDF z tekstem albo skan po nieudanym wycięciu stron (plik ≤ 4 MB)
-        if ($aiReady && $fileSize > 0 && $fileSize <= 4_000_000) {
-            try {
-                @set_time_limit(240);
-                $raw = $this->llm->chatWithPdf($prompt, $path, basename($path), AiTask::PriceListPdf);
-                $json = $this->jsonParser->parse($raw['content']);
-                $products = $this->normalizeProducts($json['products'] ?? [], $manufacturerHint);
-                if ($products !== [] && $this->looksLikeGoodPdfExtract($products)) {
-                    return $this->pdfResult(
-                        $products,
-                        $json,
-                        $raw['model'],
-                        'pdf-vision',
-                        ['mode' => 'vision', 'file_mb' => round($fileSize / 1_000_000, 2)],
-                        $originalName,
-                        null,
-                        null,
-                        $manufacturerHint,
-                    );
+            $hadPages = $this->pdfImageExtractor->extract($path, 1, 'pages') !== [];
+            if (! $hadPages && $fileSize > 0 && $fileSize <= 1_500_000) {
+                try {
+                    @set_time_limit(240);
+                    $raw = $this->llm->chatWithPdf($prompt, $path, basename($path), AiTask::PriceListPdf);
+                    $json = $this->jsonParser->parse($raw['content']);
+                    $products = $this->normalizeProducts($json['products'] ?? [], $manufacturerHint);
+                    if ($products !== [] && $this->looksLikeGoodPdfExtract($products)) {
+                        return $this->pdfResult(
+                            $products,
+                            $json,
+                            $raw['model'],
+                            'pdf-vision',
+                            ['mode' => 'vision', 'file_mb' => round($fileSize / 1_000_000, 2)],
+                            $originalName,
+                            null,
+                            null,
+                            $manufacturerHint,
+                        );
+                    }
+                } catch (\Throwable $e) {
+                    $visionError = $e->getMessage();
                 }
+            }
+        } elseif ($aiReady && $needsPriceBitmaps) {
+            $imagePrompt = $prompt."\n\nTekst z PDF (nazwy/kody; ceny TYLKO na obrazach):\n"
+                .mb_substr($text, 0, 4000);
+            try {
+                $fromImages = $this->analyzePdfViaPageImages(
+                    $path,
+                    $imagePrompt,
+                    $manufacturerHint,
+                    $originalName,
+                    $fileSize,
+                    'price_bitmaps',
+                    16,
+                );
+                if ($fromImages !== null) {
+                    return $fromImages;
+                }
+                $visionError = 'Nie odczytano cen z bitmap PDF.';
             } catch (\Throwable $e) {
                 $visionError = $e->getMessage();
             }
         } elseif (! $aiReady) {
             $visionError = 'AI wyłączone — tylko odczyt heurystyczny z tekstu PDF.';
-        } elseif ($fileSize > 4_000_000) {
-            $visionError = 'PDF '.round($fileSize / 1_000_000, 1).' MB — analiza tekstowa w częściach (bez vision).';
         }
 
         if ($text === null) {
@@ -452,8 +469,15 @@ final class PriceListAiAnalyzer
         ?string $manufacturerHint,
         ?string $originalName,
         int $fileSize,
+        string $kind = 'pages',
+        int $maxImages = 4,
     ): ?array {
-        $images = $this->pdfImageExtractor->prepareForVision($this->pdfImageExtractor->extract($path, 40));
+        $maxEdge = $kind === 'price_bitmaps' ? 800 : 1024;
+        $images = $this->pdfImageExtractor->prepareForVision(
+            $this->pdfImageExtractor->extract($path, $maxImages, $kind),
+            $maxEdge,
+            60,
+        );
         if ($images === []) {
             return null;
         }
@@ -467,7 +491,7 @@ final class PriceListAiAnalyzer
         ];
         $lastError = null;
         $smallFragments = $this->areSmallImageFragments($images);
-        $batches = $smallFragments ? array_chunk($images, 10) : array_map(
+        $batches = $smallFragments ? [$images] : array_map(
             static fn (array $image): array => [$image],
             $images
         );

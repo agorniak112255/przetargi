@@ -104,7 +104,7 @@ final class PdfEmbeddedImageExtractorTest extends TestCase
         $path = $this->writeFlateGrayImagePdf();
 
         try {
-            $images = (new PdfEmbeddedImageExtractor)->extract($path);
+            $images = (new PdfEmbeddedImageExtractor)->extract($path, 20, 'price_bitmaps');
             $this->assertCount(1, $images);
             $this->assertSame('image/jpeg', $images[0]['mime']);
             $this->assertStringStartsWith("\xFF\xD8", $images[0]['bytes']);
@@ -124,7 +124,7 @@ final class PdfEmbeddedImageExtractorTest extends TestCase
             $this->markTestSkipped('Brak lokalnego cennika RENEX');
         }
 
-        $images = (new PdfEmbeddedImageExtractor)->extract($matches[0], 40);
+        $images = (new PdfEmbeddedImageExtractor)->extract($matches[0], 16, 'price_bitmaps');
         $this->assertGreaterThanOrEqual(8, count($images));
         $this->assertSame('image/jpeg', $images[0]['mime']);
         $this->assertStringStartsWith("\xFF\xD8", $images[0]['bytes']);

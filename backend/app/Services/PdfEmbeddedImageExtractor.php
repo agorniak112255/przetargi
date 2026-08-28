@@ -10,11 +10,12 @@ namespace App\Services;
 final class PdfEmbeddedImageExtractor
 {
     /**
+     * @param  'pages'|'price_bitmaps'  $kind
      * @return list<array{bytes: string, mime: string, label: string}>
      */
-    public function extract(string $path, int $maxImages = 20): array
+    public function extract(string $path, int $maxImages = 20, string $kind = 'pages'): array
     {
-        if ($maxImages < 1 || ! is_file($path)) {
+        if ($maxImages < 1 || ! is_file($path) || ! in_array($kind, ['pages', 'price_bitmaps'], true)) {
             return [];
         }
         $data = file_get_contents($path);
@@ -45,6 +46,16 @@ final class PdfEmbeddedImageExtractor
                 continue;
             }
             $filter = $this->filterName($dict);
+            if ($kind === 'pages' && $filter !== 'DCTDecode' && $filter !== 'JPXDecode') {
+                $offset = $streamKw + 6;
+
+                continue;
+            }
+            if ($kind === 'price_bitmaps' && $filter !== 'FlateDecode') {
+                $offset = $streamKw + 6;
+
+                continue;
+            }
             $length = $this->streamLength($data, $dict);
             if ($length === null || $length < 8) {
                 $offset = $streamKw + 6;
@@ -255,9 +266,8 @@ final class PdfEmbeddedImageExtractor
         }
         $bpc = preg_match('/\/BitsPerComponent\s+(\d+)/', $dict, $bm) === 1 ? (int) $bm[1] : 8;
         $gray = preg_match('/\/ColorSpace\s*\/DeviceGray/', $dict) === 1;
-        $rgb = preg_match('/\/ColorSpace\s*\/DeviceRGB/', $dict) === 1;
         $invert = preg_match('/\/Decode\s*\[\s*1(?:\.0)?\s+0(?:\.0)?\s*\]/', $dict) === 1;
-        if (! $gray && ! $rgb) {
+        if (! $gray || $bpc !== 1) {
             return null;
         }
 
@@ -265,53 +275,20 @@ final class PdfEmbeddedImageExtractor
         if ($im === false) {
             return null;
         }
-        if ($gray && $bpc === 1) {
-            $rowBytes = (int) ceil($width / 8);
-            $need = $rowBytes * $height;
-            $raw = str_pad($raw, $need, "\x00");
-            $black = imagecolorallocate($im, 0, 0, 0);
-            $white = imagecolorallocate($im, 255, 255, 255);
-            for ($y = 0; $y < $height; $y++) {
-                for ($x = 0; $x < $width; $x++) {
-                    $byte = ord($raw[$y * $rowBytes + intdiv($x, 8)]);
-                    $bit = ($byte >> (7 - ($x % 8))) & 1;
-                    if ($invert) {
-                        $bit = $bit === 1 ? 0 : 1;
-                    }
-                    imagesetpixel($im, $x, $y, $bit === 1 ? $black : $white);
+        $rowBytes = (int) ceil($width / 8);
+        $need = $rowBytes * $height;
+        $raw = str_pad($raw, $need, "\x00");
+        $black = imagecolorallocate($im, 0, 0, 0);
+        $white = imagecolorallocate($im, 255, 255, 255);
+        for ($y = 0; $y < $height; $y++) {
+            for ($x = 0; $x < $width; $x++) {
+                $byte = ord($raw[$y * $rowBytes + intdiv($x, 8)]);
+                $bit = ($byte >> (7 - ($x % 8))) & 1;
+                if ($invert) {
+                    $bit = $bit === 1 ? 0 : 1;
                 }
+                imagesetpixel($im, $x, $y, $bit === 1 ? $black : $white);
             }
-        } elseif ($gray && $bpc === 8) {
-            $need = $width * $height;
-            $raw = str_pad($raw, $need, "\x00");
-            $i = 0;
-            for ($y = 0; $y < $height; $y++) {
-                for ($x = 0; $x < $width; $x++) {
-                    $v = ord($raw[$i++]);
-                    if ($invert) {
-                        $v = 255 - $v;
-                    }
-                    $c = imagecolorallocate($im, $v, $v, $v);
-                    imagesetpixel($im, $x, $y, $c === false ? 0 : $c);
-                }
-            }
-        } elseif ($rgb && $bpc === 8) {
-            $need = $width * $height * 3;
-            $raw = str_pad($raw, $need, "\x00");
-            $i = 0;
-            for ($y = 0; $y < $height; $y++) {
-                for ($x = 0; $x < $width; $x++) {
-                    $r = ord($raw[$i++]);
-                    $g = ord($raw[$i++]);
-                    $b = ord($raw[$i++]);
-                    $c = imagecolorallocate($im, $r, $g, $b);
-                    imagesetpixel($im, $x, $y, $c === false ? 0 : $b);
-                }
-            }
-        } else {
-            imagedestroy($im);
-
-            return null;
         }
 
         ob_start();

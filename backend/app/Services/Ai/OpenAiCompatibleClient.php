@@ -264,7 +264,7 @@ class OpenAiCompatibleClient
                 'type' => 'image_url',
                 'image_url' => [
                     'url' => 'data:'.$image['mime'].';base64,'.base64_encode($image['bytes']),
-                    'detail' => 'high',
+                    'detail' => 'low',
                 ],
             ];
         }
@@ -278,7 +278,7 @@ class OpenAiCompatibleClient
                 'role' => 'user',
                 'content' => $content,
             ],
-        ], 0.1, true, ['max_tokens' => 8000], $task);
+        ], 0.1, true, ['max_tokens' => 4000], $task);
     }
 
     /**
