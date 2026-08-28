@@ -63,4 +63,18 @@ Cena netto 354 11N-N08
 TXT;
         $this->assertTrue((new PriceListPdfTextExtractor)->looksLikePricelist($text));
     }
+
+    public function test_chunks_whole_list_by_price_budget(): void
+    {
+        $lines = [];
+        for ($i = 1; $i <= 159; $i++) {
+            $lines[] = sprintf('HW%05d Pozycja %d 12,50', $i, $i);
+        }
+        $text = implode("\n", $lines);
+        $chunks = (new PriceListPdfTextExtractor)->chunkByPriceBudget($text, 45, 7000);
+        $this->assertGreaterThan(1, count($chunks));
+        $joined = implode("\n", $chunks);
+        $this->assertSame(159, preg_match_all('/\b12,50\b/u', $joined));
+        $this->assertStringContainsString('HW00159', $joined);
+    }
 }

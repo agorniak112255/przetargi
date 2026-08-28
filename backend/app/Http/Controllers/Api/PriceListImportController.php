@@ -46,7 +46,7 @@ class PriceListImportController extends Controller
         $file = $request->file('file');
         $this->assertAllowedFile($file);
 
-        @set_time_limit(500);
+        @set_time_limit(3600);
 
         $useAi = $request->boolean('use_ai');
         $mapping = $this->decodeJsonField($request->input('mapping'));
@@ -212,7 +212,7 @@ class PriceListImportController extends Controller
         }
 
         try {
-            @set_time_limit(500);
+            @set_time_limit(3600);
             $fromFile = $this->metaDetector->fromFilename($file->getClientOriginalName());
             // nie przekazuj „zastałego” producenta z formularza — najpierw nazwa pliku
             $result = $this->analyzer->analyze(

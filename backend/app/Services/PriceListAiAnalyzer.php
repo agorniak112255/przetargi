@@ -254,11 +254,7 @@ final class PriceListAiAnalyzer
                 $this->normalizeProducts($heuristicGeneric, $manufacturerHint),
             ));
         }
-        $priceHits = is_string($text) ? (preg_match_all('/\b\d+[.,]\d{2}\b/u', $text) ?: 0) : 0;
-        $textLen = is_string($text) ? mb_strlen($text) : 0;
-        $largeList = $textLen > 40000 || $priceHits >= 80;
-        $minHeuristic = $largeList ? max(20, (int) floor($priceHits * 0.2)) : 5;
-        if ($heuristic !== [] && count($heuristic) >= $minHeuristic) {
+        if ($heuristic !== [] && count($heuristic) >= 5) {
             return $this->heuristicPdfResult(
                 $heuristic,
                 $heuristicEma,
@@ -293,15 +289,7 @@ final class PriceListAiAnalyzer
             throw new RuntimeException($msg);
         }
 
-        if ($largeList) {
-            throw new RuntimeException(
-                'Duży cennik PDF (~'.$priceHits.' cen, '.$textLen.' znaków, odczytano '
-                .count($heuristic).' SKU). Model AI nie wypisze tysięcy pozycji. '
-                .'Wgraj XLSX albo PDF z kodem i ceną w jednym wierszu.'
-            );
-        }
-
-        $chunks = $aiReady ? array_slice($this->pdfExtractor->chunk($text, 12000, 400), 0, 8) : [];
+        $chunks = $aiReady ? $this->pdfExtractor->chunkByPriceBudget($text) : [];
         $aiProducts = [];
         $model = $aiReady ? 'text-chunks' : 'heuristic-only';
         $json = [
@@ -319,40 +307,49 @@ final class PriceListAiAnalyzer
         }
 
         foreach ($chunks as $idx => $chunk) {
-            try {
-                $part = $idx + 1;
-                $total = count($chunks);
-                $messages = [
-                    [
-                        'role' => 'system',
-                        'content' => 'Jesteś ekspertem od cenników BHP. Zwracasz WYŁĄCZNIE JSON z tablicą products.',
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $prompt
-                            ."\n\nTo jest CZĘŚĆ {$part}/{$total} tekstu z dużego PDF. "
-                            .'Wypisz produkty TYLKO z tej części.'
-                            ."\n\nTEKST:\n".$chunk
-                            ."\n\nWzorce: (A) 119.00 32 80.92; (B) NV15S-00138 … 50 PCE … 2.62.",
-                    ],
-                ];
-                $raw = $this->llm->chat($messages, null, true, ['max_tokens' => 6000], AiTask::PriceListPdf);
-                $model = $raw['model'];
-                $partJson = $this->jsonParser->parse($raw['content']);
-                if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
-                    $json['manufacturer_detected'] = $partJson['manufacturer_detected'];
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(600);
+            }
+            $part = $idx + 1;
+            $total = count($chunks);
+            $ok = false;
+            for ($attempt = 1; $attempt <= 2; $attempt++) {
+                try {
+                    $messages = [
+                        [
+                            'role' => 'system',
+                            'content' => 'Jesteś ekspertem od cenników BHP. Zwracasz WYŁĄCZNIE JSON z tablicą products.',
+                        ],
+                        [
+                            'role' => 'user',
+                            'content' => $prompt
+                                ."\n\nTo jest CZĘŚĆ {$part}/{$total} tekstu PDF. "
+                                .'Wypisz KAŻDĄ pozycję z tej części — nie streszczaj i nie pomijaj wierszy.'
+                                ."\n\nTEKST:\n".$chunk
+                                ."\n\nWzorce: (A) 119.00 32 80.92; (B) NV15S-00138 … 50 PCE … 2.62.",
+                        ],
+                    ];
+                    $raw = $this->llm->chat($messages, null, true, ['max_tokens' => 8000], AiTask::PriceListPdf);
+                    $model = $raw['model'];
+                    $partJson = $this->jsonParser->parse($raw['content']);
+                    if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
+                        $json['manufacturer_detected'] = $partJson['manufacturer_detected'];
+                    }
+                    if (is_string($partJson['currency'] ?? null)) {
+                        $json['currency'] = $partJson['currency'];
+                    }
+                    $aiProducts = array_merge(
+                        $aiProducts,
+                        $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint)
+                    );
+                    $ok = true;
+                    break;
+                } catch (\Throwable) {
+                    continue;
                 }
-                if (is_string($partJson['currency'] ?? null)) {
-                    $json['currency'] = $partJson['currency'];
-                }
-                $aiProducts = array_merge(
-                    $aiProducts,
-                    $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint)
-                );
-            } catch (\Throwable) {
+            }
+            if (! $ok) {
                 $chunkErrors++;
-
-                continue;
             }
         }
 

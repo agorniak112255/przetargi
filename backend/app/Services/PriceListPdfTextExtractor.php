@@ -86,6 +86,38 @@ final class PriceListPdfTextExtractor
     }
 
     /**
+     * Części na budżet cen — model ma wypisać wszystkie pozycje z kawałka.
+     *
+     * @return list<string>
+     */
+    public function chunkByPriceBudget(string $text, int $maxPrices = 45, int $maxChars = 7000): array
+    {
+        $lines = preg_split("/\r\n|\n|\r/", $text) ?: [];
+        $chunks = [];
+        $buf = [];
+        $prices = 0;
+        $chars = 0;
+        foreach ($lines as $line) {
+            $linePrices = preg_match_all('/\b\d+[.,]\d{2}\b/u', $line) ?: 0;
+            $lineLen = mb_strlen($line) + 1;
+            if ($buf !== [] && ($prices + $linePrices > $maxPrices || $chars + $lineLen > $maxChars)) {
+                $chunks[] = implode("\n", $buf);
+                $buf = [];
+                $prices = 0;
+                $chars = 0;
+            }
+            $buf[] = $line;
+            $prices += $linePrices;
+            $chars += $lineLen;
+        }
+        if ($buf !== []) {
+            $chunks[] = implode("\n", $buf);
+        }
+
+        return $chunks === [] ? [$text] : $chunks;
+    }
+
+    /**
      * List / okładka („załączony cennik”) vs tabela z kodami i cenami.
      */
     public function looksLikePricelist(string $text): bool
