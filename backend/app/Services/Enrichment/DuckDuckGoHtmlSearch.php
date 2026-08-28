@@ -39,7 +39,7 @@ final class DuckDuckGoHtmlSearch
      * @param  list<string>  $includeDomains
      * @return list<array{url: string, title: string, snippet: string}>
      */
-    public function search(string $query, int $maxResults = 8, array $includeDomains = []): array
+    public function search(string $query, int $maxResults = 8, array $includeDomains = [], bool $allowPublicFallback = true): array
     {
         $query = trim($query);
         if ($query === '') {
@@ -68,27 +68,37 @@ final class DuckDuckGoHtmlSearch
 
         $searxng = $this->searxngBaseUrl();
         if ($searxng !== null) {
-            if ($this->searxngRecentlyBlocked()) {
+            if ($this->searxngRecentlyBlocked() && ! $allowPublicFallback) {
                 throw new RuntimeException(
                     'SearXNG: silniki zablokowane (429/CAPTCHA). Poczekaj albo zmień wyszukiwarkę w Ustawieniach AI.'
                 );
             }
-            // Nie schodzimy na Google/Bing/DDG — te same silniki już dały 429,
-            // a jeden produkt trzymał slot prefetch przez minutę.
-            try {
-                $this->reserveSearchSlot();
-                $results = $this->searchSearxng($searxng, $query);
-                if ($results !== []) {
-                    Cache::put($cacheKey, $results, now()->addHours(6));
+            if (! $this->searxngRecentlyBlocked()) {
+                try {
+                    $this->reserveSearchSlot();
+                    $results = $this->searchSearxng($searxng, $query);
+                    if ($results !== []) {
+                        Cache::put($cacheKey, $results, now()->addHours(6));
 
-                    return $this->limitResults($results, $maxResults, $includeDomains);
+                        return $this->limitResults($results, $maxResults, $includeDomains);
+                    }
+                } catch (Throwable $e) {
+                    if ($this->isSearxngBlockedMessage($e->getMessage())) {
+                        $this->markSearxngBlocked();
+                    }
+                    if (! $allowPublicFallback || ! $this->isSearxngBlockedMessage($e->getMessage())) {
+                        throw $e;
+                    }
                 }
-            } catch (Throwable $e) {
-                if ($this->isSearxngBlockedMessage($e->getMessage())) {
-                    $this->markSearxngBlocked();
-                }
-                throw $e;
             }
+        }
+
+        if (! $allowPublicFallback) {
+            throw new RuntimeException(
+                $searxng !== null
+                    ? 'SearXNG: brak wyników (bez fallbacku publicznego).'
+                    : 'Brak wyników wyszukiwania.'
+            );
         }
 
         $this->acquireGate();

@@ -883,6 +883,45 @@ final class ProductEnrichmentApiTest extends TestCase
         app(ProductEnrichmentService::class)->enqueueProductIds([$product->id], $user, false);
     }
 
+    public function test_searxng_outage_marks_failed_not_manual(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'R30X',
+            'manufacturer' => 'Honeywell',
+            'description' => null,
+        ]);
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [],
+                'errors' => ['manufacturer: SearXNG: silniki zablokowane (429/CAPTCHA)'],
+            ]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ProductDocumentFinder::class),
+            app(ManufacturerDomainResolver::class),
+            Mockery::mock(OpenAiCompatibleClient::class),
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException) {
+        }
+
+        $this->assertSame(Product::ENRICHMENT_FAILED, $product->fresh()?->enrichment_status);
+    }
+
     public function test_enrichment_service_saves_description_and_image(): void
     {
         Storage::fake('public');
@@ -1385,7 +1424,7 @@ final class ProductEnrichmentApiTest extends TestCase
         Http::fake(['*' => Http::response('should-not-run', 200)]);
 
         try {
-            app(DuckDuckGoHtmlSearch::class)->search('honeywell R30X');
+            app(DuckDuckGoHtmlSearch::class)->search('honeywell R30X', 8, [], false);
             $this->fail('Oczekiwano wyjątku przy zablokowanym SearXNG.');
         } catch (RuntimeException $e) {
             $this->assertStringContainsString('silniki zablokowane', $e->getMessage());

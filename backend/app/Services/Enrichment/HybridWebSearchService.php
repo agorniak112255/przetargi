@@ -23,6 +23,9 @@ class HybridWebSearchService
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
 
+    /** Prefetch: tylko SearXNG / indeks — bez modelu i bez Google/Bing. */
+    private bool $localSearchOnly = false;
+
     /** Ile różnych fraz próbujemy w otwartym internecie, zanim pójdziemy na domenę producenta. */
     private const OPEN_QUERY_ATTEMPTS = 4;
 
@@ -139,7 +142,7 @@ class HybridWebSearchService
         $errors = $found['errors'];
         $provider = $found['provider'];
 
-        if ($merged === [] && $cfg['web_search_enabled']) {
+        if ($merged === [] && ! $this->localSearchOnly && $cfg['web_search_enabled']) {
             try {
                 $pack = $this->searchViaProviderWeb($skuQuery, $product, $phase);
                 $merged = $this->filterResultsByIdentity($pack['results'], $product);
@@ -199,7 +202,7 @@ class HybridWebSearchService
         $errors = $found['errors'];
         $provider = $found['provider'];
 
-        if ($merged === []) {
+        if ($merged === [] && ! $this->localSearchOnly) {
             $cacheKey = $this->searchCacheKey('large_model', $phase, $skuQuery, 'ai');
             $cached = Cache::get($cacheKey);
             if (is_array($cached) && isset($cached['results']) && is_array($cached['results'])) {
@@ -298,7 +301,25 @@ class HybridWebSearchService
      *     errors: list<string>
      * }
      */
-    public function searchBothPhases(Product $product): array
+    public function searchBothPhases(Product $product, bool $localSearchOnly = false): array
+    {
+        $previous = $this->localSearchOnly;
+        $this->localSearchOnly = $localSearchOnly;
+        try {
+            return $this->searchBothPhasesInner($product);
+        } finally {
+            $this->localSearchOnly = $previous;
+        }
+    }
+
+    /**
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     images: list<string>,
+     *     errors: list<string>
+     * }
+     */
+    private function searchBothPhasesInner(Product $product): array
     {
         $merged = [];
         $images = [];
@@ -1118,7 +1139,12 @@ class HybridWebSearchService
     private function searchViaAiWeb(string $query, Product $product, string $phase): array
     {
         if ($this->settings->usesFreeWebSearch()) {
-            $hits = $this->duckDuckGo->search($query, self::FREE_SEARCH_CANDIDATES);
+            $hits = $this->duckDuckGo->search(
+                $query,
+                self::FREE_SEARCH_CANDIDATES,
+                [],
+                ! $this->localSearchOnly
+            );
 
             return [
                 'results' => $hits,
@@ -1217,7 +1243,8 @@ PROMPT;
                 $results = $this->duckDuckGo->search(
                     $query,
                     max($profile->maxResults, self::FREE_SEARCH_CANDIDATES),
-                    $includeDomains
+                    $includeDomains,
+                    ! $this->localSearchOnly
                 );
                 if ($results !== []) {
                     return [

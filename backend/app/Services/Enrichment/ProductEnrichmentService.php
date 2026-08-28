@@ -215,7 +215,7 @@ final class ProductEnrichmentService
             }
 
             $t = microtime(true);
-            $searchPack = $this->search->searchBothPhases($product);
+            $searchPack = $this->search->searchBothPhases($product, true);
             $this->rememberPrefetchPack($product, $searchPack);
             $onSearchReady !== null && $onSearchReady();
             $searchMs = $this->elapsedMs($t);
@@ -779,9 +779,7 @@ final class ProductEnrichmentService
             ]);
             try {
                 $product->update([
-                    'enrichment_status' => $e instanceof ProductSourcesNotFoundException
-                        ? Product::ENRICHMENT_MANUAL
-                        : Product::ENRICHMENT_FAILED,
+                    'enrichment_status' => $this->enrichmentStatusForFailure($e),
                     'enrichment_error' => mb_substr($e->getMessage(), 0, 2000),
                 ]);
             } catch (Throwable) {
@@ -791,6 +789,22 @@ final class ProductEnrichmentService
         } finally {
             $this->pages->bypassCache(false);
         }
+    }
+
+    private function enrichmentStatusForFailure(Throwable $e): string
+    {
+        if (! $e instanceof ProductSourcesNotFoundException) {
+            return Product::ENRICHMENT_FAILED;
+        }
+        $msg = mb_strtolower($e->getMessage());
+        if (str_contains($msg, 'silniki zablokowane')
+            || str_contains($msg, 'too many requests')
+            || str_contains($msg, 'captcha')
+            || str_contains($msg, 'bez fallbacku publicznego')) {
+            return Product::ENRICHMENT_FAILED;
+        }
+
+        return Product::ENRICHMENT_MANUAL;
     }
 
     private function elapsedMs(float $started): int
