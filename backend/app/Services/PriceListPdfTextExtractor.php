@@ -71,8 +71,15 @@ final class PriceListPdfTextExtractor
         $prices = preg_match_all('/\b\d+[.,]\d{2}\b/u', $text);
         $articles = preg_match_all('/\bD\d{6,}\b/u', $text);
         $skuish = preg_match_all('/\b[A-Z]{2}\s?\d{3,}[A-Z0-9 -]{0,12}\b/u', $text);
+        $ceCodes = preg_match_all('/\bCE-[A-Z0-9][A-Z0-9.-]{2,}\b/u', $text);
+        $tableHeader = preg_match('/\b(cena|cennik|price)\b/ui', $text) === 1
+            && preg_match('/\b(kod|nazwa|sku|article)\b/ui', $text) === 1;
 
-        return $prices >= 6 && ($articles >= 2 || $skuish >= 4 || $prices >= 16);
+        if ($ceCodes >= 4 && $tableHeader) {
+            return true;
+        }
+
+        return $prices >= 6 && ($articles >= 2 || $skuish >= 4 || $prices >= 16 || $ceCodes >= 3);
     }
 
     private function extractViaPdfToText(string $path): ?string

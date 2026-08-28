@@ -214,13 +214,19 @@ final class PriceListAiAnalyzer
             $extractError = $e->getMessage();
         }
         $isScan = $text === null || mb_strlen($text) < 40;
+        $pricesInText = is_string($text) && $this->textHasDecimalPrices($text);
 
-        // Skan / zepsuty xref: native PDF parser nie da tekstu — strony jako obrazy.
-        if ($aiReady && $isScan) {
+        // Skan albo tabela bez cen w tekście (ceny jako bitmapy, np. RENEX).
+        if ($aiReady && ($isScan || ! $pricesInText)) {
+            $imagePrompt = $prompt;
+            if (is_string($text) && $text !== '') {
+                $imagePrompt .= "\n\nTekst z PDF (nazwy/kody; ceny bywają TYLKO na obrazach):\n"
+                    .mb_substr($text, 0, 6000);
+            }
             try {
                 $fromImages = $this->analyzePdfViaPageImages(
                     $path,
-                    $prompt,
+                    $imagePrompt,
                     $manufacturerHint,
                     $originalName,
                     $fileSize,
@@ -290,13 +296,15 @@ final class PriceListAiAnalyzer
 
         if ($heuristic === [] && ! $this->pdfExtractor->looksLikePricelist($text)) {
             $letter = is_string($originalName) && preg_match('/letter|okladka|okładka|pismo/i', $originalName) === 1;
-            throw new RuntimeException(
-                ($letter
-                    ? 'Ten PDF to list / okładka, nie tabela cennika. '
-                    : 'W PDF nie ma tabeli z kodami i cenami. ')
-                .'Dla DuPont wgraj arkusz XLSX (Reference, Article Number, Price) '
-                .'z tego samego pakietu — nie plik „letter”.'
-            );
+            $dupont = $letter || (is_string($originalName) && preg_match('/dupont|tyvek/i', $originalName) === 1);
+            $msg = $letter
+                ? 'Ten PDF to list / okładka, nie tabela cennika. '
+                : 'W PDF nie ma tabeli z kodami i cenami. ';
+            $msg .= $dupont
+                ? 'Dla DuPont wgraj arkusz XLSX (Reference, Article Number, Price) '
+                    .'z tego samego pakietu — nie plik „letter”.'
+                : 'Jeśli ceny są tylko na skanie, użyj modelu vision albo wgraj XLSX.';
+            throw new RuntimeException($msg);
         }
 
         // jeśli heurystyka już dała produkty — zwracamy od razu (niezależnie od AI)
@@ -445,7 +453,7 @@ final class PriceListAiAnalyzer
         ?string $originalName,
         int $fileSize,
     ): ?array {
-        $images = $this->pdfImageExtractor->prepareForVision($this->pdfImageExtractor->extract($path));
+        $images = $this->pdfImageExtractor->prepareForVision($this->pdfImageExtractor->extract($path, 40));
         if ($images === []) {
             return null;
         }
@@ -458,10 +466,15 @@ final class PriceListAiAnalyzer
             'currency' => 'PLN',
         ];
         $lastError = null;
-        foreach ($images as $image) {
+        $smallFragments = $this->areSmallImageFragments($images);
+        $batches = $smallFragments ? array_chunk($images, 10) : array_map(
+            static fn (array $image): array => [$image],
+            $images
+        );
+        foreach ($batches as $batch) {
             try {
                 @set_time_limit(240);
-                $raw = $this->llm->chatWithPageImages($prompt, [$image], AiTask::PriceListPdf);
+                $raw = $this->llm->chatWithPageImages($prompt, $batch, AiTask::PriceListPdf);
                 $model = $raw['model'];
                 $partJson = $this->jsonParser->parse($raw['content']);
                 if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
@@ -532,6 +545,32 @@ final class PriceListAiAnalyzer
         return array_values($bySku);
     }
 
+    /**
+     * @param  list<array{bytes: string, mime: string, label?: string}>  $images
+     */
+    private function areSmallImageFragments(array $images): bool
+    {
+        if ($images === []) {
+            return false;
+        }
+        foreach (array_slice($images, 0, 8) as $image) {
+            $info = @getimagesizefromstring($image['bytes']);
+            if (! is_array($info)) {
+                return false;
+            }
+            if (max((int) $info[0], (int) $info[1]) >= 600) {
+                return false;
+            }
+        }
+
+        return count($images) >= 3;
+    }
+
+    private function textHasDecimalPrices(string $text): bool
+    {
+        return preg_match_all('/\b\d+[.,]\d{2}\b/u', $text) >= 6;
+    }
+
     private function pdfProductPrompt(string $hint): string
     {
         return <<<PROMPT
@@ -554,6 +593,11 @@ Format C (tabela skan, np. PPO / obuwie):
 - Wyszczególnienie = name
 - Cena = catalog_price, discount = 0, purchase = catalog_price
 - Norma / sekcja = category
+Format D (odzież, np. RENEX):
+- Kod CE-… (np. CE-FARTU.065) = sku
+- Nazwa = name (FARTUCH STANDARD)
+- Cena (np. 82,00 zł) = catalog_price; discount = 0; purchase = catalog_price
+- Sekcja tkaniny (TKANINA 065) = category
 Oraz opcjonalnie: opakowanie, kategoria/sekcja.
 
 Zwróć JSON:

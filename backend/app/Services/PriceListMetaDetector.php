@@ -38,6 +38,7 @@ final class PriceListMetaDetector
         'Bogaro' => ['bogaro'],
         'JS GLOVES' => ['js gloves', 'js-gloves', 'szewczyk'],
         'PPO' => ['ppo strzelce', 'strzelce opolskie'],
+        'RENEX' => ['renex'],
     ];
 
     /**

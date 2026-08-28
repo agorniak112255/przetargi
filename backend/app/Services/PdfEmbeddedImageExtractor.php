@@ -45,13 +45,8 @@ final class PdfEmbeddedImageExtractor
                 continue;
             }
             $filter = $this->filterName($dict);
-            $mime = match ($filter) {
-                'DCTDecode' => 'image/jpeg',
-                'JPXDecode' => 'image/jp2',
-                default => null,
-            };
             $length = $this->streamLength($data, $dict);
-            if ($mime === null || $length === null || $length < 32) {
+            if ($length === null || $length < 8) {
                 $offset = $streamKw + 6;
 
                 continue;
@@ -60,15 +55,16 @@ final class PdfEmbeddedImageExtractor
             $start = $this->streamPayloadStart($data, $streamKw);
             $bytes = substr($data, $start, $length);
             $offset = $start + $length;
-            if ($bytes === '' || ($mime === 'image/jpeg' && ! str_starts_with($bytes, "\xFF\xD8"))) {
+            $decoded = $this->decodeImageBytes($bytes, $filter, $dict);
+            if ($decoded === null) {
                 continue;
             }
 
             $page++;
             $images[] = [
-                'bytes' => $bytes,
-                'mime' => $mime,
-                'label' => 'Strona '.$page,
+                'bytes' => $decoded['bytes'],
+                'mime' => $decoded['mime'],
+                'label' => $this->imageLabel($page, $dict),
             ];
         }
 
@@ -206,6 +202,138 @@ final class PdfEmbeddedImageExtractor
         }
 
         return null;
+    }
+
+    /**
+     * @return array{bytes: string, mime: string}|null
+     */
+    private function decodeImageBytes(string $bytes, string $filter, string $dict): ?array
+    {
+        if ($bytes === '') {
+            return null;
+        }
+        if ($filter === 'DCTDecode') {
+            return str_starts_with($bytes, "\xFF\xD8")
+                ? ['bytes' => $bytes, 'mime' => 'image/jpeg']
+                : null;
+        }
+        if ($filter === 'JPXDecode') {
+            return ['bytes' => $bytes, 'mime' => 'image/jp2'];
+        }
+        if ($filter !== 'FlateDecode') {
+            return null;
+        }
+        $raw = @gzuncompress($bytes);
+        if ($raw === false) {
+            $raw = @gzinflate($bytes);
+        }
+        if (! is_string($raw) || $raw === '') {
+            return null;
+        }
+
+        return $this->rasterToJpeg($raw, $dict);
+    }
+
+    /**
+     * Ceny w cennikach (np. RENEX) bywają 1-bit DeviceGray, nie JPEG.
+     *
+     * @return array{bytes: string, mime: string}|null
+     */
+    private function rasterToJpeg(string $raw, string $dict): ?array
+    {
+        if (! function_exists('imagecreatetruecolor')) {
+            return null;
+        }
+        if (preg_match('/\/Width\s+(\d+)/', $dict, $wm) !== 1
+            || preg_match('/\/Height\s+(\d+)/', $dict, $hm) !== 1) {
+            return null;
+        }
+        $width = (int) $wm[1];
+        $height = (int) $hm[1];
+        if ($width < 40 || $height < 20 || $width > 4000 || $height > 4000) {
+            return null;
+        }
+        $bpc = preg_match('/\/BitsPerComponent\s+(\d+)/', $dict, $bm) === 1 ? (int) $bm[1] : 8;
+        $gray = preg_match('/\/ColorSpace\s*\/DeviceGray/', $dict) === 1;
+        $rgb = preg_match('/\/ColorSpace\s*\/DeviceRGB/', $dict) === 1;
+        $invert = preg_match('/\/Decode\s*\[\s*1(?:\.0)?\s+0(?:\.0)?\s*\]/', $dict) === 1;
+        if (! $gray && ! $rgb) {
+            return null;
+        }
+
+        $im = imagecreatetruecolor($width, $height);
+        if ($im === false) {
+            return null;
+        }
+        if ($gray && $bpc === 1) {
+            $rowBytes = (int) ceil($width / 8);
+            $need = $rowBytes * $height;
+            $raw = str_pad($raw, $need, "\x00");
+            $black = imagecolorallocate($im, 0, 0, 0);
+            $white = imagecolorallocate($im, 255, 255, 255);
+            for ($y = 0; $y < $height; $y++) {
+                for ($x = 0; $x < $width; $x++) {
+                    $byte = ord($raw[$y * $rowBytes + intdiv($x, 8)]);
+                    $bit = ($byte >> (7 - ($x % 8))) & 1;
+                    if ($invert) {
+                        $bit = $bit === 1 ? 0 : 1;
+                    }
+                    imagesetpixel($im, $x, $y, $bit === 1 ? $black : $white);
+                }
+            }
+        } elseif ($gray && $bpc === 8) {
+            $need = $width * $height;
+            $raw = str_pad($raw, $need, "\x00");
+            $i = 0;
+            for ($y = 0; $y < $height; $y++) {
+                for ($x = 0; $x < $width; $x++) {
+                    $v = ord($raw[$i++]);
+                    if ($invert) {
+                        $v = 255 - $v;
+                    }
+                    $c = imagecolorallocate($im, $v, $v, $v);
+                    imagesetpixel($im, $x, $y, $c === false ? 0 : $c);
+                }
+            }
+        } elseif ($rgb && $bpc === 8) {
+            $need = $width * $height * 3;
+            $raw = str_pad($raw, $need, "\x00");
+            $i = 0;
+            for ($y = 0; $y < $height; $y++) {
+                for ($x = 0; $x < $width; $x++) {
+                    $r = ord($raw[$i++]);
+                    $g = ord($raw[$i++]);
+                    $b = ord($raw[$i++]);
+                    $c = imagecolorallocate($im, $r, $g, $b);
+                    imagesetpixel($im, $x, $y, $c === false ? 0 : $b);
+                }
+            }
+        } else {
+            imagedestroy($im);
+
+            return null;
+        }
+
+        ob_start();
+        imagejpeg($im, null, 85);
+        $jpeg = (string) ob_get_clean();
+        imagedestroy($im);
+        if ($jpeg === '' || ! str_starts_with($jpeg, "\xFF\xD8")) {
+            return null;
+        }
+
+        return ['bytes' => $jpeg, 'mime' => 'image/jpeg'];
+    }
+
+    private function imageLabel(int $index, string $dict): string
+    {
+        $w = preg_match('/\/Width\s+(\d+)/', $dict, $m) === 1 ? (int) $m[1] : 0;
+        $h = preg_match('/\/Height\s+(\d+)/', $dict, $m) === 1 ? (int) $m[1] : 0;
+        if ($h > 0 && $h < 400 && $w > 0 && $w < 2000) {
+            return 'Fragment '.$index;
+        }
+
+        return 'Strona '.$index;
     }
 
     private function filterName(string $dict): string

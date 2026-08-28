@@ -99,6 +99,37 @@ final class PdfEmbeddedImageExtractorTest extends TestCase
         }
     }
 
+    public function test_extracts_flate_1bit_gray_as_jpeg(): void
+    {
+        $path = $this->writeFlateGrayImagePdf();
+
+        try {
+            $images = (new PdfEmbeddedImageExtractor)->extract($path);
+            $this->assertCount(1, $images);
+            $this->assertSame('image/jpeg', $images[0]['mime']);
+            $this->assertStringStartsWith("\xFF\xD8", $images[0]['bytes']);
+            $info = getimagesizefromstring($images[0]['bytes']);
+            $this->assertIsArray($info);
+            $this->assertSame(64, $info[0]);
+            $this->assertSame(32, $info[1]);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_renex_cennik_has_price_bitmaps(): void
+    {
+        $matches = glob('c:/xampp/htdocs/Przetargi/Cenniki/RENEX/Dystrybucja_cennik*.pdf') ?: [];
+        if ($matches === []) {
+            $this->markTestSkipped('Brak lokalnego cennika RENEX');
+        }
+
+        $images = (new PdfEmbeddedImageExtractor)->extract($matches[0], 40);
+        $this->assertGreaterThanOrEqual(8, count($images));
+        $this->assertSame('image/jpeg', $images[0]['mime']);
+        $this->assertStringStartsWith("\xFF\xD8", $images[0]['bytes']);
+    }
+
     /**
      * Jak MEDIBUT PPO: Contents /FlateDecode przed Image, /Length N 0 R.
      */
@@ -155,6 +186,30 @@ final class PdfEmbeddedImageExtractorTest extends TestCase
 
         $path = tempnam(sys_get_temp_dir(), 'ppo').'.pdf';
         file_put_contents($path, $pdf);
+
+        return $path;
+    }
+
+    private function writeFlateGrayImagePdf(): string
+    {
+        $width = 64;
+        $height = 32;
+        $rowBytes = (int) ceil($width / 8);
+        $raw = '';
+        for ($y = 0; $y < $height; $y++) {
+            $raw .= ($y >= 8 && $y < 24)
+                ? str_repeat("\xFF", $rowBytes)
+                : str_repeat("\x00", $rowBytes);
+        }
+        $flate = gzcompress($raw);
+        $this->assertIsString($flate);
+        $len = strlen($flate);
+        $body = "%PDF-1.4\n1 0 obj\n<</Type/XObject/Subtype/Image/Width {$width}/Height {$height}"
+            ."/ColorSpace/DeviceGray/BitsPerComponent 1/Filter/FlateDecode/Length {$len}>>\nstream\n"
+            .$flate
+            ."\nendstream\nendobj\n";
+        $path = tempnam(sys_get_temp_dir(), 'flateimg').'.pdf';
+        file_put_contents($path, $body);
 
         return $path;
     }

@@ -35,4 +35,19 @@ TF CHF5 T WH 00 D14001111 L 5.20
 TXT;
         $this->assertTrue((new PriceListPdfTextExtractor)->looksLikePricelist($text));
     }
+
+    public function test_renex_table_without_prices_in_text_is_pricelist(): void
+    {
+        $text = <<<'TXT'
+Cennik dla dystrybutorów (PL)
+Nazwa Kod Cena
+1. FARTUCH STANDARD CE-FARTU.065
+2. KASAK CE-KASAK.065
+3. CZAPKA CE-CZAPKA.065
+4. CE-KOSZU.065
+5. CE-KOSZU.065-LS
+TKANINA 065
+TXT;
+        $this->assertTrue((new PriceListPdfTextExtractor)->looksLikePricelist($text));
+    }
 }
