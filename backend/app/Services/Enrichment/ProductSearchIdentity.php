@@ -486,6 +486,18 @@ final class ProductSearchIdentity
             $queries[] = 'site:uvex-safety.com/products '.$sku;
         }
 
+        if ($phase === 'manufacturer' && str_contains(mb_strtolower($brand), 'ardon')) {
+            $code = $sku !== '' ? $sku : $bare;
+            if ($code !== '') {
+                $queries[] = 'site:ardon.pl '.$code;
+                $queries[] = 'site:behapownia.pl ardon '.$code;
+                $queries[] = 'site:specto.com.pl ardon '.$code;
+                $queries[] = 'site:kams.com.pl ardon '.$code;
+                $queries[] = 'site:aitbhp.pl ardon '.$code;
+                $queries[] = 'site:optimumbhp.pl ardon '.$code;
+            }
+        }
+
         $queries[] = $this->productNameWithManufacturer($product);
 
         // 1) Jak Google — kod / nazwa zawsze z producentem

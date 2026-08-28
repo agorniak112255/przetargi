@@ -143,9 +143,12 @@ final class ManufacturerDomainResolverTest extends TestCase
             'balticbhp.pl',
             'esklep.krisbhp.pl',
             'aitbhp.pl',
+            'behapownia.pl',
+            'kams.com.pl',
             'bhp-gabi.pl',
             'bhp-sklep.com.pl',
             'specto.com.pl',
+            'optimumbhp.pl',
             'kingbhp.pl',
             'filimar.pl',
             'elmar-bhp.pl',
@@ -156,6 +159,29 @@ final class ManufacturerDomainResolverTest extends TestCase
         ] as $host) {
             $this->assertContains($host, $retailers);
         }
+    }
+
+    public function test_resolves_ardon_official_site(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $product = new Product([
+            'manufacturer' => 'ARDON SAFETY S.R.O.',
+            'sku' => 'M80',
+            'name' => 'Buty robocze Ardon',
+        ]);
+
+        $domains = $resolver->domainsFor($product);
+        $this->assertContains('ardon.pl', $domains);
+        $this->assertTrue($resolver->isManufacturerUrl(
+            'https://www.ardon.pl/buty-robocze',
+            $product,
+            $domains
+        ));
+        $this->assertFalse($resolver->isManufacturerUrl(
+            'https://behapownia.pl/ardon',
+            $product,
+            $domains
+        ));
     }
 
     public function test_pilne_gloves_use_urgent_manufacturer_domains(): void

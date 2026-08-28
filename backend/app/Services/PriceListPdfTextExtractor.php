@@ -63,6 +63,18 @@ final class PriceListPdfTextExtractor
         return $chunks;
     }
 
+    /**
+     * List / okładka („załączony cennik”) vs tabela z kodami i cenami.
+     */
+    public function looksLikePricelist(string $text): bool
+    {
+        $prices = preg_match_all('/\b\d+[.,]\d{2}\b/u', $text);
+        $articles = preg_match_all('/\bD\d{6,}\b/u', $text);
+        $skuish = preg_match_all('/\b[A-Z]{2}\s?\d{3,}[A-Z0-9 -]{0,12}\b/u', $text);
+
+        return $prices >= 6 && ($articles >= 2 || $skuish >= 4 || $prices >= 16);
+    }
+
     private function extractViaPdfToText(string $path): ?string
     {
         $bin = $this->findPdfToText();

@@ -288,6 +288,17 @@ final class PriceListAiAnalyzer
             $this->normalizeProducts($heuristicJs, $manufacturerHint ?: 'JS GLOVES'),
         ));
 
+        if ($heuristic === [] && ! $this->pdfExtractor->looksLikePricelist($text)) {
+            $letter = is_string($originalName) && preg_match('/letter|okladka|okładka|pismo/i', $originalName) === 1;
+            throw new RuntimeException(
+                ($letter
+                    ? 'Ten PDF to list / okładka, nie tabela cennika. '
+                    : 'W PDF nie ma tabeli z kodami i cenami. ')
+                .'Dla DuPont wgraj arkusz XLSX (Reference, Article Number, Price) '
+                .'z tego samego pakietu — nie plik „letter”.'
+            );
+        }
+
         // jeśli heurystyka już dała produkty — zwracamy od razu (niezależnie od AI)
         if ($heuristic !== [] && count($heuristic) >= 5) {
             $aiGuess = $heuristicEma !== []

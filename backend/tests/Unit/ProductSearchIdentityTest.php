@@ -199,6 +199,24 @@ final class ProductSearchIdentityTest extends TestCase
         }
     }
 
+    public function test_ardon_search_queries_target_official_and_shop_sites(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'M80',
+            'name' => 'Buty robocze',
+            'manufacturer' => 'ARDON SAFETY S.R.O.',
+        ]);
+
+        $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('site:ardon.pl', $joined);
+        $this->assertStringContainsString('site:behapownia.pl', $joined);
+        $this->assertStringContainsString('site:specto.com.pl', $joined);
+        $this->assertStringContainsString('site:kams.com.pl', $joined);
+        $this->assertStringContainsString('site:aitbhp.pl', $joined);
+        $this->assertStringContainsString('site:optimumbhp.pl', $joined);
+    }
+
     public function test_search_phrase_always_appends_manufacturer(): void
     {
         $id = new ProductSearchIdentity;
