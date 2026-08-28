@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Api\AiSettingsController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ClientController;
+use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\PrestaShopSearchController;
@@ -150,6 +151,13 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/clients', [ClientController::class, 'index'])->middleware('permission:clients.view');
     Route::post('/clients', [ClientController::class, 'store'])->middleware('permission:clients.manage');
     Route::patch('/clients/{client}', [ClientController::class, 'update'])->middleware('permission:clients.manage');
+
+    Route::middleware('permission:inquiries.use')->group(function (): void {
+        Route::get('/inquiries', [ClientInquiryController::class, 'index']);
+        Route::post('/inquiries', [ClientInquiryController::class, 'store']);
+        Route::get('/inquiries/{inquiry}', [ClientInquiryController::class, 'show']);
+        Route::post('/inquiries/{inquiry}/compose', [ClientInquiryController::class, 'compose']);
+    });
 
     Route::get('/price-lists', [PriceListController::class, 'index'])->middleware('permission:price_lists.view');
     Route::get('/price-lists/{priceList}', [PriceListController::class, 'show'])->middleware('permission:price_lists.view');

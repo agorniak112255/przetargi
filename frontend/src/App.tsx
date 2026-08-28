@@ -8,6 +8,8 @@ import { AdminPresta } from './pages/AdminPresta'
 import { AdminSmtp } from './pages/AdminSmtp'
 import { AdminUsers } from './pages/AdminUsers'
 import { Clients } from './pages/Clients'
+import { Inquiries } from './pages/Inquiries'
+import { InquiryReply } from './pages/InquiryReply'
 import { Dashboard } from './pages/Dashboard'
 import { Help } from './pages/Help'
 import { Login } from './pages/Login'
@@ -76,6 +78,22 @@ export default function App() {
           />
           <Route path="substitutes" element={<Substitutes />} />
           <Route path="clients" element={<Clients />} />
+          <Route
+            path="inquiries"
+            element={
+              <PermissionGuard permission="inquiries.use">
+                <Inquiries />
+              </PermissionGuard>
+            }
+          />
+          <Route
+            path="inquiries/:id"
+            element={
+              <PermissionGuard permission="inquiries.use">
+                <InquiryReply />
+              </PermissionGuard>
+            }
+          />
           <Route
             path="admin"
             element={

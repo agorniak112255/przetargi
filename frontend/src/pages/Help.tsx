@@ -8,6 +8,7 @@ const modules = [
   { id: 'zamienniki', label: 'Zamienniki' },
   { id: 'raporty', label: 'Raporty' },
   { id: 'klienci', label: 'Klienci' },
+  { id: 'zapytania', label: 'Zapytania' },
 ] as const
 
 type ModuleId = (typeof modules)[number]['id']
@@ -416,6 +417,30 @@ function ClientsHelp() {
   )
 }
 
+function InquiriesHelp() {
+  return (
+    <Panel title="Zapytania" lead="Z maila klienta robisz gotowy list do skopiowania — po krótkim dopytaniu niuansów.">
+      <Flow
+        steps={[
+          { label: 'Wklej mail', tone: 'blue' },
+          { label: 'Karty niuansów', tone: 'amber' },
+          { label: 'Okno z listem', tone: 'green' },
+          { label: 'Kopiuj', tone: 'slate' },
+        ]}
+      />
+      <Steps
+        items={[
+          'Zakładka Zapytania — wklejasz treść maila, opcjonalnie klienta i ton.',
+          '„Przygotuj odpowiedź” szuka produktów w katalogu i otwiera mały modal tylko gdy coś jest niejasne (SKU, cena, zamiennik, braki).',
+          'Po „Napisz odpowiedź” otwiera się osobne okno: temat + treść + Kopiuj całość.',
+          '„Doprecyzuj” wraca do tych samych kart i przepisuje list. Ceny zakupu nigdy nie trafiają do maila.',
+        ]}
+      />
+      <Tip>To nie wysyła maila — kopiujesz i odsyłasz ze swojej skrzynki.</Tip>
+    </Panel>
+  )
+}
+
 const panels: Record<ModuleId, () => ReactNode> = {
   dashboard: () => <DashboardHelp />,
   przetargi: () => <TendersHelp />,
@@ -424,6 +449,7 @@ const panels: Record<ModuleId, () => ReactNode> = {
   zamienniki: () => <SubstitutesHelp />,
   raporty: () => <ReportsHelp />,
   klienci: () => <ClientsHelp />,
+  zapytania: () => <InquiriesHelp />,
 }
 
 export function Help() {

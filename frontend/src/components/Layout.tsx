@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { can, canAny } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
@@ -18,6 +18,7 @@ const links: NavLinkItem[] = [
   { to: '/substitutes', label: 'Zamienniki', permission: 'products.view' },
   { to: '/reports', label: 'Raporty', permission: 'reports.view' },
   { to: '/clients', label: 'Klienci', permission: 'clients.view' },
+  { to: '/inquiries', label: 'Zapytania', permission: 'inquiries.use' },
   { to: '/ai-settings', label: 'Ustawienia AI', permission: 'ai_settings.manage' },
   { to: '/admin', label: 'Administracja', permission: 'admin.access' },
   { to: '/help', label: 'Pomoc' },
@@ -25,6 +26,21 @@ const links: NavLinkItem[] = [
 
 export function Layout() {
   const { user, logout } = useAuth()
+  const location = useLocation()
+  const replyWindow = /^\/inquiries\/\d+/.test(location.pathname)
+
+  if (replyWindow) {
+    return (
+      <div className="min-h-screen bg-slate-50">
+        <div className="border-b border-slate-200 bg-white px-5 py-2 text-sm font-semibold text-slate-800">
+          Przetargi Supon · odpowiedź
+        </div>
+        <main className="p-5">
+          <Outlet />
+        </main>
+      </div>
+    )
+  }
 
   const visible = links.filter((l) => {
     if (l.permission) return can(user, l.permission)

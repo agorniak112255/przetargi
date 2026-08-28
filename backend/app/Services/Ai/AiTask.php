@@ -26,6 +26,8 @@ enum AiTask: string
 
     case SpreadsheetExtract = 'spreadsheet_extract';
 
+    case ClientInquiry = 'client_inquiry';
+
     public function label(): string
     {
         return match ($this) {
@@ -37,6 +39,7 @@ enum AiTask: string
             self::ImageVerification => 'Weryfikacja zdjęć',
             self::TenderDocument => 'Analiza dokumentów przetargu',
             self::SpreadsheetExtract => 'Ekstrakcja pozycji z arkusza',
+            self::ClientInquiry => 'Odpowiedzi na zapytania mailowe',
         };
     }
 
@@ -52,6 +55,7 @@ enum AiTask: string
             self::ImageVerification => 'Wymaga modelu z obsługą obrazu.',
             self::TenderDocument => 'Długie dokumenty — liczy się duży kontekst.',
             self::SpreadsheetExtract => 'Długie arkusze — liczy się duży kontekst.',
+            self::ClientInquiry => 'Krótki list handlowy + karty niuansów. Zyskuje na sprawnym modelu z JSON.',
         };
     }
 

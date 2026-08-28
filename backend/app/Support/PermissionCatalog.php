@@ -33,6 +33,7 @@ final class PermissionCatalog
         'price_lists.delete',
         'clients.view',
         'clients.manage',
+        'inquiries.use',
         'ai_settings.manage',
         'admin.access',
         'admin.users.manage',
@@ -70,6 +71,7 @@ final class PermissionCatalog
             'price_lists.view',
             'clients.view',
             'clients.manage',
+            'inquiries.use',
         ];
 
         $przetargi = array_values(array_unique([
@@ -104,6 +106,7 @@ final class PermissionCatalog
             'price_lists.delete',
             'clients.view',
             'clients.manage',
+            'inquiries.use',
         ];
 
         $dyrektor = [
@@ -122,6 +125,7 @@ final class PermissionCatalog
             'products.view',
             'price_lists.view',
             'clients.view',
+            'inquiries.use',
         ];
 
         return [
@@ -170,6 +174,7 @@ final class PermissionCatalog
             ['price_lists.delete', 'Cenniki — usuwanie', 'Może usuwać import cennika wraz z produktami wyłącznie z tego importu.', 'Produkty i cenniki'],
             ['clients.view', 'Klienci — podgląd', 'Może przeglądać listę klientów.', 'Klienci'],
             ['clients.manage', 'Klienci — edycja', 'Może dodawać i edytować klientów.', 'Klienci'],
+            ['inquiries.use', 'Zapytania mailowe', 'Może wklejać zapytanie klienta i przygotować odpowiedź z katalogu.', 'Klienci'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],
             ['admin.users.manage', 'Zarządzanie użytkownikami', 'Może tworzyć, edytować i usuwać konta oraz przypisywać role.', 'Administracja'],
