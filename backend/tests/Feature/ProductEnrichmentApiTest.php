@@ -1367,6 +1367,33 @@ final class ProductEnrichmentApiTest extends TestCase
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
     }
 
+    public function test_searxng_blocked_does_not_hit_google_or_bing(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8081/v1',
+            'api_key' => 'local',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'search_engine' => 'searxng',
+            'searxng_url' => 'http://127.0.0.1:8088',
+            'web_search_enabled' => false,
+        ]);
+        \Illuminate\Support\Facades\Cache::put('searxng_engines_blocked_v1', 1, 600);
+        Http::fake(['*' => Http::response('should-not-run', 200)]);
+
+        try {
+            app(DuckDuckGoHtmlSearch::class)->search('honeywell R30X');
+            $this->fail('Oczekiwano wyjątku przy zablokowanym SearXNG.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('silniki zablokowane', $e->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
     public function test_domain_narrowed_query_uses_single_site_operator(): void
     {
         AiSetting::query()->create([

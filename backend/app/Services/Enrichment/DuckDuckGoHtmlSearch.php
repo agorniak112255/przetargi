@@ -67,9 +67,14 @@ final class DuckDuckGoHtmlSearch
         }
 
         $searxng = $this->searxngBaseUrl();
-        if ($searxng !== null && ! $this->searxngRecentlyBlocked()) {
-            // Instancja jest nasza, ale Google/Qwant liczą zapytania z niej wychodzące —
-            // 8 workerów naraz wyczerpuje ich limit w kilka minut.
+        if ($searxng !== null) {
+            if ($this->searxngRecentlyBlocked()) {
+                throw new RuntimeException(
+                    'SearXNG: silniki zablokowane (429/CAPTCHA). Poczekaj albo zmień wyszukiwarkę w Ustawieniach AI.'
+                );
+            }
+            // Nie schodzimy na Google/Bing/DDG — te same silniki już dały 429,
+            // a jeden produkt trzymał slot prefetch przez minutę.
             try {
                 $this->reserveSearchSlot();
                 $results = $this->searchSearxng($searxng, $query);
@@ -79,10 +84,10 @@ final class DuckDuckGoHtmlSearch
                     return $this->limitResults($results, $maxResults, $includeDomains);
                 }
             } catch (Throwable $e) {
-                if (! $this->isSearxngBlockedMessage($e->getMessage())) {
-                    throw $e;
+                if ($this->isSearxngBlockedMessage($e->getMessage())) {
+                    $this->markSearxngBlocked();
                 }
-                $this->markSearxngBlocked();
+                throw $e;
             }
         }
 
