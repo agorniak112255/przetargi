@@ -20,6 +20,7 @@ final class PriceListAiAnalyzer
         private readonly PdfPriceRowParser $priceRowParser,
         private readonly AnsellEmaPdfParser $ansellEmaParser,
         private readonly JsGlovesPdfParser $jsGlovesParser,
+        private readonly RenexPdfParser $renexPdfParser,
         private readonly JsonResponseParser $jsonParser,
         private readonly CurrencyDetector $currencyDetector,
         private readonly PriceListMetaDetector $metaDetector,
@@ -214,12 +215,47 @@ final class PriceListAiAnalyzer
             $extractError = $e->getMessage();
         }
         $isScan = $text === null || mb_strlen($text) < 40;
-        $pricesInText = is_string($text) && $this->textHasDecimalPrices($text);
-        $needsPriceBitmaps = is_string($text) && ! $isScan && ! $pricesInText
-            && $this->pdfExtractor->looksLikePricelist($text);
+        $heuristicPros = [];
+        $heuristicEma = [];
+        $heuristicJs = [];
+        $heuristicRenex = [];
+        $heuristic = [];
+        if (is_string($text)) {
+            $heuristicPros = $this->priceRowParser->parse($text, $manufacturerHint);
+            $heuristicEma = $this->ansellEmaParser->parse($text, $manufacturerHint);
+            $heuristicJs = $this->jsGlovesParser->looksLike($text)
+                ? $this->jsGlovesParser->parse($text, $manufacturerHint)
+                : [];
+            $heuristicRenex = $this->renexPdfParser->parse($text);
+            $heuristic = $this->uniqueBySku(array_merge(
+                $this->normalizeProducts($heuristicEma, $manufacturerHint ?: 'Ansell'),
+                $this->normalizeProducts($heuristicPros, $manufacturerHint),
+                $this->normalizeProducts($heuristicJs, $manufacturerHint ?: 'JS GLOVES'),
+                $this->normalizeProducts(
+                    array_values(array_filter(
+                        $heuristicRenex,
+                        static fn (array $row): bool => is_numeric($row['catalog_price'] ?? null)
+                    )),
+                    $manufacturerHint ?: 'RENEX'
+                ),
+            ));
+        }
+        if ($heuristic !== [] && count($heuristic) >= 5) {
+            return $this->heuristicPdfResult(
+                $heuristic,
+                $heuristicEma,
+                $heuristicPros,
+                $heuristicJs,
+                $text ?? '',
+                $fileSize,
+                $manufacturerHint,
+                $originalName,
+                $fromName['version'] ?? null,
+                $visionError,
+            );
+        }
 
-        // Vision tylko gdy trzeba: skan (max 4 strony JPEG) albo bitmapy cen (RENEX).
-        // Nie wysyłamy całego PDF ani zdjęć katalogowych — to zjada kredyty.
+        // Vision tylko przy skanie (brak warstwy tekstu). Zwykły PDF = tekst, zero obrazów.
         if ($aiReady && $isScan) {
             try {
                 $fromImages = $this->analyzePdfViaPageImages(
@@ -229,56 +265,12 @@ final class PriceListAiAnalyzer
                     $originalName,
                     $fileSize,
                     'pages',
-                    4,
+                    2,
                 );
                 if ($fromImages !== null) {
                     return $fromImages;
                 }
                 $visionError = 'Model nie rozpoznał pozycji w skanie PDF.';
-            } catch (\Throwable $e) {
-                $visionError = $e->getMessage();
-            }
-            $hadPages = $this->pdfImageExtractor->extract($path, 1, 'pages') !== [];
-            if (! $hadPages && $fileSize > 0 && $fileSize <= 1_500_000) {
-                try {
-                    @set_time_limit(240);
-                    $raw = $this->llm->chatWithPdf($prompt, $path, basename($path), AiTask::PriceListPdf);
-                    $json = $this->jsonParser->parse($raw['content']);
-                    $products = $this->normalizeProducts($json['products'] ?? [], $manufacturerHint);
-                    if ($products !== [] && $this->looksLikeGoodPdfExtract($products)) {
-                        return $this->pdfResult(
-                            $products,
-                            $json,
-                            $raw['model'],
-                            'pdf-vision',
-                            ['mode' => 'vision', 'file_mb' => round($fileSize / 1_000_000, 2)],
-                            $originalName,
-                            null,
-                            null,
-                            $manufacturerHint,
-                        );
-                    }
-                } catch (\Throwable $e) {
-                    $visionError = $e->getMessage();
-                }
-            }
-        } elseif ($aiReady && $needsPriceBitmaps) {
-            $imagePrompt = $prompt."\n\nTekst z PDF (nazwy/kody; ceny TYLKO na obrazach):\n"
-                .mb_substr($text, 0, 4000);
-            try {
-                $fromImages = $this->analyzePdfViaPageImages(
-                    $path,
-                    $imagePrompt,
-                    $manufacturerHint,
-                    $originalName,
-                    $fileSize,
-                    'price_bitmaps',
-                    16,
-                );
-                if ($fromImages !== null) {
-                    return $fromImages;
-                }
-                $visionError = 'Nie odczytano cen z bitmap PDF.';
             } catch (\Throwable $e) {
                 $visionError = $e->getMessage();
             }
@@ -298,19 +290,6 @@ final class PriceListAiAnalyzer
             );
         }
 
-        // 2) Pełny tekst + heurystyki (Ansell/EMA, PROS) + opcjonalnie AI w chunkach
-        @set_time_limit(600);
-        $heuristicPros = $this->priceRowParser->parse($text, $manufacturerHint);
-        $heuristicEma = $this->ansellEmaParser->parse($text, $manufacturerHint);
-        $heuristicJs = $this->jsGlovesParser->looksLike($text)
-            ? $this->jsGlovesParser->parse($text, $manufacturerHint)
-            : [];
-        $heuristic = $this->uniqueBySku(array_merge(
-            $this->normalizeProducts($heuristicEma, $manufacturerHint ?: 'Ansell'),
-            $this->normalizeProducts($heuristicPros, $manufacturerHint),
-            $this->normalizeProducts($heuristicJs, $manufacturerHint ?: 'JS GLOVES'),
-        ));
-
         if ($heuristic === [] && ! $this->pdfExtractor->looksLikePricelist($text)) {
             $letter = is_string($originalName) && preg_match('/letter|okladka|okładka|pismo/i', $originalName) === 1;
             $dupont = $letter || (is_string($originalName) && preg_match('/dupont|tyvek/i', $originalName) === 1);
@@ -320,54 +299,26 @@ final class PriceListAiAnalyzer
             $msg .= $dupont
                 ? 'Dla DuPont wgraj arkusz XLSX (Reference, Article Number, Price) '
                     .'z tego samego pakietu — nie plik „letter”.'
-                : 'Jeśli ceny są tylko na skanie, użyj modelu vision albo wgraj XLSX.';
+                : 'Wgraj XLSX albo PDF z cenami w warstwie tekstowej.';
             throw new RuntimeException($msg);
         }
 
-        // jeśli heurystyka już dała produkty — zwracamy od razu (niezależnie od AI)
         if ($heuristic !== [] && count($heuristic) >= 5) {
-            $aiGuess = $heuristicEma !== []
-                ? 'Ansell'
-                : ($heuristicJs !== [] ? 'JS GLOVES' : ($heuristicPros !== [] ? 'PROS' : null));
-            $meta = $this->metaDetector->resolve(
+            return $this->heuristicPdfResult(
+                $heuristic,
+                $heuristicEma,
+                $heuristicPros,
+                $heuristicJs,
+                $text,
+                $fileSize,
                 $manufacturerHint,
                 $originalName,
-                $aiGuess,
-                mb_substr($text, 0, 4000),
                 $fromName['version'] ?? null,
-            );
-            foreach ($heuristic as $i => $row) {
-                $heuristic[$i]['manufacturer'] = $meta['manufacturer'];
-            }
-
-            $docCurrency = $this->majorityCurrency($heuristic)
-                ?? $this->currencyDetector->detect($text)
-                ?? ($heuristicEma !== [] ? 'EUR' : 'PLN');
-
-            return $this->pdfResult(
-                $heuristic,
-                [
-                    'manufacturer_detected' => $meta['manufacturer'],
-                    'currency' => $docCurrency,
-                    'notes' => 'Odczyt heurystyczny z tekstu PDF ('.count($heuristic).' SKU). '
-                        .($visionError ?? ''),
-                    'sheets' => [],
-                ],
-                'heuristic-pdf',
-                'pdf-heuristic',
-                [
-                    'file_mb' => round($fileSize / 1_000_000, 2),
-                    'pdf_chars' => mb_strlen($text),
-                    'heuristic_ema' => count($heuristicEma),
-                    'heuristic_pros' => count($heuristicPros),
-                    'heuristic_js_gloves' => count($heuristicJs),
-                ],
-                $originalName,
-                $meta,
+                $visionError,
             );
         }
 
-        $chunks = $aiReady ? $this->pdfExtractor->chunk($text, 28000, 1000) : [];
+        $chunks = $aiReady ? array_slice($this->pdfExtractor->chunk($text, 8000, 200), 0, 1) : [];
         $aiProducts = [];
         $model = $aiReady ? 'text-chunks' : 'heuristic-only';
         $json = [
@@ -402,7 +353,7 @@ final class PriceListAiAnalyzer
                             ."\n\nWzorce: (A) 119.00 32 80.92; (B) NV15S-00138 … 50 PCE … 2.62.",
                     ],
                 ];
-                $raw = $this->llm->chat($messages, null, true, null, AiTask::PriceListPdf);
+                $raw = $this->llm->chat($messages, null, true, ['max_tokens' => 1500], AiTask::PriceListPdf);
                 $model = $raw['model'];
                 $partJson = $this->jsonParser->parse($raw['content']);
                 if (is_string($partJson['manufacturer_detected'] ?? null) && ($json['manufacturer_detected'] ?? '') === '') {
@@ -490,11 +441,7 @@ final class PriceListAiAnalyzer
             'currency' => 'PLN',
         ];
         $lastError = null;
-        $smallFragments = $this->areSmallImageFragments($images);
-        $batches = $smallFragments ? [$images] : array_map(
-            static fn (array $image): array => [$image],
-            $images
-        );
+        $batches = [$images];
         foreach ($batches as $batch) {
             try {
                 @set_time_limit(240);
@@ -570,29 +517,62 @@ final class PriceListAiAnalyzer
     }
 
     /**
-     * @param  list<array{bytes: string, mime: string, label?: string}>  $images
+     * @param  list<array<string, mixed>>  $heuristic
+     * @param  list<array<string, mixed>>  $heuristicEma
+     * @param  list<array<string, mixed>>  $heuristicPros
+     * @param  list<array<string, mixed>>  $heuristicJs
+     * @return array<string, mixed>
      */
-    private function areSmallImageFragments(array $images): bool
-    {
-        if ($images === []) {
-            return false;
+    private function heuristicPdfResult(
+        array $heuristic,
+        array $heuristicEma,
+        array $heuristicPros,
+        array $heuristicJs,
+        string $text,
+        int $fileSize,
+        ?string $manufacturerHint,
+        ?string $originalName,
+        ?string $versionHint,
+        ?string $visionError,
+    ): array {
+        $aiGuess = $heuristicEma !== []
+            ? 'Ansell'
+            : ($heuristicJs !== [] ? 'JS GLOVES' : ($heuristicPros !== [] ? 'PROS' : 'RENEX'));
+        $meta = $this->metaDetector->resolve(
+            $manufacturerHint,
+            $originalName,
+            $aiGuess,
+            mb_substr($text, 0, 4000),
+            $versionHint,
+        );
+        foreach ($heuristic as $i => $row) {
+            $heuristic[$i]['manufacturer'] = $meta['manufacturer'];
         }
-        foreach (array_slice($images, 0, 8) as $image) {
-            $info = @getimagesizefromstring($image['bytes']);
-            if (! is_array($info)) {
-                return false;
-            }
-            if (max((int) $info[0], (int) $info[1]) >= 600) {
-                return false;
-            }
-        }
+        $docCurrency = $this->majorityCurrency($heuristic)
+            ?? $this->currencyDetector->detect($text)
+            ?? ($heuristicEma !== [] ? 'EUR' : 'PLN');
 
-        return count($images) >= 3;
-    }
-
-    private function textHasDecimalPrices(string $text): bool
-    {
-        return preg_match_all('/\b\d+[.,]\d{2}\b/u', $text) >= 6;
+        return $this->pdfResult(
+            $heuristic,
+            [
+                'manufacturer_detected' => $meta['manufacturer'],
+                'currency' => $docCurrency,
+                'notes' => 'Odczyt heurystyczny z tekstu PDF ('.count($heuristic).' SKU). '
+                    .($visionError ?? ''),
+                'sheets' => [],
+            ],
+            'heuristic-pdf',
+            'pdf-heuristic',
+            [
+                'file_mb' => round($fileSize / 1_000_000, 2),
+                'pdf_chars' => mb_strlen($text),
+                'heuristic_ema' => count($heuristicEma),
+                'heuristic_pros' => count($heuristicPros),
+                'heuristic_js_gloves' => count($heuristicJs),
+            ],
+            $originalName,
+            $meta,
+        );
     }
 
     private function pdfProductPrompt(string $hint): string

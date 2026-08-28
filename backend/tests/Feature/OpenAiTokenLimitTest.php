@@ -126,7 +126,7 @@ final class OpenAiTokenLimitTest extends TestCase
         );
 
         Http::assertSent(function (Request $request): bool {
-            return (int) ($request->data()['max_tokens'] ?? 0) >= 4000;
+            return (int) ($request->data()['max_tokens'] ?? 0) === 1500;
         });
     }
 }

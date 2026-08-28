@@ -278,7 +278,7 @@ class OpenAiCompatibleClient
                 'role' => 'user',
                 'content' => $content,
             ],
-        ], 0.1, true, ['max_tokens' => 4000], $task);
+        ], 0.1, true, ['max_tokens' => 1500], $task);
     }
 
     /**
