@@ -210,7 +210,7 @@ final class PriceListAiAnalyzer
             ? "Producent prawdopodobny (z nazwy pliku/formularza): {$effectiveHint}. Zweryfikuj po treści PDF."
             : 'Wykryj producenta z PDF (np. PROS / AJ Group / Ansell / 3M / Debstoko).';
 
-        $prompt = $this->pdfProductPrompt($hint);
+        $prompt = $this->pdfCompactChunkPrompt($hint);
         $fileSize = is_file($path) ? (int) filesize($path) : 0;
         $aiReady = app(AiSettingsService::class)->isReady();
 
@@ -435,11 +435,11 @@ final class PriceListAiAnalyzer
                 $messageSets[] = $this->pdfChunkMessages($prompt, $item['idx'] + 1, $total, $item['text']);
             }
             try {
-                $results = $this->llm->chatMany($messageSets, true, ['max_tokens' => 8000], AiTask::PriceListPdf);
+                $results = $this->llm->chatMany($messageSets, true, ['max_tokens' => 800], AiTask::PriceListPdf);
                 foreach ($results as $i => $result) {
                     if (! ($result['ok'] ?? false)) {
                         try {
-                            $raw = $this->llm->chat($messageSets[$i], null, true, ['max_tokens' => 8000], AiTask::PriceListPdf);
+                            $raw = $this->llm->chat($messageSets[$i], null, true, ['max_tokens' => 800], AiTask::PriceListPdf);
                             $result = ['ok' => true, 'content' => $raw['content'], 'model' => $raw['model']];
                         } catch (\Throwable) {
                             $chunkErrors++;
@@ -516,6 +516,39 @@ final class PriceListAiAnalyzer
     }
 
     /**
+     * @param  array<string, mixed>  $json
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromAiChunk(array $json): array
+    {
+        $rows = $json['products'] ?? $json['p'] ?? [];
+        if (! is_array($rows)) {
+            return [];
+        }
+        $out = [];
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            if (array_is_list($row) && isset($row[0], $row[2])) {
+                $price = $row[2];
+                $out[] = [
+                    'sku' => (string) $row[0],
+                    'name' => (string) ($row[1] ?? $row[0]),
+                    'catalog_price' => $price,
+                    'discount' => 0,
+                    'purchase' => $price,
+                ];
+
+                continue;
+            }
+            $out[] = $row;
+        }
+
+        return $out;
+    }
+
+    /**
      * @return array{products: list<array<string, mixed>>, model: string, manufacturer: mixed, currency: mixed, errors: int}
      */
     private function productsFromChunkContent(string $content, string $model, ?string $manufacturerHint): array
@@ -524,12 +557,14 @@ final class PriceListAiAnalyzer
             $partJson = $this->jsonParser->parse($content);
 
             return [
-                'products' => $this->normalizeProducts($partJson['products'] ?? [], $manufacturerHint),
+                'products' => $this->normalizeProducts($this->rowsFromAiChunk($partJson), $manufacturerHint),
                 'model' => $model,
-                'manufacturer' => is_string($partJson['manufacturer_detected'] ?? null)
-                    ? $partJson['manufacturer_detected']
+                'manufacturer' => is_string($partJson['manufacturer_detected'] ?? $partJson['m'] ?? null)
+                    ? ($partJson['manufacturer_detected'] ?? $partJson['m'])
                     : null,
-                'currency' => is_string($partJson['currency'] ?? null) ? $partJson['currency'] : null,
+                'currency' => is_string($partJson['currency'] ?? $partJson['c'] ?? null)
+                    ? ($partJson['currency'] ?? $partJson['c'])
+                    : null,
                 'errors' => 0,
             ];
         } catch (\Throwable) {
@@ -615,15 +650,11 @@ final class PriceListAiAnalyzer
         return [
             [
                 'role' => 'system',
-                'content' => 'Jesteś ekspertem od cenników BHP. Zwracasz WYŁĄCZNIE JSON z tablicą products.',
+                'content' => 'Zwracasz wyłącznie krótki JSON. Bez markdown i bez komentarzy.',
             ],
             [
                 'role' => 'user',
-                'content' => $prompt
-                    ."\n\nTo jest CZĘŚĆ {$part}/{$total} tekstu PDF. "
-                    .'Wypisz KAŻDĄ pozycję z tej części — nie streszczaj i nie pomijaj wierszy.'
-                    ."\n\nTEKST:\n".$chunk
-                    ."\n\nWzorce: (A) 119.00 32 80.92; (B) NV15S-00138 … 50 PCE … 2.62.",
+                'content' => $prompt."\n\nCZĘŚĆ {$part}/{$total}:\n".$chunk,
             ],
         ];
     }
@@ -707,64 +738,13 @@ final class PriceListAiAnalyzer
         );
     }
 
-    private function pdfProductPrompt(string $hint): string
+    private function pdfCompactChunkPrompt(string $hint): string
     {
         return <<<PROMPT
 {$hint}
-
-Przeczytaj cennik PDF (tabela produktów BHP / odzież / chemia).
-Format A (PROS / AJ Group):
-1) Opis = NAZWA
-2) Cena katalogowa
-3) Upust [%]
-4) Cena po upuście
-Format B (Ansell / EMA / AlphaTec):
-- Short/Long Base Style lub kod (np. NV15S-00138) = sku
-- nazwa serii/modelu (AlphaTec 1500…) = name
-- Price (EUR) = catalog_price
-- Carton Qty = pack_qty (np. 50 PCE)
-- purchase = null, discount = 0 jeśli brak upustu
-Format C (tabela skan, np. PPO / obuwie):
-- Model (np. 305 albo Model 0157) = sku
-- Wyszczególnienie = name
-- Cena = catalog_price, discount = 0, purchase = catalog_price
-- Norma / sekcja = category
-Format D (odzież, np. RENEX):
-- Kod CE-… (np. CE-FARTU.065) = sku
-- Nazwa = name (FARTUCH STANDARD)
-- Cena (np. 82,00 zł) = catalog_price; discount = 0; purchase = catalog_price
-- Sekcja tkaniny (TKANINA 065) = category
-Oraz opcjonalnie: opakowanie, kategoria/sekcja.
-
-Zwróć JSON:
-{
-  "manufacturer_detected": "string|null",
-  "currency": "PLN|EUR|USD|GBP|CHF",
-  "notes": "krótki opis po polsku",
-  "products": [
-    {
-      "sku": "kod lub wygenerowany symbol",
-      "name": "pełna nazwa z kolumny Opis",
-      "catalog_price": 119.00,
-      "discount": 32,
-      "purchase": 80.92,
-      "currency": "PLN",
-      "pack_qty": null,
-      "packaging": null,
-      "category": "nazwa sekcji jeśli jest"
-    }
-  ]
-}
-
-TWARDE ZASADY:
-- catalog_price = Cena katalogowa
-- discount = Upust w procentach (np. 30 lub 32)
-- purchase = Cena po upuście (NIE mylić z katalogową)
-- currency = waluta TEJ pozycji (z wiersza/nagłówka: EUR, PLN, USD…); currency na poziomie pliku = dominująca
-- name = tekst z Opis (np. "Kurtka wodoochronna…") — NIGDY "Produkt 80.92"
-- sku = kod jeśli jest; jeśli brak kodu: skrót z nazwy (np. PROS-KURTKA-001), NIGDY cena jako sku
-- NIE sklejaj upustu z ceną (błąd: 3280.92 zamiast upust=32 i cena=80.92)
-- wypisz WSZYSTKIE wiersze produktów ze wszystkich stron
+Wypisz produkty z tekstu. Tylko JSON:
+{"c":"PLN","p":[["SKU","nazwa",12.5]]}
+p = [kod, nazwa, cena]. Bez markdown.
 PROMPT;
     }
 

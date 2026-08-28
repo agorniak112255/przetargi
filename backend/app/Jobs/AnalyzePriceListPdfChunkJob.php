@@ -24,7 +24,7 @@ class AnalyzePriceListPdfChunkJob implements ShouldQueue
 
     public int $tries = 8;
 
-    public int $timeout = 420;
+    public int $timeout = 180;
 
     public const QUEUE = EnrichProductJob::QUEUE;
 
@@ -69,18 +69,14 @@ class AnalyzePriceListPdfChunkJob implements ShouldQueue
             $messages = [
                 [
                     'role' => 'system',
-                    'content' => 'Jesteś ekspertem od cenników BHP. Zwracasz WYŁĄCZNIE JSON z tablicą products.',
+                    'content' => 'Zwracasz wyłącznie krótki JSON. Bez markdown i bez komentarzy.',
                 ],
                 [
                     'role' => 'user',
-                    'content' => $this->prompt
-                        ."\n\nTo jest CZĘŚĆ {$part}/{$this->total} tekstu PDF. "
-                        .'Wypisz KAŻDĄ pozycję z tej części — nie streszczaj i nie pomijaj wierszy.'
-                        ."\n\nTEKST:\n".$this->chunk
-                        ."\n\nWzorce: (A) 119.00 32 80.92; (B) NV15S-00138 … 50 PCE … 2.62.",
+                    'content' => $this->prompt."\n\nCZĘŚĆ {$part}/{$this->total}:\n".$this->chunk,
                 ],
             ];
-            $raw = $llm->chat($messages, null, true, ['max_tokens' => 8000], AiTask::PriceListPdf);
+            $raw = $llm->chat($messages, null, true, ['max_tokens' => 800], AiTask::PriceListPdf);
             Cache::put(self::resultKey($this->runId, $this->index), [
                 'ok' => true,
                 'content' => $raw['content'],

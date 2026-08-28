@@ -90,7 +90,7 @@ final class PriceListPdfTextExtractor
      *
      * @return list<string>
      */
-    public function chunkByPriceBudget(string $text, int $maxPrices = 45, int $maxChars = 7000): array
+    public function chunkByPriceBudget(string $text, int $maxPrices = 16, int $maxChars = 2200): array
     {
         $lines = preg_split("/\r\n|\n|\r/", $text) ?: [];
         $chunks = [];
