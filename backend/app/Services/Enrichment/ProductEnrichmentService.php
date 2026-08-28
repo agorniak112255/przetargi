@@ -2113,7 +2113,7 @@ Nie cytuj całych akapitów ze strony i nie powtarzaj tego samego faktu.
 JĘZYK: źródła bywają po francusku, niemiecku, czesku czy angielsku. ZAWSZE tłumacz fakty na polski.
 Nigdy nie przepisuj zdań w języku oryginału — nazwy własne modeli i oznaczenia norm zostaw bez zmian.
 
-Zwróć TYLKO JSON:
+Zwróć TYLKO JSON — bez pola thought/reasoning. Pierwszy znak to {.
 {"pages":[{"url":"…","text":"oczyszczone fakty po polsku, 4–10 zdań: parametry, materiały, normy, przeznaczenie"}]}
 Jeśli na stronie nie ma faktów o produkcie → "text":"". Nie zmyślaj cech.
 Jeśli nazwa to PPE (obuwie, rękawice, odzież…), a tekst dotyczy odczynnika / numeru CAS / wzoru chemicznego — "text":"".
@@ -2231,7 +2231,7 @@ SYS,
                 'role' => 'system',
                 'content' => <<<'SYS'
 Jesteś ekspertem BHP/PPE. Wejście to OCZYSZCZONE fakty o produkcie (bez chrome sklepu). Zbierz PEŁNĄ specyfikację jak na karcie katalogowej.
-Zwróć WYŁĄCZNIE JSON:
+Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"description":
 {
   "description": "pełny opis PL: 1) przeznaczenie 2) budowa/materiały 3) właściwości użytkowe 4) normy/certyfikaty 5) zastosowania — min. 6–12 zdań",
   "features": ["cechy i korzyści — min. 5 pozycji, gdy źródła na to pozwalają"],
@@ -2270,7 +2270,7 @@ SYS,
                 'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}\nEAN: ".($product->ean ?? '—')
                     ."\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}",
             ],
-        ], 0.1, 3500);
+        ], 0.1, 4500);
     }
 
     /**

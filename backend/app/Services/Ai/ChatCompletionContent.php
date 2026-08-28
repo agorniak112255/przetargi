@@ -16,12 +16,18 @@ final class ChatCompletionContent
             return '';
         }
 
-        foreach ([
+        $parts = [
             $this->stringify($message['content'] ?? null),
             $this->stringify($message['reasoning_content'] ?? null),
             $this->jsonFromReasoning($message['reasoning'] ?? null),
             $this->fromReasoningDetails($message['reasoning_details'] ?? null),
-        ] as $text) {
+        ];
+        foreach ($parts as $text) {
+            if ($text !== '' && ! $this->isThoughtOnlyJson($text)) {
+                return $text;
+            }
+        }
+        foreach ($parts as $text) {
             if ($text !== '') {
                 return $text;
             }
@@ -93,5 +99,15 @@ final class ChatCompletionContent
         }
 
         return $text;
+    }
+
+    /** Model reasoning bywa zapisuje monolog w {"thought":…} zamiast wyniku. */
+    private function isThoughtOnlyJson(string $text): bool
+    {
+        if (preg_match('/^\s*\{\s*"(thought|reasoning|thinking)"\s*:/i', $text) !== 1) {
+            return false;
+        }
+
+        return preg_match('/"(description|pages|products|features|specs|matches)"\s*:/', $text) !== 1;
     }
 }

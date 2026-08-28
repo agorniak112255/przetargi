@@ -16,13 +16,13 @@ final class JsonResponseParser
         $candidates = $this->candidates($content);
         foreach ($candidates as $candidate) {
             $decoded = json_decode($candidate, true);
-            if (is_array($decoded)) {
+            if (is_array($decoded) && $this->isUsableObject($decoded)) {
                 return $decoded;
             }
 
             $fixed = $this->soften($candidate);
             $decoded = json_decode($fixed, true);
-            if (is_array($decoded)) {
+            if (is_array($decoded) && $this->isUsableObject($decoded)) {
                 return $decoded;
             }
         }
@@ -229,12 +229,22 @@ final class JsonResponseParser
         }
 
         if ($lastComplete === null) {
-            // spróbuj ostatniego '} ' w ogóle (koniec obiektu produktu)
-            $pos = strrpos($body, '}');
-            if ($pos === false) {
-                return null;
+            $cut = $body;
+            if ($inString) {
+                if ($escape) {
+                    $cut .= ' ';
+                }
+                $cut .= '"';
             }
-            $lastComplete = $pos;
+            $cut = rtrim($cut, " \t\n\r,");
+            for ($i = 0; $i < $depthArr; $i++) {
+                $cut .= ']';
+            }
+            for ($i = 0; $i < $depthObj; $i++) {
+                $cut .= '}';
+            }
+
+            return $this->soften($cut);
         }
 
         $cut = rtrim(substr($body, 0, $lastComplete + 1), " \t\n\r,");
@@ -266,7 +276,7 @@ final class JsonResponseParser
 
                 return $decoded;
             }
-            if (is_array($decoded)) {
+            if (is_array($decoded) && $this->isUsableObject($decoded)) {
                 return $decoded;
             }
         }
@@ -302,6 +312,25 @@ final class JsonResponseParser
         }
 
         return null;
+    }
+
+    /**
+     * Samo „thought” / reasoning to nie wynik — model zjadł budżet tokenów na monolog.
+     *
+     * @param  array<string, mixed>  $decoded
+     */
+    private function isUsableObject(array $decoded): bool
+    {
+        foreach ($decoded as $key => $value) {
+            $name = mb_strtolower((string) $key);
+            if (in_array($name, ['thought', 'reasoning', 'thinking', 'scratchpad', 'analysis', 'commentary', 'internal', '_partial', 'notes'], true)) {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     private function soften(string $json): string

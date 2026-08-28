@@ -37,6 +37,23 @@ final class JsonResponseParserTest extends TestCase
         $this->assertSame('ROC5', $json['products'][0]['sku']);
     }
 
+    public function test_rejects_truncated_thought_monologue(): void
+    {
+        $parser = new JsonResponseParser;
+        $raw = '{"thought": "The user wants a complete, closed JSON object. The product is a MICROGARD 1500 coverall. I need to extract all facts and format them into the specified JSO';
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('API AI nie zwróciło poprawnego JSON');
+        $parser->parse($raw);
+    }
+
+    public function test_keeps_payload_when_thought_is_only_an_extra_key(): void
+    {
+        $parser = new JsonResponseParser;
+        $json = $parser->parse('{"thought":"ok","description":"Kombinezon AlphaTec 1500","features":["kaptur"]}');
+        $this->assertSame('Kombinezon AlphaTec 1500', $json['description']);
+    }
+
     public function test_looks_complete_accepts_closed_object(): void
     {
         $parser = new JsonResponseParser;

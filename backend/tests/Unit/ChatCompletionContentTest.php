@@ -57,6 +57,24 @@ final class ChatCompletionContentTest extends TestCase
         $this->assertSame('{"matches":[{"id":2,"score":80}]}', $text);
     }
 
+    public function test_skips_thought_dump_when_real_json_is_in_reasoning(): void
+    {
+        $reader = new ChatCompletionContent;
+        $text = $reader->fromPayload([
+            'choices' => [
+                [
+                    'message' => [
+                        'content' => '{"thought": "The user wants a complete JSON object based on MICROGARD 1500",',
+                        'reasoning_content' => '{"description":"Kombinezon AlphaTec 1500","features":[]}',
+                    ],
+                    'finish_reason' => 'length',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('{"description":"Kombinezon AlphaTec 1500","features":[]}', $text);
+    }
+
     public function test_finish_reason_length(): void
     {
         $reader = new ChatCompletionContent;

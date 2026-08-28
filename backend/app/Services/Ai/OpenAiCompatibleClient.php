@@ -326,7 +326,7 @@ class OpenAiCompatibleClient
         $repair = $this->chat([
             [
                 'role' => 'system',
-                'content' => 'Napraw odpowiedź do poprawnego JSON obiektu. Zwróć TYLKO JSON, bez markdown i komentarzy.',
+                'content' => 'Napraw odpowiedź do poprawnego JSON obiektu. Zwróć TYLKO JSON, bez markdown, komentarzy i pól thought/reasoning/thinking.',
             ],
             [
                 'role' => 'user',
@@ -774,7 +774,8 @@ class OpenAiCompatibleClient
         $out = [[
             'role' => 'system',
             'content' => 'Poprzednia odpowiedź została ucięta limitem tokenów. '
-                .'Zwróć kompletny, domknięty JSON. Opis produktu zostaw pełny (wszystkie fakty i normy); '
+                .'Zwróć kompletny, domknięty JSON bez pól thought/reasoning/thinking. '
+                .'Opis produktu zostaw pełny (wszystkie fakty i normy); '
                 .'skróć tylko powtórzenia i cytaty ze stron.',
         ]];
         foreach ($this->compactMessages($messages, 0.74) as $message) {
