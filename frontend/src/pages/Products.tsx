@@ -2,10 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
-import { CrossRefPanel } from '../components/CrossRefPanel'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
-import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
+import { ProductAiSearchModal } from '../components/ProductAiSearchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { applyCheckboxRange } from '../lib/checkboxRange'
@@ -204,10 +203,7 @@ export function Products() {
   const [err, setErr] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [imageModal, setImageModal] = useState<{ name: string; url: string } | null>(null)
-  const [prestaOpen, setPrestaOpen] = useState(false)
-  const [prestaBusy, setPrestaBusy] = useState(false)
-  const [prestaErr, setPrestaErr] = useState('')
-  const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
+  const [aiModalOpen, setAiModalOpen] = useState(false)
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
   const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
   const [skipPrompt, setSkipPrompt] = useState<{
@@ -313,12 +309,13 @@ export function Products() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer
   }, [debouncedQ, manufacturer, page, sort, dir, aiMode])
 
-  async function runAiSearch(web = false) {
-    const query = aiQuery.trim()
+  async function runAiSearch(web = false, raw = aiQuery) {
+    const query = raw.trim()
     if (query.length < 3) {
       setErr('Podaj wymaganie (min. 3 znaki), np. rękawice do pracy z amoniakiem')
       return
     }
+    setAiQuery(query)
     setAiBusy(web ? 'web' : 'catalog')
     setErr('')
     setMsg(web ? 'Szukam w internecie…' : 'Szukam w katalogu przez AI…')
@@ -360,6 +357,7 @@ export function Products() {
             ? `Internet: ${hints.length} linków dla: „${res.query}”`
             : (res.ai_note ?? 'Model nie znalazł pasującego produktu w katalogu.'),
       )
+      setAiModalOpen(false)
     } catch (ex) {
       const aborted =
         (ex instanceof DOMException && ex.name === 'AbortError') ||
@@ -500,33 +498,6 @@ export function Products() {
     }
   }
 
-  async function searchPrestaIds(ids: number[]) {
-    if (ids.length === 0) return
-    setPrestaBusy(true)
-    setPrestaErr('')
-    setPrestaOpen(true)
-    try {
-      if (ids.length === 1) {
-        const res = await api<PrestaSearchResult>(`/products/${ids[0]}/presta-search`, {
-          method: 'POST',
-          body: '{}',
-        })
-        setPrestaItems([res])
-        return
-      }
-      const res = await api<{ items: PrestaSearchResult[] }>('/products/presta-search', {
-        method: 'POST',
-        body: JSON.stringify({ product_ids: ids.slice(0, 80) }),
-      })
-      setPrestaItems(res.items ?? [])
-    } catch (ex) {
-      setPrestaItems([])
-      setPrestaErr(ex instanceof Error ? ex.message : 'Błąd wyszukiwania w Preście')
-    } finally {
-      setPrestaBusy(false)
-    }
-  }
-
   const pages = result ? pageNumbers(result.current_page, result.last_page) : []
   const visibleIds = (result?.data ?? []).map((p) => p.id)
   const pendingVisible = (result?.data ?? []).filter(
@@ -577,6 +548,19 @@ export function Products() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={aiMode}
+            onClick={() => onSort('enrichment_status')}
+            className={`rounded border px-3 py-2 text-xs ${
+              sort === 'enrichment_status'
+                ? 'border-blue-400 bg-blue-50 font-semibold text-blue-800'
+                : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Sortuj po statusie opisów/zdjęć"
+          >
+            Status AI {sort === 'enrichment_status' ? (dir === 'asc' ? '▲' : '▼') : '◇'}
+          </button>
           {canEnrich && (
             <>
               <button
@@ -610,16 +594,6 @@ export function Products() {
                 Pobierz widoczne bez opisu
                 {pendingVisible.length > 0 ? ` (${pendingVisible.length})` : ''}
               </button>
-              <button
-                type="button"
-                disabled={prestaBusy || selectedIds.length === 0}
-                onClick={() => void searchPrestaIds(selectedIds)}
-                className="rounded bg-emerald-700 px-3 py-2 text-xs text-white disabled:opacity-50"
-                title="Szuka w Preście: najpierw SKU/EAN, potem producent + nazwa"
-              >
-                Wyszukaj w Presta
-                {selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
-              </button>
             </>
           )}
           <select
@@ -646,44 +620,13 @@ export function Products() {
             disabled={aiMode}
             onChange={(e) => setQ(e.target.value)}
           />
-        </div>
-      </div>
-
-      <CrossRefPanel initialCode={searchParams.get('cross') ?? ''} autoRun />
-
-      <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <label className="mb-1 block text-xs font-medium text-slate-600">
-          Wymaganie dla AI (np. rękawice do pracy z amoniakiem)
-        </label>
-        <div className="flex flex-wrap items-end gap-2">
-          <textarea
-            className="min-h-[2.5rem] w-full max-w-2xl flex-1 rounded border border-slate-300 px-3 py-2 text-sm"
-            rows={2}
-            placeholder="Opisz zastosowanie / substancję / normy — AI wyszuka w katalogu po opisach"
-            value={aiQuery}
-            onChange={(e) => setAiQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void runAiSearch()
-              }
-            }}
-          />
           <button
             type="button"
-            disabled={Boolean(aiBusy) || aiQuery.trim().length < 3}
-            onClick={() => void runAiSearch(false)}
-            className="rounded bg-indigo-600 px-3 py-2 text-xs text-white disabled:opacity-50"
+            disabled={Boolean(aiBusy)}
+            onClick={() => setAiModalOpen(true)}
+            className="rounded bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
-            {aiBusy === 'catalog' ? 'Szukam…' : 'Szukaj AI'}
-          </button>
-          <button
-            type="button"
-            disabled={Boolean(aiBusy) || aiQuery.trim().length < 3}
-            onClick={() => void runAiSearch(true)}
-            className="rounded bg-red-600 px-3 py-2 text-xs text-white hover:bg-red-700 disabled:opacity-50"
-          >
-            {aiBusy === 'web' ? 'Szukam…' : 'AI Internet'}
+            {aiBusy ? 'Szukam…' : 'Szukaj AI'}
           </button>
           {aiMode && (
             <button
@@ -749,6 +692,7 @@ export function Products() {
                 </th>
               )}
               {aiMode && <th className="p-2">Dopasowanie</th>}
+              <SortTh label="Status AI" col="enrichment_status" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Kod" col="sku" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Nazwa" col="name" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Producent" col="manufacturer" sort={sort} dir={dir} onSort={onSort} />
@@ -757,7 +701,6 @@ export function Products() {
               <SortTh label="Upust" col="discount_percent" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Opis" col="description" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Zdjęcia" col="images_count" sort={sort} dir={dir} onSort={onSort} />
-              <SortTh label="Status AI" col="enrichment_status" sort={sort} dir={dir} onSort={onSort} />
               {canEnrich && <th className="p-2">Akcja</th>}
             </tr>
           </thead>
@@ -801,6 +744,24 @@ export function Products() {
                     </td>
                   )}
                   <td className="p-2">
+                    <span
+                      className={
+                        status === 'done'
+                          ? 'text-green-700'
+                          : status === 'failed'
+                            ? 'text-red-600'
+                            : status === 'manual'
+                              ? 'text-amber-700'
+                              : status === 'running' || status === 'queued'
+                                ? 'text-blue-700'
+                                : 'text-slate-400'
+                      }
+                      title={p.enrichment_error ?? undefined}
+                    >
+                      {STATUS_LABEL[status] ?? status}
+                    </span>
+                  </td>
+                  <td className="p-2">
                     <Link className="text-blue-600 hover:underline" to={`/products/${p.id}`}>
                       {p.sku}
                     </Link>
@@ -842,24 +803,6 @@ export function Products() {
                       <span className="text-slate-400">—</span>
                     )}
                   </td>
-                  <td className="p-2">
-                    <span
-                      className={
-                        status === 'done'
-                          ? 'text-green-700'
-                          : status === 'failed'
-                            ? 'text-red-600'
-                            : status === 'manual'
-                              ? 'text-amber-700'
-                              : status === 'running' || status === 'queued'
-                                ? 'text-blue-700'
-                                : 'text-slate-400'
-                      }
-                      title={p.enrichment_error ?? undefined}
-                    >
-                      {STATUS_LABEL[status] ?? status}
-                    </span>
-                  </td>
                   {canEnrich && (
                     <td className="p-2">
                       <button
@@ -878,14 +821,6 @@ export function Products() {
                           : status === 'done'
                             ? 'Ponów'
                             : 'Pobierz'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={prestaBusy}
-                        onClick={() => void searchPrestaIds([p.id])}
-                        className="ml-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] text-emerald-900 disabled:opacity-50"
-                      >
-                        Presta
                       </button>
                     </td>
                   )}
@@ -925,15 +860,13 @@ export function Products() {
         </table>
 
         <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
-        <PrestaSearchModal
-          open={prestaOpen}
-          items={prestaItems}
-          loading={prestaBusy}
-          error={prestaErr}
-          onClose={() => setPrestaOpen(false)}
-          onApplied={() => {
-            void api<Page>(`/products?${buildParams()}`).then(setResult).catch(() => {})
-          }}
+        <ProductAiSearchModal
+          open={aiModalOpen}
+          busy={aiBusy}
+          error={err}
+          initialQuery={aiQuery}
+          onClose={() => setAiModalOpen(false)}
+          onSearch={(query, web) => void runAiSearch(web, query)}
         />
 
         {visibleEnrichOpen && (

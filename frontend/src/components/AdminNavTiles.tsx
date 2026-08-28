@@ -39,7 +39,7 @@ const tiles: Tile[] = [
   {
     to: '/admin/presta',
     label: 'Sklep Presta',
-    description: 'Opisy i zdjęcia z bazy sklepu',
+    description: 'Połączenie i wyszukiwanie w sklepie',
   },
 ]
 

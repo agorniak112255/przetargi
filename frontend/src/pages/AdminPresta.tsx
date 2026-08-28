@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { api } from '../lib/api'
+import { useAuth } from '../auth'
+import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
+import { api, can, type Product } from '../lib/api'
 
 type PrestaSettings = {
   enabled: boolean
@@ -14,7 +16,11 @@ type PrestaSettings = {
   source: string
 }
 
+type ProductPage = { data: Product[] }
+
 export function AdminPresta() {
+  const { user } = useAuth()
+  const canSearch = can(user, 'price_lists.import')
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -29,6 +35,14 @@ export function AdminPresta() {
   const [idLang, setIdLang] = useState('1')
   const [shopUrl, setShopUrl] = useState('https://supon.rzeszow.pl')
   const [source, setSource] = useState('')
+  const [catalogQ, setCatalogQ] = useState('')
+  const [catalogRows, setCatalogRows] = useState<Product[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [picked, setPicked] = useState<Record<number, boolean>>({})
+  const [prestaOpen, setPrestaOpen] = useState(false)
+  const [prestaBusy, setPrestaBusy] = useState(false)
+  const [prestaErr, setPrestaErr] = useState('')
+  const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
 
   async function load() {
     const data = await api<PrestaSettings>('/admin/presta-settings')
@@ -96,6 +110,54 @@ export function AdminPresta() {
     }
   }
 
+  useEffect(() => {
+    if (!canSearch) return
+    const t = window.setTimeout(() => {
+      const q = catalogQ.trim()
+      if (q.length < 2) {
+        setCatalogRows([])
+        return
+      }
+      setCatalogLoading(true)
+      void api<ProductPage>(`/products?q=${encodeURIComponent(q)}&per_page=30&sort=name&dir=asc`)
+        .then((res) => setCatalogRows(res.data ?? []))
+        .catch(() => setCatalogRows([]))
+        .finally(() => setCatalogLoading(false))
+    }, 300)
+    return () => window.clearTimeout(t)
+  }, [catalogQ, canSearch])
+
+  const pickedIds = Object.keys(picked)
+    .map(Number)
+    .filter((id) => picked[id])
+
+  async function searchPresta() {
+    if (pickedIds.length === 0) return
+    setPrestaBusy(true)
+    setPrestaErr('')
+    setPrestaOpen(true)
+    try {
+      if (pickedIds.length === 1) {
+        const res = await api<PrestaSearchResult>(`/products/${pickedIds[0]}/presta-search`, {
+          method: 'POST',
+          body: '{}',
+        })
+        setPrestaItems([res])
+        return
+      }
+      const res = await api<{ items: PrestaSearchResult[] }>('/products/presta-search', {
+        method: 'POST',
+        body: JSON.stringify({ product_ids: pickedIds.slice(0, 80) }),
+      })
+      setPrestaItems(res.items ?? [])
+    } catch (ex) {
+      setPrestaItems([])
+      setPrestaErr(ex instanceof Error ? ex.message : 'Błąd wyszukiwania w Preście')
+    } finally {
+      setPrestaBusy(false)
+    }
+  }
+
   return (
     <div>
       {err && <p className="mb-2 text-sm text-red-600">{err}</p>}
@@ -105,8 +167,8 @@ export function AdminPresta() {
         <div className="sm:col-span-2">
           <h2 className="text-sm font-semibold">Sklep PrestaShop (tylko odczyt)</h2>
           <p className="mt-1 text-xs text-slate-500">
-            Osobny cykl „Wyszukaj w Presta” na liście produktów. Nie miesza się z pobieraniem AI /
-            Tavily. Ceny i stany ze sklepu nie są zapisywane
+            Połączenie z bazą sklepu. Wyszukiwanie opisów i zdjęć jest poniżej — nie miesza się z
+            pobieraniem AI. Ceny i stany ze sklepu nie są zapisywane
             {source ? ` · źródło: ${source}` : ''}.
           </p>
         </div>
@@ -204,6 +266,74 @@ export function AdminPresta() {
           </button>
         </div>
       </form>
+
+      {canSearch && (
+        <div id="presta-search" className="max-w-3xl rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold">Wyszukaj w Presta</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Znajdź produkt w katalogu, zaznacz i szukaj odpowiednika w sklepie (SKU/EAN, potem nazwa).
+          </p>
+          <input
+            className="mt-3 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            placeholder="Szukaj kod, nazwa, producent…"
+            value={catalogQ}
+            onChange={(e) => setCatalogQ(e.target.value)}
+          />
+          <div className="mt-3 max-h-64 overflow-auto rounded border border-slate-100">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50">
+                  <th className="p-2 w-8" />
+                  <th className="p-2">SKU</th>
+                  <th className="p-2">Nazwa</th>
+                  <th className="p-2">Producent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {catalogRows.map((p) => (
+                  <tr key={p.id} className="border-b">
+                    <td className="p-2">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(picked[p.id])}
+                        onChange={() =>
+                          setPicked((prev) => ({ ...prev, [p.id]: !prev[p.id] }))
+                        }
+                      />
+                    </td>
+                    <td className="p-2 font-mono">{p.sku}</td>
+                    <td className="p-2">{p.name}</td>
+                    <td className="p-2">{p.manufacturer}</td>
+                  </tr>
+                ))}
+                {catalogQ.trim().length >= 2 && !catalogLoading && catalogRows.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="p-3 text-slate-400">
+                      Brak produktów.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <button
+            type="button"
+            disabled={prestaBusy || pickedIds.length === 0}
+            onClick={() => void searchPresta()}
+            className="mt-3 rounded bg-emerald-700 px-3 py-2 text-xs text-white disabled:opacity-50"
+          >
+            {prestaBusy ? 'Szukam…' : `Wyszukaj w Presta${pickedIds.length > 0 ? ` (${pickedIds.length})` : ''}`}
+          </button>
+          <PrestaSearchModal
+            open={prestaOpen}
+            items={prestaItems}
+            loading={prestaBusy}
+            error={prestaErr}
+            onClose={() => setPrestaOpen(false)}
+            onApplied={() => setMsg('Zastosowano dane ze sklepu.')}
+          />
+        </div>
+      )}
     </div>
   )
 }

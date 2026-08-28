@@ -158,12 +158,12 @@ export function ProductDetail() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link
-            to={`/products?cross=${encodeURIComponent(p.sku)}`}
+          <a
+            href="#cross-ref"
             className="rounded border border-emerald-600 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50"
           >
             Cross-ref po SKU
-          </Link>
+          </a>
           {p.substitutes?.[0]?.substitute_product_id && (
             <Link
               to={`/products/compare?a=${p.id}&b=${p.substitutes[0].substitute_product_id}`}
@@ -203,7 +203,7 @@ export function ProductDetail() {
         </div>
       </div>
 
-      <div className="mt-3">
+      <div id="cross-ref" className="mt-3">
         <CrossRefPanel initialCode={p.sku} />
       </div>
 
