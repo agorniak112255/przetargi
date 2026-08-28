@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v30';
+    private const SEARCH_CACHE_VERSION = 'v31';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -837,7 +837,8 @@ class HybridWebSearchService
      */
     private function keepHitsMentioningSkuOnPage(array $results, Product $product): array
     {
-        $fetched = $this->pages->fetch($results, (string) $product->sku, 5, []);
+        $skuHint = $this->identity->ansellCatalogBits($product)['model'] ?? (string) $product->sku;
+        $fetched = $this->pages->fetch($results, $skuHint !== '' ? $skuHint : (string) $product->sku, 5, []);
         $out = [];
         foreach ($fetched['pages'] as $page) {
             $url = (string) ($page['url'] ?? '');
@@ -888,7 +889,8 @@ class HybridWebSearchService
         }
 
         if ($this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
-            || $this->identity->hayHasNamePhrase($url.' '.$title, $product)) {
+            || $this->identity->hayHasNamePhrase($url.' '.$title, $product)
+            || $this->identity->hayMentionsProduct($url.' '.$title, $product)) {
             return true;
         }
 

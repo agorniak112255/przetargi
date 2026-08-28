@@ -503,10 +503,12 @@ final class ProductSearchIdentity
         if ($name === '') {
             return '';
         }
-        $name = (string) preg_replace('/[\s\-]*G?\d{2}\.\d+XL$/i', '', $name);
+        // nie G?\d{2}.\d+XL — to zjada „38” z „138.5XL” i zostawia „HOOD 1”
+        $name = (string) preg_replace('/[\s\-]+G\d{2}(?:\.\d+)?XL$/i', '', $name);
         $name = (string) preg_replace('/\.\d+XL$/i', '', $name);
+        $name = (string) preg_replace('/\.(?:XXL|XL|[SML])$/i', '', $name);
 
-        return trim($name);
+        return trim($name, " \t-");
     }
 
     public function ansellStyleCodes(Product $product): array
@@ -633,14 +635,23 @@ final class ProductSearchIdentity
 
         if ($phase === 'manufacturer'
             && (str_contains(mb_strtolower($brand), 'ansell') || $this->ansellStyleCodes($product) !== [])) {
-            foreach ($this->ansellSearchPhrases($product, 'early') as $phrase) {
-                $queries[] = str_starts_with($phrase, 'site:') ? $phrase : 'site:bpbhp.pl '.$phrase;
+            $early = $this->ansellSearchPhrases($product, 'early');
+            $late = $this->ansellSearchPhrases($product, 'late');
+            if (($early[0] ?? '') !== '') {
+                $queries[] = 'site:bpbhp.pl '.$early[0];
+            }
+            // druga fraza site: musi być bez zer — drabinka bierze tylko 2× site:
+            if (($late[0] ?? '') !== '') {
+                $queries[] = 'site:bpbhp.pl '.$late[0];
+            }
+            foreach (array_slice($early, 1) as $phrase) {
+                $queries[] = 'site:bpbhp.pl '.$phrase;
             }
             if ($sku !== '') {
                 $queries[] = 'site:bpbhp.pl '.$sku;
             }
-            foreach ($this->ansellSearchPhrases($product, 'late') as $phrase) {
-                $queries[] = str_starts_with($phrase, 'site:') ? $phrase : 'site:bpbhp.pl '.$phrase;
+            foreach (array_slice($late, 1) as $phrase) {
+                $queries[] = 'site:bpbhp.pl '.$phrase;
             }
         }
 

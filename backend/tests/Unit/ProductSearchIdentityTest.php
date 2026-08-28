@@ -254,9 +254,20 @@ final class ProductSearchIdentityTest extends TestCase
         $late = implode(' | ', $id->ansellSearchPhrases($product, 'late'));
         $this->assertStringContainsString('00138', $early);
         $this->assertStringContainsString('1500-OR', $early);
+        $this->assertStringContainsString('HOOD 138', $early);
+        $this->assertStringNotContainsString('HOOD 1 ', $early);
         $this->assertStringNotContainsString('00138', $late);
         $this->assertStringContainsString('138', $late);
         $this->assertStringContainsString('OR15S-138-06', $late);
+        $this->assertSame('1500-OR STD CVRL HOOD 138', $id->ansellTradeName($product));
+        $this->assertSame(
+            '1500-NV STD CVRL HOOD 138',
+            $id->ansellTradeName(new Product([
+                'sku' => 'NV15S-00138-03',
+                'name' => '1500-NV STD CVRL HOOD 138.M',
+                'manufacturer' => 'Ansell',
+            ]))
+        );
 
         $this->assertFalse($id->hayMentionsProduct(
             'https://bpbhp.pl/kombinezon-ansell-alphatec-1500-wh-plus-cvrl-hood-111 Ansell CVRL HOOD 1500',

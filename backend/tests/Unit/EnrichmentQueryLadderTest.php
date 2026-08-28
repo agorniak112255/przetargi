@@ -503,7 +503,9 @@ final class EnrichmentQueryLadderTest extends TestCase
 
         $this->assertNotEmpty($ladder);
         $this->assertStringContainsString('site:bpbhp.pl', $ladder[0] ?? '');
-        $this->assertStringContainsString('121', $ladder[0] ?? '');
+        $this->assertStringContainsString('00121', $ladder[0] ?? '');
+        $this->assertStringContainsString('site:bpbhp.pl', $ladder[1] ?? '');
+        $this->assertMatchesRegularExpression('/(?<!0)121/', $ladder[1] ?? '');
     }
 
     public function test_hi_vis_jacket_is_not_waterproof_clothing(): void
