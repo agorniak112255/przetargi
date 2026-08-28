@@ -452,12 +452,11 @@ final class ProductSearchIdentity
     }
 
     /**
-     * Ansell GR40T-00121-09 i „4000-GR CVRL HOOD 121-G02” → 121 / 4000 / gr40t.
-     * Sklepy (bpbhp.pl) trzymają model w slugu, nie pełny article number.
+     * OR15S-00138-06 / „1500-OR STD CVRL HOOD 138.5XL” → seria 1500, kolor OR, model 138.
      *
-     * @return list<string>
+     * @return array{color: ?string, series: ?string, model: ?string, prefix: ?string}
      */
-    public function ansellStyleCodes(Product $product): array
+    public function ansellCatalogBits(Product $product): array
     {
         $sku = strtoupper(trim((string) $product->sku));
         $name = strtoupper(trim((string) $product->name));
@@ -466,30 +465,132 @@ final class ProductSearchIdentity
             || str_contains($name, 'ALPHATEC')
             || str_contains($name, 'HYFLEX')
             || preg_match('/^[A-Z]{2}\d{2}[A-Z]?-\d{5}(?:-\d{2})?$/', $sku) === 1;
+        $bits = ['color' => null, 'series' => null, 'model' => null, 'prefix' => null];
         if (! $looksAnsell) {
+            return $bits;
+        }
+
+        if (preg_match('/^([A-Z]{2})(\d{2})[A-Z]?-0*(\d{3,5})(?:-\d{2})?$/', $sku, $m) === 1) {
+            $bits['color'] = $m[1];
+            $bits['prefix'] = explode('-', $sku)[0] ?? null;
+            $decade = (int) $m[2];
+            if ($decade >= 15 && $decade <= 59) {
+                $bits['series'] = (string) ($decade * 100);
+            }
+            $model = ltrim($m[3], '0');
+            $bits['model'] = $model !== '' ? $model : null;
+        }
+        if (preg_match('/\b([456]\d{3})-([A-Z]{2})\b/', $name, $m) === 1) {
+            $bits['series'] ??= $m[1];
+            $bits['color'] ??= $m[2];
+        }
+        if (preg_match('/\b([456]\d{3})\b/', $name, $m) === 1) {
+            $bits['series'] ??= $m[1];
+        }
+        if (preg_match('/(?:HOOD|MODEL|CVRL)\s+(\d{3})\b/', $name, $m) === 1
+            || preg_match('/\b(\d{3})-G\d{2}\b/', $name, $m) === 1
+            || preg_match('/\b(\d{3})\.\d+XL\b/', $name, $m) === 1) {
+            $bits['model'] ??= $m[1];
+        }
+
+        return $bits;
+    }
+
+    /** Nazwa z cennika bez rozmiaru: „1500-OR STD CVRL HOOD 138.5XL” → „1500-OR STD CVRL HOOD 138”. */
+    public function ansellTradeName(Product $product): string
+    {
+        $name = trim((string) $product->name);
+        if ($name === '') {
+            return '';
+        }
+        $name = (string) preg_replace('/[\s\-]*G?\d{2}\.\d+XL$/i', '', $name);
+        $name = (string) preg_replace('/\.\d+XL$/i', '', $name);
+
+        return trim($name);
+    }
+
+    public function ansellStyleCodes(Product $product): array
+    {
+        $bits = $this->ansellCatalogBits($product);
+        if ($bits['model'] === null && $bits['series'] === null && $bits['prefix'] === null) {
             return [];
         }
 
-        $out = [];
-        if (preg_match('/^[A-Z]{2}\d{2}[A-Z]?-0*(\d{3,5})(?:-\d{2})?$/', $sku, $m) === 1) {
-            $style = ltrim($m[1], '0');
-            if ($style !== '') {
-                $out[] = $style;
-            }
-            $out[] = $m[1];
-            $out[] = mb_strtolower(explode('-', $sku)[0] ?? '');
+        $out = array_filter([
+            $bits['model'],
+            $bits['series'],
+            $bits['color'],
+            $bits['prefix'] !== null ? mb_strtolower($bits['prefix']) : null,
+        ], static fn (?string $v): bool => $v !== null && $v !== '');
+        if ($bits['series'] !== null && $bits['color'] !== null) {
+            $out[] = $bits['series'].'-'.$bits['color'];
+            $out[] = $bits['series'].$bits['color'];
         }
-        if (preg_match('/\b(\d{3})-G\d{2}\b/', $name, $m) === 1) {
-            $out[] = $m[1];
-        }
-        if (preg_match('/\b([456]\d{3})\b/', $name, $m) === 1) {
-            $out[] = $m[1];
+        if ($bits['model'] !== null) {
+            $out[] = str_pad($bits['model'], 5, '0', STR_PAD_LEFT);
         }
 
-        return array_values(array_unique(array_filter(
-            array_map(static fn (mixed $v): string => (string) $v, $out),
-            static fn (string $v): bool => $v !== ''
-        )));
+        return array_values(array_unique(array_map(static fn (string $v): string => $v, $out)));
+    }
+
+    /**
+     * Wcześniej: 00138 / nazwa z cennika. Później: bez wiodących zer (138).
+     *
+     * @return list<string>
+     */
+    public function ansellSearchPhrases(Product $product, string $when): array
+    {
+        $bits = $this->ansellCatalogBits($product);
+        $model = $bits['model'];
+        if ($model === null) {
+            return [];
+        }
+        $padded = str_pad($model, 5, '0', STR_PAD_LEFT);
+        $label = trim(($bits['series'] ?? '').($bits['color'] !== null ? '-'.$bits['color'] : ''));
+        $trade = $this->ansellTradeName($product);
+        $sku = trim((string) $product->sku);
+
+        if ($when === 'early') {
+            $out = [];
+            if ($label !== '') {
+                $out[] = 'Ansell '.$label.' '.$padded;
+            }
+            if ($trade !== '' && mb_strtolower($trade) !== mb_strtolower($sku)) {
+                $out[] = $trade;
+            }
+
+            return array_values(array_unique($out));
+        }
+
+        $out = [];
+        if ($padded !== $model) {
+            if ($label !== '') {
+                $out[] = 'Ansell '.$label.' '.$model;
+            }
+            $out[] = 'Ansell '.$model.' kombinezon';
+            $stripped = $this->skuWithoutLeadingZeros($sku);
+            if ($stripped !== '' && $stripped !== $sku) {
+                $out[] = $stripped;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /** OR15S-00138-06 → OR15S-138-06 (zera tylko z długich członów, nie z rozmiaru 06). */
+    public function skuWithoutLeadingZeros(string $sku): string
+    {
+        $parts = preg_split('/(-)/', trim($sku), -1, PREG_SPLIT_DELIM_CAPTURE) ?: [];
+        $out = '';
+        foreach ($parts as $part) {
+            if (preg_match('/^0+\d+$/', $part) === 1 && strlen($part) >= 4) {
+                $out .= ltrim($part, '0') ?: '0';
+            } else {
+                $out .= $part;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -532,27 +633,14 @@ final class ProductSearchIdentity
 
         if ($phase === 'manufacturer'
             && (str_contains(mb_strtolower($brand), 'ansell') || $this->ansellStyleCodes($product) !== [])) {
-            $styles = $this->ansellStyleCodes($product);
-            $series = null;
-            $model = null;
-            foreach ($styles as $style) {
-                if (preg_match('/^[456]\d{3}$/', $style) === 1) {
-                    $series = $style;
-                }
-                if (preg_match('/^\d{3}$/', $style) === 1) {
-                    $model = $style;
-                }
-            }
-            $needle = trim(($series ?? '').' '.($model ?? $sku));
-            if ($needle !== '') {
-                $queries[] = 'site:bpbhp.pl Ansell '.$needle;
-            }
-            if ($model !== null) {
-                $queries[] = 'site:bpbhp.pl Ansell AlphaTec '.$model;
-                $queries[] = 'Ansell AlphaTec '.trim(($series ?? '').' '.$model).' kombinezon';
+            foreach ($this->ansellSearchPhrases($product, 'early') as $phrase) {
+                $queries[] = str_starts_with($phrase, 'site:') ? $phrase : 'site:bpbhp.pl '.$phrase;
             }
             if ($sku !== '') {
                 $queries[] = 'site:bpbhp.pl '.$sku;
+            }
+            foreach ($this->ansellSearchPhrases($product, 'late') as $phrase) {
+                $queries[] = str_starts_with($phrase, 'site:') ? $phrase : 'site:bpbhp.pl '.$phrase;
             }
         }
 
@@ -664,24 +752,18 @@ final class ProductSearchIdentity
             ? array_merge($nameQueries, $skuQueries)
             : array_merge($skuQueries, $nameQueries);
         $styleQueries = [];
-        $styles = $this->ansellStyleCodes($product);
-        if ($styles !== []) {
-            $series = null;
-            $model = null;
-            foreach ($styles as $style) {
-                if (preg_match('/^[456]\d{3}$/', $style) === 1) {
-                    $series = $style;
-                }
-                if (preg_match('/^\d{3}$/', $style) === 1) {
-                    $model = $style;
-                }
-            }
-            if ($model !== null) {
-                $styleQueries[] = trim($brand.' '.($series ?? '').' '.$model.' kombinezon');
-                $styleQueries[] = trim($brand.' '.$model.' CVRL HOOD');
+        foreach ($this->ansellSearchPhrases($product, 'early') as $phrase) {
+            if (! str_starts_with($phrase, 'site:')) {
+                $styleQueries[] = $this->queryWithManufacturer($phrase, $product);
             }
         }
-        $out = array_merge($styleQueries, $out);
+        $lateStyle = [];
+        foreach ($this->ansellSearchPhrases($product, 'late') as $phrase) {
+            if (! str_starts_with($phrase, 'site:')) {
+                $lateStyle[] = $this->queryWithManufacturer($phrase, $product);
+            }
+        }
+        $out = array_merge($styleQueries, $out, $lateStyle);
         // „URG-C-SPODNIE” w sklepie występuje jako „URG-C”, a „ERGOPRIMA45” jako „ERGOPRIMA”
         $core = $this->internalSkuCore($product);
         if ($core !== '' && mb_strtolower($core) !== mb_strtolower($sku)) {
@@ -803,6 +885,15 @@ final class ProductSearchIdentity
         // NB27 ≠ NB27B — karta dłuższego wariantu nie może przejść przez nazwę „rubiflex”
         if ($this->urlContainsLongerAlphanumericSkuVariant($hay, $skuCompact)) {
             return false;
+        }
+        $ansellModel = $this->ansellCatalogBits($product)['model'];
+        if ($ansellModel !== null) {
+            $padded = str_pad($ansellModel, 5, '0', STR_PAD_LEFT);
+            $hasModel = $this->tokenInHay($hay, $hayCompact, $ansellModel)
+                || ($padded !== $ansellModel && $this->tokenInHay($hay, $hayCompact, $padded));
+            if (! $hasModel) {
+                return false;
+            }
         }
 
         foreach ($tokens as $token) {

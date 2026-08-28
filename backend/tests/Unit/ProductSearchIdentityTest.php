@@ -237,6 +237,37 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_ansell_leading_zeros_come_later_in_search(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'OR15S-00138-06',
+            'name' => '1500-OR STD CVRL HOOD 138.5XL',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $this->assertSame('OR15S-138-06', $id->skuWithoutLeadingZeros('OR15S-00138-06'));
+        $this->assertSame('138', $id->ansellCatalogBits($product)['model']);
+        $this->assertSame('1500', $id->ansellCatalogBits($product)['series']);
+
+        $early = implode(' | ', $id->ansellSearchPhrases($product, 'early'));
+        $late = implode(' | ', $id->ansellSearchPhrases($product, 'late'));
+        $this->assertStringContainsString('00138', $early);
+        $this->assertStringContainsString('1500-OR', $early);
+        $this->assertStringNotContainsString('00138', $late);
+        $this->assertStringContainsString('138', $late);
+        $this->assertStringContainsString('OR15S-138-06', $late);
+
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://bpbhp.pl/kombinezon-ansell-alphatec-1500-wh-plus-cvrl-hood-111 Ansell CVRL HOOD 1500',
+            $product
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://shop.example/1500-or-std-cvrl-hood-138 ANSELL 1500-OR STD CVRL HOOD 138',
+            $product
+        ));
+    }
+
     public function test_ardon_search_queries_target_official_and_shop_sites(): void
     {
         $id = new ProductSearchIdentity;

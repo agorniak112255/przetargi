@@ -32,33 +32,35 @@ final class RetailerOnSiteSearch
         if ($this->identity->ansellStyleCodes($product) === []) {
             return [];
         }
-        $query = $this->query($product);
-        if ($query === '') {
+        $queries = array_values(array_filter([$this->query($product), $this->queryBareModel($product)]));
+        if ($queries === []) {
             return [];
         }
 
         $out = [];
         $seen = [];
-        foreach (self::ENDPOINTS as $endpoint) {
-            $html = $this->download(str_replace('{q}', rawurlencode($query), $endpoint['template']));
-            if ($html === '') {
-                continue;
-            }
-            foreach ($this->productLinks($html, $endpoint['host']) as $hit) {
-                $key = mb_strtolower($hit['url']);
-                if (isset($seen[$key])) {
+        foreach ($queries as $query) {
+            foreach (self::ENDPOINTS as $endpoint) {
+                $html = $this->download(str_replace('{q}', rawurlencode($query), $endpoint['template']));
+                if ($html === '') {
                     continue;
                 }
-                $hay = $hit['url'].' '.$hit['title'];
-                if (! $this->identity->hayMentionsProduct($hay, $product)
-                    || $this->identity->pageClaimsAnotherCode($hit['url'], $hit['title'], $product)) {
-                    continue;
+                foreach ($this->productLinks($html, $endpoint['host']) as $hit) {
+                    $key = mb_strtolower($hit['url']);
+                    if (isset($seen[$key])) {
+                        continue;
+                    }
+                    $hay = $hit['url'].' '.$hit['title'];
+                    if (! $this->identity->hayMentionsProduct($hay, $product)
+                        || $this->identity->pageClaimsAnotherCode($hit['url'], $hit['title'], $product)) {
+                        continue;
+                    }
+                    $seen[$key] = true;
+                    $out[] = $hit;
                 }
-                $seen[$key] = true;
-                $out[] = $hit;
-            }
-            if ($out !== []) {
-                break;
+                if ($out !== []) {
+                    return $out;
+                }
             }
         }
 
@@ -67,28 +69,24 @@ final class RetailerOnSiteSearch
 
     public function query(Product $product): string
     {
-        $brand = $this->identity->shortBrand((string) $product->manufacturer);
-        $styles = $this->identity->ansellStyleCodes($product);
-        $series = null;
-        $model = null;
-        foreach ($styles as $style) {
-            if (preg_match('/^[456]\d{3}$/', $style) === 1) {
-                $series = $style;
-            }
-            if (preg_match('/^\d{3}$/', $style) === 1) {
-                $model = $style;
-            }
-        }
-        if ($model !== null) {
-            return trim($brand.' '.($series ?? '').' '.$model);
+        $early = $this->identity->ansellSearchPhrases($product, 'early');
+        if ($early !== []) {
+            return $early[0];
         }
 
         $sku = trim((string) $product->sku);
         if ($sku !== '' && ! $this->identity->looksLikeInternalSku($product)) {
-            return trim($brand.' '.$sku);
+            return trim($this->identity->shortBrand((string) $product->manufacturer).' '.$sku);
         }
 
         return '';
+    }
+
+    public function queryBareModel(Product $product): string
+    {
+        $late = $this->identity->ansellSearchPhrases($product, 'late');
+
+        return $late[0] ?? '';
     }
 
     /**
