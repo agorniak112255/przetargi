@@ -69,15 +69,19 @@ fi
 echo "==> migrate"
 "$PHP_BIN" artisan migrate --force
 
+echo "==> cache"
+"$PHP_BIN" artisan config:cache || true
+"$PHP_BIN" artisan route:cache || true
+"$PHP_BIN" artisan view:cache || true
+
 # Po migracji dodającej search_blob kolumna jest pusta, a wyszukiwarka AI opiera się
 # na niej w całości. Komenda jest idempotentna (hash), więc kolejne deploye są tanie.
 echo "==> indeks wyszukiwania produktów"
 "$PHP_BIN" artisan products:rebuild-search-index || true
 
-echo "==> cache"
-"$PHP_BIN" artisan config:cache || true
-"$PHP_BIN" artisan route:cache || true
-"$PHP_BIN" artisan view:cache || true
+# Nowe sklepy z config/enrichment.php (np. Ardon) — bez tego enrichment nie ma kart z sitemapy.
+echo "==> indeks kart sklepów (tylko nowe domeny)"
+"$PHP_BIN" artisan catalog:index --missing-only --seconds=180 --max=20000 || true
 
 echo "==> laravel scheduler (cron schedule:run)"
 if [[ -x "$APP_ROOT/deploy/ensure-laravel-scheduler.sh" ]]; then

@@ -61,6 +61,37 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame(1, CatalogPage::query()->count());
     }
 
+    public function test_missing_only_skips_already_indexed_host(): void
+    {
+        Http::fake();
+        $this->seedPage('https://optimumbhp.pl/buty-ardon');
+
+        $this->artisan('catalog:index', [
+            'host' => 'optimumbhp.pl',
+            '--missing-only' => true,
+        ])->expectsOutputToContain('już w indeksie')->assertSuccessful();
+
+        Http::assertNothingSent();
+    }
+
+    public function test_missing_only_indexes_unknown_host(): void
+    {
+        Http::fake([
+            'https://ardon.pl/robots.txt' => Http::response('Sitemap: https://ardon.pl/sitemap.xml', 200),
+            'https://ardon.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset><url><loc>https://ardon.pl/buty-robocze-m80</loc></url></urlset>',
+                200
+            ),
+        ]);
+
+        $this->artisan('catalog:index', [
+            'host' => 'ardon.pl',
+            '--missing-only' => true,
+        ])->assertSuccessful();
+
+        $this->assertDatabaseHas('catalog_pages', ['host' => 'ardon.pl']);
+    }
+
     public function test_follows_shoper_google_sitemap_children(): void
     {
         Http::fake([

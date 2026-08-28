@@ -20,6 +20,7 @@ final class CatalogIndexCommand extends Command
         {--max=60000 : Limit adresów na domenę}
         {--seconds=240 : Limit czasu na domenę}
         {--fresh-days=0 : Pomiń domeny odświeżone w ostatnich N dniach}
+        {--missing-only : Tylko domeny, których nie ma w indeksie}
         {--skip= : Dodatkowe domeny do pominięcia, po przecinku}';
 
     protected $description = 'Indeksuje karty produktu z sitemap producentów i hurtowni';
@@ -36,11 +37,17 @@ final class CatalogIndexCommand extends Command
         $max = max(100, (int) $this->option('max'));
         $seconds = max(30, (int) $this->option('seconds'));
         $freshDays = max(0, (int) $this->option('fresh-days'));
+        $missingOnly = (bool) $this->option('missing-only');
         $total = 0;
         $failed = 0;
 
         foreach ($hosts as $host) {
             $this->line('==> '.$host);
+            if ($missingOnly && $this->hasIndexedPages($host)) {
+                $this->line('    pomijam — już w indeksie');
+
+                continue;
+            }
             if ($freshDays > 0 && $this->indexedRecently($host, $freshDays)) {
                 $this->line('    pomijam — zaindeksowane w ostatnich '.$freshDays.' dniach');
 
@@ -129,5 +136,10 @@ final class CatalogIndexCommand extends Command
             ->where('host', $host)
             ->where('last_seen_at', '>=', now()->subDays($days))
             ->exists();
+    }
+
+    private function hasIndexedPages(string $host): bool
+    {
+        return CatalogPage::query()->where('host', $host)->exists();
     }
 }
