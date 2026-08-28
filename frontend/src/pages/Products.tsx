@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
@@ -32,6 +32,9 @@ const STATUS_LABEL: Record<string, string> = {
 
 const STATUS_FILTERS = ['', 'none', 'queued', 'running', 'done', 'failed', 'manual'] as const
 
+const PER_PAGE_CHOICES = ['100', '200', '500', '1000', 'all'] as const
+type PerPageChoice = (typeof PER_PAGE_CHOICES)[number]
+
 function pageNumbers(current: number, last: number): Array<number | '…'> {
   if (last <= 7) {
     return Array.from({ length: last }, (_, i) => i + 1)
@@ -59,8 +62,11 @@ function ProductListControls({
   allVisibleSelected,
   visibleCount,
   selectedCount,
+  perPage,
+  perPageDisabled,
   onToggleSelectVisible,
   onPage,
+  onPerPage,
 }: {
   result: Page
   pages: Array<number | '…'>
@@ -68,8 +74,11 @@ function ProductListControls({
   allVisibleSelected: boolean
   visibleCount: number
   selectedCount: number
+  perPage: PerPageChoice
+  perPageDisabled: boolean
   onToggleSelectVisible: () => void
   onPage: (page: number) => void
+  onPerPage: (value: PerPageChoice) => void
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 py-2">
@@ -87,8 +96,27 @@ function ProductListControls({
             <span className="text-slate-400"> · Shift+klik: zakres</span>
           </label>
         )}
-        <p className="text-xs text-slate-500">
-          Strona {result.current_page} z {result.last_page} · {result.per_page}/stronę
+        <p className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+          <span>
+            Strona {result.current_page} z {result.last_page}
+          </span>
+          <span>·</span>
+          <label className="inline-flex items-center gap-1">
+            <select
+              className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs disabled:opacity-50"
+              value={perPage}
+              disabled={perPageDisabled}
+              onChange={(e) => onPerPage(e.target.value as PerPageChoice)}
+              title="Ile wierszy na stronie"
+            >
+              {PER_PAGE_CHOICES.map((n) => (
+                <option key={n} value={n}>
+                  {n === 'all' ? 'wszystkie' : n}
+                </option>
+              ))}
+            </select>
+            /stronę
+          </label>
         </p>
       </div>
       {result.last_page > 1 && (
@@ -149,6 +177,35 @@ type SortKey =
   | 'description'
   | 'images_count'
   | 'enrichment_status'
+  | 'ai_match_percent'
+
+function sortNum(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+function sortProductRows(rows: Product[], sort: SortKey, dir: 'asc' | 'desc'): Product[] {
+  const mul = dir === 'asc' ? 1 : -1
+  return [...rows].sort((a, b) => {
+    let cmp = 0
+    if (sort === 'catalog_price_net') {
+      cmp = sortNum(a.price_pln ?? a.catalog_price_net) - sortNum(b.price_pln ?? b.catalog_price_net)
+    } else if (sort === 'ai_match_percent') {
+      cmp = sortNum(a.ai_match_percent) - sortNum(b.ai_match_percent)
+    } else if (sort === 'images_count') {
+      cmp = sortNum(a.images_count) - sortNum(b.images_count)
+    } else if (sort === 'discount_percent') {
+      cmp = sortNum(a.discount_percent) - sortNum(b.discount_percent)
+    } else if (sort === 'description') {
+      cmp = Number(hasDescription(a)) - Number(hasDescription(b))
+      if (cmp === 0) cmp = (a.description ?? '').localeCompare(b.description ?? '', 'pl')
+    } else {
+      cmp = String(a[sort] ?? '').localeCompare(String(b[sort] ?? ''), 'pl')
+    }
+    if (cmp === 0) cmp = (a.name ?? '').localeCompare(b.name ?? '', 'pl')
+    return cmp * mul
+  })
+}
 
 function SortTh({
   label,
@@ -194,6 +251,7 @@ export function Products() {
   const [aiBusy, setAiBusy] = useState<'catalog' | 'web' | false>(false)
   const [externalHints, setExternalHints] = useState<{ url: string; title: string }[]>([])
   const [page, setPage] = useState(1)
+  const [perPage, setPerPage] = useState<PerPageChoice>('500')
   const [sort, setSort] = useState<SortKey>('name')
   const [dir, setDir] = useState<'asc' | 'desc'>('asc')
   const [result, setResult] = useState<Page | null>(null)
@@ -286,7 +344,7 @@ export function Products() {
   function buildParams(pageNum = page): URLSearchParams {
     const params = new URLSearchParams({
       page: String(pageNum),
-      per_page: '500',
+      per_page: perPage,
       sort,
       dir,
     })
@@ -316,7 +374,7 @@ export function Products() {
       })
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer/status
-  }, [debouncedQ, manufacturer, statusFilter, page, sort, dir, aiMode])
+  }, [debouncedQ, manufacturer, statusFilter, page, perPage, sort, dir, aiMode])
 
   async function runAiSearch(web = false, raw = aiQuery) {
     const query = raw.trim()
@@ -349,6 +407,8 @@ export function Products() {
       const hints =
         res.external_hints ?? (res.external_hint ? [res.external_hint] : [])
       setAiMode(true)
+      setSort('ai_match_percent')
+      setDir('desc')
       setExternalHints(hints)
       setResult({
         data: res.products,
@@ -535,8 +595,13 @@ export function Products() {
   }
 
   const pages = result ? pageNumbers(result.current_page, result.last_page) : []
-  const visibleIds = (result?.data ?? []).map((p) => p.id)
-  const pendingVisible = (result?.data ?? []).filter(
+  const displayRows = useMemo(() => {
+    const data = result?.data ?? []
+    if (!aiMode) return data
+    return sortProductRows(data, sort, dir)
+  }, [result, aiMode, sort, dir])
+  const visibleIds = displayRows.map((p) => p.id)
+  const pendingVisible = displayRows.filter(
     (p) => (p.enrichment_status ?? 'none') !== 'done',
   )
   const selectedIds = Object.keys(selected)
@@ -578,7 +643,7 @@ export function Products() {
                 ? ` · wyświetlono ${result.from}–${result.to}`
                 : ''}
               {' · '}
-              {result.per_page}/stronę
+              {perPage === 'all' ? 'wszystkie na stronie' : `${perPage}/stronę`}
               {loading ? ' · ładowanie…' : ''}
             </p>
           )}
@@ -636,10 +701,10 @@ export function Products() {
             <>
               <button
                 type="button"
-                disabled={enrichBusy || batchActive || selectedIds.length === 0}
+                disabled={enrichBusy || selectedIds.length === 0}
                 onClick={() => requestEnrich(selectedIds)}
                 className="rounded bg-blue-600 px-3 py-2 text-xs text-white disabled:opacity-50"
-                title="Pobierz opisy i zdjęcia dla zaznaczonych produktów"
+                title="Pobierz opisy i zdjęcia dla zaznaczonych — działa też przy innej kolejce"
               >
                 Pobierz zaznaczone{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
               </button>
@@ -739,6 +804,12 @@ export function Products() {
             selectedCount={selectedIds.length}
             onToggleSelectVisible={toggleSelectAllVisible}
             onPage={setPage}
+            perPage={perPage}
+            perPageDisabled={aiMode}
+            onPerPage={(value) => {
+              setPerPage(value)
+              setPage(1)
+            }}
           />
         )}
         <table className="w-full text-left text-xs">
@@ -755,12 +826,14 @@ export function Products() {
                   />
                 </th>
               )}
-              {aiMode && <th className="p-2">Dopasowanie</th>}
+              {aiMode && (
+                <SortTh label="Dopasowanie" col="ai_match_percent" sort={sort} dir={dir} onSort={onSort} />
+              )}
               <SortTh label="Status AI" col="enrichment_status" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Kod" col="sku" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Nazwa" col="name" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Producent" col="manufacturer" sort={sort} dir={dir} onSort={onSort} />
-              <SortTh label="Netto" col="catalog_price_net" sort={sort} dir={dir} onSort={onSort} />
+              <SortTh label="Netto (PLN)" col="catalog_price_net" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Waluta" col="currency" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Upust" col="discount_percent" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Opis" col="description" sort={sort} dir={dir} onSort={onSort} />
@@ -769,7 +842,7 @@ export function Products() {
             </tr>
           </thead>
           <tbody>
-            {(result?.data ?? []).map((p) => {
+            {displayRows.map((p) => {
               const status = p.enrichment_status ?? 'none'
               return (
                 <tr key={p.id} className={`border-b ${selected[p.id] ? 'bg-blue-50/40' : ''}`}>
@@ -834,7 +907,17 @@ export function Products() {
                     {p.name}
                   </td>
                   <td className="p-2">{p.manufacturer}</td>
-                  <td className="p-2">{p.catalog_price_net}</td>
+                  <td className="p-2 whitespace-nowrap">
+                    {p.catalog_price_net}
+                    {(p.currency ?? 'PLN').toUpperCase() !== 'PLN' && p.price_pln != null && (
+                      <span
+                        className="mt-0.5 block text-[10px] text-slate-500"
+                        title="Przeliczenie NBP tabela A do PLN"
+                      >
+                        ≈ {Number(p.price_pln).toFixed(2)} PLN
+                      </span>
+                    )}
+                  </td>
                   <td className="p-2">{p.currency ?? 'PLN'}</td>
                   <td className="p-2">
                     {p.discount_percent != null ? `${p.discount_percent}%` : '—'}
@@ -873,7 +956,6 @@ export function Products() {
                         type="button"
                         disabled={
                           enrichBusy ||
-                          batchActive ||
                           status === 'queued' ||
                           status === 'running'
                         }
@@ -1132,6 +1214,12 @@ export function Products() {
               selectedCount={selectedIds.length}
               onToggleSelectVisible={toggleSelectAllVisible}
               onPage={setPage}
+              perPage={perPage}
+              perPageDisabled={aiMode}
+              onPerPage={(value) => {
+                setPerPage(value)
+                setPage(1)
+              }}
             />
           </div>
         )}

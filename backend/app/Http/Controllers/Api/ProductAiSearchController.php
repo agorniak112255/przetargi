@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\Ai\AiTask;
+use App\Services\NbpExchangeRateService;
 use App\Services\ProductAiSearchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,6 +17,7 @@ class ProductAiSearchController extends Controller
 {
     public function __construct(
         private readonly ProductAiSearchService $search,
+        private readonly NbpExchangeRateService $fx,
     ) {}
 
     public function __invoke(Request $request): JsonResponse
@@ -47,6 +49,11 @@ class ProductAiSearchController extends Controller
                 'message' => 'Błąd wyszukiwania AI: '.$e->getMessage(),
             ], 422);
         }
+
+        $result['products'] = array_map(
+            fn (array $row): array => $this->fx->appendPricePln($row),
+            $result['products'],
+        );
 
         return response()->json($result);
     }

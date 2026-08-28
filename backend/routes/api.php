@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\PriceListController;
@@ -96,6 +97,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
             ->middleware('permission:tenders.invite');
     });
 
+    Route::get('/exchange-rates', ExchangeRateController::class)->middleware('permission:products.view');
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
     Route::get('/products/manufacturers', [ProductController::class, 'manufacturers'])->middleware('permission:products.view');
     Route::get('/products/catalog-health', [ProductCatalogHealthController::class, 'show'])

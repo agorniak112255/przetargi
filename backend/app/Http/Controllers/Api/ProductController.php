@@ -7,11 +7,16 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Services\NbpExchangeRateService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class ProductController extends Controller
 {
+    public function __construct(
+        private readonly NbpExchangeRateService $fx,
+    ) {}
+
     public function index(Request $request): JsonResponse
     {
         $query = Product::query()
@@ -91,7 +96,9 @@ class ProductController extends Controller
         $sortCol = $allowedSort[$sortKey] ?? 'name';
         $dir = strtolower((string) $request->string('dir', 'asc')) === 'desc' ? 'desc' : 'asc';
 
-        if ($sortCol === 'description') {
+        if ($sortCol === 'catalog_price_net') {
+            $query->orderByRaw($this->fx->priceOrderSql('catalog_price_net', 'currency').' '.$dir);
+        } elseif ($sortCol === 'description') {
             // najpierw z opisem / bez, potem alfabetycznie po treści
             $query->orderByRaw(
                 $dir === 'asc'
@@ -105,10 +112,15 @@ class ProductController extends Controller
             $query->orderBy('name', 'asc');
         }
 
-        $perPage = min(500, max(1, (int) $request->integer('per_page', 500)));
+        $rawPerPage = strtolower(trim((string) $request->input('per_page', '500')));
+        if ($rawPerPage === 'all') {
+            $perPage = 25000;
+        } else {
+            $perPage = min(1000, max(1, (int) $rawPerPage));
+        }
         $page = $query->paginate($perPage);
 
-        $page->getCollection()->transform(static function (Product $product): array {
+        $page->getCollection()->transform(function (Product $product): array {
             $row = $product->toArray();
             $row['images'] = $product->images->map(static fn ($img): array => [
                 'id' => $img->id,
@@ -127,7 +139,7 @@ class ProductController extends Controller
                 'sort_order' => $doc->sort_order,
             ])->values()->all();
 
-            return $row;
+            return $this->fx->appendPricePln($row);
         });
 
         return response()->json($page);

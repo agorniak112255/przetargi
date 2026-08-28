@@ -8,6 +8,8 @@ use App\Models\Product;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -19,6 +21,15 @@ final class ProductIndexApiTest extends TestCase
     {
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
+        Cache::forget('nbp.table_a.rates');
+        Http::fake([
+            'api.nbp.pl/*' => Http::response([[
+                'effectiveDate' => '2026-08-27',
+                'rates' => [
+                    ['code' => 'EUR', 'mid' => 4.0],
+                ],
+            ]]),
+        ]);
     }
 
     public function test_products_can_be_filtered_by_manufacturer(): void
@@ -117,16 +128,59 @@ final class ProductIndexApiTest extends TestCase
             ->assertJsonPath('data.0.sku', 'NONE-1');
     }
 
-    public function test_products_index_accepts_per_page_up_to_500(): void
+    public function test_products_index_accepts_per_page_sizes_and_all(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
-        $this->getJson('/api/products?per_page=500')
+        $this->getJson('/api/products?per_page=50')
             ->assertOk()
-            ->assertJsonPath('per_page', 500);
+            ->assertJsonPath('per_page', 50);
 
-        $this->getJson('/api/products?per_page=600')
+        $this->getJson('/api/products?per_page=1000')
             ->assertOk()
-            ->assertJsonPath('per_page', 500);
+            ->assertJsonPath('per_page', 1000);
+
+        $this->getJson('/api/products?per_page=2000')
+            ->assertOk()
+            ->assertJsonPath('per_page', 1000);
+
+        $this->getJson('/api/products?per_page=all')
+            ->assertOk()
+            ->assertJsonPath('per_page', 25000);
+    }
+
+    public function test_products_index_sorts_price_by_pln_using_nbp_rate(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'EUR-10',
+            'name' => 'Euro',
+            'manufacturer' => 'A',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'currency' => 'EUR',
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'PLN-30',
+            'name' => 'Zloty',
+            'manufacturer' => 'A',
+            'catalog_price_net' => 30,
+            'purchase_price' => 15,
+            'currency' => 'PLN',
+            'stock' => 1,
+        ]);
+
+        $this->getJson('/api/products?sort=catalog_price_net&dir=desc')
+            ->assertOk()
+            ->assertJsonPath('data.0.sku', 'EUR-10')
+            ->assertJsonPath('data.1.sku', 'PLN-30')
+            ->assertJsonPath('data.0.price_pln', 40);
+
+        $this->getJson('/api/products?sort=catalog_price_net&dir=asc')
+            ->assertOk()
+            ->assertJsonPath('data.0.sku', 'PLN-30')
+            ->assertJsonPath('data.1.sku', 'EUR-10');
     }
 }
