@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use Illuminate\Console\Command;
@@ -48,6 +49,11 @@ final class CatalogIndexCommand extends Command
 
                 continue;
             }
+            if ($missingOnly && $this->hasAttempted($host)) {
+                $this->line('    pomijam — już sprawdzane');
+
+                continue;
+            }
             if ($freshDays > 0 && $this->indexedRecently($host, $freshDays)) {
                 $this->line('    pomijam — zaindeksowane w ostatnich '.$freshDays.' dniach');
 
@@ -55,6 +61,7 @@ final class CatalogIndexCommand extends Command
             }
             try {
                 $result = $indexer->index($host, $max, $seconds);
+                $this->rememberAttempt($host, $result['saved'], $result['off_host']);
                 $total += $result['saved'];
                 $this->info(sprintf(
                     '    %d adresów (sitemap: %d)%s%s',
@@ -64,6 +71,7 @@ final class CatalogIndexCommand extends Command
                     $result['timed_out'] ? ', przerwane limitem czasu' : ''
                 ));
             } catch (Throwable $e) {
+                $this->rememberAttempt($host, 0, 0);
                 $failed++;
                 $this->warn('    '.$e->getMessage());
             }
@@ -141,5 +149,22 @@ final class CatalogIndexCommand extends Command
     private function hasIndexedPages(string $host): bool
     {
         return CatalogPage::query()->where('host', $host)->exists();
+    }
+
+    private function hasAttempted(string $host): bool
+    {
+        return CatalogHost::query()->where('host', $host)->exists();
+    }
+
+    private function rememberAttempt(string $host, int $pages, int $offHost): void
+    {
+        CatalogHost::query()->updateOrCreate(
+            ['host' => $host],
+            [
+                'pages_count' => $pages,
+                'off_host_count' => $offHost,
+                'last_attempt_at' => now(),
+            ]
+        );
     }
 }

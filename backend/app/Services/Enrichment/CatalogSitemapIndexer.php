@@ -42,6 +42,11 @@ final class CatalogSitemapIndexer
 
     private const CANDIDATE_PATHS = [
         '/sitemap.xml',
+        '/sitemap.xml.gz',
+        // Magento 2 — robots często nie wskazuje mapy, a /sitemap.xml to 404
+        '/media/sitemap.xml',
+        '/pub/media/sitemap.xml',
+        '/media/sitemap/sitemap.xml',
         '/sitemap_index.xml',
         '/sitemap-index.xml',
         '/sitemapindex.xml',
@@ -141,6 +146,17 @@ final class CatalogSitemapIndexer
             if (microtime(true) >= $deadline) {
                 $timedOut = true;
             }
+            // robots.txt bywa bez Sitemap albo wskazuje 404 — wtedy zgadujemy typowe ścieżki
+            if ($i === count($sitemaps) - 1 && count($seen) === 0 && ! $timedOut) {
+                foreach ($this->candidateUrls($host) as $extra) {
+                    if (count($sitemaps) >= self::MAX_SITEMAP_FILES) {
+                        break;
+                    }
+                    if (! in_array($extra, $sitemaps, true)) {
+                        $sitemaps[] = $extra;
+                    }
+                }
+            }
         }
 
         if ($rows !== []) {
@@ -171,12 +187,25 @@ final class CatalogSitemapIndexer
         }
 
         if ($out === []) {
-            // część sklepów serwuje mapę tylko pod „www”
-            foreach ([$host, 'www.'.$host] as $variant) {
-                foreach (self::CANDIDATE_PATHS as $path) {
-                    $out[] = 'https://'.$variant.$path;
-                }
-            }
+            $out = $this->candidateUrls($host);
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function candidateUrls(string $host): array
+    {
+        $host = $this->normalizeHost($host);
+        $out = [];
+        foreach (self::CANDIDATE_PATHS as $path) {
+            $out[] = 'https://'.$host.$path;
+        }
+        // www tylko dla najczęściej działających ścieżek — reszta tylko wydłuża update
+        foreach (['/sitemap.xml', '/sitemap.xml.gz', '/media/sitemap.xml', '/pub/media/sitemap.xml'] as $path) {
+            $out[] = 'https://www.'.$host.$path;
         }
 
         return array_values(array_unique($out));

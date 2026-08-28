@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\Product;
 use App\Services\Enrichment\CatalogIndexSearch;
@@ -136,6 +137,92 @@ final class CatalogIndexTest extends TestCase
 
         $this->assertSame(0, $result['urls']);
         $this->assertSame([], $result['sitemaps']);
+    }
+
+    public function test_uses_magento_media_sitemap_when_robots_has_none(): void
+    {
+        Http::fake([
+            'https://bpbhp.pl/robots.txt' => Http::response("User-agent: *\nDisallow: /search\n", 200),
+            'https://bpbhp.pl/media/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121</loc></url>'
+                .'</urlset>',
+                200
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('bpbhp.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121',
+        ]);
+    }
+
+    public function test_falls_back_to_media_sitemap_when_robots_map_is_empty(): void
+    {
+        Http::fake([
+            'https://bpbhp.pl/robots.txt' => Http::response(
+                "Sitemap: https://bpbhp.pl/sitemap.xml\n",
+                200
+            ),
+            'https://bpbhp.pl/sitemap.xml' => Http::response(
+                '<!DOCTYPE html><html><head><title>Brak</title></head></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://bpbhp.pl/media/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-111</loc></url>'
+                .'</urlset>',
+                200
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('bpbhp.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-111',
+        ]);
+    }
+
+    public function test_missing_only_skips_host_already_checked_without_pages(): void
+    {
+        Http::fake();
+        CatalogHost::query()->create([
+            'host' => 'gvarant.pl',
+            'pages_count' => 0,
+            'off_host_count' => 0,
+            'last_attempt_at' => now(),
+        ]);
+
+        $this->artisan('catalog:index', [
+            'host' => 'gvarant.pl',
+            '--missing-only' => true,
+        ])->expectsOutputToContain('już sprawdzane')->assertSuccessful();
+
+        Http::assertNothingSent();
+    }
+
+    public function test_missing_only_skips_host_whose_urls_were_on_another_domain(): void
+    {
+        Http::fake();
+        CatalogHost::query()->create([
+            'host' => 'sklep.prohaccp.pl',
+            'pages_count' => 4548,
+            'off_host_count' => 4548,
+            'last_attempt_at' => now(),
+        ]);
+
+        $this->artisan('catalog:index', [
+            'host' => 'sklep.prohaccp.pl',
+            '--missing-only' => true,
+        ])->expectsOutputToContain('już sprawdzane')->assertSuccessful();
+
+        Http::assertNothingSent();
     }
 
     public function test_soft_404_page_is_not_counted_as_sitemap(): void
