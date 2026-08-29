@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\RegisterManufacturerCatalogJob;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -54,6 +56,8 @@ final class PriceListUpdateApiTest extends TestCase
             'product_ids' => [$p1->id, $p2->id],
         ]);
 
+        Bus::fake([RegisterManufacturerCatalogJob::class]);
+
         $this->patchJson("/api/price-lists/{$list->id}", [
             'manufacturer' => 'ATG',
             'version' => '2026-07',
@@ -65,5 +69,6 @@ final class PriceListUpdateApiTest extends TestCase
 
         $this->assertDatabaseHas('products', ['id' => $p1->id, 'manufacturer' => 'ATG']);
         $this->assertDatabaseHas('products', ['id' => $p2->id, 'manufacturer' => 'ATG']);
+        Bus::assertDispatched(RegisterManufacturerCatalogJob::class);
     }
 }

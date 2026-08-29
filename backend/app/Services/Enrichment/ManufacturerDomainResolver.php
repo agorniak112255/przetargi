@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Exceptions\TavilyQuotaExceededException;
+use App\Models\ManufacturerSite;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
 use Illuminate\Support\Facades\Cache;
@@ -43,6 +44,10 @@ final class ManufacturerDomainResolver
                 $this->domainsFromConfig('urgent')
             )));
         }
+        $mapped = array_values(array_unique(array_merge(
+            $mapped,
+            ManufacturerSite::hostsForBrand($brand)
+        )));
         if ($mapped !== []) {
             return $mapped;
         }
@@ -120,6 +125,7 @@ final class ManufacturerDomainResolver
             $found = $this->discoverFromResults($product, $skuRows !== [] ? $skuRows : $rows);
             if ($found !== []) {
                 Cache::put($cacheKey, $found, now()->addDays(30));
+                ManufacturerSite::remember($brand, $mfr, $found, 'discovered');
             }
             Log::info('Discovered manufacturer domains', ['brand' => $brand, 'domains' => $found]);
 
@@ -158,6 +164,26 @@ final class ManufacturerDomainResolver
         }
 
         return $out;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function configDomainsFor(Product $product): array
+    {
+        $brand = $this->brandKey((string) $product->manufacturer);
+        if ($brand === '') {
+            return [];
+        }
+        $mapped = $this->domainsFromConfig($brand);
+        if ($this->identity->looksLikeUrgentGloveSeries($product)) {
+            $mapped = array_values(array_unique(array_merge(
+                $mapped,
+                $this->domainsFromConfig('urgent')
+            )));
+        }
+
+        return $mapped;
     }
 
     /**

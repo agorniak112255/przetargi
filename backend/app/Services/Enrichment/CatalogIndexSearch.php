@@ -56,6 +56,9 @@ final class CatalogIndexSearch
         foreach ($this->identity->modelAliases($product) as $alias) {
             $raw[] = $alias;
         }
+        foreach ($this->identity->shopIdentityPhrases($product) as $phrase) {
+            $raw[] = $phrase;
+        }
 
         $out = [];
         foreach ($raw as $code) {

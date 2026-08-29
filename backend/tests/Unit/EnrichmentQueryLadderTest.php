@@ -550,4 +550,70 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertStringNotContainsString('wodoochronne', $phrase);
         $this->assertStringContainsString('ostrzegawcza', $phrase);
     }
+
+    public function test_descriptive_apparel_sku_searches_model_not_type_words(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $cap = new Product([
+            'manufacturer' => 'PANTHER',
+            'sku' => 'CZAPKA-DASZKIEM-GRZMOT-DUO-74',
+            'name' => 'Czapka daszkiem GRZMOT DUO',
+        ]);
+        $jacket = new Product([
+            'manufacturer' => 'PANTHER',
+            'sku' => 'KURTKA-OCIEPLANA-TARAJ-HV-55',
+            'name' => 'Kurtka ocieplana TARAJ HV',
+        ]);
+        $sweat = new Product([
+            'manufacturer' => 'PANTHER',
+            'sku' => 'BLUZA-SZWEDZKA-GRZMOT-BASIC-57',
+            'name' => 'Bluza szwedzka GRZMOT BASIC',
+        ]);
+        $shoes = new Product([
+            'manufacturer' => 'MEDIBUT',
+            'sku' => 'MEDIBUT-COMO-BASIC-HAPPY',
+            'name' => 'Półbuty COMO BASIC HAPPY',
+        ]);
+
+        $this->assertSame('GRZMOT-DUO', $identity->internalSkuCore($cap));
+        $this->assertSame('TARAJ-HV', $identity->internalSkuCore($jacket));
+        $this->assertSame('GRZMOT-BASIC', $identity->internalSkuCore($sweat));
+        $this->assertSame('', $identity->internalSkuCore($shoes));
+        $this->assertContains('GRZMOT DUO', $identity->shopIdentityPhrases($cap));
+        $this->assertContains('TARAJ HV', $identity->shopIdentityPhrases($jacket));
+        $this->assertContains('GRZMOT BASIC', $identity->shopIdentityPhrases($sweat));
+        $this->assertContains('COMO BASIC', $identity->shopIdentityPhrases($shoes));
+
+        $capQ = implode(' | ', $identity->primaryQueries($cap));
+        $this->assertStringContainsString('GRZMOT DUO', $capQ);
+        $this->assertStringNotContainsString('CZAPKA DASZKIEM PANTHER', $capQ);
+
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sklep.example/czapka-grzmot-duo Czapka z daszkiem GRZMOT DUO PANTHER',
+            $cap
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sklep.example/kurtka-ocieplana-taraj-hv Kurtka ocieplana TARAJ HV',
+            $jacket
+        ));
+        $this->assertFalse($identity->pageClaimsAnotherCode(
+            'https://sklep.example/kurtka-ocieplana-taraj-hv-55',
+            'Kurtka ocieplana TARAJ HV 55',
+            $jacket
+        ));
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://sklep.example/kurtka-kardif Kurtka Kardif PANTHER',
+            $jacket
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sklep.example/bluza-szwedzka-grzmot-basic Bluza szwedzka GRZMOT BASIC PANTHER',
+            $sweat
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://medibut.pl/polbuty-como-basic Półbuty Medibut COMO BASIC HAPPY',
+            $shoes
+        ));
+        $this->assertContains('panther-safety.com', $identity->catalogSearchHosts($cap));
+        $this->assertContains('medibut.pl', $identity->catalogSearchHosts($shoes));
+    }
 }

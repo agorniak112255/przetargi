@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v32';
+    private const SEARCH_CACHE_VERSION = 'v33';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -228,7 +228,8 @@ class HybridWebSearchService
 
         if ($merged === []) {
             if ($this->identity->looksLikeInternalSku($product)
-                && $this->identity->internalSkuCore($product) === '') {
+                && $this->identity->internalSkuCore($product) === ''
+                && $this->identity->shopIdentityPhrases($product) === []) {
                 throw new RuntimeException(
                     'SKU '.$product->sku.' wygląda na kod z naszego cennika, a nie numer katalogowy '
                     .'producenta — w internecie takiego kodu nie ma. Uzupełnij kod producenta w produkcie. '
@@ -521,6 +522,16 @@ class HybridWebSearchService
         foreach ($queries as $query) {
             if (preg_match('/\bsite:/i', $query) === 1) {
                 $ladder[] = $query;
+            }
+        }
+        if ($ladder === []) {
+            $phrase = $this->identity->shopIdentityPhrases($product)[0] ?? '';
+            foreach ($this->manufacturers->domainsFor($product) as $host) {
+                $bare = preg_replace('/^www\./', '', mb_strtolower(trim($host))) ?? $host;
+                if ($bare === '' || $phrase === '') {
+                    continue;
+                }
+                $ladder[] = 'site:'.$bare.' '.$phrase;
             }
         }
         $ladder = array_slice($ladder, 0, 2);

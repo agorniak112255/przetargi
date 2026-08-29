@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Jobs\RegisterManufacturerCatalogJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\PriceList;
 use App\Models\Product;
@@ -373,6 +374,8 @@ final class PriceListImportService
                 ReindexProductEmbeddingJob::dispatch($productId);
             }
         }
+
+        RegisterManufacturerCatalogJob::dispatch($manufacturer, $productIds[0] ?? 0);
 
         return [
             'price_list' => $priceList->load('importer:id,name'),

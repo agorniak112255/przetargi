@@ -6,6 +6,7 @@ namespace App\Console\Commands;
 
 use App\Models\CatalogHost;
 use App\Models\CatalogPage;
+use App\Models\ManufacturerSite;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use Illuminate\Console\Command;
 use Throwable;
@@ -115,6 +116,9 @@ final class CatalogIndexCommand extends Command
                     $out[] = $domain;
                 }
             }
+        }
+        foreach (ManufacturerSite::allHosts() as $domain) {
+            $out[] = $domain;
         }
 
         $normalized = [];

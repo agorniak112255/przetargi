@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\RegisterManufacturerCatalogJob;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
@@ -152,6 +153,14 @@ class PriceListController extends Controller
         });
 
         $priceList->load('importer:id,name');
+
+        if (array_key_exists('manufacturer', $data)
+            && $oldManufacturer !== $priceList->manufacturer) {
+            RegisterManufacturerCatalogJob::dispatch(
+                (string) $priceList->manufacturer,
+                $productIds[0] ?? 0
+            );
+        }
 
         return response()->json([
             'price_list' => $priceList,
