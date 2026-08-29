@@ -1,10 +1,6 @@
 import { useState } from 'react'
 import { EnrichmentBatchLogModal } from './EnrichmentBatchLogModal'
-import {
-  enrichmentPriceListHref,
-  enrichmentProductHref,
-  type EnrichmentBatch,
-} from '../lib/api'
+import { enrichmentProductHref, type EnrichmentBatch } from '../lib/api'
 
 type Props = {
   batches: EnrichmentBatch[]
@@ -42,7 +38,6 @@ function EnrichmentProgressItem({
   idleLabel: string
   onLog: () => void
 }) {
-  const priceHref = enrichmentPriceListHref(batch)
   const productHref = enrichmentProductHref(batch)
   const title = (
     <>
@@ -66,36 +61,23 @@ function EnrichmentProgressItem({
           Log produktów
         </button>
       </div>
-      {priceHref ? (
-        <a
-          href={priceHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block rounded hover:bg-blue-100/70"
-          title={`Cennik: ${batch.manufacturer}`}
-        >
-          <p className="font-semibold underline decoration-blue-300 underline-offset-2">{title}</p>
-          {batch.manufacturer && (
-            <p className="font-normal text-blue-800">Producent: {batch.manufacturer}</p>
-          )}
-          <div className="mt-1 h-2 overflow-hidden rounded bg-blue-100">
-            <div
-              className="h-full animate-pulse bg-blue-500 transition-all"
-              style={{ width: `${Math.max(6, batch.progress_percent)}%` }}
-            />
-          </div>
-        </a>
-      ) : (
-        <>
-          <p className="font-semibold">{title}</p>
-          <div className="mt-1 h-2 overflow-hidden rounded bg-blue-100">
-            <div
-              className="h-full animate-pulse bg-blue-500 transition-all"
-              style={{ width: `${Math.max(6, batch.progress_percent)}%` }}
-            />
-          </div>
-        </>
-      )}
+      <button
+        type="button"
+        onClick={onLog}
+        className="block w-full rounded text-left hover:bg-blue-100/70"
+        title="Log produktów tego joba"
+      >
+        <p className="font-semibold underline decoration-blue-300 underline-offset-2">{title}</p>
+        {batch.manufacturer && (
+          <p className="font-normal text-blue-800">Producent: {batch.manufacturer}</p>
+        )}
+        <div className="mt-1 h-2 overflow-hidden rounded bg-blue-100">
+          <div
+            className="h-full animate-pulse bg-blue-500 transition-all"
+            style={{ width: `${Math.max(6, batch.progress_percent)}%` }}
+          />
+        </div>
+      </button>
       {productHref && batch.current_sku ? (
         <a
           href={productHref}

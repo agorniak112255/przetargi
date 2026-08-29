@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { EnrichmentBatchLogModal } from './EnrichmentBatchLogModal'
 import {
   api,
-  enrichmentPriceListHref,
   enrichmentProductHref,
   parseActiveEnrichment,
   type EnrichmentBatch,
@@ -30,7 +29,6 @@ function EnrichmentJobRow({
   onCancel?: () => void
   onLog: () => void
 }) {
-  const priceHref = enrichmentPriceListHref(batch)
   const productHref = enrichmentProductHref(batch)
   const header = (
     <>
@@ -43,19 +41,14 @@ function EnrichmentJobRow({
   return (
     <li className="flex flex-wrap items-center justify-between gap-2 rounded border border-amber-200 bg-white px-2 py-1.5">
       <div className="min-w-0 text-[11px] text-slate-700">
-        {priceHref ? (
-          <a
-            href={priceHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block font-medium text-blue-800 hover:underline"
-            title={`Cennik: ${batch.manufacturer}`}
-          >
-            {header}
-          </a>
-        ) : (
-          <p className="font-medium">{header}</p>
-        )}
+        <button
+          type="button"
+          onClick={onLog}
+          className="block text-left font-medium text-blue-800 hover:underline"
+          title="Log produktów tego joba"
+        >
+          {header}
+        </button>
         {batch.manufacturer && <p className="text-slate-600">Producent: {batch.manufacturer}</p>}
         <p className="truncate text-slate-500" title={batch.message ?? ''}>
           {batch.done + batch.failed}/{batch.total}

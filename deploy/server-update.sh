@@ -5,14 +5,16 @@
 #
 #   bash deploy/server-update.sh              # sam kod (szybko)
 #   bash deploy/server-update.sh --katalog    # + indeks sitemap sklepów (kilka–kilkanaście min)
+#   bash deploy/server-update.sh --indeks     # + pełne przeliczenie search_blob produktów
 #   bash deploy/server-update.sh /ścieżka
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Użycie: server-update.sh [--katalog|--bez-katalogu] [katalog_aplikacji]
+Użycie: server-update.sh [--katalog|--indeks|--bez-katalogu] [katalog_aplikacji]
 
-  (bez flagi)       pull, migracje, cache — bez indeksu kart sklepów
+  (bez flagi)       pull, migracje, cache — bez pełnego skanu 20k produktów
+  --indeks          products:rebuild-search-index (wolny pasek 0–100%)
   --katalog         dodatkowo catalog:index --missing-only (długo)
   --bez-katalogu    to samo co bez flagi (na wszelki wypadek)
   --help            ten tekst
@@ -21,10 +23,12 @@ EOF
 
 APP_ROOT="/var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl"
 INDEX_CATALOG=0
+INDEX_SEARCH=0
 
 for arg in "$@"; do
   case "$arg" in
     --katalog|--catalog) INDEX_CATALOG=1 ;;
+    --indeks|--search-index) INDEX_SEARCH=1 ;;
     --bez-katalogu|--skip-catalog) INDEX_CATALOG=0 ;;
     --help|-h) usage; exit 0 ;;
     /*) APP_ROOT="$arg" ;;
@@ -105,10 +109,15 @@ echo "==> cache"
 "$PHP_BIN" artisan route:cache || true
 "$PHP_BIN" artisan view:cache || true
 
-# Po migracji dodającej search_blob kolumna jest pusta, a wyszukiwarka AI opiera się
-# na niej w całości. Komenda jest idempotentna (hash), więc kolejne deploye są tanie.
-echo "==> indeks wyszukiwania produktów"
-"$PHP_BIN" artisan products:rebuild-search-index || true
+# Pełny skan 20k kart trwa minutami nawet gdy nic się nie zmienia.
+# Indeks był już liczony — odpalaj tylko po migracji kolumny albo --indeks.
+if [[ "$INDEX_SEARCH" -eq 1 ]]; then
+  echo "==> indeks wyszukiwania produktów"
+  "$PHP_BIN" artisan products:rebuild-search-index || true
+else
+  echo "==> indeks wyszukiwania produktów pominięty (szybszy update)"
+  echo "    gdy trzeba:  bash $APP_ROOT/deploy/server-update.sh --indeks"
+fi
 
 if [[ "$INDEX_CATALOG" -eq 1 ]]; then
   echo "==> indeks kart sklepów (tylko nowe domeny)"
