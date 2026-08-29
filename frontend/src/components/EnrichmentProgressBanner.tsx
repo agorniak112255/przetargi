@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { EnrichmentBatchLogModal } from './EnrichmentBatchLogModal'
 import {
   enrichmentPriceListHref,
   enrichmentProductHref,
@@ -10,6 +12,8 @@ type Props = {
 }
 
 export function EnrichmentProgressBanner({ batches, idleLabel = 'W kolejce…' }: Props) {
+  const [logBatch, setLogBatch] = useState<EnrichmentBatch | null>(null)
+
   if (batches.length === 0) {
     return null
   }
@@ -17,8 +21,14 @@ export function EnrichmentProgressBanner({ batches, idleLabel = 'W kolejce…' }
   return (
     <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900">
       {batches.map((batch) => (
-        <EnrichmentProgressItem key={batch.id} batch={batch} idleLabel={idleLabel} />
+        <EnrichmentProgressItem
+          key={batch.id}
+          batch={batch}
+          idleLabel={idleLabel}
+          onLog={() => setLogBatch(batch)}
+        />
       ))}
+      <EnrichmentBatchLogModal batch={logBatch} onClose={() => setLogBatch(null)} />
     </div>
   )
 }
@@ -26,9 +36,11 @@ export function EnrichmentProgressBanner({ batches, idleLabel = 'W kolejce…' }
 function EnrichmentProgressItem({
   batch,
   idleLabel,
+  onLog,
 }: {
   batch: EnrichmentBatch
   idleLabel: string
+  onLog: () => void
 }) {
   const priceHref = enrichmentPriceListHref(batch)
   const productHref = enrichmentProductHref(batch)
@@ -45,6 +57,15 @@ function EnrichmentProgressItem({
 
   return (
     <div className="mb-2 last:mb-0">
+      <div className="mb-1 flex justify-end">
+        <button
+          type="button"
+          onClick={onLog}
+          className="rounded border border-blue-400 bg-white px-2 py-0.5 text-[11px] font-medium text-blue-900 hover:bg-blue-100"
+        >
+          Log produktów
+        </button>
+      </div>
       {priceHref ? (
         <a
           href={priceHref}

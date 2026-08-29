@@ -92,7 +92,7 @@ function EnrichmentJobRow({
           onClick={onLog}
           className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-800 hover:bg-slate-50"
         >
-          Log
+          Log produktów
         </button>
         {onCancel ? (
           <button
