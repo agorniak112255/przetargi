@@ -53,4 +53,45 @@ final class RetailerOnSiteSearchTest extends TestCase
             'manufacturer' => 'Ansell',
         ])));
     }
+
+    public function test_mapa_query_uses_catalog_name_without_size(): void
+    {
+        $search = app(RetailerOnSiteSearch::class);
+        $product = new Product([
+            'sku' => 'KRYTECH-563-11',
+            'name' => 'KRYTECH 563',
+            'manufacturer' => 'MAPA',
+        ]);
+
+        $this->assertSame('KRYTECH 563', $search->query($product));
+    }
+
+    public function test_mapa_keeps_matching_model_and_drops_neighbour(): void
+    {
+        Http::fake([
+            'https://www.mapa-pro.pl/wyszukiwanie-zaawansowane*' => Http::response(
+                '<h3 class="product-name"><a href="/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-643">KryTech 643</a></h3>'
+                .'<h3 class="product-name"><a href="/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-563">KryTech 563</a></h3>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $product = new Product([
+            'sku' => 'KRYTECH-563-11',
+            'name' => 'KRYTECH 563',
+            'manufacturer' => 'MAPA',
+        ]);
+        $hits = app(RetailerOnSiteSearch::class)->find($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains(
+            'https://mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-563',
+            $urls
+        );
+        $this->assertNotContains(
+            'https://mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-643',
+            $urls
+        );
+    }
 }

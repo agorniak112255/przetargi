@@ -10,7 +10,8 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Szuka karty w wyszukiwarce sklepu (Magento / Presta), gdy Google/DDG dają 429.
+ * Szuka karty w wyszukiwarce sklepu (Magento / Presta) albo katalogu MAPA,
+ * gdy Google/DDG dają 429.
  */
 final class RetailerOnSiteSearch
 {
@@ -22,6 +23,12 @@ final class RetailerOnSiteSearch
         ['host' => 'icd.pl', 'template' => 'https://icd.pl/szukaj?controller=search&s={q}'],
     ];
 
+    /** @var array{host: string, template: string} */
+    private const MAPA_ENDPOINT = [
+        'host' => 'mapa-pro.pl',
+        'template' => 'https://www.mapa-pro.pl/wyszukiwanie-zaawansowane?tx_solr[filter][0]=type:tx_mapaproduct_domain_model_product&tx_solr[q]={q}',
+    ];
+
     public function __construct(private readonly ProductSearchIdentity $identity) {}
 
     /**
@@ -29,7 +36,8 @@ final class RetailerOnSiteSearch
      */
     public function find(Product $product): array
     {
-        if ($this->identity->ansellStyleCodes($product) === []) {
+        $endpoints = $this->endpointsFor($product);
+        if ($endpoints === []) {
             return [];
         }
         $queries = array_values(array_filter([$this->query($product), $this->queryBareModel($product)]));
@@ -40,12 +48,17 @@ final class RetailerOnSiteSearch
         $out = [];
         $seen = [];
         foreach ($queries as $query) {
-            foreach (self::ENDPOINTS as $endpoint) {
-                $html = $this->download(str_replace('{q}', rawurlencode($query), $endpoint['template']));
-                if ($html === '') {
+            foreach ($endpoints as $endpoint) {
+                $page = $this->fetch(str_replace('{q}', rawurlencode($query), $endpoint['template']));
+                $hits = $this->productLinks($page['html'], $endpoint['host']);
+                $redirect = $this->productPageFromRedirect($page['url'], $endpoint['host']);
+                if ($redirect !== null) {
+                    array_unshift($hits, $redirect);
+                }
+                if ($hits === []) {
                     continue;
                 }
-                foreach ($this->productLinks($html, $endpoint['host']) as $hit) {
+                foreach ($hits as $hit) {
                     $key = mb_strtolower($hit['url']);
                     if (isset($seen[$key])) {
                         continue;
@@ -69,6 +82,10 @@ final class RetailerOnSiteSearch
 
     public function query(Product $product): string
     {
+        if ($this->isMapa($product)) {
+            return $this->identity->mapaCatalogName($product);
+        }
+
         $early = $this->identity->ansellSearchPhrases($product, 'early');
         if ($early !== []) {
             return $early[0];
@@ -113,7 +130,7 @@ final class RetailerOnSiteSearch
             }
             $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
             if ($path === '' || $path === '/'
-                || preg_match('#/(search|catalogsearch|category|kategoria|customer|checkout|cart|login)#u', $path) === 1) {
+                || preg_match('#/(search|catalogsearch|wyszukiwanie|category|kategoria|customer|checkout|cart|login)#u', $path) === 1) {
                 continue;
             }
             $title = trim(html_entity_decode(strip_tags($hit[2]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
@@ -130,7 +147,60 @@ final class RetailerOnSiteSearch
         return array_values($out);
     }
 
-    private function download(string $url): string
+    /**
+     * @return list<array{host: string, template: string}>
+     */
+    private function endpointsFor(Product $product): array
+    {
+        if ($this->isMapa($product)) {
+            return [self::MAPA_ENDPOINT];
+        }
+        if ($this->identity->ansellStyleCodes($product) !== []) {
+            return self::ENDPOINTS;
+        }
+
+        return [];
+    }
+
+    private function isMapa(Product $product): bool
+    {
+        return str_contains(mb_strtolower($this->identity->shortBrand((string) $product->manufacturer)), 'mapa');
+    }
+
+    /**
+     * Solr MAPA przy jednym trafieniu robi 303 na /strona-produktu/….
+     *
+     * @return array{url: string, title: string, snippet: string}|null
+     */
+    private function productPageFromRedirect(string $url, string $host): ?array
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return null;
+        }
+        $pageHost = mb_strtolower((string) parse_url($url, PHP_URL_HOST));
+        $pageHost = preg_replace('/^www\./', '', $pageHost) ?? $pageHost;
+        if ($pageHost !== $host && ! str_ends_with($pageHost, '.'.$host)) {
+            return null;
+        }
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        if (! str_contains($path, '/strona-produktu/')) {
+            return null;
+        }
+        $slug = trim((string) basename($path), '/');
+        $title = trim(str_replace('-', ' ', $slug));
+
+        return [
+            'url' => $url,
+            'title' => $title !== '' ? $title : $url,
+            'snippet' => '',
+        ];
+    }
+
+    /**
+     * @return array{html: string, url: string}
+     */
+    private function fetch(string $url): array
     {
         try {
             $response = Http::timeout(8)
@@ -141,17 +211,21 @@ final class RetailerOnSiteSearch
                 ])
                 ->get($url);
             if (! $response->successful()) {
-                return '';
+                return ['html' => '', 'url' => ''];
             }
+            $final = (string) ($response->effectiveUri() ?? $url);
 
-            return (string) $response->body();
+            return [
+                'html' => (string) $response->body(),
+                'url' => $final !== '' ? $final : $url,
+            ];
         } catch (Throwable $e) {
             Log::info('Retailer on-site search failed', [
                 'url' => $url,
                 'error' => $e->getMessage(),
             ]);
 
-            return '';
+            return ['html' => '', 'url' => ''];
         }
     }
 }

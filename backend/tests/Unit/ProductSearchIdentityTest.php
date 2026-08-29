@@ -311,6 +311,30 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertStringContainsString('site:optimumbhp.pl', $joined);
     }
 
+    public function test_mapa_search_queries_target_polish_catalog(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'KRYTECH-563-11',
+            'name' => 'KRYTECH 563',
+            'manufacturer' => 'MAPA',
+        ]);
+
+        $this->assertSame('KRYTECH 563', $id->mapaCatalogName($product));
+        $this->assertSame(['KRYTECH 563'], $id->variantBaseCodes($product));
+
+        $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('site:mapa-pro.pl KRYTECH 563', $joined);
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-563 KryTech 563',
+            $product
+        ));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-643 KryTech 643',
+            $product
+        ));
+    }
+
     public function test_search_phrase_always_appends_manufacturer(): void
     {
         $id = new ProductSearchIdentity;

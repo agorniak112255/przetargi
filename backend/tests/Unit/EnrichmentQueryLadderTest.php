@@ -323,6 +323,14 @@ final class EnrichmentQueryLadderTest extends TestCase
             'name' => 'Kurtka ostrzegawcza URG-914',
         ]);
         $this->assertSame([], $identity->variantBaseCodes($plain));
+
+        $mapa = new Product([
+            'manufacturer' => 'MAPA',
+            'sku' => 'KRYTECH-563-11',
+            'name' => 'KRYTECH 563',
+        ]);
+        $this->assertSame(['KRYTECH 563'], $identity->variantBaseCodes($mapa));
+        $this->assertContains('KRYTECH 563 MAPA', $identity->primaryQueries($mapa));
     }
 
     public function test_only_page_titled_with_our_model_counts_as_product_card(): void
@@ -482,6 +490,28 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertSame('URG-914 Urgent', $ladder[0] ?? null);
         $this->assertLessThanOrEqual(4, count($ladder));
         $this->assertContains('Kurtka ostrzegawcza URG-914 Urgent', $ladder);
+    }
+
+    public function test_mapa_open_search_starts_on_polish_catalog(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'MAPA',
+            'sku' => 'KRYTECH-563-11',
+            'name' => 'KRYTECH 563',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+
+        /** @var list<string> $ladder */
+        $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
+
+        $this->assertNotEmpty($ladder);
+        $this->assertStringContainsString('site:mapa-pro.pl', $ladder[0] ?? '');
+        $this->assertStringContainsString('KRYTECH 563', $ladder[0] ?? '');
     }
 
     public function test_ansell_open_search_starts_on_bpbhp(): void

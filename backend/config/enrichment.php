@@ -87,7 +87,12 @@ return [
         'rostaing' => ['rostaing.com', 'www.rostaing.com'],
         'gvs' => ['gvs.com', 'www.gvs.com'],
         'weldas' => ['weldaseurope.com', 'www.weldaseurope.com', 'weldas.com', 'www.weldas.com'],
-        'mapa' => ['mapa-pro.com', 'www.mapa-pro.com'],
+        'mapa' => [
+            'mapa-pro.pl',
+            'www.mapa-pro.pl',
+            'mapa-pro.com',
+            'www.mapa-pro.com',
+        ],
         'cxs' => ['cxs.net.pl', 'www.cxs.net.pl', 'cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
         'canis' => ['cxs.net.pl', 'www.cxs.net.pl', 'cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
         'medibut' => ['medibut.pl', 'www.medibut.pl'],
@@ -248,5 +253,9 @@ return [
         'www.ejendals.com',
         'jalas.com',
         'www.jalas.com',
+        'mapa-pro.pl',
+        'www.mapa-pro.pl',
+        'mapa-pro.com',
+        'www.mapa-pro.com',
     ],
 ];

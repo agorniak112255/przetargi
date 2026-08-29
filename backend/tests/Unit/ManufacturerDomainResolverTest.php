@@ -185,6 +185,26 @@ final class ManufacturerDomainResolverTest extends TestCase
         ));
     }
 
+    public function test_resolves_mapa_polish_catalog_domain(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $product = new Product([
+            'manufacturer' => 'MAPA',
+            'sku' => 'KRYTECH-563-11',
+            'name' => 'KRYTECH 563',
+        ]);
+
+        $domains = $resolver->domainsFor($product);
+        $this->assertContains('mapa-pro.pl', $domains);
+        $this->assertContains('mapa-pro.com', $domains);
+        $this->assertTrue($resolver->isManufacturerUrl(
+            'https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-563',
+            $product,
+            $domains
+        ));
+        $this->assertContains('mapa-pro.pl', config('enrichment.preferred_domains'));
+    }
+
     public function test_pilne_gloves_use_urgent_manufacturer_domains(): void
     {
         $resolver = app(ManufacturerDomainResolver::class);

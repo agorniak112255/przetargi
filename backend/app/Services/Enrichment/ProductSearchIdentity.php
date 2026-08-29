@@ -725,6 +725,13 @@ final class ProductSearchIdentity
             }
         }
 
+        if ($phase === 'manufacturer' && str_contains(mb_strtolower($brand), 'mapa')) {
+            $model = $this->mapaCatalogName($product);
+            if ($model !== '') {
+                $queries[] = 'site:mapa-pro.pl '.$model;
+            }
+        }
+
         $queries[] = $this->productNameWithManufacturer($product);
 
         // 1) Jak Google — kod / nazwa zawsze z producentem
@@ -1191,6 +1198,20 @@ final class ProductSearchIdentity
     }
 
     /**
+     * Nazwa katalogowa MAPA (KryTech 563), bez rozmiaru z SKU (KRYTECH-563-11).
+     */
+    public function mapaCatalogName(Product $product): string
+    {
+        $name = trim((string) $product->name);
+        $sku = trim((string) $product->sku);
+        if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
+            return $name;
+        }
+
+        return $this->variantBaseCodes($product)[0] ?? $sku;
+    }
+
+    /**
      * Oznaczenie bez członu z wariantem: „MT-212-2” sprzedaje się jako „MASKA MT 212”,
      * a pełne „MT 212/2” zostaje dopiero w treści karty. Bez tej formy wyszukiwarka
      * zwraca wyłącznie sąsiedni model.
@@ -1202,7 +1223,7 @@ final class ProductSearchIdentity
         $out = [];
         foreach ([(string) $product->sku, (string) $product->name] as $source) {
             if (preg_match(
-                '/(?<![\p{L}\d])(\p{L}{1,4})[\s\-]?(\d{2,4})[\-\/](\d{1,2})(?![\d\p{L}])/u',
+                '/(?<![\p{L}\d])(\p{L}{1,12})[\s\-]?(\d{2,4})[\-\/](\d{1,2})(?![\d\p{L}])/u',
                 trim($source),
                 $hit
             ) === 1) {
