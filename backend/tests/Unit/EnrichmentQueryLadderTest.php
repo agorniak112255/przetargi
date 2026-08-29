@@ -582,7 +582,8 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertContains('GRZMOT DUO', $identity->shopIdentityPhrases($cap));
         $this->assertContains('TARAJ HV', $identity->shopIdentityPhrases($jacket));
         $this->assertContains('GRZMOT BASIC', $identity->shopIdentityPhrases($sweat));
-        $this->assertContains('COMO BASIC', $identity->shopIdentityPhrases($shoes));
+        $this->assertContains('COMO HAPPY', $identity->shopIdentityPhrases($shoes));
+        $this->assertSame('COMO HAPPY', $identity->shopIdentityPhrases($shoes)[0] ?? null);
 
         $capQ = implode(' | ', $identity->primaryQueries($cap));
         $this->assertStringContainsString('GRZMOT DUO', $capQ);
@@ -613,7 +614,149 @@ final class EnrichmentQueryLadderTest extends TestCase
             'https://medibut.pl/polbuty-como-basic Półbuty Medibut COMO BASIC HAPPY',
             $shoes
         ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://modernbhp.pl/klapki-medyczne-como-happy Klapki medyczne Como Happy',
+            $shoes
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.uniformshop.pl/obuwie-medyczne-medibut-como-print-happy '
+            .'Obuwie medyczne Medibut Como Print happy',
+            $shoes
+        ));
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://www.uniformshop.pl/obuwie-medyczne-medibut-como-biale '
+            .'Obuwie medyczne Medibut Como białe',
+            $shoes
+        ));
         $this->assertContains('panther-safety.com', $identity->catalogSearchHosts($cap));
         $this->assertContains('medibut.pl', $identity->catalogSearchHosts($shoes));
+    }
+
+    public function test_name_with_dash_variant_uses_shop_print_not_line_label(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'manufacturer' => 'MEDIBUT',
+            'sku' => 'MEDIBUT-COMO-BASIC-HAPPY',
+            'name' => 'COMO BASIC - HAPPY',
+        ]);
+
+        $this->assertContains('COMO HAPPY', $identity->shopIdentityPhrases($product));
+        $this->assertSame('COMO HAPPY MEDIBUT', $identity->primaryQueries($product)[0] ?? null);
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://obuwie-medyczne.pl/branze/como-happy COMO HAPPY',
+            $product
+        ));
+        $this->assertTrue($identity->urlOrTitleHasShopIdentity(
+            'https://modernbhp.pl/klapki-medyczne-como-happy',
+            'Klapki medyczne Como Happy',
+            $product
+        ));
+    }
+
+    public function test_warehouse_article_sku_uses_model_and_catalog_number(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $kent = new Product([
+            'manufacturer' => 'CANIS SAFETY',
+            'sku' => '212804580000',
+            'name' => 'KENT S3',
+        ]);
+        $beagle = new Product([
+            'manufacturer' => 'CANIS SAFETY',
+            'sku' => '211600170000',
+            'name' => 'BEAGLE',
+        ]);
+
+        $this->assertTrue($identity->looksLikeWarehouseArticleSku($kent));
+        $this->assertContains('2128-045-800', $identity->catalogArticleCodes($kent));
+        $this->assertContains('KENT S3', $identity->shopIdentityPhrases($kent));
+        $this->assertSame('KENT S3 CANIS SAFETY', $identity->primaryQueries($kent)[0] ?? null);
+        $this->assertStringContainsString('site:cxs.net.pl KENT S3', implode(' | ', $identity->searchQueries($kent, 'manufacturer')));
+        $this->assertStringNotContainsString('212804580000 CANIS', $identity->primaryQueries($kent)[0] ?? '');
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.ceneo.pl/polbut-kent-s3 Cxs Półbut Kent S3 2128-045-800',
+            $kent
+        ));
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://optimumbhp.pl/obuwie-robocze-cxs CXS Canis Marble S3',
+            $kent
+        ));
+
+        $this->assertContains('BEAGLE', $identity->shopIdentityPhrases($beagle));
+        $this->assertContains('2116-001-700', $identity->catalogArticleCodes($beagle));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://cxs.net.pl/beagle-s1 Buty BEAGLE CANIS SAFETY',
+            $beagle
+        ));
+    }
+
+    public function test_catalog_code_opens_official_site_after_short_query(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $tx39 = new Product([
+            'manufacturer' => 'Portwest',
+            'sku' => 'TX39',
+            'name' => 'Ogrodniczki robocze',
+        ]);
+        $this->assertTrue($identity->hasDistinctiveCatalogSku($tx39));
+        $this->assertContains('portwest.com', $identity->officialCatalogHosts($tx39));
+
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+        /** @var list<string> $ladder */
+        $ladder = $open->invoke($service, $tx39, $build->invoke($service, $tx39, 'manufacturer'));
+
+        $this->assertSame('TX39 Portwest', $ladder[0] ?? null);
+        $this->assertStringContainsString('site:portwest.com TX39', implode(' | ', $ladder));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sklep-system.pl/ogrodniczki-portwest-tx39-bremen Ogrodniczki robocze Portwest TX39 BREMEN',
+            $tx39
+        ));
+        $this->assertTrue($identity->pageClaimsAnotherCode(
+            'https://e-bormann.com.pl/ogrodniczki-texo-tx12',
+            'Ogrodniczki robocze dwukolorowe PORTWEST Texo TX12',
+            $tx39
+        ));
+    }
+
+    public function test_taille_it_suffix_searches_model_not_partial_letters(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $one = new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'ONE4ALL-IT08',
+            'name' => 'T8 GLOVES FOR PRECISION WORK WITH WEAR INDICATOR',
+        ]);
+        $opex = new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'OPSBT11',
+            'name' => 'T11 OPEX CUT RESISTANT GLOVES BLACK',
+        ]);
+
+        $this->assertSame(['ONE4ALL'], $identity->skuSizeVariants($one));
+        $this->assertSame('ONE4ALL', $identity->internalSkuCore($one));
+        $this->assertContains('ONE4ALL', $identity->shopIdentityPhrases($one));
+        $this->assertSame('ONE4ALL Rostaing', $identity->primaryQueries($one)[0] ?? null);
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.rostaing.com/gant-de-jardinage-one4all Gant de jardinage ONE4ALL Rostaing',
+            $one
+        ));
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://www.rostaing.com/gant-duranit-plus Gant DURANIT PLUS Rostaing',
+            $one
+        ));
+
+        $this->assertContains('OPEX', $identity->shopIdentityPhrases($opex));
+        $this->assertContains('OPSB', $identity->skuSizeVariants($opex));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.rostaing.com/gant-opex Gants OPEX cut resistant Rostaing',
+            $opex
+        ));
+        $this->assertStringContainsString('site:rostaing.com OPEX', implode(' | ', $identity->searchQueries($opex, 'manufacturer')));
     }
 }

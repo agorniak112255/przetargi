@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v33';
+    private const SEARCH_CACHE_VERSION = 'v35';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -516,25 +516,27 @@ class HybridWebSearchService
      */
     private function openSearchQueries(Product $product, array $queries): array
     {
-        $ladder = [];
-        // site: sklepu (bpbhp / Ardon) musi iść przed pełnym SKU — sklepy nie indeksują
-        // article number typu GR40T-00121-09, tylko model w slugu.
+        $siteQueries = [];
         foreach ($queries as $query) {
             if (preg_match('/\bsite:/i', $query) === 1) {
-                $ladder[] = $query;
+                $siteQueries[] = $query;
             }
         }
-        if ($ladder === []) {
+        if ($siteQueries === []) {
             $phrase = $this->identity->shopIdentityPhrases($product)[0] ?? '';
             foreach ($this->manufacturers->domainsFor($product) as $host) {
                 $bare = preg_replace('/^www\./', '', mb_strtolower(trim($host))) ?? $host;
                 if ($bare === '' || $phrase === '') {
                     continue;
                 }
-                $ladder[] = 'site:'.$bare.' '.$phrase;
+                $siteQueries[] = 'site:'.$bare.' '.$phrase;
             }
         }
-        $ladder = array_slice($ladder, 0, 2);
+        $siteQueries = array_slice($siteQueries, 0, 2);
+        // Model z cennika (KENT S3, KRYTECH 563) — najpierw site: katalogu.
+        // Sam kod katalogowy (TX39, URG-914) zostaje pierwszą frazą, site: dopiero za nią.
+        $preferSiteFirst = $siteQueries !== [];
+        $ladder = $preferSiteFirst ? $siteQueries : [];
         $legacy = $this->legacySafetyShoePhrase($product);
         if ($legacy !== '') {
             $ladder[] = $this->identity->queryWithManufacturer(
@@ -542,7 +544,14 @@ class HybridWebSearchService
                 $product
             );
         }
-        foreach ($this->identity->primaryQueries($product) as $query) {
+        $primary = $this->identity->primaryQueries($product);
+        if (! $preferSiteFirst && $primary !== []) {
+            $ladder[] = array_shift($primary);
+            foreach ($this->officialSiteQueriesForCatalogSku($product) as $siteQuery) {
+                $ladder[] = $siteQuery;
+            }
+        }
+        foreach ($primary as $query) {
             $ladder[] = $query;
         }
         foreach ($queries as $query) {
@@ -560,6 +569,30 @@ class HybridWebSearchService
             0,
             self::OPEN_QUERY_ATTEMPTS
         );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function officialSiteQueriesForCatalogSku(Product $product): array
+    {
+        if ($this->identity->shopIdentityPhrases($product) !== []
+            || ! $this->identity->hasDistinctiveCatalogSku($product)) {
+            return [];
+        }
+        $sku = trim((string) $product->sku);
+        if ($sku === '') {
+            return [];
+        }
+        $out = [];
+        foreach ($this->identity->officialCatalogHosts($product) as $host) {
+            $out[] = 'site:'.$host.' '.$sku;
+            if (count($out) >= 2) {
+                break;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -831,6 +864,12 @@ class HybridWebSearchService
                 $codes[] = $code;
             }
         }
+        foreach ($this->identity->shopIdentityPhrases($product) as $phrase) {
+            $phrase = mb_strtolower(trim($phrase));
+            if ($phrase !== '' && mb_strlen($phrase) >= 4) {
+                $codes[] = $phrase;
+            }
+        }
         if ($codes === []) {
             return [];
         }
@@ -937,6 +976,7 @@ class HybridWebSearchService
         }
 
         if ($this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
+            || $this->identity->urlOrTitleHasShopIdentity($url, $title, $product)
             || $this->identity->hayHasNamePhrase($url.' '.$title, $product)
             || $this->identity->hayMentionsProduct($url.' '.$title, $product)) {
             return true;

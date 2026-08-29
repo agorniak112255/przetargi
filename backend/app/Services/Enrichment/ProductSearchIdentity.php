@@ -30,7 +30,7 @@ final class ProductSearchIdentity
         'sweatshirt' => ['bluza', 'sweatshirt'],
         'vest' => ['kamizelk', 'vest'],
         'mask' => ['maska', 'maski', 'maske'],
-        'footwear' => ['buty', 'butow', 'obuwie', 'trzewik', 'polbut', 'footwear'],
+        'footwear' => ['buty', 'butow', 'obuwie', 'trzewik', 'polbut', 'footwear', 'klapk', 'chodak', 'clog'],
         'helmet' => ['kask', 'helm', 'casque'],
         'goggles' => ['okular', 'gogl'],
         'apron' => ['fartuch', 'apron'],
@@ -672,11 +672,14 @@ final class ProductSearchIdentity
         $name = trim((string) $product->name);
         $internalSku = $this->looksLikeInternalSku($product);
         $shopPhrase = $this->shopIdentityPhrases($product)[0] ?? '';
+        $warehouseSku = $this->looksLikeWarehouseArticleSku($product);
         $bare = $shopPhrase !== ''
             ? $shopPhrase
             : ($internalSku
                 ? $this->internalSkuCore($product)
-                : $this->stripBrandPrefix($sku !== '' ? $sku : $name, $brand));
+                : ($warehouseSku
+                    ? ($this->catalogArticleCodes($product)[0] ?? $this->strippedProductName($product))
+                    : $this->stripBrandPrefix($sku !== '' ? $sku : $name, $brand)));
         // nazwa „1000 ZIMA” → rdzeń kodu 1000
         $codeCore = $this->gloveCodeCore($product) ?? $bare;
         $hint = $this->productHint($product);
@@ -739,7 +742,9 @@ final class ProductSearchIdentity
             $hosts = $this->catalogSearchHosts($product);
             $phrase = $shopPhrase !== ''
                 ? $shopPhrase
-                : (($sku !== '' && ! $internalSku) ? $sku : $this->strippedProductName($product));
+                : (($sku !== '' && ! $internalSku && ! $warehouseSku)
+                    ? $sku
+                    : ($this->catalogArticleCodes($product)[0] ?? $this->strippedProductName($product)));
             if ($phrase !== '' && $hosts !== []) {
                 foreach ($hosts as $host) {
                     $queries[] = 'site:'.$host.' '.$phrase;
@@ -750,9 +755,12 @@ final class ProductSearchIdentity
         $queries[] = $this->productNameWithManufacturer($product);
 
         // 1) Jak Google — kod / nazwa zawsze z producentem
-        if ($sku !== '' && ! $internalSku) {
+        if ($sku !== '' && ! $internalSku && ! $warehouseSku) {
             $queries[] = $this->queryWithManufacturer($sku, $product);
             $queries[] = $this->queryWithManufacturer('"'.$sku.'"', $product);
+        }
+        foreach ($this->catalogArticleCodes($product) as $article) {
+            $queries[] = $this->queryWithManufacturer($article, $product);
         }
         // Ansell R065 / uvex model z aliasów
         foreach ($this->modelAliases($product) as $alias) {
@@ -783,7 +791,7 @@ final class ProductSearchIdentity
             if ($codeCore !== '' && $hint === 'rękawice') {
                 $queries[] = trim($codeCore.' '.$hint);
             }
-            if ($sku !== '' && ! $internalSku) {
+            if ($sku !== '' && ! $internalSku && ! $warehouseSku) {
                 $queries[] = trim('"'.$sku.'" '.$brand.' '.$hint);
             }
         }
@@ -815,13 +823,15 @@ final class ProductSearchIdentity
         $brand = $this->shortBrand((string) $product->manufacturer);
         $sku = trim((string) $product->sku);
         $name = trim((string) $product->name);
-        $usableSku = $sku !== '' && ! $this->looksLikeInternalSku($product);
+        $usableSku = $sku !== '' && ! $this->rawSkuIsOfflineNoise($product);
         // „PROS-121-S1-GUMA” to nasz kod złożony z opisu — w sieci działa dopiero
         // nazwa z producentem („121 S1 GUMA Urgent”), więc ona idzie pierwsza.
         $composedSku = $this->hasDescriptiveWordSegment($sku);
         $shopName = $this->shopIdentityPhrases($product)[0] ?? '';
-        // Numer z cennika (34977068) albo ogon „…-CZARNY-NYLON” nie stoi na karcie sklepu.
-        $preferCatalogName = $composedSku || $shopName !== '';
+        // Numer z cennika (34977068 / 212804580000) albo ogon „…-CZARNY-NYLON”
+        // nie stoi na karcie sklepu.
+        $preferCatalogName = $composedSku || $shopName !== ''
+            || $this->looksLikeWarehouseArticleSku($product);
 
         $skuQueries = [];
         if ($usableSku && $shopName === '') {
@@ -875,6 +885,11 @@ final class ProductSearchIdentity
                 $out[] = $this->queryWithManufacturer($variant, $product);
             }
         }
+        foreach ($this->catalogArticleCodes($product) as $article) {
+            if (mb_strtolower($article) !== mb_strtolower($sku)) {
+                $out[] = $this->queryWithManufacturer($article, $product);
+            }
+        }
         foreach ($this->variantBaseCodes($product) as $base) {
             $out[] = $this->queryWithManufacturer($base, $product);
         }
@@ -913,7 +928,7 @@ final class ProductSearchIdentity
         if ($name !== '') {
             $parts[] = $name;
         }
-        if ($sku !== '' && ! $this->looksLikeInternalSku($product)
+        if ($sku !== '' && ! $this->rawSkuIsOfflineNoise($product)
             && ! $this->hasDescriptiveWordSegment($sku)
             && ($name === '' || ! $this->phraseHasToken($name, $sku))) {
             $parts[] = $sku;
@@ -1089,7 +1104,8 @@ final class ProductSearchIdentity
                     $distinct++;
                 }
             }
-            $strong = $distinct >= 1 && (count($words) >= 2 || mb_strlen($phrase) >= 5);
+            // jedno słowo („BEAGLE”, „ONE4ALL”) bez marki trafia w inną branżę
+            $strong = $distinct >= 1 && count($words) >= 2;
             if ($strong || $brands === [] || $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
                 return true;
             }
@@ -1202,8 +1218,11 @@ final class ProductSearchIdentity
     {
         $codes = [];
         $sku = trim((string) $product->sku);
-        if ($sku !== '' && ! $this->looksLikeInternalSku($product)) {
+        if ($sku !== '' && ! $this->rawSkuIsOfflineNoise($product)) {
             $codes[] = $sku;
+        }
+        foreach ($this->catalogArticleCodes($product) as $article) {
+            $codes[] = $article;
         }
         foreach ([$this->internalSkuCore($product), $this->gloveCodeCore($product)] as $code) {
             if (is_string($code) && mb_strlen($code) >= 4) {
@@ -1233,6 +1252,11 @@ final class ProductSearchIdentity
             $raw = $sizes->stripSizeFromName(trim((string) $raw));
             if ($raw === '') {
                 continue;
+            }
+            if (preg_match('/^(\p{L}{3,12})\s+(S[1-5]S?)\b/u', $raw, $safety) === 1
+                && ! $this->isDescriptiveIdentityWord($safety[1])
+                && ! $this->isApparelTypeWord($safety[1])) {
+                $out[] = $safety[1].' '.$safety[2];
             }
             if (preg_match('/^(?:\p{L}{2,12}[\s\-]+){1,2}\d{2,4}$/u', $raw) !== 1) {
                 continue;
@@ -1320,6 +1344,10 @@ final class ProductSearchIdentity
         if ($fromName !== '') {
             $out[] = $fromName;
         }
+        $fromVariant = $this->seriesWithTrailingVariant((string) $product->name);
+        if ($fromVariant !== '') {
+            $out[] = $fromVariant;
+        }
         if ($this->looksLikeInternalSku($product) || $this->hasDescriptiveWordSegment((string) $product->sku)) {
             $fromSku = $this->seriesFromInternalSku((string) $product->sku, $product);
             if ($fromSku !== '') {
@@ -1328,6 +1356,18 @@ final class ProductSearchIdentity
         }
         foreach ($this->variantBaseCodes($product) as $base) {
             $out[] = $base;
+        }
+        $core = $this->internalSkuCore($product);
+        $corePhrase = str_replace('-', ' ', $core);
+        if ($core !== '' && mb_strtolower($core) !== mb_strtolower(trim((string) $product->sku))
+            && $this->isUsableSeriesPhrase($corePhrase)) {
+            $out[] = $corePhrase;
+            if ($corePhrase !== $core) {
+                $out[] = $core;
+            }
+        }
+        foreach ($this->nameModelPhrases($product) as $fromNameModel) {
+            $out[] = $fromNameModel;
         }
 
         $uniq = [];
@@ -1342,7 +1382,7 @@ final class ProductSearchIdentity
             }
         }
 
-        return array_values($uniq);
+        return $this->preferSpecificShopPhrases(array_values($uniq), $product);
     }
 
     /**
@@ -1364,10 +1404,36 @@ final class ProductSearchIdentity
             return [];
         }
 
+        return $this->officialCatalogHosts($product);
+    }
+
+    /**
+     * Oficjalne domeny z config — bez tabeli discovered sites.
+     *
+     * @return list<string>
+     */
+    public function officialCatalogHosts(Product $product): array
+    {
         return $this->bareHosts($this->hostsFromConfigMap(
             (array) config('enrichment.manufacturer_domains', []),
-            $keys
+            $this->manufacturerKeyCandidates($product)
         ));
+    }
+
+    /**
+     * TX39, OPSBT11, URG-914 — kod katalogowy z literą i cyfrą, nie EAN z cennika.
+     */
+    public function hasDistinctiveCatalogSku(Product $product): bool
+    {
+        $sku = trim((string) $product->sku);
+        if ($sku === '' || $this->looksLikeWarehouseArticleSku($product)) {
+            return false;
+        }
+
+        return preg_match(
+            '/^(?=[A-Z0-9\-]*\p{L})(?=[A-Z0-9\-]*\d)[A-Z0-9\-]{3,16}$/iu',
+            $sku
+        ) === 1;
     }
 
     /** @deprecated użyj shopIdentityPhrases — zostaje dla testów MAPA. */
@@ -1808,6 +1874,12 @@ final class ProductSearchIdentity
 
     private function primaryDigitCore(Product $product): ?string
     {
+        if ($this->looksLikeWarehouseArticleSku($product)) {
+            $stripped = rtrim(preg_replace('/\D+/u', '', (string) $product->sku) ?? '', '0');
+            if (mb_strlen($stripped) >= 8) {
+                return $stripped;
+            }
+        }
         foreach ([(string) $product->sku, (string) $product->name] as $value) {
             $bare = $this->stripBrandPrefix($value, $this->shortBrand((string) $product->manufacturer));
             if (preg_match('/(\d{4,})/u', $bare, $m)) {
@@ -1933,6 +2005,50 @@ final class ProductSearchIdentity
     }
 
     /**
+     * Długi numer z cennika (212804580000) — w sklepie jest model albo 2128-045-800.
+     */
+    public function looksLikeWarehouseArticleSku(Product $product): bool
+    {
+        $sku = trim((string) $product->sku);
+        if (preg_match('/^\d{10,14}$/u', $sku) !== 1) {
+            return false;
+        }
+        $stripped = rtrim($sku, '0');
+
+        return mb_strlen($stripped) >= 6 && mb_strlen($sku) - mb_strlen($stripped) >= 3;
+    }
+
+    public function rawSkuIsOfflineNoise(Product $product): bool
+    {
+        return $this->looksLikeInternalSku($product) || $this->looksLikeWarehouseArticleSku($product);
+    }
+
+    /**
+     * Numer katalogowy odczytany z kodu magazynowego: 212804580000 → 2128-045-800.
+     *
+     * @return list<string>
+     */
+    public function catalogArticleCodes(Product $product): array
+    {
+        if (! $this->looksLikeWarehouseArticleSku($product)) {
+            return [];
+        }
+        $digits = preg_replace('/\D+/u', '', (string) $product->sku) ?? '';
+        $out = [];
+        if (mb_strlen($digits) >= 10) {
+            $ten = mb_substr($digits, 0, 10);
+            $out[] = mb_substr($ten, 0, 4).'-'.mb_substr($ten, 4, 3).'-'.mb_substr($ten, 7, 3);
+            $out[] = $ten;
+        }
+        $stripped = rtrim($digits, '0');
+        if (mb_strlen($stripped) >= 8) {
+            $out[] = $stripped;
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
      * Kod bez rozmiaru „taille”: „ATTACK6PEOM-BSCT12” → „ATTACK6PEOM-BSC” i „ATTACK6PEOM”.
      * Rostaing dokleja T08–T14 na końcu, czasem z literą wariantu przed nim, więc
      * zwracamy oba odczyty — trafi ten, który faktycznie stoi na karcie.
@@ -1942,7 +2058,16 @@ final class ProductSearchIdentity
     public function skuSizeVariants(Product $product): array
     {
         $sku = trim((string) $product->sku);
-        if ($sku === '' || preg_match('/^(.*?)([A-Za-z0-9]{0,3})T(?:0\d|1[0-4])$/u', $sku, $m) !== 1) {
+        if ($sku === '') {
+            return [];
+        }
+        // „ONE4ALL-IT08” — IT to rozmiar (taille), nie litera I i osobne T08
+        if (preg_match('/^(.+)-IT(0\d|1[0-4])$/u', $sku, $it) === 1) {
+            $core = rtrim($it[1], "-/+_. \t");
+
+            return $this->isUsableSizeVariant($core) ? [$core] : [];
+        }
+        if (preg_match('/^(.*?)([A-Za-z0-9]{0,3})T(?:0\d|1[0-4])$/u', $sku, $m) !== 1) {
             return [];
         }
 
@@ -1980,6 +2105,11 @@ final class ProductSearchIdentity
     public function internalSkuCore(Product $product): string
     {
         $sku = trim((string) $product->sku);
+
+        // „ONE4ALL-IT08”, „COUPURE-IT11” — model + taille, także gdy w modelu jest cyfra
+        if (preg_match('/^((?=.*\p{L})[\p{L}\d]{4,})-IT(0\d|1[0-4])$/u', $sku, $m) === 1) {
+            return $m[1];
+        }
 
         // „BLACKNITT11” — Rostaing dokleja rozmiar jako T08–T14 (taille), więc to „T”
         // należy do rozmiaru, nie do nazwy modelu. Zakres cyfr chroni „COMFORT45”.
@@ -2080,6 +2210,12 @@ final class ProductSearchIdentity
         if ($this->looksLikeUrgentGloveSeries($product)) {
             $out[] = 'urgent';
         }
+        foreach ($this->officialCatalogHosts($product) as $host) {
+            $label = explode('.', $host)[0] ?? '';
+            if (mb_strlen($label) >= 3 && preg_match('/^[a-z0-9]+$/u', $label) === 1) {
+                $out[] = $label;
+            }
+        }
 
         return array_values(array_unique($out));
     }
@@ -2165,6 +2301,180 @@ final class ProductSearchIdentity
         return $series;
     }
 
+    /**
+     * Model z nazwy, którego nie ma w SKU: „KENT S3”, „BEAGLE”, „OPEX”.
+     *
+     * @return list<string>
+     */
+    private function nameModelPhrases(Product $product): array
+    {
+        $name = trim((string) $product->name);
+        $sku = trim((string) $product->sku);
+        if ($name === '' || mb_strtolower($name) === mb_strtolower($sku)) {
+            return [];
+        }
+        $skuHay = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($sku)) ?? '';
+        $tradeNames = $this->catalogTradeNames($product);
+        $out = [];
+        if (preg_match('/(\p{L}{3,12})\s+(S[1-5]S?)\b/u', $name, $safety) === 1
+            && ! $this->isGenericCatalogNameWord($safety[1])) {
+            $out[] = $safety[1].' '.$safety[2];
+        }
+        foreach (preg_split('/[^\p{L}\p{N}]+/u', $name) ?: [] as $word) {
+            $word = trim((string) $word);
+            if ($word === '' || mb_strlen($word) < 4 || mb_strlen($word) > 16) {
+                continue;
+            }
+            if (preg_match('/\d/u', $word) === 1 || preg_match('/^T\d{1,2}$/iu', $word) === 1) {
+                continue;
+            }
+            if ($this->isGenericCatalogNameWord($word) || $this->isHouseSkuPrefix($word)
+                || in_array(mb_strtolower($word), $this->skuBrandWords($product), true)) {
+                continue;
+            }
+            $compact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($word)) ?? '';
+            if ($skuHay !== '' && $compact !== '' && str_contains($skuHay, $compact)) {
+                continue;
+            }
+            $alreadyInTrade = false;
+            foreach ($tradeNames as $trade) {
+                if ($this->phraseHasToken($trade, $word)) {
+                    $alreadyInTrade = true;
+                    break;
+                }
+            }
+            if ($alreadyInTrade) {
+                continue;
+            }
+            $out[] = $word;
+        }
+
+        return $out;
+    }
+
+    private function isGenericCatalogNameWord(string $word): bool
+    {
+        if ($this->isDescriptiveIdentityWord($word) || $this->isApparelTypeWord($word)
+            || $this->isColorWord($word) || $this->isLineQualifierWord($word)) {
+            return true;
+        }
+        $word = mb_strtolower(trim($word));
+
+        return in_array($word, [
+            'gloves', 'glove', 'gants', 'gant', 'work', 'wear', 'indicator', 'precision',
+            'resistant', 'cut', 'for', 'with', 'the', 'and', 'pairs', 'pair', 'size',
+            'safety', 'protection', 'protective', 'garden', 'jardinage', 'comfort',
+            'confort', 'cross', 'plus', 'pro', 'max', 'soft', 'hard', 'light', 'super',
+            'ultra', 'line', 'type', 'hood', 'coverall', 'overall', 'cuffs', 'cuff',
+            'sleeves', 'sleeve', 'collar', 'pocket', 'pockets', 'visor', 'strap',
+        ], true);
+    }
+
+    /**
+     * „COMO BASIC - HAPPY” w sklepie to „COMO HAPPY” — BASIC to nasza linia, nie wzór.
+     */
+    private function seriesWithTrailingVariant(string $name): string
+    {
+        $name = trim($name);
+        if (preg_match('/^(.+?)[\s]*[-–][\s]+(\p{L}[\p{L}\d]{2,})$/u', $name, $hit) !== 1) {
+            return '';
+        }
+        $variant = trim($hit[2]);
+        if ($this->isDescriptiveIdentityWord($variant) || $this->isLineQualifierWord($variant)) {
+            return '';
+        }
+        $model = [];
+        foreach (preg_split('/[\s\-]+/u', trim($hit[1])) ?: [] as $word) {
+            $word = trim((string) $word);
+            if ($word === '' || $this->isDescriptiveIdentityWord($word)
+                || $this->isLineQualifierWord($word) || $this->isApparelTypeWord($word)) {
+                continue;
+            }
+            if (preg_match('/^\p{L}{3,}$/u', $word) === 1) {
+                $model[] = $word;
+            }
+        }
+        if ($model === []) {
+            return '';
+        }
+        $phrase = $model[0].' '.$variant;
+
+        return $this->isUsableSeriesPhrase($phrase) ? $phrase : '';
+    }
+
+    /**
+     * @param  list<string>  $phrases
+     * @return list<string>
+     */
+    private function preferSpecificShopPhrases(array $phrases, Product $product): array
+    {
+        $tail = $this->lastDistinctiveSkuWord($product);
+        if ($tail === '' || $phrases === []) {
+            return $phrases;
+        }
+        $preferred = [];
+        $rest = [];
+        foreach ($phrases as $phrase) {
+            if ($this->phraseHasToken($phrase, $tail)) {
+                $preferred[] = $phrase;
+            } else {
+                $rest[] = $phrase;
+            }
+        }
+
+        return array_values(array_merge($preferred, $rest));
+    }
+
+    private function lastDistinctiveSkuWord(Product $product): string
+    {
+        $tail = '';
+        foreach (preg_split('/[\-\/ ]+/u', trim((string) $product->sku.' '.$product->name)) ?: [] as $segment) {
+            $segment = trim((string) $segment);
+            if ($segment === '' || preg_match('/^\p{L}{3,}$/u', $segment) !== 1) {
+                continue;
+            }
+            if ($this->isGenericCatalogNameWord($segment) || $this->isHouseSkuPrefix($segment)
+                || in_array(mb_strtolower($segment), $this->skuBrandWords($product), true)) {
+                continue;
+            }
+            $tail = $segment;
+        }
+
+        return $tail;
+    }
+
+    /**
+     * @param  list<string>  $words
+     * @return list<string>
+     */
+    private function dropMiddleQualifiers(array $words): array
+    {
+        if (count($words) < 3) {
+            return $words;
+        }
+        $out = [];
+        $last = count($words) - 1;
+        foreach ($words as $i => $word) {
+            if ($i > 0 && $i < $last && $this->isLineQualifierWord((string) $word)) {
+                continue;
+            }
+            $out[] = $word;
+        }
+
+        return $out;
+    }
+
+    private function isLineQualifierWord(string $word): bool
+    {
+        $word = mb_strtolower(trim($word));
+        $word = strtr($word, ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z']);
+
+        return in_array($word, [
+            'basic', 'classic', 'print', 'standard', 'premium', 'plus', 'pro',
+            'eco', 'light', 'soft', 'extra', 'new', 'maxi', 'mini',
+        ], true);
+    }
+
     private function seriesFromInternalSku(string $sku, ?Product $product = null): string
     {
         $brandWords = $this->skuBrandWords($product);
@@ -2207,10 +2517,11 @@ final class ProductSearchIdentity
                 continue;
             }
             $kept[] = $segment;
-            if (count($kept) >= 2) {
+            if (count($kept) >= 3) {
                 break;
             }
         }
+        $kept = $this->dropMiddleQualifiers($kept);
         if ($kept !== []) {
             $series = implode(' ', $kept);
 
