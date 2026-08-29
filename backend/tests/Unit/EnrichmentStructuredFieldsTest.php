@@ -138,6 +138,10 @@ TXT;
             'Półbuty ochronne Marble marki CXS Canis z podnoskiem kompozytowym.',
             $beagle,
         ]));
+        $this->assertFalse($this->invoke($service, 'descriptionMentionsProduct', [
+            'Tablica informacyjna „Uwaga pies Beagle” marki CXS Canis z twardego PVC.',
+            $beagle,
+        ]));
     }
 
     /**

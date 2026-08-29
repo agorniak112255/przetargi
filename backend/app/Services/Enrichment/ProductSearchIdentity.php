@@ -763,8 +763,8 @@ final class ProductSearchIdentity
 
         $queries[] = $this->productNameWithManufacturer($product);
 
-        // 1) Jak Google — kod / nazwa zawsze z producentem
-        if ($sku !== '' && ! $internalSku && ! $warehouseSku) {
+        // 1) Jak Google — kod / nazwa zawsze z producentem (też 12-cyfrowy numer CXS)
+        if ($sku !== '' && ! $internalSku) {
             $queries[] = $this->queryWithManufacturer($sku, $product);
             $queries[] = $this->queryWithManufacturer('"'.$sku.'"', $product);
         }
@@ -800,7 +800,7 @@ final class ProductSearchIdentity
             if ($codeCore !== '' && $hint === 'rękawice') {
                 $queries[] = trim($codeCore.' '.$hint);
             }
-            if ($sku !== '' && ! $internalSku && ! $warehouseSku) {
+            if ($sku !== '' && ! $internalSku) {
                 $queries[] = trim('"'.$sku.'" '.$brand.' '.$hint);
             }
         }
@@ -832,15 +832,15 @@ final class ProductSearchIdentity
         $brand = $this->shortBrand((string) $product->manufacturer);
         $sku = trim((string) $product->sku);
         $name = trim((string) $product->name);
-        $usableSku = $sku !== '' && ! $this->rawSkuIsOfflineNoise($product);
+        $usableSku = $sku !== '' && ! $this->looksLikeInternalSku($product);
         // „PROS-121-S1-GUMA” to nasz kod złożony z opisu — w sieci działa dopiero
         // nazwa z producentem („121 S1 GUMA Urgent”), więc ona idzie pierwsza.
         $composedSku = $this->hasDescriptiveWordSegment($sku);
         $shopName = $this->shopIdentityPhrases($product)[0] ?? '';
-        // Numer z cennika (34977068 / 212804580000) albo ogon „…-CZARNY-NYLON”
-        // nie stoi na karcie sklepu.
-        $preferCatalogName = $composedSku || $shopName !== ''
-            || $this->looksLikeWarehouseArticleSku($product);
+        // Numer magazynowy (211600170000) Google zna — idzie przed modelem „BEAGLE”.
+        // Złożony kod z opisu albo sama nazwa katalogowa (SOLO 977) zostaje pierwsza.
+        $preferCatalogName = ($composedSku || $shopName !== '')
+            && ! $this->looksLikeWarehouseArticleSku($product);
 
         $skuQueries = [];
         if ($usableSku && $shopName === '') {
@@ -937,7 +937,7 @@ final class ProductSearchIdentity
         if ($name !== '') {
             $parts[] = $name;
         }
-        if ($sku !== '' && ! $this->rawSkuIsOfflineNoise($product)
+        if ($sku !== '' && ! $this->looksLikeInternalSku($product)
             && ! $this->hasDescriptiveWordSegment($sku)
             && ($name === '' || ! $this->phraseHasToken($name, $sku))) {
             $parts[] = $sku;
@@ -995,6 +995,9 @@ final class ProductSearchIdentity
     {
         $hay = mb_strtolower($hay);
         if ($this->looksLikeChemicalCatalogHit($hay)) {
+            return false;
+        }
+        if ($this->looksLikeUnrelatedSignage($hay, $product) && ! $this->hayHasProductCode($hay, $product)) {
             return false;
         }
         if (! $this->hayHasRequiredTypeFromName($hay, $product)) {
@@ -1661,6 +1664,27 @@ final class ProductSearchIdentity
         }
 
         return false;
+    }
+
+    /**
+     * Tablica „Uwaga pies Beagle” nie jest butem BEAGLE — sama rasa w tytule nie wystarczy.
+     */
+    public function looksLikeUnrelatedSignage(string $hay, Product $product): bool
+    {
+        $productBlob = $this->normalizeTypeText(
+            trim((string) $product->name.' '.(string) $product->sku.' '.(string) ($product->category ?? ''))
+        );
+        if (preg_match('/\b(tablic[ae]|tabliczk|znak ostrzeg|piktogram|uwaga pies)\b/u', $productBlob) === 1) {
+            return false;
+        }
+        $page = $this->normalizeTypeText($hay);
+
+        return preg_match(
+            '/\b(tablica informacyjna|tabliczka informacyjna|tablica ostrzeg|znak ostrzeg'
+            .'|uwaga pies|warning dog|beware of(?: the)? dog|information board'
+            .'|tablica pvc|naklejka uwaga)\b/u',
+            $page
+        ) === 1;
     }
 
     private function codePattern(string $code): ?string

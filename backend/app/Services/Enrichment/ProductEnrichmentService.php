@@ -1704,6 +1704,9 @@ final class ProductEnrichmentService
         if ($this->identity->hayHasProductCode($hay, $product)) {
             return true;
         }
+        if ($this->identity->looksLikeUnrelatedSignage($hay, $product)) {
+            return false;
+        }
         if ($this->identity->hayHasShopIdentity($hay, $hayCompact, $product)
             && $this->identity->hayHasBrand($hay, $product)) {
             return true;

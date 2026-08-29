@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v37';
+    private const SEARCH_CACHE_VERSION = 'v38';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -533,9 +533,10 @@ class HybridWebSearchService
             }
         }
         $siteQueries = array_slice($siteQueries, 0, 2);
-        // Model z cennika (KENT S3, KRYTECH 563) — najpierw site: katalogu.
-        // Sam kod katalogowy (TX39, URG-914) zostaje pierwszą frazą, site: dopiero za nią.
-        $preferSiteFirst = $siteQueries !== [];
+        // Model z cennika (KRYTECH 563) — najpierw site: katalogu.
+        // Numer magazynowy (211600170000) i kod TX39 — najpierw jak w Google, site: za nimi.
+        $preferSiteFirst = $siteQueries !== []
+            && ! $this->identity->looksLikeWarehouseArticleSku($product);
         $ladder = $preferSiteFirst ? $siteQueries : [];
         $legacy = $this->legacySafetyShoePhrase($product);
         if ($legacy !== '') {
@@ -576,8 +577,12 @@ class HybridWebSearchService
      */
     private function officialSiteQueriesForCatalogSku(Product $product): array
     {
-        if ($this->identity->shopIdentityPhrases($product) !== []
-            || ! $this->identity->hasDistinctiveCatalogSku($product)) {
+        $warehouse = $this->identity->looksLikeWarehouseArticleSku($product);
+        if (! $warehouse && ($this->identity->shopIdentityPhrases($product) !== []
+            || ! $this->identity->hasDistinctiveCatalogSku($product))) {
+            return [];
+        }
+        if ($warehouse && trim((string) $product->sku) === '') {
             return [];
         }
         $sku = trim((string) $product->sku);

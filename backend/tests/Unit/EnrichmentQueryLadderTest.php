@@ -671,9 +671,9 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertTrue($identity->looksLikeWarehouseArticleSku($kent));
         $this->assertContains('2128-045-800', $identity->catalogArticleCodes($kent));
         $this->assertContains('KENT S3', $identity->shopIdentityPhrases($kent));
-        $this->assertSame('KENT S3 CANIS SAFETY', $identity->primaryQueries($kent)[0] ?? null);
+        $this->assertSame('212804580000 CANIS SAFETY', $identity->primaryQueries($kent)[0] ?? null);
+        $this->assertContains('KENT S3 CANIS SAFETY', $identity->primaryQueries($kent));
         $this->assertStringContainsString('site:cxs.net.pl KENT S3', implode(' | ', $identity->searchQueries($kent, 'manufacturer')));
-        $this->assertStringNotContainsString('212804580000 CANIS', $identity->primaryQueries($kent)[0] ?? '');
         $this->assertTrue($identity->hayMentionsProduct(
             'https://www.ceneo.pl/polbut-kent-s3 Cxs Półbut Kent S3 2128-045-800',
             $kent
@@ -685,10 +685,31 @@ final class EnrichmentQueryLadderTest extends TestCase
 
         $this->assertContains('BEAGLE', $identity->shopIdentityPhrases($beagle));
         $this->assertContains('2116-001-700', $identity->catalogArticleCodes($beagle));
+        $this->assertSame('211600170000 CANIS SAFETY', $identity->primaryQueries($beagle)[0] ?? null);
         $this->assertTrue($identity->hayMentionsProduct(
             'https://cxs.net.pl/beagle-s1 Buty BEAGLE CANIS SAFETY',
             $beagle
         ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.monterky-levne.cz/Obuv-kotnikova-DOG-BEAGLE-S1P-seda-d869.htm '
+            .'Obuv kotníková DOG BEAGLE S1P 211600170000 CANIS',
+            $beagle
+        ));
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://sklep.example/tablica-uwaga-pies-beagle '
+            .'Tablica informacyjna Uwaga pies Beagle CANIS SAFETY',
+            $beagle
+        ));
+
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+        /** @var list<string> $ladder */
+        $ladder = $open->invoke($service, $beagle, $build->invoke($service, $beagle, 'manufacturer'));
+        $this->assertSame('211600170000 CANIS SAFETY', $ladder[0] ?? null);
 
         $bojar = new Product([
             'manufacturer' => 'CANIS SAFETY',

@@ -89,6 +89,19 @@ final class RetailerOnSiteSearchTest extends TestCase
         $this->assertNotContains('https://marelplus.pl/trzewiki-sonora-s3', $urls);
     }
 
+    public function test_warehouse_sku_is_searched_before_single_word_model(): void
+    {
+        $search = app(RetailerOnSiteSearch::class);
+        $beagle = new Product([
+            'sku' => '211600170000',
+            'name' => 'BEAGLE',
+            'manufacturer' => 'CANIS SAFETY',
+        ]);
+
+        $this->assertSame('211600170000', $search->query($beagle));
+        $this->assertSame('BEAGLE', $search->queryBareModel($beagle));
+    }
+
     public function test_mapa_query_uses_catalog_name_without_size(): void
     {
         $search = app(RetailerOnSiteSearch::class);

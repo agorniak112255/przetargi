@@ -88,14 +88,19 @@ final class RetailerOnSiteSearch
 
     public function query(Product $product): string
     {
-        $shop = $this->identity->shopIdentityPhrases($product);
-        if ($shop !== []) {
-            return $shop[0];
-        }
-
         $early = $this->identity->ansellSearchPhrases($product, 'early');
         if ($early !== []) {
             return $early[0];
+        }
+        if ($this->identity->looksLikeWarehouseArticleSku($product)) {
+            $sku = trim((string) $product->sku);
+            if ($sku !== '') {
+                return $sku;
+            }
+        }
+        $shop = $this->identity->shopIdentityPhrases($product);
+        if ($shop !== []) {
+            return $shop[0];
         }
 
         $sku = trim((string) $product->sku);
@@ -108,6 +113,9 @@ final class RetailerOnSiteSearch
 
     public function queryBareModel(Product $product): string
     {
+        if ($this->identity->looksLikeWarehouseArticleSku($product)) {
+            return $this->identity->shopIdentityPhrases($product)[0] ?? '';
+        }
         $late = $this->identity->ansellSearchPhrases($product, 'late');
 
         return $late[0] ?? '';
