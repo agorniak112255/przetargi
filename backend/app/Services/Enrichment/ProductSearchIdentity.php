@@ -1174,6 +1174,27 @@ final class ProductSearchIdentity
     }
 
     /**
+     * Nazwa handlowa z karty sklepu (SOLO 977, KRYTECH 563) — nie numer artykułu z cennika.
+     *
+     * @return list<string>
+     */
+    public function catalogTradeNames(Product $product): array
+    {
+        $out = [];
+        foreach ([(string) $product->name, ...$this->variantBaseCodes($product)] as $raw) {
+            $raw = trim((string) $raw);
+            if ($raw === '') {
+                continue;
+            }
+            if (preg_match('/^(?:\p{L}{2,12}[\s\-]+){1,2}\d{2,4}$/u', $raw) === 1) {
+                $out[] = $raw;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
      * Karta innego modelu tej samej marki: strona filtropochłaniacza FP 211/1 wymienia
      * w treści kompatybilne maski MT 212/2, ale kartą maski nie jest. O tym, czyja to
      * karta, mówi adres i tytuł — nie wzmianka w akapicie.
@@ -1194,6 +1215,13 @@ final class ProductSearchIdentity
     public function urlOrTitleCarriesCodeFamily(string $url, string $title, Product $product): bool
     {
         $codes = $this->compactProductCodes($product);
+        foreach ($this->catalogTradeNames($product) as $trade) {
+            $compact = $this->compactCode($trade);
+            if (mb_strlen($compact) >= 4) {
+                $codes[] = $compact;
+            }
+        }
+        $codes = array_values(array_unique($codes));
         if ($codes === []) {
             return false;
         }

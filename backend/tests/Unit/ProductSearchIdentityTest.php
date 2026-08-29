@@ -369,6 +369,16 @@ final class ProductSearchIdentityTest extends TestCase
             'https://icd.pl/rekawice-chemiczne-mapa-solo977.html Rękawice chemiczne MAPA Solo 977',
             $product
         ));
+        $this->assertContains('SOLO 977', $id->catalogTradeNames($product));
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://icd.pl/rekawice-chemiczne-mapa-solo977.html',
+            'Rękawice chemiczne MAPA Solo 977',
+            $product
+        ));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://icd.pl/rekawice-chemiczne-mapa-ultranitril472.html Rękawice MAPA Ultranitril 472',
+            $product
+        ));
     }
 
     public function test_search_phrase_always_appends_manufacturer(): void

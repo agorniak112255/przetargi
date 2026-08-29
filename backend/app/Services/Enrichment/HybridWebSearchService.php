@@ -872,7 +872,9 @@ class HybridWebSearchService
      */
     private function keepHitsMentioningSkuOnPage(array $results, Product $product): array
     {
-        $skuHint = $this->identity->ansellCatalogBits($product)['model'] ?? (string) $product->sku;
+        $skuHint = $this->identity->ansellCatalogBits($product)['model']
+            ?? ($this->identity->catalogTradeNames($product)[0] ?? '')
+            ?: (string) $product->sku;
         $fetched = $this->pages->fetch($results, $skuHint !== '' ? $skuHint : (string) $product->sku, 5, []);
         $out = [];
         foreach ($fetched['pages'] as $page) {
