@@ -854,17 +854,26 @@ final class ProductSearchIdentity
         }
 
         $nameQueries = [];
-        if ($shopName !== '') {
+        $fullName = $this->strippedProductName($product);
+        if ($fullName === '') {
+            $fullName = $name;
+        }
+        $compactName = $this->looksLikeCompactTradeName($fullName);
+        // Katalogowa fraza sklepu (COMO HAPPY, KENT S3) zostaje pierwsza.
+        // Jedno słowo z nazwy („Carbon”) nie zastępuje „Carbon ESD PU Top Eider”.
+        if ($shopName !== '' && ! $this->shopPhraseIsWeakerThanName($shopName, $fullName)) {
             $nameQueries[] = $this->queryWithManufacturer($shopName, $product);
         }
-        if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)
-            && mb_strtolower($name) !== mb_strtolower($shopName)) {
-            $nameQueries[] = $this->queryWithManufacturer(
-                $usableSku && ! $composedSku && ! $this->phraseHasToken($name, $sku)
-                    ? $name.' '.$sku
-                    : $name,
-                $product
-            );
+        if ($compactName && mb_strtolower($fullName) !== mb_strtolower($sku)
+            && mb_strtolower($fullName) !== mb_strtolower($shopName)) {
+            $nameQueries[] = $this->queryWithManufacturer($fullName, $product);
+        } elseif ($shopName === '' && $fullName !== '' && mb_strtolower($fullName) !== mb_strtolower($sku)) {
+            $nameQueries[] = $this->queryWithManufacturer($fullName, $product);
+        }
+        if ($usableSku && ! $composedSku && $fullName !== ''
+            && mb_strtolower($fullName) !== mb_strtolower($sku)
+            && ! $this->phraseHasToken($fullName, $sku)) {
+            $nameQueries[] = $this->queryWithManufacturer($fullName.' '.$sku, $product);
         }
 
         $out = $preferCatalogName
@@ -971,6 +980,34 @@ final class ProductSearchIdentity
         }
 
         return $query.' '.$brand;
+    }
+
+    /** Krótka nazwa handlowa, nie ogon z cennika („… - czarny nylon powlekany”). */
+    private function looksLikeCompactTradeName(string $name): bool
+    {
+        $name = trim($name);
+        if ($name === '' || mb_strlen($name) > 48) {
+            return false;
+        }
+        $words = preg_split('/\s+/u', $name) ?: [];
+        if (count($words) < 2 || count($words) > 6) {
+            return false;
+        }
+
+        return preg_match('/\s[-–]\s+\p{L}.{20,}/u', $name) !== 1;
+    }
+
+    /** „Carbon” z „Carbon ESD PU Top” nie może zająć slotu zamiast pełnej nazwy. */
+    private function shopPhraseIsWeakerThanName(string $shop, string $name): bool
+    {
+        $shop = mb_strtolower(trim($shop));
+        $name = mb_strtolower(trim($name));
+        if ($shop === '' || $name === '' || $shop === $name) {
+            return false;
+        }
+        $shopWords = preg_split('/\s+/u', $shop) ?: [];
+
+        return count($shopWords) === 1 && $this->phraseHasToken($name, $shop);
     }
 
     private function phraseHasToken(string $hay, string $token): bool

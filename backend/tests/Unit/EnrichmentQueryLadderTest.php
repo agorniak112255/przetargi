@@ -488,7 +488,8 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
 
         $this->assertSame('URG-914 Urgent', $ladder[0] ?? null);
-        $this->assertLessThanOrEqual(4, count($ladder));
+        $this->assertLessThanOrEqual(6, count($ladder));
+        $this->assertContains('Kurtka ostrzegawcza Urgent', $ladder);
         $this->assertContains('Kurtka ostrzegawcza URG-914 Urgent', $ladder);
     }
 
@@ -686,6 +687,7 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertContains('BEAGLE', $identity->shopIdentityPhrases($beagle));
         $this->assertContains('2116-001-700', $identity->catalogArticleCodes($beagle));
         $this->assertSame('211600170000 CANIS SAFETY', $identity->primaryQueries($beagle)[0] ?? null);
+        $this->assertContains('BEAGLE CANIS SAFETY', $identity->primaryQueries($beagle));
         $this->assertTrue($identity->hayMentionsProduct(
             'https://cxs.net.pl/beagle-s1 Buty BEAGLE CANIS SAFETY',
             $beagle
@@ -732,6 +734,29 @@ final class EnrichmentQueryLadderTest extends TestCase
             'rekawice canis bojar 321001900010budowlane skora',
             '321001900010'
         ));
+    }
+
+    public function test_open_search_keeps_full_name_and_manufacturer(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $eider = new Product([
+            'manufacturer' => 'Eider',
+            'sku' => '9011080',
+            'name' => 'Carbon ESD PU Top',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+        /** @var list<string> $ladder */
+        $ladder = $open->invoke($service, $eider, $build->invoke($service, $eider, 'manufacturer'));
+
+        $this->assertSame('Carbon ESD PU Top Eider', $identity->primaryQueries($eider)[0] ?? null);
+        $this->assertSame('Carbon ESD PU Top Eider', $ladder[0] ?? null);
+        $this->assertContains('9011080 Eider', $ladder);
+        $this->assertNotSame('Carbon Eider', $ladder[0] ?? null);
     }
 
     public function test_catalog_code_opens_official_site_after_short_query(): void

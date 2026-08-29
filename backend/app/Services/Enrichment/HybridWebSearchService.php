@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v38';
+    private const SEARCH_CACHE_VERSION = 'v39';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -27,7 +27,7 @@ class HybridWebSearchService
     private bool $localSearchOnly = false;
 
     /** Ile różnych fraz próbujemy w otwartym internecie, zanim pójdziemy na domenę producenta. */
-    private const OPEN_QUERY_ATTEMPTS = 4;
+    private const OPEN_QUERY_ATTEMPTS = 6;
 
     /** Tyle kart produktu wystarcza, żeby przerwać drabinkę fraz. */
     private const OPEN_ENOUGH_PAGES = 3;
