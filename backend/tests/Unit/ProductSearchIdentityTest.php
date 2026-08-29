@@ -381,6 +381,44 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_mapa_multiword_name_matches_shop_slug(): void
+    {
+        $id = new ProductSearchIdentity;
+        $plus = new Product([
+            'sku' => '34995428',
+            'name' => 'SOLO PLUS 995',
+            'manufacturer' => 'MAPA',
+        ]);
+        $temp = new Product([
+            'sku' => '34332028',
+            'name' => 'TEMP-TEC 332 SIZE 8',
+            'manufacturer' => 'MAPA',
+        ]);
+
+        $this->assertSame('SOLO PLUS 995', $id->mapaCatalogName($plus));
+        $this->assertSame('TEMP-TEC 332', $id->mapaCatalogName($temp));
+        $this->assertContains('SOLO PLUS 995', $id->catalogTradeNames($plus));
+        $this->assertContains('TEMP-TEC 332', $id->catalogTradeNames($temp));
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://www.mapa-pro.pl/produkty/do-uzytku-jednorazowego/strona-produktu/solo-plus-995',
+            'Solo Plus 995',
+            $plus
+        ));
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://icd.pl/rekawice-chemiczne-mapa-temptec332.html',
+            'Rękawice MAPA Temp-Tec 332',
+            $temp
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.mapa-pro.pl/produkty/strona-produktu/temp-tec-332 Temp-Tec 332 MAPA',
+            $temp
+        ));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://icd.pl/rekawice-chemiczne-mapa-solo977.html Rękawice chemiczne MAPA Solo 977',
+            $plus
+        ));
+    }
+
     public function test_search_phrase_always_appends_manufacturer(): void
     {
         $id = new ProductSearchIdentity;

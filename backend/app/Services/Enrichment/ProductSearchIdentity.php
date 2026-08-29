@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use App\Support\ProductSizeVariant;
 use Illuminate\Support\Str;
 
 /**
@@ -1180,9 +1181,10 @@ final class ProductSearchIdentity
      */
     public function catalogTradeNames(Product $product): array
     {
+        $sizes = new ProductSizeVariant;
         $out = [];
         foreach ([(string) $product->name, ...$this->variantBaseCodes($product)] as $raw) {
-            $raw = trim((string) $raw);
+            $raw = $sizes->stripSizeFromName(trim((string) $raw));
             if ($raw === '') {
                 continue;
             }
@@ -1236,6 +1238,13 @@ final class ProductSearchIdentity
                 if (str_starts_with($code, $token) || str_starts_with($token, $code)) {
                     return true;
                 }
+                // URL/tytuł ma tylko ostatni człon („plus995”, „tec332”),
+                // nazwa katalogowa jest dłuższa („soloplus995”, „temptec332”).
+                if (preg_match('/\p{L}/u', $code) === 1
+                    && preg_match('/\p{L}/u', $token) === 1
+                    && (str_ends_with($code, $token) || str_ends_with($token, $code))) {
+                    return true;
+                }
             }
         }
 
@@ -1250,7 +1259,9 @@ final class ProductSearchIdentity
         $name = trim((string) $product->name);
         $sku = trim((string) $product->sku);
         if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
-            return $name;
+            $stripped = (new ProductSizeVariant)->stripSizeFromName($name);
+
+            return $stripped !== '' ? $stripped : $name;
         }
 
         return $this->variantBaseCodes($product)[0] ?? $sku;
