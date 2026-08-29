@@ -7,6 +7,7 @@ namespace App\Jobs;
 use App\Exceptions\EnrichmentCancelledException;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Models\ProductEnrichmentBatchItem;
 use App\Services\Enrichment\PrefetchSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
 use Illuminate\Bus\Queueable;
@@ -92,6 +93,12 @@ class PrefetchProductSourcesJob implements ShouldQueue
                 'current_name' => mb_substr($product->name, 0, 255),
                 'message' => 'Prefetch źródeł (wyszukiwarka)…',
             ]);
+            $enrichment->recordBatchProduct(
+                $batch,
+                $product,
+                ProductEnrichmentBatchItem::STATUS_RUNNING,
+                'Prefetch źródeł (wyszukiwarka)…',
+            );
             $enrichment->prefetchProductSources($product, $this->force, $this->batchId, $dispatchEnrich);
         } catch (EnrichmentCancelledException) {
             $this->delete();

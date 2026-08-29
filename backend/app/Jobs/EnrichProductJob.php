@@ -9,6 +9,7 @@ use App\Exceptions\ProductSourcesNotFoundException;
 use App\Exceptions\TavilyQuotaExceededException;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Models\ProductEnrichmentBatchItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
@@ -70,7 +71,13 @@ class EnrichProductJob implements ShouldQueue
             Product::ENRICHMENT_DONE,
             Product::ENRICHMENT_MANUAL,
         ], true)) {
-            $enrichment->markBatchItem($batch, true);
+            $enrichment->markBatchItem(
+                $batch,
+                true,
+                $product,
+                ProductEnrichmentBatchItem::STATUS_SKIPPED,
+                'Produkt miał już opis',
+            );
             $this->refreshBatchProgress($batch);
 
             return;
@@ -112,10 +119,26 @@ class EnrichProductJob implements ShouldQueue
         if ($claimed === 0 && ! $this->force) {
             $status = (string) $product->fresh()?->enrichment_status;
             if (in_array($status, [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL], true)) {
-                $enrichment->markBatchItem($batch, true);
+                $enrichment->markBatchItem(
+                    $batch,
+                    true,
+                    $product,
+                    $status === Product::ENRICHMENT_MANUAL
+                        ? ProductEnrichmentBatchItem::STATUS_MANUAL
+                        : ProductEnrichmentBatchItem::STATUS_SKIPPED,
+                    $status === Product::ENRICHMENT_MANUAL
+                        ? (string) $product->fresh()?->enrichment_error
+                        : 'Produkt miał już opis',
+                );
                 $this->refreshBatchProgress($batch);
             } elseif ($status === Product::ENRICHMENT_FAILED) {
-                $enrichment->markBatchItem($batch, false);
+                $enrichment->markBatchItem(
+                    $batch,
+                    false,
+                    $product,
+                    ProductEnrichmentBatchItem::STATUS_FAILED,
+                    (string) $product->fresh()?->enrichment_error,
+                );
                 $this->refreshBatchProgress($batch);
             }
 
@@ -142,6 +165,12 @@ class EnrichProductJob implements ShouldQueue
                         ? 'Duży model (web search + opis)…'
                         : 'Tavily + skrót AI (lub cache SKU)…'),
             ]);
+            $enrichment->recordBatchProduct(
+                $batch,
+                $product,
+                ProductEnrichmentBatchItem::STATUS_RUNNING,
+                $useDuckDuckGo ? 'Wyszukiwarka…' : 'Pobieranie opisu…',
+            );
 
             $enrichment->enrichProduct($product, $this->force, $this->batchId);
 
@@ -153,10 +182,16 @@ class EnrichProductJob implements ShouldQueue
                 return;
             }
 
-            $enrichment->markBatchItem($batch, true);
+            $enrichment->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE);
             $this->refreshBatchProgress($batch);
         } catch (ProductSourcesNotFoundException $e) {
-            $enrichment->markBatchItem($batch, true);
+            $enrichment->markBatchItem(
+                $batch,
+                true,
+                $product,
+                ProductEnrichmentBatchItem::STATUS_MANUAL,
+                mb_substr($e->getMessage(), 0, 500),
+            );
             $this->refreshBatchProgress($batch);
         } catch (EnrichmentCancelledException $e) {
             $this->abandonCancelled($product);
@@ -233,7 +268,13 @@ class EnrichProductJob implements ShouldQueue
 
         $processed = $batch->done + $batch->failed;
         if ($processed < $batch->total) {
-            app(ProductEnrichmentService::class)->markBatchItem($batch, false);
+            app(ProductEnrichmentService::class)->markBatchItem(
+                $batch,
+                false,
+                $product,
+                ProductEnrichmentBatchItem::STATUS_FAILED,
+                mb_substr($error, 0, 500),
+            );
         }
 
         $batch->refresh();

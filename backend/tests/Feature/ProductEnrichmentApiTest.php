@@ -12,6 +12,7 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductEnrichmentBatch;
+use App\Models\ProductEnrichmentBatchItem;
 use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use App\Models\User;
@@ -391,7 +392,9 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $this->getJson('/api/product-enrichment-batches/active')
             ->assertOk()
-            ->assertJsonMissing(['id' => $batch->id]);
+            ->assertJsonPath('batches', [])
+            ->assertJsonPath('recent.0.id', $batch->id)
+            ->assertJsonPath('recent.0.status', ProductEnrichmentBatch::STATUS_DONE);
 
         $batch->refresh();
         $this->assertSame(ProductEnrichmentBatch::STATUS_DONE, $batch->status);
@@ -561,6 +564,47 @@ final class ProductEnrichmentApiTest extends TestCase
         Queue::assertPushed(PrefetchProductSourcesJob::class, 2);
         Queue::assertPushedOn('prefetch', PrefetchProductSourcesJob::class);
         Queue::assertNotPushed(EnrichProductJob::class);
+    }
+
+    public function test_batch_item_log_lists_products_sorted_by_status(): void
+    {
+        Queue::fake();
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $ok = $this->makeProduct(['sku' => 'LOG-OK', 'name' => 'But OK']);
+        $fail = $this->makeProduct(['sku' => 'LOG-FAIL', 'name' => 'But błąd']);
+        $queued = $this->makeProduct(['sku' => 'LOG-Q', 'name' => 'But kolejka']);
+
+        $res = $this->postJson('/api/products/enrich', [
+            'product_ids' => [$ok->id, $fail->id, $queued->id],
+        ])->assertStatus(202);
+        $batchId = (int) $res->json('batch.id');
+        $batch = ProductEnrichmentBatch::query()->findOrFail($batchId);
+        $service = app(ProductEnrichmentService::class);
+        $service->recordBatchProduct($batch, $ok, ProductEnrichmentBatchItem::STATUS_DONE);
+        $service->recordBatchProduct(
+            $batch,
+            $fail,
+            ProductEnrichmentBatchItem::STATUS_FAILED,
+            'Nie znaleziono karty',
+        );
+
+        $this->getJson("/api/product-enrichment-batches/{$batchId}/items?sort=status")
+            ->assertOk()
+            ->assertJsonPath('items.0.sku', 'LOG-FAIL')
+            ->assertJsonPath('items.0.status', 'failed')
+            ->assertJsonPath('items.1.sku', 'LOG-Q')
+            ->assertJsonPath('items.1.status', 'queued')
+            ->assertJsonPath('items.2.sku', 'LOG-OK')
+            ->assertJsonPath('items.2.status', 'done')
+            ->assertJsonPath('counts.queued', 1)
+            ->assertJsonPath('counts.done', 1)
+            ->assertJsonPath('counts.failed', 1);
+
+        $this->getJson("/api/product-enrichment-batches/{$batchId}/items?status=failed")
+            ->assertOk()
+            ->assertJsonCount(1, 'items')
+            ->assertJsonPath('items.0.product_id', $fail->id);
     }
 
     public function test_prefetch_job_dispatches_enrich_after_search(): void

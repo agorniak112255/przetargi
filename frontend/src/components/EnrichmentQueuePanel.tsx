@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { EnrichmentBatchLogModal } from './EnrichmentBatchLogModal'
 import {
   api,
   enrichmentPriceListHref,
@@ -22,10 +23,12 @@ function EnrichmentJobRow({
   batch,
   busy,
   onCancel,
+  onLog,
 }: {
   batch: EnrichmentBatch
   busy: boolean
-  onCancel: () => void
+  onCancel?: () => void
+  onLog: () => void
 }) {
   const priceHref = enrichmentPriceListHref(batch)
   const productHref = enrichmentProductHref(batch)
@@ -83,24 +86,37 @@ function EnrichmentJobRow({
           />
         </div>
       </div>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={onCancel}
-        className="rounded border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
-      >
-        {busy ? 'Zatrzymuję…' : 'Zatrzymaj'}
-      </button>
+      <div className="flex shrink-0 flex-wrap gap-1">
+        <button
+          type="button"
+          onClick={onLog}
+          className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-800 hover:bg-slate-50"
+        >
+          Log
+        </button>
+        {onCancel ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onCancel}
+            className="rounded border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
+          >
+            {busy ? 'Zatrzymuję…' : 'Zatrzymaj'}
+          </button>
+        ) : null}
+      </div>
     </li>
   )
 }
 
 export function EnrichmentQueuePanel({ onChanged }: Props) {
   const [batches, setBatches] = useState<EnrichmentBatch[]>([])
+  const [recent, setRecent] = useState<EnrichmentBatch[]>([])
   const [queuedProducts, setQueuedProducts] = useState(0)
   const [runningProducts, setRunningProducts] = useState(0)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [stoppingAll, setStoppingAll] = useState(false)
+  const [logBatch, setLogBatch] = useState<EnrichmentBatch | null>(null)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
 
@@ -108,6 +124,7 @@ export function EnrichmentQueuePanel({ onChanged }: Props) {
     try {
       const state = parseActiveEnrichment(await api<unknown>('/product-enrichment-batches/active'))
       setBatches(state.batches)
+      setRecent(state.recent)
       setQueuedProducts(state.queued_products)
       setRunningProducts(state.running_products)
     } catch {
@@ -181,7 +198,7 @@ export function EnrichmentQueuePanel({ onChanged }: Props) {
   }
 
   const ghostCount = queuedProducts + runningProducts
-  if (batches.length === 0 && ghostCount === 0 && !msg && !err) {
+  if (batches.length === 0 && recent.length === 0 && ghostCount === 0 && !msg && !err) {
     return null
   }
 
@@ -228,10 +245,27 @@ export function EnrichmentQueuePanel({ onChanged }: Props) {
               batch={b}
               busy={busyId === b.id}
               onCancel={() => void cancelBatch(b)}
+              onLog={() => setLogBatch(b)}
             />
           ))}
         </ul>
       )}
+      {recent.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-1 text-[11px] font-medium text-amber-950">Ostatnie joby</p>
+          <ul className="space-y-2">
+            {recent.map((b) => (
+              <EnrichmentJobRow
+                key={b.id}
+                batch={b}
+                busy={false}
+                onLog={() => setLogBatch(b)}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+      <EnrichmentBatchLogModal batch={logBatch} onClose={() => setLogBatch(null)} />
     </div>
   )
 }

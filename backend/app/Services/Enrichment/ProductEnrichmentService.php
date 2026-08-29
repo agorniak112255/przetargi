@@ -13,6 +13,7 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductEnrichmentBatch;
+use App\Models\ProductEnrichmentBatchItem;
 use App\Models\ProductEnrichmentCache;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
@@ -80,6 +81,7 @@ final class ProductEnrichmentService
             'enrichment_error' => null,
         ]);
 
+        $this->seedBatchItems($batch, [$product]);
         PrefetchProductSourcesJob::dispatch($product->id, $batch->id, $force);
 
         return $batch;
@@ -174,6 +176,8 @@ final class ProductEnrichmentService
             'enrichment_status' => Product::ENRICHMENT_QUEUED,
             'enrichment_error' => null,
         ]);
+
+        $this->seedBatchItems($batch, Product::query()->whereIn('id', $productIds)->get());
 
         if ($dispatchJobs) {
             foreach ($productIds as $productId) {
@@ -316,10 +320,12 @@ final class ProductEnrichmentService
         ]);
 
         Cache::forget($this->prefetchPackKey($product));
+        $this->seedBatchItems($batch, [$product]);
+        $this->recordBatchProduct($batch, $product, ProductEnrichmentBatchItem::STATUS_RUNNING);
 
         try {
             $this->enrichProduct($product, $force);
-            $this->markBatchItem($batch, true);
+            $this->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE);
             $batch->refresh();
             $batch->update([
                 'message' => 'Gotowe',
@@ -327,7 +333,15 @@ final class ProductEnrichmentService
                 'current_name' => null,
             ]);
         } catch (Throwable $e) {
-            $this->markBatchItem($batch, false);
+            $this->markBatchItem(
+                $batch,
+                false,
+                $product,
+                $e instanceof ProductSourcesNotFoundException
+                    ? ProductEnrichmentBatchItem::STATUS_MANUAL
+                    : ProductEnrichmentBatchItem::STATUS_FAILED,
+                mb_substr($e->getMessage(), 0, 500),
+            );
             $batch->refresh();
             $batch->update([
                 'message' => 'Błąd: '.mb_substr($e->getMessage(), 0, 200),
@@ -1836,9 +1850,23 @@ final class ProductEnrichmentService
         return false;
     }
 
-    public function markBatchItem(ProductEnrichmentBatch $batch, bool $success): void
-    {
+    public function markBatchItem(
+        ProductEnrichmentBatch $batch,
+        bool $success,
+        ?Product $product = null,
+        ?string $itemStatus = null,
+        ?string $message = null,
+    ): void {
         if ($batch->status === ProductEnrichmentBatch::STATUS_CANCELLED || $batch->isCancelled()) {
+            if ($product !== null) {
+                $this->recordBatchProduct(
+                    $batch,
+                    $product,
+                    ProductEnrichmentBatchItem::STATUS_CANCELLED,
+                    $message ?? 'Anulowano przez użytkownika',
+                );
+            }
+
             return;
         }
 
@@ -1849,6 +1877,134 @@ final class ProductEnrichmentService
         }
         $batch->refresh();
         $batch->refreshStatus();
+        if ($product !== null) {
+            $this->recordBatchProduct(
+                $batch,
+                $product,
+                $itemStatus ?? ($success
+                    ? ProductEnrichmentBatchItem::STATUS_DONE
+                    : ProductEnrichmentBatchItem::STATUS_FAILED),
+                $message ?? (is_string($product->enrichment_error) ? $product->enrichment_error : null),
+            );
+        }
+    }
+
+    /**
+     * @param  iterable<int, Product>  $products
+     */
+    public function seedBatchItems(ProductEnrichmentBatch $batch, iterable $products): void
+    {
+        if (! Schema::hasTable('product_enrichment_batch_items')) {
+            return;
+        }
+        $now = now();
+        $rows = [];
+        foreach ($products as $product) {
+            $rows[] = [
+                'batch_id' => $batch->id,
+                'product_id' => $product->id,
+                'sku' => mb_substr((string) $product->sku, 0, 100),
+                'name' => mb_substr((string) $product->name, 0, 255),
+                'status' => ProductEnrichmentBatchItem::STATUS_QUEUED,
+                'message' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+        foreach (array_chunk($rows, 250) as $chunk) {
+            ProductEnrichmentBatchItem::query()->insertOrIgnore($chunk);
+        }
+    }
+
+    public function recordBatchProduct(
+        ProductEnrichmentBatch $batch,
+        Product $product,
+        string $status,
+        ?string $message = null,
+    ): void {
+        if (! Schema::hasTable('product_enrichment_batch_items')) {
+            return;
+        }
+        ProductEnrichmentBatchItem::query()->updateOrCreate(
+            [
+                'batch_id' => $batch->id,
+                'product_id' => $product->id,
+            ],
+            [
+                'sku' => mb_substr((string) $product->sku, 0, 100),
+                'name' => mb_substr((string) $product->name, 0, 255),
+                'status' => $status,
+                'message' => $message !== null && $message !== ''
+                    ? mb_substr($message, 0, 500)
+                    : null,
+            ]
+        );
+    }
+
+    /**
+     * @return array{
+     *     batch: array<string, mixed>,
+     *     items: list<array<string, mixed>>,
+     *     counts: array<string, int>
+     * }
+     */
+    public function batchItemLog(
+        ProductEnrichmentBatch $batch,
+        string $sort = 'status',
+        ?string $status = null,
+    ): array {
+        $query = ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id);
+        if ($status !== null && $status !== '') {
+            $query->where('status', $status);
+        }
+        $items = $query->get();
+        if ($sort === 'updated') {
+            $items = $items->sortByDesc(static fn (ProductEnrichmentBatchItem $row): string => (string) $row->updated_at);
+        } else {
+            $items = $items->sortBy(function (ProductEnrichmentBatchItem $row): array {
+                $rank = ProductEnrichmentBatchItem::STATUS_SORT[$row->status] ?? 9;
+
+                return [$rank, mb_strtolower($row->sku)];
+            });
+        }
+
+        $counts = [];
+        foreach (ProductEnrichmentBatchItem::STATUS_SORT as $key => $_) {
+            $counts[$key] = 0;
+        }
+        foreach (ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->get(['status']) as $row) {
+            $counts[$row->status] = ($counts[$row->status] ?? 0) + 1;
+        }
+
+        return [
+            'items' => $items->values()->map(static fn (ProductEnrichmentBatchItem $row): array => [
+                'id' => $row->id,
+                'product_id' => $row->product_id,
+                'sku' => $row->sku,
+                'name' => $row->name,
+                'status' => $row->status,
+                'message' => $row->message,
+                'updated_at' => $row->updated_at?->toIso8601String(),
+            ])->all(),
+            'counts' => $counts,
+        ];
+    }
+
+    public function cancelOpenBatchItems(ProductEnrichmentBatch $batch, string $message): void
+    {
+        if (! Schema::hasTable('product_enrichment_batch_items')) {
+            return;
+        }
+        ProductEnrichmentBatchItem::query()
+            ->where('batch_id', $batch->id)
+            ->whereIn('status', [
+                ProductEnrichmentBatchItem::STATUS_QUEUED,
+                ProductEnrichmentBatchItem::STATUS_RUNNING,
+            ])
+            ->update([
+                'status' => ProductEnrichmentBatchItem::STATUS_CANCELLED,
+                'message' => mb_substr($message, 0, 500),
+            ]);
     }
 
     /**
@@ -1976,6 +2132,7 @@ final class ProductEnrichmentService
             $batch->refresh();
         }
 
+        $this->cancelOpenBatchItems($batch, 'Anulowano przez użytkownika');
         $batch->update([
             'status' => ProductEnrichmentBatch::STATUS_CANCELLED,
             'message' => 'Anulowano · OK '.$batch->done.' / usunięto z kolejki '.$removedJobs,
@@ -2042,6 +2199,7 @@ final class ProductEnrichmentService
                 $batch->increment('failed', $remaining);
                 $batch->refresh();
             }
+            $this->cancelOpenBatchItems($batch, 'Zatrzymano wszystkie pobierania opisów');
             $batch->update([
                 'status' => ProductEnrichmentBatch::STATUS_CANCELLED,
                 'message' => 'Zatrzymano wszystko · usunięto jobów '.$removedJobs,

@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Cache;
 
 class ProductEnrichmentBatch extends Model
@@ -53,6 +54,11 @@ class ProductEnrichmentBatch extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function items(): HasMany
+    {
+        return $this->hasMany(ProductEnrichmentBatchItem::class, 'batch_id');
     }
 
     public const HALT_CACHE_KEY = 'enrichment:halt-all';

@@ -154,9 +154,25 @@ class ProductEnrichmentController extends Controller
 
         $ctx = $this->batchLinkContext($batches);
 
+        $recent = ProductEnrichmentBatch::query()
+            ->whereIn('status', [
+                ProductEnrichmentBatch::STATUS_DONE,
+                ProductEnrichmentBatch::STATUS_FAILED,
+                ProductEnrichmentBatch::STATUS_CANCELLED,
+            ])
+            ->where('updated_at', '>=', now()->subDays(2))
+            ->orderByDesc('id')
+            ->limit(8)
+            ->get();
+        $recentCtx = $this->batchLinkContext($recent);
+
         return response()->json([
             'batches' => $batches
                 ->map(fn (ProductEnrichmentBatch $batch): array => $this->batchPayload($batch, $ctx[(int) $batch->id] ?? null))
+                ->values()
+                ->all(),
+            'recent' => $recent
+                ->map(fn (ProductEnrichmentBatch $batch): array => $this->batchPayload($batch, $recentCtx[(int) $batch->id] ?? null))
                 ->values()
                 ->all(),
             ...$this->enrichment->enrichmentProductCounts(),
@@ -177,6 +193,24 @@ class ProductEnrichmentController extends Controller
     public function showBatch(ProductEnrichmentBatch $batch): JsonResponse
     {
         return response()->json($this->batchPayload($batch));
+    }
+
+    public function batchItems(Request $request, ProductEnrichmentBatch $batch): JsonResponse
+    {
+        $data = $request->validate([
+            'sort' => ['sometimes', 'in:status,updated'],
+            'status' => ['sometimes', 'nullable', 'string', 'max:20'],
+        ]);
+        $log = $this->enrichment->batchItemLog(
+            $batch,
+            (string) ($data['sort'] ?? 'status'),
+            isset($data['status']) && $data['status'] !== '' ? (string) $data['status'] : null,
+        );
+
+        return response()->json([
+            'batch' => $this->batchPayload($batch),
+            ...$log,
+        ]);
     }
 
     public function processBatchItem(ProductEnrichmentBatch $batch, Product $product): JsonResponse

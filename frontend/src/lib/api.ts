@@ -181,25 +181,43 @@ export function enrichmentProductHref(batch: EnrichmentBatch): string | null {
   return appHref(`/products/${batch.current_product_id}`)
 }
 
+export type EnrichmentBatchItem = {
+  id: number
+  product_id: number
+  sku: string
+  name: string
+  status: string
+  message: string | null
+  updated_at: string | null
+}
+
+export type EnrichmentBatchLog = {
+  batch: EnrichmentBatch
+  items: EnrichmentBatchItem[]
+  counts: Record<string, number>
+}
+
 export type ActiveEnrichmentState = {
   batches: EnrichmentBatch[]
+  recent: EnrichmentBatch[]
   queued_products: number
   running_products: number
 }
 
 export function parseActiveEnrichment(res: unknown): ActiveEnrichmentState {
   if (Array.isArray(res)) {
-    return { batches: res as EnrichmentBatch[], queued_products: 0, running_products: 0 }
+    return { batches: res as EnrichmentBatch[], recent: [], queued_products: 0, running_products: 0 }
   }
   if (res && typeof res === 'object' && 'batches' in res) {
     const o = res as ActiveEnrichmentState
     return {
       batches: Array.isArray(o.batches) ? o.batches : [],
+      recent: Array.isArray(o.recent) ? o.recent : [],
       queued_products: Number(o.queued_products ?? 0),
       running_products: Number(o.running_products ?? 0),
     }
   }
-  return { batches: [], queued_products: 0, running_products: 0 }
+  return { batches: [], recent: [], queued_products: 0, running_products: 0 }
 }
 
 export type Substitute = {
