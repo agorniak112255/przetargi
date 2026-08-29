@@ -311,6 +311,23 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertStringContainsString('site:optimumbhp.pl', $joined);
     }
 
+    public function test_marelplus_search_queries_target_official_shop(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'CADIZ-S1PS',
+            'name' => 'PÓŁBUTY CADIZ S1PS FO SR',
+            'manufacturer' => 'MAREL PLUS',
+        ]);
+
+        $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('site:marelplus.pl', $joined);
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://marelplus.pl/polbuty-cadiz-s1ps-fo-sr Półbuty Cadiz S1PS FO SR',
+            $product
+        ));
+    }
+
     public function test_mapa_search_queries_target_polish_catalog(): void
     {
         $id = new ProductSearchIdentity;
@@ -325,12 +342,31 @@ final class ProductSearchIdentityTest extends TestCase
 
         $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
         $this->assertStringContainsString('site:mapa-pro.pl KRYTECH 563', $joined);
+        $this->assertStringContainsString('site:icd.pl KRYTECH 563', $joined);
         $this->assertTrue($id->hayMentionsProduct(
             'https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-563 KryTech 563',
             $product
         ));
         $this->assertFalse($id->hayMentionsProduct(
             'https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-643 KryTech 643',
+            $product
+        ));
+    }
+
+    public function test_mapa_article_number_is_not_required_on_shop_url(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '34977068',
+            'name' => 'SOLO 977',
+            'manufacturer' => 'MAPA',
+        ]);
+
+        $this->assertSame('SOLO 977', $id->mapaCatalogName($product));
+        $this->assertSame('SOLO 977 MAPA', $id->primaryQueries($product)[0] ?? null);
+        $this->assertStringContainsString('site:icd.pl SOLO 977', implode(' | ', $id->searchQueries($product, 'manufacturer')));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://icd.pl/rekawice-chemiczne-mapa-solo977.html Rękawice chemiczne MAPA Solo 977',
             $product
         ));
     }

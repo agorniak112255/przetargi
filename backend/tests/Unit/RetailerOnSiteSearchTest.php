@@ -54,6 +54,41 @@ final class RetailerOnSiteSearchTest extends TestCase
         ])));
     }
 
+    public function test_marel_query_uses_product_name(): void
+    {
+        $search = app(RetailerOnSiteSearch::class);
+        $product = new Product([
+            'sku' => 'CADIZ-42',
+            'name' => 'PÓŁBUTY CADIZ S1PS FO SR',
+            'manufacturer' => 'MAREL PLUS sp. z o.o.',
+        ]);
+
+        $this->assertSame('PÓŁBUTY CADIZ S1PS FO SR', $search->query($product));
+    }
+
+    public function test_marel_keeps_matching_product_from_shop_search(): void
+    {
+        Http::fake([
+            'https://marelplus.pl/szukaj*' => Http::response(
+                '<a href="/polbuty-cadiz-s1ps-fo-sr">Półbuty Cadiz S1PS FO SR</a>'
+                .'<a href="/trzewiki-sonora-s3">Trzewiki Sonora S3</a>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $product = new Product([
+            'sku' => 'CADIZ-S1PS',
+            'name' => 'PÓŁBUTY CADIZ S1PS FO SR',
+            'manufacturer' => 'MAREL PLUS',
+        ]);
+        $hits = app(RetailerOnSiteSearch::class)->find($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains('https://marelplus.pl/polbuty-cadiz-s1ps-fo-sr', $urls);
+        $this->assertNotContains('https://marelplus.pl/trzewiki-sonora-s3', $urls);
+    }
+
     public function test_mapa_query_uses_catalog_name_without_size(): void
     {
         $search = app(RetailerOnSiteSearch::class);
@@ -64,6 +99,30 @@ final class RetailerOnSiteSearchTest extends TestCase
         ]);
 
         $this->assertSame('KRYTECH 563', $search->query($product));
+    }
+
+    public function test_mapa_falls_back_to_icd_when_official_catalog_is_empty(): void
+    {
+        Http::fake([
+            'https://www.mapa-pro.pl/wyszukiwanie-zaawansowane*' => Http::response('<p>brak</p>', 200),
+            'https://icd.pl/szukaj*' => Http::response(
+                '<a href="/rekawice-chemiczne-mapa-solo977.html">Rękawice chemiczne MAPA Solo 977</a>'
+                .'<a href="/rekawice-chemiczne-mapa-ultranitril472.html">Rękawice MAPA Ultranitril 472</a>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $product = new Product([
+            'sku' => '34977068',
+            'name' => 'SOLO 977',
+            'manufacturer' => 'MAPA',
+        ]);
+        $hits = app(RetailerOnSiteSearch::class)->find($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains('https://icd.pl/rekawice-chemiczne-mapa-solo977.html', $urls);
+        $this->assertNotContains('https://icd.pl/rekawice-chemiczne-mapa-ultranitril472.html', $urls);
     }
 
     public function test_mapa_keeps_matching_model_and_drops_neighbour(): void

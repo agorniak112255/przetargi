@@ -29,6 +29,12 @@ final class RetailerOnSiteSearch
         'template' => 'https://www.mapa-pro.pl/wyszukiwanie-zaawansowane?tx_solr[filter][0]=type:tx_mapaproduct_domain_model_product&tx_solr[q]={q}',
     ];
 
+    /** @var array{host: string, template: string} */
+    private const MAREL_ENDPOINT = [
+        'host' => 'marelplus.pl',
+        'template' => 'https://marelplus.pl/szukaj?controller=search&s={q}',
+    ];
+
     public function __construct(private readonly ProductSearchIdentity $identity) {}
 
     /**
@@ -84,6 +90,15 @@ final class RetailerOnSiteSearch
     {
         if ($this->isMapa($product)) {
             return $this->identity->mapaCatalogName($product);
+        }
+        if ($this->isMarel($product)) {
+            $sku = trim((string) $product->sku);
+            $name = trim((string) $product->name);
+            if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
+                return $name;
+            }
+
+            return $sku;
         }
 
         $early = $this->identity->ansellSearchPhrases($product, 'early');
@@ -153,7 +168,15 @@ final class RetailerOnSiteSearch
     private function endpointsFor(Product $product): array
     {
         if ($this->isMapa($product)) {
-            return [self::MAPA_ENDPOINT];
+            $icd = array_values(array_filter(
+                self::ENDPOINTS,
+                static fn (array $row): bool => $row['host'] === 'icd.pl'
+            ));
+
+            return array_merge([self::MAPA_ENDPOINT], $icd);
+        }
+        if ($this->isMarel($product)) {
+            return [self::MAREL_ENDPOINT];
         }
         if ($this->identity->ansellStyleCodes($product) !== []) {
             return self::ENDPOINTS;
@@ -165,6 +188,11 @@ final class RetailerOnSiteSearch
     private function isMapa(Product $product): bool
     {
         return str_contains(mb_strtolower($this->identity->shortBrand((string) $product->manufacturer)), 'mapa');
+    }
+
+    private function isMarel(Product $product): bool
+    {
+        return str_contains(mb_strtolower($this->identity->shortBrand((string) $product->manufacturer)), 'marel');
     }
 
     /**

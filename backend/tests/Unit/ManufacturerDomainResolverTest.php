@@ -185,6 +185,56 @@ final class ManufacturerDomainResolverTest extends TestCase
         ));
     }
 
+    public function test_resolves_marelplus_and_other_import_catalogs(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $cases = [
+            ['MAREL PLUS sp. z o.o.', 'https://marelplus.pl/polbuty-cadiz-s1ps', 'marelplus.pl'],
+            ['Worklink', 'https://worklink.com.pl/pl/supertech', 'worklink.com.pl'],
+            ['Showa', 'https://showa-glove.com/product/310', 'showa-glove.com'],
+            ['Lebon', 'https://www.lebonprotection.com/skytouch', 'lebonprotection.com'],
+            ['CEDERROTH', 'https://www.cederroth.com/products', 'cederroth.com'],
+            ['Sir Safety System', 'https://www.sirsafety.com/en/products', 'sirsafety.com'],
+            ['U-Power', 'https://u-power.ai/pl-pl/product/arya', 'u-power.ai'],
+            ['PPO', 'https://www.ppo.pl/obuwie', 'ppo.pl'],
+            ['JS GLOVES', 'https://www.js-gloves.pl/roc5', 'js-gloves.pl'],
+            ['SECURA', 'https://www.securabc.com/pl/secura-3000', 'securabc.com'],
+            ['Filter Service', 'https://www.filter-service.eu/polmaski', 'filter-service.eu'],
+            ['BOXMET Medical', 'https://www.boxmetmedical.pl/apteczki', 'boxmetmedical.pl'],
+            ['Polstar', 'https://www.polstar.com.pl/brixton', 'polstar.com.pl'],
+            ['POLROK', 'https://polrok.com/rekawice', 'polrok.com'],
+            ['JULEX', 'https://www.julex.pl/piumetta', 'julex.pl'],
+            ['COFRA', 'https://www.cofra.it/footwear', 'cofra.it'],
+            ['PLANAM', 'https://www.planam.de/arbeitskleidung', 'planam.de'],
+            ['OX-ON', 'https://www.ox-on.com/gloves', 'ox-on.com'],
+            ['JORI', 'https://elten.com/produktgruppen/jori-by-elten/', 'elten.com'],
+            ['DuPont', 'https://safespec.dupont.com/product', 'safespec.dupont.com'],
+            ['Maskpol', 'https://www.maskpol.com.pl/maska', 'maskpol.com.pl'],
+            ['TERMOIZOL', 'https://www.termoizol.pl/wyroby', 'termoizol.pl'],
+            ['ALWIT POLAND', 'https://alwit.pl/kaptury', 'alwit.pl'],
+            ['PIP', 'https://protectiveindustrialproducts.com/gloves', 'protectiveindustrialproducts.com'],
+            ['SafeLine', 'https://safeline.pl/secubox-mini', 'safeline.pl'],
+            ['Secubox', 'https://www.secubox.eu/products', 'secubox.eu'],
+        ];
+
+        foreach ($cases as [$manufacturer, $url, $host]) {
+            $product = new Product([
+                'manufacturer' => $manufacturer,
+                'sku' => 'X',
+                'name' => 'X',
+            ]);
+            $domains = $resolver->domainsFor($product);
+            $this->assertTrue(
+                $resolver->isManufacturerUrl($url, $product, $domains),
+                $manufacturer.' → '.$host
+            );
+            $this->assertContains($host, $domains, $manufacturer);
+        }
+
+        $this->assertContains('marelplus.pl', config('enrichment.preferred_domains'));
+        $this->assertContains('marelplus.pl', config('enrichment.retailer_domains'));
+    }
+
     public function test_resolves_mapa_polish_catalog_domain(): void
     {
         $resolver = app(ManufacturerDomainResolver::class);

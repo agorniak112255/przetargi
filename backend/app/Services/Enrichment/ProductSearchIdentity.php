@@ -729,6 +729,14 @@ final class ProductSearchIdentity
             $model = $this->mapaCatalogName($product);
             if ($model !== '') {
                 $queries[] = 'site:mapa-pro.pl '.$model;
+                $queries[] = 'site:icd.pl '.$model;
+            }
+        }
+
+        if ($phase === 'manufacturer' && str_contains(mb_strtolower($brand), 'marel')) {
+            $code = $sku !== '' ? $sku : $bare;
+            if ($code !== '') {
+                $queries[] = 'site:marelplus.pl '.$code;
             }
         }
 
@@ -804,18 +812,27 @@ final class ProductSearchIdentity
         // „PROS-121-S1-GUMA” to nasz kod złożony z opisu — w sieci działa dopiero
         // nazwa z producentem („121 S1 GUMA Urgent”), więc ona idzie pierwsza.
         $composedSku = $this->hasDescriptiveWordSegment($sku);
+        $mapaCatalog = str_contains(mb_strtolower($brand), 'mapa')
+            ? $this->mapaCatalogName($product)
+            : '';
+        // MAPA 34977068 to numer artykułu — sklepy (icd.pl) mają „SOLO 977”, nie EAN.
+        $preferCatalogName = $composedSku || $mapaCatalog !== '';
 
         $skuQueries = [];
-        if ($usableSku) {
+        if ($usableSku && $mapaCatalog === '') {
             $skuQueries[] = $this->queryWithManufacturer($sku, $product);
             $bare = $this->stripBrandPrefix($sku, $brand);
             if ($bare !== '' && $bare !== $sku) {
                 $skuQueries[] = $this->queryWithManufacturer($bare, $product);
             }
+        } elseif ($usableSku) {
+            $skuQueries[] = $this->queryWithManufacturer($sku, $product);
         }
 
         $nameQueries = [];
-        if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
+        if ($mapaCatalog !== '') {
+            $nameQueries[] = $this->queryWithManufacturer($mapaCatalog, $product);
+        } elseif ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
             $nameQueries[] = $this->queryWithManufacturer(
                 $usableSku && ! $composedSku && ! $this->phraseHasToken($name, $sku)
                     ? $name.' '.$sku
@@ -824,7 +841,7 @@ final class ProductSearchIdentity
             );
         }
 
-        $out = $composedSku
+        $out = $preferCatalogName
             ? array_merge($nameQueries, $skuQueries)
             : array_merge($skuQueries, $nameQueries);
         $styleQueries = [];
