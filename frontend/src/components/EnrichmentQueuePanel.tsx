@@ -104,7 +104,6 @@ function EnrichmentJobRow({
 
 export function EnrichmentQueuePanel({ onChanged }: Props) {
   const [batches, setBatches] = useState<EnrichmentBatch[]>([])
-  const [recent, setRecent] = useState<EnrichmentBatch[]>([])
   const [queuedProducts, setQueuedProducts] = useState(0)
   const [runningProducts, setRunningProducts] = useState(0)
   const [busyId, setBusyId] = useState<number | null>(null)
@@ -117,7 +116,6 @@ export function EnrichmentQueuePanel({ onChanged }: Props) {
     try {
       const state = parseActiveEnrichment(await api<unknown>('/product-enrichment-batches/active'))
       setBatches(state.batches)
-      setRecent(state.recent)
       setQueuedProducts(state.queued_products)
       setRunningProducts(state.running_products)
     } catch {
@@ -191,7 +189,7 @@ export function EnrichmentQueuePanel({ onChanged }: Props) {
   }
 
   const ghostCount = queuedProducts + runningProducts
-  if (batches.length === 0 && recent.length === 0 && ghostCount === 0 && !msg && !err) {
+  if (batches.length === 0 && ghostCount === 0 && !msg && !err) {
     return null
   }
 
@@ -242,21 +240,6 @@ export function EnrichmentQueuePanel({ onChanged }: Props) {
             />
           ))}
         </ul>
-      )}
-      {recent.length > 0 && (
-        <div className="mt-3">
-          <p className="mb-1 text-[11px] font-medium text-amber-950">Ostatnie joby</p>
-          <ul className="space-y-2">
-            {recent.map((b) => (
-              <EnrichmentJobRow
-                key={b.id}
-                batch={b}
-                busy={false}
-                onLog={() => setLogBatch(b)}
-              />
-            ))}
-          </ul>
-        </div>
       )}
       <EnrichmentBatchLogModal batch={logBatch} onClose={() => setLogBatch(null)} />
     </div>
