@@ -1699,8 +1699,13 @@ final class ProductEnrichmentService
     private function descriptionMentionsProduct(string $description, Product $product): bool
     {
         $hay = mb_strtolower($description);
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
         if ($this->identity->hayHasProductCode($hay, $product)) {
+            return true;
+        }
+        if ($this->identity->hayHasShopIdentity($hay, $hayCompact, $product)
+            && $this->identity->hayHasBrand($hay, $product)) {
             return true;
         }
 
@@ -1713,8 +1718,7 @@ final class ProductEnrichmentService
         }
         // Sama marka nie wystarcza — pod „Urgent” idzie pół katalogu — ale razem
         // ze słowem z nazwy domyka potwierdzenie.
-        $brand = mb_strtolower($this->identity->shortBrand((string) $product->manufacturer));
-        if ($score > 0 && $brand !== '' && $this->hayHasToken($hay, $brand)) {
+        if ($score > 0 && $this->identity->hayHasBrand($hay, $product)) {
             $score++;
         }
         if ($score >= 2) {

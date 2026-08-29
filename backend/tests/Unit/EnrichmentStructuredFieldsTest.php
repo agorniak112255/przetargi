@@ -121,6 +121,25 @@ TXT;
         ]));
     }
 
+    public function test_warehouse_model_description_confirms_without_article_number(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $beagle = new Product([
+            'sku' => '211600170000',
+            'name' => 'BEAGLE',
+            'manufacturer' => 'CANIS SAFETY',
+        ]);
+
+        $this->assertTrue($this->invoke($service, 'descriptionMentionsProduct', [
+            'Półbuty ochronne BEAGLE marki CXS Canis z podnoskiem kompozytowym.',
+            $beagle,
+        ]));
+        $this->assertFalse($this->invoke($service, 'descriptionMentionsProduct', [
+            'Półbuty ochronne Marble marki CXS Canis z podnoskiem kompozytowym.',
+            $beagle,
+        ]));
+    }
+
     /**
      * @param  list<mixed>  $args
      */

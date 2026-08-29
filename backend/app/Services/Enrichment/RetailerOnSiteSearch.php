@@ -170,8 +170,16 @@ final class RetailerOnSiteSearch
                 $out[] = $row;
             }
         }
+        if ($out !== []) {
+            return $out;
+        }
+        if ($this->identity->shopIdentityPhrases($product) !== []
+            || $this->identity->hasDistinctiveCatalogSku($product)
+            || $this->identity->looksLikeWarehouseArticleSku($product)) {
+            return self::ENDPOINTS;
+        }
 
-        return $out;
+        return [];
     }
 
     /**

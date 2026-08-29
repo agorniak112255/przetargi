@@ -1227,7 +1227,7 @@ final class ProductSearchIdentity
     {
         $codes = [];
         $sku = trim((string) $product->sku);
-        if ($sku !== '' && ! $this->rawSkuIsOfflineNoise($product)) {
+        if ($sku !== '') {
             $codes[] = $sku;
         }
         foreach ($this->catalogArticleCodes($product) as $article) {
@@ -1460,10 +1460,10 @@ final class ProductSearchIdentity
     public function codeIndexRetailerHosts(): array
     {
         return $this->bareHosts([
-            'sklep-system.pl',
-            'workweargurus.com',
             'gvarant.pl',
             'optimumbhp.pl',
+            'sklep-system.pl',
+            'workweargurus.com',
         ]);
     }
 
@@ -1606,6 +1606,12 @@ final class ProductSearchIdentity
      */
     public function codeInText(string $hay, string $code): bool
     {
+        $code = trim($code);
+        // „321001900010budowlane” — sklep skleja długi numer z kolejnym słowem
+        if (preg_match('/^\d{8,}$/u', $code) === 1
+            && preg_match('/(?<![0-9])'.preg_quote($code, '/').'(?![0-9])/u', $hay) === 1) {
+            return true;
+        }
         $pattern = $this->codePattern($code);
         if ($pattern === null) {
             return false;
@@ -1831,8 +1837,9 @@ final class ProductSearchIdentity
             return false;
         }
 
+        $boundary = mb_strlen($token) >= 8 ? '(?![0-9])' : '(?![0-9a-z])';
         $count = preg_match_all(
-            '/(?<![0-9])'.preg_quote($token, '/').'(?![0-9a-z])/iu',
+            '/(?<![0-9])'.preg_quote($token, '/').$boundary.'/iu',
             $hay,
             $matches,
             PREG_OFFSET_CAPTURE
@@ -2041,12 +2048,8 @@ final class ProductSearchIdentity
     public function looksLikeWarehouseArticleSku(Product $product): bool
     {
         $sku = trim((string) $product->sku);
-        if (preg_match('/^\d{10,14}$/u', $sku) !== 1) {
-            return false;
-        }
-        $stripped = rtrim($sku, '0');
-
-        return mb_strlen($stripped) >= 6 && mb_strlen($sku) - mb_strlen($stripped) >= 3;
+        // 10–12 cyfr to numer magazynowy CXS/Canis (310000300010), nie EAN-13
+        return preg_match('/^\d{10,12}$/u', $sku) === 1;
     }
 
     public function rawSkuIsOfflineNoise(Product $product): bool

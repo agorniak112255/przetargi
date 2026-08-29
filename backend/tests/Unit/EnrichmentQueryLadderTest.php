@@ -689,6 +689,28 @@ final class EnrichmentQueryLadderTest extends TestCase
             'https://cxs.net.pl/beagle-s1 Buty BEAGLE CANIS SAFETY',
             $beagle
         ));
+
+        $bojar = new Product([
+            'manufacturer' => 'CANIS SAFETY',
+            'sku' => '321001900010',
+            'name' => 'BOJAR',
+        ]);
+        $plain = new Product([
+            'manufacturer' => 'CANIS SAFETY',
+            'sku' => '310000300010',
+            'name' => 'ASTAR',
+        ]);
+        $this->assertTrue($identity->looksLikeWarehouseArticleSku($plain));
+        $this->assertContains('3100-003-000', $identity->catalogArticleCodes($plain));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.gvarant.pl/rekawice-canis-bojar-321001900010budowlane '
+            .'Rękawice Canis Bojar 321001900010budowlane Skóra',
+            $bojar
+        ));
+        $this->assertTrue($identity->codeInText(
+            'rekawice canis bojar 321001900010budowlane skora',
+            '321001900010'
+        ));
     }
 
     public function test_catalog_code_opens_official_site_after_short_query(): void
@@ -712,7 +734,7 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $tx39, $build->invoke($service, $tx39, 'manufacturer'));
 
         $this->assertSame('TX39 Portwest', $ladder[0] ?? null);
-        $this->assertStringContainsString('site:sklep-system.pl TX39', implode(' | ', $ladder));
+        $this->assertStringContainsString('site:gvarant.pl TX39', implode(' | ', $ladder));
         $this->assertTrue($identity->hayMentionsProduct(
             'https://sklep-system.pl/ogrodniczki-portwest-tx39-bremen Ogrodniczki robocze Portwest TX39 BREMEN',
             $tx39
