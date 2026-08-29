@@ -419,6 +419,53 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_shop_identity_uses_catalog_name_not_internal_sku_tail(): void
+    {
+        $id = new ProductSearchIdentity;
+        $baltik = new Product([
+            'sku' => 'BALTIK-BLACK-CZARNY-NYLON-PO-70',
+            'name' => 'BALTIK BLACK - czarny nylon powlekany poliuretanem, DMF free',
+            'manufacturer' => 'MAREL PLUS',
+        ]);
+        $argo = new Product([
+            'sku' => 'ARGO-KURTKA-OCIEPLANA-POLYES-43',
+            'name' => 'ARGO- kurtka ocieplana polyester pongee, szaro-grafitowa',
+            'manufacturer' => 'MAREL PLUS',
+            'category' => 'Kurtki',
+        ]);
+        $buty = new Product([
+            'sku' => 'P-BUTY-126',
+            'name' => 'Półbuty 126',
+            'manufacturer' => 'MAREL PLUS',
+        ]);
+
+        $this->assertContains('BALTIK BLACK', $id->shopIdentityPhrases($baltik));
+        $this->assertContains('ARGO', $id->shopIdentityPhrases($argo));
+        $this->assertContains('buty 126', $id->shopIdentityPhrases($buty));
+
+        $baltikQ = implode(' | ', $id->searchQueries($baltik, 'manufacturer'));
+        $this->assertStringContainsString('site:marelplus.pl BALTIK BLACK', $baltikQ);
+        $this->assertStringNotContainsString('CZARNY-NYLON', $baltikQ);
+        $this->assertSame('BALTIK BLACK MAREL PLUS', $id->primaryQueries($baltik)[0] ?? null);
+
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://marelplus.pl/rekawice-baltik-black Rękawice Baltik Black MAREL PLUS',
+            $baltik
+        ));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://marelplus.pl/rekawice-nubia Rękawice Nubia MAREL PLUS',
+            $baltik
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://marelplus.pl/kurtka-argo Kurtka Argo MAREL PLUS',
+            $argo
+        ));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://marelplus.pl/kurtka-kardif Kurtka Kardif MAREL PLUS',
+            $argo
+        ));
+    }
+
     public function test_search_phrase_always_appends_manufacturer(): void
     {
         $id = new ProductSearchIdentity;

@@ -88,17 +88,9 @@ final class RetailerOnSiteSearch
 
     public function query(Product $product): string
     {
-        if ($this->isMapa($product)) {
-            return $this->identity->mapaCatalogName($product);
-        }
-        if ($this->isMarel($product)) {
-            $sku = trim((string) $product->sku);
-            $name = trim((string) $product->name);
-            if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
-                return $name;
-            }
-
-            return $sku;
+        $shop = $this->identity->shopIdentityPhrases($product);
+        if ($shop !== []) {
+            return $shop[0];
         }
 
         $early = $this->identity->ansellSearchPhrases($product, 'early');
@@ -167,32 +159,19 @@ final class RetailerOnSiteSearch
      */
     private function endpointsFor(Product $product): array
     {
-        if ($this->isMapa($product)) {
-            $icd = array_values(array_filter(
-                self::ENDPOINTS,
-                static fn (array $row): bool => $row['host'] === 'icd.pl'
-            ));
-
-            return array_merge([self::MAPA_ENDPOINT], $icd);
-        }
-        if ($this->isMarel($product)) {
-            return [self::MAREL_ENDPOINT];
-        }
         if ($this->identity->ansellStyleCodes($product) !== []) {
             return self::ENDPOINTS;
         }
+        $hosts = $this->identity->catalogSearchHosts($product);
+        $known = array_merge([self::MAPA_ENDPOINT, self::MAREL_ENDPOINT], self::ENDPOINTS);
+        $out = [];
+        foreach ($known as $row) {
+            if (in_array($row['host'], $hosts, true)) {
+                $out[] = $row;
+            }
+        }
 
-        return [];
-    }
-
-    private function isMapa(Product $product): bool
-    {
-        return str_contains(mb_strtolower($this->identity->shortBrand((string) $product->manufacturer)), 'mapa');
-    }
-
-    private function isMarel(Product $product): bool
-    {
-        return str_contains(mb_strtolower($this->identity->shortBrand((string) $product->manufacturer)), 'marel');
+        return $out;
     }
 
     /**

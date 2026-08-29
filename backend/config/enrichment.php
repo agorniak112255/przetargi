@@ -155,6 +155,28 @@ return [
     ],
 
     /*
+    | Hosty do zapytań site: (katalog + sklepy, które ten asortyment indeksują).
+    | Gdy brak wpisu, bierzemy manufacturer_domains.
+    */
+    'catalog_search_hosts' => [
+        'ardon' => [
+            'ardon.pl',
+            'behapownia.pl',
+            'specto.com.pl',
+            'kams.com.pl',
+            'aitbhp.pl',
+            'optimumbhp.pl',
+        ],
+        'mapa' => [
+            'mapa-pro.pl',
+            'icd.pl',
+        ],
+        'marel' => [
+            'marelplus.pl',
+        ],
+    ],
+
+    /*
     | Sklepy / dystrybutorzy — dobre źródła opisów (nie certyfikatów).
     */
     'retailer_domains' => [

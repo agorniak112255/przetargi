@@ -54,7 +54,7 @@ final class RetailerOnSiteSearchTest extends TestCase
         ])));
     }
 
-    public function test_marel_query_uses_product_name(): void
+    public function test_marel_query_uses_shop_model_not_price_list_tail(): void
     {
         $search = app(RetailerOnSiteSearch::class);
         $product = new Product([
@@ -63,7 +63,7 @@ final class RetailerOnSiteSearchTest extends TestCase
             'manufacturer' => 'MAREL PLUS sp. z o.o.',
         ]);
 
-        $this->assertSame('PÓŁBUTY CADIZ S1PS FO SR', $search->query($product));
+        $this->assertSame('CADIZ', $search->query($product));
     }
 
     public function test_marel_keeps_matching_product_from_shop_search(): void
