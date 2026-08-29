@@ -402,6 +402,58 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertNull($batch->current_sku);
     }
 
+    public function test_history_lists_finished_batches_and_skips_running(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+
+        $done = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 6,
+            'total' => 3,
+            'done' => 2,
+            'failed' => 1,
+            'status' => ProductEnrichmentBatch::STATUS_DONE,
+            'created_by' => $user->id,
+            'force' => false,
+            'message' => 'Gotowe',
+        ]);
+        ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCT,
+            'scope_id' => 1,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'created_by' => $user->id,
+            'force' => false,
+        ]);
+        $failed = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCT,
+            'scope_id' => 9,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 1,
+            'status' => ProductEnrichmentBatch::STATUS_FAILED,
+            'created_by' => $user->id,
+            'force' => false,
+            'message' => 'Błąd',
+        ]);
+
+        $this->getJson('/api/product-enrichment-batches/history')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 2)
+            ->assertJsonPath('data.0.id', $failed->id)
+            ->assertJsonPath('data.0.status', ProductEnrichmentBatch::STATUS_FAILED)
+            ->assertJsonPath('data.0.created_by_name', $user->name)
+            ->assertJsonPath('data.1.id', $done->id);
+
+        $this->getJson('/api/product-enrichment-batches/history?status=done')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.id', $done->id);
+    }
+
     public function test_active_batches_keep_running_when_json_job_payload_exists(): void
     {
         $user = User::factory()->withRole('admin')->create();

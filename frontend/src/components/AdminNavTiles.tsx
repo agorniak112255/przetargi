@@ -31,6 +31,11 @@ const tiles: Tile[] = [
     permission: 'admin.activity.view',
   },
   {
+    to: '/admin/enrichment',
+    label: 'Logi AI',
+    description: 'Zakończone pobierania opisów',
+  },
+  {
     to: '/admin/smtp',
     label: 'SMTP',
     description: 'Poczta wychodząca',
@@ -50,7 +55,7 @@ export function AdminNavTiles() {
   return (
     <div className="mb-5">
       <h1 className="mb-3 text-xl font-semibold">Administracja</h1>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {visible.map((t) => (
           <NavLink
             key={t.to}

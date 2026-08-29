@@ -179,6 +179,52 @@ class ProductEnrichmentController extends Controller
         ]);
     }
 
+    public function historyBatches(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'page' => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
+            'status' => ['sometimes', 'nullable', 'in:done,failed,cancelled'],
+        ]);
+
+        $query = ProductEnrichmentBatch::query()
+            ->with('creator:id,name')
+            ->whereIn('status', [
+                ProductEnrichmentBatch::STATUS_DONE,
+                ProductEnrichmentBatch::STATUS_FAILED,
+                ProductEnrichmentBatch::STATUS_CANCELLED,
+            ])
+            ->orderByDesc('id');
+
+        $status = isset($data['status']) && is_string($data['status']) && $data['status'] !== ''
+            ? $data['status']
+            : null;
+        if ($status !== null) {
+            $query->where('status', $status);
+        }
+
+        $paginator = $query->paginate((int) ($data['per_page'] ?? 40));
+        $ctx = $this->batchLinkContext($paginator->getCollection());
+
+        return response()->json([
+            'data' => $paginator->getCollection()
+                ->map(function (ProductEnrichmentBatch $batch) use ($ctx): array {
+                    $payload = $this->batchPayload($batch, $ctx[(int) $batch->id] ?? null);
+                    $payload['created_by_name'] = $batch->creator?->name;
+
+                    return $payload;
+                })
+                ->values()
+                ->all(),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+            ],
+        ]);
+    }
+
     public function stopAll(): JsonResponse
     {
         $result = $this->enrichment->stopAllEnrichment();

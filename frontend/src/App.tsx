@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth'
 import { Layout } from './components/Layout'
 import { AdminActivityLog } from './pages/AdminActivityLog'
+import { AdminEnrichmentLogs } from './pages/AdminEnrichmentLogs'
 import { AdminLayout } from './pages/AdminLayout'
 import { AdminRoles } from './pages/AdminRoles'
 import { AdminPresta } from './pages/AdminPresta'
@@ -126,6 +127,7 @@ export default function App() {
                 </PermissionGuard>
               }
             />
+            <Route path="enrichment" element={<AdminEnrichmentLogs />} />
             <Route
               path="smtp"
               element={

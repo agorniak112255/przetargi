@@ -158,6 +158,9 @@ export type EnrichmentBatch = {
   manufacturer?: string | null
   current_product_id?: number | null
   price_list_id?: number | null
+  created_by_name?: string | null
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export function appHref(path: string): string {
