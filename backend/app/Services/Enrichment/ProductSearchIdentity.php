@@ -265,8 +265,9 @@ final class ProductSearchIdentity
             return false;
         }
 
+        // NB27B / NB27S — 1–2 znaki to inny wariant. TX39ERRXL to kolor/rozmiar tego modelu.
         return preg_match(
-            '/(?<![a-z0-9])'.preg_quote($skuCompact, '/').'[a-z0-9]+/iu',
+            '/(?<![a-z0-9])'.preg_quote($skuCompact, '/').'[a-z0-9]{1,2}(?![a-z0-9])/iu',
             $hay
         ) === 1;
     }
@@ -293,6 +294,14 @@ final class ProductSearchIdentity
 
         if ($skuCompact !== ''
             && preg_match('/(?<![a-z0-9])'.preg_quote($skuCompact, '/').'(?![a-z0-9])/iu', $hayCompact) === 1) {
+            return true;
+        }
+        // TX39ERRXL / tx39bremen — sklep dokleja kolor albo nazwę, to ten sam model
+        if ($skuCompact !== '' && preg_match('/^[a-z]{1,4}\d{2,4}$/u', $skuCompact) === 1
+            && preg_match(
+                '/(?<![a-z0-9])'.preg_quote($skuCompact, '/').'[a-z]{3,8}[a-z0-9]{0,4}(?![a-z0-9])/iu',
+                $hay.' '.$hayCompact
+            ) === 1) {
             return true;
         }
 
@@ -1357,6 +1366,13 @@ final class ProductSearchIdentity
         foreach ($this->variantBaseCodes($product) as $base) {
             $out[] = $base;
         }
+        $variants = $this->skuSizeVariants($product);
+        usort($variants, static fn (string $a, string $b): int => mb_strlen($a) <=> mb_strlen($b));
+        foreach ($variants as $variant) {
+            if ($this->isUsableSeriesPhrase($variant)) {
+                $out[] = $variant;
+            }
+        }
         $core = $this->internalSkuCore($product);
         $corePhrase = str_replace('-', ' ', $core);
         if ($core !== '' && mb_strtolower($core) !== mb_strtolower(trim((string) $product->sku))
@@ -1434,6 +1450,21 @@ final class ProductSearchIdentity
             '/^(?=[A-Z0-9\-]*\p{L})(?=[A-Z0-9\-]*\d)[A-Z0-9\-]{3,16}$/iu',
             $sku
         ) === 1;
+    }
+
+    /**
+     * Sklepy, które indeksują kod katalogowy (TX39) — oficjalna strona marki często nie.
+     *
+     * @return list<string>
+     */
+    public function codeIndexRetailerHosts(): array
+    {
+        return $this->bareHosts([
+            'sklep-system.pl',
+            'workweargurus.com',
+            'gvarant.pl',
+            'optimumbhp.pl',
+        ]);
     }
 
     /** @deprecated użyj shopIdentityPhrases — zostaje dla testów MAPA. */
@@ -2319,6 +2350,10 @@ final class ProductSearchIdentity
         if (preg_match('/(\p{L}{3,12})\s+(S[1-5]S?)\b/u', $name, $safety) === 1
             && ! $this->isGenericCatalogNameWord($safety[1])) {
             $out[] = $safety[1].' '.$safety[2];
+        }
+        // OPSBT11 → OPSB; „OPEX” z angielskiej nazwy cennika nie stoi na karcie
+        if ($this->skuSizeVariants($product) !== []) {
+            return $out;
         }
         foreach (preg_split('/[^\p{L}\p{N}]+/u', $name) ?: [] as $word) {
             $word = trim((string) $word);

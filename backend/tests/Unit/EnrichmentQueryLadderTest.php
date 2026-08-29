@@ -712,9 +712,13 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $tx39, $build->invoke($service, $tx39, 'manufacturer'));
 
         $this->assertSame('TX39 Portwest', $ladder[0] ?? null);
-        $this->assertStringContainsString('site:portwest.com TX39', implode(' | ', $ladder));
+        $this->assertStringContainsString('site:sklep-system.pl TX39', implode(' | ', $ladder));
         $this->assertTrue($identity->hayMentionsProduct(
             'https://sklep-system.pl/ogrodniczki-portwest-tx39-bremen Ogrodniczki robocze Portwest TX39 BREMEN',
+            $tx39
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://workweargurus.com/portwest-tx39errxl Portwest TX39ERRXL Bremen Bib & Brace',
             $tx39
         ));
         $this->assertTrue($identity->pageClaimsAnotherCode(
@@ -751,12 +755,17 @@ final class EnrichmentQueryLadderTest extends TestCase
             $one
         ));
 
-        $this->assertContains('OPEX', $identity->shopIdentityPhrases($opex));
+        $this->assertContains('OPSB', $identity->shopIdentityPhrases($opex));
+        $this->assertSame('OPSB', $identity->shopIdentityPhrases($opex)[0] ?? null);
         $this->assertContains('OPSB', $identity->skuSizeVariants($opex));
         $this->assertTrue($identity->hayMentionsProduct(
-            'https://www.rostaing.com/gant-opex Gants OPEX cut resistant Rostaing',
+            'https://www.rostaing.com/gant-d-intervention-noir-renforce-opsb Gant d\'intervention noir renforcé OPSB+ Rostaing',
             $opex
         ));
-        $this->assertStringContainsString('site:rostaing.com OPEX', implode(' | ', $identity->searchQueries($opex, 'manufacturer')));
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://www.rostaing.com/gant-duranit-plus Gant DURANIT PLUS Rostaing',
+            $opex
+        ));
+        $this->assertStringContainsString('site:rostaing.com OPSB', implode(' | ', $identity->searchQueries($opex, 'manufacturer')));
     }
 }

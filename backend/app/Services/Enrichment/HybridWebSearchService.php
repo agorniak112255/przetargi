@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v35';
+    private const SEARCH_CACHE_VERSION = 'v36';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -584,8 +584,12 @@ class HybridWebSearchService
         if ($sku === '') {
             return [];
         }
+        $hosts = array_values(array_unique(array_merge(
+            $this->identity->codeIndexRetailerHosts(),
+            $this->identity->officialCatalogHosts($product)
+        )));
         $out = [];
-        foreach ($this->identity->officialCatalogHosts($product) as $host) {
+        foreach ($hosts as $host) {
             $out[] = 'site:'.$host.' '.$sku;
             if (count($out) >= 2) {
                 break;
