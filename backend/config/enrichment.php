@@ -96,6 +96,7 @@ return [
         'cxs' => ['cxs.net.pl', 'www.cxs.net.pl', 'cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
         'canis' => ['cxs.net.pl', 'www.cxs.net.pl', 'cxs.cz', 'www.cxs.cz', 'canis.cz', 'www.canis.cz'],
         'medibut' => ['medibut.pl', 'www.medibut.pl'],
+        'reis' => ['reis.pl', 'www.reis.pl', 'reis.eu', 'www.reis.eu'],
         'panther' => ['panther-safety.com', 'www.panther-safety.com'],
         'ejendals' => [
             'ejendals.com',

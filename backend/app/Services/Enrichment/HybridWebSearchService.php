@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v39';
+    private const SEARCH_CACHE_VERSION = 'v40';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -536,7 +536,8 @@ class HybridWebSearchService
         // Model z cennika (KRYTECH 563) — najpierw site: katalogu.
         // Numer magazynowy (211600170000) i kod TX39 — najpierw jak w Google, site: za nimi.
         $preferSiteFirst = $siteQueries !== []
-            && ! $this->identity->looksLikeWarehouseArticleSku($product);
+            && (! $this->identity->looksLikeWarehouseArticleSku($product)
+                || $this->identity->firstStrongShopPhrase($product) !== '');
         $ladder = $preferSiteFirst ? $siteQueries : [];
         $legacy = $this->legacySafetyShoePhrase($product);
         if ($legacy !== '') {
@@ -578,11 +579,28 @@ class HybridWebSearchService
     private function officialSiteQueriesForCatalogSku(Product $product): array
     {
         $warehouse = $this->identity->looksLikeWarehouseArticleSku($product);
-        if (! $warehouse && ($this->identity->shopIdentityPhrases($product) !== []
-            || ! $this->identity->hasDistinctiveCatalogSku($product))) {
-            return [];
+        $phrase = $this->identity->firstStrongShopPhrase($product);
+        if ($warehouse) {
+            $hosts = $this->identity->officialCatalogHosts($product);
+            if ($hosts === []) {
+                $hosts = $this->identity->codeIndexRetailerHosts();
+            }
+            $q = $phrase !== '' ? $phrase : trim((string) $product->sku);
+            if ($q === '') {
+                return [];
+            }
+            $out = [];
+            foreach ($hosts as $host) {
+                $out[] = 'site:'.$host.' '.$q;
+                if (count($out) >= 2) {
+                    break;
+                }
+            }
+
+            return $out;
         }
-        if ($warehouse && trim((string) $product->sku) === '') {
+        if ($this->identity->shopIdentityPhrases($product) !== []
+            || ! $this->identity->hasDistinctiveCatalogSku($product)) {
             return [];
         }
         $sku = trim((string) $product->sku);
@@ -906,8 +924,10 @@ class HybridWebSearchService
                 || ! $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
                 continue;
             }
+            $shopHit = $this->identity->firstStrongShopPhrase($product);
+            $shopOnPage = $shopHit !== '' && $this->identity->codeInText($hay, $shopHit);
             // sam kod to za mało: „1202” to też alarm Apollo 11 i szerokość zdjęcia
-            if (! $this->identity->hayHasBrand($hay, $product)) {
+            if (! $shopOnPage && ! $this->identity->hayHasBrand($hay, $product)) {
                 continue;
             }
             $out[] = [

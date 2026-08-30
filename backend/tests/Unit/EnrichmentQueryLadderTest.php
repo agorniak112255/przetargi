@@ -672,8 +672,8 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertTrue($identity->looksLikeWarehouseArticleSku($kent));
         $this->assertContains('2128-045-800', $identity->catalogArticleCodes($kent));
         $this->assertContains('KENT S3', $identity->shopIdentityPhrases($kent));
-        $this->assertSame('212804580000 CANIS SAFETY', $identity->primaryQueries($kent)[0] ?? null);
-        $this->assertContains('KENT S3 CANIS SAFETY', $identity->primaryQueries($kent));
+        $this->assertSame('KENT S3 CANIS SAFETY', $identity->primaryQueries($kent)[0] ?? null);
+        $this->assertContains('212804580000 CANIS SAFETY', $identity->primaryQueries($kent));
         $this->assertStringContainsString('site:cxs.net.pl KENT S3', implode(' | ', $identity->searchQueries($kent, 'manufacturer')));
         $this->assertTrue($identity->hayMentionsProduct(
             'https://www.ceneo.pl/polbut-kent-s3 Cxs Półbut Kent S3 2128-045-800',
@@ -686,8 +686,8 @@ final class EnrichmentQueryLadderTest extends TestCase
 
         $this->assertContains('BEAGLE', $identity->shopIdentityPhrases($beagle));
         $this->assertContains('2116-001-700', $identity->catalogArticleCodes($beagle));
-        $this->assertSame('211600170000 CANIS SAFETY', $identity->primaryQueries($beagle)[0] ?? null);
-        $this->assertContains('BEAGLE CANIS SAFETY', $identity->primaryQueries($beagle));
+        $this->assertSame('BEAGLE CANIS SAFETY', $identity->primaryQueries($beagle)[0] ?? null);
+        $this->assertContains('211600170000 CANIS SAFETY', $identity->primaryQueries($beagle));
         $this->assertTrue($identity->hayMentionsProduct(
             'https://cxs.net.pl/beagle-s1 Buty BEAGLE CANIS SAFETY',
             $beagle
@@ -711,7 +711,9 @@ final class EnrichmentQueryLadderTest extends TestCase
         $open->setAccessible(true);
         /** @var list<string> $ladder */
         $ladder = $open->invoke($service, $beagle, $build->invoke($service, $beagle, 'manufacturer'));
-        $this->assertSame('211600170000 CANIS SAFETY', $ladder[0] ?? null);
+        $this->assertStringContainsString('site:cxs.net.pl BEAGLE', $ladder[0] ?? '');
+        $this->assertContains('BEAGLE CANIS SAFETY', $ladder);
+        $this->assertNotSame('211600170000 CANIS SAFETY', $ladder[0] ?? null);
 
         $bojar = new Product([
             'manufacturer' => 'CANIS SAFETY',
@@ -835,5 +837,79 @@ final class EnrichmentQueryLadderTest extends TestCase
             $opex
         ));
         $this->assertStringContainsString('site:rostaing.com OPSB', implode(' | ', $identity->searchQueries($opex, 'manufacturer')));
+    }
+
+    public function test_mislabeled_and_warehouse_codes_use_model_not_noise(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $reis = new Product([
+            'manufacturer' => 'Reis',
+            'sku' => '005-031',
+            'name' => 'sandały S1P non-metalic welur nowość',
+        ]);
+        $eider = new Product([
+            'manufacturer' => 'Eider',
+            'sku' => '31310080',
+            'name' => 'Showa 310',
+        ]);
+        $sungboo = new Product([
+            'manufacturer' => 'SUNGBOO',
+            'sku' => '60494',
+            'name' => 'C500 Foam 7,8,9,10,11 10',
+        ]);
+        $oxon = new Product([
+            'manufacturer' => 'OX-ON',
+            'sku' => '92066',
+            'name' => 'OX-ON Flexible Advanced 1900 CE 06',
+        ]);
+        $urgent = new Product([
+            'manufacturer' => 'URGENT',
+            'sku' => 'PROS-URG-A-SPODNIE',
+            'name' => 'URG-A (spodnie)',
+        ]);
+        $lebon = new Product([
+            'manufacturer' => 'Lebon',
+            'sku' => 'BP/TS/color/5B-3XL',
+            'name' => 'Koszulka BP/TS color 5B (long sleeve + wentylacja pod pachami) 3XL wzwyż',
+        ]);
+
+        $reisPhrases = implode(' | ', $identity->shopIdentityPhrases($reis));
+        $this->assertStringNotContainsString('nowość', mb_strtolower($reisPhrases));
+        $this->assertStringNotContainsString('welur', mb_strtolower($reisPhrases));
+        $this->assertContains('reis.pl', $identity->officialCatalogHosts($reis));
+        $this->assertContains('005-031 Reis', $identity->primaryQueries($reis));
+
+        $this->assertContains('Showa 310', $identity->shopIdentityPhrases($eider));
+        $this->assertContains('showa-glove.com', $identity->officialCatalogHosts($eider));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://showa-glove.com/product/310 Showa 310 assembly glove',
+            $eider
+        ));
+
+        $this->assertContains('C500', $identity->shopIdentityPhrases($sungboo));
+        $this->assertContains('uvex-safety.com', $identity->officialCatalogHosts($sungboo));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.uvex-safety.com/en/product/phynomic-c500-foam-60494 uvex phynomic C500 foam 60494',
+            $sungboo
+        ));
+
+        $oxHosts = $identity->officialCatalogHosts($oxon);
+        $this->assertContains('ox-on.com', $oxHosts);
+        $this->assertNotContains('secubox.eu', $oxHosts);
+        $this->assertNotContains('boxmetmedical.pl', $oxHosts);
+        $this->assertContains('1900', $identity->shopIdentityPhrases($oxon));
+        $this->assertSame('1900', $identity->firstStrongShopPhrase($oxon));
+
+        $this->assertSame('URG-A', $identity->internalSkuCore($urgent));
+        $this->assertContains('URG-A', $identity->shopIdentityPhrases($urgent));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://urgent.com.pl/urg-a Spodnie URG-A URGENT',
+            $urgent
+        ));
+
+        $lebonQ = implode(' | ', $identity->primaryQueries($lebon));
+        $this->assertNotSame('', $lebonQ);
+        $this->assertStringNotContainsString('wzwyż', $lebonQ);
+        $this->assertStringContainsString('BP', $lebonQ);
     }
 }

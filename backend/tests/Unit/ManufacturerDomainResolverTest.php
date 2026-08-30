@@ -207,6 +207,7 @@ final class ManufacturerDomainResolverTest extends TestCase
             ['COFRA', 'https://www.cofra.it/footwear', 'cofra.it'],
             ['PLANAM', 'https://www.planam.de/arbeitskleidung', 'planam.de'],
             ['OX-ON', 'https://www.ox-on.com/gloves', 'ox-on.com'],
+            ['Reis', 'https://www.reis.pl/pl/buty', 'reis.pl'],
             ['JORI', 'https://elten.com/produktgruppen/jori-by-elten/', 'elten.com'],
             ['DuPont', 'https://safespec.dupont.com/product', 'safespec.dupont.com'],
             ['Maskpol', 'https://www.maskpol.com.pl/maska', 'maskpol.com.pl'],
@@ -272,5 +273,26 @@ final class ManufacturerDomainResolverTest extends TestCase
             $product,
             $domains
         ));
+    }
+
+    public function test_short_brand_key_does_not_steal_other_hosts(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $oxon = new Product(['manufacturer' => 'OX-ON', 'sku' => '92066', 'name' => 'Flexible 1900']);
+        $reis = new Product(['manufacturer' => 'Reis', 'sku' => '002-998', 'name' => 'trzewiki S2']);
+
+        $ox = $resolver->domainsFor($oxon);
+        $this->assertContains('ox-on.com', $ox);
+        $this->assertNotContains('secubox.eu', $ox);
+        $this->assertNotContains('boxmetmedical.pl', $ox);
+
+        $this->assertFalse($resolver->isManufacturerUrl('https://www.reiss.com/uk', $reis, ['reis.pl']));
+        $found = $resolver->discoverFromResults($reis, [
+            ['url' => 'https://www.reiss.com/menswear'],
+            ['url' => 'https://www.reis.pl/pl/buty-002-998'],
+        ]);
+        $this->assertContains('reis.pl', $found);
+        $this->assertNotContains('reiss.com', $found);
+        $this->assertNotContains('www.reiss.com', $found);
     }
 }

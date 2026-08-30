@@ -202,7 +202,12 @@ final class ManufacturerDomainResolver
                 continue;
             }
             $nk = $this->normalizeKey($key);
-            if ($nk === '' || ($nk !== $brand && ! str_contains($brand, $nk) && ! str_contains($nk, $brand))) {
+            if ($nk === '') {
+                continue;
+            }
+            if ($nk !== $brand
+                && (mb_strlen($nk) < 4 || mb_strlen($brand) < 4
+                    || (! str_contains($brand, $nk) && ! str_contains($nk, $brand)))) {
                 continue;
             }
             foreach ($domains as $domain) {
@@ -335,14 +340,23 @@ final class ManufacturerDomainResolver
     private function hostLooksLikeBrand(string $host, string $brandKey): bool
     {
         $bare = preg_replace('/^www\./', '', $host) ?? $host;
-        $compactHost = preg_replace('/[^a-z0-9]+/u', '', $bare) ?? $bare;
         $compactBrand = str_replace('-', '', $brandKey);
         if ($compactBrand === '' || mb_strlen($compactBrand) < 3) {
             return false;
         }
+        $first = explode('.', $bare)[0] ?? '';
+        $firstCompact = preg_replace('/[^a-z0-9]+/u', '', $first) ?? $first;
+        if ($firstCompact === $compactBrand) {
+            return true;
+        }
+        if (str_starts_with($firstCompact, $compactBrand) && mb_strlen($compactBrand) >= 4) {
+            $rest = mb_substr($firstCompact, mb_strlen($compactBrand));
 
-        return str_contains($compactHost, $compactBrand)
-            || str_starts_with($bare, $brandKey.'.')
+            return $rest !== '' && (mb_strlen($rest) >= 4
+                || in_array($rest, ['safety', 'glove', 'gloves', 'group', 'plus', 'pro'], true));
+        }
+
+        return str_starts_with($bare, $brandKey.'.')
             || str_starts_with($bare, $brandKey.'-');
     }
 

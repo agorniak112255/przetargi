@@ -680,7 +680,7 @@ final class ProductSearchIdentity
         $sku = trim((string) $product->sku);
         $name = trim((string) $product->name);
         $internalSku = $this->looksLikeInternalSku($product);
-        $shopPhrase = $this->shopIdentityPhrases($product)[0] ?? '';
+        $shopPhrase = $this->firstStrongShopPhrase($product);
         $warehouseSku = $this->looksLikeWarehouseArticleSku($product);
         $bare = $shopPhrase !== ''
             ? $shopPhrase
@@ -836,11 +836,15 @@ final class ProductSearchIdentity
         // „PROS-121-S1-GUMA” to nasz kod złożony z opisu — w sieci działa dopiero
         // nazwa z producentem („121 S1 GUMA Urgent”), więc ona idzie pierwsza.
         $composedSku = $this->hasDescriptiveWordSegment($sku);
-        $shopName = $this->shopIdentityPhrases($product)[0] ?? '';
-        // Numer magazynowy (211600170000) Google zna — idzie przed modelem „BEAGLE”.
-        // Złożony kod z opisu albo sama nazwa katalogowa (SOLO 977) zostaje pierwsza.
-        $preferCatalogName = ($composedSku || $shopName !== '')
-            && ! $this->looksLikeWarehouseArticleSku($product);
+        $shopName = $this->firstStrongShopPhrase($product);
+        $fullNameEarly = $this->strippedProductName($product);
+        if ($fullNameEarly === '') {
+            $fullNameEarly = $name;
+        }
+        // Model z nazwy (BEAGLE, C500, Carbon ESD PU Top) przed numerem magazynowym.
+        $preferCatalogName = $composedSku || $shopName !== ''
+            || ($this->looksLikeCompactTradeName($fullNameEarly)
+                && ! $this->hasDistinctiveCatalogSku($product));
 
         $skuQueries = [];
         if ($usableSku && $shopName === '') {
@@ -861,13 +865,14 @@ final class ProductSearchIdentity
         $compactName = $this->looksLikeCompactTradeName($fullName);
         // Katalogowa fraza sklepu (COMO HAPPY, KENT S3) zostaje pierwsza.
         // Jedno słowo z nazwy („Carbon”) nie zastępuje „Carbon ESD PU Top Eider”.
-        if ($shopName !== '' && ! $this->shopPhraseIsWeakerThanName($shopName, $fullName)) {
+        if ($shopName !== '' && (! $this->shopPhraseIsWeakerThanName($shopName, $fullName)
+            || preg_match('/\d|[-\/]/u', $shopName) === 1)) {
             $nameQueries[] = $this->queryWithManufacturer($shopName, $product);
         }
         if ($compactName && mb_strtolower($fullName) !== mb_strtolower($sku)
             && mb_strtolower($fullName) !== mb_strtolower($shopName)) {
             $nameQueries[] = $this->queryWithManufacturer($fullName, $product);
-        } elseif ($shopName === '' && $fullName !== '' && mb_strtolower($fullName) !== mb_strtolower($sku)) {
+        } elseif ($nameQueries === [] && $fullName !== '' && mb_strtolower($fullName) !== mb_strtolower($sku)) {
             $nameQueries[] = $this->queryWithManufacturer($fullName, $product);
         }
         if ($usableSku && ! $composedSku && $fullName !== ''
@@ -1146,16 +1151,17 @@ final class ProductSearchIdentity
             if (mb_strlen($phrase) < 4 || ! $this->tokenInHay($hay, $hayCompact, $phrase)) {
                 continue;
             }
-            $words = preg_split('/\s+/u', $phrase) ?: [];
-            $distinct = 0;
-            foreach ($words as $word) {
-                if (mb_strlen($word) >= 4 && ! $this->isDescriptiveIdentityWord($word) && ! $this->isColorWord($word)) {
-                    $distinct++;
-                }
+            if (! $this->isStrongShopPhrase($phrase)) {
+                continue;
             }
-            // jedno słowo („BEAGLE”, „ONE4ALL”) bez marki trafia w inną branżę
-            $strong = $distinct >= 1 && count($words) >= 2;
-            if ($strong || $brands === [] || $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
+            $words = preg_split('/[\s\-]+/u', $phrase) ?: [];
+            $hasDigit = preg_match('/\d/u', $phrase) === 1;
+            $digitOnly = preg_match('/^\d+$/u', (string) preg_replace('/[\s\-]+/u', '', $phrase)) === 1;
+            $multi = count($words) >= 2;
+            // C500 / Showa 310 — model z literą nie wymaga marki z cennika (Eider, SUNGBOO).
+            // Samo „1001” / „1900” bez marki to za dużo internetu.
+            if (($hasDigit && ! $digitOnly) || $multi || $brands === []
+                || $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
                 return true;
             }
         }
@@ -1327,6 +1333,9 @@ final class ProductSearchIdentity
      */
     public function pageClaimsAnotherCode(string $url, string $title, Product $product): bool
     {
+        if ($this->urlOrTitleHasForeignModelNumber($url, $title, $product)) {
+            return true;
+        }
         if ($this->urlOrTitleHasShopIdentity($url, $title, $product)) {
             return false;
         }
@@ -1335,6 +1344,42 @@ final class ProductSearchIdentity
         return $tokens !== []
             && $this->compactProductCodes($product) !== []
             && ! $this->urlOrTitleCarriesCodeFamily($url, $title, $product);
+    }
+
+    /**
+     * „model 111” przy naszym 121 — wspólna linia (4000) nie uniewinnia innego numeru.
+     */
+    private function urlOrTitleHasForeignModelNumber(string $url, string $title, Product $product): bool
+    {
+        $ours = $this->compactProductCodes($product);
+        foreach ($this->shopIdentityPhrases($product) as $phrase) {
+            $compact = $this->compactCode($phrase);
+            if (mb_strlen($compact) >= 3) {
+                $ours[] = $compact;
+            }
+        }
+        $ours = array_values(array_unique($ours));
+        if ($ours === []) {
+            return false;
+        }
+        foreach ($this->codeLikeTokens($url, $title) as $token) {
+            if (preg_match('/^\d{3,5}$/u', $token) !== 1) {
+                continue;
+            }
+            $mine = false;
+            foreach ($ours as $code) {
+                $code = (string) $code;
+                if ($token === $code || str_starts_with($code, $token) || str_starts_with($token, $code)) {
+                    $mine = true;
+                    break;
+                }
+            }
+            if (! $mine) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1425,6 +1470,12 @@ final class ProductSearchIdentity
         foreach ($this->nameModelPhrases($product) as $fromNameModel) {
             $out[] = $fromNameModel;
         }
+        foreach ($this->nameCatalogCodes($product) as $fromNameCode) {
+            $out[] = $fromNameCode;
+        }
+        foreach ($this->embeddedModelCodes((string) $product->name) as $embedded) {
+            $out[] = $embedded;
+        }
 
         $uniq = [];
         foreach ($out as $phrase) {
@@ -1438,7 +1489,12 @@ final class ProductSearchIdentity
             }
         }
 
-        return $this->preferSpecificShopPhrases(array_values($uniq), $product);
+        $ranked = $this->preferSpecificShopPhrases(array_values($uniq), $product);
+
+        return array_values(array_filter(
+            $ranked,
+            fn (string $phrase): bool => $this->isStrongShopPhrase($phrase)
+        ));
     }
 
     /**
@@ -1472,8 +1528,59 @@ final class ProductSearchIdentity
     {
         return $this->bareHosts($this->hostsFromConfigMap(
             (array) config('enrichment.manufacturer_domains', []),
-            $this->manufacturerKeyCandidates($product)
+            array_merge($this->manufacturerKeyCandidates($product), $this->nameBrandKeys($product))
         ));
+    }
+
+    public function firstStrongShopPhrase(Product $product): string
+    {
+        $name = $this->strippedProductName($product);
+        foreach ($this->shopIdentityPhrases($product) as $phrase) {
+            if (! $this->isStrongShopPhrase($phrase)) {
+                continue;
+            }
+            if (! $this->shopPhraseIsWeakerThanName($phrase, $name)) {
+                return $phrase;
+            }
+        }
+        foreach ($this->shopIdentityPhrases($product) as $phrase) {
+            if ($this->isStrongShopPhrase($phrase) && preg_match('/\d|[-\/]/u', $phrase) === 1) {
+                return $phrase;
+            }
+        }
+
+        return '';
+    }
+
+    public function isStrongShopPhrase(string $phrase): bool
+    {
+        $phrase = trim($phrase);
+        if ($phrase === '' || mb_strlen($phrase) < 3) {
+            return false;
+        }
+        if (preg_match('/^[A-Z]{2,8}[-\/][A-Z0-9]{1,8}(?:[-\/][A-Z0-9]{1,8}){0,2}$/iu', $phrase) === 1) {
+            return true;
+        }
+        $useful = [];
+        foreach (preg_split('/[\s\-]+/u', $phrase) ?: [] as $word) {
+            $word = trim((string) $word);
+            if ($word === '' || $this->isGenericCatalogNameWord($word) || $this->isHouseSkuPrefix($word)) {
+                continue;
+            }
+            $useful[] = $word;
+        }
+        if ($useful === []) {
+            return false;
+        }
+        $joined = implode('', $useful);
+        if (preg_match('/\d/u', $joined) === 1) {
+            return mb_strlen($joined) >= 3;
+        }
+        if (count($useful) >= 2) {
+            return true;
+        }
+
+        return mb_strlen($useful[0]) >= 4 && preg_match('/^\p{L}{4,16}$/u', $useful[0]) === 1;
     }
 
     /**
@@ -2251,10 +2358,13 @@ final class ProductSearchIdentity
             }
         }
 
-        // „URG-C-SPODNIE” — odwrotny układ: kod z przodu, nasz opis na końcu
+        // „URG-C-SPODNIE” / „PROS-URG-A-SPODNIE” — prefiks hurtowni + typ na końcu
         $kept = [];
         foreach ($segments as $segment) {
-            if (preg_match('/^\p{L}{4,}$/u', $segment) === 1) {
+            if ($this->isHouseSkuPrefix($segment) && mb_strtolower($segment) !== 'urg') {
+                continue;
+            }
+            if (preg_match('/^\p{L}{4,}$/u', $segment) === 1 && ! $this->isHouseSkuPrefix($segment)) {
                 break;
             }
             $kept[] = $segment;
@@ -2301,6 +2411,10 @@ final class ProductSearchIdentity
             if (preg_match('/^\p{Lu}{4,}$/u', $raw) === 1 && $this->looksLikeBrandToken(mb_strtolower($raw))) {
                 $out[] = mb_strtolower($raw);
             }
+        }
+        foreach ($this->nameBrandKeys($product) as $key) {
+            $out[] = str_replace('-', ' ', $key);
+            $out[] = $key;
         }
         if ($this->looksLikeUrgentGloveSeries($product)) {
             $out[] = 'urgent';
@@ -2419,12 +2533,18 @@ final class ProductSearchIdentity
         if ($this->skuSizeVariants($product) !== []) {
             return $out;
         }
+        foreach ($this->embeddedModelCodes($name) as $embedded) {
+            $out[] = $embedded;
+        }
         foreach (preg_split('/[^\p{L}\p{N}]+/u', $name) ?: [] as $word) {
             $word = trim((string) $word);
             if ($word === '' || mb_strlen($word) < 4 || mb_strlen($word) > 16) {
                 continue;
             }
-            if (preg_match('/\d/u', $word) === 1 || preg_match('/^T\d{1,2}$/iu', $word) === 1) {
+            if (preg_match('/^T\d{1,2}$/iu', $word) === 1 || $this->isPackOrSizeToken($word)) {
+                continue;
+            }
+            if (preg_match('/\d/u', $word) === 1 && ! $this->isStrongShopPhrase($word)) {
                 continue;
             }
             if ($this->isGenericCatalogNameWord($word) || $this->isHouseSkuPrefix($word)
@@ -2466,6 +2586,12 @@ final class ProductSearchIdentity
             'confort', 'cross', 'plus', 'pro', 'max', 'soft', 'hard', 'light', 'super',
             'ultra', 'line', 'type', 'hood', 'coverall', 'overall', 'cuffs', 'cuff',
             'sleeves', 'sleeve', 'collar', 'pocket', 'pockets', 'visor', 'strap',
+            'nowosc', 'nowość', 'wzwyz', 'wzwyż', 'technology', 'advanced', 'flexible',
+            'foam', 'welur', 'metalic', 'metallic', 'bydleca', 'bydlęca', 'elastanem',
+            'kartonikow', 'kartoników', 'ocynk', 'gorny', 'górny', 'sznurowane',
+            'kadry', 'opinacze', 'polsaperki', 'półsaperki', 'canvas', 'color', 'colour',
+            'stock', 'ce', 'non', 'met', 'ociepl', 'wentylacja', 'pachami', 'uiglenie',
+            'nierdzewnej', 'techniczne', 'polietylenowe', 'jednorazowe', 'wlokninowe',
         ], true);
     }
 
@@ -2571,6 +2697,7 @@ final class ProductSearchIdentity
         return in_array($word, [
             'basic', 'classic', 'print', 'standard', 'premium', 'plus', 'pro',
             'eco', 'light', 'soft', 'extra', 'new', 'maxi', 'mini',
+            'advanced', 'flexible', 'comfort', 'wet',
         ], true);
     }
 
@@ -2640,7 +2767,8 @@ final class ProductSearchIdentity
             return false;
         }
         foreach ($words as $word) {
-            if (mb_strlen($word) >= 4 && ! $this->isDescriptiveIdentityWord($word)) {
+            if (mb_strlen($word) >= 4 && ! $this->isDescriptiveIdentityWord($word)
+                && ! $this->isGenericCatalogNameWord($word)) {
                 return true;
             }
         }
@@ -2666,6 +2794,7 @@ final class ProductSearchIdentity
             'czapka', 'czapki', 'daszek', 'daszkiem', 'szwedzka', 'szwedzki', 'szwedzkie',
             'kombinezon', 'kombinezony', 'skarpety', 'skarpetki', 'skarpeta',
             'wkladki', 'wkladka', 'koszula', 'ogrodniczki', 'plaszcz',
+            'nowosc', 'nowość', 'wzwyz', 'wzwyż',
         ], true);
     }
 
@@ -2762,6 +2891,94 @@ final class ProductSearchIdentity
     /**
      * @return list<string>
      */
+    /**
+     * Marki z nazwy, które mają stronę w config (Showa przy Eider, C500 → uvex).
+     *
+     * @return list<string>
+     */
+    public function nameBrandKeys(Product $product): array
+    {
+        $hay = mb_strtolower(trim((string) $product->name.' '.$product->sku));
+        $out = [];
+        foreach (array_keys((array) config('enrichment.manufacturer_domains', [])) as $key) {
+            if (! is_string($key)) {
+                continue;
+            }
+            $nk = trim((string) preg_replace('/[^a-z0-9]+/u', '-', mb_strtolower($key)), '-');
+            if ($nk === '' || mb_strlen(str_replace('-', '', $nk)) < 4) {
+                continue;
+            }
+            $label = str_replace('-', ' ', $nk);
+            if ($this->phraseHasToken($hay, $nk) || $this->phraseHasToken($hay, $label)) {
+                $out[] = $nk;
+            }
+        }
+        $sku = trim((string) $product->sku);
+        if (preg_match('/^\d{5}$/u', $sku) === 1
+            && preg_match('/\bC[1-9]\d{2}\b/u', (string) $product->name) === 1) {
+            $out[] = 'uvex';
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function nameCatalogCodes(Product $product): array
+    {
+        $name = trim((string) $product->name);
+        if ($name === '') {
+            return [];
+        }
+        $out = [];
+        if (preg_match_all(
+            '/\b([A-Z]{2,8}[-\/][A-Z0-9]{1,8}(?:[-\/][A-Z0-9]{1,8}){0,2})\b/u',
+            $name,
+            $hits
+        ) === false) {
+            return [];
+        }
+        foreach ($hits[1] as $code) {
+            if ($this->isStrongShopPhrase((string) $code)) {
+                $out[] = str_replace('/', '-', (string) $code);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function embeddedModelCodes(string $name): array
+    {
+        $name = trim($name);
+        if ($name === '') {
+            return [];
+        }
+        $out = [];
+        if (preg_match_all('/(?<![\p{L}\d])([A-Z]{1,3}\d{2,5}|\d{4})(?![\p{L}\d])/u', $name, $hits) === false) {
+            return [];
+        }
+        foreach ($hits[1] as $code) {
+            $code = (string) $code;
+            if ($this->isPackOrSizeToken($code)) {
+                continue;
+            }
+            $out[] = $code;
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    private function isPackOrSizeToken(string $token): bool
+    {
+        $token = mb_strtolower(trim($token));
+
+        return preg_match('/^(0?[5-9]|1[0-4]|0[0-9])$/u', $token) === 1;
+    }
+
     private function manufacturerKeyCandidates(Product $product): array
     {
         $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
@@ -2771,7 +2988,7 @@ final class ProductSearchIdentity
         }
         $out = [$norm];
         $parts = explode('-', $norm);
-        if (($parts[0] ?? '') !== '') {
+        if (mb_strlen((string) ($parts[0] ?? '')) >= 4) {
             $out[] = $parts[0];
         }
         if (isset($parts[1])) {
@@ -2796,7 +3013,12 @@ final class ProductSearchIdentity
             $nk = trim((string) preg_replace('/[^a-z0-9]+/u', '-', mb_strtolower($key)), '-');
             $hit = false;
             foreach ($keys as $want) {
-                if ($nk === $want || str_contains($want, $nk) || str_contains($nk, $want)) {
+                if ($nk === $want) {
+                    $hit = true;
+                    break;
+                }
+                if (mb_strlen($nk) >= 4 && mb_strlen($want) >= 4
+                    && (str_contains($want, $nk) || str_contains($nk, $want))) {
                     $hit = true;
                     break;
                 }
