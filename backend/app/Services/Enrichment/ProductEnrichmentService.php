@@ -661,65 +661,13 @@ final class ProductEnrichmentService
                 'source_urls' => array_slice($sourceUrls, 0, 3),
             ]);
             $savedImages = $this->images->downloadMany($product, $primaryImageUrls, 1);
-            if ($savedImages === [] && $sourceUrls !== []) {
-                $retryPages = $this->pages->fetch(
-                    array_map(
-                        static fn (string $u): array => ['url' => $u, 'title' => '', 'snippet' => ''],
-                        array_slice($sourceUrls, 0, 2)
-                    ),
-                    (string) $product->sku,
-                    1,
-                    $mfrDomains,
-                    $product
-                );
-                $retryUrls = $this->imageVerifier->select(
+            if ($savedImages === []) {
+                $savedImages = $this->tryImagesFromOtherCards(
                     $product,
-                    $retryPages['image_urls'],
-                    $retryPages['pages'],
-                    3,
-                    $retryPages['trusted_image_urls']
+                    $searchResults,
+                    $sourceUrls,
+                    $mfrDomains
                 );
-                if ($retryUrls === []) {
-                    $retryUrls = $this->cardImagesAfterConfirmation(
-                        $retryPages['trusted_image_urls'],
-                        $retryPages['image_urls'],
-                        $retryPages['pages'],
-                        $product
-                    );
-                }
-                $savedImages = $this->images->downloadMany(
-                    $product,
-                    $this->pickPrimaryImageUrls(
-                        $retryUrls,
-                        [],
-                        (string) $product->sku,
-                        (string) $product->name,
-                        $product,
-                    ),
-                    1
-                );
-            }
-            // Ansell za Incapsulą: zrzut TYLKO gdy w ścieżce jest SKU i domena producenta
-            if ($savedImages === [] && $this->needsManufacturerScreenshot($product)) {
-                $shotPages = [];
-                $skuNeedle = preg_replace('/\D+/', '', (string) $product->sku) ?? '';
-                foreach (array_merge($sourceUrls, array_column($mfrResults, 'url')) as $u) {
-                    if (! is_string($u) || ! $this->manufacturers->isManufacturerUrl($u, $product, $mfrDomains)) {
-                        continue;
-                    }
-                    $path = mb_strtolower((string) (parse_url($u, PHP_URL_PATH) ?? ''));
-                    if ($path === '' || str_contains($path, '/search') || str_contains($path, '/category')) {
-                        continue;
-                    }
-                    if ($skuNeedle === '' || ! str_contains($path, $skuNeedle)) {
-                        continue;
-                    }
-                    $shotPages[] = $u;
-                }
-                $shot = $this->images->downloadPageScreenshot($product, array_slice($shotPages, 0, 1), 0);
-                if ($shot !== null) {
-                    $savedImages = [$shot];
-                }
             }
             if ($savedImages === []) {
                 Log::warning('Product image download exhausted', [
@@ -1059,18 +1007,90 @@ final class ProductEnrichmentService
     }
 
     /**
-     * Kandydaci na zdjęcie (kolejność: najlepsze pierwsze). downloadMany próbuje aż się uda.
+     * Gdy pierwsza karta nie da ściągalnego zdjęcia — do 5 innych sklepów, bez zrzutu strony.
      *
-     * @param  list<string>  $allUrls
-     * @param  mixed  $llmUrls
-     * @return list<string>
+     * @param  list<array{url?: string, title?: string, snippet?: string}>  $searchResults
+     * @param  list<string>  $usedPageUrls
+     * @param  list<string>  $mfrDomains
+     * @return list<object>
      */
-    private function needsManufacturerScreenshot(Product $product): bool
-    {
-        $brand = mb_strtolower($this->identity->shortBrand((string) $product->manufacturer));
+    private function tryImagesFromOtherCards(
+        Product $product,
+        array $searchResults,
+        array $usedPageUrls,
+        array $mfrDomains,
+    ): array {
+        $tried = [];
+        foreach ($usedPageUrls as $url) {
+            $key = mb_strtolower(trim($url));
+            if ($key !== '') {
+                $tried[$key] = true;
+            }
+        }
 
-        // tylko marki z bot-wallem na CDN mediów (Ansell/Imperva)
-        return $brand === 'ansell' || str_contains($brand, 'ansell');
+        $candidates = [];
+        foreach ($searchResults as $row) {
+            $url = (string) ($row['url'] ?? '');
+            $key = mb_strtolower($url);
+            if ($url === '' || isset($tried[$key]) || ! str_starts_with($url, 'http')) {
+                continue;
+            }
+            if (ProductImageDownloader::looksLikeImageUrl($url)
+                || ProductDocumentDownloader::looksLikeDocumentUrl($url)) {
+                continue;
+            }
+            if ($this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
+                continue;
+            }
+            $tried[$key] = true;
+            $candidates[] = [
+                'url' => $url,
+                'title' => (string) ($row['title'] ?? ''),
+                'snippet' => (string) ($row['snippet'] ?? ''),
+            ];
+            if (count($candidates) >= 5) {
+                break;
+            }
+        }
+
+        foreach ($candidates as $row) {
+            $fetched = $this->pages->fetch([$row], (string) $product->sku, 1, [], $product);
+            $pages = $this->keepConfirmedCardPages($product, $fetched['pages']);
+            if ($pages === []) {
+                continue;
+            }
+            $urls = $this->imageVerifier->select(
+                $product,
+                $fetched['image_urls'],
+                $pages,
+                3,
+                $fetched['trusted_image_urls']
+            );
+            if ($urls === []) {
+                $urls = $this->cardImagesAfterConfirmation(
+                    $fetched['trusted_image_urls'],
+                    $fetched['image_urls'],
+                    $pages,
+                    $product
+                );
+            }
+            $saved = $this->images->downloadMany(
+                $product,
+                $this->pickPrimaryImageUrls(
+                    $urls,
+                    [],
+                    (string) $product->sku,
+                    (string) $product->name,
+                    $product,
+                ),
+                1
+            );
+            if ($saved !== []) {
+                return $saved;
+            }
+        }
+
+        return [];
     }
 
     /**
@@ -1994,6 +2014,7 @@ final class ProductEnrichmentService
             'loading.gif', 'loader-1', 'loader-2', 'progress.gif',
             'menue-', 'menu-', '/01_menue', 'menue-pics', 'world-map', 'sitemap',
             'beer', 'fox-deluxe', 'sustainability_report', 'lego',
+            '#screenshot', 'screenshot',
         ];
         foreach ($blocked as $needle) {
             if (str_contains($u, $needle)) {

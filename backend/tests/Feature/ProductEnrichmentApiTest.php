@@ -1167,6 +1167,65 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(1, ProductDocument::query()->where('product_id', $product->id)->count());
     }
 
+    public function test_retries_shop_image_instead_of_manufacturer_screenshot(): void
+    {
+        Storage::fake('public');
+        $product = $this->makeProduct(['sku' => '54335', 'name' => 'KG G10 Flex Ntrl Glv Blue XL']);
+        $ansell = 'https://www.ansell.com/int/en/products/kleenguard-g10-flex-blue-nitrile-gloves-54335';
+        $shop = 'https://labproinc.com/products/kg-g10-flex-ntrl-glv-blue-xl-54335';
+        $shopImg = 'https://cdn.shop.example/g10-flex-54335.jpg';
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')->once()->andReturn([
+            'results' => [
+                ['url' => $ansell, 'title' => 'KleenGuard G10 Flex 54335', 'snippet' => 'Nitrile gloves 54335'],
+                ['url' => $shop, 'title' => 'KG G10 Flex Ntrl Glv Blue XL 54335', 'snippet' => 'Nitrile gloves 54335'],
+            ],
+            'errors' => [],
+        ]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        $desc = 'Rękawice nitrylowe KleenGuard G10 Flex 54335 do prac przemysłowych. '
+            .'Ambidextralne, bezpudrowe, teksturowane opuszki. Spełniają wymagania kontaktu z żywnością. '
+            .'Grubość 3 mil, mankiet zapobiegający zsunięciu. Przeznaczone do montażu i gastronomii.';
+        $this->app->instance(OpenAiCompatibleClient::class, $this->mockLlmWithSanitize([
+            'description' => $desc,
+            'features' => ['nitryl'],
+            'specs' => ['SKU: 54335'],
+            'norms' => [],
+            'materials' => ['nitryl'],
+            'use_cases' => ['przemysł'],
+            'image_urls' => [],
+            'source_urls' => [$ansell],
+            'confidence' => 0.8,
+        ]));
+
+        Http::fake([
+            $ansell => Http::response(
+                '<html><body><h1>KleenGuard G10 Flex Blue Nitrile Gloves 54335</h1>'
+                .'<p>'.str_repeat('Nitrile gloves KleenGuard G10 Flex 54335 powder free. ', 30).'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            $shop => Http::response(
+                '<html><head><meta property="og:image" content="'.$shopImg.'"></head><body>'
+                .'<h1>KG G10 Flex Ntrl Glv Blue XL 54335</h1>'
+                .'<img src="'.$shopImg.'">'
+                .'<p>'.str_repeat('Nitrile gloves KleenGuard G10 Flex 54335 powder free. ', 30).'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            $shopImg => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
+        ]);
+
+        app(ProductEnrichmentService::class)->enrichProduct($product, false);
+
+        $image = ProductImage::query()->where('product_id', $product->id)->first();
+        $this->assertNotNull($image);
+        $this->assertSame($shopImg, $image->source_url);
+        $this->assertStringNotContainsString('#screenshot', (string) $image->source_url);
+    }
+
     public function test_ai_vision_accepts_urgent_image_without_sku_in_url_and_rejects_unrelated_one(): void
     {
         $product = $this->makeProduct([
