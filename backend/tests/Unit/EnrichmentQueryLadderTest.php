@@ -511,8 +511,9 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
 
         $this->assertNotEmpty($ladder);
-        $this->assertStringContainsString('site:mapa-pro.pl', $ladder[0] ?? '');
         $this->assertStringContainsString('KRYTECH 563', $ladder[0] ?? '');
+        $this->assertDoesNotMatchRegularExpression('/^\s*site:/', $ladder[0] ?? '');
+        $this->assertStringContainsString('site:mapa-pro.pl', implode(' | ', $ladder));
     }
 
     public function test_ansell_open_search_starts_on_bpbhp(): void
@@ -533,10 +534,9 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
 
         $this->assertNotEmpty($ladder);
-        $this->assertStringContainsString('site:bpbhp.pl', $ladder[0] ?? '');
-        $this->assertStringContainsString('00121', $ladder[0] ?? '');
-        $this->assertStringContainsString('site:bpbhp.pl', $ladder[1] ?? '');
-        $this->assertMatchesRegularExpression('/(?<!0)121/', $ladder[1] ?? '');
+        $this->assertDoesNotMatchRegularExpression('/^\s*site:/', $ladder[0] ?? '');
+        $this->assertMatchesRegularExpression('/121/', $ladder[0] ?? '');
+        $this->assertStringContainsString('site:bpbhp.pl', implode(' | ', $ladder));
     }
 
     public function test_hi_vis_jacket_is_not_waterproof_clothing(): void
@@ -711,8 +711,9 @@ final class EnrichmentQueryLadderTest extends TestCase
         $open->setAccessible(true);
         /** @var list<string> $ladder */
         $ladder = $open->invoke($service, $beagle, $build->invoke($service, $beagle, 'manufacturer'));
-        $this->assertStringContainsString('site:cxs.net.pl BEAGLE', $ladder[0] ?? '');
+        $this->assertSame('BEAGLE CANIS SAFETY', $ladder[0] ?? null);
         $this->assertContains('BEAGLE CANIS SAFETY', $ladder);
+        $this->assertStringContainsString('site:cxs.net.pl BEAGLE', implode(' | ', $ladder));
         $this->assertNotSame('211600170000 CANIS SAFETY', $ladder[0] ?? null);
 
         $bojar = new Product([
@@ -945,10 +946,34 @@ final class EnrichmentQueryLadderTest extends TestCase
             $kcl
         ));
         $this->assertFalse($identity->pageClaimsAnotherCode(
-            'https://www.kcl.de/produkte/covaspec-471',
-            'CovaSpec 471',
+            'https://www.hygi.de/kcl-covaspec-471-schutzhandschuhe',
+            'KCL CovaSpec 471 Schutzhandschuhe – 1 Paar, Größe 6',
             $kcl
         ));
+        $this->assertFalse($identity->pageClaimsAnotherCode(
+            'https://cas-technik.eu/boe-471-6',
+            'KCL CovaSpec 471+ protective gloves',
+            $kcl
+        ));
+        $cejn = new Product([
+            'manufacturer' => 'GVS',
+            'sku' => '03-022-CF',
+            'name' => 'CEJN Double Action Coupler FNPT',
+        ]);
+        $this->assertSame('CEJN', $identity->leadingNameBrand($cejn));
+        $this->assertStringNotContainsString('GVS', $identity->queryWithManufacturer(
+            'CEJN Double Action Coupler FNPT',
+            $cejn
+        ));
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $kclLadder = $open->invoke($service, $kcl, $build->invoke($service, $kcl, 'manufacturer'));
+        $this->assertStringContainsString('CovaSpec 471', $kclLadder[0] ?? '');
+        $this->assertDoesNotMatchRegularExpression('/^\s*site:/', $kclLadder[0] ?? '');
         $this->assertTrue($identity->hayMentionsProduct(
             'https://sps.honeywell.com/altochut-1012 ALTOCHUT 1012 CE harness',
             $honeywell

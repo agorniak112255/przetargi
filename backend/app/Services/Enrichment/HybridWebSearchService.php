@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v41';
+    private const SEARCH_CACHE_VERSION = 'v42';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -533,12 +533,9 @@ class HybridWebSearchService
             }
         }
         $siteQueries = array_slice($siteQueries, 0, 2);
-        // Model z cennika (KRYTECH 563) — najpierw site: katalogu.
-        // Numer magazynowy (211600170000) i kod TX39 — najpierw jak w Google, site: za nimi.
-        $preferSiteFirst = $siteQueries !== []
-            && (! $this->identity->looksLikeWarehouseArticleSku($product)
-                || $this->identity->firstStrongShopPhrase($product) !== '');
-        $ladder = $preferSiteFirst ? $siteQueries : [];
+        // Najpierw otwarty internet po modelu (CovaSpec 471 KCL) — sklepy indeksują
+        // lepiej niż site:kcl.de. site: na końcu, gdy Google/DDG nic nie da.
+        $ladder = [];
         $legacy = $this->legacySafetyShoePhrase($product);
         if ($legacy !== '') {
             $ladder[] = $this->identity->queryWithManufacturer(
@@ -547,11 +544,8 @@ class HybridWebSearchService
             );
         }
         $primary = $this->identity->primaryQueries($product);
-        if (! $preferSiteFirst && $primary !== []) {
+        if ($primary !== []) {
             $ladder[] = array_shift($primary);
-            foreach ($this->officialSiteQueriesForCatalogSku($product) as $siteQuery) {
-                $ladder[] = $siteQuery;
-            }
         }
         foreach ($primary as $query) {
             $ladder[] = $query;
@@ -562,14 +556,32 @@ class HybridWebSearchService
             }
             $ladder[] = $query;
         }
+        foreach ($siteQueries as $query) {
+            $ladder[] = $query;
+        }
+        foreach ($this->officialSiteQueriesForCatalogSku($product) as $siteQuery) {
+            $ladder[] = $siteQuery;
+        }
 
-        return array_slice(
-            array_values(array_unique(array_filter(
-                $ladder,
-                static fn (string $q): bool => trim($q) !== ''
-            ))),
-            0,
-            self::OPEN_QUERY_ATTEMPTS
+        $unique = array_values(array_unique(array_filter(
+            $ladder,
+            static fn (string $q): bool => trim($q) !== ''
+        )));
+        $open = [];
+        $site = [];
+        foreach ($unique as $query) {
+            if (preg_match('/\bsite:/i', $query) === 1) {
+                if (count($site) < 2) {
+                    $site[] = $query;
+                }
+            } else {
+                $open[] = $query;
+            }
+        }
+
+        return array_merge(
+            array_slice($open, 0, max(1, self::OPEN_QUERY_ATTEMPTS - count($site))),
+            $site
         );
     }
 
@@ -852,8 +864,7 @@ class HybridWebSearchService
             if (! $this->identity->coreInUrlOrTitle($url, $title, $product)
                 && ! $this->isDistinctiveSku($product)
                 && ! $this->identity->nameTokensMatch($url.' '.$title, $product)
-                && ! ($this->identity->looksLikeWarehouseArticleSku($product)
-                    && $this->identity->hayHasShopIdentity($hay, $hayCompact, $product))) {
+                && ! $this->identity->hayHasShopIdentity($hay, $hayCompact, $product)) {
                 continue;
             }
             if (preg_match('#(ochronki na buty|shoe[- ]?cover|folie na buty|nakladki na obuwie)#i', $hay)) {

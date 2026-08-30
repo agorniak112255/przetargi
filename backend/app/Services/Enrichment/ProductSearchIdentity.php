@@ -979,12 +979,132 @@ final class ProductSearchIdentity
     public function queryWithManufacturer(string $query, Product $product): string
     {
         $query = trim((string) preg_replace('/\s+/u', ' ', $query));
+        $nameBrand = $this->leadingNameBrand($product);
         $brand = $this->shortBrand((string) $product->manufacturer);
-        if ($query === '' || $brand === '' || $this->phraseHasToken($query, $brand)) {
+        if ($query === '') {
+            return $query;
+        }
+        if ($nameBrand !== '' && mb_strtolower($nameBrand) !== mb_strtolower($brand)) {
+            if (! $this->phraseHasToken($query, $nameBrand)) {
+                return $query.' '.$nameBrand;
+            }
+
+            return $query;
+        }
+        if ($brand === '' || $this->phraseHasToken($query, $brand)) {
             return $query;
         }
 
         return $query.' '.$brand;
+    }
+
+    /** CEJN w nazwie przy producencie GVS — szukaj marki z nazwy, nie z cennika. */
+    public function leadingNameBrand(Product $product): string
+    {
+        $name = $this->usableProductName($product);
+        if ($name === '' || preg_match('/^(\p{Lu}{3,12})\b/u', $name, $hit) !== 1) {
+            return '';
+        }
+        $brand = $hit[1];
+        if (! $this->looksLikeBrandToken(mb_strtolower($brand))) {
+            return '';
+        }
+        // KRYTECH / KENT / COMO to model, nie inna firma — zostaw producenta z cennika.
+        $shop = $this->firstStrongShopPhrase($product);
+        if (mb_strtolower($brand) === mb_strtolower(trim((string) $product->sku))
+            || mb_strtolower($brand) === mb_strtolower($name)
+            || ($shop !== '' && $this->phraseHasToken($shop, $brand))) {
+            return '';
+        }
+
+        return $brand;
+    }
+
+    /** 471 w slugu sklepu (boe-471) to nasz CovaSpec 471, nie cudzy kod. */
+    public function urlOrTitleCarriesShopModelNumber(string $url, string $title, Product $product): bool
+    {
+        $hay = mb_strtolower($url.' '.$title);
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+        foreach ($this->specificModelNumbers($product) as $number) {
+            if ($this->numericTokenAsProductCode($hay, (string) $number)
+                || $this->numericTokenAsProductCode($hayCompact, (string) $number)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Numer modelu z frazy sklepu i SKU (471, 121), nie wspólna linia (4000).
+     *
+     * @return list<string>
+     */
+    private function specificModelNumbers(Product $product): array
+    {
+        $fromSku = [];
+        if (preg_match_all('/\d{3,5}/u', (string) $product->sku, $hits) !== false) {
+            foreach ($hits[0] as $n) {
+                $fromSku[] = (string) $n;
+            }
+        }
+        $ansell = $this->ansellCatalogBits($product)['model'] ?? null;
+        if (is_string($ansell) && $ansell !== '') {
+            $fromSku[] = $ansell;
+            $fromSku[] = ltrim($ansell, '0');
+        }
+        $fromShop = [];
+        if (preg_match_all('/\d{3,5}/u', $this->firstStrongShopPhrase($product), $hits) !== false) {
+            foreach ($hits[0] as $n) {
+                $fromShop[] = (string) $n;
+            }
+        }
+        if ($fromSku !== [] && $fromShop !== []) {
+            $overlap = [];
+            foreach ($fromShop as $shop) {
+                foreach ($fromSku as $sku) {
+                    if ($shop === $sku || str_ends_with($sku, $shop) || str_ends_with($shop, $sku)) {
+                        $overlap[] = $shop;
+                        $overlap[] = $sku;
+                    }
+                }
+            }
+            if ($overlap !== []) {
+                return array_values(array_unique($overlap));
+            }
+        }
+        $out = $fromSku;
+        if ($fromShop !== []) {
+            $shopModel = (string) end($fromShop);
+            $ansellModel = is_string($ansell) && $ansell !== '';
+            // 471 przy SKU 047106941E; nie linia 4000 przy modelu Ansell 121
+            if ($this->digitsHitSpecificModel([$shopModel], $fromSku)
+                || ($fromSku !== [] && ! $ansellModel && mb_strlen($shopModel) <= 4
+                    && max(array_map('strlen', $fromSku)) >= 5)) {
+                $out[] = $shopModel;
+            } elseif ($fromSku === []) {
+                $out[] = $shopModel;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * @param  list<string>  $digits
+     * @param  list<string>  $specific
+     */
+    private function digitsHitSpecificModel(array $digits, array $specific): bool
+    {
+        foreach ($digits as $digit) {
+            foreach ($specific as $code) {
+                if ($digit === $code || str_ends_with($code, $digit) || str_ends_with($digit, $code)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /** Krótka nazwa handlowa, nie ogon z cennika („… - czarny nylon powlekany”). */
@@ -1334,17 +1454,49 @@ final class ProductSearchIdentity
      */
     public function pageClaimsAnotherCode(string $url, string $title, Product $product): bool
     {
+        // Najpierw nasz model (CovaSpec 471 / 471 w slugu). Inaczej numer sklepu
+        // (boe-471, art. 860) wygląda jak cudzy kod i odrzuca dobrą kartę.
+        if ($this->urlOrTitleCarriesShopModelNumber($url, $title, $product)
+            || $this->urlOrTitleHasNamedShopIdentity($url, $title, $product)) {
+            return false;
+        }
         if ($this->urlOrTitleHasForeignModelNumber($url, $title, $product)) {
             return true;
-        }
-        if ($this->urlOrTitleHasShopIdentity($url, $title, $product)) {
-            return false;
         }
         $tokens = $this->codeLikeTokens($url, $title);
 
         return $tokens !== []
             && $this->compactProductCodes($product) !== []
             && ! $this->urlOrTitleCarriesCodeFamily($url, $title, $product);
+    }
+
+    /**
+     * Model z literą w tytule/URL (CovaSpec 471, KRYTECH 563). Same „4000” / „121”
+     * nie uniewinniają karty innego numeru tej samej linii.
+     */
+    public function urlOrTitleHasNamedShopIdentity(string $url, string $title, Product $product): bool
+    {
+        $hay = mb_strtolower($url.' '.$title);
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+        $specific = $this->specificModelNumbers($product);
+        foreach ($this->shopIdentityPhrases($product) as $phrase) {
+            $phrase = mb_strtolower(trim($phrase));
+            if ($phrase === '' || preg_match('/^\d+$/u', $this->compactCode($phrase)) === 1) {
+                continue;
+            }
+            if (! $this->isStrongShopPhrase($phrase) || ! $this->tokenInHay($hay, $hayCompact, $phrase)) {
+                continue;
+            }
+            preg_match_all('/\d{3,5}/u', $phrase, $nums);
+            $digits = $nums[0] ?? [];
+            if ($specific !== [] && ($digits === [] || ! $this->digitsHitSpecificModel($digits, $specific))) {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     /**
