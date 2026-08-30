@@ -1730,7 +1730,7 @@ final class ProductSearchIdentity
     {
         $name = $this->strippedProductName($product);
         foreach ($this->shopIdentityPhrases($product) as $phrase) {
-            if (! $this->isStrongShopPhrase($phrase)) {
+            if (! $this->isStrongShopPhrase($phrase) || $this->shopPhraseLosesToCatalogSku($phrase, $product)) {
                 continue;
             }
             if (! $this->shopPhraseIsWeakerThanName($phrase, $name)) {
@@ -1738,12 +1738,28 @@ final class ProductSearchIdentity
             }
         }
         foreach ($this->shopIdentityPhrases($product) as $phrase) {
-            if ($this->isStrongShopPhrase($phrase) && preg_match('/\d|[-\/]/u', $phrase) === 1) {
+            if ($this->isStrongShopPhrase($phrase)
+                && ! $this->shopPhraseLosesToCatalogSku($phrase, $product)
+                && preg_match('/\d|[-\/]/u', $phrase) === 1) {
                 return $phrase;
             }
         }
 
         return '';
+    }
+
+    /**
+     * GVS/RPB 04-322-100 — „GVS CEJN” i „Hose” to złącze/opis, nie model.
+     * SKU NN-NNN(-wariant) wygrywa z frazą bez cyfry.
+     */
+    private function shopPhraseLosesToCatalogSku(string $phrase, Product $product): bool
+    {
+        $sku = trim((string) $product->sku);
+        if (preg_match('/^\d{2}-\d{2,4}(?:-[A-Z0-9]{1,8})?$/iu', $sku) !== 1) {
+            return false;
+        }
+
+        return preg_match('/\d/u', $phrase) !== 1;
     }
 
     public function isStrongShopPhrase(string $phrase): bool
@@ -2950,6 +2966,9 @@ final class ProductSearchIdentity
             'stock', 'ce', 'non', 'met', 'ociepl', 'wentylacja', 'pachami', 'uiglenie',
             'nierdzewnej', 'techniczne', 'polietylenowe', 'jednorazowe', 'wlokninowe',
             'low', 'mid', 'high', 's1', 's2', 's3', 's4', 's5', 'src', 'hro',
+            'battery', 'hose', 'belt', 'buckle', 'adapter', 'charger', 'clip', 'plug',
+            'hinge', 'door', 'assembly', 'mount', 'inch', 'volt', 'calibration',
+            'breathing', 'airline',
         ], true);
     }
 

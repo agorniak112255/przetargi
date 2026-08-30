@@ -85,7 +85,16 @@ return [
         ],
         'kcl' => ['kcl.de', 'www.kcl.de'],
         'rostaing' => ['rostaing.com', 'www.rostaing.com'],
-        'gvs' => ['gvs.com', 'www.gvs.com'],
+        'gvs' => [
+            'gvs-rpb.com',
+            'www.gvs-rpb.com',
+            'rpb.com',
+            'www.rpb.com',
+            'gvs.com',
+            'www.gvs.com',
+            'gvs-elipse.com',
+            'www.gvs-elipse.com',
+        ],
         'weldas' => ['weldaseurope.com', 'www.weldaseurope.com', 'weldas.com', 'www.weldas.com'],
         'mapa' => [
             'mapa-pro.pl',
@@ -174,6 +183,11 @@ return [
         ],
         'marel' => [
             'marelplus.pl',
+        ],
+        'gvs' => [
+            'icd.pl',
+            'gvs-rpb.com',
+            'rpb.com',
         ],
     ],
 

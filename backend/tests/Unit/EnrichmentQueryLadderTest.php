@@ -892,6 +892,17 @@ final class EnrichmentQueryLadderTest extends TestCase
             implode(' | ', $identity->searchQueries($genericReis, 'manufacturer'))
         );
 
+        $gvsHose = new Product([
+            'manufacturer' => 'GVS',
+            'sku' => '04-322-100',
+            'name' => 'GVS 30M Breathing Airline Hose - CEJN',
+        ]);
+        $this->assertSame('', $identity->firstStrongShopPhrase($gvsHose));
+        $gvsQueries = implode(' | ', $identity->searchQueries($gvsHose, 'manufacturer'));
+        $this->assertStringContainsString('site:icd.pl 04-322-100', $gvsQueries);
+        $this->assertStringContainsString('04-322-100 GVS', $gvsQueries);
+        $this->assertStringNotContainsString('site:gvs.com GVS CEJN', $gvsQueries);
+
         $this->assertContains('Showa 310', $identity->shopIdentityPhrases($eider));
         $this->assertContains('showa-glove.com', $identity->officialCatalogHosts($eider));
         $this->assertTrue($identity->hayMentionsProduct(
