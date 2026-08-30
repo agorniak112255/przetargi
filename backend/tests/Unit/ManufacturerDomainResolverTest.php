@@ -164,6 +164,7 @@ final class ManufacturerDomainResolverTest extends TestCase
             'regera.pl',
             'sklep.renex.pl',
             'kaufland.pl',
+            'customguns.pl',
         ] as $host) {
             $this->assertContains($host, $retailers);
         }

@@ -30,11 +30,11 @@ final class ProductSearchIdentity
         'sweatshirt' => ['bluza', 'sweatshirt'],
         'vest' => ['kamizelk', 'vest'],
         'mask' => ['maska', 'maski', 'maske'],
-        'footwear' => ['buty', 'butow', 'obuwie', 'trzewik', 'polbut', 'footwear', 'klapk', 'chodak', 'clog'],
+        'footwear' => ['buty', 'butow', 'obuwie', 'trzewik', 'polbut', 'footwear', 'klapk', 'chodak', 'clog', 'sandal'],
         'helmet' => ['kask', 'helm', 'casque'],
         'goggles' => ['okular', 'gogl'],
         'apron' => ['fartuch', 'apron'],
-        'hearing' => ['nausznik'],
+        'hearing' => ['nausznik', 'ochronnik', 'earmuff', 'headset'],
         'harness' => ['szelk'],
         'clothing' => ['ubranie', 'odziez'],
     ];
@@ -1485,6 +1485,25 @@ final class ProductSearchIdentity
                 && ! $this->isGenericCatalogNameWord($safety[1])) {
                 $out[] = $safety[1].' '.$safety[2];
             }
+            if (preg_match('/(\p{L}{4,14})\s+Pro[- ]?X\b/u', $raw, $pro) === 1
+                && ! $this->isDescriptiveIdentityWord($pro[1])
+                && ! $this->isApparelTypeWord($pro[1])
+                && ! $this->isGenericCatalogNameWord($pro[1])) {
+                $out[] = $pro[1].' Pro-X';
+            }
+            if (preg_match_all(
+                '/(?<![\p{L}\d])(\p{L}{2,3})\s+(\d{2,3})(?=\s+(?:S[1-5]S?|ESD|SRC|HRO)\b)/u',
+                $raw,
+                $shoeCodes,
+                PREG_SET_ORDER
+            ) !== false) {
+                foreach ($shoeCodes as $shoe) {
+                    if ($this->isDescriptiveIdentityWord($shoe[1]) || $this->isApparelTypeWord($shoe[1])) {
+                        continue;
+                    }
+                    $out[] = mb_strtoupper($shoe[1]).' '.$shoe[2];
+                }
+            }
             if (preg_match('/^(?:\p{L}{2,12}[\s\-]+){1,2}\d{2,4}$/u', $raw) !== 1) {
                 continue;
             }
@@ -2481,6 +2500,10 @@ final class ProductSearchIdentity
         if (preg_match('/^\d{10,12}$/u', $sku) === 1) {
             return true;
         }
+        // SOR76332-08 — prefiks Sordin z cennika, na karcie jest 76302 / Supreme Pro-X
+        if (preg_match('/^SOR[-]?\d{4,6}(?:-\d{2,3})?$/iu', $sku) === 1) {
+            return true;
+        }
         // 047106941E — artykuł dystrybutora + wariant, w katalogu jest CovaSpec 471
         if (preg_match('/^\d{7,12}[A-Z]$/u', $sku) === 1) {
             return true;
@@ -2516,6 +2539,15 @@ final class ProductSearchIdentity
      */
     public function catalogArticleCodes(Product $product): array
     {
+        $sku = trim((string) $product->sku);
+        if (preg_match('/^SOR[-]?(\d{4,6})(?:-(\d{2,3}))?$/iu', $sku, $sordin) === 1) {
+            $out = [$sordin[1]];
+            if (($sordin[2] ?? '') !== '') {
+                $out[] = $sordin[1].'-'.$sordin[2];
+            }
+
+            return $out;
+        }
         if (! $this->looksLikeWarehouseArticleSku($product)) {
             return [];
         }
@@ -2772,6 +2804,8 @@ final class ProductSearchIdentity
             'deltaplus' => ['delta', 'deltaplus'],
             'gvs' => ['gvs', 'rpb'],
             'rpb' => ['gvs', 'rpb'],
+            'sordin' => ['sordin', 'hellberg'],
+            'hellberg' => ['sordin', 'hellberg'],
         ];
         $out = [];
         if ($compact !== '' && (mb_strlen($compact) >= 4 || in_array($compact, ['3m', 'msa', 'atg', 'kcl', 'gvs', 'pip'], true))) {
@@ -3194,7 +3228,7 @@ final class ProductSearchIdentity
     {
         $word = mb_strtolower(trim($word));
 
-        return in_array($word, ['pros', 'urg', 'urgent', 'pilne', 'aj'], true);
+        return in_array($word, ['pros', 'urg', 'urgent', 'pilne', 'aj', 'sor'], true);
     }
 
     /**

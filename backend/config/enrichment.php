@@ -101,6 +101,18 @@ return [
             'gvs-rpb.com',
             'www.gvs-rpb.com',
         ],
+        'sordin' => [
+            'sordin.com',
+            'www.sordin.com',
+            'hellberg-safety.com',
+            'www.hellberg-safety.com',
+        ],
+        'hellberg' => [
+            'hellberg-safety.com',
+            'www.hellberg-safety.com',
+            'sordin.com',
+            'www.sordin.com',
+        ],
         'weldas' => ['weldaseurope.com', 'www.weldaseurope.com', 'weldas.com', 'www.weldas.com'],
         'mapa' => [
             'mapa-pro.pl',
@@ -217,6 +229,14 @@ return [
             'sklep.renex.pl',
             'behapownia.pl',
         ],
+        'sordin' => [
+            'customguns.pl',
+            'hellberg-safety.com',
+        ],
+        'hellberg' => [
+            'customguns.pl',
+            'hellberg-safety.com',
+        ],
     ],
 
     /*
@@ -300,6 +320,8 @@ return [
         'sklep.renex.pl',
         'kaufland.pl',
         'www.kaufland.pl',
+        'customguns.pl',
+        'www.customguns.pl',
     ],
 
     /*
@@ -474,5 +496,7 @@ return [
         'sklep.renex.pl',
         'kaufland.pl',
         'www.kaufland.pl',
+        'customguns.pl',
+        'www.customguns.pl',
     ],
 ];

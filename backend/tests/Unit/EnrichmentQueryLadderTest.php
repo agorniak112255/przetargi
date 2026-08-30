@@ -1180,4 +1180,61 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertCount(1, $kept);
         $this->assertStringContainsString('idsblast.com/03-815', (string) ($kept[0]['url'] ?? ''));
     }
+
+    public function test_canis_warehouse_sku_matches_atlas_sl46_card(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'manufacturer' => 'CANIS SAFETY',
+            'sku' => '212503480000',
+            'name' => 'SL 46 S1 ESD',
+        ]);
+
+        $this->assertTrue($identity->looksLikeWarehouseArticleSku($product));
+        $this->assertContains('SL 46', $identity->shopIdentityPhrases($product));
+        $this->assertSame('SL 46', $identity->firstStrongShopPhrase($product));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://antar.pl/pl/p/Sandaly-ATLAS-SL-46-niebieski-S1-ESD/15991 '
+            .'Sandały ATLAS SL 46 niebieski S1 ESD',
+            $product
+        ));
+        $this->assertFalse($identity->pageClaimsAnotherCode(
+            'https://antar.pl/pl/p/Sandaly-ATLAS-SL-46-niebieski-S1-ESD/15991',
+            'Sandały ATLAS SL 46 niebieski S1 ESD',
+            $product
+        ));
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://roboczystyl.pl/sklep/ochrona-nog/sandaly-atlas-sl-46-blue-s1-esd/',
+            'Sandały Atlas SL 46 Blue S1 ESD',
+            'Sandały bezpieczne ATLAS SL 46 BLUE S1 SRC ESD.',
+            $product
+        ));
+    }
+
+    public function test_sordin_house_sku_matches_supreme_pro_x_card(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'manufacturer' => 'Sordin',
+            'sku' => 'SOR76332-08',
+            'name' => 'Supreme Pro-X nakarkowe zielone',
+        ]);
+
+        $this->assertTrue($identity->looksLikeWarehouseArticleSku($product));
+        $this->assertContains('76332', $identity->catalogArticleCodes($product));
+        $this->assertContains('Supreme Pro-X', $identity->shopIdentityPhrases($product));
+        $this->assertSame('Supreme Pro-X', $identity->firstStrongShopPhrase($product));
+        $this->assertContains('customguns.pl', $identity->catalogSearchHosts($product));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://customguns.pl/produkt/aktywne-ochronniki-sluchu-supreme-pro-x-nakarkowe-zielone-76302-x-g-s/ '
+            .'Aktywne ochronniki słuchu Supreme Pro-X nakarkowe zielone 76302-X-G-S',
+            $product
+        ));
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://customguns.pl/produkt/aktywne-ochronniki-sluchu-supreme-pro-x-nakarkowe-zielone-76302-x-g-s/',
+            'Aktywne ochronniki słuchu Supreme Pro-X nakarkowe zielone 76302-X-G-S',
+            'Sordin Supreme Pro-X Neckband Green. Kod 76302-X-G-S.',
+            $product
+        ));
+    }
 }
