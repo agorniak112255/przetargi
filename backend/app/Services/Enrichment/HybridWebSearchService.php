@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v42';
+    private const SEARCH_CACHE_VERSION = 'v43';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -856,21 +856,34 @@ class HybridWebSearchService
             $hay = mb_strtolower($url.' '.$title.' '.$snippet);
             $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
-            if (! $this->identity->hayMentionsProduct($hay, $product)) {
-                continue;
-            }
-            // Krótki kod (1000) — tylko URL/tytuł. ROBFM / 3-60NM może być w snippecie sklepu.
-            // Numer magazynowy (1002933, 047106941E): model z nazwy w snippecie wystarczy.
-            if (! $this->identity->coreInUrlOrTitle($url, $title, $product)
-                && ! $this->isDistinctiveSku($product)
-                && ! $this->identity->nameTokensMatch($url.' '.$title, $product)
-                && ! $this->identity->hayHasShopIdentity($hay, $hayCompact, $product)) {
-                continue;
-            }
             if (preg_match('#(ochronki na buty|shoe[- ]?cover|folie na buty|nakladki na obuwie)#i', $hay)) {
                 continue;
             }
             if ($this->isListingWithoutProduct($url, $product)) {
+                continue;
+            }
+            $oursInHeadline = $this->identity->urlOrTitleCarriesShopModelNumber($url, $title, $product)
+                || $this->identity->urlOrTitleHasNamedShopIdentity($url, $title, $product);
+            $oursInHit = $this->identity->urlOrTitleCarriesShopModelNumber($url, $title.' '.$snippet, $product)
+                || $this->identity->urlOrTitleHasNamedShopIdentity($url, $title.' '.$snippet, $product);
+            if ($oursInHit) {
+                if ($oursInHeadline || ! $this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+                    $matched[] = [
+                        'url' => $url,
+                        'title' => $title !== '' ? $title : $url,
+                        'snippet' => $snippet,
+                    ];
+                }
+
+                continue;
+            }
+            if (! $this->identity->hayMentionsProduct($hay, $product)) {
+                continue;
+            }
+            if (! $this->identity->coreInUrlOrTitle($url, $title, $product)
+                && ! $this->isDistinctiveSku($product)
+                && ! $this->identity->nameTokensMatch($url.' '.$title, $product)
+                && ! $this->identity->hayHasShopIdentity($hay, $hayCompact, $product)) {
                 continue;
             }
             if ($this->identity->pageClaimsAnotherCode($url, $title, $product)) {
@@ -1020,6 +1033,8 @@ class HybridWebSearchService
 
         if ($this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
             || $this->identity->urlOrTitleHasShopIdentity($url, $title, $product)
+            || $this->identity->urlOrTitleCarriesShopModelNumber($url, $title, $product)
+            || $this->identity->urlOrTitleHasNamedShopIdentity($url, $title, $product)
             || $this->identity->hayHasNamePhrase($url.' '.$title, $product)
             || $this->identity->hayMentionsProduct($url.' '.$title, $product)) {
             return true;

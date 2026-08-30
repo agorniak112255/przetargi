@@ -1489,7 +1489,8 @@ final class ProductSearchIdentity
             }
             preg_match_all('/\d{3,5}/u', $phrase, $nums);
             $digits = $nums[0] ?? [];
-            if ($specific !== [] && ($digits === [] || ! $this->digitsHitSpecificModel($digits, $specific))) {
+            // AlphaTec 4000 nie uniewinnia modelu 111. CRACKDOWN (bez cyfr) zostaje.
+            if ($digits !== [] && $specific !== [] && ! $this->digitsHitSpecificModel($digits, $specific)) {
                 continue;
             }
 

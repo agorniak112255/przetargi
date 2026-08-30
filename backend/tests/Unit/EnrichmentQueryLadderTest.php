@@ -988,5 +988,25 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertSame('', $identity->usableProductName($blank));
         $this->assertStringNotContainsString(' - ', $identity->productNameWithManufacturer($blank));
         $this->assertStringContainsString('4200-006-000', implode(' | ', $identity->primaryQueries($blank)));
+
+        $cofra = new Product([
+            'manufacturer' => 'COFRA',
+            'sku' => '00500-016',
+            'name' => 'CRACKDOWN D.GREY',
+        ]);
+        $this->assertTrue($identity->urlOrTitleHasNamedShopIdentity(
+            'https://www.cofra.it/en/products/crackdown',
+            'CRACKDOWN D.GREY safety shoe',
+            $cofra
+        ));
+        $filter = $ref->getMethod('filterResultsByIdentity');
+        $filter->setAccessible(true);
+        $kept = $filter->invoke($service, [[
+            'url' => 'https://www.hygi.de/kcl-handschuhe',
+            'title' => 'KCL Schutzhandschuhe',
+            'snippet' => 'KCL CovaSpec 471 PU coating size 6',
+        ]], $kcl);
+        $this->assertNotSame([], $kept);
+        $this->assertStringContainsString('hygi.de', (string) ($kept[0]['url'] ?? ''));
     }
 }
