@@ -509,6 +509,10 @@ class OpenAiCompatibleClient
      */
     public function chatJsonEnrichment(array $messages, ?float $temperature = null, ?int $maxTokens = null): array
     {
+        if ($this->settings->enrichmentUsesLargeModel()) {
+            return $this->chatJson($messages, $temperature, $maxTokens, null, null);
+        }
+
         $hasProfile = ! $this->settings->profileForTask(AiTask::Enrichment)['is_default'];
 
         return $this->chatJson(
@@ -586,13 +590,51 @@ class OpenAiCompatibleClient
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
         }
 
-        /** @var array{content: string, model: string, citations: list<array{url: string, title: string}>} $result */
-        $result = $this->withProfileFallback(
-            $task,
-            fn (array $profile): array => $this->webSearchWithProfile($profile, $prompt, $timeoutSeconds)
-        );
+        $errors = [];
+        $tried = [];
+        foreach ($this->webSearchProfileQueue($task) as $profile) {
+            $sig = $profile['base_url'].'|'.$profile['model'];
+            if (isset($tried[$sig])) {
+                continue;
+            }
+            $tried[$sig] = true;
+            if (! $this->baseUrlSupportsProviderWebSearch((string) $profile['base_url'])) {
+                $errors[] = $profile['label'].': brak pluginu web';
 
-        return $result;
+                continue;
+            }
+
+            try {
+                return $this->webSearchWithProfile($profile, $prompt, $timeoutSeconds);
+            } catch (RuntimeException $e) {
+                $errors[] = $profile['label'].': '.$e->getMessage();
+                Log::warning('Web search profil zawiódł — próbuję kolejny z pluginem web', [
+                    'profile' => $profile['label'],
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        throw new RuntimeException(
+            $errors !== []
+                ? 'AI web_search: '.implode(' | ', array_slice($errors, 0, 3))
+                : 'Brak modelu z wyszukiwaniem internetowym (OpenRouter / OpenAI).'
+        );
+    }
+
+    /**
+     * Najpierw zadanie WebSearch, potem każdy profil z pluginem web — lokalne Gemma pomijamy.
+     *
+     * @return list<array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}>
+     */
+    private function webSearchProfileQueue(?AiTask $task): array
+    {
+        $queue = [$this->settings->profileForTask($task ?? AiTask::WebSearch)];
+        foreach ($this->settings->resolvedProfiles() as $profile) {
+            $queue[] = $profile;
+        }
+
+        return $queue;
     }
 
     /**

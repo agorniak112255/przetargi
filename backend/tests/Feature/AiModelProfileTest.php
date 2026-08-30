@@ -350,4 +350,26 @@ final class AiModelProfileTest extends TestCase
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://openrouter.ai/api/v1/chat/completions'
             && $request['model'] === 'google/gemini-flash');
     }
+
+    public function test_large_model_flag_sends_enrichment_to_main_not_profile(): void
+    {
+        $this->seedMainConfig();
+        AiSetting::query()->first()?->forceFill(['enrichment_use_large_model' => true])->save();
+        $this->saveProfiles([[
+            'id' => 'cheap',
+            'name' => 'Tani opis',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'google/gemini-flash',
+            'api_key' => 'sk-or-profile-123',
+            'tasks' => [AiTask::Enrichment->value],
+        ]]);
+
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJsonEnrichment([['role' => 'user', 'content' => 'x']]);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'http://127.0.0.1:26872/v1/chat/completions'
+            && $request['model'] === 'qwen38-27b-fast');
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'openrouter.ai'));
+    }
 }

@@ -399,24 +399,34 @@ final class ProductEnrichmentService
             $t = microtime(true);
             $searchPack = $this->searchPackForEnrichment($product);
             $searchResults = $searchPack['results'];
+            $searchEmptyDetail = ($searchPack['errors'] ?? []) !== []
+                ? implode(' | ', array_slice($searchPack['errors'], 0, 2))
+                : 'brak wyników';
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
             if ($searchResults === []) {
-                $detail = ($searchPack['errors'] ?? []) !== []
-                    ? implode(' | ', array_slice($searchPack['errors'], 0, 2))
-                    : 'brak wyników';
-                throw new ProductSourcesNotFoundException(
-                    'Nie znaleziono stron z tym SKU w internecie. '.$detail
-                );
+                if ($this->searchFailedDueToEngineOutage($searchEmptyDetail)) {
+                    throw new ProductSourcesNotFoundException(
+                        'Nie znaleziono stron z tym SKU w internecie. '.$searchEmptyDetail
+                    );
+                }
+                Log::info('Product search empty — sending to description model', [
+                    'product_id' => $product->id,
+                    'sku' => $product->sku,
+                    'detail' => $searchEmptyDetail,
+                ]);
             }
 
             // Opis/zdjęcia ← sklepy; PDF/certyfikaty ← producent (osobne ścieżki).
-            if ($this->manufacturers->domainsFor($product) === []) {
-                $this->manufacturers->discoverOfficialDomains($product);
+            $mfrDomains = [];
+            if ($searchResults !== []) {
+                if ($this->manufacturers->domainsFor($product) === []) {
+                    $this->manufacturers->discoverOfficialDomains($product);
+                }
+                $mfrDomains = $this->manufacturers->discoverFromResults(
+                    $product,
+                    array_column($searchResults, 'url')
+                );
             }
-            $mfrDomains = $this->manufacturers->discoverFromResults(
-                $product,
-                array_column($searchResults, 'url')
-            );
             $timing['search_ms'] = $this->elapsedMs($t);
             $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
             $t = microtime(true);
@@ -527,8 +537,11 @@ final class ProductEnrichmentService
                 ]);
 
                 throw new ProductSourcesNotFoundException(
-                    'Nie znaleziono karty potwierdzającej produkt '.$product->sku
-                    .' — żaden opis nie wymieniał jego kodu ani modelu. Opis wpisz ręcznie.'
+                    $searchResults === []
+                        ? 'Nie znaleziono stron z tym SKU w internecie. '.$searchEmptyDetail
+                            .' Model nie potwierdził produktu — opis wpisz ręcznie.'
+                        : 'Nie znaleziono karty potwierdzającej produkt '.$product->sku
+                            .' — żaden opis nie wymieniał jego kodu ani modelu. Opis wpisz ręcznie.'
                 );
             }
 
@@ -819,6 +832,16 @@ final class ProductEnrichmentService
         }
 
         return Product::ENRICHMENT_MANUAL;
+    }
+
+    private function searchFailedDueToEngineOutage(string $detail): bool
+    {
+        $msg = mb_strtolower($detail);
+
+        return str_contains($msg, 'silniki zablokowane')
+            || str_contains($msg, 'too many requests')
+            || str_contains($msg, 'captcha')
+            || str_contains($msg, 'bez fallbacku publicznego');
     }
 
     private function elapsedMs(float $started): int
@@ -2404,6 +2427,11 @@ SYS,
 
         $sourcesJson = json_encode($compactSources, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $pagesJson = json_encode($compactPages, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $noPagesNote = $compactPages === [] && $compactSources === []
+            ? "\n\nWyszukiwarka nie znalazła karty. Jeśli znasz ten produkt BHP, napisz rzetelny opis po polsku "
+                .'i w tekście podaj kod albo nazwę modelu. Nie zmyślaj norm ani liczb. '
+                .'Nie znasz produktu → description="" i confidence=0.'
+            : '';
 
         return $this->llm->chatJsonEnrichment([
             [
@@ -2447,7 +2475,8 @@ SYS,
             [
                 'role' => 'user',
                 'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}\nEAN: ".($product->ean ?? '—')
-                    ."\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}",
+                    ."\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}"
+                    .$noPagesNote,
             ],
         ], 0.1, 4500);
     }

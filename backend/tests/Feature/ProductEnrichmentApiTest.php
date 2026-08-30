@@ -944,6 +944,11 @@ final class ProductEnrichmentApiTest extends TestCase
             ->once()
             ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
 
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')
+            ->once()
+            ->andReturn(['description' => '', 'confidence' => 0]);
+
         $service = new ProductEnrichmentService(
             $search,
             app(ProductImageDownloader::class),
@@ -951,7 +956,7 @@ final class ProductEnrichmentApiTest extends TestCase
             app(ProductPageFetcher::class),
             app(ProductDocumentFinder::class),
             app(ManufacturerDomainResolver::class),
-            Mockery::mock(OpenAiCompatibleClient::class),
+            $llm,
             app(AiSettingsService::class),
             app(BhpAttributeNormalizer::class),
             app(ProductSearchIdentity::class),
@@ -977,6 +982,56 @@ final class ProductEnrichmentApiTest extends TestCase
         // ponowne kolejkowanie ma go pominąć, ręczne wymuszenie nadal działa
         $this->expectException(RuntimeException::class);
         app(ProductEnrichmentService::class)->enqueueProductIds([$product->id], $user, false);
+    }
+
+    public function test_empty_search_keeps_confirmed_model_description(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '23201',
+            'name' => 'AlphaTec 23201',
+            'manufacturer' => 'Ansell',
+            'description' => null,
+        ]);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
+
+        $description = 'Rękawice Ansell AlphaTec 23201 chronią przed chemikaliami w laboratorium. '
+            .'Wykonane z nitrylu, kategoria III PPE. Przeznaczone do kontaktu z olejami i rozpuszczalnikami. '
+            .'Norma EN 374. Szczelne mankiety. Zastosowanie: przemysł chemiczny i laboratoria. '
+            .'Kod katalogowy 23201. Materiał nieprzepuszczalny. Dobre czucie przedmiotu.';
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')
+            ->once()
+            ->andReturn([
+                'description' => $description,
+                'features' => ['nitryl', 'EN 374'],
+                'confidence' => 0.7,
+            ]);
+        $llm->shouldReceive('chatJsonWithImages')->zeroOrMoreTimes()->andReturn(['candidates' => []]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ProductDocumentFinder::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        $service->enrichProduct($product, false);
+
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->fresh()?->enrichment_status);
+        $this->assertStringContainsString('23201', (string) $product->fresh()?->description);
     }
 
     public function test_searxng_outage_marks_failed_not_manual(): void

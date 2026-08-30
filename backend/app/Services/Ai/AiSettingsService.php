@@ -537,6 +537,34 @@ final class AiSettingsService
             return $fallback;
         }
 
+        return $this->hydrateProfile($profile, $fallback);
+    }
+
+    /**
+     * Konfiguracja główna + wszystkie profile — do wyboru endpointu z pluginem web.
+     *
+     * @return list<array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}>
+     */
+    public function resolvedProfiles(): array
+    {
+        $fallback = $this->profileForTask(null);
+        $out = [$fallback];
+        foreach ($this->resolve()['model_profiles'] as $raw) {
+            if (is_array($raw)) {
+                $out[] = $this->hydrateProfile($raw, $fallback);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $fallback
+     * @return array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}
+     */
+    private function hydrateProfile(array $profile, array $fallback): array
+    {
         $baseUrl = $this->nullableUrl($profile['base_url'] ?? null) ?? $fallback['base_url'];
         $apiKey = $this->nullableString($profile['api_key'] ?? null);
 
