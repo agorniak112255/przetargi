@@ -23,7 +23,7 @@ final class ProductSearchIdentity
      * @var array<string, list<string>>
      */
     private const TYPE_STEMS = [
-        'gloves' => ['rekawic', 'glove', 'handschuh', 'gant'],
+        'gloves' => ['rekawic', 'glove', 'glv', 'handschuh', 'gant'],
         'coverall' => ['kombinezon', 'coverall', 'overall', 'cvrl', 'protective suit', 'protection suit'],
         'jacket' => ['kurtk', 'jacket', 'plaszcz'],
         'trousers' => ['spodn', 'trouser', 'pant'],
@@ -1288,6 +1288,19 @@ final class ProductSearchIdentity
         return $this->hayMatchesNameAndBrand($hay, $product);
     }
 
+    /**
+     * Karta, z której wolno wziąć opis i zdjęcie: to ten produkt, nie inny model.
+     */
+    public function isConfirmedProductCard(string $url, string $title, string $text, Product $product): bool
+    {
+        $hay = $url.' '.$title.' '.$text;
+        if (! $this->hayMentionsProduct($hay, $product)) {
+            return false;
+        }
+
+        return ! $this->pageClaimsAnotherCode($url, $title, $product);
+    }
+
     /** Token bez cyfr to zwykłe słowo („casque”, „cut resistant gloves”), nie oznaczenie modelu. */
     private function isWordLikeToken(string $token): bool
     {
@@ -1564,6 +1577,9 @@ final class ProductSearchIdentity
                     $mine = true;
                     break;
                 }
+            }
+            if ($this->looksLikeSizeSiblingCode($token, $product)) {
+                continue;
             }
             if (! $mine) {
                 return true;
@@ -1915,6 +1931,18 @@ final class ProductSearchIdentity
         return (string) preg_replace('/[^\p{L}\d]+/u', '', mb_strtolower($code));
     }
 
+    /** 54331 i 54335 to ten sam G10 Flex, inny rozmiar — nie „cudzy model”. */
+    private function looksLikeSizeSiblingCode(string $token, Product $product): bool
+    {
+        $ours = preg_replace('/\D+/u', '', (string) $product->sku) ?? '';
+        $theirs = preg_replace('/\D+/u', '', $token) ?? '';
+        if (strlen($ours) < 5 || strlen($theirs) !== strlen($ours)) {
+            return false;
+        }
+
+        return substr($ours, 0, -1) === substr($theirs, 0, -1);
+    }
+
     /** „471” z tytułu CovaSpec 471 to nasz model, nie cudzy kod przy SKU 047106941E. */
     private function tokenMatchesOurCode(string $token, string $code): bool
     {
@@ -2069,7 +2097,7 @@ final class ProductSearchIdentity
         if ($this->ansellOfficialPathHasModel($hay, $product)) {
             return true;
         }
-        $name = $this->normalizeTypeText((string) $product->name);
+        $name = $this->normalizeTypeText((string) $product->name.' '.(string) ($product->category ?? ''));
         $page = $this->normalizeTypeText($hay);
         $required = [];
         foreach (self::TYPE_STEMS as $stems) {
@@ -2101,6 +2129,13 @@ final class ProductSearchIdentity
             // „buty” ≠ butyl / butyric na karcie odczynnika
             if ($stem === 'buty') {
                 if (preg_match('/\bbuty\b/u', $normalized) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if ($stem === 'glv') {
+                if (preg_match('/\bglv\b/u', $normalized) === 1) {
                     return true;
                 }
 
@@ -2336,7 +2371,7 @@ final class ProductSearchIdentity
         }
 
         // Rękawice ocieplane polarem muszą wygrać z regułą odzieży niżej
-        if (preg_match('#(glove|r[eę]kaw|maxiflex|maxicut|maxidry)#u', $blob)) {
+        if (preg_match('#(glove|\bglv\b|r[eę]kaw|maxiflex|maxicut|maxidry)#u', $blob)) {
             return 'rękawice';
         }
 
@@ -2650,6 +2685,9 @@ final class ProductSearchIdentity
         foreach ($this->nameBrandKeys($product) as $key) {
             $out[] = str_replace('-', ' ', $key);
             $out[] = $key;
+        }
+        foreach ($this->brandFamilyOf($this->shortBrand((string) $product->manufacturer)) as $alias) {
+            $out[] = $alias;
         }
         if ($this->looksLikeUrgentGloveSeries($product)) {
             $out[] = 'urgent';

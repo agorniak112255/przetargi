@@ -945,9 +945,7 @@ final class ProductEnrichmentApiTest extends TestCase
             ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJsonEnrichment')
-            ->once()
-            ->andReturn(['description' => '', 'confidence' => 0]);
+        $llm->shouldReceive('chatJsonEnrichment')->never();
 
         $service = new ProductEnrichmentService(
             $search,
@@ -984,7 +982,7 @@ final class ProductEnrichmentApiTest extends TestCase
         app(ProductEnrichmentService::class)->enqueueProductIds([$product->id], $user, false);
     }
 
-    public function test_empty_search_keeps_confirmed_model_description(): void
+    public function test_empty_search_does_not_invent_description_without_card(): void
     {
         $product = $this->makeProduct([
             'sku' => '23201',
@@ -998,20 +996,8 @@ final class ProductEnrichmentApiTest extends TestCase
             ->once()
             ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
 
-        $description = 'Rękawice Ansell AlphaTec 23201 chronią przed chemikaliami w laboratorium. '
-            .'Wykonane z nitrylu, kategoria III PPE. Przeznaczone do kontaktu z olejami i rozpuszczalnikami. '
-            .'Norma EN 374. Szczelne mankiety. Zastosowanie: przemysł chemiczny i laboratoria. '
-            .'Kod katalogowy 23201. Materiał nieprzepuszczalny. Dobre czucie przedmiotu.';
-
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJsonEnrichment')
-            ->once()
-            ->andReturn([
-                'description' => $description,
-                'features' => ['nitryl', 'EN 374'],
-                'confidence' => 0.7,
-            ]);
-        $llm->shouldReceive('chatJsonWithImages')->zeroOrMoreTimes()->andReturn(['candidates' => []]);
+        $llm->shouldReceive('chatJsonEnrichment')->never();
 
         $service = new ProductEnrichmentService(
             $search,
@@ -1028,10 +1014,13 @@ final class ProductEnrichmentApiTest extends TestCase
             app(PpeAssortment::class),
         );
 
-        $service->enrichProduct($product, false);
-
-        $this->assertSame(Product::ENRICHMENT_DONE, $product->fresh()?->enrichment_status);
-        $this->assertStringContainsString('23201', (string) $product->fresh()?->description);
+        try {
+            $service->enrichProduct($product, false);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException $e) {
+            $this->assertStringContainsString('bez strony', $e->getMessage());
+        }
+        $this->assertNotSame(Product::ENRICHMENT_DONE, $product->fresh()?->enrichment_status);
     }
 
     public function test_searxng_outage_marks_failed_not_manual(): void

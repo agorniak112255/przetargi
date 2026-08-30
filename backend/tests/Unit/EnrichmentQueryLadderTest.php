@@ -1045,6 +1045,34 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertStringContainsString('hygi.de', (string) ($kept[0]['url'] ?? ''));
     }
 
+    public function test_g10_flex_glove_rejects_knife_and_keeps_sibling_size_card(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '54335',
+            'name' => 'KG G10 Flex Ntrl Glv Blue XL',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $this->assertFalse($identity->isConfirmedProductCard(
+            'https://www.bhp-gabi.pl/p24000,31-003686-noz-gerber-flatiron-folding-cleaver-g10-tan.html',
+            'Nóż Gerber Flatiron Folding Cleaver G10 Tan',
+            'Składany tasak Gerber z rękojeścią G-10. Stal 7Cr17MoV. Ostrze 9,7 cm.',
+            $product
+        ));
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://labproinc.com/products/kg-g10-flex-ntrl-glv-blue-xs-54331',
+            'Kimberly Clark KG G10 Flex Ntrl Glv Blue XS - 54331',
+            'Powder free cleanroom nitrile gloves. Product Number 54331. Blue nitrile gloves 3 mil.',
+            $product
+        ));
+        $this->assertFalse($identity->pageClaimsAnotherCode(
+            'https://labproinc.com/products/kg-g10-flex-ntrl-glv-blue-xs-54331',
+            'Kimberly Clark KG G10 Flex Ntrl Glv Blue XS - 54331',
+            $product
+        ));
+    }
+
     public function test_ansell_g10_flex_does_not_match_easy_flex_card(): void
     {
         $identity = new ProductSearchIdentity;

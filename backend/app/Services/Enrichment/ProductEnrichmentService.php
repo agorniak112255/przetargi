@@ -405,16 +405,12 @@ final class ProductEnrichmentService
                 : 'brak wyników';
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
             if ($searchResults === []) {
-                if ($this->searchFailedDueToEngineOutage($searchEmptyDetail)) {
-                    throw new ProductSourcesNotFoundException(
-                        'Nie znaleziono stron z tym SKU w internecie. '.$searchEmptyDetail
-                    );
-                }
-                Log::info('Product search empty — sending to description model', [
-                    'product_id' => $product->id,
-                    'sku' => $product->sku,
-                    'detail' => $searchEmptyDetail,
-                ]);
+                throw new ProductSourcesNotFoundException(
+                    $this->searchFailedDueToEngineOutage($searchEmptyDetail)
+                        ? 'Nie znaleziono stron z tym SKU w internecie. '.$searchEmptyDetail
+                        : 'Nie znaleziono karty produktu '.$product->sku
+                            .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie. '.$searchEmptyDetail
+                );
             }
 
             // Opis/zdjęcia ← sklepy; PDF/certyfikaty ← producent (osobne ścieżki).
@@ -432,10 +428,7 @@ final class ProductEnrichmentService
             $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
             $t = microtime(true);
             $fetched = $this->pages->fetch($descResults, (string) $product->sku, 3, [], $product);
-            $pageSnippets = $fetched['pages'];
-            if ($pageSnippets === []) {
-                $pageSnippets = $this->fetchPageSnippets(array_slice($descResults, 0, 3));
-            }
+            $pageSnippets = $this->keepConfirmedCardPages($product, $fetched['pages']);
 
             // Certyfikaty + fakty techniczne: osobny fetch producenta (nie mieszać rankingu opisu).
             $mfrPageSnippets = [];
@@ -451,24 +444,40 @@ final class ProductEnrichmentService
                 foreach ($mfrFetched['trusted_image_urls'] as $url) {
                     $fetched['trusted_image_urls'][] = $url;
                 }
-                $mfrPageSnippets = $mfrFetched['pages'];
+                $mfrPageSnippets = $this->keepConfirmedCardPages($product, $mfrFetched['pages']);
             }
             $timing['fetch_ms'] = $this->elapsedMs($t);
+
+            $pageSnippets = $this->keepConfirmedCardPages(
+                $product,
+                $this->mergePageSnippets($pageSnippets, $mfrPageSnippets)
+            );
+            if ($pageSnippets === []) {
+                throw new ProductSourcesNotFoundException(
+                    'Nie znaleziono karty potwierdzającej produkt '.$product->sku
+                        .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.'
+                );
+            }
 
             $this->assertBatchNotCancelled($batchId);
 
             // sklep → opis PL; producent → normy/materiały — jedno sanitize, żeby nie dublować vLLM
             $t = microtime(true);
-            $pageSnippets = $this->sanitizePagesWithLlm(
-                $product,
-                $this->mergePageSnippets($pageSnippets, $mfrPageSnippets)
-            );
+            $pageSnippets = $this->sanitizePagesWithLlm($product, $pageSnippets);
             $timing['llm_sanitize_ms'] = $this->elapsedMs($t);
 
             $t = microtime(true);
+            $cardSources = [];
+            foreach (array_slice($pageSnippets, 0, 4) as $page) {
+                $cardSources[] = [
+                    'url' => (string) ($page['url'] ?? ''),
+                    'title' => '',
+                    'snippet' => mb_substr((string) ($page['text'] ?? ''), 0, 200),
+                ];
+            }
             $extracted = $this->extractWithLlm(
                 $product,
-                array_slice($descResults, 0, 4),
+                $cardSources,
                 array_slice($pageSnippets, 0, 5)
             );
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets);
@@ -505,7 +514,10 @@ final class ProductEnrichmentService
                     $supplement['extracted'],
                     $supplement['pages']
                 );
-                $pageSnippets = $supplement['pages'];
+                $supplementedPages = $this->keepConfirmedCardPages($product, $supplement['pages']);
+                if ($supplementedPages !== []) {
+                    $pageSnippets = $supplementedPages;
+                }
                 foreach ($supplement['image_urls'] as $url) {
                     $fetched['image_urls'][] = $url;
                 }
@@ -518,11 +530,13 @@ final class ProductEnrichmentService
                 $timing['supplement_ms'] = $this->elapsedMs($t);
             }
 
-            // Fallback ze stron i doszukiwanie omijają walidację LLM, więc tożsamość
-            // sprawdzamy jeszcze raz na tekście, który realnie trafiłby do bazy.
-            $confirmed = $description !== '' && $this->descriptionMentionsProduct($description, $product);
+            // Potwierdza karta, nie to, że model przepisał nazwę z cennika.
+            $confirmed = $pageSnippets !== []
+                && $description !== ''
+                && ! $this->looksLikeMissingCardMeta($description)
+                && ! $this->looksLikeThinDescription($description);
 
-            if (! $confirmed || $this->looksLikeMissingCardMeta($description)) {
+            if (! $confirmed) {
                 Log::warning('Product description rejected', [
                     'product_id' => $product->id,
                     'sku' => $product->sku,
@@ -580,8 +594,12 @@ final class ProductEnrichmentService
             if ($sourceUrls === []) {
                 $sourceUrls = array_column(array_slice($pageSnippets, 0, 3), 'url');
             }
+            $sourceUrls = array_values(array_filter(
+                $sourceUrls,
+                fn (string $url): bool => $this->sourceUrlIsConfirmedCard($url, $pageSnippets, $product)
+            ));
             if ($sourceUrls === []) {
-                $sourceUrls = array_column(array_slice($descResults, 0, 3), 'url');
+                $sourceUrls = array_column(array_slice($pageSnippets, 0, 3), 'url');
             }
 
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
@@ -1803,6 +1821,46 @@ final class ProductEnrichmentService
     }
 
     /**
+     * @param  list<array{url?: string, text?: string}>  $pages
+     * @return list<array{url: string, text: string}>
+     */
+    private function keepConfirmedCardPages(Product $product, array $pages): array
+    {
+        $out = [];
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            $text = (string) ($page['text'] ?? '');
+            if ($url === '' || $text === '') {
+                continue;
+            }
+            if ($this->identity->isConfirmedProductCard($url, '', $text, $product)) {
+                $out[] = ['url' => $url, 'text' => $text];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<array{url?: string, text?: string}>  $pages
+     */
+    private function sourceUrlIsConfirmedCard(string $url, array $pages, Product $product): bool
+    {
+        foreach ($pages as $page) {
+            if (mb_strtolower((string) ($page['url'] ?? '')) === mb_strtolower($url)) {
+                return $this->identity->isConfirmedProductCard(
+                    $url,
+                    '',
+                    (string) ($page['text'] ?? ''),
+                    $product
+                );
+            }
+        }
+
+        return $this->identity->isConfirmedProductCard($url, '', '', $product);
+    }
+
+    /**
      * Opis wolno przypisać dopiero wtedy, gdy sam nazywa produkt po kodzie albo modelu.
      * Bez tego karta obcego produktu z tej samej branży przechodziła jako nasza.
      */
@@ -2500,12 +2558,6 @@ SYS,
 
         $sourcesJson = json_encode($compactSources, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $pagesJson = json_encode($compactPages, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $noPagesNote = $compactPages === [] && $compactSources === []
-            ? "\n\nWyszukiwarka nie znalazła karty. Jeśli znasz ten produkt BHP, napisz rzetelny opis po polsku "
-                .'i w tekście podaj kod albo nazwę modelu. Nie zmyślaj norm ani liczb. '
-                .'Nie znasz produktu → description="" i confidence=0.'
-            : '';
-
         return $this->llm->chatJsonEnrichment([
             [
                 'role' => 'system',
@@ -2541,6 +2593,7 @@ WYPEŁNIJ tablice features/specs/norms/materials/use_cases oraz attributes, gdy 
 Nie powtarzaj tych samych zdań w description, features i specs — description zostaje pełny (6–12 zdań).
 attributes: używaj wyłącznie wartości ze źródeł; brak danych → null / [].
 Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
+Nie przepisuj nazwy z cennika jako dowodu — opisuj wyłącznie podane strony.
 Pomiń reklamy, nieruchomości, leasing, biura, inwestycje i inny tekst niezwiązany z tym produktem BHP.
 Jeśli źródła opisują substancję chemiczną / CAS, a nazwa produktu to PPE (obuwie, rękawice, odzież…) — description="" i confidence=0.
 SYS,
@@ -2548,8 +2601,7 @@ SYS,
             [
                 'role' => 'user',
                 'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}\nEAN: ".($product->ean ?? '—')
-                    ."\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}"
-                    .$noPagesNote,
+                    ."\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}",
             ],
         ], 0.1, 4500);
     }

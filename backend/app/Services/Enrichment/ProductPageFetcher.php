@@ -357,14 +357,16 @@ final class ProductPageFetcher
         if ($this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
             return;
         }
-        $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, $title, $skuNorm)
-            || $this->pageMatchesProductIdentity($url, $text, $title);
+        $pageLooksLikeProduct = $this->matchingProduct !== null
+            ? $this->identity->isConfirmedProductCard($url, $title, $text, $this->matchingProduct)
+            : ($this->pageMentionsSku($url, $text, $title, $skuNorm)
+                || $this->pageMatchesProductIdentity($url, $text, $title));
 
-        if ($text !== '') {
+        if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
             $goodPages[] = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
         }
 
-        // Zdjęcia tylko z karty produktu — nie z „klienci kupili też” ani z obcej marki.
+        // Zdjęcia tylko z potwierdzonej karty — nie z „klienci kupili też” ani z obcej marki.
         if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
             $htmlForImages = $this->withoutRelatedProductHtml($html);
             foreach ($this->extractImageUrls($htmlForImages, $url, $skuNorm) as $img) {
