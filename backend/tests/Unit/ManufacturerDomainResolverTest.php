@@ -157,6 +157,13 @@ final class ManufacturerDomainResolverTest extends TestCase
             'natare.pl',
             'sklep.arsel-bhp.pl',
             'roboczebhp.pl',
+            'antar.pl',
+            'promocjabhp.pl',
+            'paktbhp.pl',
+            'jaskon.pl',
+            'regera.pl',
+            'sklep.renex.pl',
+            'kaufland.pl',
         ] as $host) {
             $this->assertContains($host, $retailers);
         }
@@ -234,6 +241,22 @@ final class ManufacturerDomainResolverTest extends TestCase
 
         $this->assertContains('marelplus.pl', config('enrichment.preferred_domains'));
         $this->assertContains('marelplus.pl', config('enrichment.retailer_domains'));
+    }
+
+    public function test_atlas_catalog_hosts_use_polish_shoe_shops(): void
+    {
+        $identity = new \App\Services\Enrichment\ProductSearchIdentity;
+        $product = new Product([
+            'manufacturer' => 'ATLAS',
+            'sku' => 'SL-46',
+            'name' => 'Sandały ESD Atlas SL 46 Blue S1',
+        ]);
+        $hosts = $identity->catalogSearchHosts($product);
+        $this->assertSame('antar.pl', $hosts[0] ?? null);
+        $this->assertContains('promocjabhp.pl', $hosts);
+        $this->assertContains('sklep.renex.pl', $hosts);
+        $this->assertContains('antar.pl', config('enrichment.preferred_domains'));
+        $this->assertContains('kaufland.pl', config('enrichment.catalog_skip_hosts'));
     }
 
     public function test_resolves_mapa_polish_catalog_domain(): void
