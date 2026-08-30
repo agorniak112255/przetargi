@@ -61,6 +61,9 @@ final class ProductImageCandidateVerifier
         $selected = [];
         $unverified = [];
         foreach ($urls as $url) {
+            if ($this->identity->imageUrlMentionsForeignBrand($url, $product)) {
+                continue;
+            }
             if ($this->identity->imageUrlMentionsProduct($url, $product)
                 || (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url))) {
                 $selected[] = $url;
@@ -88,7 +91,7 @@ final class ProductImageCandidateVerifier
             }
         }
         if ($loaded === []) {
-            return $this->finishSelection($selected, $trusted, $urls, $max);
+            return $this->finishSelection($selected, $trusted, $urls, $max, $product);
         }
 
         try {
@@ -111,7 +114,7 @@ final class ProductImageCandidateVerifier
                 'error' => $e->getMessage(),
             ]);
 
-            return $this->finishSelection($selected, $trusted, $urls, $max);
+            return $this->finishSelection($selected, $trusted, $urls, $max, $product);
         }
 
         $verified = [];
@@ -157,7 +160,7 @@ final class ProductImageCandidateVerifier
             'accepted' => array_column($verified, 'url'),
         ]);
 
-        return $this->finishSelection($selected, $trusted, $urls, $max);
+        return $this->finishSelection($selected, $trusted, $urls, $max, $product);
     }
 
     /**
@@ -166,13 +169,18 @@ final class ProductImageCandidateVerifier
      * @param  list<string>  $urls
      * @return list<string>
      */
-    private function finishSelection(array $selected, array $trusted, array $urls, int $max): array
+    private function finishSelection(array $selected, array $trusted, array $urls, int $max, Product $product): array
     {
+        $selected = array_values(array_filter(
+            $selected,
+            fn (string $url): bool => ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
+        ));
         if ($selected !== []) {
             return array_values(array_unique(array_slice($selected, 0, $max)));
         }
         foreach ($urls as $url) {
-            if (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url)) {
+            if (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url)
+                && ! $this->identity->imageUrlMentionsForeignBrand($url, $product)) {
                 return [$url];
             }
         }

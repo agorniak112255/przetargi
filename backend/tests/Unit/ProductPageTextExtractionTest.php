@@ -393,4 +393,68 @@ HTML;
         $this->assertContains($og, $result['trusted_image_urls']);
         $this->assertContains($og, $result['image_urls']);
     }
+
+    public function test_drops_related_and_foreign_brand_images_from_matching_card(): void
+    {
+        $pageUrl = 'https://shop.example.com/ansell-kleenguard-g10-flex-54335.html';
+        $main = 'https://shop.example.com/media/kleenguard-g10-flex-54335.jpg';
+        $related = 'https://shop.example.com/user/products/PORTWEST-A620-PU-COATED-GLOVES.jpg';
+        $html = '<html><head><meta property="og:image" content="'.$main.'"></head><body>'
+            .'<h1>Ansell KleenGuard G10 Flex 54335</h1>'
+            .'<img src="'.$main.'">'
+            .'<p>'.str_repeat('KleenGuard G10 Flex Blue Nitrile Gloves 54335 disposable. ', 40).'</p>'
+            .'<h2>Customers also bought</h2>'
+            .'<img src="'.$related.'">'
+            .'<p>Portwest A620 PU coated cut resistant gloves.</p>'
+            .'</body></html>';
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+
+        $product = new Product([
+            'sku' => '54335',
+            'name' => 'KG G10 Flex Ntrl Glv Blue XL',
+            'manufacturer' => 'Ansell',
+        ]);
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Ansell KleenGuard G10 Flex 54335',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertContains($main, $result['image_urls']);
+        $this->assertNotContains($related, $result['image_urls']);
+        $this->assertNotContains($related, $result['trusted_image_urls']);
+    }
+
+    public function test_skips_images_from_other_ansell_flex_card(): void
+    {
+        $pageUrl = 'https://www.gloves.co.uk/ansell-easy-flex-47-200-palm-coated-general-handling-gloves.html';
+        $main = 'https://www.gloves.co.uk/user/products/ansell-easy-flex-47-200.jpg';
+        $related = 'https://www.gloves.co.uk/user/products/PORTWEST-A620-PU-COATED-GLOVES.jpg';
+        $html = '<html><body>'
+            .'<h1>Ansell ActivArmr 47-200 Easy Flex</h1>'
+            .'<img src="'.$main.'">'
+            .'<p>'.str_repeat('Ansell Easy Flex 47-200 palm coated general handling gloves. ', 40).'</p>'
+            .'<h2>Customers also bought</h2>'
+            .'<img src="'.$related.'">'
+            .'</body></html>';
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+
+        $product = new Product([
+            'sku' => '54335',
+            'name' => 'KG G10 Flex Ntrl Glv Blue XL',
+            'manufacturer' => 'Ansell',
+        ]);
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Ansell Easy Flex 47-200',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertSame([], $result['image_urls']);
+        $this->assertSame([], $result['trusted_image_urls']);
+    }
 }

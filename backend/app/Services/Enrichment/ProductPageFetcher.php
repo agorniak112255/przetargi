@@ -362,20 +362,26 @@ final class ProductPageFetcher
 
         if ($text !== '') {
             $goodPages[] = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
-            // Kody z naszego cennika (HEATRESIST-GAT11) nie występują na kartach sklepów,
-            // więc zdjęcia bierzemy z każdej odczytanej strony — trafność oceni AI Vision.
-            foreach ($this->extractImageUrls($html, $url, $skuNorm) as $img) {
-                $images[] = $img;
+        }
+
+        // Zdjęcia tylko z karty produktu — nie z „klienci kupili też” ani z obcej marki.
+        if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
+            $htmlForImages = $this->withoutRelatedProductHtml($html);
+            foreach ($this->extractImageUrls($htmlForImages, $url, $skuNorm) as $img) {
+                if ($this->imageAllowedForProduct($img)) {
+                    $images[] = $img;
+                }
             }
         }
 
         // og:image bez potwierdzonego SKU nie zasługuje na status zaufanego
         if ($pageLooksLikeProduct) {
-            foreach ($this->extractStructuredImageUrls($html) as $img) {
+            foreach ($this->extractStructuredImageUrls($this->withoutRelatedProductHtml($html)) as $img) {
                 $absolute = $this->absolutize($img, $url);
                 if ($absolute !== null
                     && ! $this->isJunkImageUrl($absolute)
-                    && ProductImageDownloader::looksLikeImageUrl($absolute)) {
+                    && ProductImageDownloader::looksLikeImageUrl($absolute)
+                    && $this->imageAllowedForProduct($absolute)) {
                     $trustedImages[] = $absolute;
                 }
             }
@@ -1234,6 +1240,45 @@ final class ProductPageFetcher
         }
 
         return $out;
+    }
+
+    private function imageAllowedForProduct(string $url): bool
+    {
+        if ($this->matchingProduct === null) {
+            return true;
+        }
+
+        return ! $this->identity->imageUrlMentionsForeignBrand($url, $this->matchingProduct);
+    }
+
+    /**
+     * Bloki „Customers also bought” / „Podobne produkty” niosą zdjęcia cudzych SKU.
+     */
+    private function withoutRelatedProductHtml(string $html): string
+    {
+        $stripped = preg_replace(
+            '#<(section|div|aside|ul)[^>]*(?:class|id)=["\'][^"\']*'
+            .'(?:related|upsell|cross-?sell|also-bought|alsobought|customers-also|'
+            .'you-may-also|podobne|polecane|polecamy|czesto-kupowane|frequently-bought)'
+            .'[^"\']*["\'][^>]*>.*?</\1>#is',
+            '',
+            $html
+        );
+        if (is_string($stripped)) {
+            $html = $stripped;
+        }
+
+        $cut = preg_replace(
+            '#<(h[1-4]|p|div|legend|strong)[^>]*>[^<]*(?:'
+            .'customers?\s+also\s+bought|related\s+items|related\s+products|'
+            .'you\s+may\s+also\s+like|klienci\s+kupili|podobne\s+produkty|'
+            .'polecane\s+produkty|często\s+kupowane|czesto\s+kupowane|frequently\s+bought'
+            .')[^<]*</(?:h[1-4]|p|div|legend|strong)>.*?(?=<(?:h[1-3]|footer)|$)#is',
+            '',
+            $html
+        );
+
+        return is_string($cut) ? $cut : $html;
     }
 
     private function isJunkImageUrl(string $url): bool

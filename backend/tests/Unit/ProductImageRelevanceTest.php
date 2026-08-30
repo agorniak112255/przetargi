@@ -124,4 +124,29 @@ final class ProductImageRelevanceTest extends TestCase
             $product
         ));
     }
+
+    public function test_rejects_competing_brand_in_image_filename(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $ansell = new Product([
+            'sku' => '54335',
+            'name' => 'KG G10 Flex Ntrl Glv Blue XL',
+            'manufacturer' => 'Ansell',
+        ]);
+        $portwestUrl = 'https://www.gloves.co.uk/user/products/PORTWEST-A620-PU-COATED-CUT-LEVEL-B-HEAT-RESISTANT-GREY-GLOVES-ik-4.jpg';
+
+        $this->assertTrue($identity->imageUrlMentionsForeignBrand($portwestUrl, $ansell));
+        $this->assertFalse($identity->imageUrlMentionsProduct($portwestUrl, $ansell));
+        $this->assertFalse($identity->imageUrlMentionsForeignBrand(
+            'https://kleenguard.ansell.com/media/54335-g10-flex-xl.jpg',
+            $ansell
+        ));
+
+        $portwest = new Product([
+            'sku' => 'A620',
+            'name' => 'A620 PU Coated',
+            'manufacturer' => 'Portwest',
+        ]);
+        $this->assertFalse($identity->imageUrlMentionsForeignBrand($portwestUrl, $portwest));
+    }
 }

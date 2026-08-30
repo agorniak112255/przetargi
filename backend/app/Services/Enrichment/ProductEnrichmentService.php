@@ -566,7 +566,8 @@ final class ProductEnrichmentService
                 $imageUrls = $this->cardImagesAfterConfirmation(
                     $fetched['trusted_image_urls'],
                     $fetched['image_urls'],
-                    $pageSnippets
+                    $pageSnippets,
+                    $product
                 );
             }
 
@@ -664,7 +665,8 @@ final class ProductEnrichmentService
                     $retryUrls = $this->cardImagesAfterConfirmation(
                         $retryPages['trusted_image_urls'],
                         $retryPages['image_urls'],
-                        $retryPages['pages']
+                        $retryPages['pages'],
+                        $product
                     );
                 }
                 $savedImages = $this->images->downloadMany(
@@ -1062,12 +1064,13 @@ final class ProductEnrichmentService
      * @param  list<array{url?: string, text?: string}>  $pages
      * @return list<string>
      */
-    private function cardImagesAfterConfirmation(array $trusted, array $all, array $pages): array
+    private function cardImagesAfterConfirmation(array $trusted, array $all, array $pages, Product $product): array
     {
         $usable = [];
         foreach (array_merge($trusted, $all) as $url) {
             if (! is_string($url) || $this->isJunkImageUrl($url)
-                || ! ProductImageDownloader::looksLikeImageUrl($url)) {
+                || ! ProductImageDownloader::looksLikeImageUrl($url)
+                || $this->identity->imageUrlMentionsForeignBrand($url, $product)) {
                 continue;
             }
             $usable[] = $url;
@@ -1117,6 +1120,9 @@ final class ProductEnrichmentService
         // najpierw URL z HTML karty — wiarygodniejsze niż zgadywanie LLM
         foreach ($allUrls as $url) {
             if (is_string($url) && str_starts_with($url, 'http')) {
+                if ($product !== null && $this->identity->imageUrlMentionsForeignBrand($url, $product)) {
+                    continue;
+                }
                 $push($url, 40);
             }
         }

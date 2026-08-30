@@ -1044,4 +1044,25 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertNotSame([], $kept);
         $this->assertStringContainsString('hygi.de', (string) ($kept[0]['url'] ?? ''));
     }
+
+    public function test_ansell_g10_flex_does_not_match_easy_flex_card(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '54335',
+            'name' => 'KG G10 Flex Ntrl Glv Blue XL',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://www.gloves.co.uk/ansell-easy-flex-47-200-palm-coated-general-handling-gloves.html '
+            .'Ansell ActivArmr 47-200 Palm-Coated General Handling Gloves Easy Flex nitrile coating',
+            $product
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.ansell.com/us/en/products/kleenguard-g10-flex-blue-nitrile-gloves '
+            .'KleenGuard G10 Flex Blue Nitrile Gloves 54335 XL',
+            $product
+        ));
+    }
 }

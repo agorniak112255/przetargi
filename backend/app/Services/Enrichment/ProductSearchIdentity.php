@@ -143,6 +143,9 @@ final class ProductSearchIdentity
         if ($this->looksLikeJunkMediaPath($hay) || $this->looksLikeChemicalCatalogHit($hay)) {
             return false;
         }
+        if ($this->imageUrlMentionsForeignBrand($url, $product)) {
+            return false;
+        }
         if ($this->urlSkuOnlyAsCasNumber($hay, $product)) {
             return false;
         }
@@ -198,6 +201,28 @@ final class ProductSearchIdentity
                 if (str_contains($hay, $alias) || str_contains($hayCompact, preg_replace('/[^a-z0-9]/i', '', $alias) ?? $alias)) {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * PORTWEST-A620.jpg przy produkcie Ansell — cudza marka w nazwie pliku.
+     */
+    public function imageUrlMentionsForeignBrand(string $url, Product $product): bool
+    {
+        $path = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+        if ($path === '') {
+            $path = mb_strtolower(urldecode($url));
+        }
+        $own = $this->ownBrandTokens($product);
+        foreach ($this->catalogBrandTokens() as $brand) {
+            if (isset($own[$brand])) {
+                continue;
+            }
+            if (preg_match('/(?:^|[\/_.\-])'.preg_quote($brand, '/').'(?:[\/_.\-]|$)/u', $path) === 1) {
+                return true;
             }
         }
 
@@ -406,7 +431,8 @@ final class ProductSearchIdentity
             if ($part === '' || mb_strlen($part) < 4) {
                 continue;
             }
-            if (in_array($part, ['size', 'rozmiar', 'gloves', 'glove', 'rekawice', 'rękawice', 'foam', 'with'], true)) {
+            if (in_array($part, ['size', 'rozmiar', 'gloves', 'glove', 'rekawice', 'rękawice', 'foam', 'with'], true)
+                || $this->isGenericCatalogNameWord($part) || $this->isColorWord($part)) {
                 continue;
             }
             $tokens[] = $part;
@@ -1195,6 +1221,10 @@ final class ProductSearchIdentity
 
         foreach ($tokens as $token) {
             if ($this->tokenInHay($hay, $hayCompact, $token)) {
+                // „Flex” / „Blue” / „Easy” — marketing, nie model (Easy Flex ≠ G10 Flex)
+                if ($this->isGenericCatalogNameWord($token) || $this->isColorWord($token)) {
+                    continue;
+                }
                 // krótki sam kod numeryczny → wymagaj marki (własnej lub URGENT przy serii rękawic)
                 if ($this->isShortNumericToken($token) && $brands !== []
                     && ! $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
@@ -2634,6 +2664,72 @@ final class ProductSearchIdentity
         return array_values(array_unique($out));
     }
 
+    /**
+     * Marki własne produktu (wraz z aliasami linii) — nie odrzucamy ich w URL zdjęcia.
+     *
+     * @return array<string, true>
+     */
+    private function ownBrandTokens(Product $product): array
+    {
+        $out = [];
+        foreach ($this->acceptedBrands($product) as $brand) {
+            foreach ($this->brandFamilyOf($brand) as $alias) {
+                $out[$alias] = true;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function catalogBrandTokens(): array
+    {
+        $out = [];
+        foreach (array_keys((array) config('enrichment.manufacturer_domains', [])) as $key) {
+            foreach ($this->brandFamilyOf((string) $key) as $alias) {
+                $out[$alias] = true;
+            }
+        }
+        foreach (['portwest', 'tegera', 'ejendals', 'showa', 'jalas', 'kleenguard', 'cofra', 'coverguard'] as $extra) {
+            $out[$extra] = true;
+        }
+
+        return array_keys($out);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function brandFamilyOf(string $brand): array
+    {
+        $brand = mb_strtolower(trim($brand));
+        $compact = preg_replace('/[^a-z0-9]+/u', '', $brand) ?? $brand;
+        $families = [
+            'ansell' => ['ansell', 'kleenguard', 'kimberly', 'ringers', 'activarmr', 'alphatec'],
+            'kleenguard' => ['ansell', 'kleenguard', 'kimberly'],
+            'atg' => ['atg', 'maxiflex', 'maxicut', 'maxidry'],
+            'maxiflex' => ['atg', 'maxiflex', 'maxicut', 'maxidry'],
+            'urgent' => ['urgent', 'pilne'],
+            'pilne' => ['urgent', 'pilne'],
+            'ejendals' => ['ejendals', 'tegera'],
+            'tegera' => ['ejendals', 'tegera'],
+            'delta' => ['delta', 'deltaplus'],
+            'delta-plus' => ['delta', 'deltaplus'],
+            'deltaplus' => ['delta', 'deltaplus'],
+        ];
+        $out = [];
+        if ($compact !== '' && (mb_strlen($compact) >= 4 || in_array($compact, ['3m', 'msa', 'atg', 'kcl', 'gvs', 'pip'], true))) {
+            $out[] = $compact;
+        }
+        foreach ($families[$brand] ?? $families[$compact] ?? [] as $alias) {
+            $out[] = $alias;
+        }
+
+        return array_values(array_unique($out));
+    }
+
     /** Słowo z nazwy/producenta, które jest linią produktu, nie typem PPE. */
     private function looksLikeBrandToken(string $word): bool
     {
@@ -2811,7 +2907,8 @@ final class ProductSearchIdentity
             'ultra', 'line', 'type', 'hood', 'coverall', 'overall', 'cuffs', 'cuff',
             'sleeves', 'sleeve', 'collar', 'pocket', 'pockets', 'visor', 'strap',
             'nowosc', 'nowość', 'wzwyz', 'wzwyż', 'technology', 'advanced', 'flexible',
-            'foam', 'welur', 'metalic', 'metallic', 'bydleca', 'bydlęca', 'elastanem',
+            'flex', 'easy', 'ntrl', 'glv', 'natural', 'nitrile', 'nitryl', 'palm', 'coated',
+            'handling', 'foam', 'welur', 'metalic', 'metallic', 'bydleca', 'bydlęca', 'elastanem',
             'kartonikow', 'kartoników', 'ocynk', 'gorny', 'górny', 'sznurowane',
             'kadry', 'opinacze', 'polsaperki', 'półsaperki', 'canvas', 'color', 'colour',
             'stock', 'ce', 'non', 'met', 'ociepl', 'wentylacja', 'pachami', 'uiglenie',
@@ -2922,7 +3019,7 @@ final class ProductSearchIdentity
         return in_array($word, [
             'basic', 'classic', 'print', 'standard', 'premium', 'plus', 'pro',
             'eco', 'light', 'soft', 'extra', 'new', 'maxi', 'mini',
-            'advanced', 'flexible', 'comfort', 'wet',
+            'advanced', 'flexible', 'flex', 'easy', 'natural', 'ntrl', 'comfort', 'wet',
         ], true);
     }
 
