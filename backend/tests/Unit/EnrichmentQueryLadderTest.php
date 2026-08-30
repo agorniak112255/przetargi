@@ -899,7 +899,7 @@ final class EnrichmentQueryLadderTest extends TestCase
         ]);
         $this->assertSame('', $identity->firstStrongShopPhrase($gvsHose));
         $gvsQueries = implode(' | ', $identity->searchQueries($gvsHose, 'manufacturer'));
-        $this->assertStringContainsString('site:icd.pl 04-322-100', $gvsQueries);
+        $this->assertStringContainsString('site:idsblast.com 04-322-100', $gvsQueries);
         $this->assertStringContainsString('04-322-100 GVS', $gvsQueries);
         $this->assertStringNotContainsString('site:gvs.com GVS CEJN', $gvsQueries);
 
@@ -1115,5 +1115,69 @@ final class EnrichmentQueryLadderTest extends TestCase
             .'KleenGuard G10 Flex Blue Nitrile Gloves 54335 XL',
             $product
         ));
+    }
+
+    public function test_gvs_part_searches_sku_on_rpb_catalogs_not_as_safety_shoe(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $door = new Product([
+            'manufacturer' => 'GVS',
+            'sku' => '03-815',
+            'name' => 'GVS Battery Door Assembly with Battery Door Hinge 03-818 for PX5',
+        ]);
+
+        $this->assertContains('idsblast.com', $identity->catalogSearchHosts($door));
+        $this->assertSame('idsblast.com', $identity->catalogSearchHosts($door)[0] ?? null);
+        $queries = implode(' | ', $identity->searchQueries($door, 'manufacturer'));
+        $this->assertStringContainsString('site:idsblast.com 03-815', $queries);
+        $this->assertStringContainsString('03-815 GVS', $queries);
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.idsblast.com/03-815 RPB 03-815 PX5 Battery Door Assembly',
+            $door
+        ));
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://www.idsblast.com/03-815',
+            'RPB 03-815 PX5 Battery Door',
+            'Replacement battery door assembly for the RPB PX5 PAPR. Part 03-815.',
+            $door
+        ));
+
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $legacy = $ref->getMethod('legacySafetyShoePhrase');
+        $legacy->setAccessible(true);
+        $this->assertSame('', $legacy->invoke($service, $door));
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+        /** @var list<string> $ladder */
+        $ladder = $open->invoke($service, $door, $build->invoke($service, $door, 'manufacturer'));
+        $this->assertDoesNotMatchRegularExpression('/buty ochronne/i', implode(' | ', $ladder));
+        $this->assertStringContainsString('site:idsblast.com', implode(' | ', $ladder));
+
+        $shoe = new Product([
+            'manufacturer' => 'Reis',
+            'sku' => '7-003 B',
+            'name' => '7-003 B S1 SRC',
+        ]);
+        $this->assertSame('7-003 B S1 SRC', $legacy->invoke($service, $shoe));
+
+        $coded = $ref->getMethod('resultsCarryProductCode');
+        $coded->setAccessible(true);
+        $kept = $coded->invoke($service, [
+            [
+                'url' => 'https://example.com/gvs-papr',
+                'title' => 'GVS PX5 powered air respirator',
+                'snippet' => 'GVS breathing apparatus',
+            ],
+            [
+                'url' => 'https://www.idsblast.com/03-815',
+                'title' => 'RPB 03-815 PX5 Battery Door',
+                'snippet' => 'Battery door assembly',
+            ],
+        ], $door);
+        $this->assertCount(1, $kept);
+        $this->assertStringContainsString('idsblast.com/03-815', (string) ($kept[0]['url'] ?? ''));
     }
 }

@@ -95,6 +95,12 @@ return [
             'gvs-elipse.com',
             'www.gvs-elipse.com',
         ],
+        'rpb' => [
+            'rpb.com',
+            'www.rpb.com',
+            'gvs-rpb.com',
+            'www.gvs-rpb.com',
+        ],
         'weldas' => ['weldaseurope.com', 'www.weldaseurope.com', 'weldas.com', 'www.weldas.com'],
         'mapa' => [
             'mapa-pro.pl',
@@ -185,9 +191,19 @@ return [
             'marelplus.pl',
         ],
         'gvs' => [
+            'idsblast.com',
+            'blastone.com',
+            'novarlo.com',
             'icd.pl',
             'gvs-rpb.com',
             'rpb.com',
+        ],
+        'rpb' => [
+            'idsblast.com',
+            'blastone.com',
+            'novarlo.com',
+            'rpb.com',
+            'gvs-rpb.com',
         ],
     ],
 
@@ -195,6 +211,9 @@ return [
     | Sklepy / dystrybutorzy — dobre źródła opisów (nie certyfikatów).
     */
     'retailer_domains' => [
+        'idsblast.com',
+        'blastone.com',
+        'novarlo.com',
         'icd.pl',
         'supon.rzeszow.pl',
         'sprzetbhp.pl',
@@ -285,6 +304,9 @@ return [
     | Preferowane domeny przy wyszukiwaniu kart produktu (producent + sklepy).
     */
     'preferred_domains' => [
+        'idsblast.com',
+        'blastone.com',
+        'novarlo.com',
         'icd.pl',
         'supon.rzeszow.pl',
         'sprzetbhp.pl',

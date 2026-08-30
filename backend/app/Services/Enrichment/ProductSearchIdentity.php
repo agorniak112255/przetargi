@@ -2770,6 +2770,8 @@ final class ProductSearchIdentity
             'delta' => ['delta', 'deltaplus'],
             'delta-plus' => ['delta', 'deltaplus'],
             'deltaplus' => ['delta', 'deltaplus'],
+            'gvs' => ['gvs', 'rpb'],
+            'rpb' => ['gvs', 'rpb'],
         ];
         $out = [];
         if ($compact !== '' && (mb_strlen($compact) >= 4 || in_array($compact, ['3m', 'msa', 'atg', 'kcl', 'gvs', 'pip'], true))) {

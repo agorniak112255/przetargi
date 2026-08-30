@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v46';
+    private const SEARCH_CACHE_VERSION = 'v47';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -450,6 +450,35 @@ class HybridWebSearchService
     }
 
     /**
+     * Słabe hity (marka w snippecie, bez SKU w URL/tytule) nie mogą zatrzymać drabinki
+     * przed site: — inaczej GVS 03-815 nigdy nie dochodzi do idsblast.com.
+     *
+     * @param  list<array{url: string, title?: string, snippet?: string}>  $results
+     * @return list<array{url: string, title?: string, snippet?: string}>
+     */
+    private function resultsCarryProductCode(array $results, Product $product): array
+    {
+        $out = [];
+        foreach ($results as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $url = (string) ($row['url'] ?? '');
+            $title = (string) ($row['title'] ?? '');
+            if ($url === '') {
+                continue;
+            }
+            $hay = mb_strtolower($url.' '.$title);
+            if ($this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
+                || $this->identity->hayHasProductCode($hay, $product)) {
+                $out[] = $row;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * @return list<string>
      */
     private function buildQueries(Product $product, string $phase): array
@@ -692,18 +721,22 @@ class HybridWebSearchService
             if ($openProvider === '' && $open['results'] !== []) {
                 $openProvider = $open['provider'];
             }
-            if ($this->hasEnoughPageResults($openResults, $enoughPages)) {
+            $codedSoFar = $this->resultsCarryProductCode($openResults, $product);
+            if ($this->hasEnoughPageResults($codedSoFar, $enoughPages)) {
+                $openResults = $codedSoFar;
                 break;
             }
         }
-        if ($openResults !== []) {
+        $coded = $this->resultsCarryProductCode($openResults, $product);
+        $usable = $coded !== [] ? $coded : $openResults;
+        if ($usable !== []) {
             usort(
-                $openResults,
+                $usable,
                 fn (array $a, array $b): int => $this->resultQuality($b, $product) <=> $this->resultQuality($a, $product)
             );
 
             return [
-                'results' => $openResults,
+                'results' => $usable,
                 'provider' => $openProvider !== '' ? $openProvider : $this->searchProviderName(),
                 'errors' => $errors,
             ];
@@ -833,7 +866,7 @@ class HybridWebSearchService
                 return trim($m[1].' '.implode(' ', array_unique($norms[0])));
             }
 
-            return $m[1];
+            return '';
         }
 
         return '';
