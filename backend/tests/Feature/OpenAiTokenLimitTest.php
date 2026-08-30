@@ -29,6 +29,31 @@ final class OpenAiTokenLimitTest extends TestCase
         ]);
     }
 
+    public function test_local_model_is_not_asked_to_search_the_web(): void
+    {
+        AiSetting::query()->delete();
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8000/v1',
+            'api_key' => 'local-key',
+            'model' => 'gemma4-12b',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+        ]);
+
+        Http::fake();
+
+        try {
+            app(OpenAiCompatibleClient::class)->chatWithProviderWebSearch('Znajdź kartę 420000600000');
+            $this->fail('Lokalny model nie powinien dostać promptu web search.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('lokalny model', mb_strtolower($e->getMessage()));
+        }
+
+        Http::assertNothingSent();
+    }
+
     public function test_retries_truncated_json_with_compacted_prompt(): void
     {
         Http::fake([

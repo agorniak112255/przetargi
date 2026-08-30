@@ -18,7 +18,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v40';
+    private const SEARCH_CACHE_VERSION = 'v41';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -839,18 +839,21 @@ class HybridWebSearchService
                 continue;
             }
             $url = $this->identity->preferredLocaleUrl((string) ($row['url'] ?? ''), $product);
-            $hay = mb_strtolower(
-                $url.' '.($row['title'] ?? '').' '.($row['snippet'] ?? '')
-            );
             $title = (string) ($row['title'] ?? '');
+            $snippet = (string) ($row['snippet'] ?? '');
+            $hay = mb_strtolower($url.' '.$title.' '.$snippet);
+            $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
             if (! $this->identity->hayMentionsProduct($hay, $product)) {
                 continue;
             }
             // Krótki kod (1000) — tylko URL/tytuł. ROBFM / 3-60NM może być w snippecie sklepu.
+            // Numer magazynowy (1002933, 047106941E): model z nazwy w snippecie wystarczy.
             if (! $this->identity->coreInUrlOrTitle($url, $title, $product)
                 && ! $this->isDistinctiveSku($product)
-                && ! $this->identity->nameTokensMatch($url.' '.$title, $product)) {
+                && ! $this->identity->nameTokensMatch($url.' '.$title, $product)
+                && ! ($this->identity->looksLikeWarehouseArticleSku($product)
+                    && $this->identity->hayHasShopIdentity($hay, $hayCompact, $product))) {
                 continue;
             }
             if (preg_match('#(ochronki na buty|shoe[- ]?cover|folie na buty|nakladki na obuwie)#i', $hay)) {
@@ -1008,6 +1011,14 @@ class HybridWebSearchService
             || $this->identity->urlOrTitleHasShopIdentity($url, $title, $product)
             || $this->identity->hayHasNamePhrase($url.' '.$title, $product)
             || $this->identity->hayMentionsProduct($url.' '.$title, $product)) {
+            return true;
+        }
+
+        $bodyHay = mb_strtolower($url.' '.$title.' '.$text);
+        $bodyCompact = preg_replace('/[^a-z0-9]+/iu', '', $bodyHay) ?? $bodyHay;
+        if ($this->identity->looksLikeWarehouseArticleSku($product)
+            && $this->identity->hayHasShopIdentity($bodyHay, $bodyCompact, $product)
+            && $this->identity->foreignCodeCount($text, $product) < self::LISTING_FOREIGN_CODES) {
             return true;
         }
 
@@ -1249,10 +1260,16 @@ class HybridWebSearchService
      */
     private function searchViaProviderWeb(string $query, Product $product, string $phase): array
     {
+        $shop = $this->identity->firstStrongShopPhrase($product);
+        $name = $this->identity->usableProductName($product);
+        $label = $shop !== '' ? $shop : ($name !== '' ? $name : trim((string) $product->sku));
+        $searchQuery = $shop !== ''
+            ? $this->identity->queryWithManufacturer($shop, $product)
+            : ($name !== '' ? $this->identity->queryWithManufacturer($name, $product) : $query);
         $prompt = <<<PROMPT
-Znajdź kartę produktu BHP ze SKU {$product->sku} ({$product->manufacturer} {$product->name}).
-Szukaj też po modelu ze sklepu (np. AlphaTec 4000 model 121), nie tylko po pełnym article number.
-Zapytanie: {$query}. Zwróć tylko URL stron z tym kodem albo modelem produktu.
+Znajdź kartę produktu BHP: {$label} ({$product->manufacturer}).
+SKU z cennika ({$product->sku}) bywa numerem magazynowym — szukaj po modelu ze sklepu, nie tylko po tym kodzie.
+Zapytanie: {$searchQuery}. Zwróć tylko URL stron z tym modelem albo kodem produktu.
 PROMPT;
 
         $seconds = (int) ($this->settings->resolve()['timeout_seconds'] ?? 90);

@@ -604,6 +604,11 @@ class OpenAiCompatibleClient
         if ($profile['api_key'] === null || $profile['api_key'] === '') {
             throw new RuntimeException('Brak klucza API AI. Uzupełnij go w Ustawieniach AI.');
         }
+        if (! $this->baseUrlSupportsProviderWebSearch((string) $profile['base_url'])) {
+            throw new RuntimeException(
+                'Ten endpoint AI nie ma wyszukiwania internetowego (plugin web) — lokalny model nie szuka w sieci.'
+            );
+        }
 
         $url = $profile['base_url'].'/chat/completions';
         $payload = [
@@ -1145,6 +1150,13 @@ class OpenAiCompatibleClient
     /**
      * @return array{content: string, model: string, citations: list<array{url: string, title: string}>}
      */
+    private function baseUrlSupportsProviderWebSearch(string $baseUrl): bool
+    {
+        $base = mb_strtolower($baseUrl);
+
+        return str_contains($base, 'openrouter.ai') || str_contains($base, 'api.openai.com');
+    }
+
     private function phpDuckDuckGoCitations(string $prompt): array
     {
         $query = $prompt;

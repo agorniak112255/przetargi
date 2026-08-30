@@ -831,7 +831,7 @@ final class ProductSearchIdentity
     {
         $brand = $this->shortBrand((string) $product->manufacturer);
         $sku = trim((string) $product->sku);
-        $name = trim((string) $product->name);
+        $name = $this->usableProductName($product);
         $usableSku = $sku !== '' && ! $this->looksLikeInternalSku($product);
         // „PROS-121-S1-GUMA” to nasz kod złożony z opisu — w sieci działa dopiero
         // nazwa z producentem („121 S1 GUMA Urgent”), więc ona idzie pierwsza.
@@ -945,7 +945,7 @@ final class ProductSearchIdentity
 
     public function productNameWithManufacturer(Product $product): string
     {
-        $name = trim((string) $product->name);
+        $name = $this->usableProductName($product);
         $sku = trim((string) $product->sku);
         $parts = [];
         if ($name !== '') {
@@ -1303,14 +1303,15 @@ final class ProductSearchIdentity
     {
         $sizes = new ProductSizeVariant;
         $out = [];
-        foreach ([(string) $product->name, ...$this->variantBaseCodes($product)] as $raw) {
+        foreach ([$this->usableProductName($product), ...$this->variantBaseCodes($product)] as $raw) {
             $raw = $sizes->stripSizeFromName(trim((string) $raw));
             if ($raw === '') {
                 continue;
             }
             if (preg_match('/^(\p{L}{3,12})\s+(S[1-5]S?)\b/u', $raw, $safety) === 1
                 && ! $this->isDescriptiveIdentityWord($safety[1])
-                && ! $this->isApparelTypeWord($safety[1])) {
+                && ! $this->isApparelTypeWord($safety[1])
+                && ! $this->isGenericCatalogNameWord($safety[1])) {
                 $out[] = $safety[1].' '.$safety[2];
             }
             if (preg_match('/^(?:\p{L}{2,12}[\s\-]+){1,2}\d{2,4}$/u', $raw) !== 1) {
@@ -1368,8 +1369,7 @@ final class ProductSearchIdentity
             }
             $mine = false;
             foreach ($ours as $code) {
-                $code = (string) $code;
-                if ($token === $code || str_starts_with($code, $token) || str_starts_with($token, $code)) {
+                if ($this->tokenMatchesOurCode($token, (string) $code)) {
                     $mine = true;
                     break;
                 }
@@ -1403,18 +1403,7 @@ final class ProductSearchIdentity
         foreach ($this->codeLikeTokens($url, $title) as $token) {
             $token = (string) $token;
             foreach ($codes as $code) {
-                $code = (string) $code;
-                if ($token === '' || $code === '') {
-                    continue;
-                }
-                if (str_starts_with($code, $token) || str_starts_with($token, $code)) {
-                    return true;
-                }
-                // URL/tytuł ma tylko ostatni człon („plus995”, „tec332”),
-                // nazwa katalogowa jest dłuższa („soloplus995”, „temptec332”).
-                if (preg_match('/\p{L}/u', $code) === 1
-                    && preg_match('/\p{L}/u', $token) === 1
-                    && (str_ends_with($code, $token) || str_ends_with($token, $code))) {
+                if ($this->tokenMatchesOurCode($token, (string) $code)) {
                     return true;
                 }
             }
@@ -1434,11 +1423,11 @@ final class ProductSearchIdentity
         foreach ($this->catalogTradeNames($product) as $trade) {
             $out[] = $trade;
         }
-        $fromName = $this->seriesFromDescriptiveName((string) $product->name);
+        $fromName = $this->seriesFromDescriptiveName($this->usableProductName($product));
         if ($fromName !== '') {
             $out[] = $fromName;
         }
-        $fromVariant = $this->seriesWithTrailingVariant((string) $product->name);
+        $fromVariant = $this->seriesWithTrailingVariant($this->usableProductName($product));
         if ($fromVariant !== '') {
             $out[] = $fromVariant;
         }
@@ -1733,6 +1722,26 @@ final class ProductSearchIdentity
     private function compactCode(string $code): string
     {
         return (string) preg_replace('/[^\p{L}\d]+/u', '', mb_strtolower($code));
+    }
+
+    /** „471” z tytułu CovaSpec 471 to nasz model, nie cudzy kod przy SKU 047106941E. */
+    private function tokenMatchesOurCode(string $token, string $code): bool
+    {
+        if ($token === '' || $code === '') {
+            return false;
+        }
+        if ($token === $code || str_starts_with($code, $token) || str_starts_with($token, $code)) {
+            return true;
+        }
+        if (preg_match('/\p{L}/u', $code) === 1 && str_ends_with($code, $token)) {
+            return true;
+        }
+        if (preg_match('/\p{L}/u', $code) === 1 && preg_match('/\p{L}/u', $token) === 1
+            && (str_ends_with($code, $token) || str_ends_with($token, $code))) {
+            return true;
+        }
+
+        return false;
     }
 
     public function hayHasProductCode(string $hay, Product $product): bool
@@ -2217,7 +2226,30 @@ final class ProductSearchIdentity
     {
         $sku = trim((string) $product->sku);
         // 10–12 cyfr to numer magazynowy CXS/Canis (310000300010), nie EAN-13
-        return preg_match('/^\d{10,12}$/u', $sku) === 1;
+        if (preg_match('/^\d{10,12}$/u', $sku) === 1) {
+            return true;
+        }
+        // 047106941E — artykuł dystrybutora + wariant, w katalogu jest CovaSpec 471
+        if (preg_match('/^\d{7,12}[A-Z]$/u', $sku) === 1) {
+            return true;
+        }
+        // 03-952-UK / 10120606-SP — akcesorium z krajem albo częścią
+        if (preg_match('/^[A-Z0-9.\-]+-(UK|EU|US|CF|SP)$/iu', $sku) === 1) {
+            return true;
+        }
+        // 1002933 przy nazwie ALTOCHUT 1012 — inny numer w cenniku niż model
+        if (preg_match('/^\d{6,9}$/u', $sku) === 1) {
+            $skuCompact = $this->compactCode($sku);
+            foreach ($this->shopIdentityPhrases($product) as $phrase) {
+                $shopCompact = $this->compactCode($phrase);
+                if ($shopCompact !== '' && ! str_contains($skuCompact, $shopCompact)
+                    && ! str_contains($shopCompact, $skuCompact)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     public function rawSkuIsOfflineNoise(Product $product): bool
@@ -2483,9 +2515,25 @@ final class ProductSearchIdentity
         return false;
     }
 
-    public function strippedProductName(Product $product): string
+    /** Nazwa z cennika, bez myślnika i „brak danych”. */
+    public function usableProductName(Product $product): string
     {
         $name = trim((string) $product->name);
+        if ($name === '' || preg_match('/^[-–—_.\/\s]+$/u', $name) === 1) {
+            return '';
+        }
+        $norm = mb_strtolower(trim((string) Str::ascii($name)));
+        $norm = (string) preg_replace('/\s+/u', ' ', $norm);
+        if (in_array($norm, ['brak danych', 'brak', 'n/a', 'na', 'none', 'null', 'bd'], true)) {
+            return '';
+        }
+
+        return $name;
+    }
+
+    public function strippedProductName(Product $product): string
+    {
+        $name = $this->usableProductName($product);
         $sku = trim((string) $product->sku);
         if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
             $stripped = (new ProductSizeVariant)->stripSizeFromName($name);
@@ -2517,7 +2565,7 @@ final class ProductSearchIdentity
      */
     private function nameModelPhrases(Product $product): array
     {
-        $name = trim((string) $product->name);
+        $name = $this->usableProductName($product);
         $sku = trim((string) $product->sku);
         if ($name === '' || mb_strtolower($name) === mb_strtolower($sku)) {
             return [];
@@ -2525,9 +2573,12 @@ final class ProductSearchIdentity
         $skuHay = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($sku)) ?? '';
         $tradeNames = $this->catalogTradeNames($product);
         $out = [];
-        if (preg_match('/(\p{L}{3,12})\s+(S[1-5]S?)\b/u', $name, $safety) === 1
-            && ! $this->isGenericCatalogNameWord($safety[1])) {
-            $out[] = $safety[1].' '.$safety[2];
+        if (preg_match_all('/(\p{L}{3,12})\s+(S[1-5]S?)\b/u', $name, $safetyHits, PREG_SET_ORDER) !== false) {
+            foreach ($safetyHits as $safety) {
+                if (! $this->isGenericCatalogNameWord($safety[1])) {
+                    $out[] = $safety[1].' '.$safety[2];
+                }
+            }
         }
         // OPSBT11 → OPSB; „OPEX” z angielskiej nazwy cennika nie stoi na karcie
         if ($this->skuSizeVariants($product) !== []) {
@@ -2592,6 +2643,7 @@ final class ProductSearchIdentity
             'kadry', 'opinacze', 'polsaperki', 'półsaperki', 'canvas', 'color', 'colour',
             'stock', 'ce', 'non', 'met', 'ociepl', 'wentylacja', 'pachami', 'uiglenie',
             'nierdzewnej', 'techniczne', 'polietylenowe', 'jednorazowe', 'wlokninowe',
+            'low', 'mid', 'high', 's1', 's2', 's3', 's4', 's5', 'src', 'hro',
         ], true);
     }
 

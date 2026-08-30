@@ -912,4 +912,56 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertStringNotContainsString('wzwyż', $lebonQ);
         $this->assertStringContainsString('BP', $lebonQ);
     }
+
+    public function test_catalog_model_matches_without_warehouse_sku(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $kcl = new Product([
+            'manufacturer' => 'KCL',
+            'sku' => '047106941E',
+            'name' => 'CovaSpec 471',
+        ]);
+        $honeywell = new Product([
+            'manufacturer' => 'Honeywell',
+            'sku' => '1002933',
+            'name' => 'ALTOCHUT 1012 CE',
+        ]);
+        $joris = new Product([
+            'manufacturer' => 'JORI',
+            'sku' => '12111',
+            'name' => 'BASIC Compo Low S3',
+        ]);
+        $blank = new Product([
+            'manufacturer' => 'CANIS SAFETY',
+            'sku' => '420000600000',
+            'name' => '-',
+        ]);
+
+        $this->assertTrue($identity->looksLikeWarehouseArticleSku($kcl));
+        $this->assertTrue($identity->looksLikeWarehouseArticleSku($honeywell));
+        $this->assertContains('CovaSpec 471', $identity->shopIdentityPhrases($kcl));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.kcl.de/produkte/covaspec-471 CovaSpec 471 Chemikalienschutzhandschuh',
+            $kcl
+        ));
+        $this->assertFalse($identity->pageClaimsAnotherCode(
+            'https://www.kcl.de/produkte/covaspec-471',
+            'CovaSpec 471',
+            $kcl
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sps.honeywell.com/altochut-1012 ALTOCHUT 1012 CE harness',
+            $honeywell
+        ));
+        $this->assertFalse($identity->pageClaimsAnotherCode(
+            'https://sps.honeywell.com/altochut-1012',
+            'ALTOCHUT 1012 CE',
+            $honeywell
+        ));
+        $this->assertNotSame('Low S3', $identity->firstStrongShopPhrase($joris));
+        $this->assertStringStartsWith('BASIC Compo Low S3', $identity->primaryQueries($joris)[0] ?? '');
+        $this->assertSame('', $identity->usableProductName($blank));
+        $this->assertStringNotContainsString(' - ', $identity->productNameWithManufacturer($blank));
+        $this->assertStringContainsString('4200-006-000', implode(' | ', $identity->primaryQueries($blank)));
+    }
 }
