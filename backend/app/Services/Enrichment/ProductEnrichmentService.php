@@ -237,10 +237,10 @@ final class ProductEnrichmentService
                 );
                 $descResults = $this->rankResultsForDescription($results, $product, $mfrDomains);
                 $t = microtime(true);
-                $this->pages->fetch($descResults, (string) $product->sku, 3, []);
+                $this->pages->fetch($descResults, (string) $product->sku, 3, [], $product);
                 $mfrResults = $this->manufacturerSearchResults($results, $product, $mfrDomains);
                 if ($mfrResults !== []) {
-                    $this->pages->fetch($mfrResults, (string) $product->sku, 3, $mfrDomains);
+                    $this->pages->fetch($mfrResults, (string) $product->sku, 3, $mfrDomains, $product);
                 }
                 $fetchMs = $this->elapsedMs($t);
             }
@@ -431,7 +431,7 @@ final class ProductEnrichmentService
             $timing['search_ms'] = $this->elapsedMs($t);
             $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
             $t = microtime(true);
-            $fetched = $this->pages->fetch($descResults, (string) $product->sku, 3, []);
+            $fetched = $this->pages->fetch($descResults, (string) $product->sku, 3, [], $product);
             $pageSnippets = $fetched['pages'];
             if ($pageSnippets === []) {
                 $pageSnippets = $this->fetchPageSnippets(array_slice($descResults, 0, 3));
@@ -441,7 +441,7 @@ final class ProductEnrichmentService
             $mfrPageSnippets = [];
             $mfrResults = $this->manufacturerSearchResults($searchResults, $product, $mfrDomains);
             if ($mfrResults !== []) {
-                $mfrFetched = $this->pages->fetch($mfrResults, (string) $product->sku, 3, $mfrDomains);
+                $mfrFetched = $this->pages->fetch($mfrResults, (string) $product->sku, 3, $mfrDomains, $product);
                 foreach ($mfrFetched['document_urls'] as $url) {
                     $fetched['document_urls'][] = $url;
                 }
@@ -562,6 +562,13 @@ final class ProductEnrichmentService
                 }
             }
             $imageUrls = array_values(array_unique($imageUrls));
+            if ($imageUrls === []) {
+                $imageUrls = $this->cardImagesAfterConfirmation(
+                    $fetched['trusted_image_urls'],
+                    $fetched['image_urls'],
+                    $pageSnippets
+                );
+            }
 
             $sourceUrls = [];
             foreach ($extracted['source_urls'] ?? [] as $url) {
@@ -643,7 +650,8 @@ final class ProductEnrichmentService
                     ),
                     (string) $product->sku,
                     1,
-                    $mfrDomains
+                    $mfrDomains,
+                    $product
                 );
                 $retryUrls = $this->imageVerifier->select(
                     $product,
@@ -652,6 +660,13 @@ final class ProductEnrichmentService
                     3,
                     $retryPages['trusted_image_urls']
                 );
+                if ($retryUrls === []) {
+                    $retryUrls = $this->cardImagesAfterConfirmation(
+                        $retryPages['trusted_image_urls'],
+                        $retryPages['image_urls'],
+                        $retryPages['pages']
+                    );
+                }
                 $savedImages = $this->images->downloadMany(
                     $product,
                     $this->pickPrimaryImageUrls(
@@ -735,7 +750,7 @@ final class ProductEnrichmentService
             }
             if ($docPages !== []) {
                 // indeksy deklaracji / karty producenta — bierz PDF ze strony
-                $docFetched = $this->pages->fetch($docPages, (string) $product->sku, 3, $mfrDomains);
+                $docFetched = $this->pages->fetch($docPages, (string) $product->sku, 3, $mfrDomains, $product);
                 foreach ($docFetched['document_urls'] ?? [] as $url) {
                     $documentUrls[] = $url;
                 }
@@ -1038,6 +1053,57 @@ final class ProductEnrichmentService
         return $brand === 'ansell' || str_contains($brand, 'ansell');
     }
 
+    /**
+     * Karta już potwierdzona opisem — bierz og:image / galerię z tej strony,
+     * bez SKU w nazwie pliku i bez Vision.
+     *
+     * @param  list<string>  $trusted
+     * @param  list<string>  $all
+     * @param  list<array{url?: string, text?: string}>  $pages
+     * @return list<string>
+     */
+    private function cardImagesAfterConfirmation(array $trusted, array $all, array $pages): array
+    {
+        $usable = [];
+        foreach (array_merge($trusted, $all) as $url) {
+            if (! is_string($url) || $this->isJunkImageUrl($url)
+                || ! ProductImageDownloader::looksLikeImageUrl($url)) {
+                continue;
+            }
+            $usable[] = $url;
+        }
+        $trustedClean = [];
+        foreach ($trusted as $url) {
+            if (is_string($url) && in_array($url, $usable, true)) {
+                $trustedClean[] = $url;
+            }
+        }
+        if ($trustedClean !== []) {
+            return array_values(array_unique(array_slice($trustedClean, 0, 3)));
+        }
+
+        $hosts = [];
+        foreach ($pages as $page) {
+            $host = mb_strtolower((string) (parse_url((string) ($page['url'] ?? ''), PHP_URL_HOST) ?? ''));
+            if ($host !== '') {
+                $hosts[$host] = true;
+            }
+        }
+        $sameHost = [];
+        $other = [];
+        foreach ($usable as $url) {
+            $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+            if ($host !== '' && isset($hosts[$host])) {
+                $sameHost[] = $url;
+            } else {
+                $other[] = $url;
+            }
+        }
+        $chosen = $sameHost !== [] ? $sameHost : $other;
+
+        return array_values(array_unique(array_slice($chosen, 0, 3)));
+    }
+
     private function pickPrimaryImageUrls(array $allUrls, mixed $llmUrls, string $sku, string $name, ?Product $product = null): array
     {
         $scored = [];
@@ -1285,7 +1351,7 @@ final class ProductEnrichmentService
         $trustedImageUrls = [];
         $documentUrls = [];
         if ($extraResults !== []) {
-            $extraFetched = $this->pages->fetch($extraResults, (string) $product->sku, 3, []);
+            $extraFetched = $this->pages->fetch($extraResults, (string) $product->sku, 3, [], $product);
             $extraPages = $this->sanitizePagesWithLlm($product, $extraFetched['pages']);
             foreach ($extraPages as $page) {
                 $pageSnippets[] = $page;

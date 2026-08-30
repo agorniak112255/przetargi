@@ -981,7 +981,7 @@ class HybridWebSearchService
         $skuHint = $this->identity->ansellCatalogBits($product)['model']
             ?? ($this->identity->shopIdentityPhrases($product)[0] ?? '')
             ?: (string) $product->sku;
-        $fetched = $this->pages->fetch($results, $skuHint !== '' ? $skuHint : (string) $product->sku, 5, []);
+        $fetched = $this->pages->fetch($results, $skuHint !== '' ? $skuHint : (string) $product->sku, 5, [], $product);
         $out = [];
         foreach ($fetched['pages'] as $page) {
             $url = (string) ($page['url'] ?? '');

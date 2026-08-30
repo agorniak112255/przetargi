@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use App\Models\Product;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Http\Client\Pool;
@@ -25,8 +26,11 @@ final class ProductPageFetcher
 
     private bool $bypassCache = false;
 
+    private ?Product $matchingProduct = null;
+
     public function __construct(
         private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
+        private readonly ProductSearchIdentity $identity = new ProductSearchIdentity,
     ) {}
 
     public function bypassCache(bool $bypass = true): self
@@ -46,7 +50,33 @@ final class ProductPageFetcher
      *     document_urls: list<string>
      * }
      */
-    public function fetch(array $results, string $sku, int $maxPages = 2, array $manufacturerDomains = []): array
+    public function fetch(
+        array $results,
+        string $sku,
+        int $maxPages = 2,
+        array $manufacturerDomains = [],
+        ?Product $product = null,
+    ): array {
+        $previous = $this->matchingProduct;
+        $this->matchingProduct = $product;
+        try {
+            return $this->fetchInner($results, $sku, $maxPages, $manufacturerDomains);
+        } finally {
+            $this->matchingProduct = $previous;
+        }
+    }
+
+    /**
+     * @param  list<array{url: string, title?: string, snippet?: string}>  $results
+     * @param  list<string>  $manufacturerDomains
+     * @return array{
+     *     pages: list<array{url: string, text: string}>,
+     *     image_urls: list<string>,
+     *     trusted_image_urls: list<string>,
+     *     document_urls: list<string>
+     * }
+     */
+    private function fetchInner(array $results, string $sku, int $maxPages, array $manufacturerDomains): array
     {
         $wanted = max(1, $maxPages);
         $ranked = $this->rankResults($results, $sku);
@@ -327,7 +357,8 @@ final class ProductPageFetcher
         if ($this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
             return;
         }
-        $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, $title, $skuNorm);
+        $pageLooksLikeProduct = $this->pageMentionsSku($url, $text, $title, $skuNorm)
+            || $this->pageMatchesProductIdentity($url, $text, $title);
 
         if ($text !== '') {
             $goodPages[] = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
@@ -443,6 +474,16 @@ final class ProductPageFetcher
         }
 
         return $score;
+    }
+
+    private function pageMatchesProductIdentity(string $url, string $text, string $title): bool
+    {
+        $product = $this->matchingProduct;
+        if ($product === null) {
+            return false;
+        }
+
+        return $this->identity->hayMentionsProduct($url.' '.$title.' '.$text, $product);
     }
 
     private function pageMentionsSku(string $url, string $text, string $title, string $skuNorm): bool

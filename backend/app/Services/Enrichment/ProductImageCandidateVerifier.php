@@ -88,7 +88,7 @@ final class ProductImageCandidateVerifier
             }
         }
         if ($loaded === []) {
-            return array_slice($selected, 0, $max);
+            return $this->finishSelection($selected, $trusted, $urls, $max);
         }
 
         try {
@@ -111,7 +111,7 @@ final class ProductImageCandidateVerifier
                 'error' => $e->getMessage(),
             ]);
 
-            return array_slice($selected, 0, $max);
+            return $this->finishSelection($selected, $trusted, $urls, $max);
         }
 
         $verified = [];
@@ -157,7 +157,27 @@ final class ProductImageCandidateVerifier
             'accepted' => array_column($verified, 'url'),
         ]);
 
-        return array_values(array_unique(array_slice($selected, 0, $max)));
+        return $this->finishSelection($selected, $trusted, $urls, $max);
+    }
+
+    /**
+     * @param  list<string>  $selected
+     * @param  array<string, true>  $trusted
+     * @param  list<string>  $urls
+     * @return list<string>
+     */
+    private function finishSelection(array $selected, array $trusted, array $urls, int $max): array
+    {
+        if ($selected !== []) {
+            return array_values(array_unique(array_slice($selected, 0, $max)));
+        }
+        foreach ($urls as $url) {
+            if (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url)) {
+                return [$url];
+            }
+        }
+
+        return [];
     }
 
     private function isPotentialProductImage(string $url): bool

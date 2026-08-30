@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use App\Models\Product;
 use App\Services\Enrichment\ProductPageFetcher;
 use Illuminate\Support\Facades\Http;
 use ReflectionClass;
@@ -363,5 +364,33 @@ HTML;
         $this->assertTrue(ProductPageFetcher::looksLikeBinaryMedia($jpeg));
         $this->assertTrue(ProductPageFetcher::looksLikeBinaryMedia("????\x10JFIF creator: gd-jpeg"));
         $this->assertFalse(ProductPageFetcher::looksLikeBinaryMedia('Obuwie ochronne Jalas 7168 Zenit Evo S3'));
+    }
+
+    public function test_trusts_og_image_when_page_has_model_not_warehouse_sku(): void
+    {
+        $pageUrl = 'https://www.professionalbhp.com/pl/p/Kurtka-meska-odblaskowa-HSV-3-W-1-URG/1136';
+        $og = 'https://www.professionalbhp.com/userdata/public/gfx/1136.jpg';
+        $html = '<html><head><meta property="og:image" content="'.$og.'"></head><body>'
+            .'<h1>Kurtka męska odblaskowa HSV 3 W 1 URG</h1>'
+            .'<p>KURTKA MĘSKA ODBLASKOWA HSV 3W1 URG. Wodoodporna, odpinane rękawy. '
+            .str_repeat('Opis karty produktu BHP. ', 40)
+            .'</p></body></html>';
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+
+        $product = new Product([
+            'sku' => 'PROS-KURTKA-MESKA-HSV-3W1',
+            'name' => 'KURTKA MĘSKA HSV KRÓTKA 3 W 1',
+            'manufacturer' => 'URGENT',
+        ]);
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Kurtka męska odblaskowa HSV 3 W 1 URG',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertContains($og, $result['trusted_image_urls']);
+        $this->assertContains($og, $result['image_urls']);
     }
 }
