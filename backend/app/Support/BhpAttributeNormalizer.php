@@ -372,9 +372,19 @@ final class BhpAttributeNormalizer
         return array_values(array_unique($out));
     }
 
+    public function footwearClass(string $text): ?string
+    {
+        return $this->extractFootwearClass($text);
+    }
+
+    public function footwearClassToken(string $class): string
+    {
+        return 'klasa'.mb_strtolower(preg_replace('/\s+/u', '', $class) ?? $class);
+    }
+
     private function extractFootwearClass(string $text): ?string
     {
-        if (preg_match('/\b(S7|S5|S4|S3|S2|S1P|S1|SB|OB)\b/u', $text, $m) === 1) {
+        if (preg_match('/\b(S7|S5|S4|S3|S2|S1P|S1|SB|OB|O5|O4|O3|O2|O1)\b/iu', $text, $m) === 1) {
             return mb_strtoupper($m[1]);
         }
 
@@ -405,7 +415,7 @@ final class BhpAttributeNormalizer
         $footwearClass = $this->extractFootwearClass($text);
         if ($footwearClass !== null) {
             $footwear = preg_match(
-                '/\b(trzewik|polbut|sandal|obuwie|buty|footwear|podeszw|podnosek|kalosz|purofort)\w*/u',
+                '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwie|buty|footwear|podeszw|podnosek|kalosz|purofort)\w*/u',
                 $norm
             ) === 1;
             if ($footwear && ! $respiratory) {

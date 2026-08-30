@@ -1694,7 +1694,8 @@ final class ProductSearchIdentity
     }
 
     /**
-     * Hosty do site: — z config albo domeny producenta.
+     * Hosty do site: — sklepy z config, inaczej oficjalna domena producenta.
+     * Bez nazwy handlowej też: „półbuty S2” → site:reis.pl 002-100.
      *
      * @return list<string>
      */
@@ -1707,9 +1708,6 @@ final class ProductSearchIdentity
         ));
         if ($shops !== []) {
             return $shops;
-        }
-        if ($this->shopIdentityPhrases($product) === []) {
-            return [];
         }
 
         return $this->officialCatalogHosts($product);

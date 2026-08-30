@@ -153,6 +153,24 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertSame('welding', $attrs['przeznaczenie']);
     }
 
+    public function test_reads_o2_class_from_sztyblety_name(): void
+    {
+        $n = new BhpAttributeNormalizer;
+        $this->assertSame('O2', $n->footwearClass('sztyblety O2'));
+        $this->assertSame('S2', $n->footwearClass('półbuty s2 na zam.'));
+        $this->assertSame('klasao2', $n->footwearClassToken('O2'));
+
+        $attrs = $n->normalize(
+            ['kategoria_bhp' => 'obuwie'],
+            [
+                'name' => 'sztyblety O2',
+                'category' => 'Obuwie zawodowe',
+            ]
+        );
+        $this->assertSame('O2', $attrs['klasa_ochrony']);
+        $this->assertSame('sztyblet', $attrs['typ_wyrobu']);
+    }
+
     public function test_parses_ffp_class_for_filtering_half_mask(): void
     {
         $attrs = (new BhpAttributeNormalizer)->normalize(

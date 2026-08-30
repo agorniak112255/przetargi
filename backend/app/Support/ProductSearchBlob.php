@@ -64,6 +64,10 @@ final class ProductSearchBlob
             $tokens[] = $code;
             $tokens[] = strtolower($this->filterType->hyphenated($code));
         }
+        $footwearClass = $this->bhpAttributes->footwearClass($text);
+        if ($footwearClass !== null) {
+            $tokens[] = $this->bhpAttributes->footwearClassToken($footwearClass);
+        }
 
         return implode(' ', array_values(array_unique($tokens)));
     }

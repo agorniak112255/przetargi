@@ -32,6 +32,18 @@ final class ProductSearchBlobTest extends TestCase
         }
     }
 
+    public function test_footwear_class_becomes_fulltext_token(): void
+    {
+        $this->assertStringContainsString(
+            'klasas2',
+            $this->builder()->canonicalFeatures('półbuty S2 na zam.')
+        );
+        $this->assertStringContainsString(
+            'klasao2',
+            $this->builder()->canonicalFeatures('sztyblety O2')
+        );
+    }
+
     public function test_hyphenated_filter_class_lands_in_canonical_blob(): void
     {
         $this->assertStringContainsString(

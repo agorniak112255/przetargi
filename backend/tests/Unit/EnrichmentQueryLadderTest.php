@@ -878,7 +878,19 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertStringNotContainsString('nowość', mb_strtolower($reisPhrases));
         $this->assertStringNotContainsString('welur', mb_strtolower($reisPhrases));
         $this->assertContains('reis.pl', $identity->officialCatalogHosts($reis));
+        $this->assertContains('reis.pl', $identity->catalogSearchHosts($reis));
         $this->assertContains('005-031 Reis', $identity->primaryQueries($reis));
+
+        $genericReis = new Product([
+            'manufacturer' => 'Reis',
+            'sku' => '002-100',
+            'name' => 'półbuty S2 na zam.',
+        ]);
+        $this->assertContains('reis.pl', $identity->catalogSearchHosts($genericReis));
+        $this->assertStringContainsString(
+            'site:reis.pl 002-100',
+            implode(' | ', $identity->searchQueries($genericReis, 'manufacturer'))
+        );
 
         $this->assertContains('Showa 310', $identity->shopIdentityPhrases($eider));
         $this->assertContains('showa-glove.com', $identity->officialCatalogHosts($eider));

@@ -49,6 +49,8 @@ final class PpeAssortmentTest extends TestCase
             ['Nakolanniki żelowe', PpeAssortment::FAMILY_KNEE],
             ['Rękawice nitrylowe RNITZ', PpeAssortment::FAMILY_GLOVES],
             ['Trzewiki S3 ocieplane', PpeAssortment::FAMILY_FOOTWEAR],
+            ['sztyblety O2', PpeAssortment::FAMILY_FOOTWEAR],
+            ['mokasyny S2 non-metalic', PpeAssortment::FAMILY_FOOTWEAR],
             ['Półmaska filtrująca 9914', PpeAssortment::FAMILY_RESPIRATORY],
             ['3M 8822 FFP2', PpeAssortment::FAMILY_RESPIRATORY],
             ['Kurtka ochronna ocieplana z kapturem', PpeAssortment::FAMILY_APPAREL],
@@ -160,6 +162,14 @@ final class PpeAssortmentTest extends TestCase
         $this->assertSame(
             PpeAssortment::TYPE_TRZEWIK,
             $this->assortment->articleType('Trzewiki spawalnicze DEMAR 9-075', PpeAssortment::FAMILY_FOOTWEAR)
+        );
+        $this->assertSame(
+            PpeAssortment::TYPE_SZTYBLET,
+            $this->assortment->articleType('sztyblety O2', PpeAssortment::FAMILY_FOOTWEAR)
+        );
+        $this->assertSame(
+            PpeAssortment::TYPE_POLBUT,
+            $this->assortment->articleType('mokasyny S2 non-metalic', PpeAssortment::FAMILY_FOOTWEAR)
         );
         $this->assertSame('agriculture', $this->assortment->purpose('Kalosz do rolnictwa i gospodarstw'));
         $this->assertSame('welding', $this->assortment->purpose('Trzewiki spawalnicze HRO'));

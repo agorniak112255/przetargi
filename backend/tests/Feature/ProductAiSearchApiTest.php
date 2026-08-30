@@ -448,6 +448,108 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('external_hint', null);
     }
 
+    public function test_ai_search_finds_footwear_class_without_description(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $manual = Product::query()->create([
+            'sku' => '002-100',
+            'name' => 'półbuty S2 na zam.',
+            'manufacturer' => 'Reis',
+            'category' => 'Obuwie zawodowe',
+            'description' => null,
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_MANUAL,
+        ]);
+        Product::query()->create([
+            'sku' => '003-998',
+            'name' => 'trzewiki S3 na zam.',
+            'manufacturer' => 'Reis',
+            'category' => 'Obuwie zawodowe',
+            'description' => null,
+            'catalog_price_net' => 90,
+            'purchase_price' => 55,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_MANUAL,
+        ]);
+        Product::query()->create([
+            'sku' => 'Model 203',
+            'name' => 'Półbuty bezpieczne z metalowym podnoskiem białe',
+            'manufacturer' => 'PPO',
+            'category' => 'Obuwie',
+            'description' => 'Półbuty robocze PPO spełniające normę S2.',
+            'catalog_price_net' => 70,
+            'purchase_price' => 40,
+            'stock' => 3,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $response = $this->postJson('/api/products/ai-search', [
+            'query' => 'półbuty S2',
+        ]);
+        $response->assertOk();
+        $skus = array_column($response->json('products') ?? [], 'sku');
+        $this->assertContains('002-100', $skus);
+        $this->assertNotContains('003-998', $skus);
+        $this->assertSame('002-100', $response->json('products.0.sku'));
+        $this->assertSame($manual->id, $response->json('products.0.id'));
+    }
+
+    public function test_ai_search_finds_sztyblety_o2_and_filters_reis(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => '000-045',
+            'name' => 'sztyblety O2',
+            'manufacturer' => 'Reis',
+            'category' => 'Obuwie zawodowe',
+            'description' => null,
+            'catalog_price_net' => 75,
+            'purchase_price' => 45,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_MANUAL,
+        ]);
+        Product::query()->create([
+            'sku' => '015-302',
+            'name' => 'trzewiki O2',
+            'manufacturer' => 'Reis',
+            'category' => 'Obuwie zawodowe',
+            'description' => null,
+            'catalog_price_net' => 85,
+            'purchase_price' => 50,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_MANUAL,
+        ]);
+        Product::query()->create([
+            'sku' => 'Model 037',
+            'name' => 'Trzewiki bezpieczne z metalowym podnoskiem',
+            'manufacturer' => 'PPO',
+            'category' => 'Obuwie',
+            'description' => 'Trzewiki PPO klasy S1.',
+            'catalog_price_net' => 60,
+            'purchase_price' => 35,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $sztyblety = $this->postJson('/api/products/ai-search', [
+            'query' => 'sztyblety O2',
+        ]);
+        $sztyblety->assertOk();
+        $this->assertSame(['000-045'], array_column($sztyblety->json('products') ?? [], 'sku'));
+
+        $reis = $this->postJson('/api/products/ai-search', [
+            'query' => 'trzewiki O2 Reis',
+        ]);
+        $reis->assertOk();
+        $this->assertSame(['015-302'], array_column($reis->json('products') ?? [], 'sku'));
+    }
+
     public function test_empty_catalog_retries_web_until_no_class_appears(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

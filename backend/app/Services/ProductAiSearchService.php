@@ -9,6 +9,7 @@ use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Search\ProductTextSearch;
 use App\Services\Vector\ProductVectorSearch;
+use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
 use App\Support\PpeFilterType;
 use App\Support\ProductModelFuzzy;
@@ -53,6 +54,7 @@ final class ProductAiSearchService
         private readonly PpeFilterType $filterType,
         private readonly ProductTextSearch $textSearch,
         private readonly RrfFusion $rrf,
+        private readonly BhpAttributeNormalizer $bhpAttributes,
     ) {}
 
     /**
@@ -97,6 +99,21 @@ final class ProductAiSearchService
                     ...$this->filterType->compactCodes($query),
                     ...$this->fallbackPhrases($query),
                 ])),
+                'ai_note' => null,
+                'external_hint' => null,
+            ];
+        }
+
+        $classHits = $this->retrieveByFootwearClass($query, $limit);
+        if ($classHits->isNotEmpty()) {
+            $ranked = $this->rowsFromFootwearClassMatches($query, $classHits, $limit);
+
+            return [
+                'query' => $query,
+                'total' => count($ranked),
+                'products' => $ranked,
+                'needed' => $query,
+                'search_phrases' => $this->fallbackPhrases($query),
                 'ai_note' => null,
                 'external_hint' => null,
             ];
@@ -424,6 +441,127 @@ final class ProductAiSearchService
             $score = $this->filterType->coverageScore($query, $this->filterHaystack($product));
             $row['ai_match_percent'] = min(99, max(72, 70 + intdiv($score, 3)));
             $row['ai_match_reason'] = 'Klasa pochłaniacza EN 14387 z katalogu — w tym wymagane typy (np. NO).';
+            $out[] = $row;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Klasa obuwia z nazwy (S2, O2) — działa też bez opisu, bo FULLTEXT gubi tokeny 2-literowe.
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByFootwearClass(string $query, int $limit): Collection
+    {
+        $class = $this->bhpAttributes->footwearClass($query);
+        if ($class === null || $this->assortment->family($query) !== PpeAssortment::FAMILY_FOOTWEAR) {
+            return collect();
+        }
+
+        $token = $this->bhpAttributes->footwearClassToken($class);
+        $likeClass = '%'.addcslashes($class, '%_\\').'%';
+        $likeToken = '%'.addcslashes($token, '%_\\').'%';
+
+        $rows = $this->productBaseQuery()
+            ->where(function (Builder $outer) use ($likeClass, $likeToken): void {
+                $outer->where('name', 'like', $likeClass)
+                    ->orWhere('sku', 'like', $likeClass)
+                    ->orWhere('search_blob', 'like', $likeToken)
+                    ->orWhere('search_blob', 'like', $likeClass);
+            })
+            ->where(function (Builder $outer): void {
+                $outer->where('ppe_family', PpeAssortment::FAMILY_FOOTWEAR)
+                    ->orWhereNull('ppe_family');
+            })
+            ->limit(400)
+            ->get()
+            ->filter(function (Product $product) use ($query, $class): bool {
+                $identity = trim($product->name.' '.$product->sku.' '.(string) ($product->category ?? ''));
+                if ($this->bhpAttributes->footwearClass($identity) !== $class) {
+                    return false;
+                }
+                $reqType = $this->assortment->articleType($query, PpeAssortment::FAMILY_FOOTWEAR);
+                $prodType = $this->assortment->articleType($product->name, PpeAssortment::FAMILY_FOOTWEAR);
+                if ($reqType !== null && $prodType !== null && $reqType !== $prodType) {
+                    return false;
+                }
+
+                return $this->assortment->compatibleProduct($query, $product);
+            })
+            ->values();
+
+        return $this->preferQueryManufacturers($query, $rows)->take(max(8, $limit))->values();
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return Collection<int, Product>
+     */
+    private function preferQueryManufacturers(string $query, Collection $products): Collection
+    {
+        $hints = $this->modelFuzzy->brandHints($query);
+        if ($hints === [] || $products->isEmpty()) {
+            return $products;
+        }
+
+        $matched = [];
+        foreach ($products as $product) {
+            $manuf = mb_strtolower((string) preg_replace('/[^a-z0-9]/iu', '', (string) $product->manufacturer));
+            if ($manuf === '') {
+                continue;
+            }
+            foreach ($hints as $hint) {
+                if (str_contains($manuf, $hint) || (mb_strlen($manuf) >= 3 && str_contains($hint, $manuf))) {
+                    $matched[$hint] = true;
+                }
+            }
+        }
+        if ($matched === []) {
+            return $products;
+        }
+
+        return $products->filter(function (Product $product) use ($matched): bool {
+            $manuf = mb_strtolower((string) preg_replace('/[^a-z0-9]/iu', '', (string) $product->manufacturer));
+            if ($manuf === '') {
+                return false;
+            }
+            foreach (array_keys($matched) as $hint) {
+                if (str_contains($manuf, $hint) || (mb_strlen($manuf) >= 3 && str_contains($hint, $manuf))) {
+                    return true;
+                }
+            }
+
+            return false;
+        })->values();
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromFootwearClassMatches(string $query, Collection $products, int $limit): array
+    {
+        $class = $this->bhpAttributes->footwearClass($query) ?? '';
+        $reqType = $this->assortment->articleType($query, PpeAssortment::FAMILY_FOOTWEAR);
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $prodType = $this->assortment->articleType($product->name, PpeAssortment::FAMILY_FOOTWEAR);
+            $score = 82;
+            if ($reqType !== null && $prodType === $reqType) {
+                $score += 8;
+            }
+            $row['ai_match_percent'] = min(99, $score);
+            $row['ai_match_reason'] = $class !== ''
+                ? 'Nazwa katalogowa: ten sam typ obuwia i klasa '.$class.' (także bez opisu).'
+                : 'Nazwa katalogowa: zgodny typ obuwia (także bez opisu).';
             $out[] = $row;
             if (count($out) >= $limit) {
                 break;

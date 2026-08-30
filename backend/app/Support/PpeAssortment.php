@@ -35,6 +35,8 @@ final class PpeAssortment
 
     public const TYPE_TRZEWIK = 'trzewik';
 
+    public const TYPE_SZTYBLET = 'sztyblet';
+
     public const TYPE_POLBUT = 'polbut';
 
     public const TYPE_SANDAL = 'sandal';
@@ -148,8 +150,8 @@ final class PpeAssortment
         }
 
         if (preg_match(
-            '/\b(trzewik|polbut|sandal|obuwie|buty|butow|footwear|podeszw|podnosek'
-            .'|\bs1p?\b|\bs3\b)\b/u',
+            '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwie|buty|butow|footwear|podeszw|podnosek'
+            .'|\bs1p?\b|\bs[2-5]\b|\bo[1-5]\b)\b/u',
             $t
         ) === 1) {
             return self::FAMILY_FOOTWEAR;
@@ -299,10 +301,13 @@ final class PpeAssortment
         if (preg_match('/\b(sandal)\w*/u', $t) === 1) {
             return self::TYPE_SANDAL;
         }
+        if (preg_match('/\b(sztyblet|chelsea)\w*/u', $t) === 1) {
+            return self::TYPE_SZTYBLET;
+        }
         if (preg_match('/\b(trzewik|ankle\s*boot)\w*/u', $t) === 1) {
             return self::TYPE_TRZEWIK;
         }
-        if (preg_match('/\b(polbut|polbuty|low\s*shoe)\w*/u', $t) === 1) {
+        if (preg_match('/\b(mokasyn|polbut|polbuty|low\s*shoe)\w*/u', $t) === 1) {
             return self::TYPE_POLBUT;
         }
 
