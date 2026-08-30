@@ -999,6 +999,17 @@ final class EnrichmentQueryLadderTest extends TestCase
             'CRACKDOWN D.GREY safety shoe',
             $cofra
         ));
+        $this->assertStringContainsString('COFRA', $identity->primaryQueries($cofra)[0] ?? '');
+        $this->assertFalse($identity->pageClaimsAnotherCode(
+            'https://www.ironshop.it/antinfortunistica/493-scarpa-cofra-crackdown-dark-grey.html',
+            'Scarpa Cofra Crackdown Dark Grey',
+            $cofra
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.ironshop.it/antinfortunistica/493-scarpa-cofra-crackdown-dark-grey.html '
+            .'Scarpa Cofra Crackdown Dark Grey',
+            $cofra
+        ));
         $filter = $ref->getMethod('filterResultsByIdentity');
         $filter->setAccessible(true);
         $kept = $filter->invoke($service, [[

@@ -1016,6 +1016,14 @@ final class ProductSearchIdentity
             || ($shop !== '' && $this->phraseHasToken($shop, $brand))) {
             return '';
         }
+        // CRACKDOWN D.GREY — model, zostaw COFRA. CEJN Double Action Coupler — inna firma niż GVS.
+        if ($shop === '' && $this->phraseHasToken($name, $brand)) {
+            $rest = trim((string) preg_replace('/^'.preg_quote($brand, '/').'\b/iu', '', $name));
+            $words = preg_split('/\s+/u', $rest, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            if (count($words) < 3) {
+                return '';
+            }
+        }
 
         return $brand;
     }
