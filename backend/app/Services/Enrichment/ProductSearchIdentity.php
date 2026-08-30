@@ -2003,7 +2003,18 @@ final class ProductSearchIdentity
 
     private function codePattern(string $code): ?string
     {
-        $chunks = preg_split('/[^\p{L}\d]+/u', mb_strtolower(trim($code)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $raw = preg_split('/[^\p{L}\d]+/u', mb_strtolower(trim($code)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $chunks = [];
+        foreach ($raw as $chunk) {
+            // 3W1 na karcie to „3 W 1” — rozdziel litery i cyfry, zostaw NB27 jako nb+27
+            if (preg_match_all('/\d+|\p{L}+/u', $chunk, $bits) === 1 || ($bits[0] ?? []) === []) {
+                $chunks[] = $chunk;
+            } else {
+                foreach ($bits[0] as $bit) {
+                    $chunks[] = $bit;
+                }
+            }
+        }
         if ($chunks === [] || mb_strlen(implode('', $chunks)) < 3) {
             return null;
         }
@@ -2144,8 +2155,9 @@ final class ProductSearchIdentity
             return $this->numericTokenAsProductCode($hay, $token)
                 || $this->numericTokenAsProductCode($hayCompact, $token);
         }
-        // alfanumeryczny kod (NB27): cały token — nie substring w NB27B
-        if ($this->isAlphanumericProductCode($token)) {
+        // alfanumeryczny kod (NB27): cały token — nie substring w NB27B.
+        // „HSV 3W1” z spacją to fraza sklepu, nie jeden kod — granica słowa skleja HSV z „odblaskowa”.
+        if ($this->isAlphanumericProductCode($token) && ! preg_match('/\s/u', $token)) {
             $tokenCompact = preg_replace('/[^a-z0-9]+/iu', '', $token) ?? $token;
 
             return $this->skuTokenInImageHay($hay, $hayCompact, $token, $tokenCompact);
@@ -2937,6 +2949,13 @@ final class ProductSearchIdentity
                 continue;
             }
             if (preg_match('/^\p{L}{2,}$/u', $segment) !== 1) {
+                // HSV-3W1 — „3W1” to model, nie rozmiar; nie ucinaj serii na tym członie
+                if ($kept !== [] && preg_match('/^(?=.*\d)(?=.*\p{L})[\p{L}\d]{2,8}$/u', $segment) === 1) {
+                    $kept[] = $segment;
+                    $series = implode(' ', $kept);
+
+                    return $this->isUsableSeriesPhrase($series) ? $series : '';
+                }
                 if ($kept !== []) {
                     break;
                 }
@@ -2979,6 +2998,11 @@ final class ProductSearchIdentity
         if ($words === [] || count($words) > 3) {
             return false;
         }
+        $compact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($series)) ?? '';
+        if (preg_match('/\p{L}/u', $compact) === 1 && preg_match('/\d/u', $compact) === 1
+            && mb_strlen($compact) >= 4) {
+            return true;
+        }
         foreach ($words as $word) {
             if (mb_strlen($word) >= 4 && ! $this->isDescriptiveIdentityWord($word)
                 && ! $this->isGenericCatalogNameWord($word)) {
@@ -2996,6 +3020,7 @@ final class ProductSearchIdentity
 
         return in_array($word, [
             'kurtka', 'bluza', 'spodnie', 'kamizelka', 'rekawice', 'rekawica', 'buty', 'polbuty',
+            'meska', 'meskie', 'krotka', 'krotki', 'odblaskowa', 'odblaskowy', 'odblaskowe',
             'trzewiki', 'sandaly', 'maska', 'kask', 'fartuch', 'ocieplana', 'ocieplany',
             'ostrzegawcza', 'ostr', 'nylon', 'nylonowa', 'nylonowy', 'polyester', 'polyes',
             'poliester', 'pongee', 'bawelna', 'skora', 'lateks', 'nitryl', 'poliuretan',

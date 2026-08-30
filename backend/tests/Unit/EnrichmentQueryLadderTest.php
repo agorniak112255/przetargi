@@ -908,6 +908,30 @@ final class EnrichmentQueryLadderTest extends TestCase
             $urgent
         ));
 
+        $hsv = new Product([
+            'manufacturer' => 'URGENT',
+            'sku' => 'PROS-KURTKA-MESKA-HSV-3W1',
+            'name' => 'KURTKA MĘSKA HSV KRÓTKA 3 W 1',
+        ]);
+        $this->assertSame('HSV-3W1', $identity->internalSkuCore($hsv));
+        $this->assertContains('HSV 3W1', $identity->shopIdentityPhrases($hsv));
+        $this->assertStringContainsString('HSV', $identity->primaryQueries($hsv)[0] ?? '');
+        $this->assertStringContainsString('3W1', str_replace(' ', '', $identity->primaryQueries($hsv)[0] ?? ''));
+        $this->assertTrue($identity->hayHasProductCode(
+            'kurtka męska odblaskowa hsv 3 w 1 urg',
+            $hsv
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.professionalbhp.com/pl/p/Kurtka-meska-odblaskowa-HSV-3-W-1-URG/1136 '
+            .'Kurtka męska odblaskowa HSV 3 W 1 URG',
+            $hsv
+        ));
+        $this->assertFalse($identity->pageClaimsAnotherCode(
+            'https://www.professionalbhp.com/pl/p/Kurtka-meska-odblaskowa-HSV-3-W-1-URG/1136',
+            'Kurtka męska odblaskowa HSV 3 W 1 URG',
+            $hsv
+        ));
+
         $lebonQ = implode(' | ', $identity->primaryQueries($lebon));
         $this->assertNotSame('', $lebonQ);
         $this->assertStringNotContainsString('wzwyż', $lebonQ);
