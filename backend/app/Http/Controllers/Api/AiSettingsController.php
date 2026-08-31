@@ -14,7 +14,6 @@ use App\Services\Vector\EmbeddingClient;
 use App\Services\Vector\QdrantClient;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use RuntimeException;
 use Throwable;
 
 class AiSettingsController extends Controller
@@ -82,31 +81,23 @@ class AiSettingsController extends Controller
 
     public function test(): JsonResponse
     {
-        try {
-            $result = $this->llm->chatJson([
-                [
-                    'role' => 'system',
-                    'content' => 'Odpowiedz wyłącznie JSON: {"ok":true,"message":"krótki tekst po polsku"}',
-                ],
-                [
-                    'role' => 'user',
-                    'content' => 'Ping test połączenia z API modelu AI.',
-                ],
-            ]);
-        } catch (RuntimeException|Throwable $e) {
-            return response()->json([
-                'ok' => false,
-                'message' => $e->getMessage(),
-            ], 422);
-        }
+        $results = $this->llm->testConnections();
+        $allOk = $results !== [] && array_reduce(
+            $results,
+            static fn (bool $carry, array $row): bool => $carry && $row['ok'],
+            true
+        );
+        $lines = array_map(
+            static fn (array $row): string => ($row['ok'] ? 'Połączono' : 'Brak połączenia')
+                .' — '.$row['label']
+                .($row['message'] !== '' ? ': '.$row['message'] : ''),
+            $results
+        );
 
         return response()->json([
-            'ok' => true,
-            'message' => is_string($result['message'] ?? null)
-                ? $result['message']
-                : 'Połączenie z API AI działa.',
-            'raw' => $result,
-            'settings' => $this->settings->publicView(),
+            'ok' => $allOk,
+            'message' => implode("\n", $lines),
+            'results' => $results,
         ]);
     }
 

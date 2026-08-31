@@ -10,6 +10,9 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -250,5 +253,63 @@ final class AiSettingsApiTest extends TestCase
         $this->assertNotNull($row);
         $this->assertSame('sk-openrouter-keep-me-123', $row->api_key);
         $this->assertSame('tvly-keep-me-4567890', $row->tavily_api_key);
+    }
+
+    public function test_connection_test_reports_main_and_each_profile(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://bedford-joint-adelaide-poetry.trycloudflare.com/v1',
+            'api_key' => 'local-key-1234567890',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 90,
+            'temperature' => 0.1,
+            'model_profiles' => [
+                [
+                    'id' => 'p1',
+                    'name' => 'Profil 1',
+                    'base_url' => null,
+                    'model' => 'qwen38-7b',
+                    'api_key' => null,
+                    'tasks' => [],
+                ],
+                [
+                    'id' => 'p2',
+                    'name' => 'Profil 2',
+                    'base_url' => 'https://openrouter.ai/api/v1',
+                    'model' => 'qwen/qwen3.8-flash',
+                    'api_key' => 'sk-or-profile-123',
+                    'tasks' => ['product_search'],
+                ],
+            ],
+        ]);
+
+        Http::fake(function (Request $request) {
+            if (str_contains($request->url(), 'openrouter.ai')) {
+                return Http::response([
+                    'choices' => [['message' => ['content' => '{"ok":true,"message":"pong"}']]],
+                    'model' => 'qwen/qwen3.8-flash',
+                ]);
+            }
+
+            throw new ConnectionException(
+                'cURL error 6: Could not resolve host: bedford-joint-adelaide-poetry.trycloudflare.com'
+            );
+        });
+
+        $this->postJson('/api/ai-settings/test')
+            ->assertOk()
+            ->assertJsonPath('ok', false)
+            ->assertJsonPath('results.0.label', 'Model główny')
+            ->assertJsonPath('results.0.ok', false)
+            ->assertJsonPath('results.1.label', 'Profil 1')
+            ->assertJsonPath('results.1.ok', false)
+            ->assertJsonPath('results.2.label', 'Profil 2')
+            ->assertJsonPath('results.2.ok', true)
+            ->assertJsonFragment(['message' => 'połączono (qwen/qwen3.8-flash)']);
     }
 }

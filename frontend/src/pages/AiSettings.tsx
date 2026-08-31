@@ -122,6 +122,9 @@ export function AiSettingsPage() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  const [connTests, setConnTests] = useState<
+    { id: string; label: string; ok: boolean; message: string }[] | null
+  >(null)
 
   function hydrateSecrets(next: AiSettings) {
     setApiKey('')
@@ -205,6 +208,7 @@ export function AiSettingsPage() {
     setBusy(true)
     setErr('')
     setMsg('')
+    setConnTests(null)
     try {
       const body: Record<string, unknown> = {
         enabled: cfg.enabled,
@@ -283,12 +287,18 @@ export function AiSettingsPage() {
     setBusy(true)
     setErr('')
     setMsg('')
+    setConnTests(null)
     try {
-      const res = await api<{ ok: boolean; message: string }>('/ai-settings/test', {
+      const res = await api<{
+        ok: boolean
+        message: string
+        results: { id: string; label: string; ok: boolean; message: string }[]
+      }>('/ai-settings/test', {
         method: 'POST',
         body: '{}',
       })
-      setMsg(res.message)
+      setConnTests(res.results ?? [])
+      if (res.ok) setMsg('Wszystkie endpointy odpowiadają.')
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Test nieudany')
     } finally {
@@ -360,6 +370,21 @@ export function AiSettingsPage() {
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {connTests && connTests.length > 0 && (
+        <ul className="mb-3 space-y-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+          {connTests.map((row) => (
+            <li
+              key={row.id}
+              className={row.ok ? 'text-green-800' : 'text-red-700'}
+            >
+              <span className="font-semibold">{row.ok ? 'Połączono' : 'Brak połączenia'}</span>
+              {' — '}
+              {row.label}
+              {row.message ? `: ${row.message}` : ''}
+            </li>
+          ))}
+        </ul>
+      )}
 
       <form onSubmit={onSave} className="max-w-xl rounded-xl bg-white p-4 shadow-sm text-sm space-y-3">
         <label className="flex items-center gap-2 text-xs">

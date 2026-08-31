@@ -56,6 +56,71 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * Ping konfiguracji głównej i każdego profilu — bez fallbacku między nimi.
+     *
+     * @return list<array{id: string, label: string, ok: bool, message: string}>
+     */
+    public function testConnections(): array
+    {
+        $out = [];
+        foreach ($this->settings->resolvedProfiles() as $index => $profile) {
+            $label = $profile['is_default'] ? 'Model główny' : (string) $profile['label'];
+            $id = $profile['is_default'] ? 'main' : 'profile-'.$index;
+            try {
+                $raw = $this->chatWithProfile(
+                    $profile,
+                    [
+                        [
+                            'role' => 'system',
+                            'content' => 'Odpowiedz wyłącznie JSON: {"ok":true,"message":"pong"}',
+                        ],
+                        [
+                            'role' => 'user',
+                            'content' => 'Ping test połączenia z API modelu AI.',
+                        ],
+                    ],
+                    0.0,
+                    true,
+                    ['max_tokens' => 256]
+                );
+                $model = trim((string) ($raw['model'] ?? $profile['model']));
+                $out[] = [
+                    'id' => $id,
+                    'label' => $label,
+                    'ok' => true,
+                    'message' => $model !== '' ? 'połączono ('.$model.')' : 'połączono',
+                ];
+            } catch (Throwable $e) {
+                $out[] = [
+                    'id' => $id,
+                    'label' => $label,
+                    'ok' => false,
+                    'message' => $this->summarizePingError($e->getMessage()),
+                ];
+            }
+        }
+
+        return $out;
+    }
+
+    private function summarizePingError(string $msg): string
+    {
+        if (str_contains($msg, 'Could not resolve host') || str_contains($msg, 'cURL error 6')) {
+            return 'brak połączenia (host nieosiągalny)';
+        }
+        if (str_contains($msg, 'cURL error 7')
+            || str_contains($msg, 'Connection refused')
+            || str_contains($msg, 'Failed to connect')) {
+            return 'brak połączenia (odmowa połączenia)';
+        }
+        if (str_contains($msg, 'cURL error 28') || str_contains($msg, 'timed out')) {
+            return 'brak połączenia (timeout)';
+        }
+
+        return mb_strlen($msg) > 180 ? mb_substr($msg, 0, 177).'…' : $msg;
+    }
+
+    /**
      * Równoległe chat/completions (curl_multi) — tyle requestów, ile caller trzyma slotów.
      *
      * @param  list<list<array{role: string, content: mixed}>>  $messageSets
