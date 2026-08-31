@@ -124,14 +124,14 @@ final class AiModelProfileTest extends TestCase
         });
     }
 
-    public function test_auto_reasoning_omits_field_for_other_models(): void
+    public function test_openrouter_qwen38_flash_auto_disables_thinking(): void
     {
         $this->seedMainConfig();
         $this->saveProfiles([[
             'id' => 'fast',
-            'name' => 'OpenRouter szybki',
+            'name' => 'Profil 2',
             'base_url' => 'https://openrouter.ai/api/v1',
-            'model' => 'google/gemini-flash',
+            'model' => 'qwen/qwen3.8-flash',
             'api_key' => 'sk-or-profile-123',
             'tasks' => [AiTask::ProductSearch->value],
         ]]);
@@ -148,7 +148,68 @@ final class AiModelProfileTest extends TestCase
         Http::assertSent(function (Request $request): bool {
             $data = $request->data();
 
-            return $request['model'] === 'google/gemini-flash'
+            return $request['model'] === 'qwen/qwen3.8-flash'
+                && ! array_key_exists('reasoning_effort', $data)
+                && ($data['reasoning']['enabled'] ?? null) === false
+                && ($data['chat_template_kwargs']['enable_thinking'] ?? null) === false;
+        });
+    }
+
+    public function test_openrouter_gemini_flash_auto_disables_thinking(): void
+    {
+        $this->seedMainConfig();
+        $this->saveProfiles([[
+            'id' => 'fast',
+            'name' => 'Profil 2',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'google/gemini-3.7-flash',
+            'api_key' => 'sk-or-profile-123',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::ProductSearch
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return $request['model'] === 'google/gemini-3.7-flash'
+                && ($data['reasoning']['enabled'] ?? null) === false
+                && ($data['chat_template_kwargs']['enable_thinking'] ?? null) === false;
+        });
+    }
+
+    public function test_auto_reasoning_omits_field_for_other_models(): void
+    {
+        $this->seedMainConfig();
+        $this->saveProfiles([[
+            'id' => 'fast',
+            'name' => 'OpenRouter szybki',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'openai/gpt-4o-mini',
+            'api_key' => 'sk-or-profile-123',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::ProductSearch
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return $request['model'] === 'openai/gpt-4o-mini'
                 && ! array_key_exists('reasoning_effort', $data)
                 && ! array_key_exists('chat_template_kwargs', $data);
         });

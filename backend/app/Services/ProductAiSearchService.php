@@ -119,6 +119,21 @@ final class ProductAiSearchService
             ];
         }
 
+        $heatHits = $this->retrieveByHeatRating($query, $limit);
+        if ($heatHits->isNotEmpty()) {
+            $ranked = $this->rowsFromHeatMatches($query, $heatHits, $limit);
+
+            return [
+                'query' => $query,
+                'total' => count($ranked),
+                'products' => $ranked,
+                'needed' => $query,
+                'search_phrases' => $this->fallbackPhrases($query),
+                'ai_note' => null,
+                'external_hint' => null,
+            ];
+        }
+
         $intent = $this->understandRequirement($query, $task);
         $candidates = $this->keepCompatible(
             $this->assortmentText($query, $intent['needed']),
@@ -498,6 +513,79 @@ final class ProductAiSearchService
     }
 
     /**
+     * Rękawice / asortyment z podaną odpornością °C — bez LLM, bo model zwraca jedną kartę.
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByHeatRating(string $query, int $limit): Collection
+    {
+        $minC = $this->bhpAttributes->requiredCelsius($query);
+        if ($minC === null) {
+            return collect();
+        }
+
+        $family = $this->assortment->family($query);
+        $rows = $this->productBaseQuery()
+            ->where(function (Builder $outer): void {
+                foreach (['%°C%', '%° C%', '%stopni%', '%st. C%', '%st.C%', '% C', '% C.', '% C,'] as $like) {
+                    $outer->orWhere('name', 'like', $like)
+                        ->orWhere('description', 'like', $like)
+                        ->orWhere('search_blob', 'like', $like)
+                        ->orWhere('norms', 'like', $like);
+                }
+            })
+            ->when(
+                $family !== null,
+                function (Builder $q) use ($family): void {
+                    $q->where(function (Builder $outer) use ($family): void {
+                        $outer->where('ppe_family', $family)->orWhereNull('ppe_family');
+                    });
+                }
+            )
+            ->limit(400)
+            ->get()
+            ->filter(function (Product $product) use ($query, $minC): bool {
+                $maxC = $this->bhpAttributes->maxCelsius($this->filterHaystack($product));
+                if ($maxC === null || $maxC < $minC) {
+                    return false;
+                }
+
+                return $this->assortment->compatibleProduct($query, $product);
+            })
+            ->sortByDesc(fn (Product $p): int => $this->bhpAttributes->maxCelsius($this->filterHaystack($p)) ?? 0)
+            ->values();
+
+        return $rows->take(max(8, $limit))->values();
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromHeatMatches(string $query, Collection $products, int $limit): array
+    {
+        $minC = $this->bhpAttributes->requiredCelsius($query) ?? 0;
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $maxC = $this->bhpAttributes->maxCelsius($this->filterHaystack($product));
+            $row = $this->productToRow($product);
+            $row['ai_match_percent'] = min(99, 78 + min(20, intdiv(max(0, (int) $maxC - $minC), 25)));
+            $row['ai_match_reason'] = $maxC !== null
+                ? 'Odporność cieplna '.$maxC.'°C (wymagane ≥ '.$minC.'°C) — z karty katalogu.'
+                : 'Odporność cieplna z karty katalogu.';
+            $out[] = $row;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * @param  Collection<int, Product>  $products
      * @return Collection<int, Product>
      */
@@ -869,6 +957,7 @@ final class ProductAiSearchService
                 'manufacturer' => $p->manufacturer,
                 'norms' => $p->norms,
                 'description' => mb_substr((string) ($p->description ?? ''), 0, 280),
+                'heat_celsius' => $this->bhpAttributes->maxCelsius($this->filterHaystack($p)),
                 'use_cases' => array_slice($this->stringList($payload['use_cases'] ?? null), 0, 4),
                 'features' => array_slice($this->stringList($payload['features'] ?? null), 0, 4),
             ];

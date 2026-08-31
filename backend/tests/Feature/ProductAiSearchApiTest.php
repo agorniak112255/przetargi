@@ -1262,4 +1262,61 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('external_hint.url', 'https://sklep.example/produkt/rekawice-cxs')
             ->assertJsonPath('external_hints.1.title', 'Bluza KOLPEO');
     }
+
+    public function test_ai_search_returns_all_gloves_meeting_celsius_without_llm(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'HEAT-250',
+            'name' => 'Rękawice termoochronne 250',
+            'manufacturer' => 'PIP',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice do pieca, kontakt 250°C, EN 407.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 10,
+            'stock' => 4,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'HEAT-350',
+            'name' => 'Rękawice hutnicze 350',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Odporność 350 stopni C, praca przy piecu.',
+            'catalog_price_net' => 30,
+            'purchase_price' => 15,
+            'stock' => 2,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'HEAT-100',
+            'name' => 'Rękawice kuchenne 100',
+            'manufacturer' => 'X',
+            'category' => 'Rękawice',
+            'description' => 'Kontakt 100°C.',
+            'catalog_price_net' => 8,
+            'purchase_price' => 4,
+            'stock' => 9,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'rękawice do pracy przy 200 C',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('products.0.sku', 'HEAT-350')
+            ->assertJsonPath('products.1.sku', 'HEAT-250');
+    }
 }

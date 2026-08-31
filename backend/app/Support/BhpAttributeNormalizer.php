@@ -377,6 +377,53 @@ final class BhpAttributeNormalizer
         return $this->extractFootwearClass($text);
     }
 
+    /** Próg °C z wymagania („przy 200 C”, „min. 250°C”). */
+    public function requiredCelsius(string $text): ?int
+    {
+        $ratings = $this->celsiusRatings($text);
+
+        return $ratings === [] ? null : max($ratings);
+    }
+
+    /** Najwyższa temperatura w karcie produktu. */
+    public function maxCelsius(string $text): ?int
+    {
+        $ratings = $this->celsiusRatings($text);
+
+        return $ratings === [] ? null : max($ratings);
+    }
+
+    /**
+     * @return list<int>
+     */
+    public function celsiusRatings(string $text): array
+    {
+        if (preg_match_all(
+            '/(?<![0-9])([1-9][0-9]{1,3})\s*(?:°\s*)?(?:C\b|stopn(?:i|ie)?|st\.?\s*C)/iu',
+            $text,
+            $matches,
+            PREG_OFFSET_CAPTURE
+        ) < 1) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($matches[1] as $hit) {
+            $n = (int) $hit[0];
+            if ($n < 80 || $n > 1500) {
+                continue;
+            }
+            $pos = (int) $hit[1];
+            $ctx = mb_strtolower(mb_substr($text, max(0, $pos - 24), 48));
+            if (preg_match('/g\/m|gramatur|szt\.?|\bml\b|\bmm\b|\brok\b/u', $ctx) === 1) {
+                continue;
+            }
+            $out[] = $n;
+        }
+
+        return array_values(array_unique($out));
+    }
+
     public function footwearClassToken(string $class): string
     {
         return 'klasa'.mb_strtolower(preg_replace('/\s+/u', '', $class) ?? $class);

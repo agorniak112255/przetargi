@@ -1380,7 +1380,36 @@ class OpenAiCompatibleClient
 
     private function isQwen38Model(string $model): bool
     {
-        return preg_match('/qwen3[\.\-_]?8/i', $model) === 1;
+        // Tylko lokalny vLLM/llama-swap (qwen38-27b-fast). OpenRouter qwen/qwen3.8-flash
+        // nie może łapać się tu — AUTO+low włącza myślenie i pustoszy JSON.
+        return preg_match('/qwen38[-_]|qwen3\.8-\d/i', $model) === 1;
+    }
+
+    private function shouldDisableOpenRouterThinking(string $model, string $effort): bool
+    {
+        if (! str_contains($model, '/')
+            || ! in_array($effort, [ReasoningEffort::OFF, ReasoningEffort::AUTO, ReasoningEffort::NONE], true)) {
+            return false;
+        }
+
+        return preg_match('/qwen3|gemini/i', $model) === 1;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function disableOpenRouterThinking(array $payload): array
+    {
+        $kwargs = is_array($payload['chat_template_kwargs'] ?? null)
+            ? $payload['chat_template_kwargs']
+            : [];
+        $kwargs['enable_thinking'] = false;
+        $payload['chat_template_kwargs'] = $kwargs;
+        $payload['reasoning'] = ['enabled' => false, 'exclude' => true];
+        unset($payload['reasoning_effort']);
+
+        return $payload;
     }
 
     /**
@@ -1390,11 +1419,15 @@ class OpenAiCompatibleClient
     private function applyReasoningEffort(array $payload, string $effort): array
     {
         $effort = ReasoningEffort::normalize($effort);
+        $model = (string) ($payload['model'] ?? '');
+        if ($this->shouldDisableOpenRouterThinking($model, $effort)) {
+            return $this->disableOpenRouterThinking($payload);
+        }
         if ($effort === ReasoningEffort::OFF) {
             return $payload;
         }
         if ($effort === ReasoningEffort::AUTO) {
-            if (! $this->isQwen38Model((string) ($payload['model'] ?? ''))) {
+            if (! $this->isQwen38Model($model)) {
                 return $payload;
             }
             $effort = ReasoningEffort::LOW;

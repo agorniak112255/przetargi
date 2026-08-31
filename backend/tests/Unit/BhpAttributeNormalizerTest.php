@@ -189,4 +189,14 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertSame('ffp', $attrs['typ_wyrobu']);
         $this->assertSame('drogi_oddechowe', $attrs['kategoria_bhp']);
     }
+
+    public function test_reads_celsius_from_requirement_and_ignores_grammage(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame(200, $n->requiredCelsius('rękawice do pracy przy 200 C'));
+        $this->assertSame(250, $n->maxCelsius('Kontakt 250°C, konwekcja 100°C. EN 407.'));
+        $this->assertNull($n->requiredCelsius('spodnie o gramaturze 250 g/m²'));
+        $this->assertNull($n->maxCelsius('Opakowanie 200 szt.'));
+    }
 }
