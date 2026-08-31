@@ -244,6 +244,27 @@ final class PpeAssortmentTest extends TestCase
     }
 
     #[Test]
+    public function name_beats_stale_apparel_family_for_balaclava(): void
+    {
+        $cap = new Product;
+        $cap->forceFill([
+            'name' => 'KOMINIARKA Z POLARU POLIESTRU',
+            'sku' => 'BALTIC',
+            'category' => 'Odzież',
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+
+        $this->assertSame(PpeAssortment::FAMILY_HEAD, $this->assortment->productFamily($cap));
+        $this->assertTrue($this->assortment->compatibleProduct(
+            'KOMINIARKA ANTYELEKTROSTATYCZNA EN 1149-5',
+            $cap
+        ));
+        $this->assertSame(['kominiark', 'balaclava'], $this->assortment->catalogNounLikes(
+            'KOMINIARKA ANTYELEKTROSTATYCZNA'
+        ));
+    }
+
+    #[Test]
     public function under_helmet_liner_accepts_cap_and_rejects_jacket(): void
     {
         $req = 'Wkładka/czepek ocieplana pod hełm antyelektrostatyczna z certyfikatem ESD EN 1149-5';

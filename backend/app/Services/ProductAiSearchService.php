@@ -152,6 +152,21 @@ final class ProductAiSearchService
             ];
         }
 
+        $articleHits = $this->retrieveByArticleType($query, $limit);
+        if ($articleHits->isNotEmpty()) {
+            $ranked = $this->rowsFromArticleTypeMatches($query, $articleHits, $limit);
+
+            return [
+                'query' => $query,
+                'total' => count($ranked),
+                'products' => $ranked,
+                'needed' => $query,
+                'search_phrases' => $this->fallbackPhrases($query),
+                'ai_note' => null,
+                'external_hint' => null,
+            ];
+        }
+
         $lexical = $this->retrieveLexicalIfObvious($query, $limit);
         if ($lexical !== []) {
             return [
@@ -403,8 +418,11 @@ final class ProductAiSearchService
         $name = $this->lexicalNormalize(
             $product->name.' '.$product->sku.' '.($product->category ?? '')
         );
+        $full = $this->lexicalNormalize(
+            $name.' '.($product->description ?? '').' '.($product->norms ?? '')
+        );
         $genericName = 0;
-        $distinctName = 0;
+        $distinct = 0;
         $score = 0;
         foreach ($this->fallbackPhrases($query) as $token) {
             $t = $this->lexicalNormalize($token);
@@ -412,17 +430,22 @@ final class ProductAiSearchService
                 continue;
             }
             $inName = str_contains($name, $t);
-            if (! $inName) {
+            $inFull = str_contains($full, $t);
+            if (! $inName && ! $inFull) {
                 continue;
             }
-            $score += 4;
             if ($this->isGenericAssortmentToken($t)) {
+                if (! $inName) {
+                    continue;
+                }
                 $genericName++;
-            } else {
-                $distinctName++;
+                $score += 4;
+                continue;
             }
+            $distinct++;
+            $score += 4;
         }
-        if ($genericName < 1 || $distinctName < 1 || $score < self::LEXICAL_MIN_SCORE) {
+        if ($genericName < 1 || $distinct < 1 || $score < self::LEXICAL_MIN_SCORE) {
             return null;
         }
 
@@ -743,16 +766,100 @@ final class ProductAiSearchService
                         });
                     });
             })
-            ->where(function (Builder $fam): void {
-                $fam->where('ppe_family', PpeAssortment::FAMILY_HEAD)
-                    ->orWhereNull('ppe_family');
-            })
             ->limit(200)
             ->get()
             ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p))
             ->values();
 
         return $rows->take(max(8, $limit))->values();
+    }
+
+    /**
+     * Kominiarka / kalosz / gogle — wszystkie karty tego kroju, cechy (ESD, 1149) na górze.
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByArticleType(string $query, int $limit): Collection
+    {
+        if ($this->modelFuzzy->hasNamedModel($query)) {
+            return collect();
+        }
+        $likes = $this->assortment->catalogNounLikes($query);
+        if ($likes === []) {
+            return collect();
+        }
+
+        $rows = $this->productBaseQuery()
+            ->where(function (Builder $outer) use ($likes): void {
+                foreach ($likes as $like) {
+                    $esc = '%'.$like.'%';
+                    $outer->orWhere('name', 'like', $esc)
+                        ->orWhere('sku', 'like', $esc)
+                        ->orWhere('category', 'like', $esc);
+                }
+            })
+            ->limit(400)
+            ->get()
+            ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p))
+            ->sortByDesc(fn (Product $p): int => $this->articleTypeScore($query, $p))
+            ->values();
+
+        return $rows->take(max(8, $limit))->values();
+    }
+
+    private function articleTypeScore(string $query, Product $product): int
+    {
+        $name = $this->lexicalNormalize(
+            $product->name.' '.$product->sku.' '.($product->category ?? '')
+        );
+        $full = $this->lexicalNormalize(
+            $name.' '.($product->description ?? '').' '.($product->norms ?? '')
+        );
+        $score = 10;
+        foreach ($this->fallbackPhrases($query) as $token) {
+            $t = $this->lexicalNormalize($token);
+            if ($t === '' || mb_strlen($t) < 4) {
+                continue;
+            }
+            if ($this->isGenericAssortmentToken($t)) {
+                if (str_contains($name, $t)) {
+                    $score += 2;
+                }
+
+                continue;
+            }
+            if (str_contains($name, $t)) {
+                $score += 8;
+            } elseif (str_contains($full, $t)) {
+                $score += 5;
+            }
+        }
+
+        return $score;
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromArticleTypeMatches(string $query, Collection $products, int $limit): array
+    {
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $score = $this->articleTypeScore($query, $product);
+            $row['ai_match_percent'] = min(96, 72 + min(24, $score));
+            $row['ai_match_reason'] = 'Ten sam typ w katalogu — wszystkie karty tego asortymentu, cechy z wymagania na górze.';
+            $out[] = $row;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
     }
 
     /**

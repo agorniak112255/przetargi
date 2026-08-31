@@ -1418,6 +1418,85 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('products.0.sku', 'HEAT-250');
     }
 
+    public function test_ai_search_returns_all_balaclavas_not_just_one_llm_pick(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'XISPAL-RS',
+            'name' => 'Xispal RS - Balaclava',
+            'manufacturer' => 'Lenard',
+            'category' => 'Ochrona głowy',
+            'norms' => 'EN 1149-5',
+            'description' => 'Kominiarka (balaclava) z włóknem antyelektrostatycznym ESD.',
+            'catalog_price_net' => 26,
+            'purchase_price' => 18,
+            'stock' => 8,
+            'ppe_family' => 'head',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'BALTIC',
+            'name' => 'KOMINIARKA Z POLARU POLIESTRU, 100 g/m²',
+            'manufacturer' => 'Delta Plus',
+            'category' => 'Odzież',
+            'description' => 'Kominiarka polarowa.',
+            'catalog_price_net' => 9.9,
+            'purchase_price' => 6,
+            'stock' => 12,
+            'ppe_family' => 'apparel',
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+        Product::query()->create([
+            'sku' => 'KOM-ESD',
+            'name' => 'Kominiarka antyelektrostatyczna',
+            'manufacturer' => 'Urgent',
+            'category' => 'ochrona_glowy',
+            'norms' => 'EN 1149-5 EN ISO 11612 EN ISO 13688',
+            'description' => 'Kominiarka z certyfikatem ESD.',
+            'catalog_price_net' => 15,
+            'purchase_price' => 9,
+            'stock' => 5,
+            'ppe_family' => 'apparel',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'JKT-ESD',
+            'name' => 'Kurtka antyelektrostatyczna STATICGUARD',
+            'manufacturer' => 'PW',
+            'category' => 'Kurtki',
+            'norms' => 'EN 1149-5',
+            'description' => 'Kurtka ESD.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 4,
+            'ppe_family' => 'apparel',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $skus = $this->postJson('/api/products/ai-search', [
+            'query' => 'KOMINIARKA ANTYELEKTROSTATYCZNA',
+            'limit' => 40,
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 3)
+            ->assertJsonPath('products.0.sku', 'KOM-ESD')
+            ->assertJsonMissing(['sku' => 'JKT-ESD'])
+            ->json('products');
+
+        $this->assertEqualsCanonicalizing(
+            ['KOM-ESD', 'XISPAL-RS', 'BALTIC'],
+            collect($skus)->pluck('sku')->all()
+        );
+    }
+
     public function test_ai_search_head_liner_prefers_catalog_cap_over_esd_jacket(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

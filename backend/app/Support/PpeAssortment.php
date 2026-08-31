@@ -350,6 +350,9 @@ final class PpeAssortment
         if (preg_match('/\b(jednorazow|winyl|vinyl|examinat)\w*/u', $t) === 1) {
             return 'disposable';
         }
+        if (preg_match('/\b(nitryl|nitrile)\w*/u', $t) === 1) {
+            return 'nitrile';
+        }
         if (preg_match('/\bspawal|11611|welding/u', $t) === 1) {
             return 'welding';
         }
@@ -574,10 +577,57 @@ final class PpeAssortment
         // Nazwa i kategoria mówią, czym produkt JEST. Opis wymienia też akcesoria i
         // sąsiednie środki ochrony („kieszenie na nakolanniki” w spodniach), więc o
         // rodzinie decyduje dopiero wtedy, gdy tamte milczą.
+        $fromName = $this->family((string) $product->name);
+        if ($fromName !== null) {
+            return $fromName;
+        }
+
         $identity = $this->productIdentityText($product);
         $familyText = $this->family($identity) !== null ? $identity : $this->productFullText($product);
 
         return $this->resolveFamily($familyText, $kat);
+    }
+
+    /**
+     * Wąski krój z wymagania — LIKE po nazwie/SKU, bez czekania na model.
+     *
+     * @return list<string>
+     */
+    public function catalogNounLikes(string $text): array
+    {
+        $family = $this->family($text);
+        $type = $this->articleType($text, $family);
+        if ($type === null) {
+            return [];
+        }
+
+        return match ($type) {
+            'balaclava' => ['kominiark', 'balaclava'],
+            'cap' => ['czepek', 'czepk', 'czapk'],
+            'liner' => ['wkladk', 'wkładk', 'liner'],
+            'helmet' => ['helm', 'hełm', 'kask'],
+            'vest' => ['kamizelk', 'waistcoat'],
+            'underwear' => ['kaleson', 'podkoszul'],
+            'coverall' => ['kombinezon'],
+            self::TYPE_KALOSZ => ['kalosz', 'wellington', 'gumowc', 'gumiak', 'purofort'],
+            self::TYPE_SANDAL => ['sandal'],
+            self::TYPE_SZTYBLET => ['sztyblet', 'chelsea'],
+            self::TYPE_TRZEWIK => ['trzewik'],
+            self::TYPE_POLBUT => ['mokasyn', 'polbut'],
+            'goggles' => ['gogl'],
+            'glasses' => ['okular'],
+            'earmuff' => ['nausznik'],
+            'earplug' => ['stoper'],
+            'kneepad' => ['nakolann'],
+            'welding_helmet' => ['przylbic'],
+            'shield' => ['oslona twarz', 'osłona twarz', 'face shield'],
+            'harness' => ['szelk'],
+            'lanyard' => ['lonza', 'amortyzator'],
+            'disposable' => ['jednorazow', 'winyl', 'vinyl'],
+            'nitrile' => ['nitryl', 'nitrile'],
+            'welding' => $family === self::FAMILY_GLOVES ? ['spawal'] : [],
+            default => [],
+        };
     }
 
     /**
@@ -593,9 +643,11 @@ final class PpeAssortment
             return true;
         }
 
-        $prodFamily = $product->ppe_family !== null && $product->ppe_family !== ''
+        $fromName = $this->family((string) $product->name);
+        $stored = $product->ppe_family !== null && $product->ppe_family !== ''
             ? (string) $product->ppe_family
-            : $this->productFamily($product);
+            : null;
+        $prodFamily = $fromName ?? $stored ?? $this->productFamily($product);
 
         if ($prodFamily !== null && $reqFamily !== $prodFamily) {
             return false;
