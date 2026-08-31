@@ -1319,4 +1319,48 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('products.0.sku', 'HEAT-350')
             ->assertJsonPath('products.1.sku', 'HEAT-250');
     }
+
+    public function test_ai_search_ignores_360_degree_coverage_as_celsius(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => '11849',
+            'name' => 'Rękawice ochronne HyFlex 11-849',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Gwarantuje ochronę 360 stopni przed zadrapaniami. '
+                .'odporność termiczna: do 100°C przez 15s (EN407).',
+            'catalog_price_net' => 12,
+            'purchase_price' => 6,
+            'stock' => 5,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'HEAT-250',
+            'name' => 'Rękawice termoochronne 250',
+            'manufacturer' => 'PIP',
+            'category' => 'Rękawice',
+            'description' => 'Kontakt 250°C, EN 407.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 10,
+            'stock' => 4,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'rękawice 200 stopnia',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'HEAT-250');
+    }
 }

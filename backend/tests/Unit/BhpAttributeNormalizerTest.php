@@ -195,7 +195,15 @@ final class BhpAttributeNormalizerTest extends TestCase
         $n = new BhpAttributeNormalizer;
 
         $this->assertSame(200, $n->requiredCelsius('rękawice do pracy przy 200 C'));
+        $this->assertSame(200, $n->requiredCelsius('rękawice do pracy przy 200 stopni'));
+        $this->assertSame(200, $n->requiredCelsius('rękawice do pracy przy 200 stopni C'));
         $this->assertSame(250, $n->maxCelsius('Kontakt 250°C, konwekcja 100°C. EN 407.'));
+        $this->assertSame(100, $n->maxCelsius(
+            'gwarantuje ochronę 360 stopni przed zadrapaniami. odporność termiczna: do 100°C przez 15s (EN407)'
+        ));
+        $this->assertNull($n->maxCelsius('zapewniające 360° ochrony przed otarciami'));
+        $this->assertNull($n->maxCelsius('Ochrona 360 stopni, w tym w okolicy nadgarstka'));
+        $this->assertNull($n->maxCelsius('ochronę 360° dookoła dłoni'));
         $this->assertNull($n->requiredCelsius('spodnie o gramaturze 250 g/m²'));
         $this->assertNull($n->maxCelsius('Opakowanie 200 szt.'));
     }
