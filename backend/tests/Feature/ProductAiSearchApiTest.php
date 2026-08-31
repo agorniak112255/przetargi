@@ -1363,4 +1363,92 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('total', 1)
             ->assertJsonPath('products.0.sku', 'HEAT-250');
     }
+
+    public function test_ai_search_heat_gloves_exclude_arm_sleeves(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'MBCK/40/P',
+            'name' => 'Naramiennik MBCK 40 cm',
+            'manufacturer' => 'Lebon',
+            'category' => 'Zarękawki antyprzecięciowe',
+            'description' => 'Zarękawki para-aramid. Kontakt 250°C.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 9,
+            'stock' => 3,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'HEAT-250',
+            'name' => 'Rękawice termoochronne 250',
+            'manufacturer' => 'PIP',
+            'category' => 'Rękawice',
+            'description' => 'Kontakt 250°C, EN 407.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 10,
+            'stock' => 4,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'rękawice do pracy przy 200 C',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'HEAT-250');
+    }
+
+    public function test_ai_search_heat_ignores_shop_category_temperature(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'GTA/D/M',
+            'name' => 'GTA/D/M',
+            'manufacturer' => 'Lebon',
+            'category' => 'Rękawice termiczne 350°C',
+            'norms' => '1, 1 para, 4, Nie, Poliuretan, Szary, Tak',
+            'description' => 'Rękawice dziane bezszwowo, uiglenie 13 w 100% z teksturowanego '
+                .'poliamidu z dodatkiem włókna węglowego. Końcówki palców powlekane białym poliuretanem.',
+            'catalog_price_net' => 14.97,
+            'purchase_price' => 11.98,
+            'stock' => 5,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'HEAT-250',
+            'name' => 'Rękawice termoochronne 250',
+            'manufacturer' => 'PIP',
+            'category' => 'Rękawice',
+            'description' => 'Kontakt 250°C, EN 407.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 10,
+            'stock' => 4,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'rękawice do pracy przy 200 C',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'HEAT-250');
+    }
 }

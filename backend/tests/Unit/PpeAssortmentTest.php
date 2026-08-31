@@ -209,4 +209,28 @@ final class PpeAssortmentTest extends TestCase
 
         $this->assertTrue($this->assortment->compatibleProduct('rękawice zimowe MAPA', $gloves));
     }
+
+    #[Test]
+    public function glove_requirement_rejects_arm_sleeve(): void
+    {
+        $sleeve = new Product;
+        $sleeve->forceFill([
+            'name' => 'Naramiennik MBCK 40 cm',
+            'sku' => 'MBCK/40/P',
+            'category' => 'Zarękawki antyprzecięciowe',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'description' => 'Zarękawki para-aramid, ochrona 360 stopni, kontakt 250°C.',
+        ]);
+
+        $this->assertTrue($this->assortment->isArmSleeve((string) $sleeve->name));
+        $this->assertFalse($this->assortment->compatibleProduct('rękawice do pracy przy 200 C', $sleeve));
+
+        $glove = new Product;
+        $glove->forceFill([
+            'name' => 'Rękawice termoochronne 250',
+            'sku' => 'HEAT-250',
+            'category' => 'Rękawice',
+        ]);
+        $this->assertTrue($this->assortment->compatibleProduct('rękawice do pracy przy 200 C', $glove));
+    }
 }

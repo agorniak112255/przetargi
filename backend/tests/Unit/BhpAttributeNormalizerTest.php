@@ -206,5 +206,15 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertNull($n->maxCelsius('ochronę 360° dookoła dłoni'));
         $this->assertNull($n->requiredCelsius('spodnie o gramaturze 250 g/m²'));
         $this->assertNull($n->maxCelsius('Opakowanie 200 szt.'));
+        $this->assertSame(350, $n->maxCelsius('Rękawice termiczne 350°C'));
+        $this->assertNull($n->maxCelsius('Rękawice termiczne 350°C', true));
+        $this->assertSame(350, $n->maxCelsius(
+            'Rękawice termiczne. Kontakt 350°C, EN 407.',
+            true
+        ));
+        $this->assertNull($n->maxCelsius(
+            'Rękawice dziane z poliamidu. Końcówki palców powlekane poliuretanem.',
+            true
+        ));
     }
 }

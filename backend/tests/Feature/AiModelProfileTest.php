@@ -155,7 +155,37 @@ final class AiModelProfileTest extends TestCase
         });
     }
 
-    public function test_openrouter_gemini_flash_auto_disables_thinking(): void
+    public function test_openrouter_gemini2_flash_auto_disables_thinking(): void
+    {
+        $this->seedMainConfig();
+        $this->saveProfiles([[
+            'id' => 'fast',
+            'name' => 'Profil 2',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'google/gemini-2.0-flash',
+            'api_key' => 'sk-or-profile-123',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::ProductSearch
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return $request['model'] === 'google/gemini-2.0-flash'
+                && ($data['reasoning']['enabled'] ?? null) === false
+                && ($data['chat_template_kwargs']['enable_thinking'] ?? null) === false;
+        });
+    }
+
+    public function test_openrouter_gemini3_flash_keeps_mandatory_reasoning(): void
     {
         $this->seedMainConfig();
         $this->saveProfiles([[
@@ -180,8 +210,51 @@ final class AiModelProfileTest extends TestCase
             $data = $request->data();
 
             return $request['model'] === 'google/gemini-3.7-flash'
-                && ($data['reasoning']['enabled'] ?? null) === false
-                && ($data['chat_template_kwargs']['enable_thinking'] ?? null) === false;
+                && ! array_key_exists('reasoning', $data)
+                && ($data['chat_template_kwargs']['enable_thinking'] ?? null) !== false;
+        });
+    }
+
+    public function test_retries_when_endpoint_forbids_disabled_reasoning(): void
+    {
+        $this->seedMainConfig();
+        $this->saveProfiles([[
+            'id' => 'fast',
+            'name' => 'Profil 2',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'google/gemini-2.0-flash',
+            'api_key' => 'sk-or-profile-123',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::sequence()
+                ->push([
+                    'error' => [
+                        'message' => 'Reasoning is mandatory for this endpoint and cannot be disabled.',
+                    ],
+                ], 400)
+                ->push([
+                    'error' => [
+                        'message' => 'Reasoning is mandatory for this endpoint and cannot be disabled.',
+                    ],
+                ], 400)
+                ->push(self::jsonReply('{"ok":true}'), 200),
+        ]);
+
+        $json = app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::ProductSearch
+        );
+
+        $this->assertSame(['ok' => true], $json);
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return ! array_key_exists('reasoning', $data)
+                && ($data['chat_template_kwargs']['enable_thinking'] ?? null) !== false;
         });
     }
 

@@ -545,14 +545,14 @@ final class ProductAiSearchService
             ->limit(400)
             ->get()
             ->filter(function (Product $product) use ($query, $minC): bool {
-                $maxC = $this->bhpAttributes->maxCelsius($this->filterHaystack($product));
+                $maxC = $this->productHeatCelsius($product);
                 if ($maxC === null || $maxC < $minC) {
                     return false;
                 }
 
                 return $this->assortment->compatibleProduct($query, $product);
             })
-            ->sortByDesc(fn (Product $p): int => $this->bhpAttributes->maxCelsius($this->filterHaystack($p)) ?? 0)
+            ->sortByDesc(fn (Product $p): int => $this->productHeatCelsius($p) ?? 0)
             ->values();
 
         return $rows->take(max(8, $limit))->values();
@@ -570,7 +570,7 @@ final class ProductAiSearchService
             if (! $product instanceof Product) {
                 continue;
             }
-            $maxC = $this->bhpAttributes->maxCelsius($this->filterHaystack($product));
+            $maxC = $this->productHeatCelsius($product);
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, 78 + min(20, intdiv(max(0, (int) $maxC - $minC), 25)));
             $row['ai_match_reason'] = $maxC !== null
@@ -957,7 +957,7 @@ final class ProductAiSearchService
                 'manufacturer' => $p->manufacturer,
                 'norms' => $p->norms,
                 'description' => mb_substr((string) ($p->description ?? ''), 0, 280),
-                'heat_celsius' => $this->bhpAttributes->maxCelsius($this->filterHaystack($p)),
+                'heat_celsius' => $this->productHeatCelsius($p),
                 'use_cases' => array_slice($this->stringList($payload['use_cases'] ?? null), 0, 4),
                 'features' => array_slice($this->stringList($payload['features'] ?? null), 0, 4),
             ];
@@ -1046,6 +1046,29 @@ final class ProductAiSearchService
             ...$this->stringList($payload['norms'] ?? null),
             ...$this->stringList($payload['specs'] ?? null),
         ])));
+    }
+
+    /** °C z karty — bez folderu sklepu w search_blob („Rękawice termiczne 350°C”). */
+    private function heatHaystack(Product $product): string
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+
+        return trim(implode(' ', array_filter([
+            (string) $product->name,
+            (string) $product->sku,
+            (string) ($product->manufacturer ?? ''),
+            (string) ($product->description ?? ''),
+            (string) ($product->norms ?? ''),
+            ...$this->stringList($payload['features'] ?? null),
+            ...$this->stringList($payload['use_cases'] ?? null),
+            ...$this->stringList($payload['norms'] ?? null),
+            ...$this->stringList($payload['specs'] ?? null),
+        ])));
+    }
+
+    private function productHeatCelsius(Product $product): ?int
+    {
+        return $this->bhpAttributes->maxCelsius($this->heatHaystack($product), true);
     }
 
     /**

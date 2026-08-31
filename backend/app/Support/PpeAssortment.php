@@ -535,8 +535,23 @@ final class PpeAssortment
         if ($reqFamily === self::FAMILY_APPAREL) {
             return $this->apparelCompatible($requirement, $this->productFullText($product));
         }
+        if ($reqFamily === self::FAMILY_GLOVES && ! $this->isArmSleeve($requirement)
+            && $this->isArmSleeve($this->productIdentityText($product))) {
+            return false;
+        }
 
         return true;
+    }
+
+    /** Naramiennik / zarękawek — nie jest rękawicą (dłoń zostaje odkryta). */
+    public function isArmSleeve(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match(
+            '/\b(naramiennik|zarekawk|arm\s*sleeves?|armguards?|arm\s*guards?|manchon)\w*/u',
+            $t
+        ) === 1;
     }
 
     private function productIdentityText(Product $product): string

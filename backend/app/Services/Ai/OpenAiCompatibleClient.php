@@ -1285,6 +1285,24 @@ class OpenAiCompatibleClient
             }
         }
 
+        // Gemini 3: reasoning nie da się wyłączyć — ponów bez enabled:false.
+        if ($response !== null
+            && in_array($response->status(), [400, 422], true)
+            && $this->isMandatoryReasoningError($response)
+            && $this->payloadDisablesReasoning($payload)
+        ) {
+            $alt = $this->stripDisabledReasoning($payload);
+            $retry = $jsonMode ? ($alt + ['response_format' => ['type' => 'json_object']]) : $alt;
+            $response = $this->post($url, $apiKey, $retry, $timeout);
+            if ($response->successful() || ! $jsonMode) {
+                return $response;
+            }
+            $response = $this->post($url, $apiKey, $alt, $timeout);
+            if ($response->successful() || ! in_array($response->status(), [400, 422], true)) {
+                return $response;
+            }
+        }
+
         // GPT-5 / o-series: max_tokens bywa odrzucane — spróbuj max_completion_tokens
         if ($reasoning && $response !== null && in_array($response->status(), [400, 422], true)) {
             $alt = $payload;
@@ -1375,7 +1393,12 @@ class OpenAiCompatibleClient
 
     private function isReasoningModel(string $model): bool
     {
-        return preg_match('/gpt-5|o1|o3|o4|tera|reasoning|r1|think/i', $model) === 1;
+        return preg_match('/gpt-5|o1|o3|o4|tera|reasoning|r1|think|gemini-3/i', $model) === 1;
+    }
+
+    private function requiresReasoning(string $model): bool
+    {
+        return preg_match('/gemini-3/i', $model) === 1;
     }
 
     private function isQwen38Model(string $model): bool
@@ -1387,7 +1410,8 @@ class OpenAiCompatibleClient
 
     private function shouldDisableOpenRouterThinking(string $model, string $effort): bool
     {
-        if (! str_contains($model, '/')
+        if ($this->requiresReasoning($model)
+            || ! str_contains($model, '/')
             || ! in_array($effort, [ReasoningEffort::OFF, ReasoningEffort::AUTO, ReasoningEffort::NONE], true)) {
             return false;
         }
@@ -1410,6 +1434,43 @@ class OpenAiCompatibleClient
         unset($payload['reasoning_effort']);
 
         return $payload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function payloadDisablesReasoning(array $payload): bool
+    {
+        return ($payload['reasoning']['enabled'] ?? null) === false
+            || ($payload['chat_template_kwargs']['enable_thinking'] ?? null) === false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function stripDisabledReasoning(array $payload): array
+    {
+        unset($payload['reasoning']);
+        $kwargs = $payload['chat_template_kwargs'] ?? null;
+        if (is_array($kwargs)) {
+            unset($kwargs['enable_thinking']);
+            if ($kwargs === []) {
+                unset($payload['chat_template_kwargs']);
+            } else {
+                $payload['chat_template_kwargs'] = $kwargs;
+            }
+        }
+
+        return $payload;
+    }
+
+    private function isMandatoryReasoningError(Response $response): bool
+    {
+        $detail = strtolower((string) (data_get($response->json(), 'error.message') ?? $response->body()));
+
+        return str_contains($detail, 'reasoning is mandatory')
+            || (str_contains($detail, 'reasoning') && str_contains($detail, 'cannot be disabled'));
     }
 
     /**

@@ -386,9 +386,9 @@ final class BhpAttributeNormalizer
     }
 
     /** Najwyższa temperatura w karcie produktu. */
-    public function maxCelsius(string $text): ?int
+    public function maxCelsius(string $text, bool $ignoreShopCategoryLabels = false): ?int
     {
-        $ratings = $this->celsiusRatings($text);
+        $ratings = $this->celsiusRatings($text, $ignoreShopCategoryLabels);
 
         return $ratings === [] ? null : max($ratings);
     }
@@ -396,7 +396,7 @@ final class BhpAttributeNormalizer
     /**
      * @return list<int>
      */
-    public function celsiusRatings(string $text): array
+    public function celsiusRatings(string $text, bool $ignoreShopCategoryLabels = false): array
     {
         if (preg_match_all(
             '/(?<![0-9])([1-9][0-9]{1,3})\s*(°)?\s*(C\b|celsjusz\w*|st\.?\s*C|stopn(?:i|ie|ia)?)?/iu',
@@ -423,6 +423,9 @@ final class BhpAttributeNormalizer
                 continue;
             }
             if (! $this->looksLikeCelsius($after, $window)) {
+                continue;
+            }
+            if ($ignoreShopCategoryLabels && $this->isShopCategoryHeatLabel($window)) {
                 continue;
             }
             $out[] = $n;
@@ -456,6 +459,19 @@ final class BhpAttributeNormalizer
 
         return preg_match('/termiczn|temperatur|kontakt|konwek|promieniow|piec|zaroodporn|ciepln|en\s*407/u', $window) === 1
             && preg_match('/^\d+\s*°/u', $after) === 1;
+    }
+
+    /** Folder sklepu „Rękawice termiczne 350°C”, bez EN 407 / kontaktu w karcie. */
+    private function isShopCategoryHeatLabel(string $window): bool
+    {
+        if (preg_match('/termiczn\w*.{0,16}\d+|^\d+.{0,16}termiczn/u', $window) !== 1) {
+            return false;
+        }
+
+        return preg_match(
+            '/en\s*407|kontakt|konwek|promieniow|piec|hutnicz|termoochron|odporn\w*\s+termiczn|contact\s*heat/u',
+            $window
+        ) !== 1;
     }
 
     public function footwearClassToken(string $class): string
