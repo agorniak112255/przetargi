@@ -210,7 +210,8 @@ final class AiModelProfileTest extends TestCase
             $data = $request->data();
 
             return $request['model'] === 'google/gemini-3.7-flash'
-                && ! array_key_exists('reasoning', $data)
+                && ($data['reasoning']['effort'] ?? null) === 'low'
+                && ($data['reasoning']['enabled'] ?? null) !== false
                 && ($data['chat_template_kwargs']['enable_thinking'] ?? null) !== false;
         });
     }

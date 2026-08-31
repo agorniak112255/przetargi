@@ -1484,6 +1484,12 @@ class OpenAiCompatibleClient
         if ($this->shouldDisableOpenRouterThinking($model, $effort)) {
             return $this->disableOpenRouterThinking($payload);
         }
+        if ($this->requiresReasoning($model)
+            && in_array($effort, [ReasoningEffort::AUTO, ReasoningEffort::LOW], true)) {
+            $payload['reasoning'] = ['effort' => 'low'];
+
+            return $payload;
+        }
         if ($effort === ReasoningEffort::OFF) {
             return $payload;
         }

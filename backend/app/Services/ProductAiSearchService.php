@@ -31,7 +31,10 @@ final class ProductAiSearchService
 
     private const CANDIDATE_POOL = 80;
 
-    private const RANK_CARDS = 60;
+    private const RANK_CARDS = 24;
+
+    /** Dwa tokeny w nazwie (np. kominiarka + polar) — bez LLM. */
+    private const LEXICAL_MIN_SCORE = 8;
 
     private const MAX_MATCHES = 20;
 
@@ -149,6 +152,19 @@ final class ProductAiSearchService
             ];
         }
 
+        $lexical = $this->retrieveLexicalIfObvious($query, $limit);
+        if ($lexical !== []) {
+            return [
+                'query' => $query,
+                'total' => count($lexical),
+                'products' => $lexical,
+                'needed' => $query,
+                'search_phrases' => $this->fallbackPhrases($query),
+                'ai_note' => null,
+                'external_hint' => null,
+            ];
+        }
+
         $intent = $this->understandRequirement($query, $task);
         $candidates = $this->keepCompatible(
             $this->assortmentText($query, $intent['needed']),
@@ -234,7 +250,7 @@ final class ProductAiSearchService
                     'role' => 'user',
                     'content' => $query,
                 ],
-            ], null, 4000, null, $task);
+            ], null, 800, null, $task);
 
             return $this->parseIntent($raw, $query);
         } catch (Throwable) {
@@ -323,6 +339,113 @@ final class ProductAiSearchService
             'xxs', 'xs', 'xxl', 'xxxl', 'xxxxl', 'xxxxxl',
             '2xl', '3xl', '4xl', '5xl', '2x', '3x', '4x',
         ], true);
+    }
+
+    /**
+     * Gdy SIWZ ma jasną rodzinę i w nazwie jest rzeczownik + cecha (kominiarka + polar),
+     * nie wołamy Gemini.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function retrieveLexicalIfObvious(string $query, int $limit): array
+    {
+        if ($this->assortment->family($query) === null || $this->modelFuzzy->hasNamedModel($query)) {
+            return [];
+        }
+
+        $intent = ['needed' => $query, 'search_phrases' => $this->fallbackPhrases($query)];
+        $family = $this->assortment->family($query);
+        $ids = array_values(array_unique(array_merge(
+            $this->textSearch->search($intent['search_phrases'], $family, 80),
+            $family !== null ? $this->textSearch->searchUnclassified($intent['search_phrases'], 40) : [],
+        )));
+        $products = $this->keepCompatible($query, $this->hydrate($ids));
+
+        $scored = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $hit = $this->lexicalHit($query, $product);
+            if ($hit === null) {
+                continue;
+            }
+            $scored[] = $hit;
+        }
+        if ($scored === []) {
+            return [];
+        }
+        usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+
+        $out = [];
+        foreach ($scored as $hit) {
+            $product = $hit['product'];
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $row['ai_match_percent'] = min(96, 78 + min(18, (int) $hit['score'] * 2));
+            $row['ai_match_reason'] = 'Zgodność nazwy i fraz z SIWZ — bez czekania na model.';
+            $out[] = $row;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return array{score: int, product: Product}|null
+     */
+    private function lexicalHit(string $query, Product $product): ?array
+    {
+        $name = $this->lexicalNormalize(
+            $product->name.' '.$product->sku.' '.($product->category ?? '')
+        );
+        $genericName = 0;
+        $distinctName = 0;
+        $score = 0;
+        foreach ($this->fallbackPhrases($query) as $token) {
+            $t = $this->lexicalNormalize($token);
+            if ($t === '' || mb_strlen($t) < 4) {
+                continue;
+            }
+            $inName = str_contains($name, $t);
+            if (! $inName) {
+                continue;
+            }
+            $score += 4;
+            if ($this->isGenericAssortmentToken($t)) {
+                $genericName++;
+            } else {
+                $distinctName++;
+            }
+        }
+        if ($genericName < 1 || $distinctName < 1 || $score < self::LEXICAL_MIN_SCORE) {
+            return null;
+        }
+
+        return ['score' => $score, 'product' => $product];
+    }
+
+    private function isGenericAssortmentToken(string $normalized): bool
+    {
+        return preg_match(
+            '/^(rekawic|glove|spodn|kurtk|bluz|czapk|czepek|kominiark|balaclava|helm|kask'
+            .'|fartuch|kitel|kamizelk|kombinezon|ogrodniczk|buty|obuwie|trzewik|polbut'
+            .'|sztyblet|okular|gogl|nausznik|polmask|respirator|pochlaniacz|filtr'
+            .'|nakolann|wkladk|robocz|ochronn|zimow|letni|mesk|damsk)/u',
+            trim($normalized)
+        ) === 1;
+    }
+
+    private function lexicalNormalize(string $text): string
+    {
+        $t = mb_strtolower($text);
+        $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z'];
+
+        return (string) preg_replace('/[^a-z0-9]+/u', ' ', strtr($t, $map));
     }
 
     /**
@@ -1090,7 +1213,7 @@ final class ProductAiSearchService
                 'role' => 'user',
                 'content' => "Wymaganie:\n{$query}{$neededLine}\n\nKarty katalogu:\n{$json}",
             ],
-        ], null, 6000, null, $task);
+        ], null, 2500, null, $task);
 
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
         $byId = $candidates->keyBy('id');

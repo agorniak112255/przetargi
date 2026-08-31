@@ -683,35 +683,15 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_NONE,
         ]);
 
-        $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $balaclava): array {
-                $call++;
-                if ($call === 1) {
-                    return [
-                        'needed' => 'kominiarka z polaru',
-                        'search_phrases' => ['kominiarka', 'czapka', 'polar'],
-                    ];
-                }
-                $cards = (string) $messages[1]['content'];
-
-                return ['matches' => [
-                    ['id' => $balaclava->id, 'score' => 91, 'reason' => 'Kominiarka z polaru'],
-                ]];
-            });
+        $llm->shouldNotReceive('chatJson');
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'CZAPKA KOMINIARKA Z POLARU czarna lub granatowa',
         ])
             ->assertOk()
-            ->assertJsonPath('total', 1)
             ->assertJsonPath('products.0.sku', 'BALTIC');
-
-        $this->assertNotNull($cards);
-        $this->assertStringContainsString('KOMINIARKA Z POLARU POLIESTRU', $cards);
     }
 
     public function test_ai_search_ranks_card_matching_description_details_over_name_only_hits(): void
@@ -868,35 +848,16 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_NONE,
         ]);
 
-        $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $balaclava): array {
-                $call++;
-                if ($call === 1) {
-                    return [
-                        'needed' => 'kominiarka z polaru',
-                        'search_phrases' => ['kominiarka', 'polar'],
-                    ];
-                }
-                $cards = (string) $messages[1]['content'];
-
-                return ['matches' => [
-                    ['id' => $balaclava->id, 'score' => 90, 'reason' => 'Kominiarka z polaru'],
-                ]];
-            });
+        $llm->shouldNotReceive('chatJson');
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'CZAPKA KOMINIARKA Z POLARU czarna lub granatowa',
         ])
             ->assertOk()
-            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'BALTIC')
             ->assertJsonMissing(['sku' => 'GLOVE-OFFTOPIC']);
-
-        $this->assertNotNull($cards);
-        $this->assertStringNotContainsString('GLOVE-OFFTOPIC', $cards);
     }
 
     public function test_grammage_written_differently_in_siwz_and_in_card_still_ranks_first(): void
