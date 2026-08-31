@@ -343,6 +343,42 @@ final class AiModelProfileTest extends TestCase
         }
     }
 
+    public function test_profile_401_names_the_profile_and_does_not_hide_behind_dead_main(): void
+    {
+        $this->seedMainConfig();
+        $this->saveProfiles([[
+            'id' => 'fast',
+            'name' => 'Profil 2',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'qwen/qwen3.8-flash',
+            'api_key' => 'sk-or-old-invalid',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+
+        Http::fake(function (Request $request) {
+            if (str_contains($request->url(), 'openrouter.ai')) {
+                return Http::response(['error' => ['message' => 'User not found.']], 401);
+            }
+
+            throw new ConnectionException('cURL error 7: Failed to connect');
+        });
+
+        try {
+            app(OpenAiCompatibleClient::class)->chatJson(
+                [['role' => 'user', 'content' => 'test']],
+                null,
+                null,
+                null,
+                AiTask::ProductSearch
+            );
+            $this->fail('Oczekiwano HTTP 401 profilu.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Profil 2', $e->getMessage());
+            $this->assertStringContainsString('401', $e->getMessage());
+            $this->assertStringContainsString('User not found', $e->getMessage());
+        }
+    }
+
     public function test_a_task_cannot_be_claimed_by_two_profiles(): void
     {
         $this->seed(RolesAndPermissionsSeeder::class);
@@ -397,6 +433,29 @@ final class AiModelProfileTest extends TestCase
 
         $this->assertSame(
             'sk-or-secret-9876543210',
+            app(AiSettingsService::class)->profileForTask(AiTask::ProductSearch)['api_key']
+        );
+    }
+
+    public function test_profile_key_strips_bearer_prefix(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedMainConfig();
+
+        $this->putJson('/api/ai-settings', [
+            'model_profiles' => [[
+                'id' => 'fast',
+                'name' => 'OpenRouter',
+                'base_url' => 'https://openrouter.ai/api/v1',
+                'model' => 'google/gemini-flash',
+                'api_key' => 'Bearer sk-or-v1-abc123def456',
+                'tasks' => ['product_search'],
+            ]],
+        ])->assertOk();
+
+        $this->assertSame(
+            'sk-or-v1-abc123def456',
             app(AiSettingsService::class)->profileForTask(AiTask::ProductSearch)['api_key']
         );
     }

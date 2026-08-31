@@ -124,18 +124,12 @@ export function AiSettingsPage() {
   const [err, setErr] = useState('')
 
   function hydrateSecrets(next: AiSettings) {
-    setApiKey(next.has_api_key ? (next.api_key_masked ?? '') : '')
-    setTavilyKey(next.has_tavily_api_key ? (next.tavily_api_key_masked ?? '') : '')
-    setQdrantKey(next.has_qdrant_api_key ? (next.qdrant_api_key_masked ?? '') : '')
-    setEmbeddingKey(next.has_embedding_api_key ? (next.embedding_api_key_masked ?? '') : '')
-    setCloudEmbeddingKey(
-      next.has_embedding_cloud_api_key ? (next.embedding_cloud_api_key_masked ?? '') : ''
-    )
-    setProfileKeys(
-      Object.fromEntries(
-        (next.model_profiles ?? []).map((p) => [p.id, p.has_api_key ? (p.api_key_masked ?? '') : ''])
-      )
-    )
+    setApiKey('')
+    setTavilyKey('')
+    setQdrantKey('')
+    setEmbeddingKey('')
+    setCloudEmbeddingKey('')
+    setProfileKeys(Object.fromEntries((next.model_profiles ?? []).map((p) => [p.id, ''])))
   }
 
   async function load() {

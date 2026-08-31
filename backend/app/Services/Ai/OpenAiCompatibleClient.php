@@ -256,7 +256,7 @@ class OpenAiCompatibleClient
             }
             if (! $response instanceof Response || ! $response->successful()) {
                 $out[] = ['ok' => false, 'error' => $response instanceof Response
-                    ? $this->formatHttpError($response)
+                    ? $this->formatHttpError($response, $profile)
                     : 'Brak odpowiedzi AI'];
 
                 continue;
@@ -395,7 +395,7 @@ class OpenAiCompatibleClient
         }
 
         if (! $response->successful()) {
-            throw new RuntimeException($this->formatHttpError($response));
+            throw new RuntimeException($this->formatHttpError($response, $profile));
         }
 
         $payload = $response->json();
@@ -1170,19 +1170,29 @@ class OpenAiCompatibleClient
         return preg_match('/context|max_model_len|n_ctx|too many tokens|maximum context|requested .+ tokens/i', $detail) === 1;
     }
 
-    private function formatHttpError(Response $response): string
+    /**
+     * @param  array{label?: string, is_default?: bool}|null  $profile
+     */
+    private function formatHttpError(Response $response, ?array $profile = null): string
     {
         $status = $response->status();
         $body = $response->json();
         $detail = is_array($body)
             ? (string) data_get($body, 'error.message', $response->body())
             : $response->body();
+        $who = ! empty($profile['is_default']) || ($profile['label'] ?? '') === ''
+            ? 'API AI'
+            : 'API AI (profil „'.$profile['label'].'”)';
+        if ($status === 401) {
+            return $who.' odrzuciło klucz (HTTP 401: '.$detail.'). '
+                .'Wklej nowy klucz sk-or-v1-… w tym profilu i zapisz ustawienia — nie zmieniaj klucza w konfiguracji głównej.';
+        }
         if ($status === 429) {
             return 'Limit zapytań modelu AI (HTTP 429). To OpenRouter/dostawca modelu, nie Tavily. '
                 .'Poczekaj ok. minutę i ponów opis produktu.';
         }
 
-        return 'API AI zwróciło błąd HTTP '.$status.': '.$detail;
+        return $who.' zwróciło błąd HTTP '.$status.': '.$detail;
     }
 
     /**

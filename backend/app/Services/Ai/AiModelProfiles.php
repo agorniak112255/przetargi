@@ -148,6 +148,7 @@ final class AiModelProfiles
             return $existing;
         }
         $incoming = trim($incoming);
+        $incoming = (string) preg_replace('/^bearer\s+/i', '', $incoming);
         if ($incoming === '' || str_contains($incoming, '*')) {
             return $existing;
         }
