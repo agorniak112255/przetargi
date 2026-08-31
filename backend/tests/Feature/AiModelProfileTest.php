@@ -11,9 +11,11 @@ use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
+use RuntimeException;
 use Tests\TestCase;
 
 final class AiModelProfileTest extends TestCase
@@ -267,6 +269,78 @@ final class AiModelProfileTest extends TestCase
 
         $this->assertSame(['ok' => true], $result);
         Http::assertSent(fn (Request $request): bool => $request->url() === 'http://127.0.0.1:26872/v1/chat/completions');
+    }
+
+    public function test_dead_profile_keeps_its_error_when_main_host_does_not_resolve(): void
+    {
+        $this->seedMainConfig();
+        AiSetting::query()->first()?->forceFill([
+            'base_url' => 'https://dead-local-ai.invalid/v1',
+        ])->save();
+        $this->saveProfiles([[
+            'id' => 'fast',
+            'name' => 'OpenRouter bez środków',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'google/gemini-flash',
+            'api_key' => 'sk-or-profile-123',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+
+        Http::fake([
+            'openrouter.ai/*' => Http::response(['error' => ['message' => 'Insufficient credits']], 402),
+            '*' => Http::response(self::jsonReply('{"ok":true}')),
+        ]);
+
+        try {
+            app(OpenAiCompatibleClient::class)->chatJson(
+                [['role' => 'user', 'content' => 'test']],
+                null,
+                null,
+                null,
+                AiTask::ProductSearch
+            );
+            $this->fail('Oczekiwano błędu profilu, nie fallbacku na martwy host.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Insufficient credits', $e->getMessage());
+            $this->assertStringNotContainsString('Could not resolve host', $e->getMessage());
+        }
+
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'dead-local-ai.invalid'));
+    }
+
+    public function test_dead_profile_keeps_its_error_when_main_connection_fails(): void
+    {
+        $this->seedMainConfig();
+        $this->saveProfiles([[
+            'id' => 'fast',
+            'name' => 'OpenRouter bez środków',
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'model' => 'google/gemini-flash',
+            'api_key' => 'sk-or-profile-123',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+
+        Http::fake(function (Request $request) {
+            if (str_contains($request->url(), 'openrouter.ai')) {
+                return Http::response(['error' => ['message' => 'Insufficient credits']], 402);
+            }
+
+            throw new ConnectionException('cURL error 6: Could not resolve host: bedford-joint-adelaide-poetry.trycloudflare.com');
+        });
+
+        try {
+            app(OpenAiCompatibleClient::class)->chatJson(
+                [['role' => 'user', 'content' => 'test']],
+                null,
+                null,
+                null,
+                AiTask::ProductSearch
+            );
+            $this->fail('Oczekiwano błędu profilu, nie błędu DNS konfiguracji głównej.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Insufficient credits', $e->getMessage());
+            $this->assertStringNotContainsString('trycloudflare.com', $e->getMessage());
+        }
     }
 
     public function test_a_task_cannot_be_claimed_by_two_profiles(): void

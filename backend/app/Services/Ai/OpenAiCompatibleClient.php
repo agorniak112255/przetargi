@@ -12,6 +12,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Throwable;
 
 class OpenAiCompatibleClient
 {
@@ -92,13 +93,18 @@ class OpenAiCompatibleClient
                 return $failed;
             }
 
-            return $this->chatManyWithProfile($this->settings->profileForTask(null), $messageSets, $jsonMode, $extra);
+            return $this->runOnMainOrRethrow(
+                $e,
+                fn (array $main): array => $this->chatManyWithProfile($main, $messageSets, $jsonMode, $extra),
+                $task,
+                $profile['label']
+            );
         }
     }
 
     /**
-     * Cichy fallback: brak środków, limit 429 albo padnięty endpoint profilu nie może
-     * zatrzymać funkcji, która przed wprowadzeniem profili działała na modelu głównym.
+     * Fallback na model główny przy 402/429 — ale nie gdy lokalny endpoint nie odpowiada,
+     * bo wtedy użytkownik widzi cURL do trycloudflare zamiast błędu profilu.
      *
      * @param  callable(array<string, mixed>): array<string, mixed>  $run
      * @return array<string, mixed>
@@ -114,14 +120,82 @@ class OpenAiCompatibleClient
                 throw $e;
             }
 
-            Log::warning('Profil AI zawiódł — schodzę na konfigurację główną', [
+            return $this->runOnMainOrRethrow($e, $run, $task, $profile['label']);
+        }
+    }
+
+    /**
+     * @template T
+     *
+     * @param  callable(array<string, mixed>): T  $run
+     * @return T
+     */
+    private function runOnMainOrRethrow(
+        RuntimeException $profileError,
+        callable $run,
+        ?AiTask $task,
+        string $profileLabel
+    ): mixed {
+        $main = $this->settings->profileForTask(null);
+        if ($this->isUnreachableBaseUrl($main['base_url'])) {
+            Log::warning('Profil AI zawiódł — konfiguracja główna nieosiągalna, zostawiam błąd profilu', [
                 'task' => $task?->value,
-                'profile' => $profile['label'],
-                'error' => $e->getMessage(),
+                'profile' => $profileLabel,
+                'error' => $profileError->getMessage(),
+                'main_url' => $main['base_url'],
             ]);
 
-            return $run($this->settings->profileForTask(null));
+            throw $profileError;
         }
+
+        Log::warning('Profil AI zawiódł — schodzę na konfigurację główną', [
+            'task' => $task?->value,
+            'profile' => $profileLabel,
+            'error' => $profileError->getMessage(),
+        ]);
+
+        try {
+            return $run($main);
+        } catch (RuntimeException $fallbackError) {
+            if ($this->isUnreachableEndpointError($fallbackError)) {
+                Log::warning('Profil AI zawiódł — konfiguracja główna też nie odpowiada, zostawiam błąd profilu', [
+                    'task' => $task?->value,
+                    'profile' => $profileLabel,
+                    'profile_error' => $profileError->getMessage(),
+                    'main_error' => $fallbackError->getMessage(),
+                ]);
+
+                throw $profileError;
+            }
+
+            throw $fallbackError;
+        }
+    }
+
+    private function isUnreachableBaseUrl(string $baseUrl): bool
+    {
+        $host = parse_url($baseUrl, PHP_URL_HOST);
+
+        return ! is_string($host)
+            || $host === ''
+            || (! filter_var($host, FILTER_VALIDATE_IP) && gethostbyname($host) === $host);
+    }
+
+    private function isUnreachableEndpointError(Throwable $e): bool
+    {
+        if ($e->getPrevious() instanceof ConnectionException) {
+            return true;
+        }
+        $msg = $e->getMessage();
+
+        return str_contains($msg, 'Nie można połączyć z API AI')
+            || str_contains($msg, 'Could not resolve host')
+            || str_contains($msg, 'cURL error 6')
+            || str_contains($msg, 'cURL error 7')
+            || str_contains($msg, 'cURL error 28')
+            || str_contains($msg, 'Connection refused')
+            || str_contains($msg, 'Failed to connect')
+            || str_contains($msg, 'Operation timed out');
     }
 
     /**
