@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type Product } from '../lib/api'
+import { ProductVerifyModal } from './ProductVerifyModal'
 
 export type AiMatchPick = {
   id: number
@@ -38,6 +39,7 @@ export function ProductAiMatchModal({
   const [error, setError] = useState('')
   const [results, setResults] = useState<AiMatchPick[]>([])
   const [externalHints, setExternalHints] = useState<ExternalHint[]>([])
+  const [describeId, setDescribeId] = useState<number | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -45,16 +47,17 @@ export function ProductAiMatchModal({
     setError('')
     setResults([])
     setExternalHints([])
+    setDescribeId(null)
   }, [open, initialQuery, initialWeb])
 
   useEffect(() => {
     if (!open) return
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !busy) onClose()
+      if (e.key === 'Escape' && !busy && describeId == null) onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open, busy, onClose])
+  }, [open, busy, describeId, onClose])
 
   async function runSearch(web: boolean, text = query) {
     const q = text.trim()
@@ -217,20 +220,17 @@ export function ProductAiMatchModal({
             <div className="space-y-1.5">
               <p className="text-xs font-medium text-slate-600">Wybierz produkt:</p>
               {results.map((r) => (
-                <button
+                <div
                   key={r.id}
-                  type="button"
-                  disabled={Boolean(busy)}
-                  onClick={() => onSelect(r)}
-                  className="flex w-full flex-col rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-left transition hover:border-violet-400 hover:bg-violet-100"
+                  className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2"
                 >
-                  <span className="flex items-center justify-between gap-2">
+                  <div className="flex items-start justify-between gap-2">
                     <span className="text-sm font-medium text-violet-950">
                       {r.sku} · {r.name}
                     </span>
                     <span className="shrink-0 text-xs text-violet-700">{r.score}%</span>
-                  </span>
-                  <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-700">
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-700">
                     <span>
                       Producent: <b>{r.manufacturer || '—'}</b>
                     </span>
@@ -247,14 +247,37 @@ export function ProductAiMatchModal({
                         Katalog: <b>{r.catalog_price_net} {r.currency ?? 'PLN'}</b>
                       </span>
                     )}
-                  </span>
-                  {r.reason && <span className="mt-0.5 text-[11px] text-slate-600">{r.reason}</span>}
-                </button>
+                  </div>
+                  {r.reason && <p className="mt-0.5 text-[11px] text-slate-600">{r.reason}</p>}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      disabled={Boolean(busy)}
+                      onClick={() => setDescribeId(r.id)}
+                      className="rounded border border-violet-400 bg-white px-2 py-1 text-[11px] font-medium text-violet-800 hover:bg-violet-100 disabled:opacity-50"
+                    >
+                      Opis
+                    </button>
+                    <button
+                      type="button"
+                      disabled={Boolean(busy)}
+                      onClick={() => onSelect(r)}
+                      className="rounded bg-violet-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+                    >
+                      Wybierz
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
           )}
         </div>
       </div>
+      <ProductVerifyModal
+        productId={describeId}
+        query={query}
+        onClose={() => setDescribeId(null)}
+      />
     </div>
   )
 }
