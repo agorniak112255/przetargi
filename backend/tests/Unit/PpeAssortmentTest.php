@@ -45,6 +45,7 @@ final class PpeAssortmentTest extends TestCase
             ['Filtropochłaniacz FP 211/1', PpeAssortment::FAMILY_RESPIRATORY],
             ['Hełm przemysłowy z osłoną', PpeAssortment::FAMILY_HEAD],
             ['Kominiarka antyelektrostatyczna', PpeAssortment::FAMILY_HEAD],
+            ['Wkładka/czepek ocieplana pod hełm ESD EN 1149-5', PpeAssortment::FAMILY_HEAD],
             ['Szelki bezpieczeństwa z linką', PpeAssortment::FAMILY_FALL],
             ['Nakolanniki żelowe', PpeAssortment::FAMILY_KNEE],
             ['Rękawice nitrylowe RNITZ', PpeAssortment::FAMILY_GLOVES],
@@ -94,6 +95,14 @@ final class PpeAssortmentTest extends TestCase
                 '103 - Kurtka wodoochronna zapinana na zamek',
             ],
             ['KURTKA DAMSKA - POLAR granatowy', 'POLA - EN 420 KAT. II, EN 388 - 3131'],
+            [
+                'Wkładka/czepek ocieplana pod hełm antyelektrostatyczna EN 1149-5',
+                'Kurtka antyelektrostatyczna STATICGUARD',
+            ],
+            [
+                'Wkładka/czepek ocieplana pod hełm antyelektrostatyczna EN 1149-5',
+                'Hełm przemysłowy EN 397',
+            ],
         ];
     }
 
@@ -232,5 +241,15 @@ final class PpeAssortmentTest extends TestCase
             'category' => 'Rękawice',
         ]);
         $this->assertTrue($this->assortment->compatibleProduct('rękawice do pracy przy 200 C', $glove));
+    }
+
+    #[Test]
+    public function under_helmet_liner_accepts_cap_and_rejects_jacket(): void
+    {
+        $req = 'Wkładka/czepek ocieplana pod hełm antyelektrostatyczna z certyfikatem ESD EN 1149-5';
+        $this->assertTrue($this->assortment->isUnderHelmetLiner($req));
+        $this->assertTrue($this->assortment->compatible($req, 'Czepek ocieplany pod hełm ESD'));
+        $this->assertTrue($this->assortment->compatible($req, 'Wkładka polarowa pod hełm'));
+        $this->assertFalse($this->assortment->compatible($req, 'Kurtka antyelektrostatyczna STATICGUARD'));
     }
 }

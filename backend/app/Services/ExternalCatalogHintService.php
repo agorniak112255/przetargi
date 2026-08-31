@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\TavilyQuotaGuard;
+use App\Support\PpeAssortment;
 use App\Support\PpeFilterType;
 use Illuminate\Support\Facades\Http;
 use Throwable;
@@ -22,6 +23,7 @@ final class ExternalCatalogHintService
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly PpeFilterType $filterType = new PpeFilterType,
+        private readonly PpeAssortment $assortment = new PpeAssortment,
         private readonly DuckDuckGoHtmlSearch $duckDuckGo = new DuckDuckGoHtmlSearch,
     ) {}
 
@@ -109,6 +111,9 @@ final class ExternalCatalogHintService
             if (! $this->filterType->covers($requirement, $hay)) {
                 continue;
             }
+            if ($requirement !== '' && ! $this->assortment->compatibleOrUnknown($requirement, $hay)) {
+                continue;
+            }
             $seen[$key] = true;
             $candidates[] = [
                 'url' => $url,
@@ -161,6 +166,9 @@ final class ExternalCatalogHintService
             if (mb_strtolower($hyphen) !== $code) {
                 $bits[] = $hyphen;
             }
+        }
+        if ($this->assortment->isUnderHelmetLiner($requirement)) {
+            $bits[] = 'czepek wkładka ocieplana pod hełm ESD';
         }
         $bits[] = $requirement;
 

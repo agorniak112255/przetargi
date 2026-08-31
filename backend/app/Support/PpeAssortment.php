@@ -145,7 +145,11 @@ final class PpeAssortment
             return self::FAMILY_APPAREL;
         }
 
-        if (preg_match('/\b(kominiark|czapk|helm|kask|czepek|balaclava)\w*/u', $t) === 1) {
+        if (preg_match(
+            '/\b(kominiark|czapk|helm|kask|czepek|balaclava|liner)\w*'
+            .'|(wkladk\w*.{0,24}(helm|kask))/u',
+            $t
+        ) === 1) {
             return self::FAMILY_HEAD;
         }
 
@@ -394,14 +398,75 @@ final class PpeAssortment
         if (preg_match('/\b(kominiark|balaclava)\w*/u', $t) === 1) {
             return 'balaclava';
         }
+        if (preg_match('/\b(czepek|czapk)\w*/u', $t) === 1) {
+            return 'cap';
+        }
+        if (preg_match('/\b(wkladk|liner)\w*/u', $t) === 1
+            && preg_match('/\b(helm|kask)\w*/u', $t) === 1) {
+            return 'liner';
+        }
         if (preg_match('/\b(helm|kask)\w*/u', $t) === 1) {
             return 'helmet';
         }
-        if (preg_match('/\b(czapk|czepek)\w*/u', $t) === 1) {
-            return 'cap';
-        }
 
         return null;
+    }
+
+    /** Czepek / wkładka pod hełm — nie zwykła czapka i nie kurtka ESD. */
+    public function isUnderHelmetLiner(string $text): bool
+    {
+        $t = $this->normalize($text);
+        if (preg_match('/\b(czepek)\w*/u', $t) === 1) {
+            return true;
+        }
+        if (preg_match('/\b(wkladk|liner|czapk|kominiark|balaclava)\w*/u', $t) !== 1) {
+            return false;
+        }
+
+        return preg_match('/\b(helm|kask)\w*/u', $t) === 1;
+    }
+
+    private function isUnderHelmetType(?string $type): bool
+    {
+        return in_array($type, ['liner', 'cap', 'balaclava'], true);
+    }
+
+    private function headCompatible(string $requirement, string $productText): bool
+    {
+        $reqType = $this->articleType($requirement, self::FAMILY_HEAD);
+        $prodType = $this->articleType($productText, self::FAMILY_HEAD);
+        if ($this->isUnderHelmetLiner($requirement)) {
+            if ($prodType === 'helmet') {
+                return false;
+            }
+            $pt = $this->normalize($productText);
+
+            return $this->isUnderHelmetLiner($productText)
+                || preg_match('/\b(czepek|wkladk|liner|kominiark|balaclava)\w*/u', $pt) === 1;
+        }
+        if ($reqType === null || $prodType === null) {
+            return true;
+        }
+        if ($this->isUnderHelmetType($reqType) && $this->isUnderHelmetType($prodType)) {
+            return true;
+        }
+
+        return $reqType === $prodType;
+    }
+
+    /** Odrzuca tylko pewną niezgodność rodziny; nieznany tytuł zostaje. */
+    public function compatibleOrUnknown(string $requirement, string $productText, ?string $kategoriaBhp = null): bool
+    {
+        $reqFamily = $this->family($requirement);
+        if ($reqFamily === null) {
+            return true;
+        }
+        $prodFamily = $this->resolveFamily($productText, $kategoriaBhp);
+        if ($prodFamily === null) {
+            return true;
+        }
+
+        return $this->compatible($requirement, $productText, $kategoriaBhp);
     }
 
     private function faceType(string $t): ?string
@@ -488,6 +553,9 @@ final class PpeAssortment
         if ($reqFamily === self::FAMILY_APPAREL) {
             return $this->apparelCompatible($requirement, $productText);
         }
+        if ($reqFamily === self::FAMILY_HEAD) {
+            return $this->headCompatible($requirement, $productText);
+        }
 
         return true;
     }
@@ -538,6 +606,9 @@ final class PpeAssortment
         if ($reqFamily === self::FAMILY_GLOVES && ! $this->isArmSleeve($requirement)
             && $this->isArmSleeve($this->productIdentityText($product))) {
             return false;
+        }
+        if ($reqFamily === self::FAMILY_HEAD) {
+            return $this->headCompatible($requirement, $this->productIdentityText($product));
         }
 
         return true;

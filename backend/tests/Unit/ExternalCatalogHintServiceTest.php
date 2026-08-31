@@ -145,4 +145,25 @@ final class ExternalCatalogHintServiceTest extends TestCase
         $this->assertCount(2, $ranked);
         $this->assertSame('https://sklep-bhp.example/produkt/gasnica-4kg', $ranked[0]['url']);
     }
+
+    #[Test]
+    public function drops_jacket_when_requirement_is_helmet_liner(): void
+    {
+        $svc = $this->app->make(ExternalCatalogHintService::class);
+        $req = 'Wkładka/czepek ocieplana pod hełm antyelektrostatyczna EN 1149-5 lub EN 61340';
+
+        $ranked = $svc->rankResults([
+            [
+                'url' => 'https://www.krystian.com.pl/produkt/kurtka-antyelektrostatyczna/',
+                'title' => 'Kurtka antyelektrostatyczna - STATICGUARD - PW KRYSTIAN',
+            ],
+            [
+                'url' => 'https://sklep.example/produkt/czepek-ocieplany-esd',
+                'title' => 'Czepek ocieplany pod hełm ESD EN 1149-5',
+            ],
+        ], $req);
+
+        $this->assertCount(1, $ranked);
+        $this->assertSame('https://sklep.example/produkt/czepek-ocieplany-esd', $ranked[0]['url']);
+    }
 }

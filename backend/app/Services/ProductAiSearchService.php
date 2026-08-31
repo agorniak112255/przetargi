@@ -134,6 +134,21 @@ final class ProductAiSearchService
             ];
         }
 
+        $linerHits = $this->retrieveByHeadLiner($query, $limit);
+        if ($linerHits->isNotEmpty()) {
+            $ranked = $this->rowsFromHeadLinerMatches($query, $linerHits, $limit);
+
+            return [
+                'query' => $query,
+                'total' => count($ranked),
+                'products' => $ranked,
+                'needed' => $query,
+                'search_phrases' => $this->fallbackPhrases($query),
+                'ai_note' => null,
+                'external_hint' => null,
+            ];
+        }
+
         $intent = $this->understandRequirement($query, $task);
         $candidates = $this->keepCompatible(
             $this->assortmentText($query, $intent['needed']),
@@ -556,6 +571,88 @@ final class ProductAiSearchService
             ->values();
 
         return $rows->take(max(8, $limit))->values();
+    }
+
+    /**
+     * Czepek / wkładka pod hełm — bez LLM, bo EN 1149/ESD ciągnie kurtki.
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByHeadLiner(string $query, int $limit): Collection
+    {
+        if (! $this->assortment->isUnderHelmetLiner($query)) {
+            return collect();
+        }
+
+        $rows = $this->productBaseQuery()
+            ->where(function (Builder $outer): void {
+                $outer->where('name', 'like', '%czepek%')
+                    ->orWhere('name', 'like', '%czepk%')
+                    ->orWhere('name', 'like', '%kominiark%')
+                    ->orWhere('name', 'like', '%balaclava%')
+                    ->orWhere('category', 'like', '%czepek%')
+                    ->orWhere('category', 'like', '%kominiark%')
+                    ->orWhere(function (Builder $inner): void {
+                        $inner->where(function (Builder $w): void {
+                            $w->where('name', 'like', '%wkładk%')
+                                ->orWhere('name', 'like', '%wkladk%')
+                                ->orWhere('search_blob', 'like', '%wkladk%');
+                        })->where(function (Builder $h): void {
+                            $h->where('name', 'like', '%hełm%')
+                                ->orWhere('name', 'like', '%helm%')
+                                ->orWhere('name', 'like', '%kask%')
+                                ->orWhere('description', 'like', '%hełm%')
+                                ->orWhere('description', 'like', '%helm%')
+                                ->orWhere('search_blob', 'like', '%helm%');
+                        });
+                    })
+                    ->orWhere(function (Builder $cap): void {
+                        $cap->where(function (Builder $n): void {
+                            $n->where('name', 'like', '%czapk%')
+                                ->orWhere('category', 'like', '%czapk%');
+                        })->where(function (Builder $ctx): void {
+                            $ctx->where('name', 'like', '%ociepl%')
+                                ->orWhere('name', 'like', '%hełm%')
+                                ->orWhere('name', 'like', '%helm%')
+                                ->orWhere('name', 'like', '%kask%')
+                                ->orWhere('name', 'like', '%esd%')
+                                ->orWhere('description', 'like', '%hełm%');
+                        });
+                    });
+            })
+            ->where(function (Builder $fam): void {
+                $fam->where('ppe_family', PpeAssortment::FAMILY_HEAD)
+                    ->orWhereNull('ppe_family');
+            })
+            ->limit(200)
+            ->get()
+            ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p))
+            ->values();
+
+        return $rows->take(max(8, $limit))->values();
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromHeadLinerMatches(string $query, Collection $products, int $limit): array
+    {
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $row['ai_match_percent'] = 88;
+            $row['ai_match_reason'] = 'Czepek / wkładka pod hełm z katalogu — nie kurtka ESD.';
+            $out[] = $row;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
     }
 
     /**

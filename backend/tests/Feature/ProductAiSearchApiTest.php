@@ -1260,7 +1260,12 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('total', 0)
             ->assertJsonPath('products', [])
             ->assertJsonPath('external_hint.url', 'https://sklep.example/produkt/rekawice-cxs')
-            ->assertJsonPath('external_hints.1.title', 'Bluza KOLPEO');
+            ->assertJsonPath('external_hints', [
+                [
+                    'url' => 'https://sklep.example/produkt/rekawice-cxs',
+                    'title' => 'Rękawice CXS ocieplane',
+                ],
+            ]);
     }
 
     public function test_ai_search_returns_all_gloves_meeting_celsius_without_llm(): void
@@ -1450,5 +1455,51 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('products.0.sku', 'HEAT-250');
+    }
+
+    public function test_ai_search_head_liner_prefers_catalog_cap_over_esd_jacket(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'CAP-ESD',
+            'name' => 'Czepek ocieplany pod hełm ESD',
+            'manufacturer' => 'JSP',
+            'category' => 'Czepki pod hełm',
+            'norms' => 'EN 1149-5',
+            'description' => 'Wkładka ocieplana pod hełm, antyelektrostatyczna ESD.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 8,
+            'stock' => 20,
+            'ppe_family' => 'head',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'JKT-ESD',
+            'name' => 'Kurtka antyelektrostatyczna STATICGUARD',
+            'manufacturer' => 'PW Krystian',
+            'category' => 'Kurtki',
+            'norms' => 'EN 1149-5',
+            'description' => 'Kurtka ESD EN 1149-5 EN 61340.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 4,
+            'ppe_family' => 'apparel',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Wkładka/czepek ocieplana pod hełm antyelektrostatyczna EN 1149-5 lub EN 61340',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'CAP-ESD')
+            ->assertJsonPath('external_hint', null);
     }
 }
