@@ -165,6 +165,21 @@ final class ManufacturerDomainResolverTest extends TestCase
             'sklep.renex.pl',
             'kaufland.pl',
             'customguns.pl',
+            'sklep.aio.com.pl',
+            'bhpstar.pl',
+            'ferpol.pl',
+            'pol-paw.pl',
+            'xbhp.pl',
+            'ventabebhp.com',
+            'bhpsklep24.pl',
+            'sklep.lahtipro.pl',
+            'urgent.com.pl',
+            'ardon.pl',
+            'worklink.com.pl',
+            'mapa-pro.pl',
+            'julex.pl',
+            'jagatex.pl',
+            'demar.com.pl',
         ] as $host) {
             $this->assertContains($host, $retailers);
         }
