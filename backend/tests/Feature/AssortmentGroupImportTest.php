@@ -44,6 +44,23 @@ final class AssortmentGroupImportTest extends TestCase
         $this->assertSame(12.0, $rekawice['discount_percent']);
     }
 
+    public function test_summarize_keeps_numeric_group_names_as_string(): void
+    {
+        $summary = app(AssortmentGroupService::class)->summarize([
+            ['sku' => 'A', 'category' => '26'],
+            ['sku' => 'B', 'category' => 26],
+            ['sku' => 'C', 'category' => 'Oczy'],
+        ], 'Irudek');
+
+        $this->assertTrue($summary['has_grouping']);
+        $names = array_column($summary['detected'], 'name');
+        $this->assertContains('26', $names);
+        $this->assertContains('Oczy', $names);
+        $group26 = collect($summary['detected'])->firstWhere('name', '26');
+        $this->assertIsString($group26['name'] ?? null);
+        $this->assertSame(2, $group26['product_count']);
+    }
+
     public function test_apply_group_discounts_and_persist_groups(): void
     {
         $service = app(AssortmentGroupService::class);

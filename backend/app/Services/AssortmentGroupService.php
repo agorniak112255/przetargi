@@ -50,6 +50,8 @@ final class AssortmentGroupService
 
         $detected = [];
         foreach ($counts as $name => $count) {
+            // PHP zamienia klucz „26” na int — strcasecmp wymaga stringa
+            $name = (string) $name;
             $match = $byName[$name] ?? null;
             $detected[] = [
                 'name' => $name,
@@ -58,7 +60,7 @@ final class AssortmentGroupService
                 'id' => $match?->id,
             ];
         }
-        usort($detected, static fn (array $a, array $b): int => strcasecmp($a['name'], $b['name']));
+        usort($detected, static fn (array $a, array $b): int => strcasecmp((string) $a['name'], (string) $b['name']));
 
         return [
             'has_grouping' => $counts !== [],

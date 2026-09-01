@@ -94,7 +94,7 @@ final class PriceListMetaDetector
         ]) ?? 'Nieznany';
 
         // EMA to linia Ansell — spójna nazwa w bazie
-        if (strcasecmp($manufacturer, 'EMA') === 0) {
+        if (strcasecmp((string) $manufacturer, 'EMA') === 0) {
             $manufacturer = 'Ansell';
         }
 
@@ -199,6 +199,6 @@ final class PriceListMetaDetector
             return false;
         }
 
-        return strcasecmp(trim($a), trim($b)) === 0;
+        return strcasecmp(trim((string) $a), trim((string) $b)) === 0;
     }
 }
