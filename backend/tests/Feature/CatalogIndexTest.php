@@ -517,6 +517,78 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame('https://sklep-b.pl/rekawice-urgent-1202', $hits[0]['url'] ?? null);
     }
 
+    public function test_uses_bigcommerce_xmlsitemap_php(): void
+    {
+        Http::fake([
+            'https://idsblast.com/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://idsblast.com/xmlsitemap.php' => Http::response(
+                '<?xml version="1.0"?><sitemapindex>'
+                .'<sitemap><loc>https://idsblast.com/xmlsitemap.php?type=products</loc></sitemap>'
+                .'</sitemapindex>',
+                200,
+                ['Content-Type' => 'text/xml']
+            ),
+            'https://idsblast.com/xmlsitemap.php?type=products' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://idsblast.com/al-q-2x/</loc></url>'
+                .'</urlset>',
+                200,
+                ['Content-Type' => 'text/xml']
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('idsblast.com');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://idsblast.com/al-q-2x/']);
+    }
+
+    public function test_crawls_iai_product_cards_when_sitemap_missing(): void
+    {
+        Http::fake([
+            'https://gvarant.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://gvarant.pl/' => Http::response(
+                '<!DOCTYPE html><html><body><a href="/rekawice-robocze/">Rękawice</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://gvarant.pl/rekawice-robocze/' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/p494,rekawice-reis-rlevel5.html">Rękawice Reis</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('gvarant.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://gvarant.pl/p494,rekawice-reis-rlevel5.html',
+        ]);
+    }
+
+    public function test_rejects_jpeg_disguised_as_sitemap(): void
+    {
+        Http::fake([
+            'https://bpbhp.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://bpbhp.pl/media/sitemap.xml' => Http::response(
+                'not-xml',
+                200,
+                ['Content-Type' => 'image/jpeg']
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('bpbhp.pl');
+
+        $this->assertSame(0, $result['urls']);
+        $this->assertSame([], $result['sitemaps']);
+    }
+
     private function seedPage(string $url): void
     {
         $page = CatalogPage::query()->create([

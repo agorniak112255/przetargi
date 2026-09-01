@@ -32,6 +32,9 @@ final class CatalogSitemapIndexer
     /** Zgadywane ścieżki nie mogą zjeść całego --seconds na jednym 404. */
     private const CANDIDATE_TIMEOUT = 15;
 
+    /** Sklepy bez XML (IAI) — ile stron HTML zbieramy z menu. */
+    private const HTML_CRAWL_PAGES = 35;
+
     /** Sklepy za WAF-em odrzucają nagłówki botów, więc przedstawiamy się jak przeglądarka. */
     private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -56,6 +59,8 @@ final class CatalogSitemapIndexer
         '/1_index_sitemap.xml',
         '/wp-sitemap.xml',
         '/sitemap.php',
+        // BigCommerce — robots często bez Sitemap:, mapa jest pod xmlsitemap.php
+        '/xmlsitemap.php',
         '/pl/sitemap.xml',
         '/product-sitemap.xml',
         '/products-sitemap.xml',
@@ -163,6 +168,17 @@ final class CatalogSitemapIndexer
             }
         }
 
+        if (count($seen) === 0 && ! $timedOut) {
+            foreach ($this->crawlShopPages($host, $maxUrls, $deadline) as $row) {
+                $url = (string) $row['url'];
+                if (isset($seen[$url])) {
+                    continue;
+                }
+                $seen[$url] = true;
+                $rows[] = $row;
+            }
+        }
+
         if ($rows !== []) {
             $saved += $this->store($rows);
         }
@@ -220,7 +236,7 @@ final class CatalogSitemapIndexer
             $out[] = 'https://'.$host.$path;
         }
         // www tylko dla najczęściej działających ścieżek — reszta tylko wydłuża update
-        foreach (['/sitemap.xml', '/sitemap.xml.gz', '/media/sitemap.xml', '/pub/media/sitemap.xml'] as $path) {
+        foreach (['/sitemap.xml', '/sitemap.xml.gz', '/media/sitemap.xml', '/pub/media/sitemap.xml', '/xmlsitemap.php'] as $path) {
             $out[] = 'https://www.'.$host.$path;
         }
 
@@ -266,8 +282,12 @@ final class CatalogSitemapIndexer
         }
         // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
         // bez tego pobralibyśmy 130 kB HTML-a dla każdej zgadywanej ścieżki
-        if (str_contains(mb_strtolower((string) $response->header('Content-Type')), 'text/html')) {
+        $contentType = mb_strtolower((string) $response->header('Content-Type'));
+        if (str_contains($contentType, 'text/html')) {
             return $this->streamFromCurl($url, $onLocation, $timeout);
+        }
+        if (str_contains($contentType, 'image/') || str_contains($contentType, 'video/') || str_contains($contentType, 'font/')) {
+            return false;
         }
 
         $body = $response->toPsrResponse()->getBody();
@@ -440,6 +460,178 @@ final class CatalogSitemapIndexer
                 $out[] = $href;
             }
         }
+    }
+
+    /**
+     * IAI/IdoSell i podobne nie publikują XML — zbieramy karty z menu i listingów.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function crawlShopPages(string $host, int $maxUrls, float $deadline): array
+    {
+        $queue = ['https://'.$host.'/', 'https://www.'.$host.'/'];
+        $fetched = [];
+        $seen = [];
+        $rows = [];
+        $pages = 0;
+
+        while ($queue !== [] && $pages < self::HTML_CRAWL_PAGES && count($rows) < $maxUrls) {
+            if (microtime(true) >= $deadline) {
+                break;
+            }
+            $page = array_shift($queue);
+            $key = mb_strtolower(rtrim($page, '/'));
+            if (isset($fetched[$key])) {
+                continue;
+            }
+            $fetched[$key] = true;
+            $html = $this->fetchHtml($page);
+            $pages++;
+            if ($html === null) {
+                continue;
+            }
+            foreach ($this->extractHtmlHrefs($html, $host) as $href) {
+                if ($this->isSkippableUrl($href)) {
+                    continue;
+                }
+                if ($this->looksLikeProductUrl($href)) {
+                    if (isset($seen[$href])) {
+                        continue;
+                    }
+                    $seen[$href] = true;
+                    $locHost = $this->normalizeHost((string) (parse_url($href, PHP_URL_HOST) ?? $host));
+                    $rows[] = $this->rowFor($locHost !== '' ? $locHost : $host, $href);
+                    if (count($rows) >= $maxUrls) {
+                        break 2;
+                    }
+
+                    continue;
+                }
+                if (count($queue) < 80 && $this->looksLikeCategoryUrl($href)) {
+                    $queue[] = $href;
+                }
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractHtmlHrefs(string $html, string $host): array
+    {
+        if (preg_match_all('/href\s*=\s*["\']([^"\']+)["\']/i', $html, $m) === 0) {
+            return [];
+        }
+        $out = [];
+        foreach ($m[1] as $href) {
+            $resolved = $this->resolveHref((string) $href, $host);
+            if ($resolved !== null) {
+                $out[] = $resolved;
+            }
+        }
+
+        return $out;
+    }
+
+    private function resolveHref(string $href, string $host): ?string
+    {
+        $href = trim(html_entity_decode($href, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($href === '' || str_starts_with($href, '#')
+            || str_starts_with($href, 'mailto:')
+            || str_starts_with($href, 'tel:')
+            || str_starts_with($href, 'javascript:')) {
+            return null;
+        }
+        if (str_starts_with($href, '//')) {
+            $href = 'https:'.$href;
+        } elseif (str_starts_with($href, '/')) {
+            $href = 'https://'.$host.$href;
+        } elseif (preg_match('#^https?://#i', $href) !== 1) {
+            return null;
+        }
+        $href = explode('#', $href, 2)[0];
+        if (! $this->belongsToHost($href, $host)) {
+            return null;
+        }
+
+        return $href;
+    }
+
+    private function looksLikeProductUrl(string $url): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        $query = mb_strtolower((string) (parse_url($url, PHP_URL_QUERY) ?? ''));
+        if (str_contains($query, 'id_product=')) {
+            return true;
+        }
+
+        return preg_match('#/p\d+,#', $path) === 1
+            || preg_match('#-p\d+(\.html)?$#', $path) === 1
+            || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
+            || preg_match('#/p/[^/]+/\d+#', $path) === 1;
+    }
+
+    private function looksLikeCategoryUrl(string $url): bool
+    {
+        if ($this->looksLikeProductUrl($url) || $this->looksLikeSitemap($url)) {
+            return false;
+        }
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?? '/');
+        if ($path === '/' || $path === '') {
+            return false;
+        }
+        if (preg_match('#\.(jpe?g|png|gif|webp|css|js|woff2?|ico|pdf|svg|xml|gz)$#i', $path) === 1) {
+            return false;
+        }
+        $segments = array_values(array_filter(explode('/', $path), static fn (string $s): bool => $s !== ''));
+
+        return $segments !== [] && count($segments) <= 4;
+    }
+
+    private function isSkippableUrl(string $url): bool
+    {
+        $hay = mb_strtolower($url);
+        foreach ([
+            '/koszyk', '/cart', '/checkout', '/login', '/konto', '/account',
+            '/admin', '/search', '/szukaj', '/blog/', '/gfx/', '/szablony/',
+            '/cdn-cgi/', '.css', '.js', '.jpg', '.jpeg', '.png', '.gif', '.webp',
+        ] as $bad) {
+            if (str_contains($hay, $bad)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function fetchHtml(string $url): ?string
+    {
+        try {
+            $response = Http::withHeaders([
+                'User-Agent' => self::USER_AGENT,
+                'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+                'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
+            ])->timeout(12)->connectTimeout(6)->get($url);
+        } catch (Throwable $e) {
+            Log::info('Catalog HTML fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
+
+            return null;
+        }
+        if (! $response->successful()) {
+            return null;
+        }
+        $contentType = mb_strtolower((string) $response->header('Content-Type'));
+        if (str_contains($contentType, 'image/') || str_contains($contentType, 'xml')) {
+            return null;
+        }
+        $body = (string) $response->body();
+        if ($body === '' || ! $this->looksLikeHtml($body)) {
+            return null;
+        }
+
+        return mb_substr($body, 0, 400000);
     }
 
     private function curlBinary(): ?string
