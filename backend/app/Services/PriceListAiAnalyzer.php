@@ -131,11 +131,13 @@ final class PriceListAiAnalyzer
             $model .= '+sample-research';
         }
 
+        $mapping = app(SpreadsheetColumnMapper::class)->refineMapping($path, $mapping);
+
         $stats = $this->buildPreview($path, $mapping);
         if (($stats['products_found'] ?? 0) === 0) {
             $fallback = $this->spreadsheetHeuristic->detect($path);
             if ($fallback !== null) {
-                $mapping = $fallback;
+                $mapping = app(SpreadsheetColumnMapper::class)->refineMapping($path, $fallback);
                 $stats = $this->buildPreview($path, $mapping);
                 $model .= '+heuristic-empty';
             }
@@ -1106,13 +1108,17 @@ Priorytet pól (to nas interesuje):
    Article służy tylko do rozróżnienia wariantów gdy cena zależy od rozmiaru.
 3) name = krótka nazwa handlowa (np. NEW! TYVEK Dual Combi), NIE sam Article i NIE sam Reference.
    Ta sama kolumna bywa też długim opisem EN — i tak mapuj ją na name; system rozdzieli tytuł/opis.
-4) catalog_price = cena katalogowa / sugerowana / CENA CENNIK / Price (€/pc) — NIE kolumna „Zamówienie=0”
-5) discount = upust / rabat / marża w % (kolumny: upust, rabat, discount, marża, PL Discount)
+4) catalog_price = Nowa cena cennikowa / cena katalogowa / MSRP / Price List Price / Price (€/pc)
+   — NIE „Cena aktualna na dzień” (to data), NIE „Cena za”, NIE transport, NIE cena kartonu.
+   Gdy są „Aktualna” i „Nowa” — bierz NOWĄ.
+5) discount = tylko kolumna procentu (rabat %, PL Discount). NIE „cena po upustach” i NIE „procentowa zmiana ceny”.
 6) pack_qty = Quantity per box / ilość sztuk w kartonie / opakowaniu zbiorczym
 7) packaging = Size / rozmiar / opakowanie / jednostka / pojemność
-8) purchase = cena po upuście / zakup tylko jeśli jest osobna kolumna
+8) purchase = Nowa cena po upustach / Dealer / List Price minus Discount / Price 26
+   — NIE „Wskaźnik zakupów”.
 9) currency = kolumna waluty jeśli jest (EUR/PLN/USD); currency na poziomie pliku = dominująca z nagłówka (Price EUR, PLN, zł…)
 10) category = Category/Type / kategoria / grupa
+11) sku = Numer katalogowy produktu / Article Number / kod — NIE Kod EAN i NIE numer klienta.
 
 Zasady:
 - Często nad tabelą jest blok rabatów/kontaktów — header_excel_row to wiersz z „Kod produktu”/„Nazwa”/„Cena…”, nie wiersz 1.
@@ -1123,6 +1129,7 @@ Zasady:
 - header_excel_row = sample_rows[].excel_row wiersza z nazwami kolumn.
 - Nie ustawiaj include=false tylko dlatego, że brak kodu produktu.
 - Gdy jest SAMPLE_ROLE_RESEARCH — skopiuj column z roles.* do columns.*.
+- Arkusze Special Pricing / EUA Prices / Disclaimer / Languages / Cover: include=false (ceny kontraktowe klientów system bierze osobno).
 
 Dane:
 {$payload}
@@ -1162,16 +1169,18 @@ PROMPT;
                 $headerExcel = 1;
             }
 
+            $role = is_string($sheet['role'] ?? null) ? (string) $sheet['role'] : 'catalog';
             $hasRequired = $normCols['name'] !== null
                 && $normCols['catalog_price'] !== null;
 
             $sheets[] = [
                 'sheet' => (string) ($sheet['sheet'] ?? ''),
-                'include' => (bool) ($sheet['include'] ?? false) && $hasRequired,
+                'include' => (bool) ($sheet['include'] ?? false) && $hasRequired && $role === 'catalog',
                 'header_excel_row' => $headerExcel,
                 'columns' => $normCols,
                 'repeating_headers' => (bool) ($sheet['repeating_headers'] ?? false),
                 'confidence' => (float) ($sheet['confidence'] ?? 0),
+                'role' => $role,
             ];
         }
 
@@ -1179,6 +1188,7 @@ PROMPT;
         if ($included === []) {
             throw new RuntimeException('AI nie znalazło arkusza z produktami do importu.');
         }
+        $special = array_values(array_filter($sheets, static fn (array $s) => ($s['role'] ?? '') === 'special'));
 
         return [
             'manufacturer_detected' => isset($json['manufacturer_detected'])
@@ -1188,7 +1198,7 @@ PROMPT;
                 ? $this->currencyDetector->normalize($json['currency'], null)
                 : null,
             'notes' => is_string($json['notes'] ?? null) ? $json['notes'] : '',
-            'sheets' => $sheets,
+            'sheets' => array_values([...$included, ...$special]),
         ];
     }
 

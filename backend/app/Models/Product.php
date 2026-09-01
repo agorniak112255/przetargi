@@ -113,4 +113,9 @@ class Product extends Model
     {
         return $this->hasMany(ProductPriceHistory::class)->latest('id');
     }
+
+    public function specialPrices(): HasMany
+    {
+        return $this->hasMany(ProductSpecialPrice::class)->orderBy('client_name');
+    }
 }

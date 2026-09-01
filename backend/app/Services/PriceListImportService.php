@@ -21,6 +21,8 @@ final class PriceListImportService
         private readonly CurrencyDetector $currencyDetector,
         private readonly AssortmentGroupService $assortmentGroups,
         private readonly ProductSizeVariant $sizes,
+        private readonly SpreadsheetColumnMapper $columnMapper,
+        private readonly ProductSpecialPriceImporter $specialPrices,
     ) {}
 
     /**
@@ -307,7 +309,7 @@ final class PriceListImportService
             $byManufacturer = [];
             foreach ($collected['products'] as $payload) {
                 $sku = (string) $payload['sku'];
-                unset($payload['sku']);
+                unset($payload['sku'], $payload['_purchase_from_file']);
                 $payload = $this->clampProductFields($payload);
                 if (($payload['description'] ?? null) === null) {
                     unset($payload['description']);
@@ -375,6 +377,12 @@ final class PriceListImportService
             }
         }
 
+        $specialCount = 0;
+        $realPath = $file->getRealPath();
+        if ($realPath !== false) {
+            $specialCount = $this->specialPrices->importFromPath($realPath, $manufacturer);
+        }
+
         RegisterManufacturerCatalogJob::dispatch($manufacturer, $productIds[0] ?? 0);
 
         return [
@@ -388,6 +396,7 @@ final class PriceListImportService
             'updated_products' => array_slice($updatedProducts, 0, 100),
             'skipped_details' => $skippedDetails,
             'product_ids' => $productIds,
+            'special_prices' => $specialCount,
         ];
     }
 
@@ -615,6 +624,10 @@ final class PriceListImportService
         $rowsTotal = 0;
 
         foreach ($mapping['sheets'] as $sheetMap) {
+            $role = (string) ($sheetMap['role'] ?? 'catalog');
+            if ($role === 'special' || $role === 'skip') {
+                continue;
+            }
             if (! ($sheetMap['include'] ?? false)) {
                 continue;
             }
@@ -1087,10 +1100,24 @@ final class PriceListImportService
         $discount = isset($map['discount'])
             ? ($this->toFloat($row[$map['discount']] ?? 0) ?? 0.0)
             : 0.0;
+        if ($discount > 0 && $discount <= 1) {
+            $discount *= 100;
+        }
+        if ($discount > 90) {
+            $discount = 0.0;
+        }
 
+        $purchaseFromFile = false;
         $purchase = isset($map['purchase'])
             ? $this->toFloat($row[$map['purchase']] ?? null)
             : null;
+        if ($purchase !== null && $purchase > 0) {
+            $purchaseFromFile = true;
+            if ($catalog > 0) {
+                $discount = round((1 - ($purchase / $catalog)) * 100, 2);
+                $discount = max(0.0, min(100.0, $discount));
+            }
+        }
 
         if ($purchase === null) {
             $purchase = round($catalog * (1 - ($discount / 100)), 2);
@@ -1163,6 +1190,7 @@ final class PriceListImportService
                 'pack_qty' => $packQty,
                 'packaging' => $packaging,
                 '_model_key' => $groupKey ?? ($carry['group'] ?? null),
+                '_purchase_from_file' => $purchaseFromFile,
             ],
         ];
     }
@@ -1288,60 +1316,12 @@ final class PriceListImportService
      */
     private function resolveColumns(array $header): array
     {
-        $find = static function (array $aliases) use ($header): ?int {
-            foreach ($header as $i => $col) {
-                foreach ($aliases as $alias) {
-                    if ($col === $alias || str_contains($col, $alias)) {
-                        return $i;
-                    }
-                }
-            }
-
-            return null;
-        };
-
+        $mapped = $this->columnMapper->mapLabels($header);
         $map = [];
-        $defs = [
-            'sku' => [
-                'article number', 'artikelnummer', 'kod produktu', 'product code', 'sku',
-                'symbol', 'indeks', 'sap', 'article', 'product reference', 'reference', 'ref', 'kod', 'code',
-            ],
-            'name' => ['model name', 'nazwa', 'name', 'produkt', 'opis', 'description'],
-            'catalog_price' => [
-                'cena_kat', 'cena katalog', 'cena_netto', 'price(€', 'price (€', 'cena', 'price', 'netto',
-            ],
-            'discount' => ['upust', 'rabat', 'discount', 'marża', 'marza', 'mraza'],
-            'purchase' => ['zakup', 'cena_zakupu', 'purchase', 'koszt', 'po upuście', 'po upust'],
-            'ean' => ['ean', 'barcode'],
-            'category' => [
-                'category/type', 'kategoria', 'category', 'grupa asortymentowa', 'klasa asortymentowa',
-                'klasa', 'grupa', 'asortyment',
-            ],
-            'norms' => ['norma', 'normy', 'en ', 'standard'],
-            'pack_qty' => [
-                'quantity per box', 'qty per box', 'ilość szt', 'ilosc szt', 'szt. w', 'szt w',
-                'w kart', 'w opak', 'pack size', 'units per', 'ilość w opak', 'ilosc w opak', 'opak. zbior',
-            ],
-            'packaging' => [
-                'opakowanie', 'packaging', 'jednostka', 'uom', 'pojemność', 'pojemnosc', 'size', 'rozmiar',
-            ],
-            'currency' => ['waluta', 'currency', 'curr', 'iso'],
-            'stock' => ['stan magazyn', 'stock', 'magazyn'],
-            'manufacturer' => ['producent', 'manufacturer', 'marka', 'brand'],
-        ];
-
-        foreach ($defs as $key => $aliases) {
-            $idx = $find($aliases);
+        foreach ($mapped as $key => $idx) {
             if ($idx !== null) {
                 $map[$key] = $idx;
             }
-        }
-
-        // Preferuj kolumnę o wyższym wypełnieniu (Article Number > Reference)
-        $skuAliasesStrong = ['article number', 'artikelnummer', 'kod produktu', 'product code', 'sku'];
-        $strongSku = $find($skuAliasesStrong);
-        if ($strongSku !== null) {
-            $map['sku'] = $strongSku;
         }
 
         return $map;
@@ -1396,6 +1376,14 @@ final class PriceListImportService
         return $best;
     }
 
+    private function looksLikeDateString(string $value): bool
+    {
+        $value = trim($value);
+
+        return preg_match('/^\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}$/', $value) === 1
+            || preg_match('/^\d{4}[.\/-]\d{1,2}[.\/-]\d{1,2}$/', $value) === 1;
+    }
+
     private function toFloat(mixed $value): ?float
     {
         if ($value === null || $value === '') {
@@ -1409,6 +1397,9 @@ final class PriceListImportService
         }
 
         $s = trim((string) $value);
+        if ($this->looksLikeDateString($s)) {
+            return null;
+        }
         $s = str_replace(["\xc2\xa0", "\xe2\x80\xaf"], ' ', $s);
         $s = preg_replace('/\s+/u', '', $s) ?? $s;
         $s = mb_strtolower($s);
@@ -1504,6 +1495,7 @@ final class PriceListImportService
             'updated_products' => [],
             'skipped_details' => [],
             'product_ids' => [],
+            'special_prices' => 0,
         ];
     }
 }

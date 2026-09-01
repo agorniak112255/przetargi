@@ -166,6 +166,7 @@ class ProductController extends Controller
             'substitutes.approver:id,name',
             'images',
             'documents',
+            'specialPrices.client:id,name',
         ]);
 
         $payload = $product->toArray();
@@ -209,6 +210,15 @@ class ProductController extends Controller
         }
         $payload['price_change_percent'] = $catalogChangePct;
         $payload['price_history_latest_at'] = $latest?->created_at;
+        $payload['special_prices'] = $product->specialPrices->map(static fn ($row): array => [
+            'id' => $row->id,
+            'client_id' => $row->client_id,
+            'client_name' => $row->client_name,
+            'price' => $row->price,
+            'currency' => $row->currency,
+            'valid_from' => $row->valid_from?->format('Y-m-d'),
+            'contract_ref' => $row->contract_ref !== '' ? $row->contract_ref : null,
+        ])->values()->all();
 
         return response()->json($payload);
     }

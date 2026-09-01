@@ -13,6 +13,10 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
  */
 final class SpreadsheetMappingHeuristic
 {
+    public function __construct(
+        private readonly SpreadsheetColumnMapper $columns = new SpreadsheetColumnMapper,
+    ) {}
+
     /**
      * @return array{
      *     manufacturer_detected: ?string,
@@ -28,11 +32,12 @@ final class SpreadsheetMappingHeuristic
 
         foreach ($spreadsheet->getWorksheetIterator() as $sheet) {
             $name = $sheet->getTitle();
-            if ($this->skipSheetName($name)) {
+            $kind = $this->columns->classifySheet($name);
+            if ($kind === 'skip') {
                 continue;
             }
 
-            $maxCol = min(24, Coordinate::columnIndexFromString($sheet->getHighestDataColumn() ?: 'A'));
+            $maxCol = min(28, Coordinate::columnIndexFromString($sheet->getHighestDataColumn() ?: 'A'));
             $maxRow = min(80, max(1, (int) $sheet->getHighestDataRow()));
             $grid = [];
             for ($r = 1; $r <= $maxRow; $r++) {
@@ -44,7 +49,7 @@ final class SpreadsheetMappingHeuristic
                 $grid[$r] = $row;
             }
 
-            $mapped = $this->mapSheet($name, $grid);
+            $mapped = $this->mapSheet($name, $grid, $kind);
             if ($mapped !== null) {
                 $sheets[] = $mapped;
             }
@@ -74,8 +79,12 @@ final class SpreadsheetMappingHeuristic
      * @param  array<int, list<string>>  $grid  excelRow => cells 0-based
      * @return array<string, mixed>|null
      */
-    private function mapSheet(string $sheetName, array $grid): ?array
+    private function mapSheet(string $sheetName, array $grid, string $kind = 'catalog'): ?array
     {
+        if ($kind === 'special') {
+            return $this->mapSpecialSheet($sheetName, $grid);
+        }
+
         $best = null;
         $bestScore = 0;
 
@@ -86,45 +95,24 @@ final class SpreadsheetMappingHeuristic
                 continue;
             }
 
-            $priceCol = $this->findCol($labels, [
-                'cena cennik', 'cena katalog', 'cena sugerowana', 'cena netto', 'list price',
-                'price(€', 'price (€', 'price(€/pc', 'price eur', 'price(eur', 'cena - ', 'cena_',
-                'cena hurtowa', 'cena', 'price', 'cennik',
-            ]);
-            $skuCol = $this->findBestSkuCol($labels, $grid, $excelRow, $priceCol);
-            $modelKeyCol = $this->findCol($labels, [
-                'product reference', 'reference', 'model code', 'base style',
-            ]);
-            if ($modelKeyCol !== null && $skuCol !== null && $modelKeyCol === $skuCol) {
-                $modelKeyCol = null;
-            }
+            $mapped = $this->columns->mapLabels($cells);
+            $skuCol = $mapped['sku'] ?? $this->findBestSkuCol($labels, $grid, $excelRow, $mapped['catalog_price']);
             $cols = [
                 'sku' => $skuCol,
-                'model_key' => $modelKeyCol,
-                'name' => $this->findCol($labels, [
-                    'model name', 'nazwa', 'name', 'opis', 'description', 'produkt', 'asortyment', 'model',
-                ]),
-                'catalog_price' => $priceCol,
-                'purchase' => $this->findCol($labels, [
-                    'cena po rabacie', 'po rabacie', 'purchase', 'zakup', 'netto po',
-                ]) ?? $this->findCol($labels, ['cena hurtowa']),
-                'discount' => $this->findCol($labels, [
-                    'upust', 'rabat %', 'rabat', 'discount', 'marża', 'marza',
-                ]),
-                'pack_qty' => $this->findCol($labels, [
-                    'quantity per box', 'qty per box', 'ilość w kartonie', 'ilosc w kartonie',
-                    'ilość w opak', 'ilosc w opak', 'carton', 'pack qty', 'množství', 'mnozstvi',
-                ]),
-                'packaging' => $this->findCol($labels, [
-                    'opakowanie', 'packaging', 'jednostka', 'size', 'rozmiar',
-                ]),
-                'ean' => $this->findCol($labels, ['ean', 'barcode', 'kod kresk']),
-                'category' => $this->findCol($labels, [
-                    'category/type', 'kategoria', 'category', 'grupa asortymentowa', 'klasa asortymentowa',
-                    'klasa', 'grupa', 'asortyment', 'skupina',
-                ]),
-                'currency' => $this->findCol($labels, ['waluta', 'currency']),
+                'model_key' => $mapped['model_key'],
+                'name' => $mapped['name'],
+                'catalog_price' => $mapped['catalog_price'],
+                'purchase' => $mapped['purchase'],
+                'discount' => $mapped['discount'],
+                'pack_qty' => $mapped['pack_qty'],
+                'packaging' => $mapped['packaging'],
+                'ean' => $mapped['ean'],
+                'category' => $mapped['category'],
+                'currency' => $mapped['currency'],
             ];
+            if ($cols['sku'] === null && $mapped['catalog_price'] !== null) {
+                $cols['sku'] = $this->inferSkuFromData($grid, $excelRow, $mapped['catalog_price'], $cols);
+            }
 
             // wariant PANTHER: wiersz "… | Cena sugerowana | Cena hurtowa | Cena po rabacie"
             if ($cols['name'] === null && $this->looksLikePriceHeaderRow($labels)) {
@@ -162,9 +150,14 @@ final class SpreadsheetMappingHeuristic
             if ($score < 5 || $cols['catalog_price'] === null) {
                 continue;
             }
-            // nazwa: jeśli brak kolumny, a jest SKU — użyj następnej; jeśli brak SKU — kolumna 0 z danymi
-            if ($cols['name'] === null) {
-                $cols['name'] = $cols['sku'] !== null ? $cols['sku'] + 1 : 0;
+            if ($cols['name'] === null || $cols['name'] === $cols['catalog_price']) {
+                $cols['name'] = $this->resolveNameCol($labels, $cols);
+            }
+            if ($cols['name'] === $cols['sku'] || $cols['name'] === $cols['catalog_price']) {
+                $inferredName = $this->inferNameFromData($grid, $excelRow, $cols);
+                if ($inferredName !== null) {
+                    $cols['name'] = $inferredName;
+                }
             }
 
             if ($score > $bestScore) {
@@ -194,12 +187,40 @@ final class SpreadsheetMappingHeuristic
                     ],
                     'repeating_headers' => false,
                     'confidence' => min(0.95, 0.45 + $score * 0.05),
+                    'role' => 'catalog',
                     '_currency' => $currency,
                 ];
             }
         }
 
         return $best;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     * @return array<string, mixed>|null
+     */
+    private function mapSpecialSheet(string $sheetName, array $grid): ?array
+    {
+        foreach ($grid as $excelRow => $cells) {
+            $cols = $this->columns->mapSpecialLabels($cells);
+            if ($cols['purchase'] === null || ($cols['sku'] === null && $cols['ean'] === null)) {
+                continue;
+            }
+
+            return [
+                'sheet' => $sheetName,
+                'include' => false,
+                'header_excel_row' => $excelRow,
+                'columns' => $cols,
+                'repeating_headers' => false,
+                'confidence' => 0.9,
+                'role' => 'special',
+                '_currency' => null,
+            ];
+        }
+
+        return null;
     }
 
     /**
@@ -234,10 +255,10 @@ final class SpreadsheetMappingHeuristic
     {
         /** @var list<array{0: list<string>, 1: int}> $tiers */
         $tiers = [
-            [['article number', 'artikelnummer', 'kod produktu', 'kod towaru', 'product code', 'sku', 'sap id'], 100],
-            [['art. nr', 'art nr', 'artikel', 'symbol', 'indeks', 'katalogové', 'katalogove'], 70],
-            [['article', 'sap'], 55],
-            [['product reference', 'reference', 'ref'], 25],
+            [['article number', 'artikelnummer', 'kod produktu', 'kod towaru', 'product code', 'sku', 'sap id', 'new code', 'long base style'], 100],
+            [['art. nr', 'art nr', 'art.-nr', 'artikel', 'symbol', 'indeks', 'katalogové', 'katalogove', 'kod ref', 'numer produktu'], 70],
+            [['article', 'sap', 'artykuł', 'artykul'], 55],
+            [['product reference', 'reference', 'ref', 'code', 'kod'], 40],
         ];
 
         $bestIdx = null;
@@ -363,8 +384,7 @@ final class SpreadsheetMappingHeuristic
             if ($name === '' || mb_strlen($name) < 3) {
                 continue;
             }
-            // pomiń same nagłówki sekcji bez ceny
-            if ($price === '' || ! preg_match('/\d/', $price)) {
+            if (! $this->looksLikeMoney($price)) {
                 continue;
             }
             $hits++;
@@ -374,6 +394,212 @@ final class SpreadsheetMappingHeuristic
         }
 
         return $hits;
+    }
+
+    /**
+     * @param  list<string>  $labels
+     * @param  array<string, int|null>  $cols
+     */
+    private function resolveNameCol(array $labels, array $cols): int
+    {
+        $sku = $cols['sku'];
+        $price = $cols['catalog_price'];
+        if ($sku !== null) {
+            $next = $sku + 1;
+            $nextLabel = mb_strtolower(trim((string) ($labels[$next] ?? '')));
+            if (in_array($nextLabel, ['#ref!', '#n/a', '#value!'], true)) {
+                $nextLabel = '';
+            }
+            if ($next !== $price && $nextLabel !== '' && ! $this->isNonNameLabel($nextLabel)) {
+                return $next;
+            }
+
+            return $sku;
+        }
+
+        foreach ($labels as $i => $label) {
+            if ($i === $price || $this->isNonNameLabel(mb_strtolower(trim($label)))) {
+                continue;
+            }
+            if (trim($label) !== '') {
+                return $i;
+            }
+        }
+
+        return 0;
+    }
+
+    private function isNonNameLabel(string $label): bool
+    {
+        return $label === 'page'
+            || $label === 'strana'
+            || $label === 'lp'
+            || $label === 'lp.'
+            || str_contains($label, 'cena')
+            || str_contains($label, 'price')
+            || str_contains($label, 'vat')
+            || str_contains($label, 'ean')
+            || str_contains($label, 'zdję')
+            || str_contains($label, 'zdjec')
+            || str_contains($label, 'image')
+            || str_contains($label, 'photo')
+            || $label === 'size'
+            || str_contains($label, 'rozmiar')
+            || $label === 'mj'
+            || $label === 'unit';
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     * @param  array<string, int|null>  $cols
+     */
+    private function inferSkuFromData(array $grid, int $headerRow, int $priceIdx, array $cols): ?int
+    {
+        $skip = [];
+        foreach (['name', 'ean', 'purchase', 'discount'] as $key) {
+            if (($cols[$key] ?? null) !== null) {
+                $skip[] = $cols[$key];
+            }
+        }
+        $skip[] = $priceIdx;
+
+        $width = 0;
+        foreach ($grid as $cells) {
+            $width = max($width, count($cells));
+        }
+
+        $best = null;
+        $bestScore = 0.0;
+        for ($i = 0; $i < $width; $i++) {
+            if (in_array($i, $skip, true)) {
+                continue;
+            }
+            $priced = 0;
+            $filled = 0;
+            $uniq = [];
+            foreach ($grid as $r => $cells) {
+                if ($r <= $headerRow) {
+                    continue;
+                }
+                if (! $this->looksLikeMoney(trim((string) ($cells[$priceIdx] ?? '')))) {
+                    continue;
+                }
+                $priced++;
+                $raw = trim((string) ($cells[$i] ?? ''));
+                if (! $this->looksLikeSkuValue($raw)) {
+                    continue;
+                }
+                $filled++;
+                $uniq[$raw] = true;
+                if ($priced >= 40) {
+                    break;
+                }
+            }
+            if ($priced < 2 || $filled < 2) {
+                continue;
+            }
+            $score = ($filled / $priced) * 40 + (count($uniq) / max(1, $filled)) * 25;
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = $i;
+            }
+        }
+
+        return $bestScore >= 30.0 ? $best : null;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     * @param  array<string, int|null>  $cols
+     */
+    private function inferNameFromData(array $grid, int $headerRow, array $cols): ?int
+    {
+        $priceIdx = $cols['catalog_price'];
+        if ($priceIdx === null) {
+            return null;
+        }
+        $skip = array_filter([$priceIdx, $cols['sku'] ?? null, $cols['ean'] ?? null, $cols['purchase'] ?? null], fn ($v) => $v !== null);
+        $width = 0;
+        foreach ($grid as $cells) {
+            $width = max($width, count($cells));
+        }
+
+        $best = null;
+        $bestAvg = 0.0;
+        for ($i = 0; $i < $width; $i++) {
+            if (in_array($i, $skip, true)) {
+                continue;
+            }
+            $lens = [];
+            foreach ($grid as $r => $cells) {
+                if ($r <= $headerRow) {
+                    continue;
+                }
+                if (! $this->looksLikeMoney(trim((string) ($cells[$priceIdx] ?? '')))) {
+                    continue;
+                }
+                $raw = trim((string) ($cells[$i] ?? ''));
+                if (mb_strlen($raw) < 8 || $this->looksLikeMoney($raw)) {
+                    continue;
+                }
+                $lens[] = mb_strlen($raw);
+                if (count($lens) >= 20) {
+                    break;
+                }
+            }
+            if (count($lens) < 2) {
+                continue;
+            }
+            $avg = array_sum($lens) / count($lens);
+            if ($avg > $bestAvg) {
+                $bestAvg = $avg;
+                $best = $i;
+            }
+        }
+
+        return $bestAvg >= 12.0 ? $best : null;
+    }
+
+    private function looksLikeMoney(string $value): bool
+    {
+        $value = trim($value);
+        if ($value === '' || $value === '-') {
+            return false;
+        }
+        if (substr_count($value, '-') >= 2 || mb_strlen($value) > 24) {
+            return false;
+        }
+        if (preg_match('/[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]{4,}/u', $value) === 1) {
+            return false;
+        }
+        $s = str_replace(["\xc2\xa0", "\xe2\x80\xaf"], '', $value);
+        $s = preg_replace('/\s+/u', '', $s) ?? $s;
+        $s = str_replace(['zł.', 'zł', 'pln', '€', 'eur', '$', '£'], '', mb_strtolower($s));
+        if (preg_match('/^-?\d{1,3}(\.\d{3})+(,\d{1,4})?$/', $s) === 1) {
+            return true;
+        }
+        if (preg_match('/^-?\d{1,3}(,\d{3})+(\.\d{1,4})?$/', $s) === 1) {
+            return true;
+        }
+
+        return preg_match('/^-?\d+([.,]\d{1,4})?$/', $s) === 1;
+    }
+
+    private function looksLikeSkuValue(string $value): bool
+    {
+        $len = mb_strlen($value);
+        if ($len < 3 || $len > 40) {
+            return false;
+        }
+        if ($this->looksLikeMoney($value)) {
+            return false;
+        }
+        $words = preg_split('/\s+/u', $value, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if (count($words) > 6) {
+            return false;
+        }
+
+        return preg_match('/[A-Za-z0-9]/', $value) === 1;
     }
 
     private function skipSheetName(string $name): bool

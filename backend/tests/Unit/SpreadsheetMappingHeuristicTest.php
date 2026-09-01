@@ -31,6 +31,122 @@ final class SpreadsheetMappingHeuristicTest extends TestCase
         }
     }
 
+    public function test_skips_rostaing_cover_and_maps_base_and_discounted(): void
+    {
+        $path = $this->writeSheet('ROSTAING 2026', [
+            ['Language:', 'Anglais', null, null, null, 'DISCOUNT RATE:'],
+            [null, null, null, null, '2026 PRICE LIST'],
+            ['17, Avenue Charles de Gaulle', null, null, null, 'Applicable as of 1 January 2026. Subject to change until 31 December 2026.'],
+            [],
+            ['EAN Code', 'Product Description', 'Range of products', 'Catalogue page', 'Reference', 'Unit or Pair', 'Quantity per bag', 'Quantity per box', 'Base price 2026 in Euro', 'Discounted price'],
+            ['3353090016794', 'RECTANGLE 35X30 CM MICROFIBRE', 'HANDLING', '-', '35X30SPEEDNET', 'U', '50', '50', '4.94', '2.23'],
+            ['3353090115213', '1 RIGHT HAND GLOVE T7 WELDER', 'WELDING', '76', 'ALUWELD-DRT07', 'U', '5', '40', '23.51', '10.63'],
+            ['3353090112991', '1 RIGHT HAND GLOVE SIZE 8 WELDER', 'WELDING', '76', 'ALUWELD-DRT08', 'U', '5', '40', '23.51', '10.63'],
+        ]);
+        try {
+            $mapping = (new SpreadsheetMappingHeuristic)->detect($path);
+            $this->assertNotNull($mapping);
+            $sheet = $mapping['sheets'][0];
+            $this->assertSame(5, $sheet['header_excel_row']);
+            $this->assertSame(4, $sheet['columns']['sku']);
+            $this->assertSame(1, $sheet['columns']['name']);
+            $this->assertSame(8, $sheet['columns']['catalog_price']);
+            $this->assertSame(9, $sheet['columns']['purchase']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_maps_artra_article_and_net_without_vat(): void
+    {
+        $path = $this->writeSheet('PL', [
+            ['PHT Supon'],
+            [],
+            ['lp.', 'kat.', 'artykuł', 'zdjęcie', 'typ', 'ochrony', 'podeszwa', 'metal free', 'kolekcja', 'rozm.', 'bez VAT', '* NCD z VAT'],
+            ['1', 'NEW', 'AROX 7333 641460 S1 PL ESD', '', 'półbuty', 'S1 PL', 'LYFTOR', 'metal free', 'PINKYUM', '35-48', '36.19', '429'],
+            ['2', 'NEW', 'AROX 733 648080 S1 PL ESD', '', 'półbuty', 'S1 PL', 'RAPTOR', '', 'PINKYUM', '35-48', '35.59', '429'],
+            ['3', '76', 'ARDEA 310 618080 S1 PL ESD', '', 'sandały', 'S1 PL', 'LYFTOR', 'metal free', 'PINKYUM', '35-48', '44.12', '539'],
+        ]);
+        try {
+            $mapping = (new SpreadsheetMappingHeuristic)->detect($path);
+            $this->assertNotNull($mapping);
+            $cols = $mapping['sheets'][0]['columns'];
+            $this->assertSame(2, $cols['sku']);
+            $this->assertSame(10, $cols['catalog_price']);
+            $this->assertNotSame(11, $cols['catalog_price']);
+            $this->assertNotSame(10, $cols['name']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_ppo_name_is_not_the_price_column(): void
+    {
+        $path = $this->writeSheet('2026 PL', [
+            ['Zał. Nr 1'],
+            ['L.p.', 'Wyszczególnienie', 'Kategoria', 'Model', 'Indeks nadrzędny', 'Cena fabryczna netto I gatunek od 01.06.2026'],
+            [],
+            ['1', 'Trzewiki zawodowe bez podnoska', 'EN ISO 20347', 'Model 305', '305', '139.00'],
+            ['2', 'Półbuty bezpieczne z metalowym podnoskiem', 'EN ISO 20345', 'Model 317', '317', '161.00'],
+            ['3', 'Półbuty zawodowe bez podnoska', 'EN ISO 20347', 'Model 318', '318', '155.00'],
+        ]);
+        try {
+            $mapping = (new SpreadsheetMappingHeuristic)->detect($path);
+            $this->assertNotNull($mapping);
+            $cols = $mapping['sheets'][0]['columns'];
+            $this->assertSame(4, $cols['sku']);
+            $this->assertSame(1, $cols['name']);
+            $this->assertSame(5, $cols['catalog_price']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_canis_uses_dash_code_not_unit_and_pln_price(): void
+    {
+        $path = $this->writeSheet('Price list', [
+            [null, null, 'Název', null, null, 'MJ', 'bal./kar.', 'Kč', 'EUR', 'USD', 'Price PLN'],
+            [],
+            ['WORKING SUITS'],
+            ['Strana', 'Pomlčkový kód', 'Název', null, 'Men´s working garments CXS SOLIS', 'UNIT', 'bal./kar.', 'Price CZK', 'Price EUR', 'Price USD', 'Price PLN'],
+            ['41', '1010-130-260-00', 'SOLIS FLEX', null, 'Men´s jacket CXS SOLIS FLEX, redblack, size 46', 'pcs', '1/20', '430.00', '17.917', '20.98', '78.182'],
+            ['41', '1010-130-411-00', 'SOLIS FLEX', null, 'Men´s jacket CXS SOLIS FLEX, blue-black, size 46', 'pcs', '1/20', '430.00', '17.917', '20.98', '78.182'],
+            ['41', '1020-130-260-00', 'SOLIS FLEX', null, 'Men´s trousers CXS SOLIS FLEX, red-black, size 46', 'pcs', '1/20', '400.00', '16.667', '19.51', '72.727'],
+        ]);
+        try {
+            $mapping = (new SpreadsheetMappingHeuristic)->detect($path);
+            $this->assertNotNull($mapping);
+            $cols = $mapping['sheets'][0]['columns'];
+            $this->assertSame(1, $cols['sku']);
+            $this->assertSame(2, $cols['name']);
+            $this->assertSame(10, $cols['catalog_price']);
+            $this->assertNotSame(5, $cols['sku']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_dupont_ignores_ref_errors_and_finds_article_and_unit_price(): void
+    {
+        $path = $this->writeSheet('Industrial  ', [
+            ['Line1', '#REF!', '#REF!'],
+            ['Line2', 'Category/Type', '#REF!', '#REF!', '#REF!', '#REF!', '#REF!', '#REF!', 'Box Price (€/pc.)', '#REF!', 'Price (€/pc.)'],
+            ['TS CHF5 S WH DE', 'Cat. III', 'TS CHF5 S WH DE', '', '#REF!', 'D14886039', 'S', '100', '#REF!', '1600', '3.06'],
+            ['TS CHF5 S WH DE', '', '', '', '#REF!', 'D14886047', 'M', '100', '#REF!', '1600', '3.06'],
+            ['TS CHF5 S WH DE', '', '', '', '', 'D14886050', 'L', '100', '#REF!', '1600', '3.06'],
+        ]);
+        try {
+            $mapping = (new SpreadsheetMappingHeuristic)->detect($path);
+            $this->assertNotNull($mapping);
+            $cols = $mapping['sheets'][0]['columns'];
+            $this->assertSame(10, $cols['catalog_price']);
+            $this->assertSame(5, $cols['sku']);
+            $this->assertNotSame(6, $cols['name']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     private function makeDupontLikeSpreadsheet(): string
     {
         $spreadsheet = new Spreadsheet;
@@ -47,6 +163,21 @@ final class SpreadsheetMappingHeuristicTest extends TestCase
         ]);
 
         $path = tempnam(sys_get_temp_dir(), 'dupont').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+
+        return $path;
+    }
+
+    /**
+     * @param  list<list<mixed>>  $rows
+     */
+    private function writeSheet(string $title, array $rows): string
+    {
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle($title);
+        $sheet->fromArray($rows);
+        $path = tempnam(sys_get_temp_dir(), 'map').'.xlsx';
         (new Xlsx($spreadsheet))->save($path);
 
         return $path;

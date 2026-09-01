@@ -13,6 +13,8 @@ final class PriceListStructureSampler
     private const SKIP_SHEET_HINTS = [
         'okładka', 'okladka', 'disclaimer', 'ważne', 'wazne', 'kontakt',
         'spis', 'cover', 'info', 'instructions', 'readme',
+        'languages', 'gtcs', 'warunki', 'kalkulator', 'overview',
+        'tarifs', 'wygaszane', 'trad. ',
     ];
 
     /**
@@ -25,7 +27,7 @@ final class PriceListStructureSampler
      *     }>
      * }
      */
-    public function sample(string $path, int $maxSheets = 8, int $rowsPerSheet = 35, int $cols = 20): array
+    public function sample(string $path, int $maxSheets = 8, int $rowsPerSheet = 35, int $cols = 28): array
     {
         $spreadsheet = IOFactory::load($path);
         $sheets = [];

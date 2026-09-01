@@ -141,6 +141,15 @@ export type Product = {
   documents_count?: number
   ai_match_percent?: number
   ai_match_reason?: string | null
+  special_prices?: Array<{
+    id: number
+    client_id: number | null
+    client_name: string
+    price: string
+    currency: string
+    valid_from: string | null
+    contract_ref: string | null
+  }>
 }
 
 export type EnrichmentBatch = {

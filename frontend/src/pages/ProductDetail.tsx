@@ -246,6 +246,34 @@ export function ProductDetail() {
         </div>
       </div>
 
+      {(p.special_prices?.length ?? 0) > 0 && (
+        <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold">Ceny specjalne (kontrakty klientów)</h2>
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Klient</th>
+                <th className="p-2">Cena</th>
+                <th className="p-2">Od</th>
+                <th className="p-2">Kontrakt</th>
+              </tr>
+            </thead>
+            <tbody>
+              {p.special_prices!.map((s) => (
+                <tr key={s.id} className="border-b">
+                  <td className="p-2">{s.client_name}</td>
+                  <td className="p-2">
+                    {s.price} {s.currency}
+                  </td>
+                  <td className="p-2">{s.valid_from ?? '—'}</td>
+                  <td className="p-2">{s.contract_ref ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {priceHistory.length > 0 && (
         <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
           <h2 className="mb-2 text-sm font-semibold">Historia cen</h2>

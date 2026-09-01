@@ -125,12 +125,16 @@ final class AssortmentGroupService
             }
 
             $group = $resolvedGroups[$assigned];
-            $discount = (float) $group->discount_percent;
             $catalog = (float) ($product['catalog_price_net'] ?? 0);
             $product['category'] = $assigned;
             $product['assortment_group_id'] = $group->id;
-            $product['discount_percent'] = $discount;
-            $product['purchase_price'] = round($catalog * (1 - ($discount / 100)), 2);
+            if (! empty($product['_purchase_from_file'])) {
+                unset($product['_purchase_from_file']);
+            } else {
+                $discount = (float) $group->discount_percent;
+                $product['discount_percent'] = $discount;
+                $product['purchase_price'] = round($catalog * (1 - ($discount / 100)), 2);
+            }
             $out[] = $product;
         }
 
@@ -162,10 +166,14 @@ final class AssortmentGroupService
 
         $out = [];
         foreach ($products as $product) {
-            $catalog = (float) ($product['catalog_price_net'] ?? 0);
-            $product['discount_percent'] = $defaultDiscount;
-            $product['purchase_price'] = round($catalog * (1 - ($defaultDiscount / 100)), 2);
             $product['assortment_group_id'] = null;
+            if (! empty($product['_purchase_from_file'])) {
+                unset($product['_purchase_from_file']);
+            } else {
+                $catalog = (float) ($product['catalog_price_net'] ?? 0);
+                $product['discount_percent'] = $defaultDiscount;
+                $product['purchase_price'] = round($catalog * (1 - ($defaultDiscount / 100)), 2);
+            }
             $out[] = $product;
         }
 
