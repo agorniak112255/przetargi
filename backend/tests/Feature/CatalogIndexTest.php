@@ -189,6 +189,80 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
+    public function test_follows_xml_child_without_sitemap_in_name(): void
+    {
+        Http::fake([
+            'https://ox-on.com/robots.txt' => Http::response('Sitemap: https://ox-on.com/sitemap.xml', 200),
+            'https://ox-on.com/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><sitemapindex>'
+                .'<sitemap><loc>https://ox-on.com/feeds/products.xml</loc></sitemap>'
+                .'</sitemapindex>',
+                200
+            ),
+            'https://ox-on.com/feeds/products.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://ox-on.com/gloves/nitril-4500</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('ox-on.com');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://ox-on.com/gloves/nitril-4500']);
+        $this->assertSame(0, CatalogPage::query()->where('url', 'like', '%feeds/products.xml%')->count());
+    }
+
+    public function test_uses_www_robots_when_apex_has_no_sitemap(): void
+    {
+        Http::fake([
+            'https://brand.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://www.brand.pl/robots.txt' => Http::response(
+                "Sitemap: https://www.brand.pl/sitemap.xml\n",
+                200
+            ),
+            'https://www.brand.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.brand.pl/rekawice-ox-on</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('brand.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://www.brand.pl/rekawice-ox-on']);
+    }
+
+    public function test_missing_only_retry_empty_reindexes_zero_hosts(): void
+    {
+        Http::fake([
+            'https://gvarant.pl/robots.txt' => Http::response('Sitemap: https://gvarant.pl/sitemap.xml', 200),
+            'https://gvarant.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://gvarant.pl/kask-pros</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+        CatalogHost::query()->create([
+            'host' => 'gvarant.pl',
+            'pages_count' => 0,
+            'off_host_count' => 0,
+            'last_attempt_at' => now()->subDay(),
+        ]);
+
+        $this->artisan('catalog:index', [
+            'host' => 'gvarant.pl',
+            '--missing-only' => true,
+            '--retry-empty' => true,
+        ])->expectsOutputToContain('ponawiam')->assertSuccessful();
+
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://gvarant.pl/kask-pros']);
+    }
+
     public function test_missing_only_skips_host_already_checked_without_pages(): void
     {
         Http::fake();
@@ -220,6 +294,7 @@ final class CatalogIndexTest extends TestCase
         $this->artisan('catalog:index', [
             'host' => 'sklep.prohaccp.pl',
             '--missing-only' => true,
+            '--retry-empty' => true,
         ])->expectsOutputToContain('już sprawdzane')->assertSuccessful();
 
         Http::assertNothingSent();

@@ -23,6 +23,7 @@ final class CatalogIndexCommand extends Command
         {--seconds=240 : Limit czasu na domenę}
         {--fresh-days=0 : Pomiń domeny odświeżone w ostatnich N dniach}
         {--missing-only : Tylko domeny, których nie ma w indeksie}
+        {--retry-empty : Przy --missing-only ponów domeny, które wcześniej dały 0 adresów}
         {--skip= : Dodatkowe domeny do pominięcia, po przecinku}';
 
     protected $description = 'Indeksuje karty produktu z sitemap producentów i hurtowni';
@@ -40,6 +41,7 @@ final class CatalogIndexCommand extends Command
         $seconds = max(30, (int) $this->option('seconds'));
         $freshDays = max(0, (int) $this->option('fresh-days'));
         $missingOnly = (bool) $this->option('missing-only');
+        $retryEmpty = (bool) $this->option('retry-empty');
         $total = 0;
         $failed = 0;
 
@@ -51,9 +53,12 @@ final class CatalogIndexCommand extends Command
                 continue;
             }
             if ($missingOnly && $this->hasAttempted($host)) {
-                $this->line('    pomijam — już sprawdzane');
+                if (! $retryEmpty || $this->attemptHadPages($host)) {
+                    $this->line('    pomijam — już sprawdzane');
 
-                continue;
+                    continue;
+                }
+                $this->line('    ponawiam — poprzednio 0 adresów');
             }
             if ($freshDays > 0 && $this->indexedRecently($host, $freshDays)) {
                 $this->line('    pomijam — zaindeksowane w ostatnich '.$freshDays.' dniach');
@@ -158,6 +163,13 @@ final class CatalogIndexCommand extends Command
     private function hasAttempted(string $host): bool
     {
         return CatalogHost::query()->where('host', $host)->exists();
+    }
+
+    private function attemptHadPages(string $host): bool
+    {
+        $count = CatalogHost::query()->where('host', $host)->value('pages_count');
+
+        return is_numeric($count) && (int) $count > 0;
     }
 
     private function rememberAttempt(string $host, int $pages, int $offHost): void

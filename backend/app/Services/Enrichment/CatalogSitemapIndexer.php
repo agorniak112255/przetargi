@@ -29,9 +29,8 @@ final class CatalogSitemapIndexer
     /** Limit pobrania przez curl.exe, gdy Guzzle dostaje 403 od WAF. */
     private const CURL_MAX_BYTES = 20971520;
 
-    private const MAX_CURL_ATTEMPTS = 2;
-
-    private int $curlAttempts = 0;
+    /** Zgadywane ścieżki nie mogą zjeść całego --seconds na jednym 404. */
+    private const CANDIDATE_TIMEOUT = 15;
 
     /** Sklepy za WAF-em odrzucają nagłówki botów, więc przedstawiamy się jak przeglądarka. */
     private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -58,6 +57,10 @@ final class CatalogSitemapIndexer
         '/wp-sitemap.xml',
         '/sitemap.php',
         '/pl/sitemap.xml',
+        '/product-sitemap.xml',
+        '/products-sitemap.xml',
+        '/sitemap-products.xml',
+        '/sitemap/products.xml',
         // Shoper / Shoparena
         '/console/integration/execute/name/GoogleSitemap',
         // Joomla OSMap
@@ -74,8 +77,8 @@ final class CatalogSitemapIndexer
             throw new RuntimeException('Pusty host.');
         }
 
-        $this->curlAttempts = 0;
         $sitemaps = $this->discoverSitemaps($host);
+        $guessed = array_flip($this->candidateUrls($host));
         if ($sitemaps === []) {
             throw new RuntimeException('Nie znalazłem sitemapy dla '.$host.'.');
         }
@@ -140,7 +143,8 @@ final class CatalogSitemapIndexer
 
             // liczymy tylko mapy, które faktycznie coś dały — inaczej raport
             // pokazuje soft-404 sklepu jako znalezioną sitemapę
-            if ($this->streamLocations($sitemap, $consume, $deadline) && $found > 0) {
+            $timeout = isset($guessed[$sitemap]) ? self::CANDIDATE_TIMEOUT : 90;
+            if ($this->streamLocations($sitemap, $consume, $deadline, $timeout) && $found > 0) {
                 $used[] = $sitemap;
             }
             if (microtime(true) >= $deadline) {
@@ -180,12 +184,24 @@ final class CatalogSitemapIndexer
     public function discoverSitemaps(string $host): array
     {
         $out = [];
-        $robots = $this->fetch('https://'.$host.'/robots.txt');
-        $this->collectRobotSitemaps($robots, $out);
-        if ($out === [] && ! app()->environment('testing')) {
-            $this->collectRobotSitemaps($this->fetchViaCurl('https://'.$host.'/robots.txt'), $out);
+        $hosts = [$host];
+        if (! str_starts_with($host, 'www.')) {
+            $hosts[] = 'www.'.$host;
+        }
+        foreach ($hosts as $name) {
+            $robots = $this->fetch('https://'.$name.'/robots.txt');
+            $this->collectRobotSitemaps($robots, $out);
+            if ($out === [] && ! app()->environment('testing')) {
+                $this->collectRobotSitemaps($this->fetchViaCurl('https://'.$name.'/robots.txt'), $out);
+            }
+            if ($out !== []) {
+                break;
+            }
         }
 
+        if ($out === []) {
+            $this->collectHtmlSitemaps($host, $out);
+        }
         if ($out === []) {
             $out = $this->candidateUrls($host);
         }
@@ -216,38 +232,42 @@ final class CatalogSitemapIndexer
      *
      * @param  callable(string): bool  $onLocation  false przerywa czytanie
      */
-    private function streamLocations(string $url, callable $onLocation, float $deadline = 0.0): bool
+    private function streamLocations(string $url, callable $onLocation, float $deadline = 0.0, int $timeout = 90): bool
     {
+        $timeout = max(5, $timeout);
+        if ($deadline > 0.0) {
+            $timeout = max(5, min($timeout, (int) ceil($deadline - microtime(true))));
+        }
         try {
             $response = Http::withHeaders([
                 'User-Agent' => self::USER_AGENT,
                 'Accept' => 'application/xml,text/xml,text/plain,*/*',
                 'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
-            ])->timeout(180)->connectTimeout(8)
+            ])->timeout($timeout)->connectTimeout(8)
                 // read_timeout działa tylko na StreamHandlerze, więc pod cURL-em
                 // zrywamy transfer wolniejszy niż 1 kB/s przez 20 s
                 ->withOptions([
                     'stream' => true,
-                    'read_timeout' => 20,
+                    'read_timeout' => min(20, $timeout),
                     'curl' => [
                         CURLOPT_LOW_SPEED_LIMIT => 1024,
-                        CURLOPT_LOW_SPEED_TIME => 20,
+                        CURLOPT_LOW_SPEED_TIME => min(20, $timeout),
                     ],
                 ])
                 ->get($url);
         } catch (Throwable $e) {
             Log::info('Sitemap stream failed', ['url' => $url, 'error' => $e->getMessage()]);
 
-            return $this->streamFromCurl($url, $onLocation);
+            return $this->streamFromCurl($url, $onLocation, $timeout);
         }
 
         if (! $response->successful()) {
-            return $this->streamFromCurl($url, $onLocation);
+            return $this->streamFromCurl($url, $onLocation, $timeout);
         }
         // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
         // bez tego pobralibyśmy 130 kB HTML-a dla każdej zgadywanej ścieżki
         if (str_contains(mb_strtolower((string) $response->header('Content-Type')), 'text/html')) {
-            return $this->streamFromCurl($url, $onLocation);
+            return $this->streamFromCurl($url, $onLocation, $timeout);
         }
 
         $body = $response->toPsrResponse()->getBody();
@@ -286,7 +306,7 @@ final class CatalogSitemapIndexer
                 $chunk = (string) inflate_add($inflate, $chunk);
             }
             if ($buffer === '' && $this->looksLikeHtml($chunk)) {
-                return $this->streamFromCurl($url, $onLocation);
+                return $this->streamFromCurl($url, $onLocation, $timeout);
             }
 
             $buffer .= $chunk;
@@ -307,14 +327,13 @@ final class CatalogSitemapIndexer
      *
      * @param  callable(string): bool  $onLocation
      */
-    private function streamFromCurl(string $url, callable $onLocation): bool
+    private function streamFromCurl(string $url, callable $onLocation, int $timeout = 90): bool
     {
-        if (app()->environment('testing') || $this->curlAttempts >= self::MAX_CURL_ATTEMPTS) {
+        if (app()->environment('testing')) {
             return false;
         }
-        $this->curlAttempts++;
 
-        $body = $this->fetchViaCurl($url);
+        $body = $this->fetchViaCurl($url, $timeout);
         if ($body === null || $this->looksLikeHtml($body)) {
             return false;
         }
@@ -328,7 +347,7 @@ final class CatalogSitemapIndexer
         return true;
     }
 
-    private function fetchViaCurl(string $url): ?string
+    private function fetchViaCurl(string $url, int $timeout = 90): ?string
     {
         if (preg_match('#^https?://#i', $url) !== 1) {
             return null;
@@ -337,11 +356,12 @@ final class CatalogSitemapIndexer
         if ($binary === null) {
             return null;
         }
+        $timeout = max(5, $timeout);
 
         $process = new Process([
             $binary,
             '-sL',
-            '--max-time', '180',
+            '--max-time', (string) $timeout,
             '--connect-timeout', '8',
             '--compressed',
             '-A', self::USER_AGENT,
@@ -349,7 +369,7 @@ final class CatalogSitemapIndexer
             '-H', 'Accept-Language: pl-PL,pl;q=0.9,en;q=0.8',
             $url,
         ]);
-        $process->setTimeout(180);
+        $process->setTimeout($timeout + 5);
 
         try {
             $process->run();
@@ -386,6 +406,38 @@ final class CatalogSitemapIndexer
             $url = trim((string) $url);
             if ($url !== '') {
                 $out[] = $url;
+            }
+        }
+    }
+
+    /**
+     * @param  list<string>  $out
+     */
+    private function collectHtmlSitemaps(string $host, array &$out): void
+    {
+        $html = $this->fetch('https://'.$host.'/');
+        if ($html === null || $html === '' || ! $this->looksLikeHtml($html)) {
+            return;
+        }
+        if (preg_match_all(
+            '/rel=["\']sitemap["\'][^>]*href=["\']([^"\']+)["\']|href=["\']([^"\']*sitemap[^"\']*)["\'][^>]*rel=["\']sitemap["\']/i',
+            mb_substr($html, 0, 80000),
+            $m
+        ) === 0) {
+            return;
+        }
+        foreach (array_merge($m[1], $m[2]) as $href) {
+            $href = trim((string) $href);
+            if ($href === '') {
+                continue;
+            }
+            if (str_starts_with($href, '//')) {
+                $href = 'https:'.$href;
+            } elseif (str_starts_with($href, '/')) {
+                $href = 'https://'.$host.$href;
+            }
+            if (preg_match('#^https?://#i', $href) === 1) {
+                $out[] = $href;
             }
         }
     }
@@ -525,12 +577,11 @@ final class CatalogSitemapIndexer
         if (str_contains($hay, 'googlesitemap') || str_contains($hay, 'osmap')) {
             return true;
         }
+        if (str_ends_with($path, '.xml') || str_ends_with($path, '.xml.gz') || str_ends_with($path, '.gz')) {
+            return true;
+        }
 
-        return str_contains($path, 'sitemap') && (
-            str_ends_with($path, '.xml')
-            || str_ends_with($path, '.gz')
-            || str_ends_with($path, '.php')
-        );
+        return str_contains($path, 'sitemap') && str_ends_with($path, '.php');
     }
 
     /** Portale społecznościowe i wyszukiwarki bywają linkowane w sitemapach — do indeksu nie wnoszą nic. */
