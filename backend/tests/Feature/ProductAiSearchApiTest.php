@@ -754,6 +754,79 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertStringContainsString('CXS STRETCH', $cards);
     }
 
+    public function test_ai_search_long_cards_include_description(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'CHEM-LONG',
+            'name' => 'Rękawice chemiczne testowe',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'norms' => 'EN 374',
+            'description' => 'Unikalny znacznik opisu ALPHA-LONG-DESC-99.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 6,
+            'stock' => 3,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+            'enrichment_payload' => [
+                'specs' => ['odporność na kwasy'],
+                'use_cases' => ['laboratorium'],
+                'features' => ['mankiet dziany'],
+            ],
+        ]);
+
+        $cards = $this->captureRankCards('rękawice do kwasów');
+
+        $this->assertStringContainsString('ALPHA-LONG-DESC-99', $cards);
+        $this->assertStringContainsString('mankiet dziany', $cards);
+        $this->assertStringContainsString('CHEM-LONG', $cards);
+    }
+
+    public function test_ai_search_short_cards_omit_description(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'product_search_card_detail' => 'short',
+        ]);
+
+        Product::query()->create([
+            'sku' => 'CHEM-SHORT',
+            'name' => 'Rękawice chemiczne testowe',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'norms' => 'EN 374',
+            'description' => 'Unikalny znacznik opisu ALPHA-LONG-DESC-99.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 6,
+            'stock' => 3,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+            'enrichment_payload' => [
+                'specs' => ['odporność na kwasy'],
+                'use_cases' => ['laboratorium'],
+                'features' => ['mankiet dziany'],
+            ],
+        ]);
+
+        $cards = $this->captureRankCards('rękawice do kwasów');
+
+        $this->assertStringContainsString('CHEM-SHORT', $cards);
+        $this->assertStringContainsString('laboratorium', $cards);
+        $this->assertStringNotContainsString('ALPHA-LONG-DESC-99', $cards);
+        $this->assertStringNotContainsString('mankiet dziany', $cards);
+    }
+
     public function test_ai_search_sends_whole_assortment_even_without_phrase_hit(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
@@ -1084,6 +1157,28 @@ final class ProductAiSearchApiTest extends TestCase
 
         $this->assertNotNull($cards);
         $this->assertStringNotContainsString('REK-250', $cards);
+    }
+
+    private function captureRankCards(string $query): string
+    {
+        $cards = null;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards): array {
+                $cards = (string) $messages[1]['content'];
+
+                return [
+                    'needed' => 'rękawice',
+                    'search_phrases' => ['rękawice'],
+                    'matches' => [],
+                ];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', ['query' => $query])->assertOk();
+        $this->assertNotNull($cards);
+
+        return (string) $cards;
     }
 
     private function firstCardSku(?string $prompt): ?string

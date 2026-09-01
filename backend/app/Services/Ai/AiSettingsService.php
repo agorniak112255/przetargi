@@ -53,6 +53,15 @@ final class AiSettingsService
 
     public const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small';
 
+    public const PRODUCT_SEARCH_CARDS_LONG = 'long';
+
+    public const PRODUCT_SEARCH_CARDS_SHORT = 'short';
+
+    public const PRODUCT_SEARCH_CARD_DETAILS = [
+        self::PRODUCT_SEARCH_CARDS_LONG,
+        self::PRODUCT_SEARCH_CARDS_SHORT,
+    ];
+
     /**
      * @return array{
      *     enabled: bool,
@@ -73,6 +82,7 @@ final class AiSettingsService
      *     tavily_search_mode: string,
      *     enrichment_batch_limit: int,
      *     match_concurrency: int,
+     *     product_search_card_detail: string,
      *     vector_enabled: bool,
      *     qdrant_url: ?string,
      *     qdrant_api_key: ?string,
@@ -149,6 +159,11 @@ final class AiSettingsService
                         ? ($row->match_concurrency ?? null)
                         : null
                 ),
+                'product_search_card_detail' => $this->normalizeProductSearchCardDetail(
+                    Schema::hasColumn('ai_settings', 'product_search_card_detail')
+                        ? ($row->product_search_card_detail ?? null)
+                        : null
+                ),
                 'vector_enabled' => $hasVectorCols ? (bool) ($row->vector_enabled ?? false) : false,
                 'qdrant_url' => $hasVectorCols ? $this->nullableString($row->qdrant_url ?? null) : null,
                 'qdrant_api_key' => $qdrantKey !== null && $qdrantKey !== '' ? (string) $qdrantKey : null,
@@ -207,6 +222,9 @@ final class AiSettingsService
             'tavily_search_mode' => $this->normalizeTavilySearchMode(config('ai.tavily_search_mode')),
             'enrichment_batch_limit' => $this->normalizeEnrichmentBatchLimit(config('ai.enrichment_batch_limit')),
             'match_concurrency' => $this->normalizeMatchConcurrency(config('ai.match_concurrency')),
+            'product_search_card_detail' => $this->normalizeProductSearchCardDetail(
+                config('ai.product_search_card_detail')
+            ),
             'vector_enabled' => (bool) config('ai.vector_enabled', false),
             'qdrant_url' => $this->nullableString(config('ai.qdrant_url')),
             'qdrant_api_key' => $qdrantKey,
@@ -251,6 +269,7 @@ final class AiSettingsService
             'tavily_search_mode' => $cfg['tavily_search_mode'],
             'enrichment_batch_limit' => $cfg['enrichment_batch_limit'],
             'match_concurrency' => $cfg['match_concurrency'],
+            'product_search_card_detail' => $cfg['product_search_card_detail'],
             'vector_enabled' => $cfg['vector_enabled'],
             'qdrant_url' => $cfg['qdrant_url'],
             'qdrant_collection' => $cfg['qdrant_collection'],
@@ -296,6 +315,7 @@ final class AiSettingsService
             'tavily_search_mode' => TavilySearchProfile::MODE_BALANCED,
             'enrichment_batch_limit' => 5,
             'match_concurrency' => 4,
+            'product_search_card_detail' => self::PRODUCT_SEARCH_CARDS_LONG,
             'vector_enabled' => false,
             'qdrant_url' => 'http://127.0.0.1:6333',
             'qdrant_collection' => 'products',
@@ -359,6 +379,13 @@ final class AiSettingsService
         if (array_key_exists('match_concurrency', $data)
             && Schema::hasColumn('ai_settings', 'match_concurrency')) {
             $row->match_concurrency = $this->normalizeMatchConcurrency($data['match_concurrency']);
+        }
+
+        if (array_key_exists('product_search_card_detail', $data)
+            && Schema::hasColumn('ai_settings', 'product_search_card_detail')) {
+            $row->product_search_card_detail = $this->normalizeProductSearchCardDetail(
+                $data['product_search_card_detail']
+            );
         }
 
         if (Schema::hasColumn('ai_settings', 'embedding_provider')) {
@@ -672,6 +699,13 @@ final class AiSettingsService
         return $this->normalizeMatchConcurrency($cfg['match_concurrency'] ?? null);
     }
 
+    public function productSearchUsesShortCards(): bool
+    {
+        return $this->normalizeProductSearchCardDetail(
+            $this->resolve()['product_search_card_detail'] ?? null
+        ) === self::PRODUCT_SEARCH_CARDS_SHORT;
+    }
+
     /**
      * @param  array<string, mixed>  $cfg
      */
@@ -728,6 +762,15 @@ final class AiSettingsService
         $n = is_numeric($value) ? (int) $value : 4;
 
         return max(1, min(self::CONCURRENCY_MAX, $n));
+    }
+
+    private function normalizeProductSearchCardDetail(mixed $value): string
+    {
+        $detail = is_string($value) ? strtolower(trim($value)) : '';
+
+        return in_array($detail, self::PRODUCT_SEARCH_CARD_DETAILS, true)
+            ? $detail
+            : self::PRODUCT_SEARCH_CARDS_LONG;
     }
 
     private function normalizeReasoningEffort(mixed $value): string

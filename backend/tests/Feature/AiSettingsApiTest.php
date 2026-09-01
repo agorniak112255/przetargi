@@ -29,7 +29,8 @@ final class AiSettingsApiTest extends TestCase
         $this->getJson('/api/ai-settings')
             ->assertOk()
             ->assertJsonPath('enabled', false)
-            ->assertJsonPath('has_api_key', false);
+            ->assertJsonPath('has_api_key', false)
+            ->assertJsonPath('product_search_card_detail', 'long');
 
         $this->putJson('/api/ai-settings', [
             'enabled' => true,
@@ -57,8 +58,16 @@ final class AiSettingsApiTest extends TestCase
             ->assertJsonPath('qdrant_url', 'http://127.0.0.1:6333')
             ->assertJsonPath('embedding_model', 'text-embedding-3-small')
             ->assertJsonPath('match_concurrency', 6)
+            ->assertJsonPath('product_search_card_detail', 'long')
             ->assertJsonPath('search_engine', 'duckduckgo')
             ->assertJsonPath('reasoning_effort', 'low');
+
+        $this->putJson('/api/ai-settings', ['product_search_card_detail' => 'short'])
+            ->assertOk()
+            ->assertJsonPath('product_search_card_detail', 'short');
+
+        $this->putJson('/api/ai-settings', ['product_search_card_detail' => 'medium'])
+            ->assertStatus(422);
 
         $this->putJson('/api/ai-settings', ['match_concurrency' => 100])
             ->assertOk()

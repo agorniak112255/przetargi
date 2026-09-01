@@ -23,6 +23,7 @@ function withProfileDefaults(next: AiSettings): AiSettings {
   return {
     ...next,
     reasoning_effort: next.reasoning_effort ?? 'auto',
+    product_search_card_detail: next.product_search_card_detail === 'short' ? 'short' : 'long',
     model_profiles: (next.model_profiles ?? []).map((p) => ({
       ...p,
       reasoning_effort: p.reasoning_effort ?? null,
@@ -86,6 +87,7 @@ type AiSettings = {
   tavily_search_mode: 'eco' | 'balanced' | 'full'
   enrichment_batch_limit: number
   match_concurrency: number
+  product_search_card_detail: 'long' | 'short'
   vector_enabled: boolean
   qdrant_url: string | null
   qdrant_collection: string | null
@@ -227,6 +229,7 @@ export function AiSettingsPage() {
         tavily_search_mode: cfg.tavily_search_mode || 'balanced',
         enrichment_batch_limit: cfg.enrichment_batch_limit || 5,
         match_concurrency: cfg.match_concurrency || 4,
+        product_search_card_detail: cfg.product_search_card_detail === 'short' ? 'short' : 'long',
         vector_enabled: cfg.vector_enabled,
         qdrant_url: cfg.qdrant_url?.trim() || null,
         qdrant_collection: cfg.qdrant_collection?.trim() || 'products',
@@ -826,6 +829,27 @@ export function AiSettingsPage() {
               To jest limit równoległych zapytań do modelu (llama-swap), nie liczba workerów
               wyszukiwarki. Ustaw 16, jeśli model ma 16 slotów — przy 1–2 w panelu llama-swap
               pokaże 1–2 in-flight niezależnie od 16 workerów.
+            </span>
+          </label>
+          <label className="block text-xs">
+            Karty produktów dla modelu (wyszukiwarka AI)
+            <select
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+              value={cfg.product_search_card_detail || 'long'}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  product_search_card_detail: e.target.value === 'short' ? 'short' : 'long',
+                })
+              }
+            >
+              <option value="long">Długi opis → model (obecny, dokładniejszy)</option>
+              <option value="short">Krótki opis → model (szybszy)</option>
+            </select>
+            <span className="mt-1 block text-[11px] text-slate-500">
+              {cfg.product_search_card_detail === 'short'
+                ? 'Model dostaje SKU, nazwę, normy, °C i 1–2 specy. RAG bez zmian — porównaj jakość z długim.'
+                : 'Model dostaje pełny opis, cechy i zastosowania (wolniej, lepiej łapie szczegóły z opisu).'}
             </span>
           </label>
           <label className="flex items-center gap-2 text-xs">

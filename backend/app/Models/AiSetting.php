@@ -27,6 +27,7 @@ class AiSetting extends Model
         'tavily_search_mode',
         'enrichment_batch_limit',
         'match_concurrency',
+        'product_search_card_detail',
         'vector_enabled',
         'qdrant_url',
         'qdrant_api_key',

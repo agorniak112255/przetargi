@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Product;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Search\ProductTextSearch;
@@ -35,6 +36,10 @@ final class ProductAiSearchService
 
     private const MAX_MATCHES = 20;
 
+    private const RANK_MAX_TOKENS_LONG = 2500;
+
+    private const RANK_MAX_TOKENS_SHORT = 800;
+
     /** Trafienie w kod modelu jest pewniejsze niż podobieństwo tekstu czy wektora. */
     private const RRF_WEIGHT_PRIORITY = 3.0;
 
@@ -55,6 +60,7 @@ final class ProductAiSearchService
         private readonly ProductTextSearch $textSearch,
         private readonly RrfFusion $rrf,
         private readonly BhpAttributeNormalizer $bhpAttributes,
+        private readonly AiSettingsService $aiSettings,
     ) {}
 
     /**
@@ -146,9 +152,10 @@ final class ProductAiSearchService
                 $limit,
                 $intents[$i]['needed'],
                 $intents[$i]['constraints'],
+                $task,
             );
         }
-        $rankRaws = $this->llm->chatJsonMany($rankMessages, 2500, $task, $maxConcurrent);
+        $rankRaws = $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent);
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
             $intents[$i] = $this->parseIntent($raw, $clean[$i]);
@@ -1391,9 +1398,9 @@ final class ProductAiSearchService
         array $constraints = [],
     ): array {
         $raw = $this->llm->chatJson(
-            $this->rankMessages($query, $candidates, $limit, $needed, $constraints),
+            $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task),
             null,
-            2500,
+            $this->rankMaxTokens($task),
             null,
             $task,
         );
@@ -1416,9 +1423,9 @@ final class ProductAiSearchService
         array $constraints,
     ): array {
         $raw = $this->llm->chatJson(
-            $this->analyzeAndRankMessages($query, $candidates, $limit, null, $constraints),
+            $this->analyzeAndRankMessages($query, $candidates, $limit, null, $constraints, $task),
             null,
-            2500,
+            $this->rankMaxTokens($task),
             null,
             $task,
         );
@@ -1438,8 +1445,9 @@ final class ProductAiSearchService
         int $limit,
         ?string $needed,
         array $constraints,
+        AiTask $task,
     ): array {
-        $messages = $this->rankMessages($query, $candidates, $limit, $needed, $constraints);
+        $messages = $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task);
         $messages[0]['content'] = str_replace(
             'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}.',
             'needed: krótka nazwa (rzeczownik); search_phrases: 2-8, pierwsze 2 = nazwa; constraints: 0-6. '
@@ -1450,6 +1458,44 @@ final class ProductAiSearchService
         );
 
         return $messages;
+    }
+
+    private function useShortSearchCards(AiTask $task): bool
+    {
+        return $task === AiTask::ProductSearch && $this->aiSettings->productSearchUsesShortCards();
+    }
+
+    private function rankMaxTokens(AiTask $task): int
+    {
+        return $this->useShortSearchCards($task)
+            ? self::RANK_MAX_TOKENS_SHORT
+            : self::RANK_MAX_TOKENS_LONG;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function rankCard(Product $product, bool $short): array
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $card = [
+            'id' => $product->id,
+            'sku' => $product->sku,
+            'name' => mb_substr((string) $product->name, 0, $short ? 80 : 120),
+            'category' => $product->category,
+            'manufacturer' => $product->manufacturer,
+            'norms' => $product->norms,
+            'heat_celsius' => $this->productHeatCelsius($product),
+            'specs' => array_slice($this->stringList($payload['specs'] ?? null), 0, $short ? 2 : 8),
+            'use_cases' => array_slice($this->stringList($payload['use_cases'] ?? null), 0, $short ? 2 : 4),
+            'payload_norms' => array_slice($this->stringList($payload['norms'] ?? null), 0, 6),
+        ];
+        if (! $short) {
+            $card['description'] = mb_substr((string) ($product->description ?? ''), 0, 360);
+            $card['features'] = array_slice($this->stringList($payload['features'] ?? null), 0, 4);
+        }
+
+        return $card;
     }
 
     /**
@@ -1463,35 +1509,24 @@ final class ProductAiSearchService
         int $limit,
         ?string $needed,
         array $constraints,
+        AiTask $task,
     ): array {
-        $cards = $candidates->map(function (Product $p): array {
-            $payload = is_array($p->enrichment_payload) ? $p->enrichment_payload : [];
-
-            return [
-                'id' => $p->id,
-                'sku' => $p->sku,
-                'name' => mb_substr((string) $p->name, 0, 120),
-                'category' => $p->category,
-                'manufacturer' => $p->manufacturer,
-                'norms' => $p->norms,
-                'description' => mb_substr((string) ($p->description ?? ''), 0, 360),
-                'heat_celsius' => $this->productHeatCelsius($p),
-                'specs' => array_slice($this->stringList($payload['specs'] ?? null), 0, 8),
-                'use_cases' => array_slice($this->stringList($payload['use_cases'] ?? null), 0, 4),
-                'features' => array_slice($this->stringList($payload['features'] ?? null), 0, 4),
-                'payload_norms' => array_slice($this->stringList($payload['norms'] ?? null), 0, 6),
-            ];
-        })->values()->all();
+        $short = $this->useShortSearchCards($task);
+        $cards = $candidates->map(fn (Product $p): array => $this->rankCard($p, $short))->values()->all();
 
         $neededLine = is_string($needed) && trim($needed) !== ''
             ? "\nSzukany produkt (z analizy):\n".trim($needed)
             : '';
+        $proofFields = $short
+            ? 'norms/specs/payload_norms/use_cases/heat_celsius'
+            : 'norms/specs/payload_norms/features/use_cases/description';
         $constraintLine = $constraints === []
             ? ''
-            : "\nWarunki, które karta MUSI potwierdzać w norms/specs/description (nie zgaduj):\n- "
+            : "\nWarunki, które karta MUSI potwierdzać w {$proofFields} (nie zgaduj):\n- "
                 .implode("\n- ", $constraints);
         $maxMatches = max(1, min($limit, self::MAX_MATCHES));
         $json = json_encode($cards, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $reasonHint = $short ? 'reason: max 8 słów. ' : '';
 
         return [
             [
@@ -1502,7 +1537,7 @@ final class ProductAiSearchService
                     .'Inny rodzaj → nie zwracaj: kamizelka ≠ osłona twarzy; rękawice ≠ obuwie. '
                     .'Sam ten sam rodzaj (kombinezon, kalosz) NIE wystarczy, gdy wymaganie ma warunek. '
                     .'2) WARUNEK: substancja, stężenie, klasa, typ, norma, napięcie — tylko gdy widać to '
-                    .'w polach norms, specs, payload_norms, features, use_cases albo description. '
+                    .'w polach '.$proofFields.'. '
                     .'Brak potwierdzenia → nie zwracaj (kombinezon pszczelarski / EN 343 ≠ kwas siarkowy). '
                     .'Równoznaczna norma/klasa (np. EN 13034, Typ 3/4, Tychem przy kwasie) = spełnione. '
                     .'Nie zgaduj z nazwy handlowej. '
@@ -1513,6 +1548,7 @@ final class ProductAiSearchService
                     .'(podnie = spodnie, rekawice = rękawice). '
                     .'Brak zgodnej nazwy albo braku dowodu na warunek: {"matches":[]}. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}. '
+                    .$reasonHint
                     .'score>=40 tylko przy zgodnej nazwie I spełnionych warunkach. Max '.$maxMatches.'. '
                     .'Zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
                     .'Tylko id z listy. Nie wymyślaj.',
