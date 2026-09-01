@@ -1628,31 +1628,42 @@ function InquiriesHelp() {
         },
         {
           action: 'Doprecyzowanie niuansów',
-          does: 'Karty pytają tylko o wybory (produkt, cena, zamiennik). Od tego zależy treść listu.',
-          click: 'Chipy na kartach, potem „Napisz odpowiedź”.',
+          does: 'Każda pozycja ma cytat klienta, wybór towaru i zamienników — potem kolejna pozycja.',
+          click: 'Chipy przy pozycji, potem „Napisz odpowiedź”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Zapytania">
-              <div className="mx-auto max-w-md rounded-xl bg-white shadow-sm">
-                <div className="border-b border-slate-100 px-4 py-3">
-                  <p className="text-sm font-semibold">Doprecyzowanie</p>
-                  <p className="text-xs text-slate-500">Kliknij opcje. Dopiero potem powstanie list.</p>
+              <div className="mx-auto max-w-xl rounded-2xl bg-white shadow-sm">
+                <div className="border-b border-slate-100 px-6 py-4">
+                  <p className="text-base font-semibold">Doprecyzowanie</p>
+                  <p className="text-sm text-slate-500">2 pozycje z zapytania — przy każdej widać cytat klienta.</p>
                 </div>
-                <div className="space-y-3 px-4 py-3">
-                  <p className="text-xs font-semibold">Produkt</p>
-                  <div className="flex flex-wrap gap-1.5">
+                <div className="space-y-3 px-6 py-4">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="mb-2 text-sm font-semibold">1 · 30 szt. · rozm. 10</p>
+                    <p className="mb-2 border-l-4 border-amber-400 bg-amber-50 px-2 py-1.5 text-sm">
+                      30szt Rękawice chemoodporne… rozmiar 10
+                    </p>
+                    <p className="mb-1 text-xs font-semibold">Towar z katalogu</p>
                     <Mark>
-                      <span className="rounded-full border border-blue-600 bg-blue-600 px-2.5 py-1 text-[11px] text-white">
+                      <span className="rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-sm text-white">
                         A611
                       </span>
                     </Mark>
-                    <span className="rounded-full border border-slate-300 px-2.5 py-1 text-[11px]">A621</span>
+                    <p className="mb-1 mt-2 text-xs font-semibold">Zamienniki</p>
+                    <span className="rounded-full border border-slate-300 px-3 py-1 text-sm">Tylko wskazany towar</span>
                   </div>
-                  <p className="text-xs font-semibold">Ceny</p>
-                  <span className="rounded-full border border-blue-600 bg-blue-600 px-2.5 py-1 text-[11px] text-white">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="mb-1 text-sm font-semibold">2 · 4 szt. · rozm. 43</p>
+                    <p className="border-l-4 border-amber-400 bg-amber-50 px-2 py-1.5 text-sm">
+                      4szt Kalosze chemoodporne… rozmiar 43
+                    </p>
+                  </div>
+                  <p className="text-sm font-semibold">Ceny</p>
+                  <span className="rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-sm text-white">
                     Bez ceny
                   </span>
-                  <span className="mt-2 block w-full rounded bg-blue-600 px-3 py-2 text-center text-xs font-medium text-white">
+                  <span className="mt-2 block w-full rounded-lg bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white">
                     Napisz odpowiedź
                   </span>
                 </div>

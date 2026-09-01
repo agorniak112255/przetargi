@@ -36,6 +36,11 @@ export type InquiryCard = {
   prompt: string
   options: InquiryCardOption[]
   allow_custom?: boolean
+  kind?: 'item' | 'global'
+  item_id?: string | null
+  quote?: string | null
+  qty?: string | null
+  size?: string | null
 }
 
 export type InquiryAnswer = {
@@ -52,6 +57,35 @@ type Props = {
   error?: string
   onClose: () => void
   onSubmit: (answers: Record<string, InquiryAnswer>, extraNote: string) => void
+}
+
+function isItemCard(card: InquiryCard): boolean {
+  return card.kind === 'item' || Boolean(card.item_id) || Boolean(card.quote) || card.id.startsWith('product:')
+}
+
+function partitionCards(cards: InquiryCard[]): { groups: InquiryCard[][]; global: InquiryCard[] } {
+  const groups: InquiryCard[][] = []
+  const byItem = new Map<string, InquiryCard[]>()
+  const global: InquiryCard[] = []
+  const order: string[] = []
+
+  for (const card of cards) {
+    if (!isItemCard(card)) {
+      global.push(card)
+      continue
+    }
+    const key = card.item_id || card.id
+    if (!byItem.has(key)) {
+      byItem.set(key, [])
+      order.push(key)
+    }
+    byItem.get(key)!.push(card)
+  }
+  for (const key of order) {
+    const group = byItem.get(key)
+    if (group) groups.push(group)
+  }
+  return { groups, global }
 }
 
 export function InquiryClarifyModal({
@@ -87,7 +121,63 @@ export function InquiryClarifyModal({
 
   if (!open) return null
 
+  const { groups, global } = partitionCards(cards)
   const missing = cards.filter((card) => !answers[card.id]?.option_id).map((c) => c.title)
+
+  function setOption(card: InquiryCard, optionId: string) {
+    setAnswers((prev) => ({
+      ...prev,
+      [card.id]: { option_id: optionId, custom: prev[card.id]?.custom ?? null },
+    }))
+  }
+
+  function setCustom(card: InquiryCard, custom: string) {
+    setAnswers((prev) => ({
+      ...prev,
+      [card.id]: {
+        option_id: prev[card.id]?.option_id ?? card.options[0]?.id ?? '',
+        custom,
+      },
+    }))
+  }
+
+  function renderFields(card: InquiryCard) {
+    return (
+      <div>
+        <p className="text-sm font-semibold text-slate-800">{card.title}</p>
+        <p className="mt-1 text-sm leading-snug text-slate-500">{card.prompt}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {card.options.map((opt) => {
+            const active = answers[card.id]?.option_id === opt.id
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                disabled={busy}
+                onClick={() => setOption(card, opt.id)}
+                className={`max-w-full rounded-full border px-3.5 py-1.5 text-left text-sm leading-snug ${
+                  active
+                    ? 'border-blue-600 bg-blue-600 text-white'
+                    : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+                } disabled:opacity-50`}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
+        {card.allow_custom && (
+          <input
+            className="mt-3 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            disabled={busy}
+            placeholder="Własna notatka do tej karty"
+            value={answers[card.id]?.custom ?? ''}
+            onChange={(e) => setCustom(card, e.target.value)}
+          />
+        )}
+      </div>
+    )
+  }
 
   return (
     <div
@@ -99,87 +189,97 @@ export function InquiryClarifyModal({
       }}
     >
       <div
-        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-xl bg-white"
+        className="relative flex max-h-[92vh] w-full max-w-[42rem] flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         {busy && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/85">
-            <span className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-violet-600 border-t-transparent" />
-            <p className="mt-3 text-sm font-semibold text-violet-900">Model pisze list…</p>
-            <p className="mt-1 text-xs text-slate-500">{seconds}s — nie zamykaj okna</p>
+            <span className="inline-block h-10 w-10 animate-spin rounded-full border-4 border-violet-600 border-t-transparent" />
+            <p className="mt-4 text-base font-semibold text-violet-900">Model pisze list…</p>
+            <p className="mt-1 text-sm text-slate-500">{seconds}s — nie zamykaj okna</p>
           </div>
         )}
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
           <div>
-            <p className="text-sm font-semibold text-slate-900">Doprecyzowanie</p>
-            <p className="text-xs text-slate-500">
-              Kliknij opcje. Dopiero potem powstanie list do skopiowania.
+            <p className="text-lg font-semibold text-slate-900">Doprecyzowanie</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {groups.length > 1
+                ? `${groups.length} pozycji — przy każdej wybierz towar i zamiennik, potem kolejna.`
+                : 'Kliknij opcje. Dopiero potem powstanie list do skopiowania.'}
             </p>
           </div>
           <button
             type="button"
             disabled={busy}
             onClick={onClose}
-            className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-50"
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50"
           >
             Anuluj
           </button>
         </div>
 
-        <div className="space-y-4 overflow-y-auto px-4 py-3">
-          {cards.map((card) => (
-            <div key={card.id}>
-              <p className="text-xs font-semibold text-slate-800">{card.title}</p>
-              <p className="mt-0.5 text-[11px] text-slate-500">{card.prompt}</p>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {card.options.map((opt) => {
-                  const active = answers[card.id]?.option_id === opt.id
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        setAnswers((prev) => ({
-                          ...prev,
-                          [card.id]: { option_id: opt.id, custom: prev[card.id]?.custom ?? null },
-                        }))
+        <div className="space-y-5 overflow-y-auto px-6 py-5">
+          {groups.map((group, gi) => {
+            const head = group[0]
+            return (
+              <section
+                key={head.item_id || head.id}
+                className="rounded-xl border border-slate-200 bg-slate-50/80 p-4"
+              >
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-lg bg-blue-600 px-2 text-sm font-semibold text-white">
+                    {gi + 1}
+                  </span>
+                  {head.qty && (
+                    <span className="rounded-full bg-white px-2.5 py-0.5 text-sm font-medium text-slate-800 ring-1 ring-slate-200">
+                      {head.qty}
+                    </span>
+                  )}
+                  {head.size && (
+                    <span className="rounded-full bg-white px-2.5 py-0.5 text-sm text-slate-700 ring-1 ring-slate-200">
+                      rozm. {head.size}
+                    </span>
+                  )}
+                </div>
+                {head.quote && (
+                  <blockquote className="mb-4 border-l-4 border-amber-400 bg-amber-50 px-3 py-2.5 text-sm leading-relaxed text-slate-800">
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-amber-800">
+                      Klient napisał
+                    </p>
+                    {head.quote}
+                  </blockquote>
+                )}
+                <div className="space-y-4">
+                  {group.map((card) => (
+                    <div
+                      key={card.id}
+                      className={
+                        card.id.startsWith('substitutes')
+                          ? 'border-t border-slate-200 pt-4'
+                          : undefined
                       }
-                      className={`rounded-full border px-2.5 py-1 text-[11px] ${
-                        active
-                          ? 'border-blue-600 bg-blue-600 text-white'
-                          : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
-                      } disabled:opacity-50`}
                     >
-                      {opt.label}
-                    </button>
-                  )
-                })}
-              </div>
-              {card.allow_custom && (
-                <input
-                  className="mt-2 w-full rounded border border-slate-300 px-2 py-1 text-xs"
-                  disabled={busy}
-                  placeholder="Własna notatka do tej karty"
-                  value={answers[card.id]?.custom ?? ''}
-                  onChange={(e) =>
-                    setAnswers((prev) => ({
-                      ...prev,
-                      [card.id]: {
-                        option_id: prev[card.id]?.option_id ?? card.options[0]?.id ?? '',
-                        custom: e.target.value,
-                      },
-                    }))
-                  }
-                />
+                      {renderFields(card)}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )
+          })}
+
+          {global.length > 0 && (
+            <section className={groups.length > 0 ? 'border-t border-slate-200 pt-5' : undefined}>
+              {groups.length > 0 && (
+                <p className="mb-3 text-sm font-semibold text-slate-700">Dla całej oferty</p>
               )}
-            </div>
-          ))}
+              <div className="space-y-4">{global.map((card) => renderFields(card))}</div>
+            </section>
+          )}
 
           <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">Inny niuans</span>
+            <span className="mb-1.5 block text-sm font-medium text-slate-600">Inny niuans</span>
             <textarea
-              className="min-h-[56px] w-full rounded border border-slate-300 px-2 py-1.5 text-xs"
+              className="min-h-[72px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               disabled={busy}
               value={note}
               onChange={(e) => setNote(e.target.value)}
@@ -187,12 +287,12 @@ export function InquiryClarifyModal({
             />
           </label>
 
-          {error && <p className="text-xs text-red-600">{error}</p>}
+          {error && <p className="text-sm text-red-600">{error}</p>}
         </div>
 
-        <div className="border-t border-slate-100 px-4 py-3">
+        <div className="border-t border-slate-100 px-6 py-5">
           {!busy && missing.length > 0 && (
-            <p className="mb-2 text-center text-[11px] text-slate-500">
+            <p className="mb-3 text-center text-sm text-slate-500">
               Nie wybrane: {missing.join(', ')} — możesz i tak wysłać.
             </p>
           )}
@@ -200,7 +300,7 @@ export function InquiryClarifyModal({
             type="button"
             disabled={busy}
             onClick={() => onSubmit(answers, note.trim())}
-            className={`w-full rounded px-3 py-2 text-xs font-medium text-white ${
+            className={`w-full rounded-lg px-4 py-3 text-sm font-medium text-white ${
               busy ? 'cursor-wait bg-violet-600' : 'bg-blue-600 hover:bg-blue-700'
             }`}
           >

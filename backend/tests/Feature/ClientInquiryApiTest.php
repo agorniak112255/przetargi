@@ -116,6 +116,60 @@ final class ClientInquiryApiTest extends TestCase
         ]);
     }
 
+    public function test_analyze_keeps_product_and_substitutes_on_each_line(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = Product::query()->create([
+            'sku' => 'G10',
+            'name' => 'Rękawice chemoodporne',
+            'manufacturer' => 'Supon',
+            'catalog_price_net' => 12.00,
+            'purchase_price' => 5.00,
+            'stock' => 40,
+        ]);
+
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Oferta BHP',
+                'questions' => [],
+                'product_queries' => ['rękawice chemoodporne'],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($product): void {
+            $mock->shouldReceive('find')->andReturn([
+                'products' => [[
+                    'id' => $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                    'manufacturer' => $product->manufacturer,
+                    'norms' => '',
+                    'catalog_price_net' => '12.00',
+                    'currency' => 'PLN',
+                    'stock' => 40,
+                    'ai_match_percent' => 86,
+                ]],
+            ]);
+        });
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n30szt Rękawice chemoodporne rozmiar 10\n\n30szt Rękawice chemoodporne rozmiar 9",
+            'tone' => 'formal',
+        ]);
+
+        $res->assertCreated()
+            ->assertJsonPath('cards.0.id', 'product:item_1')
+            ->assertJsonPath('cards.1.id', 'substitutes:item_1')
+            ->assertJsonPath('cards.2.id', 'product:item_2')
+            ->assertJsonPath('cards.3.id', 'substitutes:item_2')
+            ->assertJsonPath('cards.0.quote', '30szt Rękawice chemoodporne rozmiar 10')
+            ->assertJsonPath('cards.2.quote', '30szt Rękawice chemoodporne rozmiar 9');
+    }
+
     public function test_compose_saves_reply_from_answers(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

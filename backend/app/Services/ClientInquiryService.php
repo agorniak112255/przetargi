@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\ClientInquiry;
+use App\Models\ProductSubstitute;
 use App\Models\User;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
@@ -13,11 +14,13 @@ use Throwable;
 
 final class ClientInquiryService
 {
-    private const MAX_PRODUCT_QUERIES = 3;
+    private const MAX_PRODUCT_QUERIES = 8;
 
     private const MAX_MATCHES_PER_QUERY = 3;
 
-    private const MAX_CARDS = 5;
+    private const MAX_LINE_ITEMS = 8;
+
+    private const MAX_CARDS = 28;
 
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
@@ -32,8 +35,10 @@ final class ClientInquiryService
         ?string $subject,
     ): ClientInquiry {
         $extracted = $this->extract($body);
-        $matches = $this->matchProducts($extracted['product_queries']);
-        $cards = $this->buildCards($extracted['cards'], $matches);
+        $lineItems = $this->resolveLineItems($body, $extracted['line_items']);
+        $queries = $this->uniqueQueries($lineItems, $extracted['product_queries']);
+        $matches = $this->matchProducts($queries);
+        $cards = $this->buildCards($extracted['cards'], $matches, $lineItems, $this->loadSubstitutes($matches));
 
         return ClientInquiry::query()->create([
             'user_id' => $user->id,
@@ -44,7 +49,8 @@ final class ClientInquiryService
             'analysis' => [
                 'subject' => $extracted['subject'],
                 'questions' => $extracted['questions'],
-                'product_queries' => $extracted['product_queries'],
+                'product_queries' => $queries,
+                'line_items' => $lineItems,
                 'matches' => $matches,
                 'cards' => $cards,
             ],
@@ -76,6 +82,7 @@ final class ClientInquiryService
      *     subject: string|null,
      *     questions: list<string>,
      *     product_queries: list<string>,
+     *     line_items: list<array<string, mixed>>,
      *     cards: list<array<string, mixed>>
      * }
      */
@@ -89,17 +96,21 @@ final class ClientInquiryService
                         .'Z maila klienta wyodrębnij tylko to, co widać w treści. Nie wymyślaj faktów. '
                         .'subject: krótki temat odpowiedzi (bez Re:). '
                         .'questions: konkretne pytania klienta. '
-                        .'product_queries: 1-3 krótkie frazy do wyszukania w katalogu (nazwa/model/norma). '
-                        .'cards: max 4 karty doprecyzowania — TYLKO prawdziwe niejasności '
-                        .'(rozmiar, ilość, termin, ton, czy dopytać). Nie pytaj o oczywistości. '
-                        .'Każda karta: id (snake), title, prompt, options[{id,label}] (2-4), allow_custom (bool). '
-                        .'JSON: {"subject":"","questions":[],"product_queries":[],"cards":[]}.',
+                        .'line_items: KAŻDA osobna pozycja (osobny wiersz, ilość albo rozmiar = osobna pozycja). '
+                        .'Nie łącz „rękawice 9” i „rękawice 10” w jedną. Max 8. '
+                        .'Każda pozycja: id (item_1…), quote (DOKŁADNY cytat wiersza z maila), '
+                        .'qty (np. „30 szt.”), query (fraza do katalogu BEZ rozmiaru), size (lub null). '
+                        .'product_queries: unikalne query z line_items. '
+                        .'cards: max 4 — TYLKO prawdziwe niejasności (rozmiar, wariant, termin). '
+                        .'Nie pytaj o oczywistości. item_id jeśli karta dotyczy jednej pozycji. '
+                        .'Każda karta: id (snake), title, prompt, options[{id,label}] (2-4), allow_custom (bool), item_id. '
+                        .'JSON: {"subject":"","questions":[],"product_queries":[],"line_items":[],"cards":[]}.',
                 ],
                 [
                     'role' => 'user',
                     'content' => $body,
                 ],
-            ], 0.1, 2500, null, AiTask::ClientInquiry);
+            ], 0.1, 3500, null, AiTask::ClientInquiry);
         } catch (Throwable $e) {
             throw new RuntimeException('Nie udało się przeanalizować zapytania: '.$e->getMessage(), 0, $e);
         }
@@ -112,10 +123,24 @@ final class ClientInquiryService
             }
         }
 
+        $lineItems = [];
+        $index = 1;
+        foreach ($raw['line_items'] ?? [] as $row) {
+            $normalized = $this->normalizeLineItem($row, $index);
+            if ($normalized !== null) {
+                $lineItems[] = $normalized;
+                $index++;
+            }
+            if (count($lineItems) >= self::MAX_LINE_ITEMS) {
+                break;
+            }
+        }
+
         return [
             'subject' => $this->nullable($raw['subject'] ?? null),
             'questions' => $this->stringList($raw['questions'] ?? null),
             'product_queries' => $this->stringList($raw['product_queries'] ?? null),
+            'line_items' => $lineItems,
             'cards' => $cards,
         ];
     }
@@ -155,9 +180,11 @@ final class ClientInquiryService
     /**
      * @param  list<array<string, mixed>>  $aiCards
      * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
+     * @param  list<array<string, mixed>>  $lineItems
+     * @param  array<int, list<array<string, mixed>>>  $subsByProductId
      * @return list<array<string, mixed>>
      */
-    public function buildCards(array $aiCards, array $matches): array
+    public function buildCards(array $aiCards, array $matches, array $lineItems = [], array $subsByProductId = []): array
     {
         $flat = $this->flatProducts($matches);
         $best = $flat[0] ?? null;
@@ -165,11 +192,38 @@ final class ClientInquiryService
             && $best !== null
             && (int) ($best['score'] ?? 0) >= 80;
 
-        if ($confidentSingle && $aiCards === []) {
+        if ($confidentSingle && $aiCards === [] && count($lineItems) <= 1) {
             return [];
         }
 
         $cards = [];
+        $used = [];
+        if ($lineItems !== []) {
+            foreach ($lineItems as $item) {
+                $products = $this->productsForQuery($matches, (string) ($item['query'] ?? ''));
+                $productCard = $this->productCardForItem($item, $products);
+                $cards[] = $productCard;
+                $used[] = (string) $productCard['id'];
+
+                foreach ($this->aiCardsForItem($aiCards, $lineItems, (string) $item['id'], $used) as $card) {
+                    $cards[] = $card;
+                    $used[] = (string) $card['id'];
+                }
+
+                if ($products !== []) {
+                    $subCard = $this->substituteCardForItem($item, $products, $subsByProductId);
+                    $cards[] = $subCard;
+                    $used[] = (string) $subCard['id'];
+                }
+            }
+            foreach ($this->aiCardsForItem($aiCards, $lineItems, null, $used) as $card) {
+                $cards[] = $card;
+                $used[] = (string) $card['id'];
+            }
+
+            return $this->appendCommerce($cards, $used, true, false);
+        }
+
         if ($flat !== [] && ! $confidentSingle) {
             $options = [];
             foreach (array_slice($flat, 0, 5) as $product) {
@@ -185,7 +239,9 @@ final class ClientInquiryService
                 'prompt' => 'Który produkt z katalogu wskazać w odpowiedzi?',
                 'options' => $options,
                 'allow_custom' => false,
+                'kind' => 'global',
             ];
+            $used[] = 'product';
         } elseif ($flat === []) {
             $cards[] = [
                 'id' => 'missing',
@@ -196,36 +252,17 @@ final class ClientInquiryService
                     ['id' => 'category', 'label' => 'Ogólnie o kategorii, bez SKU'],
                 ],
                 'allow_custom' => true,
+                'kind' => 'global',
             ];
+            $used[] = 'missing';
         }
 
-        $used = array_column($cards, 'id');
-        foreach ($aiCards as $card) {
-            $id = (string) ($card['id'] ?? '');
-            if ($id === '' || in_array($id, $used, true) || in_array($id, ['product', 'missing'], true)) {
-                continue;
-            }
+        foreach ($this->aiCardsForItem($aiCards, [], null, $used) as $card) {
             $cards[] = $card;
-            $used[] = $id;
-            if (count($cards) >= self::MAX_CARDS) {
-                return array_slice($cards, 0, self::MAX_CARDS);
-            }
+            $used[] = (string) $card['id'];
         }
 
-        if ($flat !== []) {
-            foreach ($this->commerceCards() as $card) {
-                if (in_array($card['id'], $used, true)) {
-                    continue;
-                }
-                $cards[] = $card;
-                $used[] = $card['id'];
-                if (count($cards) >= self::MAX_CARDS) {
-                    break;
-                }
-            }
-        }
-
-        return array_slice($cards, 0, self::MAX_CARDS);
+        return $this->appendCommerce($cards, $used, $flat !== [], true);
     }
 
     /**
@@ -258,6 +295,395 @@ final class ClientInquiryService
     }
 
     /**
+     * @param  list<array<string, mixed>>  $cards
+     * @param  list<string>  $used
+     * @return list<array<string, mixed>>
+     */
+    private function appendCommerce(array $cards, array $used, bool $hasCatalog, bool $includeSubstitutes): array
+    {
+        if (! $hasCatalog) {
+            return array_slice($cards, 0, self::MAX_CARDS);
+        }
+        foreach ($this->commerceCards() as $card) {
+            if (! $includeSubstitutes && ($card['id'] ?? '') === 'substitutes') {
+                continue;
+            }
+            if (in_array($card['id'], $used, true)) {
+                continue;
+            }
+            $card['kind'] = 'global';
+            $cards[] = $card;
+            $used[] = $card['id'];
+            if (count($cards) >= self::MAX_CARDS) {
+                break;
+            }
+        }
+
+        return array_slice($cards, 0, self::MAX_CARDS);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $fromAi
+     * @return list<array<string, mixed>>
+     */
+    public function resolveLineItems(string $body, array $fromAi): array
+    {
+        $parsed = $this->parseLineItemsFromBody($body);
+        if ($parsed !== [] && count($parsed) > count($fromAi)) {
+            return $parsed;
+        }
+
+        return $fromAi !== [] ? $fromAi : $parsed;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function parseLineItemsFromBody(string $body): array
+    {
+        $items = [];
+        $index = 1;
+        foreach (preg_split('/\R/u', $body) ?: [] as $line) {
+            $line = trim((string) $line);
+            if ($line === '') {
+                continue;
+            }
+            if (preg_match('/^(\d+)\s*(?:szt\.?|sztuk|pcs\.?)?[\s.,:–-]+(.+)$/iu', $line, $m) !== 1) {
+                continue;
+            }
+            $rest = trim($m[2]);
+            $size = null;
+            if (preg_match('/\b(?:rozmiar|rozm\.?)\s+([a-z0-9\/,.\-]+)/iu', $rest, $sizeMatch) === 1) {
+                $size = trim($sizeMatch[1]);
+            }
+            $items[] = [
+                'id' => 'item_'.$index,
+                'quote' => $line,
+                'qty' => $m[1].' szt.',
+                'query' => $this->queryFromLine($rest),
+                'size' => $size,
+            ];
+            $index++;
+            if (count($items) >= self::MAX_LINE_ITEMS) {
+                break;
+            }
+        }
+
+        return $items;
+    }
+
+    private function queryFromLine(string $rest): string
+    {
+        $q = preg_replace('/\b(?:rozmiar|rozm\.?)\s+[a-z0-9\/,.\-]+/iu', '', $rest) ?? $rest;
+        $q = preg_replace('/\s+/u', ' ', $q) ?? $q;
+
+        return mb_substr(trim($q), 0, 140);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $lineItems
+     * @param  list<string>  $fallbackQueries
+     * @return list<string>
+     */
+    private function uniqueQueries(array $lineItems, array $fallbackQueries): array
+    {
+        $seen = [];
+        $out = [];
+        foreach ($lineItems as $item) {
+            $query = trim((string) ($item['query'] ?? ''));
+            $key = mb_strtolower($query);
+            if ($query === '' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $out[] = $query;
+        }
+        foreach ($fallbackQueries as $query) {
+            $key = mb_strtolower(trim($query));
+            if ($key === '' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $out[] = trim($query);
+        }
+
+        return array_slice($out, 0, self::MAX_PRODUCT_QUERIES);
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @param  list<array<string, mixed>>  $products
+     * @return array<string, mixed>
+     */
+    private function productCardForItem(array $item, array $products): array
+    {
+        $qty = trim((string) ($item['qty'] ?? ''));
+        $size = trim((string) ($item['size'] ?? ''));
+        if ($products === []) {
+            $options = [
+                ['id' => 'check', 'label' => 'Sprawdzimy i wrócimy'],
+                ['id' => 'category', 'label' => 'Ogólnie o kategorii, bez SKU'],
+            ];
+            $prompt = 'Nie znaleziono produktu w katalogu. Jak odpowiedzieć na tę pozycję?';
+            $allowCustom = true;
+        } else {
+            $options = [];
+            foreach (array_slice($products, 0, 5) as $product) {
+                $options[] = [
+                    'id' => 'p:'.$product['id'],
+                    'label' => $product['sku'].' · '.$product['name'],
+                ];
+            }
+            $options[] = ['id' => 'check', 'label' => 'Napisz, że sprawdzimy'];
+            $prompt = 'Który towar z katalogu wskazać na tę pozycję?';
+            $allowCustom = false;
+        }
+
+        return [
+            'id' => 'product:'.(string) $item['id'],
+            'title' => 'Towar z katalogu',
+            'prompt' => $prompt,
+            'options' => $options,
+            'allow_custom' => $allowCustom,
+            'kind' => 'item',
+            'item_id' => (string) $item['id'],
+            'quote' => (string) $item['quote'],
+            'qty' => $qty !== '' ? $qty : null,
+            'size' => $size !== '' ? $size : null,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @param  list<array<string, mixed>>  $products
+     * @param  array<int, list<array<string, mixed>>>  $subsByProductId
+     * @return array<string, mixed>
+     */
+    private function substituteCardForItem(array $item, array $products, array $subsByProductId): array
+    {
+        $options = [
+            ['id' => 'no', 'label' => 'Tylko wskazany towar'],
+        ];
+        $seen = [];
+        foreach ($products as $product) {
+            $pid = (int) ($product['id'] ?? 0);
+            foreach ($subsByProductId[$pid] ?? [] as $sub) {
+                $sid = (int) ($sub['id'] ?? 0);
+                if ($sid <= 0 || isset($seen[$sid])) {
+                    continue;
+                }
+                $seen[$sid] = true;
+                $options[] = [
+                    'id' => 'p:'.$sid,
+                    'label' => 'Zamiennik: '.$sub['sku'].' · '.$sub['name'],
+                ];
+                if (count($options) >= 5) {
+                    break 2;
+                }
+            }
+        }
+        $options[] = ['id' => 'yes', 'label' => 'Zaproponuj zamienniki jeśli są'];
+
+        $qty = trim((string) ($item['qty'] ?? ''));
+        $size = trim((string) ($item['size'] ?? ''));
+
+        return [
+            'id' => 'substitutes:'.(string) $item['id'],
+            'title' => 'Zamienniki',
+            'prompt' => $seen === []
+                ? 'Czy do tej pozycji proponować zamienniki?'
+                : 'Który zamiennik dodać przy tej pozycji? Albo zostań przy wskazanym towarze.',
+            'options' => $options,
+            'allow_custom' => false,
+            'kind' => 'item',
+            'item_id' => (string) $item['id'],
+            'quote' => (string) $item['quote'],
+            'qty' => $qty !== '' ? $qty : null,
+            'size' => $size !== '' ? $size : null,
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $aiCards
+     * @param  list<array<string, mixed>>  $lineItems
+     * @param  list<string>  $used
+     * @return list<array<string, mixed>>
+     */
+    private function aiCardsForItem(array $aiCards, array $lineItems, ?string $itemId, array $used): array
+    {
+        $out = [];
+        foreach ($aiCards as $card) {
+            $id = (string) ($card['id'] ?? '');
+            if ($id === '' || in_array($id, $used, true) || in_array($id, ['product', 'missing'], true)) {
+                continue;
+            }
+            $resolved = trim((string) ($card['item_id'] ?? '')) ?: $this->guessItemId($card, $lineItems);
+            if ($itemId === null) {
+                if ($resolved !== null && $lineItems !== []) {
+                    continue;
+                }
+                $card['kind'] = 'global';
+                $out[] = $card;
+                continue;
+            }
+            if ($resolved !== $itemId) {
+                continue;
+            }
+            $card['item_id'] = $itemId;
+            $card['kind'] = 'item';
+            $item = $this->lineItemById($lineItems, $itemId);
+            if ($item !== null) {
+                $card['quote'] = $item['quote'];
+                $card['qty'] = $item['qty'];
+                $card['size'] = $item['size'] ?? null;
+            }
+            $out[] = $card;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
+     * @return array<int, list<array<string, mixed>>>
+     */
+    public function loadSubstitutes(array $matches): array
+    {
+        $ids = [];
+        foreach ($this->flatProducts($matches) as $product) {
+            $id = (int) ($product['id'] ?? 0);
+            if ($id > 0) {
+                $ids[] = $id;
+            }
+        }
+        if ($ids === []) {
+            return [];
+        }
+
+        $rows = ProductSubstitute::query()
+            ->whereIn('main_product_id', $ids)
+            ->where('approval_status', 'zatwierdzony')
+            ->with('substituteProduct')
+            ->get();
+
+        $out = [];
+        foreach ($rows as $row) {
+            $sub = $row->substituteProduct;
+            if ($sub === null) {
+                continue;
+            }
+            $safe = $this->safeProduct([
+                'id' => $sub->id,
+                'sku' => $sub->sku,
+                'name' => $sub->name,
+                'manufacturer' => $sub->manufacturer,
+                'norms' => $sub->norms,
+                'catalog_price_net' => $sub->catalog_price_net,
+                'currency' => $sub->currency ?? 'PLN',
+                'stock' => $sub->stock,
+            ]);
+            if ($safe === null) {
+                continue;
+            }
+            $mainId = (int) $row->main_product_id;
+            $out[$mainId] ??= [];
+            $out[$mainId][] = $safe;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
+     * @return list<array<string, mixed>>
+     */
+    private function productsForQuery(array $matches, string $query): array
+    {
+        $key = mb_strtolower(trim($query));
+        foreach ($matches as $group) {
+            if (mb_strtolower(trim((string) ($group['query'] ?? ''))) === $key) {
+                return $group['products'];
+            }
+        }
+        if (count($matches) === 1) {
+            return $matches[0]['products'];
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $card
+     * @param  list<array<string, mixed>>  $lineItems
+     */
+    private function guessItemId(array $card, array $lineItems): ?string
+    {
+        if ($lineItems === []) {
+            return null;
+        }
+        $hay = mb_strtolower(((string) ($card['title'] ?? '')).' '.((string) ($card['prompt'] ?? '')));
+        $best = null;
+        $bestHits = 0;
+        foreach ($lineItems as $item) {
+            $quote = mb_strtolower((string) ($item['quote'] ?? ''));
+            $hits = 0;
+            foreach (['kombinezon', 'kalosz', 'rękawic', 'but', 'okular', 'kask', 'hełm', 'fartuch'] as $kw) {
+                if (str_contains($hay, $kw) && str_contains($quote, $kw)) {
+                    $hits++;
+                }
+            }
+            if ($hits > $bestHits) {
+                $bestHits = $hits;
+                $best = (string) $item['id'];
+            }
+        }
+
+        return $bestHits > 0 ? $best : null;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $lineItems
+     * @return array<string, mixed>|null
+     */
+    private function lineItemById(array $lineItems, string $id): ?array
+    {
+        foreach ($lineItems as $item) {
+            if ((string) ($item['id'] ?? '') === $id) {
+                return $item;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function normalizeLineItem(mixed $item, int $index): ?array
+    {
+        if (! is_array($item)) {
+            return null;
+        }
+        $quote = trim((string) ($item['quote'] ?? ''));
+        $query = trim((string) ($item['query'] ?? ''));
+        if ($quote === '' && $query === '') {
+            return null;
+        }
+        $id = trim((string) ($item['id'] ?? ''));
+        if ($id === '') {
+            $id = 'item_'.$index;
+        }
+
+        return [
+            'id' => $id,
+            'quote' => $quote !== '' ? $quote : $query,
+            'qty' => $this->nullable($item['qty'] ?? null),
+            'query' => $query !== '' ? $query : $quote,
+            'size' => $this->nullable($item['size'] ?? null),
+        ];
+    }
+
+    /**
      * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
      * @return array{subject: string, body: string}
      */
@@ -273,6 +699,7 @@ final class ClientInquiryService
                     'role' => 'system',
                     'content' => 'Piszesz odpowiedź e-mail po polsku dla handlowca BHP/PPE (Supon). '
                         .'Używaj WYŁĄCZNIE faktów z bloku katalogu i decyzji handlowca. '
+                        .'Odpowiedz na KAŻDĄ pozycję osobno: cytat/ilość, wybrany towar, ewentualny zamiennik. '
                         .'Nie wymyślaj SKU, norm, stanów ani cen. '
                         .'Ceny zakupu są zakazane. Cenę katalogową podaj tylko gdy decyzja to pozwala. '
                         .'Brak faktu → wstaw [DO UZUPEŁNIENIA: …], nie zgaduj. '
@@ -286,6 +713,7 @@ final class ClientInquiryService
                         $clientName !== null && $clientName !== '' ? 'Klient: '.$clientName : null,
                         $inquiry->source_subject ? 'Temat zapytania: '.$inquiry->source_subject : null,
                         "Zapytanie klienta:\n".$inquiry->source_body,
+                        $this->lineItemsBlock($inquiry),
                         "Fakty z katalogu:\n".$facts,
                         "Decyzje handlowca:\n".$decisions,
                     ])),
@@ -306,6 +734,28 @@ final class ClientInquiryService
         return ['subject' => $subject, 'body' => $body];
     }
 
+    private function lineItemsBlock(ClientInquiry $inquiry): ?string
+    {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $items = is_array($analysis['line_items'] ?? null) ? $analysis['line_items'] : [];
+        if ($items === []) {
+            return null;
+        }
+        $lines = ['Pozycje z zapytania (odpowiedz na KAŻDĄ osobno):'];
+        foreach ($items as $index => $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $qty = trim((string) ($item['qty'] ?? ''));
+            $size = trim((string) ($item['size'] ?? ''));
+            $quote = trim((string) ($item['quote'] ?? ''));
+            $meta = implode(', ', array_filter([$qty !== '' ? $qty : null, $size !== '' ? 'rozm. '.$size : null]));
+            $lines[] = ($index + 1).'. '.($meta !== '' ? $meta.' — ' : '').'„'.$quote.'”';
+        }
+
+        return implode("\n", $lines);
+    }
+
     /**
      * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
      */
@@ -313,7 +763,13 @@ final class ClientInquiryService
     {
         $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
         $matches = is_array($analysis['matches'] ?? null) ? $analysis['matches'] : [];
+        $cards = is_array($analysis['cards'] ?? null) ? $analysis['cards'] : [];
         $flat = $this->flatProducts($matches);
+        $perItem = $this->itemFacts($cards, $flat, $answers);
+        if ($perItem !== []) {
+            return implode("\n", $perItem);
+        }
+
         $selected = $this->selectedProducts($flat, $answers);
 
         if ($selected === []) {
@@ -322,22 +778,81 @@ final class ClientInquiryService
 
         $lines = [];
         foreach ($selected as $product) {
-            $price = $product['catalog_price_net'];
-            $priceText = $price !== null && $price !== ''
-                ? $price.' '.($product['currency'] ?? 'PLN')
-                : 'brak';
-            $lines[] = sprintf(
-                '- SKU %s, nazwa: %s, producent: %s, normy: %s, cena katalogowa: %s, stan: %s',
-                $product['sku'],
-                $product['name'],
-                $product['manufacturer'] !== '' ? $product['manufacturer'] : '—',
-                $product['norms'] !== '' ? $product['norms'] : '—',
-                $priceText,
-                $product['stock'] !== null ? (string) $product['stock'] : 'brak'
-            );
+            $lines[] = '- '.$this->productFactLine($product);
         }
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $cards
+     * @param  list<array<string, mixed>>  $flat
+     * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
+     * @return list<string>
+     */
+    private function itemFacts(array $cards, array $flat, array $answers): array
+    {
+        $lines = [];
+        foreach ($cards as $card) {
+            if (! is_array($card)) {
+                continue;
+            }
+            $id = (string) ($card['id'] ?? '');
+            if (! str_starts_with($id, 'product:') && $id !== 'product' && ! str_starts_with($id, 'substitutes:')) {
+                continue;
+            }
+            $quote = trim((string) ($card['quote'] ?? ''));
+            $qty = trim((string) ($card['qty'] ?? ''));
+            $option = (string) (($answers[$id]['option_id'] ?? ''));
+            $prefix = trim(($qty !== '' ? $qty.' ' : '').($quote !== '' ? '„'.$quote.'”' : $id));
+            if (str_starts_with($option, 'p:')) {
+                $pid = (int) substr($option, 2);
+                foreach ($flat as $product) {
+                    if ((int) $product['id'] === $pid) {
+                        $lines[] = '- '.$prefix.' → '.$this->productFactLine($product);
+                        continue 2;
+                    }
+                }
+            }
+            if (in_array($option, ['check', 'category'], true)) {
+                $lines[] = '- '.$prefix.' → bez SKU (sprawdzimy / ogólnie o kategorii)';
+                continue;
+            }
+            if ($option === 'no') {
+                $lines[] = '- '.$prefix.' → bez zamiennika, tylko wskazany towar';
+                continue;
+            }
+            if ($option === 'yes') {
+                $lines[] = '- '.$prefix.' → zaproponuj zamienniki jeśli są w katalogu';
+                continue;
+            }
+            if ($quote !== '' && str_starts_with($id, 'product')) {
+                $lines[] = '- '.$prefix.' → brak potwierdzonego SKU';
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     */
+    private function productFactLine(array $product): string
+    {
+        $price = $product['catalog_price_net'] ?? null;
+        $priceText = $price !== null && $price !== ''
+            ? $price.' '.($product['currency'] ?? 'PLN')
+            : 'brak';
+
+        return sprintf(
+            'SKU %s, nazwa: %s, producent: %s, normy: %s, cena katalogowa: %s, stan: %s',
+            $product['sku'],
+            $product['name'],
+            $product['manufacturer'] !== '' ? $product['manufacturer'] : '—',
+            $product['norms'] !== '' ? $product['norms'] : '—',
+            $priceText,
+            $product['stock'] !== null ? (string) $product['stock'] : 'brak'
+        );
     }
 
     /**
@@ -394,15 +909,33 @@ final class ClientInquiryService
      */
     private function selectedProducts(array $flat, array $answers): array
     {
-        $option = (string) ($answers['product']['option_id'] ?? '');
-        if (str_starts_with($option, 'p:')) {
+        $picked = [];
+        $seen = [];
+        foreach ($answers as $answer) {
+            if (! is_array($answer)) {
+                continue;
+            }
+            $option = trim((string) ($answer['option_id'] ?? ''));
+            if (! str_starts_with($option, 'p:')) {
+                continue;
+            }
             $id = (int) substr($option, 2);
+            if ($id <= 0 || isset($seen[$id])) {
+                continue;
+            }
             foreach ($flat as $product) {
                 if ((int) $product['id'] === $id) {
-                    return [$product];
+                    $seen[$id] = true;
+                    $picked[] = $product;
+                    break;
                 }
             }
         }
+        if ($picked !== []) {
+            return $picked;
+        }
+
+        $option = (string) ($answers['product']['option_id'] ?? '');
         if (in_array($option, ['check', 'category'], true)) {
             return [];
         }
@@ -494,13 +1027,19 @@ final class ClientInquiryService
             return null;
         }
 
-        return [
+        $normalized = [
             'id' => $id,
             'title' => $title,
             'prompt' => $prompt,
             'options' => array_slice($options, 0, 4),
             'allow_custom' => (bool) ($card['allow_custom'] ?? false),
         ];
+        $itemId = trim((string) ($card['item_id'] ?? ''));
+        if ($itemId !== '') {
+            $normalized['item_id'] = $itemId;
+        }
+
+        return $normalized;
     }
 
     /**
