@@ -166,4 +166,54 @@ final class ExternalCatalogHintServiceTest extends TestCase
         $this->assertCount(1, $ranked);
         $this->assertSame('https://sklep.example/produkt/czepek-ocieplany-esd', $ranked[0]['url']);
     }
+
+    #[Test]
+    public function coverall_query_asks_for_the_suit_with_acid_as_resistance(): void
+    {
+        $svc = $this->app->make(ExternalCatalogHintService::class);
+        $q = $svc->productSearchQuery(
+            'Kombinezon chemoodporny ( w szczególności na kwas siarkowy 96%) antyelektrostatyczny,'
+        );
+
+        $this->assertStringContainsString('kombinezon chemoodporny', mb_strtolower($q));
+        $this->assertStringContainsString('antyelektrostatyczny', mb_strtolower($q));
+        $this->assertStringContainsString('odporność na kwas siarkowy 96%', mb_strtolower($q));
+        $this->assertDoesNotMatchRegularExpression('/^kwas siarkowy/ui', trim($q));
+    }
+
+    #[Test]
+    public function picks_coverall_page_not_the_acid_listing(): void
+    {
+        $svc = $this->app->make(ExternalCatalogHintService::class);
+        $req = 'Kombinezon chemoodporny ( w szczególności na kwas siarkowy 96%) antyelektrostatyczny,';
+
+        $best = $svc->pickBestResult([
+            [
+                'url' => 'https://sklep.biomus.eu/kategoria-produktu/surowce-i-odczynniki-chemiczne/kwas-siarkowy-96/',
+                'title' => 'Kwas siarkowy 96% | Biomus',
+            ],
+            [
+                'url' => 'https://sklep-bhp.example/produkt/kombinezon-tychem-c',
+                'title' => 'Kombinezon chemoodporny Tychem C na kwas siarkowy',
+            ],
+        ], $req);
+
+        $this->assertNotNull($best);
+        $this->assertSame('https://sklep-bhp.example/produkt/kombinezon-tychem-c', $best['url']);
+    }
+
+    #[Test]
+    public function does_not_offer_acid_page_when_no_coverall_hit(): void
+    {
+        $svc = $this->app->make(ExternalCatalogHintService::class);
+
+        $best = $svc->pickBestResult([
+            [
+                'url' => 'https://sklep.biomus.eu/kategoria-produktu/surowce-i-odczynniki-chemiczne/kwas-siarkowy-96/',
+                'title' => 'Kwas siarkowy 96% | Biomus',
+            ],
+        ], 'Kombinezon chemoodporny ( w szczególności na kwas siarkowy 96%) antyelektrostatyczny,');
+
+        $this->assertNull($best);
+    }
 }

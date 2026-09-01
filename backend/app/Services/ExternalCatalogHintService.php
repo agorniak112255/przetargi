@@ -114,6 +114,9 @@ final class ExternalCatalogHintService
             if ($requirement !== '' && ! $this->assortment->compatibleOrUnknown($requirement, $hay)) {
                 continue;
             }
+            if ($requirement !== '' && ! $this->mentionsRequiredProduct($hay, $requirement)) {
+                continue;
+            }
             $seen[$key] = true;
             $candidates[] = [
                 'url' => $url,
@@ -150,14 +153,17 @@ final class ExternalCatalogHintService
             $out[] = 'A2-B2-E2-K2-NO-P3 pochłaniacz wielogazowy';
             $out[] = 'A2-B2-E2-K2-Hg-CO-NO-P3 filtr';
         }
-        $out[] = $this->webQuery($requirement);
+        $out[] = $this->productSearchQuery($requirement);
 
         return array_values(array_unique(array_filter(
             array_map(static fn (string $q): string => mb_substr(trim($q), 0, 400), $out)
         )));
     }
 
-    private function webQuery(string $requirement): string
+    /**
+     * Szuka towaru (kombinezon…), substancja jest tylko warunkiem „odporność na”.
+     */
+    public function productSearchQuery(string $requirement): string
     {
         $bits = [];
         foreach ($this->filterType->compactCodes($requirement) as $code) {
@@ -170,9 +176,37 @@ final class ExternalCatalogHintService
         if ($this->assortment->isUnderHelmetLiner($requirement)) {
             $bits[] = 'czepek wkładka ocieplana pod hełm ESD';
         }
-        $bits[] = $requirement;
+        $bits[] = $this->productFirstPhrase($requirement);
 
         return mb_substr(implode(' ', array_unique($bits)), 0, 400);
+    }
+
+    private function productFirstPhrase(string $requirement): string
+    {
+        $raw = trim((string) preg_replace('/\s+/u', ' ', $requirement));
+        $hazard = '';
+        if (preg_match('/\(\s*w\s+szczeg(?:ól|ol)no[sś]ci\s+na\s+([^)]+)\)/ui', $raw, $m) === 1) {
+            $hazard = trim($m[1], " \t,.;");
+            $raw = trim((string) preg_replace('/\(\s*w\s+szczeg(?:ól|ol)no[sś]ci\s+na\s+[^)]+\)/ui', ' ', $raw));
+        } elseif (preg_match('/\bw\s+szczeg(?:ól|ol)no[sś]ci\s+na\s+(.+?)(?:,|$)/ui', $raw, $m) === 1) {
+            $hazard = trim($m[1], " \t,.;");
+            $raw = trim((string) preg_replace('/\bw\s+szczeg(?:ól|ol)no[sś]ci\s+na\s+.+?(?:,|$)/ui', ' ', $raw));
+        } elseif (preg_match('/\bna\s+(kwas\s+[^,;.()]+)/ui', $raw, $m) === 1) {
+            $hazard = trim($m[1], " \t,.;");
+            $raw = trim((string) preg_replace('/\bna\s+kwas\s+[^,;.()]+/ui', ' ', $raw));
+        }
+        $raw = trim((string) preg_replace('/[\s,;]+/u', ' ', $raw));
+        foreach ($this->assortment->catalogNounLikes($requirement) as $like) {
+            if ($like !== '' && ! str_contains(mb_strtolower($raw), mb_strtolower($like))) {
+                $raw = $like.' '.$raw;
+            }
+            break;
+        }
+        if ($hazard !== '') {
+            $raw = trim($raw.' odporność na '.$hazard);
+        }
+
+        return $raw !== '' ? $raw : $requirement;
     }
 
     /**
@@ -239,6 +273,9 @@ final class ExternalCatalogHintService
         if ($this->looksLikeProductPage($url, $hay)) {
             $score += 40;
         }
+        if ($requirement !== '' && $this->mentionsRequiredProduct($hay, $requirement)) {
+            $score += 35;
+        }
         $score += $this->filterType->coverageScore($requirement, $url.' '.$title);
 
         return $score;
@@ -276,13 +313,34 @@ final class ExternalCatalogHintService
             return false;
         }
 
-        foreach (['/produkt', '/product', '/sklep', '/p/', 'karta produktu'] as $needle) {
+        if (str_contains($path, 'kategoria-produkt') || str_contains($path, '/category/')) {
+            return false;
+        }
+        foreach (['/produkt/', '/produkt-', '/product/', '/product-', '/sklep/', '/p/', 'karta produktu'] as $needle) {
             if (str_contains($path, $needle) || str_contains($hay, $needle)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /** Gdy znamy towar (kombinezon…), wynik musi być o tym towarze — nie o samej substancji. */
+    private function mentionsRequiredProduct(string $hay, string $requirement): bool
+    {
+        $likes = $this->assortment->catalogNounLikes($requirement);
+        if ($likes === []) {
+            return true;
+        }
+        $norm = $this->assortment->normalize($hay);
+        foreach ($likes as $like) {
+            $needle = $this->assortment->normalize($like);
+            if ($needle !== '' && str_contains($norm, $needle)) {
+                return true;
+            }
+        }
+
+        return preg_match('/\b(tychem|coverall|overall|hazmat)\w*/u', $norm) === 1;
     }
 
     /**
