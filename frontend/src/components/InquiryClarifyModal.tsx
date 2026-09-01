@@ -125,9 +125,7 @@ export function InquiryClarifyModal({
       if (e.key !== 'Escape' || busy) return
       if (previewId != null) {
         setPreviewId(null)
-        return
       }
-      onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -230,9 +228,7 @@ export function InquiryClarifyModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
       role="dialog"
       aria-modal="true"
-      onClick={() => {
-        if (!busy) onClose()
-      }}
+      onClick={(e) => e.stopPropagation()}
     >
       <div
         className="relative flex max-h-[94vh] w-full max-w-[63rem] flex-col overflow-hidden rounded-2xl bg-white shadow-xl"

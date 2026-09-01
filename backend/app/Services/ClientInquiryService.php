@@ -15,7 +15,7 @@ use Throwable;
 
 final class ClientInquiryService
 {
-    private const MAX_PRODUCT_QUERIES = 8;
+    private const MAX_PRODUCT_QUERIES = 10;
 
     private const MAX_MATCHES_PER_QUERY = 3;
 
@@ -152,16 +152,19 @@ final class ClientInquiryService
      */
     private function matchProducts(array $queries): array
     {
-        $groups = [];
-        foreach (array_slice($queries, 0, self::MAX_PRODUCT_QUERIES) as $query) {
-            try {
-                $result = $this->search->find($query, self::MAX_MATCHES_PER_QUERY);
-            } catch (Throwable) {
-                $groups[] = ['query' => $query, 'products' => []];
-
-                continue;
+        $sliced = array_values(array_slice($queries, 0, self::MAX_PRODUCT_QUERIES));
+        try {
+            $rawGroups = $this->search->findMany($sliced, self::MAX_MATCHES_PER_QUERY);
+        } catch (Throwable) {
+            $rawGroups = [];
+            foreach ($sliced as $query) {
+                $rawGroups[] = ['query' => $query, 'products' => []];
             }
+        }
 
+        $groups = [];
+        foreach ($rawGroups as $i => $result) {
+            $query = (string) ($result['query'] ?? $sliced[$i] ?? '');
             $products = [];
             foreach ($result['products'] ?? [] as $row) {
                 if (! is_array($row)) {

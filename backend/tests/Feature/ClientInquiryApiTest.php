@@ -66,7 +66,8 @@ final class ClientInquiryApiTest extends TestCase
         });
 
         $this->mock(ProductInquirySearch::class, function ($mock) use ($product, $other): void {
-            $mock->shouldReceive('find')->once()->andReturn([
+            $mock->shouldReceive('findMany')->once()->andReturn([[
+                'query' => 'rękawice nitrylowe',
                 'products' => [
                     [
                         'id' => $product->id,
@@ -92,7 +93,7 @@ final class ClientInquiryApiTest extends TestCase
                         'ai_match_percent' => 70,
                     ],
                 ],
-            ]);
+            ]]);
         });
 
         Sanctum::actingAs($user);
@@ -139,19 +140,23 @@ final class ClientInquiryApiTest extends TestCase
         });
 
         $this->mock(ProductInquirySearch::class, function ($mock) use ($product): void {
-            $mock->shouldReceive('find')->andReturn([
-                'products' => [[
-                    'id' => $product->id,
-                    'sku' => $product->sku,
-                    'name' => $product->name,
-                    'manufacturer' => $product->manufacturer,
-                    'norms' => '',
-                    'catalog_price_net' => '12.00',
-                    'currency' => 'PLN',
-                    'stock' => 40,
-                    'ai_match_percent' => 86,
-                ]],
-            ]);
+            $row = [
+                'id' => $product->id,
+                'sku' => $product->sku,
+                'name' => $product->name,
+                'manufacturer' => $product->manufacturer,
+                'norms' => '',
+                'catalog_price_net' => '12.00',
+                'currency' => 'PLN',
+                'stock' => 40,
+                'ai_match_percent' => 86,
+            ];
+            $mock->shouldReceive('findMany')->once()->andReturnUsing(
+                fn (array $queries): array => array_map(
+                    fn (string $q): array => ['query' => $q, 'products' => [$row]],
+                    $queries
+                )
+            );
         });
 
         Sanctum::actingAs($user);

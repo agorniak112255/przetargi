@@ -8,6 +8,7 @@ use App\Models\AiSetting;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductAiSearchService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -1737,6 +1738,68 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertNotNull($cards);
         $this->assertStringContainsString('TYCHEM-C', (string) $cards);
         $this->assertStringContainsString('kwas siarkowy', (string) $cards);
+    }
+
+    public function test_search_many_ranks_lines_in_one_parallel_wave(): void
+    {
+        $gloves = Product::query()->create([
+            'sku' => 'G-CHEM',
+            'name' => 'Rękawice chemoodporne',
+            'manufacturer' => 'X',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice EN 374 antyelektrostatyczne.',
+            'catalog_price_net' => 10,
+            'purchase_price' => 6,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $boots = Product::query()->create([
+            'sku' => 'K-CHEM',
+            'name' => 'Kalosze chemoodporne',
+            'manufacturer' => 'X',
+            'category' => 'Kalosze',
+            'description' => 'Kalosze chemoodporne antyelektrostatyczne.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 12,
+            'stock' => 3,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $waves = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonMany')
+            ->twice()
+            ->andReturnUsing(function (array $sets) use (&$waves, $gloves, $boots): array {
+                $waves++;
+                $this->assertLessThanOrEqual(10, count($sets));
+                if ($waves === 1) {
+                    $this->assertCount(2, $sets);
+
+                    return [
+                        ['needed' => 'rękawice chemoodporne', 'search_phrases' => ['rękawice'], 'constraints' => ['EN 374']],
+                        ['needed' => 'kalosze chemoodporne', 'search_phrases' => ['kalosze'], 'constraints' => []],
+                    ];
+                }
+
+                return [
+                    ['matches' => [['id' => $gloves->id, 'score' => 91, 'reason' => 'EN 374']]],
+                    ['matches' => [['id' => $boots->id, 'score' => 88, 'reason' => 'kalosze']]],
+                ];
+            });
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $rows = $this->app->make(ProductAiSearchService::class)->searchMany([
+            'Rękawice chemoodporne EN 374',
+            'Kalosze chemoodporne',
+        ], 3);
+
+        $this->assertCount(2, $rows);
+        $this->assertSame('G-CHEM', $rows[0]['products'][0]['sku'] ?? null);
+        $this->assertSame('K-CHEM', $rows[1]['products'][0]['sku'] ?? null);
+        $this->assertSame(2, $waves);
     }
 
     /**

@@ -87,6 +87,112 @@ final class ProductAiSearchService
         }
 
         $intent = $this->understandRequirement($query, $task);
+
+        return $this->finishSearch($query, $intent, $limit, $withExternalHint, $task);
+    }
+
+    /**
+     * Wiele zapytań: intent i ranking idą równolegle (max $maxConcurrent połączeń).
+     *
+     * @param  list<string>  $queries
+     * @return list<array{
+     *     query: string,
+     *     total: int,
+     *     products: list<array<string, mixed>>,
+     *     needed: string,
+     *     search_phrases: list<string>,
+     *     ai_note: string|null,
+     *     external_hint: array{url: string, title: string}|null
+     * }>
+     */
+    public function searchMany(
+        array $queries,
+        int $limit = 40,
+        bool $withExternalHint = false,
+        AiTask $task = AiTask::ProductSearch,
+        int $maxConcurrent = 10,
+    ): array {
+        $clean = [];
+        foreach ($queries as $query) {
+            $query = trim((string) $query);
+            if ($query !== '') {
+                $clean[] = $query;
+            }
+        }
+        if ($clean === []) {
+            return [];
+        }
+        $limit = max(1, min(80, $limit));
+        $maxConcurrent = max(1, min(10, $maxConcurrent));
+
+        $intentRaws = $this->llm->chatJsonMany(
+            array_map(fn (string $q): array => $this->understandMessages($q), $clean),
+            900,
+            $task,
+            $maxConcurrent,
+        );
+        $intents = [];
+        foreach ($clean as $i => $query) {
+            $raw = $intentRaws[$i] ?? [];
+            $intents[$i] = $this->parseIntent(is_array($raw) ? $raw : [], $query);
+        }
+
+        $pending = [];
+        $done = [];
+        foreach ($clean as $i => $query) {
+            $prepared = $this->prepareSearch($query, $intents[$i], $limit);
+            if ($prepared['rank_cards'] === null) {
+                $done[$i] = $this->searchResult($query, $intents[$i], $prepared['products'], $prepared['note'], $withExternalHint);
+            } else {
+                $pending[$i] = $prepared;
+            }
+        }
+
+        $rankMessages = [];
+        $rankOrder = [];
+        foreach ($pending as $i => $prepared) {
+            $rankOrder[] = $i;
+            $rankMessages[] = $this->rankMessages(
+                $clean[$i],
+                $prepared['rank_cards'],
+                $limit,
+                $intents[$i]['needed'],
+                $intents[$i]['constraints'],
+            );
+        }
+        $rankRaws = $this->llm->chatJsonMany($rankMessages, 2500, $task, $maxConcurrent);
+        foreach ($rankOrder as $pos => $i) {
+            $ranked = $this->rowsFromLlmMatches(
+                $clean[$i],
+                $pending[$i]['candidates'],
+                is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [],
+                $limit,
+                $intents[$i]['needed'],
+            );
+            $done[$i] = $this->searchResult(
+                $clean[$i],
+                $intents[$i],
+                $ranked,
+                $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.' : null,
+                $withExternalHint,
+            );
+        }
+        ksort($done);
+
+        return array_values($done);
+    }
+
+    /**
+     * @param  array{needed: string, search_phrases: list<string>, constraints: list<string>}  $intent
+     * @return array{
+     *     products: list<array<string, mixed>>,
+     *     note: string|null,
+     *     rank_cards: Collection<int, Product>|null,
+     *     candidates: Collection<int, Product>
+     * }
+     */
+    private function prepareSearch(string $query, array $intent, int $limit): array
+    {
         $candidates = $this->keepCompatible(
             $this->assortmentText($query, $intent['needed']),
             $this->retrieveCandidates($query, $intent, self::CANDIDATE_POOL)
@@ -96,43 +202,132 @@ final class ProductAiSearchService
                 && $this->filterType->covers($query, $this->filterHaystack($p))
         )->values();
         if ($named->isNotEmpty()) {
-            $ranked = $this->rowsFromNamedModels($query, $named, $limit);
-
             return [
-                'query' => $query,
-                'total' => count($ranked),
-                'products' => $ranked,
-                'needed' => $intent['needed'],
-                'search_phrases' => $intent['search_phrases'],
-                'ai_note' => null,
-                'external_hint' => null,
+                'products' => $this->rowsFromNamedModels($query, $named, $limit),
+                'note' => null,
+                'rank_cards' => null,
+                'candidates' => $candidates,
+            ];
+        }
+        if ($candidates->isEmpty()) {
+            return [
+                'products' => [],
+                'note' => 'Brak kart z opisem w katalogu do porównania. Nie dodano produktu z internetu.',
+                'rank_cards' => null,
+                'candidates' => $candidates,
             ];
         }
 
-        if ($candidates->isEmpty()) {
-            return $this->emptyResult($query, $intent, $withExternalHint, 'Brak kart z opisem w katalogu do porównania. Nie dodano produktu z internetu.');
+        return [
+            'products' => [],
+            'note' => null,
+            'rank_cards' => $this->cardsForRanking($candidates, $intent['constraints']),
+            'candidates' => $candidates,
+        ];
+    }
+
+    /**
+     * @param  array{needed: string, search_phrases: list<string>, constraints: list<string>}  $intent
+     * @param  list<array<string, mixed>>  $products
+     * @return array{
+     *     query: string,
+     *     total: int,
+     *     products: list<array<string, mixed>>,
+     *     needed: string,
+     *     search_phrases: list<string>,
+     *     ai_note: string|null,
+     *     external_hint: array{url: string, title: string}|null
+     * }
+     */
+    private function searchResult(
+        string $query,
+        array $intent,
+        array $products,
+        ?string $note,
+        bool $withExternalHint,
+    ): array {
+        if ($products === [] && $note !== null) {
+            return $this->emptyResult($query, $intent, $withExternalHint, $note);
         }
 
+        return [
+            'query' => $query,
+            'total' => count($products),
+            'products' => $products,
+            'needed' => $intent['needed'],
+            'search_phrases' => $intent['search_phrases'],
+            'ai_note' => null,
+            'external_hint' => null,
+        ];
+    }
+
+    /**
+     * @param  array{needed: string, search_phrases: list<string>, constraints: list<string>}  $intent
+     * @return array{
+     *     query: string,
+     *     total: int,
+     *     products: list<array<string, mixed>>,
+     *     needed: string,
+     *     search_phrases: list<string>,
+     *     ai_note: string|null,
+     *     external_hint: array{url: string, title: string}|null
+     * }
+     */
+    private function finishSearch(
+        string $query,
+        array $intent,
+        int $limit,
+        bool $withExternalHint,
+        AiTask $task,
+    ): array {
+        $prepared = $this->prepareSearch($query, $intent, $limit);
+        if ($prepared['rank_cards'] === null) {
+            return $this->searchResult($query, $intent, $prepared['products'], $prepared['note'], $withExternalHint);
+        }
         $ranked = $this->rankWithLlm(
             $query,
-            $this->cardsForRanking($candidates, $intent['constraints']),
+            $prepared['rank_cards'],
             $limit,
             $intent['needed'],
             $task,
             $intent['constraints'],
         );
-        if ($ranked === []) {
-            return $this->emptyResult($query, $intent, $withExternalHint, 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.');
-        }
 
+        return $this->searchResult(
+            $query,
+            $intent,
+            $ranked,
+            $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.' : null,
+            $withExternalHint,
+        );
+    }
+
+    /**
+     * @return list<array{role: string, content: string}>
+     */
+    private function understandMessages(string $query): array
+    {
         return [
-            'query' => $query,
-            'total' => count($ranked),
-            'products' => $ranked,
-            'needed' => $intent['needed'],
-            'search_phrases' => $intent['search_phrases'],
-            'ai_note' => null,
-            'external_hint' => null,
+            [
+                'role' => 'system',
+                'content' => 'Jesteś ekspertem BHP. Z SIWZ wyodrębnij NAZWĘ produktu (rzeczownik), zanim cechy i normy. '
+                    .'needed: krótka nazwa na początku (np. kamizelka odblaskowa żółta) — bez EN i bez samego przymiotnika. '
+                    .'search_phrases: 2-8 fraz; PIERWSZE 2 to wyłącznie nazwa/synonim (kamizelka, kamizelka odblaskowa). '
+                    .'Cechy (siatkowa, nadruk) i normy EN dopiero na końcu. '
+                    .'constraints: 0-6 warunków z wymagania (albo równoważna norma/klasa, którą znasz jako ekspert BHP). '
+                    .'Dotyczy dowolnej cechy: substancja, stężenie, klasa, typ, norma, napięcie, temperatura, ESD, gramatura. '
+                    .'Nie wstawiaj samej nazwy produktu. Pusta tablica, gdy wymaganie to tylko nazwa asortymentu. '
+                    .'Przymiotnik wspólny nie zastępuje nazwy: kamizelka ≠ osłona twarzy; rękawy ≠ rękawice. '
+                    .'Synonimy: obuwie/buty/trzewiki, kurtka/bluza ochronna. '
+                    .'Popraw literówki — w modelu (TEPM-ICE → TEMP-ICE) i w nazwie produktu '
+                    .'(podnie → spodnie, rekawice → rękawice, kamizelaka → kamizelka). '
+                    .'needed i pierwsze frazy zawsze w poprawnej pisowni. Nie klasyfikuj sztywną listą typów. '
+                    .'JSON: {"needed":"nazwa","search_phrases":["najpierw nazwa","potem cechy/normy"],"constraints":[]}.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $query,
+            ],
         ];
     }
 
@@ -167,28 +362,7 @@ final class ProductAiSearchService
     public function understandRequirement(string $query, AiTask $task = AiTask::ProductSearch): array
     {
         try {
-            $raw = $this->llm->chatJson([
-                [
-                    'role' => 'system',
-                    'content' => 'Jesteś ekspertem BHP. Z SIWZ wyodrębnij NAZWĘ produktu (rzeczownik), zanim cechy i normy. '
-                        .'needed: krótka nazwa na początku (np. kamizelka odblaskowa żółta) — bez EN i bez samego przymiotnika. '
-                        .'search_phrases: 2-8 fraz; PIERWSZE 2 to wyłącznie nazwa/synonim (kamizelka, kamizelka odblaskowa). '
-                        .'Cechy (siatkowa, nadruk) i normy EN dopiero na końcu. '
-                        .'constraints: 0-6 warunków z wymagania (albo równoważna norma/klasa, którą znasz jako ekspert BHP). '
-                        .'Dotyczy dowolnej cechy: substancja, stężenie, klasa, typ, norma, napięcie, temperatura, ESD, gramatura. '
-                        .'Nie wstawiaj samej nazwy produktu. Pusta tablica, gdy wymaganie to tylko nazwa asortymentu. '
-                        .'Przymiotnik wspólny nie zastępuje nazwy: kamizelka ≠ osłona twarzy; rękawy ≠ rękawice. '
-                        .'Synonimy: obuwie/buty/trzewiki, kurtka/bluza ochronna. '
-                        .'Popraw literówki — w modelu (TEPM-ICE → TEMP-ICE) i w nazwie produktu '
-                        .'(podnie → spodnie, rekawice → rękawice, kamizelaka → kamizelka). '
-                        .'needed i pierwsze frazy zawsze w poprawnej pisowni. Nie klasyfikuj sztywną listą typów. '
-                        .'JSON: {"needed":"nazwa","search_phrases":["najpierw nazwa","potem cechy/normy"],"constraints":[]}.',
-                ],
-                [
-                    'role' => 'user',
-                    'content' => $query,
-                ],
-            ], null, 900, null, $task);
+            $raw = $this->llm->chatJson($this->understandMessages($query), null, 900, null, $task);
 
             return $this->parseIntent($raw, $query);
         } catch (Throwable) {
@@ -1155,6 +1329,29 @@ final class ProductAiSearchService
         AiTask $task = AiTask::ProductSearch,
         array $constraints = [],
     ): array {
+        $raw = $this->llm->chatJson(
+            $this->rankMessages($query, $candidates, $limit, $needed, $constraints),
+            null,
+            2500,
+            null,
+            $task,
+        );
+
+        return $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $needed);
+    }
+
+    /**
+     * @param  Collection<int, Product>  $candidates
+     * @param  list<string>  $constraints
+     * @return list<array{role: string, content: string}>
+     */
+    private function rankMessages(
+        string $query,
+        Collection $candidates,
+        int $limit,
+        ?string $needed,
+        array $constraints,
+    ): array {
         $cards = $candidates->map(function (Product $p): array {
             $payload = is_array($p->enrichment_payload) ? $p->enrichment_payload : [];
 
@@ -1174,7 +1371,6 @@ final class ProductAiSearchService
             ];
         })->values()->all();
 
-        $requirement = $this->assortmentText($query, $needed);
         $neededLine = is_string($needed) && trim($needed) !== ''
             ? "\nSzukany produkt (z analizy):\n".trim($needed)
             : '';
@@ -1183,9 +1379,9 @@ final class ProductAiSearchService
             : "\nWarunki, które karta MUSI potwierdzać w norms/specs/description (nie zgaduj):\n- "
                 .implode("\n- ", $constraints);
         $maxMatches = max(1, min($limit, self::MAX_MATCHES));
-
         $json = json_encode($cards, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $raw = $this->llm->chatJson([
+
+        return [
             [
                 'role' => 'system',
                 'content' => 'Jesteś ekspertem BHP. Ranking w dwóch krokach — nie mieszaj ich. '
@@ -1213,8 +1409,22 @@ final class ProductAiSearchService
                 'role' => 'user',
                 'content' => "Wymaganie:\n{$query}{$neededLine}{$constraintLine}\n\nKarty katalogu:\n{$json}",
             ],
-        ], null, 2500, null, $task);
+        ];
+    }
 
+    /**
+     * @param  Collection<int, Product>  $candidates
+     * @param  array<string, mixed>  $raw
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromLlmMatches(
+        string $query,
+        Collection $candidates,
+        array $raw,
+        int $limit,
+        ?string $needed,
+    ): array {
+        $requirement = $this->assortmentText($query, $needed);
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
         $byId = $candidates->keyBy('id');
         $out = [];

@@ -168,6 +168,42 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * Równoległe chat/completions w paczkach — max $maxConcurrent połączeń naraz.
+     *
+     * @param  list<list<array{role: string, content: mixed}>>  $messageSets
+     * @return list<array<string, mixed>>
+     */
+    public function chatJsonMany(
+        array $messageSets,
+        ?int $maxTokens = null,
+        ?AiTask $task = null,
+        int $maxConcurrent = 10,
+    ): array {
+        if ($messageSets === []) {
+            return [];
+        }
+        $extra = [];
+        if ($maxTokens !== null) {
+            $extra['max_tokens'] = max(256, $maxTokens);
+        }
+        $maxConcurrent = max(1, min(10, $maxConcurrent));
+        $parsed = [];
+        foreach (array_chunk($messageSets, $maxConcurrent) as $chunk) {
+            foreach ($this->chatMany($chunk, true, $extra !== [] ? $extra : null, $task) as $row) {
+                if (! ($row['ok'] ?? false)) {
+                    $parsed[] = [];
+
+                    continue;
+                }
+                $json = $this->tryParseJson((string) ($row['content'] ?? ''));
+                $parsed[] = $json ?? [];
+            }
+        }
+
+        return $parsed;
+    }
+
+    /**
      * Fallback na model główny przy 402/429 — ale nie gdy lokalny endpoint nie odpowiada,
      * bo wtedy użytkownik widzi cURL do trycloudflare zamiast błędu profilu.
      *
