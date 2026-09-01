@@ -36,12 +36,14 @@ final class SpreadsheetColumnMapperTest extends TestCase
         $map = (new SpreadsheetColumnMapper)->mapLabels($header);
 
         $this->assertSame(4, $map['sku']);
+        $this->assertSame(3, $map['sku_alt']);
         $this->assertSame(6, $map['name']);
         $this->assertSame(15, $map['catalog_price']);
         $this->assertSame(16, $map['purchase']);
         $this->assertNull($map['discount']);
         $this->assertSame(19, $map['ean']);
         $this->assertSame(10, $map['currency']);
+        $this->assertNull($map['packaging']);
     }
 
     public function test_maps_dupont_article_and_unit_price(): void
@@ -95,6 +97,7 @@ final class SpreadsheetColumnMapperTest extends TestCase
         $this->assertSame('skip', $m->classifySheet('Disclaimer'));
         $this->assertSame('skip', $m->classifySheet('Tarifs'));
         $this->assertSame('skip', $m->classifySheet('PDF-PRODUKTY WYGASZANE'));
+        $this->assertSame('skip', $m->classifySheet('ConfigurableMaterial plPL'));
         $this->assertSame('catalog', $m->classifySheet('StandardPrice plPL'));
     }
 

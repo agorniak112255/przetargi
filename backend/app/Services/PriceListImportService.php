@@ -632,6 +632,9 @@ final class PriceListImportService
                 continue;
             }
             $sheetName = (string) ($sheetMap['sheet'] ?? '');
+            if ($this->columnMapper->classifySheet($sheetName) === 'skip') {
+                continue;
+            }
             $sheet = $spreadsheet->getSheetByName($sheetName);
             if ($sheet === null) {
                 $errors[] = "Brak arkusza: {$sheetName}";
@@ -641,7 +644,7 @@ final class PriceListImportService
 
             $cols = is_array($sheetMap['columns'] ?? null) ? $sheetMap['columns'] : [];
             $map = [];
-            foreach (['sku', 'name', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'currency'] as $key) {
+            foreach (['sku', 'sku_alt', 'name', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'currency'] as $key) {
                 if (isset($cols[$key]) && is_numeric($cols[$key])) {
                     $map[$key] = (int) $cols[$key];
                 }
@@ -766,6 +769,10 @@ final class PriceListImportService
                     static fn (array $item): array => $item['product'],
                     $items,
                 ));
+                $model = trim((string) ($chosen['_model_key'] ?? $chosen['_size_core'] ?? ''));
+                if ($model !== '' && trim((string) ($chosen['_size_core'] ?? '')) === '') {
+                    $chosen['_size_core'] = $model;
+                }
                 // Kod = model (Reference), nie Article Number rozmiaru
                 $out[] = $this->finalizeProductCode($chosen, null);
                 $removed += count($items) - 1;
@@ -809,9 +816,12 @@ final class PriceListImportService
             ) ?? '');
         }
         if ($model !== '') {
-            $product['sku'] = $sizeSuffix !== null && $sizeSuffix !== ''
-                ? $model.'-'.$sizeSuffix
-                : $model;
+            $sizeOk = $sizeSuffix !== null && $sizeSuffix !== '' && $this->isSizePackaging($sizeSuffix);
+            if ($sizeOk) {
+                $product['sku'] = $model.'-'.$sizeSuffix;
+            } elseif ($sizeSuffix === null || $sizeSuffix === '') {
+                $product['sku'] = $model;
+            }
         }
 
         return $this->stripInternalProductKeys($product);
@@ -1027,11 +1037,21 @@ final class PriceListImportService
         }
 
         $prefix = $sheetName !== null ? "[{$sheetName}] " : '';
-        $sku = isset($map['sku']) ? $this->normalizeSku((string) ($row[$map['sku']] ?? '')) : '';
+        $skuFromCatalog = isset($map['sku']) ? $this->normalizeSku((string) ($row[$map['sku']] ?? '')) : '';
+        $sku = $skuFromCatalog;
+        if ($sku === '' && isset($map['sku_alt'])) {
+            $sku = $this->normalizeSku((string) ($row[$map['sku_alt']] ?? ''));
+        }
         $rawName = trim((string) ($row[$map['name']] ?? ''));
         $priceRaw = $row[$map['catalog_price']] ?? null;
 
         $groupKey = $this->resolveGroupKey($row, $map, $carry);
+        $ownModel = isset($map['model_key']) ? $this->normalizeSku((string) ($row[$map['model_key']] ?? '')) : '';
+        $inferredModel = $this->rowGroupKey($row, $map);
+        $modelForProduct = $ownModel !== '' ? $ownModel : $inferredModel;
+        if ($modelForProduct === null && $skuFromCatalog !== '') {
+            $modelForProduct = $groupKey;
+        }
         if ($groupKey !== null && ($carry['group'] ?? null) !== null && $groupKey !== $carry['group']) {
             $carry['name'] = null;
             $carry['category'] = null;
@@ -1083,6 +1103,9 @@ final class PriceListImportService
         }
 
         if ($sku === '') {
+            if (isset($map['sku'])) {
+                return ['status' => 'skip'];
+            }
             $slugBase = ! $this->isDescriptionLike($name) ? $name : ($carry['name'] ?? $name);
             $slug = strtoupper(preg_replace('/[^A-Za-z0-9]+/', '-', $slugBase) ?? 'POZ');
             $slug = trim(mb_substr($slug, 0, 28), '-');
@@ -1189,7 +1212,7 @@ final class PriceListImportService
                 'stock' => 0,
                 'pack_qty' => $packQty,
                 'packaging' => $packaging,
-                '_model_key' => $groupKey ?? ($carry['group'] ?? null),
+                '_model_key' => $modelForProduct,
                 '_purchase_from_file' => $purchaseFromFile,
             ],
         ];
@@ -1198,7 +1221,8 @@ final class PriceListImportService
     private function normalizeSku(string $value): string
     {
         $sku = trim($value);
-        if ($sku === '' || strtoupper($sku) === '#N/A') {
+        $upper = strtoupper($sku);
+        if ($sku === '' || in_array($upper, ['#N/A', 'N/A', 'NA', 'N.A.', '.', '-', '#REF!', '#VALUE!'], true)) {
             return '';
         }
         // DuPont i podobne: „D13495380*” / „M*” — gwiazdka = made-to-order

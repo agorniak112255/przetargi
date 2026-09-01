@@ -14,7 +14,7 @@ final class PriceListStructureSampler
         'okładka', 'okladka', 'disclaimer', 'ważne', 'wazne', 'kontakt',
         'spis', 'cover', 'info', 'instructions', 'readme',
         'languages', 'gtcs', 'warunki', 'kalkulator', 'overview',
-        'tarifs', 'wygaszane', 'trad. ',
+        'tarifs', 'wygaszane', 'trad. ', 'configurable',
     ];
 
     /**

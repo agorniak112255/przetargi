@@ -99,6 +99,7 @@ final class SpreadsheetMappingHeuristic
             $skuCol = $mapped['sku'] ?? $this->findBestSkuCol($labels, $grid, $excelRow, $mapped['catalog_price']);
             $cols = [
                 'sku' => $skuCol,
+                'sku_alt' => $mapped['sku_alt'] ?? null,
                 'model_key' => $mapped['model_key'],
                 'name' => $mapped['name'],
                 'catalog_price' => $mapped['catalog_price'],
@@ -174,6 +175,7 @@ final class SpreadsheetMappingHeuristic
                     'header_excel_row' => $excelRow,
                     'columns' => [
                         'sku' => $cols['sku'],
+                        'sku_alt' => $cols['sku_alt'],
                         'model_key' => $cols['model_key'],
                         'name' => $cols['name'],
                         'catalog_price' => $cols['catalog_price'],

@@ -136,12 +136,8 @@ final class PriceListSampleRoleResearcher
         }
 
         $notes = trim((string) ($mapping['notes'] ?? ''));
-        $extra = 'Research 1 pozycji: model≠article; collaps rozmiarów przy tej samej cenie.';
-        $web = trim((string) ($research['web_notes'] ?? ''));
-        if ($web !== '') {
-            $extra .= ' '.mb_substr($web, 0, 220);
-        }
-        $mapping['notes'] = trim($notes.' '.$extra);
+        $web = $this->publicWebNotes((string) ($research['web_notes'] ?? ''));
+        $mapping['notes'] = trim($notes.($web !== '' ? ' '.$web : ''));
         $mapping['sample_role_research'] = [
             'sheet' => $research['sheet'] ?? null,
             'sample_excel_row' => $research['sample_excel_row'] ?? null,
@@ -151,6 +147,22 @@ final class PriceListSampleRoleResearcher
         ];
 
         return $mapping;
+    }
+
+    private function publicWebNotes(string $web): string
+    {
+        $web = trim($web);
+        if ($web === '') {
+            return '';
+        }
+        $lower = mb_strtolower($web);
+        foreach (['outlook.com', 'olmoauth', 'urlblockederror', 'http://', 'https://'] as $junk) {
+            if (str_contains($lower, $junk)) {
+                return '';
+            }
+        }
+
+        return mb_substr($web, 0, 220);
     }
 
     /**

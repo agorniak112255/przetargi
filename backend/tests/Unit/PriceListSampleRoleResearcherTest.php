@@ -74,6 +74,13 @@ final class PriceListSampleRoleResearcherTest extends TestCase
         $this->assertSame(2, $out['sheets'][0]['columns']['model_key']);
         $this->assertSame(4, $out['sheets'][0]['columns']['name']);
         $this->assertArrayHasKey('sample_role_research', $out);
+        $this->assertStringNotContainsString('collaps', (string) ($out['notes'] ?? ''));
+
+        $spam = $researcher->applyToMapping($mapping, [
+            ...$research,
+            'web_notes' => 'Outlook: https://outlook.com/owa/UrlBlockedError.aspx',
+        ]);
+        $this->assertStringNotContainsString('outlook', mb_strtolower((string) ($spam['notes'] ?? '')));
     }
 
     private function makeDupontLike(): string

@@ -47,6 +47,7 @@ final class SpreadsheetColumnMapper
         if ($cols['ean'] !== null && $cols['ean'] === $cols['sku']) {
             $cols['ean'] = $this->best($norm, $this->eanScores(...), $cols['sku']);
         }
+        $cols['sku_alt'] = $this->best($norm, $this->skuAltScores(...), $cols['sku']);
 
         return $cols;
     }
@@ -74,7 +75,7 @@ final class SpreadsheetColumnMapper
             'languages', 'gtcs', 'warunki handlowe', 'kalkulator', 'logo',
             'tabulka velik', 'overview', 'trad. ', 'trad articles', 'trad gammes',
             'tabelle1', 'folio2', 'foglio2', 'tarifs', 'conditions commerciales',
-            'wygaszane',
+            'wygaszane', 'configurablematerial', 'configurable material',
         ] as $hint) {
             if (str_contains($n, $hint)) {
                 return 'skip';
@@ -133,7 +134,7 @@ final class SpreadsheetColumnMapper
                 continue;
             }
 
-            foreach (['catalog_price', 'purchase', 'discount', 'sku', 'name', 'ean', 'currency', 'pack_qty', 'packaging', 'category', 'model_key'] as $field) {
+            foreach (['catalog_price', 'purchase', 'discount', 'sku', 'sku_alt', 'name', 'ean', 'currency', 'pack_qty', 'packaging', 'category', 'model_key'] as $field) {
                 if ($scored[$field] !== null) {
                     $cols[$field] = $scored[$field];
                 }
@@ -263,6 +264,12 @@ final class SpreadsheetColumnMapper
             return 0;
         }
         if (str_contains($l, 'box price') || str_contains($l, 'pack price') || str_contains($l, 'cena za')) {
+            return 0;
+        }
+        if (str_contains($l, 'skala ilościowa') || str_contains($l, 'skala ilosciowa') || str_contains($l, 'quantity scale')) {
+            return 0;
+        }
+        if (preg_match('/^kolumna\s*\d+$/u', $l) === 1) {
             return 0;
         }
         if (str_contains($l, 'ncd') && str_contains($l, 'vat')) {
@@ -571,10 +578,19 @@ final class SpreadsheetColumnMapper
         return 0;
     }
 
+    private function skuAltScores(string $l): int
+    {
+        if (str_contains($l, 'numer magazynowy') || str_contains($l, '3m numer') || str_contains($l, 'stock number')) {
+            return 90;
+        }
+
+        return 0;
+    }
+
     private function packagingScores(string $l): int
     {
-        if (str_contains($l, 'opis jednostki sprzedaży') || str_contains($l, 'jednostka sprzedaży')) {
-            return 80;
+        if (str_contains($l, 'jednostka sprzedaży') || str_contains($l, 'sales unit') || str_contains($l, 'sales uom')) {
+            return 0;
         }
         if (str_contains($l, 'opakowanie') || str_contains($l, 'packaging') || $l === 'size' || $l === 'rozmiar') {
             return 70;
