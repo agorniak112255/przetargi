@@ -86,13 +86,11 @@ final class ProductAiSearchService
             return $this->webOnlyResult($query, $limit);
         }
 
-        $intent = $this->understandRequirement($query, $task);
-
-        return $this->finishSearch($query, $intent, $limit, $withExternalHint, $task);
+        return $this->finishSearch($query, $this->localIntent($query), $limit, $withExternalHint, $task);
     }
 
     /**
-     * Wiele zapytań: intent i ranking idą równolegle (max $maxConcurrent połączeń).
+     * Wiele zapytań: retrieval od razu, potem jedna fala analizy+rankingu (max $maxConcurrent).
      *
      * @param  list<string>  $queries
      * @return list<array{
@@ -125,21 +123,11 @@ final class ProductAiSearchService
         $limit = max(1, min(80, $limit));
         $maxConcurrent = max(1, min(10, $maxConcurrent));
 
-        $intentRaws = $this->llm->chatJsonMany(
-            array_map(fn (string $q): array => $this->understandMessages($q), $clean),
-            900,
-            $task,
-            $maxConcurrent,
-        );
-        $intents = [];
-        foreach ($clean as $i => $query) {
-            $raw = $intentRaws[$i] ?? [];
-            $intents[$i] = $this->parseIntent(is_array($raw) ? $raw : [], $query);
-        }
-
         $pending = [];
         $done = [];
+        $intents = [];
         foreach ($clean as $i => $query) {
+            $intents[$i] = $this->localIntent($query);
             $prepared = $this->prepareSearch($query, $intents[$i], $limit);
             if ($prepared['rank_cards'] === null) {
                 $done[$i] = $this->searchResult($query, $intents[$i], $prepared['products'], $prepared['note'], $withExternalHint);
@@ -152,7 +140,7 @@ final class ProductAiSearchService
         $rankOrder = [];
         foreach ($pending as $i => $prepared) {
             $rankOrder[] = $i;
-            $rankMessages[] = $this->rankMessages(
+            $rankMessages[] = $this->analyzeAndRankMessages(
                 $clean[$i],
                 $prepared['rank_cards'],
                 $limit,
@@ -162,10 +150,12 @@ final class ProductAiSearchService
         }
         $rankRaws = $this->llm->chatJsonMany($rankMessages, 2500, $task, $maxConcurrent);
         foreach ($rankOrder as $pos => $i) {
+            $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
+            $intents[$i] = $this->parseIntent($raw, $clean[$i]);
             $ranked = $this->rowsFromLlmMatches(
                 $clean[$i],
-                $pending[$i]['candidates'],
-                is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [],
+                $pending[$i]['rank_cards'] ?? $pending[$i]['candidates'],
+                $raw,
                 $limit,
                 $intents[$i]['needed'],
             );
@@ -284,11 +274,10 @@ final class ProductAiSearchService
         if ($prepared['rank_cards'] === null) {
             return $this->searchResult($query, $intent, $prepared['products'], $prepared['note'], $withExternalHint);
         }
-        $ranked = $this->rankWithLlm(
+        [$intent, $ranked] = $this->analyzeAndRank(
             $query,
             $prepared['rank_cards'],
             $limit,
-            $intent['needed'],
             $task,
             $intent['constraints'],
         );
@@ -366,12 +355,47 @@ final class ProductAiSearchService
 
             return $this->parseIntent($raw, $query);
         } catch (Throwable) {
-            return [
-                'needed' => $query,
-                'search_phrases' => $this->fallbackPhrases($query),
-                'constraints' => $this->fallbackConstraints($query),
-            ];
+            return $this->localIntent($query);
         }
+    }
+
+    /**
+     * Retrieval nie czeka na model — frazy i rodzina z zapytania (z korektą rzeczownika).
+     *
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
+     */
+    private function localIntent(string $query): array
+    {
+        $corrected = $this->correctQueryNouns($query);
+
+        return $this->parseIntent([
+            'needed' => $corrected,
+            'search_phrases' => array_values(array_unique(array_filter([
+                $corrected,
+                $query,
+                ...$this->fallbackPhrases($corrected),
+                ...$this->fallbackPhrases($query),
+            ]))),
+            'constraints' => $this->fallbackConstraints($corrected),
+        ], $query);
+    }
+
+    /** Literówki rzeczownika, które wcześniej poprawiał tylko model — bez tego rodzina się zeruje. */
+    private function correctQueryNouns(string $query): string
+    {
+        $fixed = preg_replace([
+            '/\bpodnie\b/ui',
+            '/\bpodni\b/ui',
+            '/\bkamizelaka\b/ui',
+            '/\bkamizelaki\b/ui',
+        ], [
+            'spodnie',
+            'spodnie',
+            'kamizelka',
+            'kamizelki',
+        ], $query);
+
+        return is_string($fixed) ? $fixed : $query;
     }
 
     /**
@@ -513,7 +537,13 @@ final class ProductAiSearchService
         $out = [];
         foreach ($tokens as $token) {
             $token = trim($token);
-            if (mb_strlen($token) < 4 || in_array($token, $stop, true) || $this->isClothingSizePhrase($token)) {
+            $hasDigit = preg_match('/\d/u', $token) === 1;
+            if (
+                (! $hasDigit && mb_strlen($token) < 4)
+                || ($hasDigit && mb_strlen($token) < 2)
+                || in_array($token, $stop, true)
+                || $this->isClothingSizePhrase($token)
+            ) {
                 continue;
             }
             $out[] = $token;
@@ -621,6 +651,7 @@ final class ProductAiSearchService
      */
     private function assortmentText(string $query, ?string $needed): string
     {
+        $query = $this->correctQueryNouns($query);
         $needed = trim((string) $needed);
         if ($needed === '' || $needed === $query || $this->assortment->family($query) !== null) {
             return $query;
@@ -1176,6 +1207,7 @@ final class ProductAiSearchService
      */
     private function rowsFromNamedModels(string $query, Collection $products, int $limit): array
     {
+        $products = $this->withResponseRelations($products);
         $out = [];
         foreach ($products as $product) {
             if (! $product instanceof Product) {
@@ -1242,13 +1274,42 @@ final class ProductAiSearchService
     }
 
     /**
+     * Retrieval — bez zdjęć i zliczeń. Relacje ładujemy dopiero na kartach wyniku.
+     *
      * @return Builder<Product>
      */
     private function productBaseQuery()
     {
+        return Product::query();
+    }
+
+    /**
+     * @return Builder<Product>
+     */
+    private function productResponseQuery()
+    {
         return Product::query()
             ->with(['images' => static fn ($img) => $img->orderBy('sort_order')->orderBy('id')])
             ->withCount(['substitutes', 'images']);
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return Collection<int, Product>
+     */
+    private function withResponseRelations(Collection $products): Collection
+    {
+        $ids = $products->pluck('id')->filter()->map(intval(...))->all();
+        if ($ids === []) {
+            return $products;
+        }
+
+        $loaded = $this->productResponseQuery()->whereIn('id', $ids)->get()->keyBy('id');
+
+        return $products
+            ->map(static fn (Product $p): ?Product => $loaded->get($p->id))
+            ->filter(static fn (mixed $p): bool => $p instanceof Product)
+            ->values();
     }
 
     /**
@@ -1341,6 +1402,57 @@ final class ProductAiSearchService
     }
 
     /**
+     * Jedno wywołanie: korekta wymagania + ranking kart, które już leżą w puli.
+     *
+     * @param  Collection<int, Product>  $candidates
+     * @param  list<string>  $constraints
+     * @return array{0: array{needed: string, search_phrases: list<string>, constraints: list<string>}, 1: list<array<string, mixed>>}
+     */
+    private function analyzeAndRank(
+        string $query,
+        Collection $candidates,
+        int $limit,
+        AiTask $task,
+        array $constraints,
+    ): array {
+        $raw = $this->llm->chatJson(
+            $this->analyzeAndRankMessages($query, $candidates, $limit, null, $constraints),
+            null,
+            2500,
+            null,
+            $task,
+        );
+        $intent = $this->parseIntent($raw, $query);
+
+        return [$intent, $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed'])];
+    }
+
+    /**
+     * @param  Collection<int, Product>  $candidates
+     * @param  list<string>  $constraints
+     * @return list<array{role: string, content: string}>
+     */
+    private function analyzeAndRankMessages(
+        string $query,
+        Collection $candidates,
+        int $limit,
+        ?string $needed,
+        array $constraints,
+    ): array {
+        $messages = $this->rankMessages($query, $candidates, $limit, $needed, $constraints);
+        $messages[0]['content'] = str_replace(
+            'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}.',
+            'needed: krótka nazwa (rzeczownik); search_phrases: 2-8, pierwsze 2 = nazwa; constraints: 0-6. '
+            .'Popraw literówki (podnie→spodnie, rekawice→rękawice, kamizelaka→kamizelka, TEPM-ICE→TEMP-ICE). '
+            .'JSON: {"needed":"nazwa","search_phrases":["najpierw nazwa"],"constraints":[],'
+            .'"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}.',
+            $messages[0]['content'],
+        );
+
+        return $messages;
+    }
+
+    /**
      * @param  Collection<int, Product>  $candidates
      * @param  list<string>  $constraints
      * @return list<array{role: string, content: string}>
@@ -1426,6 +1538,7 @@ final class ProductAiSearchService
     ): array {
         $requirement = $this->assortmentText($query, $needed);
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
+        $candidates = $this->withResponseRelations($candidates);
         $byId = $candidates->keyBy('id');
         $out = [];
 

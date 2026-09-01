@@ -65,17 +65,14 @@ final class ProductAiSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturn(
-                [
-                    'needed' => 'rękawice ochronne do pracy z amoniakiem',
-                    'search_phrases' => ['rękawice chemiczne', 'amoniak', 'nitryl'],
+            ->once()
+            ->andReturn([
+                'needed' => 'rękawice ochronne do pracy z amoniakiem',
+                'search_phrases' => ['rękawice chemiczne', 'amoniak', 'nitryl'],
+                'matches' => [
+                    ['id' => $match->id, 'score' => 92, 'reason' => 'Odporność na amoniak'],
                 ],
-                [
-                    'matches' => [
-                        ['id' => $match->id, 'score' => 92, 'reason' => 'Odporność na amoniak'],
-                    ],
-                ],
-            );
+            ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
@@ -127,21 +124,13 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')
-            ->once()
-            ->andReturn(
-                [
-                    'needed' => 'fartuch laboratoryjny elano-bawełna',
-                    'search_phrases' => ['fartuch', 'kitel', 'elano-bawełna', 'laboratoryjny'],
-                ],
-            );
+        $llm->shouldNotReceive('chatJson');
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'FARTUCH LAB. ELANO-BAWEŁNA prosty, biały, rękawy wykończone zatrzaską. EN ISO 13688',
         ])
             ->assertOk()
-            ->assertJsonPath('needed', 'fartuch laboratoryjny elano-bawełna')
             ->assertJsonPath('total', 1)
             ->assertJsonPath('products.0.id', $coat->id)
             ->assertJsonPath('products.0.sku', 'LAB-COAT');
@@ -177,14 +166,7 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')
-            ->once()
-            ->andReturn(
-                [
-                    'needed' => 'fartuch laboratoryjny',
-                    'search_phrases' => ['fartuch', 'kitel'],
-                ],
-            );
+        $llm->shouldNotReceive('chatJson');
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
@@ -224,17 +206,14 @@ final class ProductAiSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturn(
-                [
-                    'needed' => 'półmaska 3M 6503',
-                    'search_phrases' => ['półmaska', '6503'],
+            ->once()
+            ->andReturn([
+                'needed' => 'półmaska 3M 6503',
+                'search_phrases' => ['półmaska', '6503'],
+                'matches' => [
+                    ['id' => $mask->id, 'score' => 94, 'reason' => 'Kod 6503 w SKU'],
                 ],
-                [
-                    'matches' => [
-                        ['id' => $mask->id, 'score' => 94, 'reason' => 'Kod 6503 w SKU'],
-                    ],
-                ],
-            );
+            ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
@@ -274,14 +253,7 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')
-            ->once()
-            ->andReturn(
-                [
-                    'needed' => 'rękawice MAPA TEPM-ICE 700',
-                    'search_phrases' => ['mapa', 'tepm-ice', 'rękawice zimowe'],
-                ],
-            );
+        $llm->shouldNotReceive('chatJson');
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
@@ -323,12 +295,7 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')
-            ->once()
-            ->andReturn([
-                'needed' => 'rękawice MAPA TEPM-ICE 700 EN ISO 21420',
-                'search_phrases' => ['21420', 'rękawice', 'mapa'],
-            ]);
+        $llm->shouldNotReceive('chatJson');
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
@@ -354,13 +321,11 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'ocieplana kurtka ochronna multi-ochronna',
-                'search_phrases' => ['kurtka ochronna', 'ocieplana'],
-            ],
-            ['matches' => []],
-        );
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'ocieplana kurtka ochronna multi-ochronna',
+            'search_phrases' => ['kurtka ochronna', 'ocieplana'],
+            'matches' => [],
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         Http::fake([
@@ -554,23 +519,20 @@ final class ProductAiSearchApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
-        $lastQuery = '';
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturnUsing(function (array $messages) use (&$lastQuery, $sztyblet, $trzewik): array {
+        $llm->shouldReceive('chatJson')->andReturnUsing(function (array $messages) use ($sztyblet, $trzewik): array {
             $content = (string) $messages[1]['content'];
-            if (! str_contains($content, 'Karty katalogu:')) {
-                $lastQuery = $content;
-                $sztyblety = str_contains(mb_strtolower($content), 'sztyblet');
+            $requirement = strstr($content, 'Karty katalogu:', true);
+            $requirement = mb_strtolower(is_string($requirement) ? $requirement : $content);
+            $sztyblety = str_contains($requirement, 'sztyblet');
+            $pick = $sztyblety ? $sztyblet : $trzewik;
 
-                return [
-                    'needed' => $sztyblety ? 'sztyblety O2' : 'trzewiki O2 Reis',
-                    'search_phrases' => $sztyblety ? ['sztyblety', 'o2'] : ['trzewiki', 'o2', 'reis'],
-                    'constraints' => ['O2'],
-                ];
-            }
-            $pick = str_contains(mb_strtolower($lastQuery), 'sztyblet') ? $sztyblet : $trzewik;
-
-            return ['matches' => [['id' => $pick->id, 'score' => 90, 'reason' => 'test']]];
+            return [
+                'needed' => $sztyblety ? 'sztyblety O2' : 'trzewiki O2 Reis',
+                'search_phrases' => $sztyblety ? ['sztyblety', 'o2'] : ['trzewiki', 'o2', 'reis'],
+                'constraints' => ['O2'],
+                'matches' => [['id' => $pick->id, 'score' => 90, 'reason' => 'test']],
+            ];
         });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -602,13 +564,11 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'pochłaniacz wielogazowy',
-                'search_phrases' => ['pochłaniacz'],
-            ],
-            ['matches' => []],
-        );
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'pochłaniacz wielogazowy',
+            'search_phrases' => ['pochłaniacz'],
+            'matches' => [],
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         Http::fake([
@@ -654,13 +614,11 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'pochłaniacz wielogazowy',
-                'search_phrases' => ['pochłaniacz', 'wielogazowy'],
-            ],
-            ['matches' => []],
-        );
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'pochłaniacz wielogazowy',
+            'search_phrases' => ['pochłaniacz', 'wielogazowy'],
+            'matches' => [],
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         Http::fake([
@@ -768,24 +726,20 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $cxs): array {
-                $call++;
-                if ($call === 1) {
-                    return [
-                        'needed' => 'spodnie robocze o gramaturze 250 g/m²',
-                        'search_phrases' => [
-                            'spodnie', 'spodnie robocze', 'gramatura 250 g/m²', '250 g/m²',
-                        ],
-                    ];
-                }
+            ->andReturnUsing(function (array $messages) use (&$cards, $cxs): array {
                 $cards = (string) $messages[1]['content'];
 
-                return ['matches' => [
-                    ['id' => $cxs->id, 'score' => 88, 'reason' => 'Gramatura 250 g/m² w opisie'],
-                ]];
+                return [
+                    'needed' => 'spodnie robocze o gramaturze 250 g/m²',
+                    'search_phrases' => [
+                        'spodnie', 'spodnie robocze', 'gramatura 250 g/m²', '250 g/m²',
+                    ],
+                    'matches' => [
+                        ['id' => $cxs->id, 'score' => 88, 'reason' => 'Gramatura 250 g/m² w opisie'],
+                    ],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -835,20 +789,16 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call): array {
-                $call++;
-                if ($call === 1) {
-                    return [
-                        'needed' => 'spodnie robocze',
-                        'search_phrases' => ['spodnie', 'spodnie robocze'],
-                    ];
-                }
+            ->andReturnUsing(function (array $messages) use (&$cards): array {
                 $cards = (string) $messages[1]['content'];
 
-                return ['matches' => []];
+                return [
+                    'needed' => 'spodnie robocze',
+                    'search_phrases' => ['spodnie', 'spodnie robocze'],
+                    'matches' => [],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -934,23 +884,18 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $heavy): array {
-                $call++;
-                if ($call === 1) {
-                    // SIWZ pisze „250 gr”, karta „250 g/m²” — dosłownie nic się nie zgadza.
-                    return [
-                        'needed' => 'spodnie robocze gramatura 250 gr',
-                        'search_phrases' => ['spodnie', 'spodnie robocze', '250 gr'],
-                    ];
-                }
+            ->andReturnUsing(function (array $messages) use (&$cards, $heavy): array {
                 $cards = (string) $messages[1]['content'];
 
-                return ['matches' => [
-                    ['id' => $heavy->id, 'score' => 93, 'reason' => 'Gramatura 250 g/m²'],
-                ]];
+                return [
+                    'needed' => 'spodnie robocze gramatura 250 gr',
+                    'search_phrases' => ['spodnie', 'spodnie robocze', '250 gr'],
+                    'matches' => [
+                        ['id' => $heavy->id, 'score' => 93, 'reason' => 'Gramatura 250 g/m²'],
+                    ],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -1001,22 +946,18 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $chemical): array {
-                $call++;
-                if ($call === 1) {
-                    return [
-                        'needed' => 'rękawice do pracy z amoniakiem',
-                        'search_phrases' => ['rękawice', 'amoniak'],
-                    ];
-                }
+            ->andReturnUsing(function (array $messages) use (&$cards, $chemical): array {
                 $cards = (string) $messages[1]['content'];
 
-                return ['matches' => [
-                    ['id' => $chemical->id, 'score' => 95, 'reason' => 'Zastosowanie: amoniak'],
-                ]];
+                return [
+                    'needed' => 'rękawice do pracy z amoniakiem',
+                    'search_phrases' => ['rękawice', 'amoniak'],
+                    'matches' => [
+                        ['id' => $chemical->id, 'score' => 95, 'reason' => 'Zastosowanie: amoniak'],
+                    ],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -1064,22 +1005,18 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertNull($czech->ppe_family);
 
         $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $czech): array {
-                $call++;
-                if ($call === 1) {
-                    return [
-                        'needed' => 'rękawice ABRAK',
-                        'search_phrases' => ['rękawice', 'abrak'],
-                    ];
-                }
+            ->andReturnUsing(function (array $messages) use (&$cards, $czech): array {
                 $cards = (string) $messages[1]['content'];
 
-                return ['matches' => [
-                    ['id' => $czech->id, 'score' => 91, 'reason' => 'Model ABRAK'],
-                ]];
+                return [
+                    'needed' => 'rękawice ABRAK',
+                    'search_phrases' => ['rękawice', 'abrak'],
+                    'matches' => [
+                        ['id' => $czech->id, 'score' => 91, 'reason' => 'Model ABRAK'],
+                    ],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -1124,24 +1061,19 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $pants, $gloves): array {
-                $call++;
-                if ($call === 1) {
-                    // Model czyta „podnie” i zwraca nazwę po korekcie.
-                    return [
-                        'needed' => 'spodnie robocze',
-                        'search_phrases' => ['spodnie', 'spodnie robocze', 'gramatura 250'],
-                    ];
-                }
+            ->andReturnUsing(function (array $messages) use (&$cards, $pants, $gloves): array {
                 $cards = (string) $messages[1]['content'];
 
-                return ['matches' => [
-                    ['id' => $gloves->id, 'score' => 95, 'reason' => 'Gramatura 250'],
-                    ['id' => $pants->id, 'score' => 80, 'reason' => 'Spodnie 250 g/m²'],
-                ]];
+                return [
+                    'needed' => 'spodnie robocze',
+                    'search_phrases' => ['spodnie', 'spodnie robocze', 'gramatura 250'],
+                    'matches' => [
+                        ['id' => $gloves->id, 'score' => 95, 'reason' => 'Gramatura 250'],
+                        ['id' => $pants->id, 'score' => 80, 'reason' => 'Spodnie 250 g/m²'],
+                    ],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -1197,18 +1129,14 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'kamizelka odblaskowa żółta',
-                'search_phrases' => ['kamizelka', 'kamizelka odblaskowa', 'siatkowa', 'EN 20471'],
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'kamizelka odblaskowa żółta',
+            'search_phrases' => ['kamizelka', 'kamizelka odblaskowa', 'siatkowa', 'EN 20471'],
+            'matches' => [
+                ['id' => $shield->id, 'score' => 86, 'reason' => 'siatkowa'],
+                ['id' => $vest->id, 'score' => 80, 'reason' => 'kamizelka'],
             ],
-            [
-                'matches' => [
-                    ['id' => $shield->id, 'score' => 86, 'reason' => 'siatkowa'],
-                    ['id' => $vest->id, 'score' => 80, 'reason' => 'kamizelka'],
-                ],
-            ],
-        );
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
@@ -1520,18 +1448,16 @@ final class ProductAiSearchApiTest extends TestCase
         $llm->shouldReceive('chatJson')
             ->andReturnUsing(function () use (&$call, $xispal, $esd): array {
                 $call++;
-                if ($call === 1) {
-                    return [
-                        'needed' => 'kominiarka antyelektrostatyczna',
-                        'search_phrases' => ['kominiarka', 'balaclava', 'antyelektrostatyczna'],
-                        'constraints' => ['antyelektrostatyczna', 'EN 1149-5'],
-                    ];
-                }
 
-                return ['matches' => [
-                    ['id' => $esd->id, 'score' => 96, 'reason' => 'Kominiarka ESD EN 1149-5'],
-                    ['id' => $xispal->id, 'score' => 90, 'reason' => 'Balaclava z włóknem ESD'],
-                ]];
+                return [
+                    'needed' => 'kominiarka antyelektrostatyczna',
+                    'search_phrases' => ['kominiarka', 'balaclava', 'antyelektrostatyczna'],
+                    'constraints' => ['antyelektrostatyczna', 'EN 1149-5'],
+                    'matches' => [
+                        ['id' => $esd->id, 'score' => 96, 'reason' => 'Kominiarka ESD EN 1149-5'],
+                        ['id' => $xispal->id, 'score' => 90, 'reason' => 'Balaclava z włóknem ESD'],
+                    ],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -1549,7 +1475,7 @@ final class ProductAiSearchApiTest extends TestCase
             ['KOM-ESD', 'XISPAL-RS'],
             collect($skus)->pluck('sku')->all()
         );
-        $this->assertGreaterThanOrEqual(2, $call);
+        $this->assertSame(1, $call);
     }
 
     public function test_ai_search_head_liner_prefers_catalog_cap_over_esd_jacket(): void
@@ -1642,18 +1568,16 @@ final class ProductAiSearchApiTest extends TestCase
         $llm->shouldReceive('chatJson')
             ->andReturnUsing(function (array $messages) use (&$cards, &$call, $chem): array {
                 $call++;
-                if ($call === 1) {
-                    return [
-                        'needed' => 'kombinezon chemoodporny',
-                        'search_phrases' => ['kombinezon', 'kombinezon chemoodporny', 'kwas siarkowy'],
-                        'constraints' => ['kwas siarkowy 96%', 'EN 13034', 'Typ 3/4'],
-                    ];
-                }
                 $cards = (string) $messages[1]['content'];
 
-                return ['matches' => [
-                    ['id' => $chem->id, 'score' => 94, 'reason' => 'EN 13034 i kwas siarkowy w specyfikacji'],
-                ]];
+                return [
+                    'needed' => 'kombinezon chemoodporny',
+                    'search_phrases' => ['kombinezon', 'kombinezon chemoodporny', 'kwas siarkowy'],
+                    'constraints' => ['kwas siarkowy 96%', 'EN 13034', 'Typ 3/4'],
+                    'matches' => [
+                        ['id' => $chem->id, 'score' => 94, 'reason' => 'EN 13034 i kwas siarkowy w specyfikacji'],
+                    ],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -1667,7 +1591,7 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertNotNull($cards);
         $this->assertStringContainsString('kwas siarkowy 96%', $cards);
         $this->assertStringContainsString('EN 13034', $cards);
-        $this->assertGreaterThanOrEqual(2, $call);
+        $this->assertSame(1, $call);
         unset($bee);
     }
 
@@ -1712,18 +1636,15 @@ final class ProductAiSearchApiTest extends TestCase
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
             ->andReturnUsing(function (array $messages) use (&$cards, $chem): array {
-                if (str_contains((string) $messages[1]['content'], 'Karty katalogu:')) {
-                    $cards = (string) $messages[1]['content'];
-
-                    return ['matches' => [
-                        ['id' => $chem->id, 'score' => 95, 'reason' => 'kwas siarkowy w specyfikacji'],
-                    ]];
-                }
+                $cards = (string) $messages[1]['content'];
 
                 return [
                     'needed' => 'kombinezon chemoodporny',
                     'search_phrases' => ['kombinezon', 'kombinezon chemoodporny', 'kwas siarkowy'],
                     'constraints' => ['kwas siarkowy 96%', 'EN 13034'],
+                    'matches' => [
+                        ['id' => $chem->id, 'score' => 95, 'reason' => 'kwas siarkowy w specyfikacji'],
+                    ],
                 ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
@@ -1770,22 +1691,24 @@ final class ProductAiSearchApiTest extends TestCase
         $waves = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJsonMany')
-            ->twice()
+            ->once()
             ->andReturnUsing(function (array $sets) use (&$waves, $gloves, $boots): array {
                 $waves++;
-                $this->assertLessThanOrEqual(10, count($sets));
-                if ($waves === 1) {
-                    $this->assertCount(2, $sets);
-
-                    return [
-                        ['needed' => 'rękawice chemoodporne', 'search_phrases' => ['rękawice'], 'constraints' => ['EN 374']],
-                        ['needed' => 'kalosze chemoodporne', 'search_phrases' => ['kalosze'], 'constraints' => []],
-                    ];
-                }
+                $this->assertCount(2, $sets);
 
                 return [
-                    ['matches' => [['id' => $gloves->id, 'score' => 91, 'reason' => 'EN 374']]],
-                    ['matches' => [['id' => $boots->id, 'score' => 88, 'reason' => 'kalosze']]],
+                    [
+                        'needed' => 'rękawice chemoodporne',
+                        'search_phrases' => ['rękawice'],
+                        'constraints' => ['EN 374'],
+                        'matches' => [['id' => $gloves->id, 'score' => 91, 'reason' => 'EN 374']],
+                    ],
+                    [
+                        'needed' => 'kalosze chemoodporne',
+                        'search_phrases' => ['kalosze'],
+                        'constraints' => [],
+                        'matches' => [['id' => $boots->id, 'score' => 88, 'reason' => 'kalosze']],
+                    ],
                 ];
             });
         $llm->shouldNotReceive('chatJson');
@@ -1799,7 +1722,7 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertCount(2, $rows);
         $this->assertSame('G-CHEM', $rows[0]['products'][0]['sku'] ?? null);
         $this->assertSame('K-CHEM', $rows[1]['products'][0]['sku'] ?? null);
-        $this->assertSame(2, $waves);
+        $this->assertSame(1, $waves);
     }
 
     /**
@@ -1809,17 +1732,8 @@ final class ProductAiSearchApiTest extends TestCase
      */
     private function mockCatalogRank(string $needed, array $phrases, array $picks, array $constraints = []): void
     {
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturnUsing(function () use (&$call, $needed, $phrases, $picks, $constraints): array {
-            $call++;
-            if ($call === 1) {
-                return [
-                    'needed' => $needed,
-                    'search_phrases' => $phrases,
-                    'constraints' => $constraints,
-                ];
-            }
+        $llm->shouldReceive('chatJson')->andReturnUsing(function () use ($needed, $phrases, $picks, $constraints): array {
             $matches = [];
             foreach (array_values($picks) as $i => $product) {
                 $matches[] = [
@@ -1829,7 +1743,12 @@ final class ProductAiSearchApiTest extends TestCase
                 ];
             }
 
-            return ['matches' => $matches];
+            return [
+                'needed' => $needed,
+                'search_phrases' => $phrases,
+                'constraints' => $constraints,
+                'matches' => $matches,
+            ];
         });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
     }

@@ -171,13 +171,11 @@ final class TenderCustomOfferTest extends TestCase
             'tavily_api_key' => 'tvly-test',
         ]);
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'kalesony bawelniane meskie',
-                'search_phrases' => ['kalesony', 'bawelniane'],
-            ],
-            ['matches' => []],
-        );
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'kalesony bawelniane meskie',
+            'search_phrases' => ['kalesony', 'bawelniane'],
+            'matches' => [],
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         Http::fake();
 
@@ -228,13 +226,11 @@ final class TenderCustomOfferTest extends TestCase
             'tavily_api_key' => 'tvly-test',
         ]);
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'kalesony',
-                'search_phrases' => ['kalesony'],
-            ],
-            ['matches' => []],
-        );
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'kalesony',
+            'search_phrases' => ['kalesony'],
+            'matches' => [],
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         Http::fake();
 
@@ -393,13 +389,11 @@ final class TenderCustomOfferTest extends TestCase
             'tavily_api_key' => 'tvly-test',
         ]);
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'czapka ocieplana pod hełm',
-                'search_phrases' => ['czapka ocieplana', 'kominiarka'],
-            ],
-            ['matches' => []],
-        );
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'czapka ocieplana pod hełm',
+            'search_phrases' => ['czapka ocieplana', 'kominiarka'],
+            'matches' => [],
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         Http::fake([
             'api.tavily.com/search' => Http::response([
@@ -476,13 +470,11 @@ final class TenderCustomOfferTest extends TestCase
             'tavily_api_key' => 'tvly-test',
         ]);
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'recznik 50x100',
-                'search_phrases' => ['recznik', 'bawelniany'],
-            ],
-            ['matches' => []],
-        );
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'recznik 50x100',
+            'search_phrases' => ['recznik', 'bawelniany'],
+            'matches' => [],
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         Http::fake([
             'api.tavily.com/search' => Http::response([

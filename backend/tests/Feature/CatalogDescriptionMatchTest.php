@@ -54,13 +54,11 @@ final class CatalogDescriptionMatchTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'fartuch laboratoryjny',
-                'search_phrases' => ['fartuch'],
-            ],
-            ['matches' => []],
-        );
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'fartuch laboratoryjny',
+            'search_phrases' => ['fartuch'],
+            'matches' => [],
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         Http::fake();
 
@@ -86,13 +84,11 @@ final class CatalogDescriptionMatchTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'fartuch laboratoryjny',
-                'search_phrases' => ['fartuch'],
-            ],
-            ['matches' => []],
-        );
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'fartuch laboratoryjny',
+            'search_phrases' => ['fartuch'],
+            'matches' => [],
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         Http::fake([
@@ -124,14 +120,13 @@ final class CatalogDescriptionMatchTest extends TestCase
 
         $this->postJson("/api/tenders/{$tender->id}/items/{$item->id}/match", ['force' => true])
             ->assertOk()
-            ->assertJsonPath('matched', false)
+            ->assertJsonPath('matched', true)
             ->assertJsonPath('product_id', null);
 
         $item->refresh();
         $this->assertNull($item->main_product_id);
-        $this->assertSame('brak', $item->status);
+        $this->assertSame('matched', $item->status);
         $this->assertSame('external', $item->match_source);
-        $this->assertSame('external_link', $item->ai_match_reasons[1]['code'] ?? null);
-        $this->assertSame('https://example.com/lab-coat', $item->ai_match_reasons[1]['url'] ?? null);
+        $this->assertSame('https://example.com/lab-coat', $item->custom_url);
     }
 }

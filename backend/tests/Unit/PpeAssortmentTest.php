@@ -58,6 +58,8 @@ final class PpeAssortmentTest extends TestCase
             ['POLA - EN 420 KAT. II, EN 388 - 3131', PpeAssortment::FAMILY_GLOVES],
             ['Kalesony bawełniane męskie', PpeAssortment::FAMILY_APPAREL],
             ['Fartuch laboratoryjny', PpeAssortment::FAMILY_APPAREL],
+            ['podnie gramatura 250 gr', PpeAssortment::FAMILY_APPAREL],
+            ['kamizelaka odblaskowa', PpeAssortment::FAMILY_APPAREL],
         ];
     }
 

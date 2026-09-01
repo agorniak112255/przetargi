@@ -138,7 +138,7 @@ final class PpeAssortment
         }
 
         if (preg_match(
-            '/\b(odziez|kurtk|spodn|kombinezon|kamizelk|softshell|fartuch|kitel|bluza'
+            '/\b(odziez|kurtk|spodn|podnie|kombinezon|kamizelk|kamizelak|softshell|fartuch|kitel|bluza'
             .'|kaleson|ogrodniczk|park[ae]|peleryn)\w*/u',
             $t
         ) === 1) {

@@ -70,17 +70,13 @@ final class ProductVectorCandidateFilterTest extends TestCase
         ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->andReturn(
-            [
-                'needed' => 'ocieplana kurtka ochronna',
-                'search_phrases' => ['kurtka ochronna', 'ocieplana'],
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'ocieplana kurtka ochronna',
+            'search_phrases' => ['kurtka ochronna', 'ocieplana'],
+            'matches' => [
+                ['id' => $jacket->id, 'score' => 88, 'reason' => 'Kurtka ocieplana z kapturem'],
             ],
-            [
-                'matches' => [
-                    ['id' => $jacket->id, 'score' => 88, 'reason' => 'Kurtka ocieplana z kapturem'],
-                ],
-            ],
-        );
+        ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [

@@ -56,17 +56,13 @@ final class ProductVectorSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturn(
-                [
-                    'needed' => 'rękawice do amoniaku',
-                    'search_phrases' => ['rękawice chemiczne', 'amoniak'],
+            ->andReturn([
+                'needed' => 'rękawice do amoniaku',
+                'search_phrases' => ['rękawice chemiczne', 'amoniak'],
+                'matches' => [
+                    ['id' => $match->id, 'score' => 88, 'reason' => 'LIKE path'],
                 ],
-                [
-                    'matches' => [
-                        ['id' => $match->id, 'score' => 88, 'reason' => 'LIKE path'],
-                    ],
-                ],
-            );
+            ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         Http::fake();
@@ -144,18 +140,13 @@ final class ProductVectorSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturn(
-                [
-                    // frazy celowo nietrafione w LIKE — wektor wchodzi dopiero, gdy SQL nie ma nic
-                    'needed' => 'rękawice chemiczne do amoniaku',
-                    'search_phrases' => ['zzz-brak-dopasowania-w-like'],
+            ->andReturn([
+                'needed' => 'rękawice chemiczne do amoniaku',
+                'search_phrases' => ['zzz-brak-dopasowania-w-like'],
+                'matches' => [
+                    ['id' => $vectorOnly->id, 'score' => 90, 'reason' => 'Wektor'],
                 ],
-                [
-                    'matches' => [
-                        ['id' => $vectorOnly->id, 'score' => 90, 'reason' => 'Wektor'],
-                    ],
-                ],
-            );
+            ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $this->postJson('/api/products/ai-search', [
@@ -230,22 +221,18 @@ final class ProductVectorSearchApiTest extends TestCase
         ]);
 
         $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $cxs): array {
-                $call++;
-                if ($call === 1) {
-                    return [
-                        'needed' => 'spodnie robocze o gramaturze 250',
-                        'search_phrases' => ['spodnie', 'spodnie robocze', '250gr'],
-                    ];
-                }
+            ->andReturnUsing(function (array $messages) use (&$cards, $cxs): array {
                 $cards = (string) $messages[1]['content'];
 
-                return ['matches' => [
-                    ['id' => $cxs->id, 'score' => 87, 'reason' => 'Gramatura 250 g/m²'],
-                ]];
+                return [
+                    'needed' => 'spodnie robocze o gramaturze 250',
+                    'search_phrases' => ['spodnie', 'spodnie robocze', '250gr'],
+                    'matches' => [
+                        ['id' => $cxs->id, 'score' => 87, 'reason' => 'Gramatura 250 g/m²'],
+                    ],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -302,24 +289,18 @@ final class ProductVectorSearchApiTest extends TestCase
         ]);
 
         $cards = null;
-        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $bare): array {
-                $call++;
-                if ($call === 1) {
-                    return [
-                        // Fraza celowo nietrafiona w tekst, a zapytanie bez nazwy rodziny —
-                        // jedynym źródłem kandydata zostaje wektor.
-                        'needed' => 'ochrona dloni przed amoniakiem',
-                        'search_phrases' => ['zzz-brak-takiej-frazy'],
-                    ];
-                }
+            ->andReturnUsing(function (array $messages) use (&$cards, $bare): array {
                 $cards = (string) $messages[1]['content'];
 
-                return ['matches' => [
-                    ['id' => $bare->id, 'score' => 90, 'reason' => 'Trafienie wektorowe'],
-                ]];
+                return [
+                    'needed' => 'ochrona dloni przed amoniakiem',
+                    'search_phrases' => ['zzz-brak-takiej-frazy'],
+                    'matches' => [
+                        ['id' => $bare->id, 'score' => 90, 'reason' => 'Trafienie wektorowe'],
+                    ],
+                ];
             });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 

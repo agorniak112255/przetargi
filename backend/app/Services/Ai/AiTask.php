@@ -47,7 +47,7 @@ enum AiTask: string
     public function hint(): string
     {
         return match ($this) {
-            self::ProductSearch => 'Dwa wywołania na zapytanie, długi prompt z kartami katalogu. Zyskuje na szybkim modelu.',
+            self::ProductSearch => 'Jedno wywołanie: analiza wymagania i ranking kart katalogu. Zyskuje na szybkim modelu.',
             self::TenderMatch => 'Największy wolumen — pozycje przetargu lecą równolegle.',
             self::Enrichment => 'Bez własnego profilu działa pole „Model do opisów”.',
             self::WebSearch => 'Wymaga dostawcy z pluginem web (OpenRouter).',
