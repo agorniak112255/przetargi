@@ -14,6 +14,7 @@ use App\Support\ProductSizeVariant;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use Throwable;
 
 final class PriceListImportService
 {
@@ -100,6 +101,9 @@ final class PriceListImportService
         $path = $file->getRealPath();
         if ($path === false) {
             return $this->emptyResult('Nie można odczytać pliku.');
+        }
+        if (! $this->isSpreadsheetUpload($file)) {
+            return $this->emptyResult('PDF: użyj „Importuj wg AI” z listy po analizie, nie mapowania arkusza.');
         }
 
         $collected = $this->collectFromMapping($path, $mapping, $defaultCategory, $manufacturer);
@@ -379,8 +383,12 @@ final class PriceListImportService
 
         $specialCount = 0;
         $realPath = $file->getRealPath();
-        if ($realPath !== false) {
-            $specialCount = $this->specialPrices->importFromPath($realPath, $manufacturer);
+        if ($realPath !== false && $this->isSpreadsheetUpload($file)) {
+            try {
+                $specialCount = $this->specialPrices->importFromPath($realPath, $manufacturer);
+            } catch (Throwable) {
+                $specialCount = 0;
+            }
         }
 
         RegisterManufacturerCatalogJob::dispatch($manufacturer, $productIds[0] ?? 0);
@@ -1501,6 +1509,16 @@ final class PriceListImportService
         }
 
         return $payload;
+    }
+
+    private function isSpreadsheetUpload(UploadedFile $file): bool
+    {
+        $name = mb_strtolower($file->getClientOriginalName());
+
+        return str_ends_with($name, '.xlsx')
+            || str_ends_with($name, '.xls')
+            || str_ends_with($name, '.csv')
+            || str_ends_with($name, '.ods');
     }
 
     /**

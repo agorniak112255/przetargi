@@ -8,6 +8,7 @@ use App\Models\Client;
 use App\Models\Product;
 use App\Models\ProductSpecialPrice;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use Throwable;
 
 final class ProductSpecialPriceImporter
 {
@@ -18,7 +19,15 @@ final class ProductSpecialPriceImporter
 
     public function importFromPath(string $path, string $manufacturer): int
     {
-        $spreadsheet = IOFactory::load($path);
+        if (! $this->looksLikeSpreadsheet($path)) {
+            return 0;
+        }
+
+        try {
+            $spreadsheet = IOFactory::load($path);
+        } catch (Throwable) {
+            return 0;
+        }
         $imported = 0;
         $source = basename($path);
 
@@ -183,5 +192,24 @@ final class ProductSpecialPriceImporter
         }
 
         return $value;
+    }
+
+    private function looksLikeSpreadsheet(string $path): bool
+    {
+        $name = mb_strtolower($path);
+        foreach (['.xlsx', '.xls', '.csv', '.ods'] as $ext) {
+            if (str_ends_with($name, $ext)) {
+                return true;
+            }
+        }
+        if (! is_readable($path)) {
+            return false;
+        }
+        $head = (string) file_get_contents($path, false, null, 0, 8);
+        if ($head === '' || str_starts_with($head, '%PDF')) {
+            return false;
+        }
+
+        return str_starts_with($head, 'PK') || str_starts_with($head, "\xD0\xCF");
     }
 }

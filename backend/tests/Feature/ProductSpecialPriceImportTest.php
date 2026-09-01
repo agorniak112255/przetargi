@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\ProductSpecialPrice;
 use App\Models\User;
 use App\Services\PriceListImportService;
+use App\Services\ProductSpecialPriceImporter;
 use App\Services\SpreadsheetColumnMapper;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -166,5 +167,58 @@ final class ProductSpecialPriceImportTest extends TestCase
         (new Xlsx($spreadsheet))->save($path);
 
         return $path;
+    }
+
+    public function test_special_price_importer_ignores_pdf(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'pdf').'.pdf';
+        file_put_contents($path, "%PDF-1.4\n");
+        try {
+            $this->assertSame(
+                0,
+                app(ProductSpecialPriceImporter::class)->importFromPath($path, 'Cofra')
+            );
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_pdf_import_from_products_skips_spreadsheet_reader(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'cofra').'.pdf';
+        file_put_contents($path, "%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+        $file = new UploadedFile($path, 'Cofra akcesoria cennik.pdf', 'application/pdf', null, true);
+
+        try {
+            $result = app(PriceListImportService::class)->importFromProducts(
+                $file,
+                'Cofra',
+                '2026-09',
+                User::factory()->create(),
+                [[
+                    'sku' => 'COF-ACC-1',
+                    'name' => 'Wkladka Cofra',
+                    'catalog_price_net' => 10,
+                    'discount_percent' => 17,
+                ]],
+                null,
+                [
+                    'groups' => [],
+                    'default_discount' => 17.0,
+                    'ungrouped_group' => null,
+                    'product_assignments' => [],
+                ],
+            );
+
+            $this->assertNotNull($result['price_list'], implode('; ', $result['errors'] ?? []));
+            $this->assertSame(1, $result['created']);
+            $this->assertSame(0, $result['special_prices']);
+            $product = Product::query()->where('sku', 'COF-ACC-1')->first();
+            $this->assertNotNull($product);
+            $this->assertSame('Cofra', $product->manufacturer);
+            $this->assertEqualsWithDelta(17.0, (float) $product->discount_percent, 0.01);
+        } finally {
+            @unlink($path);
+        }
     }
 }

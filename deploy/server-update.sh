@@ -124,8 +124,11 @@ if [[ "$INDEX_CATALOG" -eq 1 ]]; then
   "$PHP_BIN" artisan catalog:index --missing-only --seconds=180 --max=20000 || true
 else
   echo "==> indeks kart sklepów pominięty (szybszy update)"
-  echo "    gdy trzeba:  bash $APP_ROOT/deploy/server-update.sh --katalog"
-  echo "    albo jedna domena:  $PHP_BIN artisan catalog:index bpbhp.pl"
+  echo "    Aby zaindeksować sklepy (nowe domeny z retailer_domains), wykonaj:"
+  echo "      bash $APP_ROOT/deploy/server-update.sh --katalog"
+  echo "    albo tylko indeks:"
+  echo "      cd $APP_ROOT/backend && $PHP_BIN artisan catalog:index --missing-only --seconds=180 --max=20000"
+  echo "    jedna domena:  $PHP_BIN artisan catalog:index bhpstar.pl"
 fi
 
 echo "==> laravel scheduler (cron schedule:run)"
@@ -145,3 +148,7 @@ else
 fi
 
 echo "==> gotowe: https://przetargi.supon.rzeszow.pl"
+if [[ "$INDEX_CATALOG" -eq 0 ]]; then
+  echo "==> Aby zaindeksować sklepy, wykonaj:"
+  echo "    bash $APP_ROOT/deploy/server-update.sh --katalog"
+fi

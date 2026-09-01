@@ -103,6 +103,10 @@ class PriceListImportController extends Controller
                 $data['category'] ?? null,
                 $groupOptions,
             );
+        } elseif ($isPdf) {
+            throw ValidationException::withMessages([
+                'file' => 'PDF: najpierw „Analizuj AI”, potem import.',
+            ]);
         } elseif ($mapping !== null) {
             $result = $this->importer->importWithMapping(
                 $file,
@@ -113,10 +117,6 @@ class PriceListImportController extends Controller
                 $data['category'] ?? null,
                 $groupOptions,
             );
-        } elseif ($isPdf) {
-            throw ValidationException::withMessages([
-                'file' => 'PDF: najpierw „Analizuj AI”, potem import.',
-            ]);
         } elseif ($useAi && $mapping === null) {
             if (! $this->aiSettings->isReady()) {
                 throw ValidationException::withMessages([

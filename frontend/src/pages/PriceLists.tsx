@@ -1041,11 +1041,11 @@ export function PriceLists() {
     try {
       const fd = buildFormData()
       fd.append('use_ai', '1')
-      if (analysis.mapping) {
-        fd.append('mapping', JSON.stringify(analysis.mapping))
-      }
       // XLSX: import po mapowaniu (bez pełnej listy w JSON). PDF: lista produktów z analizy.
       const isSpreadsheet = analysis.source === 'spreadsheet'
+      if (isSpreadsheet && analysis.mapping) {
+        fd.append('mapping', JSON.stringify(analysis.mapping))
+      }
       if (!isSpreadsheet && analysis.products && analysis.products.length > 0) {
         fd.append('products', JSON.stringify(analysis.products))
       }
