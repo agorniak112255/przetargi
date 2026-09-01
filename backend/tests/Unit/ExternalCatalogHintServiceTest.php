@@ -168,6 +168,45 @@ final class ExternalCatalogHintServiceTest extends TestCase
     }
 
     #[Test]
+    public function glued_rup_spec_searches_model_not_the_whole_sheet(): void
+    {
+        $svc = $this->app->make(ExternalCatalogHintService::class);
+        $req = 'RUP 502-U - Ewakuacyjne urządzenie podnosząco-opuszczające PROTEKT: DOR (kg) 140 MBS: 20 kNSF '
+            .'współczynnik bezpieczeństwa: 10:1Długość korby: 300 mmSiła wymagana do wyciągania ładunku: 5,6 kg'
+            .'Przełożenie mechanizmu przekładni: 5:1 (~4,0m/min)Amortyzator sprężynowy: SDWKonstrukcja: stal';
+
+        $q = $svc->productSearchQuery($req);
+
+        $this->assertStringContainsString('RUP 502-U', $q);
+        $this->assertStringContainsString('PROTEKT', $q);
+        $this->assertStringNotContainsString('10:1Długość', $q);
+        $this->assertStringNotContainsString('mmSiła', $q);
+        $this->assertLessThan(180, mb_strlen($q));
+    }
+
+    #[Test]
+    public function glued_rup_spec_accepts_model_page_without_lanyard_words(): void
+    {
+        $svc = $this->app->make(ExternalCatalogHintService::class);
+        $req = 'RUP 502-U - Ewakuacyjne urządzenie podnosząco-opuszczające PROTEKT: DOR (kg) 140 '
+            .'Amortyzator sprężynowy: SDWKonstrukcja: stal';
+
+        $best = $svc->pickBestResult([
+            [
+                'url' => 'https://protekt.com.pl/produkt/rup-502-u',
+                'title' => 'RUP 502-U PROTEKT',
+            ],
+            [
+                'url' => 'https://sklep.example/produkt/amortyzator-tasmowy',
+                'title' => 'Amortyzator taśmowy ABM',
+            ],
+        ], $req);
+
+        $this->assertNotNull($best);
+        $this->assertSame('https://protekt.com.pl/produkt/rup-502-u', $best['url']);
+    }
+
+    #[Test]
     public function coverall_query_asks_for_the_suit_with_acid_as_resistance(): void
     {
         $svc = $this->app->make(ExternalCatalogHintService::class);

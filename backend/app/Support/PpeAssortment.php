@@ -127,7 +127,8 @@ final class PpeAssortment
         }
 
         if (preg_match(
-            '/\b(szelk|linka\s+bezpieczen|amortyzator|asekurac|urzadzeni\w*\s+samoham|lonza)\w*/u',
+            '/\b(szelk|linka\s+bezpieczen|amortyzator|asekurac|urzadzeni\w*\s+samoham|lonza'
+            .'|ewakuac|podnoszac|opuszczaj|wciagark)\w*/u',
             $t
         ) === 1) {
             return self::FAMILY_FALL;
@@ -486,6 +487,9 @@ final class PpeAssortment
 
     private function fallType(string $t): ?string
     {
+        if (preg_match('/\b(ewakuac|podnoszac|opuszczaj|wciagark)\w*/u', $t) === 1) {
+            return 'rescue';
+        }
         if (preg_match('/\b(szelk)\w*/u', $t) === 1) {
             return 'harness';
         }
@@ -622,6 +626,7 @@ final class PpeAssortment
             'welding_helmet' => ['przylbic'],
             'shield' => ['oslona twarz', 'osłona twarz', 'face shield'],
             'harness' => ['szelk'],
+            'rescue' => ['ewakuac', 'podnosz', 'opuszcz'],
             'lanyard' => ['lonza', 'amortyzator'],
             'disposable' => ['jednorazow', 'winyl', 'vinyl'],
             'nitrile' => ['nitryl', 'nitrile'],

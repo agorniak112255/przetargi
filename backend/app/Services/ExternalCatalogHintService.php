@@ -178,12 +178,12 @@ final class ExternalCatalogHintService
         }
         $bits[] = $this->productFirstPhrase($requirement);
 
-        return mb_substr(implode(' ', array_unique($bits)), 0, 400);
+        return mb_substr(implode(' ', array_unique($bits)), 0, 180);
     }
 
     private function productFirstPhrase(string $requirement): string
     {
-        $raw = trim((string) preg_replace('/\s+/u', ' ', $requirement));
+        $raw = $this->unglueSpecLabels($requirement);
         $hazard = '';
         if (preg_match('/\(\s*w\s+szczeg(?:ól|ol)no[sś]ci\s+na\s+([^)]+)\)/ui', $raw, $m) === 1) {
             $hazard = trim($m[1], " \t,.;");
@@ -195,18 +195,81 @@ final class ExternalCatalogHintService
             $hazard = trim($m[1], " \t,.;");
             $raw = trim((string) preg_replace('/\bna\s+kwas\s+[^,;.()]+/ui', ' ', $raw));
         }
-        $raw = trim((string) preg_replace('/[\s,;]+/u', ' ', $raw));
-        foreach ($this->assortment->catalogNounLikes($requirement) as $like) {
-            if ($like !== '' && ! str_contains(mb_strtolower($raw), mb_strtolower($like))) {
-                $raw = $like.' '.$raw;
+        $raw = $this->productHeadline($raw);
+        if ($this->modelNeedles($requirement) === []) {
+            foreach ($this->assortment->catalogNounLikes($requirement) as $like) {
+                if ($like !== '' && ! str_contains(mb_strtolower($raw), mb_strtolower($like))) {
+                    $raw = $like.' '.$raw;
+                }
+                break;
             }
-            break;
         }
         if ($hazard !== '') {
             $raw = trim($raw.' odporność na '.$hazard);
         }
 
         return $raw !== '' ? $raw : $requirement;
+    }
+
+    /** Skleja z SIWZ: „10:1Długość” / „kgPrzełożenie” → osobne słowa. */
+    private function unglueSpecLabels(string $text): string
+    {
+        $text = preg_replace('/(?<=[0-9a-ząćęłńóśźż])(?=[A-ZĄĆĘŁŃÓŚŹŻ])/u', ' ', $text) ?? $text;
+
+        return trim((string) preg_replace('/\s+/u', ' ', $text));
+    }
+
+    /** Nagłówek karty (model + nazwa + marka), bez tabeli DOR/MBS/mm. */
+    private function productHeadline(string $text): string
+    {
+        $text = trim((string) preg_replace('/[\s,;]+/u', ' ', $text));
+        if (preg_match('/^(.{12,200}?)\s*:\s*[A-ZĄĆĘŁŃÓŚŹŻ(]/u', $text, $m) === 1) {
+            return trim($m[1], " \t-–·•");
+        }
+        $words = preg_split('/\s+/u', $text) ?: [];
+
+        return implode(' ', array_slice($words, 0, 12));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function modelNeedles(string $requirement): array
+    {
+        $norm = $this->assortment->normalize($this->unglueSpecLabels($requirement));
+        $out = [];
+        if (preg_match_all('/\b[a-z]{2,6}\s+\d{2,5}(?:\s+[a-z0-9]{1,6})?\b/u', $norm, $m) > 0) {
+            foreach ($m[0] as $raw) {
+                $token = trim((string) preg_replace('/\s+/u', ' ', $raw));
+                if ($token === '' || preg_match('/^(en|iso|pn|din|ce|ansi|typ|klasa|kat|dor|mbs|min|max)\b/u', $token) === 1) {
+                    continue;
+                }
+                $out[] = $token;
+                $compact = str_replace(' ', '', $token);
+                if ($compact !== $token) {
+                    $out[] = $compact;
+                }
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    private function mentionsModelCode(string $hay, string $requirement): bool
+    {
+        $needles = $this->modelNeedles($requirement);
+        if ($needles === []) {
+            return false;
+        }
+        $norm = $this->assortment->normalize($hay);
+        $compact = str_replace(' ', '', $norm);
+        foreach ($needles as $needle) {
+            if ($needle !== '' && (str_contains($norm, $needle) || str_contains($compact, str_replace(' ', '', $needle)))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -276,6 +339,9 @@ final class ExternalCatalogHintService
         if ($requirement !== '' && $this->mentionsRequiredProduct($hay, $requirement)) {
             $score += 35;
         }
+        if ($requirement !== '' && $this->mentionsModelCode($hay, $requirement)) {
+            $score += 50;
+        }
         $score += $this->filterType->coverageScore($requirement, $url.' '.$title);
 
         return $score;
@@ -328,6 +394,9 @@ final class ExternalCatalogHintService
     /** Gdy znamy towar (kombinezon…), wynik musi być o tym towarze — nie o samej substancji. */
     private function mentionsRequiredProduct(string $hay, string $requirement): bool
     {
+        if ($this->mentionsModelCode($hay, $requirement)) {
+            return true;
+        }
         $likes = $this->assortment->catalogNounLikes($requirement);
         if ($likes === []) {
             return true;

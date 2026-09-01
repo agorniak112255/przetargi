@@ -47,6 +47,7 @@ final class PpeAssortmentTest extends TestCase
             ['Kominiarka antyelektrostatyczna', PpeAssortment::FAMILY_HEAD],
             ['Wkładka/czepek ocieplana pod hełm ESD EN 1149-5', PpeAssortment::FAMILY_HEAD],
             ['Szelki bezpieczeństwa z linką', PpeAssortment::FAMILY_FALL],
+            ['RUP 502-U Ewakuacyjne urządzenie podnosząco-opuszczające PROTEKT', PpeAssortment::FAMILY_FALL],
             ['Nakolanniki żelowe', PpeAssortment::FAMILY_KNEE],
             ['Rękawice nitrylowe RNITZ', PpeAssortment::FAMILY_GLOVES],
             ['Trzewiki S3 ocieplane', PpeAssortment::FAMILY_FOOTWEAR],
