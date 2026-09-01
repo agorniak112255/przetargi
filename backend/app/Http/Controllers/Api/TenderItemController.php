@@ -13,7 +13,6 @@ use App\Services\ProductMatchService;
 use App\Services\TenderActivityLogger;
 use App\Services\TenderPricingService;
 use App\Services\TenderWorkflowService;
-use App\Support\OfferPricing;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -81,7 +80,7 @@ class TenderItemController extends Controller
             }
 
             $item->main_product_id = $product->id;
-            $item->offer_price = OfferPricing::fromPurchase($product->purchase_price);
+            $item->offer_price = $this->pricing->offerFromPurchase($tender, $product->purchase_price);
             $item->status = 'matched';
             $item->match_source = 'battlecard';
             $item->ai_match_percent = $pick['match_percent'];
@@ -275,7 +274,7 @@ class TenderItemController extends Controller
             if ($data['main_product_id'] !== null && ! array_key_exists('offer_price', $data)) {
                 $product = Product::query()->find($data['main_product_id']);
                 if ($product !== null && (float) $product->purchase_price > 0) {
-                    $item->offer_price = OfferPricing::fromPurchase($product->purchase_price);
+                    $item->offer_price = $this->pricing->offerFromPurchase($tender, $product->purchase_price);
                 }
                 if (! array_key_exists('ai_match_reasons', $data) && $product !== null) {
                     $explained = $this->matcher->explainMatch($item->requirement, $product);

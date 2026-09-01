@@ -72,8 +72,20 @@ export function productSelectLabel(p: { sku: string } & Named): string {
   return `${p.sku} · ${productDisplayName(p, 56)}`
 }
 
+/** Współczynnik narzutu z procentu marży przetargu (18 → 1.18). */
+export function offerMarkupFactor(percent: number | null | undefined, fallback = 1.18): number {
+  const p = Number(percent)
+  if (!Number.isFinite(p)) return fallback
+  const factor = 1 + p / 100
+  return factor > 0 ? factor : fallback
+}
+
 /** Sugerowana cena oferty = zakup × narzut (+18% domyślnie, jak config/pricing.php). */
-export function suggestedOfferPrice(purchase: number | null | undefined, markup = 1.18): number | null {
+export function suggestedOfferPrice(
+  purchase: number | null | undefined,
+  markup: number | null | undefined = 1.18,
+): number | null {
   if (purchase == null || Number.isNaN(Number(purchase)) || Number(purchase) <= 0) return null
-  return Math.round(Number(purchase) * markup * 100) / 100
+  const factor = markup == null || Number.isNaN(Number(markup)) || Number(markup) <= 0 ? 1.18 : Number(markup)
+  return Math.round(Number(purchase) * factor * 100) / 100
 }

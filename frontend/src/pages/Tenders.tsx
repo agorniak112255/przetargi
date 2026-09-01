@@ -16,6 +16,7 @@ export function Tenders() {
   const [title, setTitle] = useState('')
   const [clientId, setClientId] = useState('')
   const [deadline, setDeadline] = useState('')
+  const [margin, setMargin] = useState('18')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const seeAll = can(user, 'tenders.view_all')
@@ -46,10 +47,12 @@ export function Tenders() {
           title,
           client_id: Number(clientId),
           deadline: deadline || null,
+          target_margin_percent: Number(String(margin).replace(',', '.')) || 18,
         }),
       })
       setOpen(false)
       setTitle('')
+      setMargin('18')
       navigate(`/tenders/${t.id}`)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd tworzenia')
@@ -91,7 +94,7 @@ export function Tenders() {
         <form onSubmit={onCreate} className="mb-4 rounded-xl bg-white p-4 shadow-sm text-sm">
           <h2 className="mb-3 font-semibold">Nowy przetarg</h2>
           {err && <p className="mb-2 text-xs text-red-600">{err}</p>}
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-4">
             <label className="block text-xs">
               Tytuł
               <input
@@ -126,7 +129,23 @@ export function Tenders() {
                 onChange={(e) => setDeadline(e.target.value)}
               />
             </label>
+            <label className="block text-xs">
+              Marża %
+              <input
+                required
+                type="number"
+                min={0}
+                max={500}
+                step={0.1}
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                value={margin}
+                onChange={(e) => setMargin(e.target.value)}
+              />
+            </label>
           </div>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Cena oferty = zakup × (1 + marża%). Domyślnie 18%.
+          </p>
           <button
             type="submit"
             disabled={busy}

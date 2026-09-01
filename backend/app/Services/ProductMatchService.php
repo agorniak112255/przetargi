@@ -1327,7 +1327,10 @@ final class ProductMatchService
         $item->ai_match_reasons = $this->appendExternalHint($reasons, $this->lastExternalHint);
         $item->match_source = $source;
         $item->status = 'matched';
-        if ($item->offer_price === null) {
+        $item->loadMissing('tender');
+        if ($item->tender !== null) {
+            $item->offer_price = $this->pricing->offerFromPurchase($item->tender, $product->purchase_price);
+        } elseif ($item->offer_price === null) {
             $item->offer_price = OfferPricing::fromPurchase($product->purchase_price);
         }
         $item->save();

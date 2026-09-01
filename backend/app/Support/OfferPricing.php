@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace App\Support;
 
 /**
- * Proponowana cena oferty = zakup × narzut (domyślnie +18%).
+ * Proponowana cena oferty = zakup × (1 + marża%/100).
+ * Domyślnie +18% (config/pricing.php), albo marża docelowa przetargu.
  */
 final class OfferPricing
 {
@@ -16,12 +17,20 @@ final class OfferPricing
         return $m > 0 ? $m : 1.18;
     }
 
-    public static function markupPercent(): int
+    public static function markupPercent(): float
     {
-        return max(0, (int) config('pricing.offer_markup_percent', 18));
+        return max(0, (float) config('pricing.offer_markup_percent', 18));
     }
 
-    public static function fromPurchase(float|string|null $purchase): ?float
+    public static function factorFromPercent(?float $percent): float
+    {
+        $p = $percent ?? self::markupPercent();
+        $factor = 1 + ($p / 100);
+
+        return $factor > 0 ? $factor : 1.0;
+    }
+
+    public static function fromPurchase(float|string|null $purchase, ?float $markupPercent = null): ?float
     {
         if ($purchase === null || $purchase === '') {
             return null;
@@ -31,6 +40,23 @@ final class OfferPricing
             return null;
         }
 
-        return round($p * self::markup(), 2);
+        return round($p * self::factorFromPercent($markupPercent), 2);
+    }
+
+    /**
+     * Link zewnętrzny: stara cena × (nowy narzut / stary narzut).
+     */
+    public static function scaleByMarginChange(?float $price, float $oldPercent, float $newPercent): ?float
+    {
+        if ($price === null || $price <= 0) {
+            return $price;
+        }
+        $old = self::factorFromPercent($oldPercent);
+        $new = self::factorFromPercent($newPercent);
+        if ($old <= 0) {
+            return round($price * $new, 2);
+        }
+
+        return round($price * ($new / $old), 2);
     }
 }

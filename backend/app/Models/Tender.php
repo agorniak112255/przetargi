@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Support\OfferPricing;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -21,6 +22,7 @@ class Tender extends Model
         'ai_percent',
         'offer_value_net',
         'margin_percent',
+        'target_margin_percent',
         'last_activity_at',
     ];
 
@@ -31,7 +33,17 @@ class Tender extends Model
             'last_activity_at' => 'datetime',
             'offer_value_net' => 'decimal:2',
             'margin_percent' => 'decimal:2',
+            'target_margin_percent' => 'decimal:2',
         ];
+    }
+
+    public function targetMarkupPercent(): float
+    {
+        if ($this->target_margin_percent !== null) {
+            return (float) $this->target_margin_percent;
+        }
+
+        return OfferPricing::markupPercent();
     }
 
     public function client(): BelongsTo

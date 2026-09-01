@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { productDisplayName, suggestedOfferPrice } from '../lib/productLabel'
+import { ProductVerifyModal } from './ProductVerifyModal'
 
 export type BattlecardProduct = {
   role: string
@@ -63,16 +64,20 @@ function Col({
   p,
   clickable,
   selected,
-  onClick,
+  onSelect,
+  onPreview,
   cheaperBadge,
+  markupPercent = 18,
 }: {
   title: string
   tone: 'main' | 'sub'
   p: BattlecardProduct | null
   clickable?: boolean
   selected?: boolean
-  onClick?: () => void
+  onSelect?: () => void
+  onPreview?: () => void
   cheaperBadge?: string | null
+  markupPercent?: number
 }) {
   const tones = {
     main: 'border-emerald-200 bg-emerald-50/80',
@@ -88,10 +93,13 @@ function Col({
   }
   const purchase = p.purchase_price ?? p.catalog_price_net
   const offerHint =
-    p.offer_price ?? p.suggested_offer_price ?? suggestedOfferPrice(p.purchase_price)
+    p.offer_price ??
+    p.suggested_offer_price ??
+    suggestedOfferPrice(p.purchase_price, 1 + markupPercent / 100)
   const selectedRing = selected ? 'ring-2 ring-violet-400 ring-offset-1' : ''
-  const body = (
-    <>
+
+  return (
+    <div className={`rounded border px-2 py-1.5 ${tones[tone]} ${selectedRing}`}>
       <div className="flex items-center justify-between gap-1">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">{title}</span>
         <span className="flex items-center gap-1">
@@ -123,11 +131,11 @@ function Col({
         </p>
         <p
           className="text-[10px] text-emerald-800"
-          title="Cena w ofercie (zapisana lub proponowana: zakup + 18%)"
+          title={`Cena w ofercie (zapisana lub proponowana: zakup + ${markupPercent}%)`}
         >
           Oferta: {fmtPrice(offerHint)} zł
           {p.offer_price == null && offerHint != null ? (
-            <span className="text-slate-500"> (prop. +18%)</span>
+            <span className="text-slate-500"> (prop. +{markupPercent}%)</span>
           ) : null}
         </p>
       </div>
@@ -149,28 +157,27 @@ function Col({
           {p.approval_status ? ` · ${p.approval_status}` : ''}
         </p>
       ) : null}
-      {selected ? (
-        <p className="mt-1 text-[9px] font-semibold text-violet-700">Wybrane w ofercie</p>
-      ) : clickable ? (
-        <p className="mt-1 text-[9px] font-medium text-sky-700">Kliknij, aby wybrać do oferty</p>
-      ) : null}
-    </>
-  )
-
-  if (clickable && onClick) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className={`w-full rounded border px-2 py-1.5 text-left transition hover:border-sky-400 hover:bg-sky-100 ${tones[tone]} ${selectedRing}`}
-      >
-        {body}
-      </button>
-    )
-  }
-
-  return (
-    <div className={`rounded border px-2 py-1.5 ${tones[tone]} ${selectedRing}`}>{body}</div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        <button
+          type="button"
+          onClick={onPreview}
+          className="rounded border border-violet-400 bg-white px-1.5 py-0.5 text-[9px] font-medium text-violet-800 hover:bg-violet-100"
+        >
+          Opis
+        </button>
+        {selected ? (
+          <span className="text-[9px] font-semibold text-violet-700">Wybrane w ofercie</span>
+        ) : clickable && onSelect ? (
+          <button
+            type="button"
+            onClick={onSelect}
+            className="rounded bg-violet-600 px-1.5 py-0.5 text-[9px] font-medium text-white hover:bg-violet-700"
+          >
+            Wybierz
+          </button>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
@@ -250,6 +257,7 @@ function ConfirmSubstituteModal({
 export function ItemBattlecard({
   tenderId,
   itemId,
+  markupPercent = 18,
   enabled,
   canSelectSubstitute = false,
   selectedProductId = null,
@@ -257,6 +265,7 @@ export function ItemBattlecard({
 }: {
   tenderId: number
   itemId: number
+  markupPercent?: number
   enabled: boolean
   canSelectSubstitute?: boolean
   selectedProductId?: number | null
@@ -268,6 +277,7 @@ export function ItemBattlecard({
   const [card, setCard] = useState<Battlecard | null>(null)
   const [pending, setPending] = useState<BattlecardProduct | null>(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
+  const [describeId, setDescribeId] = useState<number | null>(null)
 
   function canPick(product: BattlecardProduct | null | undefined): boolean {
     return (
@@ -357,21 +367,30 @@ export function ItemBattlecard({
               <Col
                 title="Propozycja"
                 tone="main"
+                markupPercent={markupPercent}
                 p={card.ours}
                 selected={isSelected(card.ours)}
                 clickable={canPick(card.ours)}
-                onClick={() => {
+                onPreview={() => {
+                  if (card.ours) setDescribeId(card.ours.product_id)
+                }}
+                onSelect={() => {
                   if (card.ours) setPending(card.ours)
                 }}
               />
               <Col
                 title="Zamiennik 1"
                 tone="sub"
+                markupPercent={markupPercent}
                 p={card.substitutes[0] ?? null}
                 cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[0] ?? null)}
                 selected={isSelected(card.substitutes[0] ?? null)}
                 clickable={canPick(card.substitutes[0] ?? null)}
-                onClick={() => {
+                onPreview={() => {
+                  const s = card.substitutes[0]
+                  if (s) setDescribeId(s.product_id)
+                }}
+                onSelect={() => {
                   const s = card.substitutes[0]
                   if (s) setPending(s)
                 }}
@@ -379,11 +398,16 @@ export function ItemBattlecard({
               <Col
                 title="Zamiennik 2"
                 tone="sub"
+                markupPercent={markupPercent}
                 p={card.substitutes[1] ?? null}
                 cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[1] ?? null)}
                 selected={isSelected(card.substitutes[1] ?? null)}
                 clickable={canPick(card.substitutes[1] ?? null)}
-                onClick={() => {
+                onPreview={() => {
+                  const s = card.substitutes[1]
+                  if (s) setDescribeId(s.product_id)
+                }}
+                onSelect={() => {
                   const s = card.substitutes[1]
                   if (s) setPending(s)
                 }}
@@ -406,6 +430,11 @@ export function ItemBattlecard({
           onConfirm={() => void confirmSubstitute()}
         />
       )}
+      <ProductVerifyModal
+        productId={describeId}
+        query={card?.requirement.text ?? ''}
+        onClose={() => setDescribeId(null)}
+      />
     </details>
   )
 }

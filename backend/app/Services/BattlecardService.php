@@ -38,18 +38,20 @@ final class BattlecardService
      */
     public function forItem(TenderItem $item): array
     {
-        $item->loadMissing('mainProduct');
+        $item->loadMissing(['mainProduct', 'tender']);
         $ours = $item->mainProduct;
+        $markupPercent = $item->tender?->targetMarkupPercent();
         $excludeIds = [];
         if ($ours !== null) {
             $excludeIds[] = (int) $ours->id;
         }
 
-        $substitutes = $this->buildSubstitutes($ours, $excludeIds, $item->requirement);
+        $substitutes = $this->buildSubstitutes($ours, $excludeIds, $item->requirement, $markupPercent);
         $substitutes = $this->fillFromCatalog(
             $item->requirement,
             $substitutes,
             $excludeIds,
+            $markupPercent,
         );
         $substitutes = $this->sortSubstitutesCheapestFirst($substitutes);
 
@@ -65,6 +67,7 @@ final class BattlecardService
                 is_array($item->ai_match_reasons) ? $item->ai_match_reasons : [],
                 $item->match_source,
                 'ours',
+                $markupPercent,
             ),
             'substitutes' => array_slice($substitutes, 0, self::SUBSTITUTE_LIMIT),
             'competitors' => [],
@@ -80,7 +83,7 @@ final class BattlecardService
      * @param  list<int>  $excludeIds
      * @return list<array<string, mixed>>
      */
-    private function buildSubstitutes(?Product $ours, array &$excludeIds, string $requirement): array
+    private function buildSubstitutes(?Product $ours, array &$excludeIds, string $requirement, ?float $markupPercent): array
     {
         if ($ours === null) {
             return [];
@@ -110,6 +113,7 @@ final class BattlecardService
                 [],
                 null,
                 'substitute',
+                $markupPercent,
             );
             $snap['substitute_type'] = $row->type;
             $snap['approval_status'] = $row->approval_status;
@@ -128,7 +132,7 @@ final class BattlecardService
      * @param  list<int>  $excludeIds
      * @return list<array<string, mixed>>
      */
-    private function fillFromCatalog(string $requirement, array $existing, array $excludeIds): array
+    private function fillFromCatalog(string $requirement, array $existing, array $excludeIds, ?float $markupPercent): array
     {
         $need = self::SUBSTITUTE_LIMIT - count($existing);
         if ($need <= 0 || trim($requirement) === '') {
@@ -151,7 +155,7 @@ final class BattlecardService
             }
             /** @var Product $p */
             $p = $row['product'];
-            $snap = $this->productSnapshot($p, $row['score'], null, [], null, 'substitute');
+            $snap = $this->productSnapshot($p, $row['score'], null, [], null, 'substitute', $markupPercent);
             $snap['source'] = 'catalog';
             $snap['substitute_type'] = 'katalog';
             $existing[] = $snap;
@@ -174,6 +178,7 @@ final class BattlecardService
         array $reasons,
         ?string $matchSource,
         string $role,
+        ?float $markupPercent = null,
     ): array {
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         $attrs = $this->bhpAttributes->forProduct($product);
@@ -201,7 +206,7 @@ final class BattlecardService
             'purchase_price' => $product->purchase_price !== null
                 ? (float) $product->purchase_price
                 : null,
-            'suggested_offer_price' => OfferPricing::fromPurchase($product->purchase_price),
+            'suggested_offer_price' => OfferPricing::fromPurchase($product->purchase_price, $markupPercent),
             'stock' => (int) ($product->stock ?? 0),
             'match_percent' => $matchPercent,
             'match_source' => $matchSource,

@@ -10,7 +10,6 @@ use App\Models\TenderCondition;
 use App\Models\TenderDocument;
 use App\Models\TenderItem;
 use App\Models\User;
-use App\Support\OfferPricing;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -295,7 +294,7 @@ final class TenderDocumentImportService
                         'status' => $product ? 'matched' : 'brak',
                     ]);
                     if ($item->offer_price === null && $product !== null) {
-                        $item->offer_price = OfferPricing::fromPurchase($product->purchase_price);
+                        $item->offer_price = $this->pricing->offerFromPurchase($tender, $product->purchase_price);
                     }
                     $item->save();
                     $this->pricing->recalculateItemMargin($item);

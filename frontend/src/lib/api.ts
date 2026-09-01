@@ -66,6 +66,7 @@ export type Tender = {
   ai_percent: number
   offer_value_net: string | null
   margin_percent: string | null
+  target_margin_percent: string | number | null
   deadline: string | null
   last_activity_at: string | null
   items_count?: number

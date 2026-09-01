@@ -9,6 +9,7 @@ type MiniProduct = {
   name: string
   manufacturer?: string | null
   description?: string | null
+  purchase_price?: string | number | null
 }
 
 type Props = {

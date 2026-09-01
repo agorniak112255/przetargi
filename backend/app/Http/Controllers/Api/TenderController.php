@@ -11,9 +11,12 @@ use App\Models\TenderItem;
 use App\Services\ProductMatchService;
 use App\Services\TenderActivityLogger;
 use App\Services\TenderCoverageService;
+use App\Services\TenderPricingService;
 use App\Services\TenderWorkflowService;
+use App\Support\OfferPricing;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class TenderController extends Controller
 {
@@ -22,6 +25,7 @@ class TenderController extends Controller
         private readonly TenderCoverageService $coverage,
         private readonly TenderActivityLogger $activities,
         private readonly ProductMatchService $matcher,
+        private readonly TenderPricingService $pricing,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -74,6 +78,7 @@ class TenderController extends Controller
             'deadline' => ['nullable', 'date'],
             'owner_id' => ['nullable', 'integer', 'exists:users,id'],
             'number' => ['nullable', 'string', 'max:50', 'unique:tenders,number'],
+            'target_margin_percent' => ['sometimes', 'numeric', 'min:0', 'max:500'],
         ]);
 
         $year = (int) now()->format('Y');
@@ -88,6 +93,7 @@ class TenderController extends Controller
             'deadline' => $data['deadline'] ?? null,
             'status' => 'draft',
             'ai_percent' => 0,
+            'target_margin_percent' => $data['target_margin_percent'] ?? OfferPricing::markupPercent(),
             'last_activity_at' => now(),
         ]);
 
@@ -108,6 +114,7 @@ class TenderController extends Controller
             'deadline' => ['sometimes', 'nullable', 'date'],
             'owner_id' => ['sometimes', 'nullable', 'integer', 'exists:users,id'],
             'client_id' => ['sometimes', 'integer', 'exists:clients,id'],
+            'target_margin_percent' => ['sometimes', 'numeric', 'min:0', 'max:500'],
         ]);
 
         $before = [
@@ -115,6 +122,7 @@ class TenderController extends Controller
             'deadline' => $tender->deadline?->format('Y-m-d'),
             'owner_id' => $tender->owner_id,
             'client_id' => $tender->client_id,
+            'target_margin_percent' => $tender->target_margin_percent,
         ];
 
         if (array_key_exists('title', $data)) {
@@ -130,8 +138,28 @@ class TenderController extends Controller
             $tender->client_id = $data['client_id'];
         }
 
+        $oldTarget = $tender->targetMarkupPercent();
+        $reprice = false;
+        if (array_key_exists('target_margin_percent', $data)) {
+            if (! $this->workflow->canEditOffer($tender)) {
+                throw ValidationException::withMessages([
+                    'tender' => ['Oferta zablokowana — status: '.$tender->status],
+                ]);
+            }
+            $tender->target_margin_percent = $data['target_margin_percent'];
+            $reprice = abs($oldTarget - (float) $data['target_margin_percent']) >= 0.0001;
+        }
+
         $tender->last_activity_at = now();
         $tender->save();
+
+        if ($reprice) {
+            $this->pricing->applyTargetMarginChange(
+                $tender,
+                $oldTarget,
+                (float) $tender->target_margin_percent,
+            );
+        }
 
         $this->activities->log($tender, 'updated', $request->user(), null, [
             'before' => $before,
@@ -140,6 +168,7 @@ class TenderController extends Controller
                 'deadline' => $tender->deadline?->format('Y-m-d'),
                 'owner_id' => $tender->owner_id,
                 'client_id' => $tender->client_id,
+                'target_margin_percent' => $tender->target_margin_percent,
             ],
         ]);
 

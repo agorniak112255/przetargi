@@ -55,7 +55,10 @@ final class TenderOfferExportService
                 'quantity' => (int) $item->quantity,
                 'purchase_price' => $purchase,
                 'offer_price' => $offer,
-                'suggested_offer_price' => OfferPricing::fromPurchase($purchase),
+                'suggested_offer_price' => OfferPricing::fromPurchase(
+                    $purchase,
+                    $tender->targetMarkupPercent(),
+                ),
                 'margin_percent' => $item->margin_percent !== null ? (float) $item->margin_percent : null,
                 'line_value' => $line,
                 'match_percent' => $item->ai_match_percent !== null ? (int) $item->ai_match_percent : null,

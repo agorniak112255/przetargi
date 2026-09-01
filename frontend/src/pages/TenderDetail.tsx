@@ -7,7 +7,7 @@ import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
-import { productDisplayName } from '../lib/productLabel'
+import { offerMarkupFactor, productDisplayName, suggestedOfferPrice } from '../lib/productLabel'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -483,6 +483,7 @@ export function TenderDetail() {
   const [commentBody, setCommentBody] = useState('')
   const [commentItemId, setCommentItemId] = useState('')
   const [deadlineEdit, setDeadlineEdit] = useState('')
+  const [marginEdit, setMarginEdit] = useState('18')
   const [cheaperPreview, setCheaperPreview] = useState<{
     candidates: Array<{
       item_id: number
@@ -504,6 +505,11 @@ export function TenderDetail() {
     const d = await api<Detail>(`/tenders/${id}`)
     setData(d)
     setDeadlineEdit(d.tender.deadline ? d.tender.deadline.slice(0, 10) : '')
+    setMarginEdit(
+      d.tender.target_margin_percent != null && d.tender.target_margin_percent !== ''
+        ? String(d.tender.target_margin_percent)
+        : '18',
+    )
     return d
   }, [id])
 
@@ -997,6 +1003,29 @@ export function TenderDetail() {
     }
   }
 
+  async function saveTargetMargin() {
+    const next = Number(String(marginEdit).replace(',', '.'))
+    if (!Number.isFinite(next) || next < 0 || next > 500) {
+      setErr('Marża musi być liczbą od 0 do 500.')
+      return
+    }
+    setBusy(true)
+    setErr('')
+    try {
+      await api(`/tenders/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ target_margin_percent: next }),
+      })
+      await load()
+      await loadMeta()
+      setMsg('Zapisano marżę — ceny pozycji przeliczone.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd zapisu marży')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function addComment() {
     if (commentBody.trim().length < 2) return
     setBusy(true)
@@ -1270,8 +1299,9 @@ export function TenderDetail() {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-slate-500">
           {tender.client?.name} · opiekun {tender.owner?.name ?? '—'} ·{' '}
-          <strong>{statusLabel[tender.status] ?? tender.status}</strong> · AI {tender.ai_percent}% · marża{' '}
-          {tender.margin_percent}% · {can_edit ? 'edycja włączona' : 'tylko podgląd'}
+          <strong>{statusLabel[tender.status] ?? tender.status}</strong> · AI {tender.ai_percent}% · narzut{' '}
+          {tender.target_margin_percent ?? 18}% · marża zreal. {tender.margin_percent ?? '—'}% ·{' '}
+          {can_edit ? 'edycja włączona' : 'tylko podgląd'}
         </p>
         <div className="flex flex-wrap gap-1">
           {can_edit && (
@@ -1553,6 +1583,31 @@ export function TenderDetail() {
         >
           Zapisz termin
         </button>
+        <label>
+          Marża oferty %
+          <input
+            type="number"
+            min={0}
+            max={500}
+            step={0.1}
+            disabled={!can_edit || busy}
+            className="mt-1 block w-24 rounded border border-slate-300 px-2 py-1 disabled:bg-slate-50"
+            value={marginEdit}
+            onChange={(e) => setMarginEdit(e.target.value)}
+            title="Cena katalogowa = zakup × (1 + marża%). Linki zewnętrzne skalowane współczynnikiem zmiany."
+          />
+        </label>
+        {can_edit && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void saveTargetMargin()}
+            className="rounded bg-violet-700 px-3 py-1.5 text-white disabled:opacity-50"
+            title="Przelicza ceny z katalogu i skaluje linki zewnętrzne"
+          >
+            Zapisz marżę
+          </button>
+        )}
         {tender.deadline &&
           new Date(tender.deadline) <= new Date(Date.now() + 7 * 86400000) &&
           new Date(tender.deadline) >= new Date(new Date().toDateString()) && (
@@ -1686,6 +1741,7 @@ export function TenderDetail() {
                   <ItemRow
                     key={item.id}
                     tenderId={Number(id)}
+                    targetMarginPercent={Number(tender.target_margin_percent ?? 18)}
                     item={item}
                     products={products}
                     canEdit={can_edit}
@@ -2288,7 +2344,7 @@ export function TenderDetail() {
                 ? `${Number(tender.offer_value_net).toLocaleString('pl-PL')} zł`
                 : '—'}
             </strong>{' '}
-            · marża {tender.margin_percent}%
+            · narzut {tender.target_margin_percent ?? 18}% · marża zreal. {tender.margin_percent ?? '—'}%
           </p>
         </div>
       )}
@@ -2585,6 +2641,7 @@ export function TenderDetail() {
 
 function ItemRow({
   tenderId,
+  targetMarginPercent,
   item,
   products,
   canEdit,
@@ -2598,6 +2655,7 @@ function ItemRow({
   onComment,
 }: {
   tenderId: number
+  targetMarginPercent: number
   item: Item
   products: Product[]
   canEdit: boolean
@@ -2680,6 +2738,12 @@ function ItemRow({
     selectedProduct || productId || (item.custom_name ?? '').trim(),
   )
   const isExternal = isExternalOfferItem(item, productId)
+  const markup = offerMarkupFactor(targetMarginPercent)
+
+  function applyCatalogPrice(purchase: string | number | null | undefined) {
+    const next = suggestedOfferPrice(purchase == null || purchase === '' ? null : Number(purchase), markup)
+    if (next != null) setPrice(next.toFixed(2))
+  }
 
   return (
     <>
@@ -2731,6 +2795,7 @@ function ItemRow({
                   if (id) {
                     setCustomName('')
                     setCustomUrl('')
+                    applyCatalogPrice(product?.purchase_price ?? null)
                   }
                 }}
                 hint={
@@ -2788,12 +2853,12 @@ function ItemRow({
                 setCustomName('')
                 setCustomUrl('')
                 setAiModalOpen(false)
+                applyCatalogPrice(p.purchase_price)
                 void onSave(item.id, {
                   main_product_id: p.id,
                   custom_name: null,
                   custom_url: null,
                   quantity: Number(qty) || 1,
-                  offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
                   ai_match_percent: p.score,
                   match_source: 'ai',
                   ai_match_reasons: [
@@ -2906,11 +2971,13 @@ function ItemRow({
             <ItemBattlecard
               tenderId={tenderId}
               itemId={item.id}
+              markupPercent={targetMarginPercent}
               enabled={Boolean(item.main_product_id ?? item.main_product?.id)}
               canSelectSubstitute
               selectedProductId={item.main_product_id ?? item.main_product?.id ?? null}
-              onSelectSubstitute={(p: BattlecardProduct) =>
-                onSave(item.id, {
+              onSelectSubstitute={(p: BattlecardProduct) => {
+                applyCatalogPrice(p.purchase_price)
+                return onSave(item.id, {
                   main_product_id: p.product_id,
                   quantity: Number(qty) || 1,
                   ai_match_percent: p.match_percent,
@@ -2923,7 +2990,7 @@ function ItemRow({
                     },
                   ],
                 })
-              }
+              }}
             />
           </div>
         ) : (
@@ -2968,6 +3035,7 @@ function ItemRow({
               <ItemBattlecard
                 tenderId={tenderId}
                 itemId={item.id}
+                markupPercent={targetMarginPercent}
                 enabled={Boolean(item.main_product)}
               />
             </div>
@@ -3051,8 +3119,8 @@ function ItemRow({
         }`}
         title={
           item.margin_percent != null && Number(item.margin_percent) < 0
-            ? 'Ujemna marża — cena oferty poniżej zakupu (po upuście). Proponowany narzut: +18%.'
-            : 'Marża = (oferta − zakup) / oferta'
+            ? `Ujemna marża — cena oferty poniżej zakupu (po upuście). Narzut przetargu: +${targetMarginPercent}%.`
+            : 'Marża zreal. = (oferta − zakup) / oferta'
         }
       >
         {item.margin_percent ?? '—'}%
