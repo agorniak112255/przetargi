@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use App\Services\PriceListImportService;
 use App\Services\SpreadsheetMappingHeuristic;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
@@ -130,10 +131,11 @@ final class SpreadsheetMappingHeuristicTest extends TestCase
     {
         $path = $this->writeSheet('Industrial  ', [
             ['Line1', '#REF!', '#REF!'],
-            ['Line2', 'Category/Type', '#REF!', '#REF!', '#REF!', '#REF!', '#REF!', '#REF!', 'Box Price (€/pc.)', '#REF!', 'Price (€/pc.)'],
-            ['TS CHF5 S WH DE', 'Cat. III', 'TS CHF5 S WH DE', '', '#REF!', 'D14886039', 'S', '100', '#REF!', '1600', '3.06'],
-            ['TS CHF5 S WH DE', '', '', '', '#REF!', 'D14886047', 'M', '100', '#REF!', '1600', '3.06'],
-            ['TS CHF5 S WH DE', '', '', '', '', 'D14886050', 'L', '100', '#REF!', '1600', '3.06'],
+            ['Line2', 'Category/Type', '#REF!', '#REF!', '#REF!', '#REF!', '#REF!', '#REF!', 'Box Price (€/pc.)', '#REF!', 'Price (€/pc.)', '', '', '', '', '', '', '', '', '', 'Price Lists', 'Column1'],
+            ['Line3', '#REF!', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'SuperPartnerSpecialistEUR', 'Price (€/pc.)  Min. 5000€'],
+            ['TS CHF5 S WH DE', 'Cat. III', 'TS CHF5 S WH DE', '', '#REF!', 'D14886039', 'S', '100', '#REF!', '1600', '3.06', '', '', '', '', '', '', '', '', '', 'SuperPartnerGeneralistEUR', 'Price (€/pc.)  Min. 5000€'],
+            ['TS CHF5 S WH DE', '', '', '', '#REF!', 'D14886047', 'M', '100', '#REF!', '1600', '3.06', '', '', '', '', '', '', '', '', '', 'CoreSpecialistEUR', 'Price (€/pc.)  Min. 5000€'],
+            ['TS CHF5 S WH DE', '', '', '', '', 'D14886050', 'L', '100', '#REF!', '1600', '3.06', '', '', '', '', '', '', '', '', '', 'CoreGeneralistEUR', 'Price (€/pc.)  Min. 5000€'],
         ]);
         try {
             $mapping = (new SpreadsheetMappingHeuristic)->detect($path);
@@ -141,7 +143,42 @@ final class SpreadsheetMappingHeuristicTest extends TestCase
             $cols = $mapping['sheets'][0]['columns'];
             $this->assertSame(10, $cols['catalog_price']);
             $this->assertSame(5, $cols['sku']);
+            $this->assertSame(0, $cols['model_key']);
+            $this->assertSame(0, $cols['name'], 'nazwa = Reference, nie kolumna cennika');
+            $this->assertSame(6, $cols['packaging']);
+            $this->assertSame(7, $cols['pack_qty']);
+            $this->assertNotSame(21, $cols['name']);
             $this->assertNotSame(6, $cols['name']);
+
+            $preview = app(PriceListImportService::class)->previewFromMapping($path, $mapping, 20);
+            $this->assertSame(1, $preview['products_found']);
+            $this->assertSame('TS CHF5 S WH DE', $preview['products'][0]['sku']);
+            $this->assertSame('TS CHF5 S WH DE', $preview['products'][0]['name']);
+            $this->assertEqualsWithDelta(3.06, (float) $preview['products'][0]['catalog_price_net'], 0.001);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_dupont_sparse_reference_still_maps_model_key(): void
+    {
+        $path = $this->writeSheet('Controlled Environment  ', [
+            ['Line2', '#REF!', '#REF!', '#REF!', '#REF!', '#REF!', '#REF!', '#REF!', "Price\n(€/pc.)"],
+            ['Line3', '#REF!'],
+            ['IC 270 B WH 0B', 'Cat III. PB [6]', 'IC 270 B WH 0B', '', '#REF!', 'D15535577', 'S', '30', '4.60'],
+            ['', '', '', '', '#REF!', 'D15535578', 'M', '30', '4.60'],
+            ['', '', '', '', '', 'D15535579', 'L', '30', '4.60'],
+            ['IC 451 S WH 00', 'Cat III. PB [6]', 'IC 451 S WH 00', '', '#REF!', 'D15531633', 'M', '100', '0.84'],
+            ['', '', '', '', '', 'D15531634', 'L', '100', '0.84'],
+        ]);
+        try {
+            $mapping = (new SpreadsheetMappingHeuristic)->detect($path);
+            $this->assertNotNull($mapping);
+            $cols = $mapping['sheets'][0]['columns'];
+            $this->assertSame(8, $cols['catalog_price']);
+            $this->assertSame(5, $cols['sku']);
+            $this->assertSame(0, $cols['model_key']);
+            $this->assertSame(0, $cols['name']);
         } finally {
             @unlink($path);
         }

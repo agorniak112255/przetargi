@@ -151,6 +151,15 @@ final class SpreadsheetMappingHeuristic
             if ($score < 5 || $cols['catalog_price'] === null) {
                 continue;
             }
+            if ($cols['model_key'] === null) {
+                $cols['model_key'] = $this->inferModelKeyFromData($grid, $excelRow, $cols);
+            }
+            if ($cols['packaging'] === null) {
+                $cols['packaging'] = $this->inferSizeFromData($grid, $excelRow, $cols);
+            }
+            if ($cols['pack_qty'] === null) {
+                $cols['pack_qty'] = $this->inferPackQtyFromData($grid, $excelRow, $cols);
+            }
             if ($cols['name'] === null || $cols['name'] === $cols['catalog_price']) {
                 $cols['name'] = $this->resolveNameCol($labels, $cols);
             }
@@ -159,6 +168,11 @@ final class SpreadsheetMappingHeuristic
                 if ($inferredName !== null) {
                     $cols['name'] = $inferredName;
                 }
+            }
+            if ($cols['name'] === $cols['sku']
+                || $this->nameColUnusable($grid, $excelRow, $cols['name'], $cols['catalog_price'])
+            ) {
+                $cols['name'] = $cols['model_key'] ?? $cols['sku'];
             }
 
             if ($score > $bestScore) {
@@ -448,7 +462,11 @@ final class SpreadsheetMappingHeuristic
             || $label === 'size'
             || str_contains($label, 'rozmiar')
             || $label === 'mj'
-            || $label === 'unit';
+            || $label === 'unit'
+            || preg_match('/^column\s*\d+$/', $label) === 1
+            || str_contains($label, '€/pc')
+            || str_contains($label, '£/pc')
+            || str_contains($label, 'price lists');
     }
 
     /**
@@ -541,7 +559,10 @@ final class SpreadsheetMappingHeuristic
                     continue;
                 }
                 $raw = trim((string) ($cells[$i] ?? ''));
-                if (mb_strlen($raw) < 8 || $this->looksLikeMoney($raw)) {
+                if (mb_strlen($raw) < 8 || $this->looksLikeMoney($raw) || $this->looksLikePriceHeaderText($raw)) {
+                    continue;
+                }
+                if ($this->looksLikeCategoryValue($raw)) {
                     continue;
                 }
                 $lens[] = mb_strlen($raw);
@@ -560,6 +581,262 @@ final class SpreadsheetMappingHeuristic
         }
 
         return $bestAvg >= 12.0 ? $best : null;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     * @param  array<string, int|null>  $cols
+     */
+    private function inferModelKeyFromData(array $grid, int $headerRow, array $cols): ?int
+    {
+        $skip = $this->skipCols($cols);
+        $width = $this->gridWidth($grid);
+        $best = null;
+        $bestScore = 0.0;
+        for ($i = 0; $i < $width; $i++) {
+            if (in_array($i, $skip, true)) {
+                continue;
+            }
+            $priced = 0;
+            $filled = 0;
+            $uniq = [];
+            foreach ($grid as $r => $cells) {
+                if ($r <= $headerRow) {
+                    continue;
+                }
+                $priceIdx = $cols['catalog_price'];
+                if ($priceIdx !== null && ! $this->looksLikeMoney(trim((string) ($cells[$priceIdx] ?? '')))) {
+                    continue;
+                }
+                $priced++;
+                $raw = trim((string) ($cells[$i] ?? ''));
+                if (! $this->looksLikeModelCode($raw)) {
+                    continue;
+                }
+                $filled++;
+                $uniq[$raw] = true;
+                if ($priced >= 40) {
+                    break;
+                }
+            }
+            if ($filled < 2) {
+                continue;
+            }
+            // Reference bywa tylko w 1. wierszu modelu (kolejne rozmiary puste)
+            $score = $filled + (count($uniq) * 3) + min(20.0, ($filled / $priced) * 20);
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = $i;
+            }
+        }
+
+        return $bestScore >= 5.0 ? $best : null;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     * @param  array<string, int|null>  $cols
+     */
+    private function inferSizeFromData(array $grid, int $headerRow, array $cols): ?int
+    {
+        $skip = $this->skipCols($cols);
+        $width = $this->gridWidth($grid);
+        $best = null;
+        $bestRate = 0.0;
+        for ($i = 0; $i < $width; $i++) {
+            if (in_array($i, $skip, true)) {
+                continue;
+            }
+            $priced = 0;
+            $sizes = 0;
+            foreach ($grid as $r => $cells) {
+                if ($r <= $headerRow) {
+                    continue;
+                }
+                $priceIdx = $cols['catalog_price'];
+                if ($priceIdx !== null && ! $this->looksLikeMoney(trim((string) ($cells[$priceIdx] ?? '')))) {
+                    continue;
+                }
+                $priced++;
+                if ($this->looksLikeSizeToken(trim((string) ($cells[$i] ?? '')))) {
+                    $sizes++;
+                }
+                if ($priced >= 40) {
+                    break;
+                }
+            }
+            if ($priced < 2) {
+                continue;
+            }
+            $rate = $sizes / $priced;
+            if ($rate > $bestRate) {
+                $bestRate = $rate;
+                $best = $i;
+            }
+        }
+
+        return $bestRate >= 0.5 ? $best : null;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     * @param  array<string, int|null>  $cols
+     */
+    private function inferPackQtyFromData(array $grid, int $headerRow, array $cols): ?int
+    {
+        $skip = $this->skipCols($cols);
+        $width = $this->gridWidth($grid);
+        $best = null;
+        $bestRate = 0.0;
+        for ($i = 0; $i < $width; $i++) {
+            if (in_array($i, $skip, true)) {
+                continue;
+            }
+            $priced = 0;
+            $qty = 0;
+            foreach ($grid as $r => $cells) {
+                if ($r <= $headerRow) {
+                    continue;
+                }
+                $priceIdx = $cols['catalog_price'];
+                if ($priceIdx !== null && ! $this->looksLikeMoney(trim((string) ($cells[$priceIdx] ?? '')))) {
+                    continue;
+                }
+                $priced++;
+                $raw = trim((string) ($cells[$i] ?? ''));
+                if (preg_match('/^\d{1,4}$/', $raw) === 1) {
+                    $n = (int) $raw;
+                    if ($n >= 1 && $n <= 2000) {
+                        $qty++;
+                    }
+                }
+                if ($priced >= 40) {
+                    break;
+                }
+            }
+            if ($priced < 2) {
+                continue;
+            }
+            $rate = $qty / $priced;
+            if ($rate > $bestRate) {
+                $bestRate = $rate;
+                $best = $i;
+            }
+        }
+
+        return $bestRate >= 0.6 ? $best : null;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     */
+    private function nameColUnusable(array $grid, int $headerRow, ?int $nameIdx, ?int $priceIdx): bool
+    {
+        if ($nameIdx === null) {
+            return true;
+        }
+        $ok = 0;
+        $bad = 0;
+        foreach ($grid as $r => $cells) {
+            if ($r <= $headerRow) {
+                continue;
+            }
+            if ($priceIdx !== null && ! $this->looksLikeMoney(trim((string) ($cells[$priceIdx] ?? '')))) {
+                continue;
+            }
+            $raw = trim((string) ($cells[$nameIdx] ?? ''));
+            if ($raw === '' || $this->looksLikeMoney($raw) || $this->looksLikePriceHeaderText($raw) || $this->looksLikeCategoryValue($raw)) {
+                $bad++;
+            } else {
+                $ok++;
+            }
+            if (($ok + $bad) >= 20) {
+                break;
+            }
+        }
+
+        return $ok === 0 || $bad > $ok;
+    }
+
+    /**
+     * @param  array<string, int|null>  $cols
+     * @return list<int>
+     */
+    private function skipCols(array $cols): array
+    {
+        $skip = [];
+        foreach (['sku', 'sku_alt', 'name', 'ean', 'purchase', 'discount', 'catalog_price', 'model_key', 'packaging', 'pack_qty', 'currency', 'category'] as $key) {
+            if (($cols[$key] ?? null) !== null) {
+                $skip[] = $cols[$key];
+            }
+        }
+
+        return $skip;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     */
+    private function gridWidth(array $grid): int
+    {
+        $width = 0;
+        foreach ($grid as $cells) {
+            $width = max($width, count($cells));
+        }
+
+        return $width;
+    }
+
+    private function looksLikeModelCode(string $value): bool
+    {
+        if (mb_strlen($value) < 6 || mb_strlen($value) > 48) {
+            return false;
+        }
+        if ($this->looksLikeMoney($value) || $this->looksLikePriceHeaderText($value)) {
+            return false;
+        }
+        if (preg_match('/^D\d{6,}\*?$/i', $value) === 1) {
+            return false;
+        }
+        if (preg_match('/[A-Za-z]/', $value) !== 1 || preg_match('/\d/', $value) !== 1) {
+            return false;
+        }
+
+        return preg_match('/^[A-Z0-9][A-Z0-9 .\-\/]{4,}$/i', $value) === 1;
+    }
+
+    private function looksLikeSizeToken(string $value): bool
+    {
+        $pack = strtoupper(trim($value));
+
+        return preg_match('/^(XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|[2-6]XL|ONE\s*SIZE|ONESIZE)$/', $pack) === 1;
+    }
+
+    private function looksLikePriceHeaderText(string $value): bool
+    {
+        $l = mb_strtolower(trim($value));
+        if ($l === '') {
+            return false;
+        }
+
+        return preg_match('/^column\s*\d+$/', $l) === 1
+            || str_contains($l, '€/pc')
+            || str_contains($l, '£/pc')
+            || str_contains($l, 'price lists')
+            || (str_contains($l, 'price') && (str_contains($l, 'min.') || str_contains($l, 'min ')))
+            || str_contains($l, 'superpartner')
+            || str_contains($l, 'coregeneralist')
+            || str_contains($l, 'corespecialist');
+    }
+
+    private function looksLikeCategoryValue(string $value): bool
+    {
+        $l = mb_strtolower(trim($value));
+
+        return preg_match('/^cat\.?\s*(iii|ii|i|\d)/i', $l) === 1
+            || preg_match('/^type\s*\d/i', $l) === 1
+            || str_starts_with($l, 'cat. iii')
+            || str_starts_with($l, 'cat iii');
     }
 
     private function looksLikeMoney(string $value): bool

@@ -24,6 +24,7 @@ final class PriceListImportService
         private readonly ProductSizeVariant $sizes,
         private readonly SpreadsheetColumnMapper $columnMapper,
         private readonly ProductSpecialPriceImporter $specialPrices,
+        private readonly SpreadsheetCellReader $cells,
     ) {}
 
     /**
@@ -43,7 +44,7 @@ final class PriceListImportService
             return $this->emptyResult('Nie można odczytać pliku.');
         }
 
-        $rows = IOFactory::load($path)->getActiveSheet()->toArray(null, true, true, false);
+        $rows = $this->cells->toRows(IOFactory::load($path)->getActiveSheet());
         if ($rows === []) {
             return $this->emptyResult('Plik jest pusty.');
         }
@@ -666,7 +667,7 @@ final class PriceListImportService
             $headerExcelRow = max(1, (int) ($sheetMap['header_excel_row'] ?? $sheetMap['header_row'] ?? 1));
             $headerIdx = $headerExcelRow - 1;
             $repeating = (bool) ($sheetMap['repeating_headers'] ?? false);
-            $all = $sheet->toArray(null, true, true, false);
+            $all = $this->cells->toRows($sheet);
             $headerLabels = $this->headerLabels($all, $headerIdx, $map);
             $sheetDefaultCurrency = $this->currencyDetector->normalize(
                 is_string($mapping['currency'] ?? null) ? $mapping['currency'] : null,
@@ -1051,6 +1052,9 @@ final class PriceListImportService
             $sku = $this->normalizeSku((string) ($row[$map['sku_alt']] ?? ''));
         }
         $rawName = trim((string) ($row[$map['name']] ?? ''));
+        if ($this->looksLikeNonProductName($rawName)) {
+            $rawName = '';
+        }
         $priceRaw = $row[$map['catalog_price']] ?? null;
 
         $groupKey = $this->resolveGroupKey($row, $map, $carry);
@@ -1103,6 +1107,9 @@ final class PriceListImportService
             return ['status' => 'skip'];
         }
 
+        if ($name === '' && $modelForProduct !== null && $modelForProduct !== '') {
+            $name = $modelForProduct;
+        }
         if ($name === '') {
             return [
                 'status' => 'error',
@@ -1226,11 +1233,25 @@ final class PriceListImportService
         ];
     }
 
+    private function looksLikeNonProductName(string $name): bool
+    {
+        $l = mb_strtolower(trim($name));
+        if ($l === '') {
+            return false;
+        }
+
+        return preg_match('/^column\s*\d+$/', $l) === 1
+            || str_contains($l, '€/pc')
+            || str_contains($l, '£/pc')
+            || (str_contains($l, 'price') && (str_contains($l, 'min.') || str_contains($l, 'min ')));
+    }
+
     private function normalizeSku(string $value): string
     {
         $sku = trim($value);
+        $sku = ltrim($sku, '=');
         $upper = strtoupper($sku);
-        if ($sku === '' || in_array($upper, ['#N/A', 'N/A', 'NA', 'N.A.', '.', '-', '#REF!', '#VALUE!'], true)) {
+        if ($sku === '' || in_array($upper, ['#N/A', 'N/A', 'NA', 'N.A.', '.', '-', '#REF!', '#VALUE!', '#NAME?'], true)) {
             return '';
         }
         // DuPont i podobne: „D13495380*” / „M*” — gwiazdka = made-to-order
