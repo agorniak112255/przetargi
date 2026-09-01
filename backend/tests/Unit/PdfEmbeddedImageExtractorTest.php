@@ -27,6 +27,36 @@ final class PdfEmbeddedImageExtractorTest extends TestCase
         }
     }
 
+    public function test_extracts_jpeg_wrapped_in_flate_dct_filter(): void
+    {
+        $jpeg = $this->tinyJpeg();
+        $path = $this->writeFlateDctImagePdf($jpeg);
+
+        try {
+            $images = (new PdfEmbeddedImageExtractor)->extract($path);
+            $this->assertCount(1, $images);
+            $this->assertSame('image/jpeg', $images[0]['mime']);
+            $this->assertSame($jpeg, $images[0]['bytes']);
+            $this->assertSame('Strona 1', $images[0]['label']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_maskpol_scan_has_one_flate_dct_page(): void
+    {
+        $path = 'c:/xampp/htdocs/Przetargi/Cenniki/2026/Maskpol/Cennik BHP nowe produkty.pdf';
+        if (! is_file($path)) {
+            $this->markTestSkipped('Brak lokalnego cennika Maskpol');
+        }
+
+        $images = (new PdfEmbeddedImageExtractor)->extract($path, 4, 'pages');
+        $this->assertCount(1, $images);
+        $this->assertSame('image/jpeg', $images[0]['mime']);
+        $this->assertStringStartsWith("\xFF\xD8", $images[0]['bytes']);
+        $this->assertGreaterThan(20_000, strlen($images[0]['bytes']));
+    }
+
     public function test_prepare_for_vision_downscales_large_page(): void
     {
         $im = imagecreatetruecolor(2000, 2800);
@@ -186,6 +216,21 @@ final class PdfEmbeddedImageExtractorTest extends TestCase
 
         $path = tempnam(sys_get_temp_dir(), 'ppo').'.pdf';
         file_put_contents($path, $pdf);
+
+        return $path;
+    }
+
+    private function writeFlateDctImagePdf(string $jpeg): string
+    {
+        $flate = gzcompress($jpeg);
+        $this->assertIsString($flate);
+        $len = strlen($flate);
+        $body = "%PDF-1.4\n1 0 obj\n<</Type/XObject/Subtype/Image/Width 1240/Height 1754"
+            ."/ColorSpace/DeviceRGB/BitsPerComponent 8/Filter[/FlateDecode/DCTDecode]/Length {$len}>>\nstream\n"
+            .$flate
+            ."\nendstream\nendobj\n";
+        $path = tempnam(sys_get_temp_dir(), 'flatedct').'.pdf';
+        file_put_contents($path, $body);
 
         return $path;
     }

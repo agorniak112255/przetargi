@@ -172,6 +172,7 @@ function guessMetaFromFilename(name: string): { manufacturer: string; version: s
     ['Ansell', ['ema body', 'ema']],
     ['PROS', ['pros', 'ajgroup', 'aj group']],
     ['Lebon', ['lebon']],
+    ['Maskpol', ['maskpol']],
     ['Debstoko', ['debstoko', 'stoko']],
     ['PANTHER', ['panther']],
     ['Ardon', ['ardon']],
@@ -1148,6 +1149,7 @@ export function PriceLists() {
               <option value="PROS" />
               <option value="Debstoko" />
               <option value="Lebon" />
+              <option value="Maskpol" />
               <option value="uvex" />
               <option value="MAPA" />
               <option value="Rostaing" />

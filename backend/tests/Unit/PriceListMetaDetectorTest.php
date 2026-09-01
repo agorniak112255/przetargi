@@ -28,6 +28,10 @@ final class PriceListMetaDetectorTest extends TestCase
         $ppo = $d->fromFilename('Strzelce Opolskie - 2018-02-01.pdf');
         $this->assertSame('PPO', $ppo['manufacturer']);
         $this->assertSame('2018-02', $ppo['version']);
+
+        $maskpol = $d->fromFilename('Maskpol cennik 2026.pdf');
+        $this->assertSame('Maskpol', $maskpol['manufacturer']);
+        $this->assertSame('2026', $maskpol['version']);
     }
 
     public function test_resolve_prefers_ai_then_filename_over_stale_hint(): void

@@ -22,6 +22,7 @@ final class PriceListAiAnalyzer
         private readonly PriceListStructureSampler $sampler,
         private readonly OpenAiCompatibleClient $llm,
         private readonly PriceListPdfTextExtractor $pdfExtractor,
+        private readonly PdfEmbeddedImageExtractor $pdfImageExtractor,
         private readonly PdfPriceRowParser $priceRowParser,
         private readonly AnsellEmaPdfParser $ansellEmaParser,
         private readonly JsGlovesPdfParser $jsGlovesParser,
@@ -279,10 +280,29 @@ final class PriceListAiAnalyzer
             );
         }
 
+        $visionError = null;
+        if ($aiReady && $isScan) {
+            try {
+                $fromImages = $this->analyzePdfViaPageImages(
+                    $path,
+                    $prompt,
+                    $manufacturerHint,
+                    $originalName,
+                    $fileSize,
+                );
+                if ($fromImages !== null) {
+                    return $fromImages;
+                }
+                $visionError = 'Brak stron-obrazów do odczytu skanu.';
+            } catch (\Throwable $e) {
+                $visionError = $e->getMessage();
+            }
+        }
+
         if ($isScan) {
             throw new RuntimeException(
-                'PDF jest skanem (brak warstwy tekstowej). Wgraj XLSX albo PDF z zaznaczalnym tekstem. '
-                .($extractError ?? '')
+                'PDF jest skanem (brak warstwy tekstowej). '
+                .($visionError ?? $extractError ?? 'Wgraj XLSX albo PDF z zaznaczalnym tekstem.')
             );
         }
 
@@ -672,6 +692,87 @@ final class PriceListAiAnalyzer
                 'content' => $prompt."\n\nCZĘŚĆ {$part}/{$total}:\n".$chunk,
             ],
         ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function analyzePdfViaPageImages(
+        string $path,
+        string $prompt,
+        ?string $manufacturerHint,
+        ?string $originalName,
+        int $fileSize,
+        string $kind = 'pages',
+        int $maxImages = 2,
+    ): ?array {
+        $maxEdge = $kind === 'price_bitmaps' ? 800 : 1024;
+        $images = $this->pdfImageExtractor->prepareForVision(
+            $this->pdfImageExtractor->extract($path, $maxImages, $kind),
+            $maxEdge,
+            60,
+        );
+        if ($images === []) {
+            return null;
+        }
+
+        $aiProducts = [];
+        $model = 'pdf-vision-images';
+        $json = [
+            'notes' => '',
+            'manufacturer_detected' => $manufacturerHint,
+            'currency' => 'PLN',
+        ];
+        $lastError = null;
+        try {
+            @set_time_limit(240);
+            $raw = $this->llm->chatWithPageImages($prompt, $images, AiTask::PriceListPdf);
+            $model = $raw['model'];
+            $partJson = $this->jsonParser->parse($raw['content']);
+            if (is_string($partJson['manufacturer_detected'] ?? $partJson['m'] ?? null)) {
+                $json['manufacturer_detected'] = $partJson['manufacturer_detected'] ?? $partJson['m'];
+            }
+            if (is_string($partJson['currency'] ?? $partJson['c'] ?? null)) {
+                $json['currency'] = $partJson['currency'] ?? $partJson['c'];
+            }
+            if (is_string($partJson['notes'] ?? null) && ($json['notes'] ?? '') === '') {
+                $json['notes'] = $partJson['notes'];
+            }
+            $aiProducts = $this->normalizeProducts($this->rowsFromAiChunk($partJson), $manufacturerHint);
+        } catch (\Throwable $e) {
+            $lastError = $e->getMessage();
+        }
+
+        $products = $this->uniqueBySku($aiProducts);
+        if ($products === []) {
+            throw new RuntimeException(
+                $lastError ?? 'Model nie zwrócił pozycji ze skanu PDF.'
+            );
+        }
+        if (! $this->looksLikeGoodPdfExtract($products)) {
+            throw new RuntimeException(
+                'Model źle odczytał skan PDF (brak nazw/cen).'
+                .($lastError !== null ? ' '.$lastError : '')
+            );
+        }
+
+        $json['notes'] = trim((string) ($json['notes'] ?? '').' Odczyt skanu PDF: '.count($products).' SKU.');
+
+        return $this->pdfResult(
+            $products,
+            $json,
+            $model,
+            'pdf-vision-images',
+            [
+                'mode' => 'page-images',
+                'file_mb' => round($fileSize / 1_000_000, 2),
+                'pages' => count($images),
+            ],
+            $originalName,
+            null,
+            null,
+            $manufacturerHint,
+        );
     }
 
     /**

@@ -45,13 +45,14 @@ final class PdfEmbeddedImageExtractor
 
                 continue;
             }
-            $filter = $this->filterName($dict);
-            if ($kind === 'pages' && $filter !== 'DCTDecode' && $filter !== 'JPXDecode') {
+            $filters = $this->filterChain($dict);
+            $hasPhoto = $this->hasPhotoFilter($filters);
+            if ($kind === 'pages' && ! $hasPhoto) {
                 $offset = $streamKw + 6;
 
                 continue;
             }
-            if ($kind === 'price_bitmaps' && $filter !== 'FlateDecode') {
+            if ($kind === 'price_bitmaps' && (! in_array('FlateDecode', $filters, true) || $hasPhoto)) {
                 $offset = $streamKw + 6;
 
                 continue;
@@ -66,7 +67,7 @@ final class PdfEmbeddedImageExtractor
             $start = $this->streamPayloadStart($data, $streamKw);
             $bytes = substr($data, $start, $length);
             $offset = $start + $length;
-            $decoded = $this->decodeImageBytes($bytes, $filter, $dict);
+            $decoded = $this->decodeImageBytes($bytes, $filters, $dict);
             if ($decoded === null) {
                 continue;
             }
@@ -216,33 +217,69 @@ final class PdfEmbeddedImageExtractor
     }
 
     /**
+     * @param  list<string>  $filters
      * @return array{bytes: string, mime: string}|null
      */
-    private function decodeImageBytes(string $bytes, string $filter, string $dict): ?array
+    private function decodeImageBytes(string $bytes, array $filters, string $dict): ?array
     {
-        if ($bytes === '') {
+        if ($bytes === '' || $filters === []) {
             return null;
         }
-        if ($filter === 'DCTDecode') {
-            return str_starts_with($bytes, "\xFF\xD8")
-                ? ['bytes' => $bytes, 'mime' => 'image/jpeg']
-                : null;
-        }
-        if ($filter === 'JPXDecode') {
-            return ['bytes' => $bytes, 'mime' => 'image/jp2'];
-        }
-        if ($filter !== 'FlateDecode') {
-            return null;
-        }
-        $raw = @gzuncompress($bytes);
-        if ($raw === false) {
-            $raw = @gzinflate($bytes);
-        }
-        if (! is_string($raw) || $raw === '') {
+        $data = $bytes;
+        $last = array_key_last($filters);
+        foreach ($filters as $i => $filter) {
+            if ($filter === 'FlateDecode') {
+                $raw = @gzuncompress($data);
+                if ($raw === false) {
+                    $raw = @gzinflate($data);
+                }
+                if (! is_string($raw) || $raw === '') {
+                    return null;
+                }
+                $data = $raw;
+                if ($i === $last) {
+                    return $this->rasterToJpeg($data, $dict);
+                }
+
+                continue;
+            }
+            if ($filter === 'DCTDecode') {
+                return str_starts_with($data, "\xFF\xD8")
+                    ? ['bytes' => $data, 'mime' => 'image/jpeg']
+                    : null;
+            }
+            if ($filter === 'JPXDecode') {
+                return ['bytes' => $data, 'mime' => 'image/jp2'];
+            }
+
             return null;
         }
 
-        return $this->rasterToJpeg($raw, $dict);
+        return null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function filterChain(string $dict): array
+    {
+        if (preg_match('/\/Filter\s*\[([^\]]+)\]/', $dict, $m) === 1
+            && preg_match_all('/\/(\w+)/', $m[1], $names) > 0) {
+            return array_values($names[1]);
+        }
+        if (preg_match('/\/Filter\s*\/(\w+)/', $dict, $m) === 1) {
+            return [$m[1]];
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  list<string>  $filters
+     */
+    private function hasPhotoFilter(array $filters): bool
+    {
+        return in_array('DCTDecode', $filters, true) || in_array('JPXDecode', $filters, true);
     }
 
     /**
@@ -311,18 +348,6 @@ final class PdfEmbeddedImageExtractor
         }
 
         return 'Strona '.$index;
-    }
-
-    private function filterName(string $dict): string
-    {
-        if (preg_match('/\/Filter\s*\[\s*\/(\w+)/', $dict, $m) === 1) {
-            return $m[1];
-        }
-        if (preg_match('/\/Filter\s*\/(\w+)/', $dict, $m) === 1) {
-            return $m[1];
-        }
-
-        return '';
     }
 
     private function streamPayloadStart(string $data, int $streamKw): int

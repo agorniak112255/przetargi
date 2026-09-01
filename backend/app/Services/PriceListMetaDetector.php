@@ -16,6 +16,7 @@ final class PriceListMetaDetector
         'EMA' => ['ema body', 'ema '],
         'PROS' => ['pros-cennik', 'pros cennik', 'pros_', 'ajgroup', 'aj group', 'aj-group'],
         'Lebon' => ['lebon'],
+        'Maskpol' => ['maskpol'],
         'Debstoko' => ['debstoko', 'deb stoko', 'stoko'],
         'uvex' => ['uvex'],
         'MAPA' => ['mapa'],
