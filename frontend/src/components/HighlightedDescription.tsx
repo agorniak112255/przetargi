@@ -3,8 +3,8 @@ import { highlightSegments, type HighlightKind } from '../lib/descriptionHighlig
 const KIND_CLASS: Record<HighlightKind, string> = {
   text: '',
   query: 'rounded-sm bg-amber-200 px-0.5 text-amber-950',
-  find: 'rounded-sm bg-sky-200 px-0.5 text-sky-950',
-  both: 'rounded-sm bg-orange-300 px-0.5 font-medium text-orange-950',
+  find: 'rounded-sm bg-sky-200 px-0.5 font-bold text-sky-950',
+  both: 'rounded-sm bg-orange-300 px-0.5 font-bold text-orange-950',
 }
 
 type Props = {

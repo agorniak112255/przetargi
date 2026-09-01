@@ -1005,7 +1005,11 @@ export function Products() {
           )}
         </table>
 
-        <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
+        <ProductPreviewModal
+          productId={previewId}
+          query={aiMode ? aiQuery : ''}
+          onClose={() => setPreviewId(null)}
+        />
         <ProductAiSearchModal
           open={aiModalOpen}
           busy={aiBusy}

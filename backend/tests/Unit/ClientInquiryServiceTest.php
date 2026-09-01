@@ -91,7 +91,27 @@ final class ClientInquiryServiceTest extends TestCase
 
         $this->assertSame('product', $cards[0]['id']);
         $this->assertSame('price', $cards[1]['id']);
+        $priceIds = array_column($cards[1]['options'], 'id');
+        $this->assertContains('catalog_margin', $priceIds);
         $this->assertLessThanOrEqual(12, count($cards));
+    }
+
+    public function test_price_policy_uses_catalog_plus_default_margin(): void
+    {
+        $block = $this->service()->pricePolicyBlock(
+            ['price' => ['option_id' => 'catalog_margin', 'custom' => null]],
+            [[
+                'id' => 1,
+                'sku' => 'G10',
+                'catalog_price_net' => '100.00',
+                'currency' => 'PLN',
+            ]],
+        );
+
+        $this->assertNotNull($block);
+        $this->assertStringContainsString('+ 18%', (string) $block);
+        $this->assertStringContainsString('oferta 118.00 PLN', (string) $block);
+        $this->assertSame(18.0, $this->service()->marginPercent(['price' => ['option_id' => 'catalog_margin']]));
     }
 
     public function test_parse_line_items_splits_qty_rows(): void
@@ -193,6 +213,23 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame('product:item_2', $cards[2]['id']);
         $ids = array_column($cards, 'id');
         $this->assertNotContains('substitutes', $ids);
+    }
+
+    public function test_catalog_search_query_keeps_constraint_from_quote(): void
+    {
+        $svc = $this->service();
+
+        $this->assertSame(
+            'Kombinezon chemoodporny na kwas siarkowy 96%',
+            $svc->catalogSearchQuery(
+                'kombinezon',
+                '8szt Kombinezon chemoodporny na kwas siarkowy 96% rozmiar uniwersalny'
+            )
+        );
+        $this->assertSame(
+            'Rękawice chemoodporne',
+            $svc->catalogSearchQuery('Rękawice chemoodporne', '30szt Rękawice chemoodporne rozmiar 10')
+        );
     }
 
     public function test_resolve_line_items_prefers_more_body_rows_than_ai(): void

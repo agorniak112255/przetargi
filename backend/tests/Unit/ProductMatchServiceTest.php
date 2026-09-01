@@ -513,6 +513,24 @@ final class ProductMatchServiceTest extends TestCase
         $this->assertSame(45, $accepted);
     }
 
+    #[Test]
+    public function persistable_score_trusts_ai_when_token_overlap_is_weak(): void
+    {
+        $product = $this->fakeProduct([
+            'sku' => 'TYCHEM-C',
+            'name' => 'Tychem 6000 F',
+            'manufacturer' => 'DuPont',
+            'category' => 'Ochrona chemiczna',
+            'norms' => 'EN 13034',
+            'description' => 'Kombinezon Typ 3/4.',
+        ]);
+        $req = 'Kombinezon chemoodporny na kwas siarkowy 96%';
+        $method = new \ReflectionMethod(ProductMatchService::class, 'persistableScore');
+
+        $this->assertNull($method->invoke($this->matcher, $req, $product, 94, false));
+        $this->assertSame(94, $method->invoke($this->matcher, $req, $product, 94, true));
+    }
+
     /**
      * @param  array<string, mixed>  $attrs
      */

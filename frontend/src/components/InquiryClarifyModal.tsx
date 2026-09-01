@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ProductPreviewModal } from './ProductPreviewModal'
 
 export function useBusySeconds(busy: boolean): number {
   const [sec, setSec] = useState(0)
@@ -59,6 +60,12 @@ type Props = {
   onSubmit: (answers: Record<string, InquiryAnswer>, extraNote: string) => void
 }
 
+function productIdFromOption(id: string): number | null {
+  if (!id.startsWith('p:')) return null
+  const n = Number(id.slice(2))
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 function isItemCard(card: InquiryCard): boolean {
   return card.kind === 'item' || Boolean(card.item_id) || Boolean(card.quote) || card.id.startsWith('product:')
 }
@@ -100,12 +107,14 @@ export function InquiryClarifyModal({
 }: Props) {
   const [answers, setAnswers] = useState<Record<string, InquiryAnswer>>(initialAnswers)
   const [note, setNote] = useState(initialNote)
+  const [previewId, setPreviewId] = useState<number | null>(null)
   const seconds = useBusySeconds(open && busy)
 
   useEffect(() => {
     if (!open) return
     setAnswers(initialAnswers)
     setNote(initialNote)
+    setPreviewId(null)
     // tylko przy otwarciu — nie nadpisuj kliknięć przy re-renderze rodzica
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -113,11 +122,16 @@ export function InquiryClarifyModal({
   useEffect(() => {
     if (!open) return
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !busy) onClose()
+      if (e.key !== 'Escape' || busy) return
+      if (previewId != null) {
+        setPreviewId(null)
+        return
+      }
+      onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open, busy, onClose])
+  }, [open, busy, onClose, previewId])
 
   if (!open) return null
 
@@ -125,10 +139,13 @@ export function InquiryClarifyModal({
   const missing = cards.filter((card) => !answers[card.id]?.option_id).map((c) => c.title)
 
   function setOption(card: InquiryCard, optionId: string) {
-    setAnswers((prev) => ({
-      ...prev,
-      [card.id]: { option_id: optionId, custom: prev[card.id]?.custom ?? null },
-    }))
+    setAnswers((prev) => {
+      let custom = prev[card.id]?.custom ?? null
+      if (card.id === 'price') {
+        custom = optionId === 'catalog_margin' ? custom || '18' : null
+      }
+      return { ...prev, [card.id]: { option_id: optionId, custom } }
+    })
   }
 
   function setCustom(card: InquiryCard, custom: string) {
@@ -146,26 +163,55 @@ export function InquiryClarifyModal({
       <div>
         <p className="text-sm font-semibold text-slate-800">{card.title}</p>
         <p className="mt-1 text-sm leading-snug text-slate-500">{card.prompt}</p>
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-3 flex flex-col gap-2">
           {card.options.map((opt) => {
             const active = answers[card.id]?.option_id === opt.id
+            const productId = productIdFromOption(opt.id)
             return (
-              <button
-                key={opt.id}
-                type="button"
-                disabled={busy}
-                onClick={() => setOption(card, opt.id)}
-                className={`max-w-full rounded-full border px-3.5 py-1.5 text-left text-sm leading-snug ${
-                  active
-                    ? 'border-blue-600 bg-blue-600 text-white'
-                    : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
-                } disabled:opacity-50`}
-              >
-                {opt.label}
-              </button>
+              <div key={opt.id} className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setOption(card, opt.id)}
+                  className={`max-w-full rounded-full border px-3.5 py-1.5 text-left text-sm leading-snug ${
+                    active
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+                  } disabled:opacity-50`}
+                >
+                  {opt.label}
+                </button>
+                {productId != null && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setPreviewId(productId)}
+                    className="rounded-full border border-violet-300 bg-white px-2.5 py-1 text-xs font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
+                  >
+                    Opis
+                  </button>
+                )}
+              </div>
             )
           })}
         </div>
+        {card.id === 'price' && answers[card.id]?.option_id === 'catalog_margin' && (
+          <label className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-700">
+            <span>Marża</span>
+            <input
+              type="number"
+              min={0}
+              max={99}
+              step={0.5}
+              disabled={busy}
+              className="w-24 rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={answers[card.id]?.custom ?? '18'}
+              onChange={(e) => setCustom(card, e.target.value)}
+            />
+            <span>%</span>
+            <span className="text-slate-500">domyślnie 18% od ceny katalogowej</span>
+          </label>
+        )}
         {card.allow_custom && (
           <input
             className="mt-3 w-full rounded border border-slate-300 px-3 py-2 text-sm"
@@ -189,7 +235,7 @@ export function InquiryClarifyModal({
       }}
     >
       <div
-        className="relative flex max-h-[92vh] w-full max-w-[42rem] flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        className="relative flex max-h-[94vh] w-full max-w-[63rem] flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         {busy && (
@@ -299,7 +345,13 @@ export function InquiryClarifyModal({
           <button
             type="button"
             disabled={busy}
-            onClick={() => onSubmit(answers, note.trim())}
+            onClick={() => {
+              const next = { ...answers }
+              if (next.price?.option_id === 'catalog_margin' && !next.price.custom?.trim()) {
+                next.price = { ...next.price, custom: '18' }
+              }
+              onSubmit(next, note.trim())
+            }}
             className={`w-full rounded-lg px-4 py-3 text-sm font-medium text-white ${
               busy ? 'cursor-wait bg-violet-600' : 'bg-blue-600 hover:bg-blue-700'
             }`}
@@ -308,6 +360,7 @@ export function InquiryClarifyModal({
           </button>
         </div>
       </div>
+      <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
     </div>
   )
 }

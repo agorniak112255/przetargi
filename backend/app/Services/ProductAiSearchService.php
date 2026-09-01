@@ -33,9 +33,6 @@ final class ProductAiSearchService
 
     private const RANK_CARDS = 24;
 
-    /** Dwa tokeny w nazwie (np. kominiarka + polar) — bez LLM. */
-    private const LEXICAL_MIN_SCORE = 8;
-
     private const MAX_MATCHES = 20;
 
     /** Trafienie w kod modelu jest pewniejsze niż podobieństwo tekstu czy wektora. */
@@ -89,97 +86,6 @@ final class ProductAiSearchService
             return $this->webOnlyResult($query, $limit);
         }
 
-        $filterHits = $this->retrieveByFilterType($query, $limit);
-        if ($filterHits->isNotEmpty()) {
-            $ranked = $this->rowsFromFilterMatches($query, $filterHits, $limit);
-
-            return [
-                'query' => $query,
-                'total' => count($ranked),
-                'products' => $ranked,
-                'needed' => $query,
-                'search_phrases' => array_values(array_unique([
-                    ...$this->filterType->compactCodes($query),
-                    ...$this->fallbackPhrases($query),
-                ])),
-                'ai_note' => null,
-                'external_hint' => null,
-            ];
-        }
-
-        $classHits = $this->retrieveByFootwearClass($query, $limit);
-        if ($classHits->isNotEmpty()) {
-            $ranked = $this->rowsFromFootwearClassMatches($query, $classHits, $limit);
-
-            return [
-                'query' => $query,
-                'total' => count($ranked),
-                'products' => $ranked,
-                'needed' => $query,
-                'search_phrases' => $this->fallbackPhrases($query),
-                'ai_note' => null,
-                'external_hint' => null,
-            ];
-        }
-
-        $heatHits = $this->retrieveByHeatRating($query, $limit);
-        if ($heatHits->isNotEmpty()) {
-            $ranked = $this->rowsFromHeatMatches($query, $heatHits, $limit);
-
-            return [
-                'query' => $query,
-                'total' => count($ranked),
-                'products' => $ranked,
-                'needed' => $query,
-                'search_phrases' => $this->fallbackPhrases($query),
-                'ai_note' => null,
-                'external_hint' => null,
-            ];
-        }
-
-        $linerHits = $this->retrieveByHeadLiner($query, $limit);
-        if ($linerHits->isNotEmpty()) {
-            $ranked = $this->rowsFromHeadLinerMatches($query, $linerHits, $limit);
-
-            return [
-                'query' => $query,
-                'total' => count($ranked),
-                'products' => $ranked,
-                'needed' => $query,
-                'search_phrases' => $this->fallbackPhrases($query),
-                'ai_note' => null,
-                'external_hint' => null,
-            ];
-        }
-
-        $articleHits = $this->retrieveByArticleType($query, $limit);
-        if ($articleHits->isNotEmpty()) {
-            $ranked = $this->rowsFromArticleTypeMatches($query, $articleHits, $limit);
-
-            return [
-                'query' => $query,
-                'total' => count($ranked),
-                'products' => $ranked,
-                'needed' => $query,
-                'search_phrases' => $this->fallbackPhrases($query),
-                'ai_note' => null,
-                'external_hint' => null,
-            ];
-        }
-
-        $lexical = $this->retrieveLexicalIfObvious($query, $limit);
-        if ($lexical !== []) {
-            return [
-                'query' => $query,
-                'total' => count($lexical),
-                'products' => $lexical,
-                'needed' => $query,
-                'search_phrases' => $this->fallbackPhrases($query),
-                'ai_note' => null,
-                'external_hint' => null,
-            ];
-        }
-
         $intent = $this->understandRequirement($query, $task);
         $candidates = $this->keepCompatible(
             $this->assortmentText($query, $intent['needed']),
@@ -207,7 +113,14 @@ final class ProductAiSearchService
             return $this->emptyResult($query, $intent, $withExternalHint, 'Brak kart z opisem w katalogu do porównania. Nie dodano produktu z internetu.');
         }
 
-        $ranked = $this->rankWithLlm($query, $candidates->take(self::RANK_CARDS)->values(), $limit, $intent['needed'], $task);
+        $ranked = $this->rankWithLlm(
+            $query,
+            $this->cardsForRanking($candidates, $intent['constraints']),
+            $limit,
+            $intent['needed'],
+            $task,
+            $intent['constraints'],
+        );
         if ($ranked === []) {
             return $this->emptyResult($query, $intent, $withExternalHint, 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.');
         }
@@ -238,11 +151,18 @@ final class ProductAiSearchService
             return [];
         }
 
-        return $this->rankWithLlm($query, $candidates->values(), max(1, min(80, $limit)), $needed, $task);
+        return $this->rankWithLlm(
+            $query,
+            $candidates->values(),
+            max(1, min(80, $limit)),
+            $needed,
+            $task,
+            $this->fallbackConstraints($query),
+        );
     }
 
     /**
-     * @return array{needed: string, search_phrases: list<string>}
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
      */
     public function understandRequirement(string $query, AiTask $task = AiTask::ProductSearch): array
     {
@@ -254,31 +174,35 @@ final class ProductAiSearchService
                         .'needed: krótka nazwa na początku (np. kamizelka odblaskowa żółta) — bez EN i bez samego przymiotnika. '
                         .'search_phrases: 2-8 fraz; PIERWSZE 2 to wyłącznie nazwa/synonim (kamizelka, kamizelka odblaskowa). '
                         .'Cechy (siatkowa, nadruk) i normy EN dopiero na końcu. '
+                        .'constraints: 0-6 warunków z wymagania (albo równoważna norma/klasa, którą znasz jako ekspert BHP). '
+                        .'Dotyczy dowolnej cechy: substancja, stężenie, klasa, typ, norma, napięcie, temperatura, ESD, gramatura. '
+                        .'Nie wstawiaj samej nazwy produktu. Pusta tablica, gdy wymaganie to tylko nazwa asortymentu. '
                         .'Przymiotnik wspólny nie zastępuje nazwy: kamizelka ≠ osłona twarzy; rękawy ≠ rękawice. '
                         .'Synonimy: obuwie/buty/trzewiki, kurtka/bluza ochronna. '
                         .'Popraw literówki — w modelu (TEPM-ICE → TEMP-ICE) i w nazwie produktu '
                         .'(podnie → spodnie, rekawice → rękawice, kamizelaka → kamizelka). '
                         .'needed i pierwsze frazy zawsze w poprawnej pisowni. Nie klasyfikuj sztywną listą typów. '
-                        .'JSON: {"needed":"nazwa szukanego produktu","search_phrases":["najpierw nazwa","potem cechy/normy"]}.',
+                        .'JSON: {"needed":"nazwa","search_phrases":["najpierw nazwa","potem cechy/normy"],"constraints":[]}.',
                 ],
                 [
                     'role' => 'user',
                     'content' => $query,
                 ],
-            ], null, 800, null, $task);
+            ], null, 900, null, $task);
 
             return $this->parseIntent($raw, $query);
         } catch (Throwable) {
             return [
                 'needed' => $query,
                 'search_phrases' => $this->fallbackPhrases($query),
+                'constraints' => $this->fallbackConstraints($query),
             ];
         }
     }
 
     /**
      * @param  array<string, mixed>  $raw
-     * @return array{needed: string, search_phrases: list<string>}
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
      */
     private function parseIntent(array $raw, string $query): array
     {
@@ -314,10 +238,91 @@ final class ProductAiSearchService
             $phrases[] = $this->filterType->hyphenated($code);
         }
 
+        $constraints = [];
+        foreach ([$raw['constraints'] ?? [], $raw['must_evidence'] ?? []] as $list) {
+            if (! is_array($list)) {
+                continue;
+            }
+            foreach ($list as $term) {
+                if (is_string($term) && mb_strlen(trim($term)) >= 3) {
+                    $constraints[] = trim($term);
+                }
+            }
+        }
+        if ($constraints === []) {
+            $constraints = $this->fallbackConstraints($query);
+        }
+
         return [
             'needed' => $needed,
             'search_phrases' => array_values(array_unique($phrases)),
+            'constraints' => array_values(array_unique($constraints)),
         ];
+    }
+
+    /**
+     * Czy wymaganie ma warunek poza samą nazwą asortymentu — wtedy ocenia model, nie skrót „ten sam typ”.
+     */
+    public function isSpecificRequirement(string $query): bool
+    {
+        $stripped = $this->stripNonTechnicalTokens($query);
+        if (preg_match('/\b(?:en|iso|pn-?en|iec|astm|din)\s*-?\s*\d/ui', $stripped) === 1) {
+            return true;
+        }
+        if (preg_match('/\d/u', $stripped) === 1) {
+            return true;
+        }
+
+        return $this->fallbackConstraints($query) !== [];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function fallbackConstraints(string $query): array
+    {
+        $out = [];
+        foreach ($this->fallbackPhrases($query) as $token) {
+            $norm = $this->lexicalNormalize($token);
+            if ($norm === '' || $this->isNonTechnicalToken($norm)) {
+                continue;
+            }
+            $out[] = $token;
+            if (count($out) >= 6) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    private function stripNonTechnicalTokens(string $query): string
+    {
+        $kept = [];
+        foreach (preg_split('/[\s,;\/|+]+/u', $query) ?: [] as $token) {
+            $token = trim($token);
+            if ($token === '' || $this->isNonTechnicalToken($this->lexicalNormalize($token))) {
+                continue;
+            }
+            $kept[] = $token;
+        }
+
+        return implode(' ', $kept);
+    }
+
+    private function isNonTechnicalToken(string $normalized): bool
+    {
+        $t = trim($normalized);
+        if ($t === '' || $this->isClothingSizePhrase($t) || $this->isGenericAssortmentToken($t)) {
+            return true;
+        }
+
+        return preg_match(
+            '/^(czarn|bial|zol|niebies|czerw|zielon|szar|granat|pomaranc|brazow|bezow'
+            .'|srebrn|zlot|grafit|khaki|navy|black|white|yellow|blue|red|green|grey|gray|orange'
+            .'|polar(?!yz)|poliestr|baweln|nylon|elastan|lycra|ociepl|kolor|rozmiar)/u',
+            $t
+        ) === 1;
     }
 
     /**
@@ -356,107 +361,12 @@ final class ProductAiSearchService
         ], true);
     }
 
-    /**
-     * Gdy SIWZ ma jasną rodzinę i w nazwie jest rzeczownik + cecha (kominiarka + polar),
-     * nie wołamy Gemini.
-     *
-     * @return list<array<string, mixed>>
-     */
-    private function retrieveLexicalIfObvious(string $query, int $limit): array
-    {
-        if ($this->assortment->family($query) === null || $this->modelFuzzy->hasNamedModel($query)) {
-            return [];
-        }
-
-        $intent = ['needed' => $query, 'search_phrases' => $this->fallbackPhrases($query)];
-        $family = $this->assortment->family($query);
-        $ids = array_values(array_unique(array_merge(
-            $this->textSearch->search($intent['search_phrases'], $family, 80),
-            $family !== null ? $this->textSearch->searchUnclassified($intent['search_phrases'], 40) : [],
-        )));
-        $products = $this->keepCompatible($query, $this->hydrate($ids));
-
-        $scored = [];
-        foreach ($products as $product) {
-            if (! $product instanceof Product) {
-                continue;
-            }
-            $hit = $this->lexicalHit($query, $product);
-            if ($hit === null) {
-                continue;
-            }
-            $scored[] = $hit;
-        }
-        if ($scored === []) {
-            return [];
-        }
-        usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
-
-        $out = [];
-        foreach ($scored as $hit) {
-            $product = $hit['product'];
-            if (! $product instanceof Product) {
-                continue;
-            }
-            $row = $this->productToRow($product);
-            $row['ai_match_percent'] = min(96, 78 + min(18, (int) $hit['score'] * 2));
-            $row['ai_match_reason'] = 'Zgodność nazwy i fraz z SIWZ — bez czekania na model.';
-            $out[] = $row;
-            if (count($out) >= $limit) {
-                break;
-            }
-        }
-
-        return $out;
-    }
-
-    /**
-     * @return array{score: int, product: Product}|null
-     */
-    private function lexicalHit(string $query, Product $product): ?array
-    {
-        $name = $this->lexicalNormalize(
-            $product->name.' '.$product->sku.' '.($product->category ?? '')
-        );
-        $full = $this->lexicalNormalize(
-            $name.' '.($product->description ?? '').' '.($product->norms ?? '')
-        );
-        $genericName = 0;
-        $distinct = 0;
-        $score = 0;
-        foreach ($this->fallbackPhrases($query) as $token) {
-            $t = $this->lexicalNormalize($token);
-            if ($t === '' || mb_strlen($t) < 4) {
-                continue;
-            }
-            $inName = str_contains($name, $t);
-            $inFull = str_contains($full, $t);
-            if (! $inName && ! $inFull) {
-                continue;
-            }
-            if ($this->isGenericAssortmentToken($t)) {
-                if (! $inName) {
-                    continue;
-                }
-                $genericName++;
-                $score += 4;
-                continue;
-            }
-            $distinct++;
-            $score += 4;
-        }
-        if ($genericName < 1 || $distinct < 1 || $score < self::LEXICAL_MIN_SCORE) {
-            return null;
-        }
-
-        return ['score' => $score, 'product' => $product];
-    }
-
     private function isGenericAssortmentToken(string $normalized): bool
     {
         return preg_match(
             '/^(rekawic|glove|spodn|kurtk|bluz|czapk|czepek|kominiark|balaclava|helm|kask'
             .'|fartuch|kitel|kamizelk|kombinezon|ogrodniczk|buty|obuwie|trzewik|polbut'
+            .'|kalosz|gumiak|gumowc|wellington'
             .'|sztyblet|okular|gogl|nausznik|polmask|respirator|pochlaniacz|filtr'
             .'|nakolann|wkladk|robocz|ochronn|zimow|letni|mesk|damsk)/u',
             trim($normalized)
@@ -518,7 +428,15 @@ final class ProductAiSearchService
             $limit * 2,
         );
 
-        return $this->keepCompatible($requirement, $this->hydrate($fused))->take($limit)->values();
+        $recall = $this->retrieveByFootwearClass($query, $limit)
+            ->concat($this->retrieveByHeatRating($query, $limit))
+            ->concat($this->retrieveByHeadLiner($query, $limit))
+            ->concat($this->retrieveByArticleType($query, $limit));
+
+        return $this->keepCompatible(
+            $requirement,
+            $this->uniqueProducts($this->hydrate($fused)->concat($recall), $limit)
+        )->values();
     }
 
     /**
@@ -600,30 +518,6 @@ final class ProductAiSearchService
             ->sortByDesc(fn (Product $p): int => $this->filterType->coverageScore($query, $this->filterHaystack($p)))
             ->take(max(8, $limit))
             ->values();
-    }
-
-    /**
-     * @param  Collection<int, Product>  $products
-     * @return list<array<string, mixed>>
-     */
-    private function rowsFromFilterMatches(string $query, Collection $products, int $limit): array
-    {
-        $out = [];
-        foreach ($products as $product) {
-            if (! $product instanceof Product) {
-                continue;
-            }
-            $row = $this->productToRow($product);
-            $score = $this->filterType->coverageScore($query, $this->filterHaystack($product));
-            $row['ai_match_percent'] = min(99, max(72, 70 + intdiv($score, 3)));
-            $row['ai_match_reason'] = 'Klasa pochłaniacza EN 14387 z katalogu — w tym wymagane typy (np. NO).';
-            $out[] = $row;
-            if (count($out) >= $limit) {
-                break;
-            }
-        }
-
-        return $out;
     }
 
     /**
@@ -795,7 +689,9 @@ final class ProductAiSearchService
                     $esc = '%'.$like.'%';
                     $outer->orWhere('name', 'like', $esc)
                         ->orWhere('sku', 'like', $esc)
-                        ->orWhere('category', 'like', $esc);
+                        ->orWhere('category', 'like', $esc)
+                        ->orWhere('description', 'like', $esc)
+                        ->orWhere('search_blob', 'like', $esc);
                 }
             })
             ->limit(400)
@@ -840,80 +736,6 @@ final class ProductAiSearchService
 
     /**
      * @param  Collection<int, Product>  $products
-     * @return list<array<string, mixed>>
-     */
-    private function rowsFromArticleTypeMatches(string $query, Collection $products, int $limit): array
-    {
-        $out = [];
-        foreach ($products as $product) {
-            if (! $product instanceof Product) {
-                continue;
-            }
-            $row = $this->productToRow($product);
-            $score = $this->articleTypeScore($query, $product);
-            $row['ai_match_percent'] = min(96, 72 + min(24, $score));
-            $row['ai_match_reason'] = 'Ten sam typ w katalogu — wszystkie karty tego asortymentu, cechy z wymagania na górze.';
-            $out[] = $row;
-            if (count($out) >= $limit) {
-                break;
-            }
-        }
-
-        return $out;
-    }
-
-    /**
-     * @param  Collection<int, Product>  $products
-     * @return list<array<string, mixed>>
-     */
-    private function rowsFromHeadLinerMatches(string $query, Collection $products, int $limit): array
-    {
-        $out = [];
-        foreach ($products as $product) {
-            if (! $product instanceof Product) {
-                continue;
-            }
-            $row = $this->productToRow($product);
-            $row['ai_match_percent'] = 88;
-            $row['ai_match_reason'] = 'Czepek / wkładka pod hełm z katalogu — nie kurtka ESD.';
-            $out[] = $row;
-            if (count($out) >= $limit) {
-                break;
-            }
-        }
-
-        return $out;
-    }
-
-    /**
-     * @param  Collection<int, Product>  $products
-     * @return list<array<string, mixed>>
-     */
-    private function rowsFromHeatMatches(string $query, Collection $products, int $limit): array
-    {
-        $minC = $this->bhpAttributes->requiredCelsius($query) ?? 0;
-        $out = [];
-        foreach ($products as $product) {
-            if (! $product instanceof Product) {
-                continue;
-            }
-            $maxC = $this->productHeatCelsius($product);
-            $row = $this->productToRow($product);
-            $row['ai_match_percent'] = min(99, 78 + min(20, intdiv(max(0, (int) $maxC - $minC), 25)));
-            $row['ai_match_reason'] = $maxC !== null
-                ? 'Odporność cieplna '.$maxC.'°C (wymagane ≥ '.$minC.'°C) — z karty katalogu.'
-                : 'Odporność cieplna z karty katalogu.';
-            $out[] = $row;
-            if (count($out) >= $limit) {
-                break;
-            }
-        }
-
-        return $out;
-    }
-
-    /**
-     * @param  Collection<int, Product>  $products
      * @return Collection<int, Product>
      */
     private function preferQueryManufacturers(string $query, Collection $products): Collection
@@ -952,38 +774,6 @@ final class ProductAiSearchService
 
             return false;
         })->values();
-    }
-
-    /**
-     * @param  Collection<int, Product>  $products
-     * @return list<array<string, mixed>>
-     */
-    private function rowsFromFootwearClassMatches(string $query, Collection $products, int $limit): array
-    {
-        $class = $this->bhpAttributes->footwearClass($query) ?? '';
-        $reqType = $this->assortment->articleType($query, PpeAssortment::FAMILY_FOOTWEAR);
-        $out = [];
-        foreach ($products as $product) {
-            if (! $product instanceof Product) {
-                continue;
-            }
-            $row = $this->productToRow($product);
-            $prodType = $this->assortment->articleType($product->name, PpeAssortment::FAMILY_FOOTWEAR);
-            $score = 82;
-            if ($reqType !== null && $prodType === $reqType) {
-                $score += 8;
-            }
-            $row['ai_match_percent'] = min(99, $score);
-            $row['ai_match_reason'] = $class !== ''
-                ? 'Nazwa katalogowa: ten sam typ obuwia i klasa '.$class.' (także bez opisu).'
-                : 'Nazwa katalogowa: zgodny typ obuwia (także bez opisu).';
-            $out[] = $row;
-            if (count($out) >= $limit) {
-                break;
-            }
-        }
-
-        return $out;
     }
 
     /**
@@ -1059,6 +849,96 @@ final class ProductAiSearchService
             ->sortByDesc(fn (Product $p): int => $this->modelFuzzy->score($query, $p))
             ->take(max(8, $limit))
             ->values();
+    }
+
+    /**
+     * Do modelu idą najpierw karty z śladem warunku — zrzut „wszystkie kombinezony”
+     * nie może zająć 24 miejsc i wypchnąć Tychema.
+     *
+     * @param  Collection<int, Product>  $candidates
+     * @param  list<string>  $constraints
+     * @return Collection<int, Product>
+     */
+    private function cardsForRanking(Collection $candidates, array $constraints): Collection
+    {
+        $candidates = $candidates->values();
+        if ($candidates->count() <= self::RANK_CARDS || $constraints === []) {
+            return $candidates->take(self::RANK_CARDS)->values();
+        }
+
+        $needles = $this->constraintNeedles($constraints);
+        if ($needles === []) {
+            return $candidates->take(self::RANK_CARDS)->values();
+        }
+
+        $with = collect();
+        $without = collect();
+        foreach ($candidates as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            if ($this->haystackHasNeedle($this->rankingHaystack($product), $needles)) {
+                $with->push($product);
+            } else {
+                $without->push($product);
+            }
+        }
+
+        return $with->concat($without)->take(self::RANK_CARDS)->values();
+    }
+
+    /**
+     * @param  list<string>  $constraints
+     * @return list<string>
+     */
+    private function constraintNeedles(array $constraints): array
+    {
+        $needles = [];
+        foreach ($constraints as $constraint) {
+            $norm = $this->lexicalNormalize($constraint);
+            if ($norm === '') {
+                continue;
+            }
+            foreach (preg_split('/\s+/u', $norm) ?: [] as $part) {
+                if ($part === '' || mb_strlen($part) < 4 || $this->isNonTechnicalToken($part)) {
+                    continue;
+                }
+                $needles[] = $part;
+            }
+        }
+
+        return array_values(array_unique($needles));
+    }
+
+    private function rankingHaystack(Product $product): string
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+
+        return $this->lexicalNormalize(implode(' ', [
+            (string) $product->name,
+            (string) $product->sku,
+            (string) ($product->category ?? ''),
+            (string) ($product->description ?? ''),
+            (string) ($product->norms ?? ''),
+            implode(' ', $this->stringList($payload['specs'] ?? null)),
+            implode(' ', $this->stringList($payload['norms'] ?? null)),
+            implode(' ', $this->stringList($payload['features'] ?? null)),
+            implode(' ', $this->stringList($payload['use_cases'] ?? null)),
+        ]));
+    }
+
+    /**
+     * @param  list<string>  $needles
+     */
+    private function haystackHasNeedle(string $haystack, array $needles): bool
+    {
+        foreach ($needles as $needle) {
+            if (str_contains($haystack, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1264,6 +1144,7 @@ final class ProductAiSearchService
 
     /**
      * @param  Collection<int, Product>  $candidates
+     * @param  list<string>  $constraints
      * @return list<array<string, mixed>>
      */
     private function rankWithLlm(
@@ -1271,7 +1152,8 @@ final class ProductAiSearchService
         Collection $candidates,
         int $limit,
         ?string $needed = null,
-        AiTask $task = AiTask::ProductSearch
+        AiTask $task = AiTask::ProductSearch,
+        array $constraints = [],
     ): array {
         $cards = $candidates->map(function (Product $p): array {
             $payload = is_array($p->enrichment_payload) ? $p->enrichment_payload : [];
@@ -1283,10 +1165,12 @@ final class ProductAiSearchService
                 'category' => $p->category,
                 'manufacturer' => $p->manufacturer,
                 'norms' => $p->norms,
-                'description' => mb_substr((string) ($p->description ?? ''), 0, 280),
+                'description' => mb_substr((string) ($p->description ?? ''), 0, 360),
                 'heat_celsius' => $this->productHeatCelsius($p),
+                'specs' => array_slice($this->stringList($payload['specs'] ?? null), 0, 8),
                 'use_cases' => array_slice($this->stringList($payload['use_cases'] ?? null), 0, 4),
                 'features' => array_slice($this->stringList($payload['features'] ?? null), 0, 4),
+                'payload_norms' => array_slice($this->stringList($payload['norms'] ?? null), 0, 6),
             ];
         })->values()->all();
 
@@ -1294,6 +1178,10 @@ final class ProductAiSearchService
         $neededLine = is_string($needed) && trim($needed) !== ''
             ? "\nSzukany produkt (z analizy):\n".trim($needed)
             : '';
+        $constraintLine = $constraints === []
+            ? ''
+            : "\nWarunki, które karta MUSI potwierdzać w norms/specs/description (nie zgaduj):\n- "
+                .implode("\n- ", $constraints);
         $maxMatches = max(1, min($limit, self::MAX_MATCHES));
 
         $json = json_encode($cards, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -1304,21 +1192,26 @@ final class ProductAiSearchService
                     .'1) NAZWA: rzeczownik z wymagania = ten sam produkt co w polu name karty '
                     .'(synonimy: buty=obuwie=trzewiki; kurtka≈bluza ochronna). '
                     .'Inny rodzaj → nie zwracaj: kamizelka ≠ osłona twarzy; rękawice ≠ obuwie. '
-                    .'Wspólna cecha (siatkowa) albo ta sama norma EN NIE wystarczy. '
-                    .'2) Dopiero potem cechy, materiał, klasa i normy — tylko wśród kart z kroku 1. '
+                    .'Sam ten sam rodzaj (kombinezon, kalosz) NIE wystarczy, gdy wymaganie ma warunek. '
+                    .'2) WARUNEK: substancja, stężenie, klasa, typ, norma, napięcie — tylko gdy widać to '
+                    .'w polach norms, specs, payload_norms, features, use_cases albo description. '
+                    .'Brak potwierdzenia → nie zwracaj (kombinezon pszczelarski / EN 343 ≠ kwas siarkowy). '
+                    .'Równoznaczna norma/klasa (np. EN 13034, Typ 3/4, Tychem przy kwasie) = spełnione. '
+                    .'Nie zgaduj z nazwy handlowej. '
+                    .'Wspólna cecha (siatkowa) albo przypadkowa norma EN NIE wystarczy. '
                     .'Marka/model z SIWZ wygrywa przy literówce (TEPM-ICE=TEMP-ICE); nie zmieniaj marki przez EN. '
                     .'Pochłaniacz/filtr EN 14387: A2B2E2K2 ≠ A2B2E2K2NO — bez NO/Hg/CO z wymagania nie zwracaj karty. '
                     .'Literówka w wymaganiu nie dyskwalifikuje karty — nazwę czytaj z linii "Szukany produkt (z analizy)" '
                     .'(podnie = spodnie, rekawice = rękawice). '
-                    .'Brak zgodnej nazwy: {"matches":[]}. '
+                    .'Brak zgodnej nazwy albo braku dowodu na warunek: {"matches":[]}. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}. '
-                    .'score>=40 tylko przy zgodnej nazwie. Max '.$maxMatches.'. '
+                    .'score>=40 tylko przy zgodnej nazwie I spełnionych warunkach. Max '.$maxMatches.'. '
                     .'Zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
                     .'Tylko id z listy. Nie wymyślaj.',
             ],
             [
                 'role' => 'user',
-                'content' => "Wymaganie:\n{$query}{$neededLine}\n\nKarty katalogu:\n{$json}",
+                'content' => "Wymaganie:\n{$query}{$neededLine}{$constraintLine}\n\nKarty katalogu:\n{$json}",
             ],
         ], null, 2500, null, $task);
 

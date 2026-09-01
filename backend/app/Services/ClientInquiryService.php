@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\ClientInquiry;
 use App\Models\ProductSubstitute;
 use App\Models\User;
+use App\Support\OfferPricing;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use RuntimeException;
@@ -99,7 +100,7 @@ final class ClientInquiryService
                         .'line_items: KAŻDA osobna pozycja (osobny wiersz, ilość albo rozmiar = osobna pozycja). '
                         .'Nie łącz „rękawice 9” i „rękawice 10” w jedną. Max 8. '
                         .'Każda pozycja: id (item_1…), quote (DOKŁADNY cytat wiersza z maila), '
-                        .'qty (np. „30 szt.”), query (fraza do katalogu BEZ rozmiaru), size (lub null). '
+                        .'qty (np. „30 szt.”), query (fraza do katalogu BEZ rozmiaru, Z warunkiem: substancja, norma, typ), size (lub null). '
                         .'product_queries: unikalne query z line_items. '
                         .'cards: max 4 — TYLKO prawdziwe niejasności (rozmiar, wariant, termin). '
                         .'Nie pytaj o oczywistości. item_id jeśli karta dotyczy jednej pozycji. '
@@ -200,7 +201,7 @@ final class ClientInquiryService
         $used = [];
         if ($lineItems !== []) {
             foreach ($lineItems as $item) {
-                $products = $this->productsForQuery($matches, (string) ($item['query'] ?? ''));
+                $products = $this->productsForItem($matches, $item);
                 $productCard = $this->productCardForItem($item, $products);
                 $cards[] = $productCard;
                 $used[] = (string) $productCard['id'];
@@ -274,10 +275,11 @@ final class ClientInquiryService
             [
                 'id' => 'price',
                 'title' => 'Ceny',
-                'prompt' => 'Czy podać cenę katalogową? Ceny zakupu nigdy nie idą do listu.',
+                'prompt' => 'Czy podać cenę w liście? Ceny zakupu nigdy nie idą do listu.',
                 'options' => [
                     ['id' => 'none', 'label' => 'Bez ceny'],
                     ['id' => 'catalog', 'label' => 'Cena katalogowa'],
+                    ['id' => 'catalog_margin', 'label' => 'Cena katalogowa + marża'],
                 ],
                 'allow_custom' => false,
             ],
@@ -375,9 +377,27 @@ final class ClientInquiryService
     private function queryFromLine(string $rest): string
     {
         $q = preg_replace('/\b(?:rozmiar|rozm\.?)\s+[a-z0-9\/,.\-]+/iu', '', $rest) ?? $rest;
+        $q = preg_replace('/^\d+\s*(?:szt\.?|sztuk|pcs\.?)?[\s.,:–-]+/iu', '', $q) ?? $q;
         $q = preg_replace('/\s+/u', ' ', $q) ?? $q;
 
         return mb_substr(trim($q), 0, 140);
+    }
+
+    /**
+     * Do katalogu idzie cytat z warunkiem, nie sama nazwa z ekstraktora („kombinezon”).
+     */
+    public function catalogSearchQuery(string $query, string $quote): string
+    {
+        $query = trim($query);
+        $fromQuote = $this->queryFromLine($quote);
+        if ($fromQuote === '') {
+            return $query;
+        }
+        if ($query === '' || mb_strlen($fromQuote) > mb_strlen($query)) {
+            return $fromQuote;
+        }
+
+        return $query;
     }
 
     /**
@@ -390,7 +410,10 @@ final class ClientInquiryService
         $seen = [];
         $out = [];
         foreach ($lineItems as $item) {
-            $query = trim((string) ($item['query'] ?? ''));
+            $query = $this->catalogSearchQuery(
+                (string) ($item['query'] ?? ''),
+                (string) ($item['quote'] ?? '')
+            );
             $key = mb_strtolower($query);
             if ($query === '' || isset($seen[$key])) {
                 continue;
@@ -595,6 +618,25 @@ final class ClientInquiryService
 
     /**
      * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
+     * @param  array<string, mixed>  $item
+     * @return list<array<string, mixed>>
+     */
+    private function productsForItem(array $matches, array $item): array
+    {
+        $search = $this->catalogSearchQuery(
+            (string) ($item['query'] ?? ''),
+            (string) ($item['quote'] ?? '')
+        );
+        $found = $this->productsForQuery($matches, $search);
+        if ($found !== []) {
+            return $found;
+        }
+
+        return $this->productsForQuery($matches, (string) ($item['query'] ?? ''));
+    }
+
+    /**
+     * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
      * @return list<array<string, mixed>>
      */
     private function productsForQuery(array $matches, string $query): array
@@ -701,7 +743,7 @@ final class ClientInquiryService
                         .'Używaj WYŁĄCZNIE faktów z bloku katalogu i decyzji handlowca. '
                         .'Odpowiedz na KAŻDĄ pozycję osobno: cytat/ilość, wybrany towar, ewentualny zamiennik. '
                         .'Nie wymyślaj SKU, norm, stanów ani cen. '
-                        .'Ceny zakupu są zakazane. Cenę katalogową podaj tylko gdy decyzja to pozwala. '
+                        .'Ceny zakupu są zakazane. Cenę katalogową albo ofertę (katalog + marża) podaj tylko gdy decyzja to pozwala. '
                         .'Brak faktu → wstaw [DO UZUPEŁNIENIA: …], nie zgaduj. '
                         .'Ton: '.($inquiry->tone === 'handlowy' ? 'luźniejszy handlowy, nadal rzeczowy' : 'formalny, uprzejmy').'. '
                         .'Bez markdown. Zwykły tekst maila: powitanie, treść, pozdrowienia (zespół Supon). '
@@ -765,23 +807,17 @@ final class ClientInquiryService
         $matches = is_array($analysis['matches'] ?? null) ? $analysis['matches'] : [];
         $cards = is_array($analysis['cards'] ?? null) ? $analysis['cards'] : [];
         $flat = $this->flatProducts($matches);
-        $perItem = $this->itemFacts($cards, $flat, $answers);
-        if ($perItem !== []) {
-            return implode("\n", $perItem);
-        }
-
         $selected = $this->selectedProducts($flat, $answers);
+        $perItem = $this->itemFacts($cards, $flat, $answers);
+        $body = $perItem !== []
+            ? implode("\n", $perItem)
+            : ($selected === []
+                ? 'Brak potwierdzonego produktu z katalogu. Nie podawaj SKU ani ceny.'
+                : implode("\n", array_map(fn (array $p): string => '- '.$this->productFactLine($p), $selected)));
 
-        if ($selected === []) {
-            return 'Brak potwierdzonego produktu z katalogu. Nie podawaj SKU ani ceny.';
-        }
+        $pricePolicy = $this->pricePolicyBlock($answers, $selected);
 
-        $lines = [];
-        foreach ($selected as $product) {
-            $lines[] = '- '.$this->productFactLine($product);
-        }
-
-        return implode("\n", $lines);
+        return $pricePolicy === null ? $body : $body."\n\n".$pricePolicy;
     }
 
     /**
@@ -853,6 +889,70 @@ final class ClientInquiryService
             $priceText,
             $product['stock'] !== null ? (string) $product['stock'] : 'brak'
         );
+    }
+
+    /**
+     * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
+     * @param  list<array<string, mixed>>  $products
+     */
+    public function pricePolicyBlock(array $answers, array $products): ?string
+    {
+        $option = trim((string) ($answers['price']['option_id'] ?? ''));
+        if ($option === '' || $option === 'none') {
+            return 'Ceny: nie podawaj w liście.';
+        }
+        if ($option === 'catalog') {
+            return 'Ceny: podaj cenę katalogową z faktów. Nie podawaj ceny zakupu.';
+        }
+        if ($option !== 'catalog_margin') {
+            return null;
+        }
+
+        $percent = $this->marginPercent($answers);
+        $lines = [
+            'Ceny: podaj cenę oferty = katalog + '.$percent.'% marży. Nie podawaj zakupu ani samej ceny katalogowej.',
+        ];
+        foreach ($products as $product) {
+            $offer = OfferPricing::fromPurchase($product['catalog_price_net'] ?? null, $percent);
+            if ($offer === null) {
+                $lines[] = sprintf(
+                    '- %s: brak ceny katalogowej → [DO UZUPEŁNIENIA: cena oferty]',
+                    $product['sku']
+                );
+                continue;
+            }
+            $lines[] = sprintf(
+                '- %s: oferta %s %s (katalog %s + %s%%)',
+                $product['sku'],
+                number_format($offer, 2, '.', ''),
+                $product['currency'] ?? 'PLN',
+                (string) ($product['catalog_price_net'] ?? ''),
+                rtrim(rtrim(number_format($percent, 2, '.', ''), '0'), '.')
+            );
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
+     */
+    public function marginPercent(array $answers): float
+    {
+        $raw = trim((string) ($answers['price']['custom'] ?? ''));
+        $raw = str_replace([',', '%', ' '], ['.', '', ''], $raw);
+        if ($raw === '' || ! is_numeric($raw)) {
+            return OfferPricing::markupPercent();
+        }
+        $value = (float) $raw;
+        if ($value < 0) {
+            return 0.0;
+        }
+        if ($value > 99) {
+            return 99.0;
+        }
+
+        return $value;
     }
 
     /**

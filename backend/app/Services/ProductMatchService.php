@@ -981,7 +981,12 @@ final class ProductMatchService
         }
 
         $picked['product'] = $this->resolveCatalogBySku($picked['product'], $products);
-        $honest = $this->persistableScore($requirement, $picked['product'], $picked['score']);
+        $honest = $this->persistableScore(
+            $requirement,
+            $picked['product'],
+            $picked['score'],
+            in_array($picked['source'] ?? '', ['ai', 'vector'], true)
+        );
         if ($honest === null) {
             return null;
         }
@@ -1128,12 +1133,8 @@ final class ProductMatchService
             if (! $this->honorsSpecificModelCodes($requirement, $product)) {
                 continue;
             }
-            $honest = $this->persistableScore($requirement, $product, $topAi['score']);
+            $honest = $this->persistableScore($requirement, $product, $topAi['score'], true);
             if ($honest === null) {
-                continue;
-            }
-            if (! $this->hasStrongSkuInRequirement($requirement, $product)
-                && $this->explainMatch($requirement, $product)['score'] < 40) {
                 continue;
             }
 
@@ -1259,7 +1260,7 @@ final class ProductMatchService
      * Konflikt rodzaju (okulary ≠ rękawice) = brak zapisu.
      * AI nie może zawyżyć % ponad heurystykę / SKU.
      */
-    private function persistableScore(string $requirement, Product $product, int $proposed): ?int
+    private function persistableScore(string $requirement, Product $product, int $proposed, bool $trustModel = false): ?int
     {
         if (! $this->assortment->compatibleProduct($requirement, $product)) {
             return null;
@@ -1285,6 +1286,9 @@ final class ProductMatchService
         if ($skuish >= 70) {
             return max(self::MIN_MATCH_SCORE, $skuish);
         }
+        if ($trustModel && $proposed >= self::APPLY_MATCH_SCORE) {
+            return min(96, $proposed);
+        }
 
         return null;
     }
@@ -1296,7 +1300,12 @@ final class ProductMatchService
         ?string $source = 'heuristic',
         ?string $aiReason = null,
     ): bool {
-        $honest = $this->persistableScore($item->requirement, $product, $score);
+        $honest = $this->persistableScore(
+            $item->requirement,
+            $product,
+            $score,
+            in_array($source, ['ai', 'vector'], true)
+        );
         if ($honest === null) {
             return false;
         }

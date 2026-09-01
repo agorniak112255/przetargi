@@ -384,7 +384,7 @@ final class ProductAiSearchApiTest extends TestCase
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
-        Product::query()->create([
+        $oxy = Product::query()->create([
             'sku' => 'OXY-203-UP3',
             'name' => 'Filtr 203 UP3 A2-B2-E2-K2-Hg-CO-NO-P3',
             'manufacturer' => 'Oxyline',
@@ -410,6 +410,13 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
+
+        $this->mockCatalogRank(
+            'pochłaniacz wielogazowy',
+            ['pochłaniacz', 'a2b2e2k2no'],
+            [$oxy],
+            ['A2B2E2K2NO']
+        );
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'pochłaniacz wielogazowy a2b2e2k2no dodatkowa ochrona na tlenki azoty NO',
@@ -439,6 +446,13 @@ final class ProductAiSearchApiTest extends TestCase
         ]);
         $product->ppe_family = 'apparel';
         $product->save();
+
+        $this->mockCatalogRank(
+            'pochłaniacz wielogazowy',
+            ['pochłaniacz', 'a2b2e2k2no'],
+            [$product],
+            ['NO']
+        );
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'pochłaniacz wielogazowy a2b2e2k2no (dodatkowa ochrona na tlenki azotu)',
@@ -487,6 +501,8 @@ final class ProductAiSearchApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
+        $this->mockCatalogRank('półbuty S2', ['półbuty', 's2'], [$manual], ['S2']);
+
         $response = $this->postJson('/api/products/ai-search', [
             'query' => 'półbuty S2',
         ]);
@@ -502,7 +518,7 @@ final class ProductAiSearchApiTest extends TestCase
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
-        Product::query()->create([
+        $sztyblet = Product::query()->create([
             'sku' => '000-045',
             'name' => 'sztyblety O2',
             'manufacturer' => 'Reis',
@@ -513,7 +529,7 @@ final class ProductAiSearchApiTest extends TestCase
             'stock' => 1,
             'enrichment_status' => Product::ENRICHMENT_MANUAL,
         ]);
-        Product::query()->create([
+        $trzewik = Product::query()->create([
             'sku' => '015-302',
             'name' => 'trzewiki O2',
             'manufacturer' => 'Reis',
@@ -536,6 +552,26 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
+
+        $lastQuery = '';
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(function (array $messages) use (&$lastQuery, $sztyblet, $trzewik): array {
+            $content = (string) $messages[1]['content'];
+            if (! str_contains($content, 'Karty katalogu:')) {
+                $lastQuery = $content;
+                $sztyblety = str_contains(mb_strtolower($content), 'sztyblet');
+
+                return [
+                    'needed' => $sztyblety ? 'sztyblety O2' : 'trzewiki O2 Reis',
+                    'search_phrases' => $sztyblety ? ['sztyblety', 'o2'] : ['trzewiki', 'o2', 'reis'],
+                    'constraints' => ['O2'],
+                ];
+            }
+            $pick = str_contains(mb_strtolower($lastQuery), 'sztyblet') ? $sztyblet : $trzewik;
+
+            return ['matches' => [['id' => $pick->id, 'score' => 90, 'reason' => 'test']]];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $sztyblety = $this->postJson('/api/products/ai-search', [
             'query' => 'sztyblety O2',
@@ -683,9 +719,11 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_NONE,
         ]);
 
-        $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldNotReceive('chatJson');
-        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        $this->mockCatalogRank(
+            'kominiarka polarowa',
+            ['kominiarka', 'polar'],
+            [$balaclava]
+        );
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'CZAPKA KOMINIARKA Z POLARU czarna lub granatowa',
@@ -848,9 +886,11 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_NONE,
         ]);
 
-        $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldNotReceive('chatJson');
-        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        $this->mockCatalogRank(
+            'kominiarka polarowa',
+            ['kominiarka', 'polar'],
+            [$balaclava]
+        );
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'CZAPKA KOMINIARKA Z POLARU czarna lub granatowa',
@@ -1229,11 +1269,11 @@ final class ProductAiSearchApiTest extends TestCase
             ]);
     }
 
-    public function test_ai_search_returns_all_gloves_meeting_celsius_without_llm(): void
+    public function test_ai_search_returns_all_gloves_meeting_celsius(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
-        Product::query()->create([
+        $heat250 = Product::query()->create([
             'sku' => 'HEAT-250',
             'name' => 'Rękawice termoochronne 250',
             'manufacturer' => 'PIP',
@@ -1246,7 +1286,7 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
-        Product::query()->create([
+        $heat350 = Product::query()->create([
             'sku' => 'HEAT-350',
             'name' => 'Rękawice hutnicze 350',
             'manufacturer' => 'Ansell',
@@ -1273,9 +1313,12 @@ final class ProductAiSearchApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
-        $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldNotReceive('chatJson');
-        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        $this->mockCatalogRank(
+            'rękawice termiczne',
+            ['rękawice', '200'],
+            [$heat350, $heat250],
+            ['200 C']
+        );
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'rękawice do pracy przy 200 C',
@@ -1304,7 +1347,7 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
-        Product::query()->create([
+        $heat250 = Product::query()->create([
             'sku' => 'HEAT-250',
             'name' => 'Rękawice termoochronne 250',
             'manufacturer' => 'PIP',
@@ -1318,9 +1361,7 @@ final class ProductAiSearchApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
-        $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldNotReceive('chatJson');
-        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        $this->mockCatalogRank('rękawice termiczne', ['rękawice', '200'], [$heat250], ['200']);
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'rękawice 200 stopnia',
@@ -1347,7 +1388,7 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
-        Product::query()->create([
+        $heat250 = Product::query()->create([
             'sku' => 'HEAT-250',
             'name' => 'Rękawice termoochronne 250',
             'manufacturer' => 'PIP',
@@ -1361,9 +1402,7 @@ final class ProductAiSearchApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
-        $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldNotReceive('chatJson');
-        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        $this->mockCatalogRank('rękawice termiczne', ['rękawice', '200'], [$heat250], ['200 C']);
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'rękawice do pracy przy 200 C',
@@ -1392,7 +1431,7 @@ final class ProductAiSearchApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
-        Product::query()->create([
+        $heat250 = Product::query()->create([
             'sku' => 'HEAT-250',
             'name' => 'Rękawice termoochronne 250',
             'manufacturer' => 'PIP',
@@ -1406,9 +1445,7 @@ final class ProductAiSearchApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
-        $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldNotReceive('chatJson');
-        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        $this->mockCatalogRank('rękawice termiczne', ['rękawice', '200'], [$heat250], ['200 C']);
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'rękawice do pracy przy 200 C',
@@ -1418,11 +1455,11 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('products.0.sku', 'HEAT-250');
     }
 
-    public function test_ai_search_returns_all_balaclavas_not_just_one_llm_pick(): void
+    public function test_antistatic_balaclava_asks_model_instead_of_dumping_all_hoods(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
-        Product::query()->create([
+        $xispal = Product::query()->create([
             'sku' => 'XISPAL-RS',
             'name' => 'Xispal RS - Balaclava',
             'manufacturer' => 'Lenard',
@@ -1448,7 +1485,7 @@ final class ProductAiSearchApiTest extends TestCase
             'ppe_family' => 'apparel',
             'enrichment_status' => Product::ENRICHMENT_NONE,
         ]);
-        Product::query()->create([
+        $esd = Product::query()->create([
             'sku' => 'KOM-ESD',
             'name' => 'Kominiarka antyelektrostatyczna',
             'manufacturer' => 'Urgent',
@@ -1477,8 +1514,24 @@ final class ProductAiSearchApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
+        $call = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldNotReceive('chatJson');
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function () use (&$call, $xispal, $esd): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        'needed' => 'kominiarka antyelektrostatyczna',
+                        'search_phrases' => ['kominiarka', 'balaclava', 'antyelektrostatyczna'],
+                        'constraints' => ['antyelektrostatyczna', 'EN 1149-5'],
+                    ];
+                }
+
+                return ['matches' => [
+                    ['id' => $esd->id, 'score' => 96, 'reason' => 'Kominiarka ESD EN 1149-5'],
+                    ['id' => $xispal->id, 'score' => 90, 'reason' => 'Balaclava z włóknem ESD'],
+                ]];
+            });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         $skus = $this->postJson('/api/products/ai-search', [
@@ -1486,22 +1539,23 @@ final class ProductAiSearchApiTest extends TestCase
             'limit' => 40,
         ])
             ->assertOk()
-            ->assertJsonPath('total', 3)
             ->assertJsonPath('products.0.sku', 'KOM-ESD')
             ->assertJsonMissing(['sku' => 'JKT-ESD'])
+            ->assertJsonMissing(['sku' => 'BALTIC'])
             ->json('products');
 
         $this->assertEqualsCanonicalizing(
-            ['KOM-ESD', 'XISPAL-RS', 'BALTIC'],
+            ['KOM-ESD', 'XISPAL-RS'],
             collect($skus)->pluck('sku')->all()
         );
+        $this->assertGreaterThanOrEqual(2, $call);
     }
 
     public function test_ai_search_head_liner_prefers_catalog_cap_over_esd_jacket(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
-        Product::query()->create([
+        $cap = Product::query()->create([
             'sku' => 'CAP-ESD',
             'name' => 'Czepek ocieplany pod hełm ESD',
             'manufacturer' => 'JSP',
@@ -1530,9 +1584,12 @@ final class ProductAiSearchApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
-        $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldNotReceive('chatJson');
-        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        $this->mockCatalogRank(
+            'czepek pod hełm',
+            ['czepek', 'wkładka', 'hełm'],
+            [$cap],
+            ['EN 1149-5']
+        );
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'Wkładka/czepek ocieplana pod hełm antyelektrostatyczna EN 1149-5 lub EN 61340',
@@ -1541,5 +1598,176 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('total', 1)
             ->assertJsonPath('products.0.sku', 'CAP-ESD')
             ->assertJsonPath('external_hint', null);
+    }
+
+    public function test_specific_coverall_query_asks_model_instead_of_dumping_all_suits(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $bee = Product::query()->create([
+            'sku' => '303',
+            'name' => 'Kombinezon dla pszczelarza',
+            'manufacturer' => 'AJ Group',
+            'category' => 'Kombinezony',
+            'norms' => null,
+            'description' => 'Kombinezon pszczelarski z kapeluszem.',
+            'catalog_price_net' => 200,
+            'purchase_price' => 120,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $chem = Product::query()->create([
+            'sku' => 'TYCHEM-C',
+            'name' => 'Kombinezon chemoodporny Tychem C',
+            'manufacturer' => 'DuPont',
+            'category' => 'Kombinezony',
+            'norms' => 'EN 13034',
+            'description' => 'Kombinezon Typ 3/4 na kwasy, w tym kwas siarkowy.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 6,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'specs' => ['odporność na kwas siarkowy 96%', 'Typ 3/4'],
+                'norms' => ['EN 13034'],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $cards = null;
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, &$call, $chem): array {
+                $call++;
+                if ($call === 1) {
+                    return [
+                        'needed' => 'kombinezon chemoodporny',
+                        'search_phrases' => ['kombinezon', 'kombinezon chemoodporny', 'kwas siarkowy'],
+                        'constraints' => ['kwas siarkowy 96%', 'EN 13034', 'Typ 3/4'],
+                    ];
+                }
+                $cards = (string) $messages[1]['content'];
+
+                return ['matches' => [
+                    ['id' => $chem->id, 'score' => 94, 'reason' => 'EN 13034 i kwas siarkowy w specyfikacji'],
+                ]];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Kombinezon chemoodporny na kwas siarkowy 96%',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'TYCHEM-C')
+            ->assertJsonMissing(['sku' => '303']);
+
+        $this->assertNotNull($cards);
+        $this->assertStringContainsString('kwas siarkowy 96%', $cards);
+        $this->assertStringContainsString('EN 13034', $cards);
+        $this->assertGreaterThanOrEqual(2, $call);
+        unset($bee);
+    }
+
+    public function test_specific_query_keeps_constraint_hit_out_of_large_article_dump(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        for ($i = 1; $i <= 30; $i++) {
+            Product::query()->create([
+                'sku' => 'SUIT-'.$i,
+                'name' => 'Kombinezon roboczy model '.$i,
+                'manufacturer' => 'Delta Plus',
+                'category' => 'Kombinezony',
+                'description' => 'Kombinezon ochronny do prac ogólnych.',
+                'catalog_price_net' => 40 + $i,
+                'purchase_price' => 25,
+                'stock' => 3,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        $chem = Product::query()->create([
+            'sku' => 'TYCHEM-C',
+            'name' => 'Tychem 6000 F',
+            'manufacturer' => 'DuPont',
+            'category' => 'Ochrona chemiczna',
+            'norms' => 'EN 13034',
+            'description' => 'Bariera na kwas siarkowy 96%, Typ 3/4.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 6,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'specs' => ['odporność na kwas siarkowy 96%'],
+                'norms' => ['EN 13034'],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $cards = null;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages) use (&$cards, $chem): array {
+                if (str_contains((string) $messages[1]['content'], 'Karty katalogu:')) {
+                    $cards = (string) $messages[1]['content'];
+
+                    return ['matches' => [
+                        ['id' => $chem->id, 'score' => 95, 'reason' => 'kwas siarkowy w specyfikacji'],
+                    ]];
+                }
+
+                return [
+                    'needed' => 'kombinezon chemoodporny',
+                    'search_phrases' => ['kombinezon', 'kombinezon chemoodporny', 'kwas siarkowy'],
+                    'constraints' => ['kwas siarkowy 96%', 'EN 13034'],
+                ];
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Kombinezon chemoodporny na kwas siarkowy 96%',
+            'limit' => 40,
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'TYCHEM-C');
+
+        $this->assertNotNull($cards);
+        $this->assertStringContainsString('TYCHEM-C', (string) $cards);
+        $this->assertStringContainsString('kwas siarkowy', (string) $cards);
+    }
+
+    /**
+     * @param  list<string>  $phrases
+     * @param  list<Product>  $picks
+     * @param  list<string>  $constraints
+     */
+    private function mockCatalogRank(string $needed, array $phrases, array $picks, array $constraints = []): void
+    {
+        $call = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(function () use (&$call, $needed, $phrases, $picks, $constraints): array {
+            $call++;
+            if ($call === 1) {
+                return [
+                    'needed' => $needed,
+                    'search_phrases' => $phrases,
+                    'constraints' => $constraints,
+                ];
+            }
+            $matches = [];
+            foreach (array_values($picks) as $i => $product) {
+                $matches[] = [
+                    'id' => $product->id,
+                    'score' => 92 - $i,
+                    'reason' => 'test',
+                ];
+            }
+
+            return ['matches' => $matches];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
     }
 }

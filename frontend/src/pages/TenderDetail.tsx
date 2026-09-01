@@ -3039,7 +3039,11 @@ function ItemRow({
                 enabled={Boolean(item.main_product)}
               />
             </div>
-            <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
+            <ProductPreviewModal
+              productId={previewId}
+              query={item.requirement ?? ''}
+              onClose={() => setPreviewId(null)}
+            />
           </span>
         )}
       </td>

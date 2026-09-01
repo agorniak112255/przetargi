@@ -1628,12 +1628,12 @@ function InquiriesHelp() {
         },
         {
           action: 'Doprecyzowanie niuansów',
-          does: 'Każda pozycja ma cytat klienta, wybór towaru i zamienników — potem kolejna pozycja.',
+          does: 'Każda pozycja ma cytat, towar i zamienniki. Przy SKU jest Opis. Na końcu cena katalogowa albo katalog + marża (18%).',
           click: 'Chipy przy pozycji, potem „Napisz odpowiedź”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Zapytania">
-              <div className="mx-auto max-w-xl rounded-2xl bg-white shadow-sm">
+              <div className="mx-auto max-w-4xl rounded-2xl bg-white shadow-sm">
                 <div className="border-b border-slate-100 px-6 py-4">
                   <p className="text-base font-semibold">Doprecyzowanie</p>
                   <p className="text-sm text-slate-500">2 pozycje z zapytania — przy każdej widać cytat klienta.</p>
@@ -1650,6 +1650,9 @@ function InquiriesHelp() {
                         A611
                       </span>
                     </Mark>
+                    <span className="ml-1 rounded-full border border-violet-300 px-2 py-0.5 text-xs text-violet-800">
+                      Opis
+                    </span>
                     <p className="mb-1 mt-2 text-xs font-semibold">Zamienniki</p>
                     <span className="rounded-full border border-slate-300 px-3 py-1 text-sm">Tylko wskazany towar</span>
                   </div>
@@ -1660,9 +1663,11 @@ function InquiriesHelp() {
                     </p>
                   </div>
                   <p className="text-sm font-semibold">Ceny</p>
-                  <span className="rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-sm text-white">
-                    Bez ceny
+                  <span className="rounded-full border border-slate-300 px-3 py-1 text-sm">Bez ceny</span>
+                  <span className="ml-1 rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-sm text-white">
+                    Cena katalogowa + marża
                   </span>
+                  <span className="ml-2 text-sm text-slate-600">18%</span>
                   <span className="mt-2 block w-full rounded-lg bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white">
                     Napisz odpowiedź
                   </span>
