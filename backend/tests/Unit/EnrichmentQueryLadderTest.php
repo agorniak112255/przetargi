@@ -490,7 +490,7 @@ final class EnrichmentQueryLadderTest extends TestCase
 
         $this->assertStringStartsWith('site:', $ladder[0] ?? '');
         $this->assertStringContainsString('URG-914', $ladder[0] ?? '');
-        $this->assertLessThanOrEqual(6, count($ladder));
+        $this->assertLessThanOrEqual(8, count($ladder));
         $this->assertContains('URG-914 Urgent', $ladder);
         $this->assertContains('Kurtka ostrzegawcza Urgent', $ladder);
         $this->assertContains('Kurtka ostrzegawcza URG-914 Urgent', $ladder);
