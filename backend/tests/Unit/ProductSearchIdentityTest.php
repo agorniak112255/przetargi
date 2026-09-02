@@ -863,4 +863,34 @@ final class ProductSearchIdentityTest extends TestCase
             $product
         ));
     }
+
+    public function test_distributor_prefix_sku_searches_name_and_catalog_code(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'WST068GM',
+            'name' => 'ALFA Grey Meteorite',
+            'manufacturer' => 'Whirlpool',
+        ]);
+
+        $this->assertTrue($id->looksLikeWarehouseArticleSku($product));
+        $this->assertSame('ST068GM', $id->distributorPrefixedCatalogSku($product));
+        $this->assertSame('ST068GM', $id->catalogSkuWithoutSize($product));
+        $this->assertSame('ALFA Grey Meteorite', $id->firstStrongShopPhrase($product));
+        $this->assertSame('ALFA Grey Meteorite', $id->primaryQueries($product)[0] ?? null);
+        $this->assertContains('ST068GM', $id->primaryQueries($product));
+        $joined = implode(' | ', $id->primaryQueries($product));
+        $this->assertStringNotContainsString('Whirlpool', $joined);
+        $this->assertStringNotContainsString('Whirlpool', implode(' | ', $id->searchQueries($product, 'manufacturer')));
+        $this->assertStringNotContainsString('WST068GM', $id->productNameWithManufacturer($product));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html '
+            .'ALFA Grey Meteorite Four Seasons Work Pants ST068GM U-Power',
+            $product
+        ));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://www.imdb.com/title/tt123/ APEX movie Charlize Theron',
+            $product
+        ));
+    }
 }

@@ -100,6 +100,11 @@ final class RetailerOnSiteSearchTest extends TestCase
 
         $this->assertSame('211600170000', $search->query($beagle));
         $this->assertSame('BEAGLE', $search->queryBareModel($beagle));
+        $this->assertSame('ST068GM', $search->query(new Product([
+            'sku' => 'WST068GM',
+            'name' => 'ALFA Grey Meteorite',
+            'manufacturer' => 'Whirlpool',
+        ])));
     }
 
     public function test_mapa_query_uses_catalog_name_without_size(): void

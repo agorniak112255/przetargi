@@ -101,6 +101,10 @@ final class RetailerOnSiteSearch
             return $early[0];
         }
         if ($this->identity->looksLikeWarehouseArticleSku($product)) {
+            $article = $this->identity->catalogArticleCodes($product)[0] ?? '';
+            if ($article !== '' && preg_match('/\p{L}/u', $article) === 1) {
+                return $article;
+            }
             $sku = trim((string) $product->sku);
             if ($sku !== '') {
                 return $sku;

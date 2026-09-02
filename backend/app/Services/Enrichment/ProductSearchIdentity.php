@@ -719,7 +719,9 @@ final class ProductSearchIdentity
      */
     public function searchQueries(Product $product, string $phase): array
     {
-        $brand = $this->shortBrand((string) $product->manufacturer);
+        $brand = $this->manufacturerLooksUnrelatedToProduct($product)
+            ? ''
+            : $this->shortBrand((string) $product->manufacturer);
         $sku = trim((string) $product->sku);
         $name = trim((string) $product->name);
         $internalSku = $this->looksLikeInternalSku($product);
@@ -973,7 +975,8 @@ final class ProductSearchIdentity
             $out[] = $this->queryWithManufacturer($base, $product);
         }
         if ($withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)
-            && ! $composedSku && ! $this->looksLikeInternalSku($product)) {
+            && ! $composedSku && ! $this->looksLikeInternalSku($product)
+            && $this->distributorPrefixedCatalogSku($product) === '') {
             array_unshift($out, $this->queryWithManufacturer($withoutSize, $product));
         }
 
@@ -1014,7 +1017,8 @@ final class ProductSearchIdentity
         if ($sku !== '' && ! $this->looksLikeInternalSku($product)
             && ! $this->hasDescriptiveWordSegment($sku)
             && ($name === '' || ! $this->phraseHasToken($name, $sku))) {
-            $parts[] = $sku;
+            $catalog = $this->distributorPrefixedCatalogSku($product);
+            $parts[] = $catalog !== '' ? $catalog : $sku;
         }
         if ($parts === [] && $sku !== '') {
             $parts[] = $sku;
@@ -1040,6 +1044,9 @@ final class ProductSearchIdentity
     {
         $query = trim((string) preg_replace('/\s+/u', ' ', $query));
         if (preg_match('/\bsite:/i', $query) === 1) {
+            return $query;
+        }
+        if ($this->manufacturerLooksUnrelatedToProduct($product)) {
             return $query;
         }
         $nameBrand = $this->leadingNameBrand($product);
@@ -1974,6 +1981,10 @@ final class ProductSearchIdentity
      */
     public function officialCatalogHosts(Product $product): array
     {
+        if ($this->manufacturerLooksUnrelatedToProduct($product)) {
+            return [];
+        }
+
         return $this->bareHosts($this->hostsFromConfigMap(
             (array) config('enrichment.manufacturer_domains', []),
             array_merge($this->manufacturerKeyCandidates($product), $this->nameBrandKeys($product))
@@ -1983,8 +1994,12 @@ final class ProductSearchIdentity
     public function firstStrongShopPhrase(Product $product): string
     {
         $name = $this->strippedProductName($product);
+        $prefixed = mb_strtolower($this->distributorPrefixedCatalogSku($product));
         foreach ($this->shopIdentityPhrases($product) as $phrase) {
             if (! $this->isStrongShopPhrase($phrase) || $this->shopPhraseLosesToCatalogSku($phrase, $product)) {
+                continue;
+            }
+            if ($prefixed !== '' && mb_strtolower($phrase) === $prefixed && $this->looksLikeCompactTradeName($name)) {
                 continue;
             }
             if (! $this->shopPhraseIsWeakerThanName($phrase, $name)) {
@@ -1992,11 +2007,19 @@ final class ProductSearchIdentity
             }
         }
         foreach ($this->shopIdentityPhrases($product) as $phrase) {
+            if ($prefixed !== '' && mb_strtolower($phrase) === $prefixed && $this->looksLikeCompactTradeName($name)) {
+                continue;
+            }
             if ($this->isStrongShopPhrase($phrase)
                 && ! $this->shopPhraseLosesToCatalogSku($phrase, $product)
                 && preg_match('/\d|[-\/]/u', $phrase) === 1) {
                 return $phrase;
             }
+        }
+        if ($prefixed !== '' && $name !== '' && $this->looksLikeCompactTradeName($name)
+            && $this->isStrongShopPhrase($name)
+            && ! $this->shopPhraseLosesToCatalogSku($name, $product)) {
+            return $name;
         }
 
         return '';
@@ -2079,6 +2102,10 @@ final class ProductSearchIdentity
         $sku = trim((string) $product->sku);
         if ($sku === '') {
             return '';
+        }
+        $prefixed = $this->distributorPrefixedCatalogSku($product);
+        if ($prefixed !== '') {
+            return $prefixed;
         }
         $sizes = new ProductSizeVariant;
         $stripped = $sizes->stripWearSizeSuffix($sku);
@@ -3038,6 +3065,9 @@ final class ProductSearchIdentity
     public function looksLikeWarehouseArticleSku(Product $product): bool
     {
         $sku = trim((string) $product->sku);
+        if ($this->distributorPrefixedCatalogSku($product) !== '') {
+            return true;
+        }
         // 10–12 cyfr to numer magazynowy CXS/Canis (310000300010), nie EAN-13
         if (preg_match('/^\d{10,12}$/u', $sku) === 1) {
             return true;
@@ -3082,6 +3112,10 @@ final class ProductSearchIdentity
     public function catalogArticleCodes(Product $product): array
     {
         $sku = trim((string) $product->sku);
+        $prefixed = $this->distributorPrefixedCatalogSku($product);
+        if ($prefixed !== '') {
+            return [$prefixed];
+        }
         if (preg_match('/^SOR[-]?(\d{4,6})(?:-(\d{2,3}))?$/iu', $sku, $sordin) === 1) {
             $out = [$sordin[1]];
             if (($sordin[2] ?? '') !== '') {
@@ -3637,7 +3671,40 @@ final class ProductSearchIdentity
             || preg_match('/^SOR[-]?\d{4,6}(?:-\d{2,3})?$/iu', $sku) === 1
             || preg_match('/^\d{7,12}[A-Z]$/u', $sku) === 1
             || preg_match('/^[A-Z0-9.\-]+-(UK|EU|US|CF|SP)$/iu', $sku) === 1
-            || preg_match('/^\d{6,9}$/u', $sku) === 1;
+            || preg_match('/^\d{6,9}$/u', $sku) === 1
+            || $this->distributorPrefixedCatalogSku($product) !== '';
+    }
+
+    /**
+     * WST068GM → ST068GM — litera z cennika + kod katalogowy (U-Power ST068GM).
+     */
+    public function distributorPrefixedCatalogSku(Product $product): string
+    {
+        $sku = strtoupper(trim((string) $product->sku));
+        if (preg_match('/^[A-Z]([A-Z]{2}\d{3}[A-Z]{2})$/u', $sku, $m) !== 1) {
+            return '';
+        }
+
+        return $m[1];
+    }
+
+    /** Whirlpool w cenniku odzieży BHP — nie doklejaj do zapytań ani site:. */
+    private function manufacturerLooksUnrelatedToProduct(Product $product): bool
+    {
+        $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        if ($brand === '') {
+            return false;
+        }
+        $hay = mb_strtolower($this->usableProductName($product).' '.trim((string) $product->sku));
+        if ($this->phraseHasToken($hay, $brand)) {
+            return false;
+        }
+        $first = explode(' ', $brand)[0] ?? $brand;
+
+        return in_array($first, [
+            'whirlpool', 'indesit', 'hotpoint', 'amica', 'beko', 'candy',
+            'electrolux', 'zanussi', 'gorenje', 'samsung', 'lg',
+        ], true);
     }
 
     /**
