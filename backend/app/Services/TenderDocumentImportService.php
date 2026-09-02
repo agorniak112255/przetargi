@@ -294,7 +294,7 @@ final class TenderDocumentImportService
                         'status' => $product ? 'matched' : 'brak',
                     ]);
                     if ($item->offer_price === null && $product !== null) {
-                        $item->offer_price = $this->pricing->offerFromPurchase($tender, $product->purchase_price);
+                        $item->offer_price = $this->pricing->offerFromProduct($tender, $product);
                     }
                     $item->save();
                     $this->pricing->recalculateItemMargin($item);

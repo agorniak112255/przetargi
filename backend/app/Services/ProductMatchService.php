@@ -1338,7 +1338,7 @@ final class ProductMatchService
         $item->status = 'matched';
         $item->loadMissing('tender');
         if ($item->tender !== null) {
-            $item->offer_price = $this->pricing->offerFromPurchase($item->tender, $product->purchase_price);
+            $item->offer_price = $this->pricing->offerFromProduct($item->tender, $product);
         } elseif ($item->offer_price === null) {
             $item->offer_price = OfferPricing::fromPurchase($product->purchase_price);
         }

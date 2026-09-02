@@ -11,9 +11,24 @@ use App\Support\OfferPricing;
 
 final class TenderPricingService
 {
-    public function offerFromPurchase(Tender $tender, float|string|null $purchase): ?float
+    public function __construct(
+        private readonly NbpExchangeRateService $fx,
+    ) {}
+
+    public function offerFromPurchase(Tender $tender, float|string|null $purchase, ?string $currency = 'PLN'): ?float
     {
-        return OfferPricing::fromPurchase($purchase, $tender->targetMarkupPercent());
+        return OfferPricing::fromPurchase(
+            $this->fx->toPlnOrNull($purchase, $currency),
+            $tender->targetMarkupPercent(),
+        );
+    }
+
+    public function offerFromProduct(Tender $tender, Product $product): ?float
+    {
+        return OfferPricing::fromPurchase(
+            $this->fx->purchasePln($product),
+            $tender->targetMarkupPercent(),
+        );
     }
 
     public function applyTargetMarginChange(Tender $tender, float $oldPercent, float $newPercent): void
@@ -29,7 +44,7 @@ final class TenderPricingService
                 $product = $item->mainProduct;
                 if ($product !== null && (float) $product->purchase_price > 0) {
                     $item->offer_price = OfferPricing::fromPurchase(
-                        $product->purchase_price,
+                        $this->fx->purchasePln($product),
                         $newPercent,
                     );
                 }
@@ -68,7 +83,7 @@ final class TenderPricingService
         }
 
         $offer = (float) $item->offer_price;
-        $purchase = (float) $product->purchase_price;
+        $purchase = $this->fx->purchasePln($product) ?? (float) $product->purchase_price;
         if ($offer <= 0) {
             $item->margin_percent = null;
             $item->save();

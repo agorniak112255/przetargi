@@ -210,6 +210,7 @@ class ProductController extends Controller
         }
         $payload['price_change_percent'] = $catalogChangePct;
         $payload['price_history_latest_at'] = $latest?->created_at;
+        $payload = $this->fx->appendPricePln($payload);
         $payload['special_prices'] = $product->specialPrices->map(static fn ($row): array => [
             'id' => $row->id,
             'client_id' => $row->client_id,

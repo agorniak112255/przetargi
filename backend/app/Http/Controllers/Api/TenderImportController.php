@@ -102,7 +102,7 @@ class TenderImportController extends Controller
                 if ($offerRaw !== null && $offerRaw !== '') {
                     $item->offer_price = (float) str_replace(',', '.', (string) $offerRaw);
                 } elseif ($product !== null) {
-                    $item->offer_price = $this->pricing->offerFromPurchase($tender, $product->purchase_price);
+                    $item->offer_price = $this->pricing->offerFromProduct($tender, $product);
                 }
 
                 $item->save();

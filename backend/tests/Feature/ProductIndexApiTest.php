@@ -176,7 +176,8 @@ final class ProductIndexApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.sku', 'EUR-10')
             ->assertJsonPath('data.1.sku', 'PLN-30')
-            ->assertJsonPath('data.0.price_pln', 40);
+            ->assertJsonPath('data.0.price_pln', 40)
+            ->assertJsonPath('data.0.purchase_price_pln', 20);
 
         $this->getJson('/api/products?sort=catalog_price_net&dir=asc')
             ->assertOk()

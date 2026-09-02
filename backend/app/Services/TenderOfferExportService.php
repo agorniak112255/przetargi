@@ -15,6 +15,7 @@ final class TenderOfferExportService
 {
     public function __construct(
         private readonly BattlecardService $battlecards,
+        private readonly NbpExchangeRateService $fx,
     ) {}
 
     /**
@@ -26,7 +27,7 @@ final class TenderOfferExportService
         $rows = [];
         foreach ($tender->items as $item) {
             $product = $item->mainProduct;
-            $purchase = $product?->purchase_price !== null ? (float) $product->purchase_price : null;
+            $purchase = $product !== null ? $this->fx->purchasePln($product) : null;
             $offer = $item->offer_price !== null ? (float) $item->offer_price : null;
             $line = $offer !== null ? round($offer * (int) $item->quantity, 2) : null;
             $card = $this->battlecards->forItem($item);

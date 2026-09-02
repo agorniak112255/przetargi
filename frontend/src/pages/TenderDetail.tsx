@@ -7,7 +7,7 @@ import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
-import { offerMarkupFactor, productDisplayName, suggestedOfferPrice } from '../lib/productLabel'
+import { offerMarkupFactor, productDisplayName, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -2795,7 +2795,7 @@ function ItemRow({
                   if (id) {
                     setCustomName('')
                     setCustomUrl('')
-                    applyCatalogPrice(product?.purchase_price ?? null)
+                    applyCatalogPrice(purchaseForOffer(product))
                   }
                 }}
                 hint={
@@ -2853,7 +2853,7 @@ function ItemRow({
                 setCustomName('')
                 setCustomUrl('')
                 setAiModalOpen(false)
-                applyCatalogPrice(p.purchase_price)
+                applyCatalogPrice(purchaseForOffer(p))
                 void onSave(item.id, {
                   main_product_id: p.id,
                   custom_name: null,

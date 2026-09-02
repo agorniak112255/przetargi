@@ -106,6 +106,7 @@ export type Product = {
   discount_percent?: string
   currency?: string | null
   price_pln?: number | null
+  purchase_price_pln?: number | null
   stock: number
   pack_qty?: number | null
   packaging?: string | null

@@ -25,6 +25,7 @@ final class BattlecardService
         private readonly ProductMatchService $matcher,
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly PpeAssortment $assortment,
+        private readonly NbpExchangeRateService $fx,
     ) {}
 
     /**
@@ -189,6 +190,18 @@ final class BattlecardService
             $norms = implode(', ', array_map('strval', $payload['norms']));
         }
 
+        $sourceCurrency = strtoupper(trim((string) ($product->currency ?? 'PLN'))) ?: 'PLN';
+        $catalogPln = $this->fx->catalogPln($product);
+        $purchasePln = $this->fx->purchasePln($product);
+        $suggested = OfferPricing::fromPurchase($purchasePln, $markupPercent);
+        $offerOut = $offerPrice;
+        if ($offerOut !== null && $this->fx->isForeign($sourceCurrency) && $product->purchase_price !== null) {
+            $unconverted = OfferPricing::fromPurchase($product->purchase_price, $markupPercent);
+            if ($unconverted !== null && abs($offerOut - $unconverted) < 0.03) {
+                $offerOut = $suggested;
+            }
+        }
+
         return [
             'role' => $role,
             'product_id' => $product->id,
@@ -199,14 +212,12 @@ final class BattlecardService
             'category' => $product->category,
             'norms' => $norms,
             'attributes' => $attrs,
-            'catalog_price_net' => $product->catalog_price_net !== null
-                ? (float) $product->catalog_price_net
-                : null,
-            'offer_price' => $offerPrice,
-            'purchase_price' => $product->purchase_price !== null
-                ? (float) $product->purchase_price
-                : null,
-            'suggested_offer_price' => OfferPricing::fromPurchase($product->purchase_price, $markupPercent),
+            'source_currency' => $sourceCurrency,
+            'currency' => 'PLN',
+            'catalog_price_net' => $catalogPln,
+            'offer_price' => $offerOut,
+            'purchase_price' => $purchasePln,
+            'suggested_offer_price' => $suggested,
             'stock' => (int) ($product->stock ?? 0),
             'match_percent' => $matchPercent,
             'match_source' => $matchSource,

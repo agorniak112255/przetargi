@@ -33,6 +33,15 @@ final class NbpExchangeRateServiceTest extends TestCase
 
         $this->assertSame(40.0, $fx->toPln(10, 'EUR'));
         $this->assertSame(10.0, $fx->toPln(10, 'PLN'));
+        $this->assertSame(20.0, $fx->toPlnOrNull(5, 'EUR'));
+        $this->assertNull($fx->toPlnOrNull(null, 'EUR'));
+        $row = $fx->appendPricePln([
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'currency' => 'EUR',
+        ]);
+        $this->assertSame(40.0, $row['price_pln']);
+        $this->assertSame(20.0, $row['purchase_price_pln']);
         $this->assertSame('nbp', $fx->snapshot()['source']);
         $this->assertSame('2026-08-27', $fx->snapshot()['as_of']);
     }

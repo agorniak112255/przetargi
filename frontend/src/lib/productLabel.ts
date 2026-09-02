@@ -80,6 +80,25 @@ export function offerMarkupFactor(percent: number | null | undefined, fallback =
   return factor > 0 ? factor : fallback
 }
 
+/** Zakup do oferty: zawsze PLN (API przelicza NBP, gdy karta jest w EUR itd.). */
+export function purchaseForOffer(p: {
+  purchase_price?: string | number | null
+  purchase_price_pln?: number | null
+  currency?: string | null
+} | null | undefined): number | null {
+  if (!p) return null
+  if (p.purchase_price_pln != null && Number(p.purchase_price_pln) > 0) {
+    return Number(p.purchase_price_pln)
+  }
+  const cur = (p.currency ?? 'PLN').trim().toUpperCase()
+  if (cur !== '' && cur !== 'PLN') {
+    return null
+  }
+  const raw = p.purchase_price
+  if (raw == null || raw === '' || Number(raw) <= 0) return null
+  return Number(raw)
+}
+
 /** Sugerowana cena oferty = zakup × narzut (+18% domyślnie, jak config/pricing.php). */
 export function suggestedOfferPrice(
   purchase: number | null | undefined,

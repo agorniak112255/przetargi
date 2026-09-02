@@ -218,9 +218,15 @@ export function ProductVerifyModal({ productId, query, onClose }: Props) {
               <div className="grid grid-cols-2 gap-2 text-xs text-slate-700">
                 <span>
                   Zakup: <b>{product.purchase_price} {product.currency ?? 'PLN'}</b>
+                  {(product.currency ?? 'PLN').toUpperCase() !== 'PLN' && product.purchase_price_pln != null ? (
+                    <span className="block text-[10px] text-slate-500">≈ {product.purchase_price_pln} zł</span>
+                  ) : null}
                 </span>
                 <span>
                   Katalog: <b>{product.catalog_price_net} {product.currency ?? 'PLN'}</b>
+                  {(product.currency ?? 'PLN').toUpperCase() !== 'PLN' && product.price_pln != null ? (
+                    <span className="block text-[10px] text-slate-500">≈ {product.price_pln} zł</span>
+                  ) : null}
                 </span>
               </div>
             )}

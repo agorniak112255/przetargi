@@ -23,6 +23,8 @@ export type BattlecardProduct = {
   offer_price: number | null
   purchase_price: number | null
   suggested_offer_price?: number | null
+  source_currency?: string | null
+  currency?: string | null
   stock: number
   match_percent: number
   match_source?: string | null
@@ -123,7 +125,11 @@ function Col({
           className="text-[11px] font-semibold text-slate-800"
           title={
             p.purchase_price != null
-              ? `Cennik po upuście${p.catalog_price_net != null ? ` (kat. ${fmtPrice(p.catalog_price_net)} zł)` : ''}`
+              ? `Cennik po upuście w zł${
+                  p.source_currency && p.source_currency !== 'PLN'
+                    ? ` (z ${p.source_currency}, kurs NBP)`
+                    : ''
+                }${p.catalog_price_net != null ? ` (kat. ${fmtPrice(p.catalog_price_net)} zł)` : ''}`
               : 'Cena katalogowa'
           }
         >

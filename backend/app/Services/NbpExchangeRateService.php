@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Models\Product;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Throwable;
@@ -92,16 +93,48 @@ final class NbpExchangeRateService
         return round($amount * $rate, 2);
     }
 
+    public function toPlnOrNull(float|string|null $amount, ?string $currency): ?float
+    {
+        if ($amount === null || $amount === '') {
+            return null;
+        }
+        $value = (float) $amount;
+        if ($value <= 0) {
+            return null;
+        }
+
+        return $this->toPln($value, $currency);
+    }
+
+    public function isForeign(?string $currency): bool
+    {
+        $code = strtoupper(trim((string) $currency));
+
+        return $code !== '' && $code !== 'PLN';
+    }
+
+    public function purchasePln(Product $product): ?float
+    {
+        return $this->toPlnOrNull($product->purchase_price, $product->currency);
+    }
+
+    public function catalogPln(Product $product): ?float
+    {
+        return $this->toPlnOrNull($product->catalog_price_net, $product->currency);
+    }
+
     /**
      * @param  array<string, mixed>  $row
      * @return array<string, mixed>
      */
     public function appendPricePln(array $row): array
     {
+        $currency = isset($row['currency']) ? (string) $row['currency'] : 'PLN';
         $row['price_pln'] = $this->toPln(
             (float) ($row['catalog_price_net'] ?? 0),
-            isset($row['currency']) ? (string) $row['currency'] : 'PLN',
+            $currency,
         );
+        $row['purchase_price_pln'] = $this->toPlnOrNull($row['purchase_price'] ?? null, $currency);
 
         return $row;
     }

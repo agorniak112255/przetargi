@@ -80,7 +80,7 @@ class TenderItemController extends Controller
             }
 
             $item->main_product_id = $product->id;
-            $item->offer_price = $this->pricing->offerFromPurchase($tender, $product->purchase_price);
+            $item->offer_price = $this->pricing->offerFromProduct($tender, $product);
             $item->status = 'matched';
             $item->match_source = 'battlecard';
             $item->ai_match_percent = $pick['match_percent'];
@@ -274,7 +274,7 @@ class TenderItemController extends Controller
             if ($data['main_product_id'] !== null && ! array_key_exists('offer_price', $data)) {
                 $product = Product::query()->find($data['main_product_id']);
                 if ($product !== null && (float) $product->purchase_price > 0) {
-                    $item->offer_price = $this->pricing->offerFromPurchase($tender, $product->purchase_price);
+                    $item->offer_price = $this->pricing->offerFromProduct($tender, $product);
                 }
                 if (! array_key_exists('ai_match_reasons', $data) && $product !== null) {
                     $explained = $this->matcher->explainMatch($item->requirement, $product);

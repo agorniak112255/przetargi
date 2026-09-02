@@ -9,6 +9,7 @@ export type AiMatchPick = {
   description?: string | null
   manufacturer?: string | null
   purchase_price?: string | number | null
+  purchase_price_pln?: number | null
   catalog_price_net?: string | number | null
   currency?: string | null
   score: number
@@ -85,6 +86,7 @@ export function ProductAiMatchModal({
         name: p.name,
         manufacturer: p.manufacturer,
         purchase_price: p.purchase_price,
+        purchase_price_pln: p.purchase_price_pln ?? null,
         catalog_price_net: p.catalog_price_net,
         currency: p.currency ?? 'PLN',
         score: p.ai_match_percent ?? 0,
@@ -241,6 +243,9 @@ export function ProductAiMatchModal({
                           ? `${r.purchase_price} ${r.currency ?? 'PLN'}`
                           : '—'}
                       </b>
+                      {(r.currency ?? 'PLN').toUpperCase() !== 'PLN' && r.purchase_price_pln != null ? (
+                        <span className="text-slate-500"> ≈ {r.purchase_price_pln} zł</span>
+                      ) : null}
                     </span>
                     {r.catalog_price_net != null && r.catalog_price_net !== '' && (
                       <span>

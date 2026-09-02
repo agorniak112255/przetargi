@@ -199,9 +199,15 @@ export function ProductPreviewModal({ productId, query = '', onClose }: Props) {
               <div className="mb-3 flex flex-wrap gap-4 text-xs text-slate-700">
                 <span>
                   Katalog: <b>{product.catalog_price_net}</b> {product.currency ?? 'PLN'}
+                  {(product.currency ?? 'PLN').toUpperCase() !== 'PLN' && product.price_pln != null ? (
+                    <span className="ml-1 text-slate-500">≈ {product.price_pln} zł</span>
+                  ) : null}
                 </span>
                 <span>
                   Zakup: <b>{product.purchase_price}</b> {product.currency ?? 'PLN'}
+                  {(product.currency ?? 'PLN').toUpperCase() !== 'PLN' && product.purchase_price_pln != null ? (
+                    <span className="ml-1 text-slate-500">≈ {product.purchase_price_pln} zł</span>
+                  ) : null}
                 </span>
                 {product.discount_percent != null && product.discount_percent !== '' && (
                   <span>
