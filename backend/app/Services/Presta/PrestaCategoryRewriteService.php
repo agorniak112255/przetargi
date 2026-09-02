@@ -36,41 +36,53 @@ final class PrestaCategoryRewriteService
      */
     public function rewrite(): array
     {
-        $this->maps->autoFillMaps();
         $tree = PrestaCategory::query()->where('active', true)->get();
-        $updated = 0;
-        $cleared = 0;
+        $pathCache = [];
+        /** @var array<string, list<int>> $byPath */
+        $byPath = [];
+        /** @var list<int> $clearIds */
+        $clearIds = [];
         $skipped = 0;
 
-        Product::query()->orderBy('id')->chunkById(200, function ($products) use ($tree, &$updated, &$cleared, &$skipped): void {
-            foreach ($products as $product) {
-                if (! $product instanceof Product) {
-                    continue;
-                }
-                $current = trim((string) ($product->category ?? ''));
-                $target = $this->resolvePath($product, $tree);
-                if ($target !== null && mb_strtolower($target) === mb_strtolower($current)) {
+        Product::query()->select(['id', 'name', 'category'])->orderBy('id')
+            ->chunkById(500, function ($products) use ($tree, &$pathCache, &$byPath, &$clearIds, &$skipped): void {
+                foreach ($products as $product) {
+                    if (! $product instanceof Product) {
+                        continue;
+                    }
+                    $current = trim((string) ($product->category ?? ''));
+                    $target = $this->resolvePath($product, $tree, $pathCache);
+                    if ($target !== null && mb_strtolower($target) === mb_strtolower($current)) {
+                        $skipped++;
+
+                        continue;
+                    }
+                    if ($target !== null) {
+                        $byPath[$target][] = (int) $product->id;
+
+                        continue;
+                    }
+                    if ($this->sanitizer->isGarbage($current)) {
+                        $clearIds[] = (int) $product->id;
+
+                        continue;
+                    }
                     $skipped++;
-
-                    continue;
                 }
-                if ($target !== null) {
-                    $product->category = $target;
-                    $product->save();
-                    $updated++;
+            });
 
-                    continue;
-                }
-                if ($this->sanitizer->isGarbage($current)) {
-                    $product->category = null;
-                    $product->save();
-                    $cleared++;
-
-                    continue;
-                }
-                $skipped++;
+        $updated = 0;
+        foreach ($byPath as $path => $ids) {
+            foreach (array_chunk($ids, 1000) as $chunk) {
+                Product::query()->whereIn('id', $chunk)->update(['category' => $path]);
+                $updated += count($chunk);
             }
-        });
+        }
+        $cleared = 0;
+        foreach (array_chunk($clearIds, 1000) as $chunk) {
+            Product::query()->whereIn('id', $chunk)->update(['category' => null]);
+            $cleared += count($chunk);
+        }
 
         $this->maps->autoFillMaps();
 
@@ -79,15 +91,21 @@ final class PrestaCategoryRewriteService
 
     /**
      * @param  \Illuminate\Support\Collection<int, PrestaCategory>  $tree
+     * @param  array<string, string|null>  $pathCache
      */
-    public function resolvePath(Product $product, $tree): ?string
+    public function resolvePath(Product $product, $tree, array &$pathCache = []): ?string
     {
         $current = trim((string) ($product->category ?? ''));
         $name = (string) $product->name;
         $fromName = $this->sanitizer->familyFromText($name);
         if ($fromName !== null) {
-            return $this->bestTreePath($fromName, $name, $tree)
-                ?? (ProductCategorySanitizer::FAMILY_LABELS[$fromName] ?? null);
+            $cacheKey = $fromName.'|'.$this->extraKey($name);
+            if (! array_key_exists($cacheKey, $pathCache)) {
+                $pathCache[$cacheKey] = $this->bestTreePath($fromName, $name, $tree)
+                    ?? (ProductCategorySanitizer::FAMILY_LABELS[$fromName] ?? null);
+            }
+
+            return $pathCache[$cacheKey];
         }
         if ($current !== '' && ! $this->sanitizer->isGarbage($current)) {
             $exact = $this->maps->resolveId($current);
@@ -170,6 +188,19 @@ final class PrestaCategoryRewriteService
         }
 
         return $best instanceof PrestaCategory ? $this->pathOf($best) : null;
+    }
+
+    private function extraKey(string $productName): string
+    {
+        $n = $this->normalize($productName);
+        $bits = [];
+        foreach (['baweln', 'papier', 'hotel', 'robocz', 'ochron'] as $extra) {
+            if (str_contains($n, $extra)) {
+                $bits[] = $extra;
+            }
+        }
+
+        return implode(',', $bits);
     }
 
     private function pathOf(PrestaCategory $cat): string

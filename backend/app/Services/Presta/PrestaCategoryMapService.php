@@ -147,7 +147,7 @@ final class PrestaCategoryMapService
         $filled = 0;
         foreach ($locals as $local) {
             $local = trim((string) $local);
-            if ($local === '') {
+            if ($local === '' || $this->sanitizer->isGarbage($local)) {
                 continue;
             }
             $map = PrestaCategoryMap::query()->firstOrNew(['local_category' => $local]);

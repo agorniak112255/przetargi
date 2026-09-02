@@ -35,11 +35,48 @@ final class ProductCategorySanitizer
         private readonly PpeAssortment $ppe,
     ) {}
 
-    public function isGarbage(?string $category): bool
+    /**
+     * @param  array<string, true>  $official
+     */
+    public function isOfficial(string $category, array $official): bool
+    {
+        $key = mb_strtolower(trim($category));
+
+        return $key !== '' && isset($official[$key]);
+    }
+
+    /**
+     * @param  iterable<int, \App\Models\PrestaCategory>  $tree
+     * @return array<string, true>
+     */
+    public function officialKeys($tree): array
+    {
+        $keys = [];
+        foreach ($tree as $cat) {
+            $name = mb_strtolower(trim((string) $cat->name));
+            $path = mb_strtolower(trim((string) ($cat->path !== '' ? $cat->path : $cat->name)));
+            if ($name !== '') {
+                $keys[$name] = true;
+            }
+            if ($path !== '') {
+                $keys[$path] = true;
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
+     * @param  array<string, true>  $official
+     */
+    public function isGarbage(?string $category, array $official = []): bool
     {
         $c = trim((string) $category);
-        if ($c === '') {
+        if ($c === '' || $c === '-') {
             return true;
+        }
+        if ($this->isOfficial($c, $official)) {
+            return false;
         }
         if (str_starts_with($c, '=') || str_starts_with($c, "'=")) {
             return true;
@@ -62,7 +99,25 @@ final class ProductCategorySanitizer
         if (preg_match('/^en\s*(iso\s*)?2034/i', $c) === 1) {
             return true;
         }
-        if (mb_strlen($c) > 72) {
+        if (preg_match('/^cat\.?\s*i{1,3}\b/iu', $c) === 1) {
+            return true;
+        }
+        if (preg_match('/^[A-Z]{1,2}\d{2}(\s|-)/u', $c) === 1) {
+            return true;
+        }
+        if (preg_match('/^\d+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/u', $c) === 1) {
+            return true;
+        }
+        if (str_contains($c, '@')) {
+            return true;
+        }
+        if (preg_match('/^(accessori|accessories|colours|essential|premium|unique|distributor|grupa|model|produkt|para|szt|op)\b/iu', $c) === 1) {
+            return true;
+        }
+        if (preg_match('/^(art\.?\s*no|dodatkowe oplat|ceny wyrobow|tabela cen)/iu', $c) === 1) {
+            return true;
+        }
+        if (mb_strlen($c) > 72 && ! str_contains($c, ' / ')) {
             return true;
         }
         if (preg_match('/\b(S[1-5]P?|ESD|SRC|GTX|BOA)\b/u', $c) === 1
@@ -113,6 +168,7 @@ final class ProductCategorySanitizer
     public function familyFromText(string $text): ?string
     {
         $n = $this->normalize($text);
+        $n = trim((string) preg_replace('/^\d+[\.\s]*/u', '', $n));
         if (preg_match('/\b(recznik|towel|r[eę]cznik)/u', $n) === 1) {
             return self::FAMILY_TOWEL;
         }
@@ -144,6 +200,31 @@ final class ProductCategorySanitizer
             'eye protection' => 'okulary ochronne',
             'face protection' => 'oslona twarzy',
             'head protection' => 'helm ochronny',
+            'felpa' => 'bluza odziez',
+            'giacca' => 'kurtka odziez',
+            'gilet' => 'kamizelka odziez',
+            'pantalon' => 'spodnie odziez',
+            'bermuda' => 'spodnie odziez',
+            'jeans' => 'spodnie odziez',
+            'coverall' => 'kombinezon odziez',
+            'clothing' => 'odziez',
+            'workwear' => 'odziez',
+            'rainwear' => 'odziez',
+            'softshell' => 'odziez kurtka',
+            't-shirt' => 'odziez',
+            'polo' => 'odziez',
+            'camicia' => 'odziez',
+            'spectacles' => 'okulary ochronne',
+            'occhiali' => 'okulary ochronne',
+            'ear plug' => 'ochrona sluchu',
+            'ear muff' => 'ochrona sluchu',
+            'fall arrest' => 'asekuracja szelki',
+            'harness' => 'asekuracja szelki',
+            'polmask' => 'drogi oddechowe polmaska',
+            'gasnic' => 'odziez',
+            'skarpet' => 'obuwie',
+            'socks' => 'obuwie',
+            'rekawic' => 'rekawice',
         ];
         foreach ($aliases as $from => $to) {
             if (str_contains($normalized, $from)) {

@@ -28,6 +28,8 @@ type Listing = {
   skipped?: number
   garbage_categories?: number
   garbage_products?: number
+  queued?: boolean
+  rewrite_status?: { running?: boolean; updated?: number; cleared?: number; skipped?: number } | null
 }
 
 export function PrestaCategoryMapTab() {
@@ -98,10 +100,28 @@ export function PrestaCategoryMapTab() {
   async function onRewrite() {
     setBusy(true)
     setErr('')
-    setMsg('')
+    setMsg('Zlecam przepisanie…')
     try {
       const data = await api<Listing>('/admin/presta-categories/rewrite', { method: 'POST', body: '{}' })
       applyListing(data)
+      if (data.queued) {
+        setMsg('Przepisuję w tle — czekaj, nie odświeżaj.')
+        const started = Date.now()
+        while (Date.now() - started < 180_000) {
+          await new Promise((r) => setTimeout(r, 3000))
+          const next = await api<Listing>('/admin/presta-categories')
+          applyListing(next)
+          const st = next.rewrite_status
+          if (st && st.running === false && st.updated != null) {
+            setMsg(
+              `Przepisano ${st.updated} produktów, wyczyszczono ${st.cleared ?? 0} śmieci, pominięto ${st.skipped ?? 0}.`,
+            )
+            return
+          }
+        }
+        setMsg('Nadal trwa w kolejce — odśwież za minutę.')
+        return
+      }
       setMsg(
         `Przepisano ${data.updated ?? 0} produktów, wyczyszczono ${data.cleared ?? 0} śmieci, pominięto ${data.skipped ?? 0}.`,
       )
@@ -157,7 +177,7 @@ export function PrestaCategoryMapTab() {
           onClick={() => void onSync()}
           className="rounded bg-emerald-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
         >
-          {busy ? 'Pobieram…' : 'Pobierz kategorie z Presty'}
+          {busy ? 'Czekaj…' : 'Pobierz kategorie z Presty'}
         </button>
         <button
           type="button"

@@ -103,6 +103,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/exchange-rates', ExchangeRateController::class)->middleware('permission:products.view');
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
     Route::get('/products/manufacturers', [ProductController::class, 'manufacturers'])->middleware('permission:products.view');
+    Route::get('/products/categories', [ProductController::class, 'categoryOptions'])->middleware('permission:products.view');
+    Route::patch('/products/{product}/category', [ProductController::class, 'updateCategory'])->middleware('permission:products.view');
     Route::get('/products/catalog-health', [ProductCatalogHealthController::class, 'show'])
         ->middleware('permission:products.view');
     Route::get('/products/catalog-health/vector', [ProductCatalogHealthController::class, 'vector'])

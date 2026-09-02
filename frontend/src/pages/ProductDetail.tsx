@@ -59,6 +59,9 @@ export function ProductDetail() {
       price_list?: { manufacturer: string; version: string } | null
     }[]
   >([])
+  const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([])
+  const [categoryBusy, setCategoryBusy] = useState(false)
+  const [categoryMsg, setCategoryMsg] = useState('')
 
   const load = useCallback(async () => {
     if (!id) return
@@ -70,6 +73,33 @@ export function ProductDetail() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    void api<{ data: { value: string; label: string }[] }>('/products/categories')
+      .then((res) => setCategoryOptions(res.data ?? []))
+      .catch(() => setCategoryOptions([]))
+  }, [])
+
+  async function saveCategory(next: string) {
+    if (!id || !p) return
+    const current = p.category ?? ''
+    if (next === current) return
+    setCategoryBusy(true)
+    setCategoryMsg('')
+    setErr('')
+    try {
+      const res = await api<{ category: string | null }>(`/products/${id}/category`, {
+        method: 'PATCH',
+        body: JSON.stringify({ category: next === '' ? null : next }),
+      })
+      setP({ ...p, category: res.category })
+      setCategoryMsg('Zapisano')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zapisać grupy')
+    } finally {
+      setCategoryBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (!batch || batch.status === 'done' || batch.status === 'failed') return
@@ -192,6 +222,31 @@ export function ProductDetail() {
           <p className="mb-2 text-sm text-slate-500">
             {p.sku} · {p.manufacturer} · {p.norms ?? 'bez normy'}
           </p>
+          <div className="mb-2 flex max-w-xl flex-wrap items-center gap-2">
+            <label htmlFor="product-group" className="shrink-0 text-xs font-semibold text-slate-600">
+              Grupa
+            </label>
+            <select
+              id="product-group"
+              className="min-w-[16rem] flex-1 rounded border border-slate-300 bg-white px-2 py-1.5 text-xs"
+              value={p.category ?? ''}
+              disabled={categoryBusy}
+              onChange={(e) => void saveCategory(e.target.value)}
+            >
+              <option value="">— brak —</option>
+              {p.category
+                && !categoryOptions.some((o) => o.value === p.category)
+                && <option value={p.category}>{p.category}</option>}
+              {categoryOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-slate-500">
+              {categoryBusy ? 'Zapisuję…' : categoryMsg}
+            </span>
+          </div>
           <p className="text-xs text-slate-500">
             Opis/zdjęcia: <b>{STATUS_LABEL[status] ?? status}</b>
             {p.enriched_at ? ` · ${new Date(p.enriched_at).toLocaleString('pl-PL')}` : ''}

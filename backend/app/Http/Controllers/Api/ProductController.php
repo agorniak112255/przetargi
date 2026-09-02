@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\UpdateProductCategoryRequest;
+use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
@@ -146,6 +148,40 @@ class ProductController extends Controller
         });
 
         return response()->json($page);
+    }
+
+    public function categoryOptions(): JsonResponse
+    {
+        $options = PrestaCategory::query()
+            ->where('active', true)
+            ->orderBy('path')
+            ->orderBy('name')
+            ->get()
+            ->map(static function (PrestaCategory $row): array {
+                $path = trim((string) ($row->path !== '' ? $row->path : $row->name));
+
+                return [
+                    'value' => $path,
+                    'label' => $path !== '' ? $path : (string) $row->name,
+                ];
+            })
+            ->filter(static fn (array $row): bool => $row['value'] !== '' && mb_strlen($row['value']) <= 255)
+            ->unique('value')
+            ->values()
+            ->all();
+
+        return response()->json(['data' => $options]);
+    }
+
+    public function updateCategory(UpdateProductCategoryRequest $request, Product $product): JsonResponse
+    {
+        $category = trim((string) $request->validated('category'));
+        $product->category = $category !== '' ? $category : null;
+        $product->save();
+
+        return response()->json([
+            'category' => $product->category,
+        ]);
     }
 
     public function manufacturers(): JsonResponse

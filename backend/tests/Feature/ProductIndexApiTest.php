@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\PrestaCategory;
 use App\Models\Product;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -183,5 +184,67 @@ final class ProductIndexApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.sku', 'PLN-30')
             ->assertJsonPath('data.1.sku', 'EUR-10');
+    }
+
+    public function test_category_options_return_presta_paths(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        PrestaCategory::query()->create([
+            'presta_id' => 88,
+            'parent_presta_id' => 10,
+            'name' => 'Ręczniki bawełniane',
+            'path' => 'Środki czystości / Ręczniki / Ręczniki bawełniane',
+            'level_depth' => 3,
+            'active' => true,
+        ]);
+        PrestaCategory::query()->create([
+            'presta_id' => 9,
+            'parent_presta_id' => 2,
+            'name' => 'Ukryta',
+            'path' => 'Ukryta',
+            'level_depth' => 2,
+            'active' => false,
+        ]);
+
+        $this->getJson('/api/products/categories')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.value', 'Środki czystości / Ręczniki / Ręczniki bawełniane');
+    }
+
+    public function test_product_category_can_be_updated_and_cleared(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = Product::query()->create([
+            'sku' => 'GRP-1',
+            'name' => 'Ręcznik',
+            'manufacturer' => 'X',
+            'category' => 'Felpa',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+
+        $this->patchJson('/api/products/'.$product->id.'/category', [
+            'category' => 'Środki czystości / Ręczniki / Ręczniki bawełniane',
+        ])
+            ->assertOk()
+            ->assertJsonPath('category', 'Środki czystości / Ręczniki / Ręczniki bawełniane');
+
+        $this->assertDatabaseHas('products', [
+            'id' => $product->id,
+            'category' => 'Środki czystości / Ręczniki / Ręczniki bawełniane',
+        ]);
+
+        $this->patchJson('/api/products/'.$product->id.'/category', [
+            'category' => null,
+        ])
+            ->assertOk()
+            ->assertJsonPath('category', null);
+
+        $this->assertDatabaseHas('products', [
+            'id' => $product->id,
+            'category' => null,
+        ]);
     }
 }
