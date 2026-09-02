@@ -332,7 +332,7 @@ export function ProductDetail() {
           </a>
         </p>
       )}
-      {p.enrichment_error && status === 'failed' && (
+      {p.enrichment_error && (status === 'failed' || status === 'manual') && (
         <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{p.enrichment_error}</p>
       )}
       {batch && (batch.status === 'queued' || batch.status === 'running') && (

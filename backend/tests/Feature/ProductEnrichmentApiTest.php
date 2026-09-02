@@ -1023,6 +1023,55 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertNotSame(Product::ENRICHMENT_DONE, $product->fresh()?->enrichment_status);
     }
 
+    public function test_force_without_sign_card_clears_foreign_clothing_description(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'T-31',
+            'name' => 'Tablica pionowa AED + krok po kroku ZIELONA',
+            'manufacturer' => 'CABINAID',
+            'category' => 'Tablice / Oznakowanie',
+            'description' => 'Koszula flanelowa ARDON URBAN+ kod T-31, 100% bawełna, rozmiary S-4XL.',
+            'enrichment_payload' => ['attributes' => ['rozmiar' => 's-xl']],
+            'enrichment_status' => Product::ENRICHMENT_MANUAL,
+        ]);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('forgetProductCache')->once();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->never();
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ProductDocumentFinder::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, true);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException) {
+        }
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+        $this->assertSame('', (string) $product->description);
+        $this->assertNull($product->enrichment_payload);
+        $this->assertNotEmpty($product->enrichment_error);
+    }
+
     public function test_searxng_outage_marks_failed_not_manual(): void
     {
         $product = $this->makeProduct([

@@ -794,8 +794,10 @@ final class ProductSearchIdentity
                     ? $sku
                     : ($this->catalogArticleCodes($product)[0] ?? $this->strippedProductName($product)));
             if ($phrase !== '' && $hosts !== []) {
+                $extra = $this->sharedShortSkuQueryExtra($product);
+                $sitePhrase = trim($phrase.($extra !== '' ? ' '.$extra : ''));
                 foreach ($hosts as $host) {
-                    $queries[] = 'site:'.$host.' '.$phrase;
+                    $queries[] = 'site:'.$host.' '.$sitePhrase;
                 }
             }
         }
@@ -882,6 +884,7 @@ final class ProductSearchIdentity
         }
         // Model z nazwy (BEAGLE, C500, Carbon ESD PU Top) przed numerem magazynowym.
         $preferCatalogName = $composedSku || $shopName !== ''
+            || $this->skuIsSharedShortCode($product)
             || ($this->looksLikeCompactTradeName($fullNameEarly)
                 && ! $this->hasDistinctiveCatalogSku($product));
 
@@ -894,6 +897,12 @@ final class ProductSearchIdentity
             }
         } elseif ($usableSku) {
             $skuQueries[] = $this->queryWithManufacturer($sku, $product);
+        }
+        if ($usableSku && $this->skuIsSharedShortCode($product)) {
+            $extra = $this->sharedShortSkuQueryExtra($product);
+            if ($extra !== '') {
+                $skuQueries = [$this->queryWithManufacturer(trim($sku.' '.$extra), $product)];
+            }
         }
 
         $nameQueries = [];
@@ -1209,6 +1218,9 @@ final class ProductSearchIdentity
         if ($this->looksLikeUnrelatedSignage($hay, $product) && ! $this->hayHasProductCode($hay, $product)) {
             return false;
         }
+        if ($this->looksLikeUnrelatedApparel($hay, $product)) {
+            return false;
+        }
         if (! $this->hayHasRequiredTypeFromName($hay, $product)) {
             return false;
         }
@@ -1351,6 +1363,9 @@ final class ProductSearchIdentity
         if ($blob === '') {
             return false;
         }
+        if ($this->looksLikeUnrelatedApparel($blob, $product)) {
+            return false;
+        }
         if (! $this->hayHasBrand($blob, $product) && ! $this->hayHasOfficialHost($blob, $url, $product)) {
             return false;
         }
@@ -1426,7 +1441,55 @@ final class ProductSearchIdentity
             }
         }
 
-        return array_values(array_unique($out));
+        $uniq = array_values(array_unique($out));
+        $specific = array_values(array_filter(
+            $uniq,
+            fn (string $token): bool => ! $this->tokenIsArticleTypeWord($token)
+        ));
+
+        return $specific !== [] ? $specific : $uniq;
+    }
+
+    /**
+     * T-31 / T-34 — sam kod w site: łapie koszulę; dopisz typ i część nazwy.
+     */
+    public function sharedShortSkuQueryExtra(Product $product): string
+    {
+        if (! $this->skuIsSharedShortCode($product)) {
+            return '';
+        }
+        $bits = [];
+        $type = $this->requiredArticleTypeLabel($product);
+        if ($type !== null) {
+            $bits[] = trim(explode('/', $type)[0]);
+        }
+        foreach ($this->distinctiveIdentityNameTokens($product) as $token) {
+            if ($this->tokenIsArticleTypeWord($token) || in_array($token, $bits, true)) {
+                continue;
+            }
+            $bits[] = $token;
+            if (count($bits) >= 3) {
+                break;
+            }
+        }
+
+        return implode(' ', $bits);
+    }
+
+    public function hayHasSpecificNameToken(string $hay, Product $product): bool
+    {
+        $blob = mb_strtolower($hay);
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $blob) ?? $blob;
+        foreach ($this->distinctiveIdentityNameTokens($product) as $token) {
+            if ($this->tokenIsArticleTypeWord($token)) {
+                continue;
+            }
+            if ($this->tokenInHay($blob, $hayCompact, $token)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function hayHasOfficialHost(string $hay, string $url, Product $product): bool
@@ -1434,7 +1497,11 @@ final class ProductSearchIdentity
         $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
         $host = preg_replace('/^www\./', '', $host) ?? $host;
         $blob = mb_strtolower($url.' '.$hay);
-        foreach ($this->officialCatalogHosts($product) as $official) {
+        $hosts = array_values(array_unique(array_merge(
+            $this->officialCatalogHosts($product),
+            $this->catalogSearchHosts($product),
+        )));
+        foreach ($hosts as $official) {
             $official = preg_replace('/^www\./', '', mb_strtolower(trim($official))) ?? '';
             if ($official === '') {
                 continue;
@@ -2272,6 +2339,23 @@ final class ProductSearchIdentity
             '/\b(tablica informacyjna|tabliczka informacyjna|tablica ostrzeg|znak ostrzeg'
             .'|uwaga pies|warning dog|beware of(?: the)? dog|information board'
             .'|tablica pvc|naklejka uwaga)\b/u',
+            $page
+        ) === 1;
+    }
+
+    /** T-31 tablicy nie jest koszulą — odzież z tym samym kodem odpada. */
+    public function looksLikeUnrelatedApparel(string $hay, Product $product): bool
+    {
+        $productBlob = $this->normalizeTypeText(
+            trim((string) $product->name.' '.(string) $product->sku.' '.(string) ($product->category ?? ''))
+        );
+        if (! $this->textHasTypeStem($productBlob, self::TYPE_STEMS['signage'])) {
+            return false;
+        }
+        $page = $this->normalizeTypeText($hay);
+
+        return preg_match(
+            '/\b(koszul|flanel|bluza|kurtk|spodn|ogrodniczk|sweatshirt|jacket|trouser)\w*\b/u',
             $page
         ) === 1;
     }
@@ -3585,6 +3669,21 @@ final class ProductSearchIdentity
     {
         foreach (preg_split('/[\-\/ ]+/u', trim($sku)) ?: [] as $segment) {
             if (preg_match('/\d/u', (string) $segment) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function tokenIsArticleTypeWord(string $token): bool
+    {
+        if ($this->isApparelTypeWord($token)) {
+            return true;
+        }
+        $normalized = $this->normalizeTypeText($token);
+        foreach (self::TYPE_STEMS as $stems) {
+            if ($this->textHasTypeStem($normalized, $stems)) {
                 return true;
             }
         }

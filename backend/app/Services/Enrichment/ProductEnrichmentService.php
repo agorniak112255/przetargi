@@ -799,10 +799,18 @@ final class ProductEnrichmentService
                 'error' => $e->getMessage(),
             ]);
             try {
-                $product->update([
+                $failed = [
                     'enrichment_status' => $this->enrichmentStatusForFailure($e),
                     'enrichment_error' => mb_substr($e->getMessage(), 0, 2000),
-                ]);
+                ];
+                if ($force && $e instanceof ProductSourcesNotFoundException) {
+                    $old = trim((string) $product->description);
+                    if ($old !== '' && ! $this->descriptionMentionsProduct($old, $product)) {
+                        $failed['description'] = '';
+                        $failed['enrichment_payload'] = null;
+                    }
+                }
+                $product->update($failed);
             } catch (Throwable) {
                 // np. padnięte MySQL — status może zostać "running"; UI pozwala odblokować
             }
@@ -1956,8 +1964,14 @@ final class ProductEnrichmentService
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
         if ($this->identity->hayHasProductCode($hay, $product)) {
-            return $this->identity->pageAgreesWithBrandAndName($hay, '', $product)
-                && $this->identity->hayHasRequiredTypeFromName($hay, $product);
+            if ($this->identity->pageAgreesWithBrandAndName($hay, '', $product)
+                && $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
+                return true;
+            }
+            // Sklep nie pisze CABINAID — T-31 + tablica + AED wystarcza w opisie.
+            return $this->identity->skuIsSharedShortCode($product)
+                && $this->identity->hayHasRequiredTypeFromName($hay, $product)
+                && $this->identity->hayHasSpecificNameToken($hay, $product);
         }
         if ($this->identity->looksLikeUnrelatedSignage($hay, $product)) {
             return false;

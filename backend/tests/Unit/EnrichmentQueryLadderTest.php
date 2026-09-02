@@ -1399,6 +1399,39 @@ final class EnrichmentQueryLadderTest extends TestCase
         $cabinaidLadder = $open->invoke($web, $t31, $build->invoke($web, $t31, 'manufacturer'));
         $this->assertStringStartsWith('site:', $cabinaidLadder[0] ?? '');
         $this->assertStringContainsString('T-31', $cabinaidLadder[0] ?? '');
+        $this->assertMatchesRegularExpression('/tablic|aed|pionow/i', $cabinaidLadder[0] ?? '');
+        $this->assertStringContainsString('tablica', $identity->sharedShortSkuQueryExtra($t31));
+
+        $this->assertTrue($identity->pageAgreesWithBrandAndName(
+            'Tablica pionowa AED T-31 krok po kroku',
+            'https://gvarant.pl/tablica-aed-t-31',
+            $t31
+        ));
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://gvarant.pl/tablica-aed-t-31',
+            'Tablica pionowa AED T-31',
+            'Tablica AED instrukcja krok po kroku.',
+            $t31
+        ));
+        $this->assertFalse($identity->pageAgreesWithBrandAndName(
+            'Koszula flanelowa ARDON URBAN+ T-31 tablica rozmiarów S-XL',
+            'https://gvarant.pl/ardon-urban-plus-t-31',
+            $t31
+        ));
+        $this->assertTrue($identity->looksLikeUnrelatedApparel(
+            'Koszula flanelowa ARDON URBAN+ T-31',
+            $t31
+        ));
+        $this->assertTrue($identity->pageAgreesWithBrandAndName(
+            'Tablica kierunkowa w prawo T-34',
+            'https://optimumbhp.pl/tablica-t-34',
+            $t34
+        ));
+        $this->assertTrue($desc->invoke(
+            $service,
+            'Tablica pionowa AED T-31, instrukcja krok po kroku.',
+            $t31
+        ));
 
         $this->assertFalse($identity->pageAgreesWithBrandAndName(
             'https://www.cofra.it/en/products/other Cofra V742-0-02 safety shoe S3',
