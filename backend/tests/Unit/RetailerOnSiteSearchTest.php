@@ -178,4 +178,30 @@ final class RetailerOnSiteSearchTest extends TestCase
         $this->assertMatchesRegularExpression('/G\\s*3175/i', $query);
         $this->assertStringNotContainsString('TRACK', $query);
     }
+
+    public function test_idosell_kams_finds_product_from_relative_search_hit(): void
+    {
+        Http::fake([
+            'https://kams.com.pl*' => Http::response(
+                '<a href="p6119,track-ardon-buty-do-kostki-z-nubuku-material-tekstylny-g3175-38-46.html">'
+                .'TRACK Ardon - buty do kostki z nubuku + materiał tekstylny G3175 - 38-46</a>'
+                .'<a href="p100,kurtka-ardon-track.html">Kurtka ARDON TRACK EN 342</a>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $hits = app(RetailerOnSiteSearch::class)->find(new Product([
+            'sku' => 'G3175/40',
+            'name' => 'Obuv TRACK',
+            'manufacturer' => 'ARDON SAFETY',
+        ]));
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains(
+            'https://kams.com.pl/p6119,track-ardon-buty-do-kostki-z-nubuku-material-tekstylny-g3175-38-46.html',
+            $urls
+        );
+        $this->assertNotContains('https://kams.com.pl/p100,kurtka-ardon-track.html', $urls);
+    }
 }

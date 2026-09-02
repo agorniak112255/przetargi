@@ -56,7 +56,7 @@ final class DuckDuckGoHtmlSearch
         }
         // Tylko jedna domena: powtórzone site: łączą się warunkiem „i”,
         // a strona nie leży w dwóch domenach naraz — takie zapytanie zawsze jest puste.
-        if ($sites !== []) {
+        if ($sites !== [] && preg_match('/\bsite:/i', $query) !== 1) {
             $query .= ' '.$sites[0];
         }
 
@@ -172,11 +172,13 @@ final class DuckDuckGoHtmlSearch
             }
         }
 
-        throw new RuntimeException(
-            $blocked !== ''
-                ? 'SearXNG: silniki zablokowane ('.$blocked.') — nic nie odpowiedziało na "'.$query.'".'
-                : 'SearXNG: brak wyników dla "'.$query.'".'
-        );
+        if ($blocked !== '') {
+            throw new RuntimeException(
+                'SearXNG: silniki zablokowane ('.$blocked.') — nic nie odpowiedziało na "'.$query.'".'
+            );
+        }
+
+        return [];
     }
 
     private function fetchSearxngJson(string $baseUrl, string $query, ?string $engines): string

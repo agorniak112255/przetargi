@@ -1469,32 +1469,21 @@ PROMPT;
     ): array {
         if ($this->settings->usesFreeWebSearch()) {
             $engine = $this->searchProviderName();
-            $freeError = null;
-            try {
-                // Darmowe szukanie nic nie kosztuje, a SearXNG miesza trafne karty z szumem —
-                // bierzemy szerszą listę i zawężamy ją dopiero filtrem tożsamości produktu.
-                $results = $this->duckDuckGo->search(
-                    $query,
-                    max($profile->maxResults, self::FREE_SEARCH_CANDIDATES),
-                    $includeDomains,
-                    ! $this->localSearchOnly
-                );
-                if ($results !== []) {
-                    return [
-                        'results' => $results,
-                        'images' => [],
-                        'provider' => $includeDomains !== [] ? $engine.'_preferred' : $engine,
-                        'raw_content' => null,
-                    ];
-                }
-                $freeError = $includeDomains !== []
-                    ? 'Brak wyników ('.$engine.') na stronie producenta.'
-                    : $engine.' nie zwrócił wyników.';
-            } catch (Throwable $e) {
-                $freeError = $e->getMessage();
-            }
+            // Darmowe szukanie nic nie kosztuje, a SearXNG miesza trafne karty z szumem —
+            // bierzemy szerszą listę i zawężamy ją dopiero filtrem tożsamości produktu.
+            $results = $this->duckDuckGo->search(
+                $query,
+                max($profile->maxResults, self::FREE_SEARCH_CANDIDATES),
+                $includeDomains,
+                ! $this->localSearchOnly
+            );
 
-            throw new RuntimeException($freeError ?? $engine.' nie zwrócił wyników.');
+            return [
+                'results' => $results,
+                'images' => [],
+                'provider' => $includeDomains !== [] ? $engine.'_preferred' : $engine,
+                'raw_content' => null,
+            ];
         }
 
         return $this->searchViaTavily($query, $includeDomains, $profile, false);

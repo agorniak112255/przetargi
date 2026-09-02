@@ -23,6 +23,14 @@ final class RetailerOnSiteSearch
         ['host' => 'icd.pl', 'template' => 'https://icd.pl/szukaj?controller=search&s={q}'],
     ];
 
+    /** @var list<array{host: string, template: string}> */
+    private const IDOSELL_ENDPOINTS = [
+        ['host' => 'kams.com.pl', 'template' => 'https://kams.com.pl/?d=szukaj&szukaj={q}'],
+        ['host' => 'behapownia.pl', 'template' => 'https://behapownia.pl/?d=szukaj&szukaj={q}'],
+        ['host' => 'specto.com.pl', 'template' => 'https://specto.com.pl/?d=szukaj&szukaj={q}'],
+        ['host' => 'aitbhp.pl', 'template' => 'https://aitbhp.pl/?d=szukaj&szukaj={q}'],
+    ];
+
     /** @var array{host: string, template: string} */
     private const MAPA_ENDPOINT = [
         'host' => 'mapa-pro.pl',
@@ -144,11 +152,14 @@ final class RetailerOnSiteSearch
         }
         foreach ($matches as $hit) {
             $url = html_entity_decode(trim($hit[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-            if (str_starts_with($url, '/')) {
-                $url = 'https://'.$host.$url;
-            }
-            if (! str_starts_with($url, 'http')) {
+            if ($url === '' || str_starts_with($url, '#')
+                || str_starts_with($url, 'javascript:') || str_starts_with($url, 'mailto:')) {
                 continue;
+            }
+            if (str_starts_with($url, '//')) {
+                $url = 'https:'.$url;
+            } elseif (preg_match('#^https?://#i', $url) !== 1) {
+                $url = 'https://'.$host.'/'.ltrim($url, '/');
             }
             $pageHost = mb_strtolower((string) parse_url($url, PHP_URL_HOST));
             $pageHost = preg_replace('/^www\./', '', $pageHost) ?? $pageHost;
@@ -156,11 +167,17 @@ final class RetailerOnSiteSearch
                 continue;
             }
             $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
-            if ($path === '' || $path === '/'
+            if ($path === '' || $path === '/' || str_ends_with($path, '/index.php')
                 || preg_match('#/(search|catalogsearch|wyszukiwanie|category|kategoria|customer|checkout|cart|login)#u', $path) === 1) {
                 continue;
             }
             $title = trim(html_entity_decode(strip_tags($hit[2]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            if (mb_strlen($title) < 8) {
+                $fromSlug = $this->titleFromProductPath($path);
+                if ($fromSlug !== '') {
+                    $title = $fromSlug;
+                }
+            }
             if ($title === '' || mb_strlen($title) < 8) {
                 continue;
             }
@@ -183,7 +200,7 @@ final class RetailerOnSiteSearch
             return self::ENDPOINTS;
         }
         $hosts = $this->identity->catalogSearchHosts($product);
-        $known = array_merge([self::MAPA_ENDPOINT, self::MAREL_ENDPOINT], self::ENDPOINTS);
+        $known = array_merge(self::IDOSELL_ENDPOINTS, [self::MAPA_ENDPOINT, self::MAREL_ENDPOINT], self::ENDPOINTS);
         $out = [];
         foreach ($known as $row) {
             if (in_array($row['host'], $hosts, true)) {
@@ -230,6 +247,17 @@ final class RetailerOnSiteSearch
             'title' => $title !== '' ? $title : $url,
             'snippet' => '',
         ];
+    }
+
+    private function titleFromProductPath(string $path): string
+    {
+        $slug = basename($path);
+        $slug = preg_replace('/\.html?$/i', '', $slug) ?? $slug;
+        if (preg_match('/^p\d+[,_-](.+)$/u', $slug, $m) !== 1) {
+            return '';
+        }
+
+        return trim((string) preg_replace('/[-_]+/u', ' ', $m[1]));
     }
 
     /**

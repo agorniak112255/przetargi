@@ -42,6 +42,7 @@ final class CatalogIndexSearch
     {
         $raw = [
             trim((string) $product->sku),
+            $this->identity->catalogSkuWithoutSize($product),
             $this->identity->internalSkuCore($product),
             $this->identity->stripBrandPrefix(
                 trim((string) $product->sku),
