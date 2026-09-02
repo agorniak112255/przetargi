@@ -979,6 +979,17 @@ final class ProductSearchIdentity
             && $this->distributorPrefixedCatalogSku($product) === '') {
             array_unshift($out, $this->queryWithManufacturer($withoutSize, $product));
         }
+        $hintBrand = $this->inferredBrandHint($product);
+        if ($hintBrand !== '') {
+            $catalog = $this->distributorPrefixedCatalogSku($product);
+            if ($catalog !== '') {
+                array_unshift($out, trim($catalog.' '.$hintBrand));
+            }
+            $trade = $this->strippedProductName($product);
+            if ($trade !== '') {
+                array_unshift($out, trim($trade.' '.$hintBrand));
+            }
+        }
 
         return array_values(array_unique(array_filter(
             $out,
@@ -1970,8 +1981,44 @@ final class ProductSearchIdentity
         if ($shops !== []) {
             return $shops;
         }
+        $inferred = $this->inferredCatalogHosts($product);
+        if ($inferred !== []) {
+            return $inferred;
+        }
 
         return $this->officialCatalogHosts($product);
+    }
+
+    /**
+     * WST068GM / ST068GM — cennik ma Whirlpool, karta jest u U-Power i na misterworker.
+     *
+     * @return list<string>
+     */
+    public function inferredCatalogHosts(Product $product): array
+    {
+        $code = $this->distributorPrefixedCatalogSku($product);
+        if ($code === '') {
+            return [];
+        }
+        $hosts = ['misterworker.com'];
+        if (preg_match('/^ST\d{3}[A-Z]{2}$/u', $code) === 1) {
+            $hosts = array_merge(
+                $hosts,
+                (array) config('enrichment.manufacturer_domains.u-power', []),
+            );
+        }
+
+        return $this->bareHosts($hosts);
+    }
+
+    public function inferredBrandHint(Product $product): string
+    {
+        $code = $this->distributorPrefixedCatalogSku($product);
+        if ($code !== '' && preg_match('/^ST\d{3}[A-Z]{2}$/u', $code) === 1) {
+            return 'U-Power';
+        }
+
+        return '';
     }
 
     /**
@@ -1982,7 +2029,7 @@ final class ProductSearchIdentity
     public function officialCatalogHosts(Product $product): array
     {
         if ($this->manufacturerLooksUnrelatedToProduct($product)) {
-            return [];
+            return $this->inferredCatalogHosts($product);
         }
 
         return $this->bareHosts($this->hostsFromConfigMap(
@@ -2129,6 +2176,10 @@ final class ProductSearchIdentity
         bool $internalSku,
         bool $warehouseSku,
     ): string {
+        $prefixed = $this->distributorPrefixedCatalogSku($product);
+        if ($prefixed !== '') {
+            return $prefixed;
+        }
         $sku = trim((string) $product->sku);
         $coded = $this->catalogSkuWithoutSize($product);
         $stripped = $coded !== '' && mb_strtolower($coded) !== mb_strtolower($sku);
@@ -3326,6 +3377,10 @@ final class ProductSearchIdentity
         if ($this->looksLikeUrgentGloveSeries($product)) {
             $out[] = 'urgent';
         }
+        $hint = $this->inferredBrandHint($product);
+        if ($hint !== '') {
+            $out[] = mb_strtolower($hint);
+        }
         foreach ($this->officialCatalogHosts($product) as $host) {
             $label = explode('.', $host)[0] ?? '';
             if (mb_strlen($label) >= 3 && preg_match('/^[a-z0-9]+$/u', $label) === 1) {
@@ -3689,7 +3744,7 @@ final class ProductSearchIdentity
     }
 
     /** Whirlpool w cenniku odzieży BHP — nie doklejaj do zapytań ani site:. */
-    private function manufacturerLooksUnrelatedToProduct(Product $product): bool
+    public function manufacturerLooksUnrelatedToProduct(Product $product): bool
     {
         $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
         if ($brand === '') {

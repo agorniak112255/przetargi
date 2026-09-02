@@ -1475,4 +1475,45 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertTrue($identity->hayHasRequiredTypeFromName('taśma naprawcza 3M 2903', $tape));
         $this->assertFalse($identity->hayHasRequiredTypeFromName('rękawice nitrylowe 3M', $tape));
     }
+
+    public function test_distributor_prefix_sku_sites_misterworker_not_gvarant(): void
+    {
+        $product = new Product([
+            'sku' => 'WST068GM',
+            'name' => 'ALFA Grey Meteorite',
+            'manufacturer' => 'Whirlpool',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+        $filter = $ref->getMethod('filterResultsByIdentity');
+        $filter->setAccessible(true);
+        /** @var list<string> $ladder */
+        $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
+        $joined = implode(' | ', $ladder);
+
+        $this->assertStringStartsWith('site:misterworker.com ST068GM', $ladder[0] ?? '');
+        $this->assertStringContainsString('ALFA Grey Meteorite U-Power', $joined);
+        $this->assertStringNotContainsString('site:gvarant.pl', $joined);
+        $this->assertStringNotContainsString('Whirlpool', $joined);
+
+        /** @var list<array{url: string, title: string, snippet: string}> $kept */
+        $kept = $filter->invoke($service, [
+            [
+                'url' => 'https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html',
+                'title' => 'ALFA Grey Meteorite Four Seasons Work Pants ST068GM',
+                'snippet' => 'U-Power work pants',
+            ],
+            [
+                'url' => 'https://www.imdb.com/title/tt1253863/',
+                'title' => 'APEX movie poster',
+                'snippet' => 'Charlize Theron',
+            ],
+        ], $product);
+        $this->assertCount(1, $kept);
+        $this->assertStringContainsString('misterworker.com', $kept[0]['url'] ?? '');
+    }
 }

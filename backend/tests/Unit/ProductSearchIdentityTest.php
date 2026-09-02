@@ -877,11 +877,17 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertSame('ST068GM', $id->distributorPrefixedCatalogSku($product));
         $this->assertSame('ST068GM', $id->catalogSkuWithoutSize($product));
         $this->assertSame('ALFA Grey Meteorite', $id->firstStrongShopPhrase($product));
-        $this->assertSame('ALFA Grey Meteorite', $id->primaryQueries($product)[0] ?? null);
+        $this->assertSame('ALFA Grey Meteorite U-Power', $id->primaryQueries($product)[0] ?? null);
         $this->assertContains('ST068GM', $id->primaryQueries($product));
+        $this->assertContains('ST068GM U-Power', $id->primaryQueries($product));
+        $this->assertContains('misterworker.com', $id->catalogSearchHosts($product));
+        $this->assertContains('u-power.ai', $id->officialCatalogHosts($product));
         $joined = implode(' | ', $id->primaryQueries($product));
         $this->assertStringNotContainsString('Whirlpool', $joined);
-        $this->assertStringNotContainsString('Whirlpool', implode(' | ', $id->searchQueries($product, 'manufacturer')));
+        $mfr = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringNotContainsString('Whirlpool', $mfr);
+        $this->assertStringContainsString('site:misterworker.com ST068GM', $mfr);
+        $this->assertStringNotContainsString('site:gvarant.pl', $mfr);
         $this->assertStringNotContainsString('WST068GM', $id->productNameWithManufacturer($product));
         $this->assertTrue($id->hayMentionsProduct(
             'https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html '

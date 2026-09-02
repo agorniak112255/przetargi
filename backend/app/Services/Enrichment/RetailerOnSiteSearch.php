@@ -214,6 +214,9 @@ final class RetailerOnSiteSearch
         if ($out !== []) {
             return $out;
         }
+        if ($this->identity->inferredCatalogHosts($product) !== []) {
+            return [];
+        }
         if ($this->identity->shopIdentityPhrases($product) !== []
             || $this->identity->hasDistinctiveCatalogSku($product)
             || $this->identity->looksLikeWarehouseArticleSku($product)) {

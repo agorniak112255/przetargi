@@ -19,7 +19,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v53';
+    private const SEARCH_CACHE_VERSION = 'v54';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -631,16 +631,22 @@ class HybridWebSearchService
         if ($warehouse) {
             $hosts = $this->identity->officialCatalogHosts($product);
             if ($hosts === []) {
+                $hosts = $this->identity->inferredCatalogHosts($product);
+            }
+            if ($hosts === []) {
                 $hosts = $this->identity->codeIndexRetailerHosts();
             }
-            $q = $phrase !== '' ? $phrase : trim((string) $product->sku);
+            $coded = $this->identity->catalogSkuWithoutSize($product);
+            $q = ($coded !== '' && preg_match('/\p{L}/u', $coded) === 1 && preg_match('/\d/u', $coded) === 1)
+                ? $coded
+                : ($phrase !== '' ? $phrase : trim((string) $product->sku));
             if ($q === '') {
                 return [];
             }
             $out = [];
             foreach ($hosts as $host) {
                 $out[] = 'site:'.$host.' '.$q;
-                if (count($out) >= 2) {
+                if (count($out) >= self::SITE_QUERY_ATTEMPTS) {
                     break;
                 }
             }
@@ -731,14 +737,18 @@ class HybridWebSearchService
             }
         }
 
-        $mfrDomains = $this->manufacturers->domainsFor($product);
-        if ($mfrDomains === []) {
-            try {
-                $mfrDomains = $this->manufacturers->discoverOfficialDomains($product);
-            } catch (TavilyQuotaExceededException $e) {
-                throw $e;
-            } catch (Throwable $e) {
-                $errors[] = $e->getMessage();
+        if ($this->identity->manufacturerLooksUnrelatedToProduct($product)) {
+            $mfrDomains = $this->identity->inferredCatalogHosts($product);
+        } else {
+            $mfrDomains = $this->manufacturers->domainsFor($product);
+            if ($mfrDomains === []) {
+                try {
+                    $mfrDomains = $this->manufacturers->discoverOfficialDomains($product);
+                } catch (TavilyQuotaExceededException $e) {
+                    throw $e;
+                } catch (Throwable $e) {
+                    $errors[] = $e->getMessage();
+                }
             }
         }
         $mfrQueries = $openQueries !== [] ? $openQueries : $skuQueries;
