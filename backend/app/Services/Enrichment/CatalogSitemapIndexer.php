@@ -20,7 +20,7 @@ use Throwable;
 final class CatalogSitemapIndexer
 {
     /** Ile plików sitemap z jednego indeksu przetwarzamy. */
-    private const MAX_SITEMAP_FILES = 100;
+    private const MAX_SITEMAP_FILES = 400;
 
     private const CHUNK_BYTES = 262144;
 
@@ -81,7 +81,7 @@ final class CatalogSitemapIndexer
     /**
      * @return array{urls: int, saved: int, sitemaps: list<string>, off_host: int, timed_out: bool}
      */
-    public function index(string $host, int $maxUrls = 60000, int $maxSeconds = 240): array
+    public function index(string $host, int $maxUrls = 250000, int $maxSeconds = 600): array
     {
         $host = $this->normalizeHost($host);
         if ($host === '') {

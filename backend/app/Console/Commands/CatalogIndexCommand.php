@@ -21,8 +21,8 @@ final class CatalogIndexCommand extends Command
 {
     protected $signature = 'catalog:index
         {host? : Domena do zaindeksowania (domyślnie wszystkie z konfiguracji)}
-        {--max=60000 : Limit adresów na domenę}
-        {--seconds=240 : Limit czasu na domenę}
+        {--max=250000 : Limit adresów na domenę}
+        {--seconds=600 : Limit czasu na domenę}
         {--fresh-days=0 : Pomiń domeny odświeżone w ostatnich N dniach}
         {--missing-only : Tylko domeny, których nie ma w indeksie}
         {--retry-empty : Przy --missing-only ponów domeny, które wcześniej dały 0 adresów}

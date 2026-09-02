@@ -62,6 +62,26 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseHas('catalog_pages', ['host' => 'inny-sklep.pl']);
     }
 
+    public function test_stops_at_max_urls(): void
+    {
+        $locs = '';
+        for ($i = 1; $i <= 5; $i++) {
+            $locs .= '<url><loc>https://optimumbhp.pl/karta-'.$i.'</loc></url>';
+        }
+        $this->fakeHttp([
+            'https://optimumbhp.pl/robots.txt' => Http::response('Sitemap: https://optimumbhp.pl/sitemap.xml', 200),
+            'https://optimumbhp.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'.$locs.'</urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('optimumbhp.pl', 3);
+
+        $this->assertSame(3, $result['urls']);
+        $this->assertSame(3, CatalogPage::query()->count());
+    }
+
     public function test_reindex_does_not_duplicate_rows(): void
     {
         $this->fakeHttp([

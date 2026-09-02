@@ -26,7 +26,7 @@ class IndexCatalogHostJob implements ShouldQueue, ShouldBeUnique
     /** @var list<int> */
     public array $backoff = [30, 90];
 
-    public int $timeout = 240;
+    public int $timeout = 720;
 
     public int $uniqueFor = 3600;
 
@@ -47,7 +47,7 @@ class IndexCatalogHostJob implements ShouldQueue, ShouldBeUnique
     {
         $host = mb_strtolower(trim($this->host));
         try {
-            $result = $indexer->index($host, 20000, 180);
+            $result = $indexer->index($host, 250000, 600);
             CatalogHost::query()->updateOrCreate(
                 ['host' => $host],
                 [
