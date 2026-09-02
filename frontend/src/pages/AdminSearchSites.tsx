@@ -8,6 +8,7 @@ type SearchSite = {
   source_label: string
   last_seen_at: string | null
   last_attempt_at: string | null
+  empty_reason: string | null
   added_at: string | null
 }
 
@@ -16,6 +17,25 @@ type SitesResponse = {
   total: number
   with_links: number
   links: number
+}
+
+type CatalogPageRow = {
+  id: number
+  url: string
+  title: string | null
+  last_seen_at: string | null
+}
+
+type PagesResponse = {
+  host: string
+  links: number
+  data: CatalogPageRow[]
+  meta: {
+    current_page: number
+    last_page: number
+    per_page: number
+    total: number
+  }
 }
 
 type SortKey = 'host' | 'links' | 'source_label' | 'last_seen_at'
@@ -60,6 +80,8 @@ export function AdminSearchSites() {
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [reindexHost, setReindexHost] = useState('')
+  const [pagesHost, setPagesHost] = useState<SearchSite | null>(null)
 
   async function load() {
     setBusy(true)
@@ -94,7 +116,12 @@ export function AdminSearchSites() {
     const needle = q.trim().toLowerCase()
     const filtered = needle === ''
       ? rows
-      : rows.filter((r) => r.host.includes(needle) || r.source_label.toLowerCase().includes(needle))
+      : rows.filter(
+          (r) =>
+            r.host.includes(needle) ||
+            r.source_label.toLowerCase().includes(needle) ||
+            (r.empty_reason ?? '').toLowerCase().includes(needle),
+        )
     const copy = [...filtered]
     copy.sort((a, b) => {
       let cmp = 0
@@ -130,6 +157,23 @@ export function AdminSearchSites() {
     }
   }
 
+  async function onReindex(host: string) {
+    setReindexHost(host)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>(
+        `/admin/catalog-search-sites/${encodeURIComponent(host)}/reindex`,
+        { method: 'POST' },
+      )
+      setMsg(res.message)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zlecić sprawdzenia')
+    } finally {
+      setReindexHost('')
+    }
+  }
+
   const headers: { key: SortKey; label: string; className?: string }[] = [
     { key: 'host', label: 'Domena' },
     { key: 'links', label: 'Linki', className: 'text-right' },
@@ -143,8 +187,8 @@ export function AdminSearchSites() {
         <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-700">Wyszukiwarka katalogu</p>
         <h2 className="mt-1 text-lg font-semibold text-slate-900">Strony w indeksie</h2>
         <p className="mt-1 max-w-2xl text-[12px] text-slate-600">
-          Domeny, z których zbieramy karty produktów (sitemap). Nowa strona trafia do indeksu i do
-          wyszukiwania opisów — ten sam host (także z www) nie zostanie dodany drugi raz.
+          Domeny, z których zbieramy karty produktów (sitemap). Zero linków to zwykle brak sitemapy,
+          WAF, CDN albo wpis z konfiguracji, którego jeszcze nie udało się zaindeksować.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <Stat label="Strony" value={total} hint="w konfiguracji i dodane ręcznie" />
@@ -210,6 +254,7 @@ export function AdminSearchSites() {
                     </button>
                   </th>
                 ))}
+                <th className="p-3 text-right">Akcje</th>
               </tr>
             </thead>
             <tbody>
@@ -227,6 +272,9 @@ export function AdminSearchSites() {
                     >
                       {row.host}
                     </a>
+                    {row.empty_reason && (
+                      <p className="mt-0.5 max-w-md text-[11px] text-amber-800">{row.empty_reason}</p>
+                    )}
                   </td>
                   <td className="p-3 text-right tabular-nums">
                     <span className={row.links > 0 ? 'font-semibold text-slate-800' : 'text-amber-700'}>
@@ -245,18 +293,239 @@ export function AdminSearchSites() {
                       ))}
                     </span>
                   </td>
-                  <td className="p-3 text-slate-500">{formatWhen(row.last_seen_at)}</td>
+                  <td className="p-3 text-slate-500">
+                    <div>{formatWhen(row.last_seen_at)}</div>
+                    {row.last_attempt_at && (
+                      <div className="text-[10px] text-slate-400">
+                        sprawdzano {formatWhen(row.last_attempt_at)}
+                      </div>
+                    )}
+                  </td>
+                  <td className="p-3 text-right">
+                    <div className="flex flex-wrap justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setPagesHost(row)}
+                        className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        Karty
+                      </button>
+                      <button
+                        type="button"
+                        disabled={reindexHost === row.host}
+                        onClick={() => void onReindex(row.host)}
+                        className="rounded-lg bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+                      >
+                        {reindexHost === row.host ? 'Zlecam…' : 'Sprawdź'}
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {visible.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="p-8 text-center text-slate-400">
+                  <td colSpan={5} className="p-8 text-center text-slate-400">
                     {busy ? 'Ładowanie…' : 'Brak stron dla tego filtra.'}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {pagesHost && (
+        <CatalogPagesModal
+          site={pagesHost}
+          onClose={() => setPagesHost(null)}
+          onReindex={() => void onReindex(pagesHost.host)}
+          reindexing={reindexHost === pagesHost.host}
+        />
+      )}
+    </div>
+  )
+}
+
+function CatalogPagesModal({
+  site,
+  onClose,
+  onReindex,
+  reindexing,
+}: {
+  site: SearchSite
+  onClose: () => void
+  onReindex: () => void
+  reindexing: boolean
+}) {
+  const [q, setQ] = useState('')
+  const [page, setPage] = useState(1)
+  const [rows, setRows] = useState<CatalogPageRow[]>([])
+  const [meta, setMeta] = useState({ current_page: 1, last_page: 1, per_page: 40, total: 0 })
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function load(nextPage = page, nextQ = q) {
+    setBusy(true)
+    setErr('')
+    try {
+      const params = new URLSearchParams()
+      params.set('page', String(nextPage))
+      params.set('per_page', '40')
+      if (nextQ.trim() !== '') {
+        params.set('q', nextQ.trim())
+      }
+      const data = await api<PagesResponse>(
+        `/admin/catalog-search-sites/${encodeURIComponent(site.host)}/pages?${params}`,
+      )
+      setRows(data.data)
+      setMeta(data.meta)
+      setPage(data.meta.current_page)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd wczytywania kart')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    void load(1, q)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [site.host])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        onClose()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold text-slate-900">Karty {site.host}</p>
+            <p className="text-xs text-slate-500">
+              {site.links.toLocaleString('pl-PL')} adresów w indeksie
+              {site.empty_reason ? ` · ${site.empty_reason}` : ''}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={reindexing}
+              onClick={onReindex}
+              className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+            >
+              {reindexing ? 'Zlecam…' : 'Sprawdź ponownie'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded border border-slate-300 px-2 py-1 text-xs"
+            >
+              Zamknij
+            </button>
+          </div>
+        </div>
+
+        <form
+          className="flex gap-2 border-b border-slate-100 px-4 py-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void load(1, q)
+          }}
+        >
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Szukaj w adresie lub tytule…"
+            className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-sky-400"
+          />
+          <button
+            type="submit"
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Szukaj
+          </button>
+        </form>
+
+        {err && (
+          <p className="mx-4 mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
+            {err}
+          </p>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full text-left text-[13px]">
+            <thead>
+              <tr className="sticky top-0 border-b bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                <th className="p-3">Adres</th>
+                <th className="p-3">Tytuł</th>
+                <th className="p-3">W indeksie</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id} className="border-b last:border-0 hover:bg-slate-50">
+                  <td className="p-3">
+                    <a
+                      href={row.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="break-all text-sky-800 hover:underline"
+                    >
+                      {row.url}
+                    </a>
+                  </td>
+                  <td className="p-3 text-slate-600">{row.title ?? '—'}</td>
+                  <td className="whitespace-nowrap p-3 text-slate-500">{formatWhen(row.last_seen_at)}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="p-8 text-center text-slate-400">
+                    {busy ? 'Ładowanie…' : 'Brak kart dla tej domeny.'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2 text-[12px] text-slate-500">
+          <span>
+            {meta.total.toLocaleString('pl-PL')} wyników · strona {meta.current_page} / {meta.last_page}
+          </span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              disabled={busy || page <= 1}
+              onClick={() => void load(page - 1, q)}
+              className="rounded border border-slate-300 px-2 py-1 disabled:opacity-40"
+            >
+              Wstecz
+            </button>
+            <button
+              type="button"
+              disabled={busy || page >= meta.last_page}
+              onClick={() => void load(page + 1, q)}
+              className="rounded border border-slate-300 px-2 py-1 disabled:opacity-40"
+            >
+              Dalej
+            </button>
+          </div>
         </div>
       </div>
     </div>

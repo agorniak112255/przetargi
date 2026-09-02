@@ -19,7 +19,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v50';
+    private const SEARCH_CACHE_VERSION = 'v51';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -28,7 +28,10 @@ class HybridWebSearchService
     private bool $localSearchOnly = false;
 
     /** Ile fraz z otwartego internetu — dopiero po listach sklepów / producencie. */
-    private const OPEN_QUERY_ATTEMPTS = 6;
+    private const OPEN_QUERY_ATTEMPTS = 8;
+
+    /** Ile zapytań site: (oficjalna + sklepy) — nie tylko pierwsze 2 z listy marki. */
+    private const SITE_QUERY_ATTEMPTS = 4;
 
     /** Tyle kart produktu wystarcza, żeby przerwać drabinkę fraz. */
     private const OPEN_ENOUGH_PAGES = 3;
@@ -566,7 +569,7 @@ class HybridWebSearchService
                 $siteQueries[] = 'site:'.$bare.' '.$phrase;
             }
         }
-        $siteQueries = array_slice($siteQueries, 0, 2);
+        $siteQueries = array_slice($siteQueries, 0, self::SITE_QUERY_ATTEMPTS);
         // Najpierw listy sklepów / katalog (site:) — po to są. Otwarty internet na końcu.
         $ladder = [];
         $legacy = $this->legacySafetyShoePhrase($product);
@@ -604,7 +607,7 @@ class HybridWebSearchService
         $site = [];
         foreach ($unique as $query) {
             if (preg_match('/\bsite:/i', $query) === 1) {
-                if (count($site) < 2) {
+                if (count($site) < self::SITE_QUERY_ATTEMPTS) {
                     $site[] = $query;
                 }
             } else {
@@ -648,7 +651,7 @@ class HybridWebSearchService
             || ! $this->identity->hasDistinctiveCatalogSku($product)) {
             return [];
         }
-        $sku = trim((string) $product->sku);
+        $sku = $this->identity->catalogSkuWithoutSize($product);
         if ($sku === '') {
             return [];
         }

@@ -68,7 +68,7 @@ final class CatalogIndexCommand extends Command
             }
             try {
                 $result = $indexer->index($host, $max, $seconds);
-                $this->rememberAttempt($host, $result['saved'], $result['off_host']);
+                $this->rememberAttempt($host, $result['saved'], $result['off_host'], $this->emptyError($result));
                 $total += $result['saved'];
                 $this->info(sprintf(
                     '    %d adresów (sitemap: %d)%s%s',
@@ -78,7 +78,7 @@ final class CatalogIndexCommand extends Command
                     $result['timed_out'] ? ', przerwane limitem czasu' : ''
                 ));
             } catch (Throwable $e) {
-                $this->rememberAttempt($host, 0, 0);
+                $this->rememberAttempt($host, 0, 0, $e->getMessage());
                 $failed++;
                 $this->warn('    '.$e->getMessage());
             }
@@ -176,7 +176,25 @@ final class CatalogIndexCommand extends Command
         return is_numeric($count) && (int) $count > 0;
     }
 
-    private function rememberAttempt(string $host, int $pages, int $offHost): void
+    /**
+     * @param  array{saved: int, sitemaps: list<string>, timed_out: bool}  $result
+     */
+    private function emptyError(array $result): ?string
+    {
+        if ($result['saved'] > 0) {
+            return null;
+        }
+        if ($result['timed_out']) {
+            return 'Przerwane limitem czasu, 0 kart.';
+        }
+        if ($result['sitemaps'] === []) {
+            return 'Nie znaleziono sitemapy.';
+        }
+
+        return 'Sitemap bez kart produktu.';
+    }
+
+    private function rememberAttempt(string $host, int $pages, int $offHost, ?string $error = null): void
     {
         CatalogHost::query()->updateOrCreate(
             ['host' => $host],
@@ -184,6 +202,7 @@ final class CatalogIndexCommand extends Command
                 'pages_count' => $pages,
                 'off_host_count' => $offHost,
                 'last_attempt_at' => now(),
+                'last_error' => $pages > 0 ? null : ($error !== null ? mb_substr($error, 0, 500) : null),
             ]
         );
     }

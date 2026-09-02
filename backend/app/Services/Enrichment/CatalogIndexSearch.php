@@ -57,6 +57,9 @@ final class CatalogIndexSearch
             $raw[] = $alias;
         }
         foreach ($this->identity->shopIdentityPhrases($product) as $phrase) {
+            if ($this->identity->isWeakShopIndexPhrase($phrase, $product)) {
+                continue;
+            }
             $raw[] = $phrase;
         }
 

@@ -261,4 +261,17 @@ final class ProductSizeVariantTest extends TestCase
             $svc->parseShopOptionSizes($html)
         );
     }
+
+    #[Test]
+    public function strips_eu_size_suffix_from_catalog_sku(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame('40', $svc->extractSize(null, 'G3175/40'));
+        $this->assertSame('G3175', $svc->skuCore('G3175/40'));
+        $this->assertSame('CADIZ', $svc->skuCore('CADIZ-42'));
+        $this->assertSame('A5016', $svc->skuCore('A5016/09'));
+        $this->assertNull($svc->skuCore('MT-212-2'));
+        $this->assertNull($svc->skuCore('04-322-100'));
+    }
 }

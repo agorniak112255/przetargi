@@ -394,6 +394,11 @@ final class ProductSizeVariant
         }
         if (preg_match('/^\d+(?:\.\d)?$/', $size) === 1) {
             $two = (string) (int) $size;
+            $padded = str_pad($two, 2, '0', STR_PAD_LEFT);
+            if (preg_match('/^(.+?)[\/\-](?:'.$padded.'|'.$two.')$/i', $sku, $m) === 1
+                && $this->isUsableCore($m[1])) {
+                return rtrim($m[1], "-/_ \t");
+            }
             if (preg_match('/^(.+)'.$two.'$/i', $sku, $m) === 1 && $this->isUsableCore($m[1])) {
                 return rtrim($m[1], "-/_ \t");
             }
@@ -915,6 +920,10 @@ final class ProductSizeVariant
     {
         if (preg_match('/[A-Za-z](\d{3})$/', $sku, $m) === 1) {
             return $this->sizeForDigitCode($m[1]);
+        }
+        // G3175/40, CADIZ-42, A5016/09 — rozmiar po ukośniku albo myślniku
+        if (preg_match('/[\/\-]0?(\d{1,2})$/', $sku, $m) === 1) {
+            return $this->normalizeSizeToken($m[1]);
         }
 
         return null;

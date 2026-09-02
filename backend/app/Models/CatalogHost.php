@@ -17,6 +17,7 @@ class CatalogHost extends Model
         'pages_count',
         'off_host_count',
         'last_attempt_at',
+        'last_error',
     ];
 
     protected $casts = [

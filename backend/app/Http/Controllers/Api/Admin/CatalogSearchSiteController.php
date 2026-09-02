@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\ShowCatalogSearchSitePagesRequest;
 use App\Http\Requests\Admin\StoreCatalogSearchSiteRequest;
 use App\Services\Enrichment\CatalogSearchHostService;
 use Illuminate\Http\JsonResponse;
@@ -40,5 +41,22 @@ class CatalogSearchSiteController extends Controller
         $row = $this->sites->add((string) $request->validated()['url']);
 
         return response()->json($row, 201);
+    }
+
+    public function pages(ShowCatalogSearchSitePagesRequest $request, string $host): JsonResponse
+    {
+        $data = $request->validated();
+
+        return response()->json($this->sites->pages(
+            $host,
+            (string) ($data['q'] ?? ''),
+            (int) ($data['page'] ?? 1),
+            (int) ($data['per_page'] ?? 40),
+        ));
+    }
+
+    public function reindex(string $host): JsonResponse
+    {
+        return response()->json($this->sites->reindex($host));
     }
 }

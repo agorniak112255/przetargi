@@ -23,15 +23,19 @@ final class ProductSearchIdentity
      * @var array<string, list<string>>
      */
     private const TYPE_STEMS = [
-        'gloves' => ['rekawic', 'glove', 'glv', 'handschuh', 'gant'],
-        'coverall' => ['kombinezon', 'coverall', 'overall', 'cvrl', 'protective suit', 'protection suit'],
-        'jacket' => ['kurtk', 'jacket', 'plaszcz'],
-        'trousers' => ['spodn', 'trouser', 'pant', 'ogrodniczk', 'dungaree', 'bib brace'],
+        'gloves' => ['rekawic', 'rukavic', 'glove', 'glv', 'handschuh', 'gant'],
+        'coverall' => ['kombinezon', 'kombineza', 'coverall', 'overall', 'cvrl', 'protective suit', 'protection suit'],
+        'jacket' => ['kurtk', 'jacket', 'jacke', 'plaszcz', 'bunda', 'parka'],
+        'trousers' => ['spodn', 'trouser', 'pant', 'ogrodniczk', 'dungaree', 'bib brace', 'kalhot'],
         'cap' => ['czapk', 'czepek', 'czepk'],
         'sweatshirt' => ['bluza', 'sweatshirt'],
         'vest' => ['kamizelk', 'vest'],
         'mask' => ['maska', 'maski', 'maske'],
-        'footwear' => ['buty', 'butow', 'obuwie', 'trzewik', 'polbut', 'footwear', 'klapk', 'chodak', 'clog', 'sandal'],
+        'footwear' => [
+            'buty', 'butow', 'obuwie', 'obuv', 'boty', 'trzewik', 'polbut', 'footwear',
+            'klapk', 'chodak', 'clog', 'sandal', 'schuh', 'chaussure', 'scarpa', 'zapato',
+            'calzado', 'kotnik', 'monterk', 'shoe', 'boot',
+        ],
         'helmet' => ['kask', 'helm', 'casque'],
         'goggles' => ['okular', 'gogl'],
         'apron' => ['fartuch', 'apron'],
@@ -791,7 +795,7 @@ final class ProductSearchIdentity
             $phrase = $shopPhrase !== ''
                 ? $shopPhrase
                 : (($sku !== '' && ! $internalSku && ! $warehouseSku)
-                    ? $sku
+                    ? $this->catalogSkuWithoutSize($product)
                     : ($this->catalogArticleCodes($product)[0] ?? $this->strippedProductName($product)));
             if ($phrase !== '' && $hosts !== []) {
                 $extra = $this->sharedShortSkuQueryExtra($product);
@@ -1663,6 +1667,10 @@ final class ProductSearchIdentity
         if ($sku !== '') {
             $codes[] = $sku;
         }
+        $withoutSize = $this->catalogSkuWithoutSize($product);
+        if ($withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)) {
+            $codes[] = $withoutSize;
+        }
         foreach ($this->catalogArticleCodes($product) as $article) {
             $codes[] = $article;
         }
@@ -2033,15 +2041,64 @@ final class ProductSearchIdentity
      */
     public function hasDistinctiveCatalogSku(Product $product): bool
     {
+        if ($this->looksLikeWarehouseArticleSku($product)) {
+            return false;
+        }
+        foreach ([$this->catalogSkuWithoutSize($product), trim((string) $product->sku)] as $sku) {
+            $sku = str_replace('/', '-', trim($sku));
+            if ($sku === '') {
+                continue;
+            }
+            if (preg_match(
+                '/^(?=[A-Z0-9\-]*\p{L})(?=[A-Z0-9\-]*\d)[A-Z0-9\-]{3,16}$/iu',
+                $sku
+            ) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Kod katalogowy bez rozmiaru z cennika: „G3175/40” → „G3175”, „CADIZ-42” → „CADIZ”.
+     */
+    public function catalogSkuWithoutSize(Product $product): string
+    {
         $sku = trim((string) $product->sku);
-        if ($sku === '' || $this->looksLikeWarehouseArticleSku($product)) {
+        if ($sku === '') {
+            return '';
+        }
+        $core = (new ProductSizeVariant)->skuCore($sku, $product->name);
+        if (is_string($core) && $core !== '' && mb_strtolower($core) !== mb_strtolower($sku)) {
+            return $core;
+        }
+
+        return $sku;
+    }
+
+    /**
+     * Fraza „TRACK” nie idzie do indeksu, gdy jest już kod G3175.
+     */
+    public function isWeakShopIndexPhrase(string $phrase, Product $product): bool
+    {
+        $phrase = trim($phrase);
+        if ($phrase === '' || $this->isApparelTypeWord($phrase) || $this->isDescriptiveIdentityWord($phrase)) {
+            return true;
+        }
+        if (! $this->hasDistinctiveCatalogSku($product)) {
+            return false;
+        }
+        $core = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($this->catalogSkuWithoutSize($product))) ?? '';
+        if ($core === '' || preg_match('/\d/u', $core) !== 1 || preg_match('/\p{L}/u', $core) !== 1) {
+            return false;
+        }
+        $compact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($phrase)) ?? '';
+        if ($compact === $core || str_contains($core, $compact) || str_contains($compact, $core)) {
             return false;
         }
 
-        return preg_match(
-            '/^(?=[A-Z0-9\-]*\p{L})(?=[A-Z0-9\-]*\d)[A-Z0-9\-]{3,16}$/iu',
-            $sku
-        ) === 1;
+        return preg_match('/\d/u', $compact) !== 1;
     }
 
     /** T-31 / A12 — za krótki kod, koliduje między katalogami. */
@@ -2398,14 +2455,8 @@ final class ProductSearchIdentity
         if ($this->ansellOfficialPathHasModel($hay, $product)) {
             return true;
         }
-        $name = $this->normalizeTypeText((string) $product->name.' '.(string) ($product->category ?? ''));
         $page = $this->normalizeTypeText($hay);
-        $required = [];
-        foreach (self::TYPE_STEMS as $stems) {
-            if ($this->textHasTypeStem($name, $stems)) {
-                $required[] = $stems;
-            }
-        }
+        $required = $this->requiredTypeStems($product, true);
         if ($required === []) {
             return true;
         }
@@ -2426,14 +2477,8 @@ final class ProductSearchIdentity
         if ($this->ansellOfficialPathHasModel($hay, $product)) {
             return true;
         }
-        $name = $this->normalizeTypeText((string) $product->name);
         $page = $this->normalizeTypeText($hay);
-        $required = [];
-        foreach (self::TYPE_STEMS as $stems) {
-            if ($this->textHasTypeStem($name, $stems)) {
-                $required[] = $stems;
-            }
-        }
+        $required = $this->requiredTypeStems($product, false);
         if ($required === []) {
             return true;
         }
@@ -2455,7 +2500,7 @@ final class ProductSearchIdentity
             }
         }
 
-        return false;
+        return $this->skuImpliesFootwear($product);
     }
 
     public function imageUrlHasForeignType(string $url, Product $product): bool
@@ -2467,6 +2512,9 @@ final class ProductSearchIdentity
             if ($this->textHasTypeStem($name, $stems)) {
                 $own[$key] = true;
             }
+        }
+        if ($own === [] && $this->skuImpliesFootwear($product)) {
+            $own['footwear'] = true;
         }
         if ($own === []) {
             return false;
@@ -2512,8 +2560,44 @@ final class ProductSearchIdentity
                 return $labels[$key] ?? $key;
             }
         }
+        if ($this->skuImpliesFootwear($product)) {
+            return $labels['footwear'];
+        }
 
         return null;
+    }
+
+    /**
+     * @return list<list<string>>
+     */
+    private function requiredTypeStems(Product $product, bool $includeCategory): array
+    {
+        $name = $includeCategory
+            ? $this->normalizeTypeText((string) $product->name.' '.(string) ($product->category ?? ''))
+            : $this->normalizeTypeText((string) $product->name);
+        $required = [];
+        foreach (self::TYPE_STEMS as $stems) {
+            if ($this->textHasTypeStem($name, $stems)) {
+                $required[] = $stems;
+            }
+        }
+        if ($required === [] && $this->skuImpliesFootwear($product)) {
+            $required[] = self::TYPE_STEMS['footwear'];
+        }
+
+        return $required;
+    }
+
+    /** G3175/40, CADIZ-42 — rozmiar EU w SKU oznacza obuwie, nawet przy nazwie „TRACK”. */
+    private function skuImpliesFootwear(Product $product): bool
+    {
+        $size = (new ProductSizeVariant)->extractSize($product->name, $product->sku);
+        if ($size === null || ! is_numeric($size)) {
+            return false;
+        }
+        $n = (int) $size;
+
+        return $n >= 32 && $n <= 50;
     }
 
     /**
@@ -2528,6 +2612,27 @@ final class ProductSearchIdentity
             // „buty” ≠ butyl / butyric na karcie odczynnika
             if ($stem === 'buty') {
                 if (preg_match('/\bbuty\b/u', $normalized) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if (in_array($stem, ['obuv', 'boty', 'schuh'], true)) {
+                if (preg_match('/\b'.preg_quote($stem, '/').'/u', $normalized) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if ($stem === 'shoe') {
+                if (preg_match('/\bshoes?\b/u', $normalized) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if ($stem === 'boot') {
+                if (preg_match('/\bboots?\b/u', $normalized) === 1) {
                     return true;
                 }
 
@@ -2765,9 +2870,10 @@ final class ProductSearchIdentity
         $blob = trim($nameSku.' '.$category);
 
         if (preg_match(
-            '#(trzewik|p[oó]łbut|polbut|\bbuty\b|obuwie|\bs1\b|\bs3\b|\bsrc\b|\bhro\b|demar|befado)#u',
+            '#(trzewik|p[oó]łbut|polbut|\bbuty\b|obuwie|\bobuv\b|\bboty\b|schuh|chaussure|footwear'
+            .'|\bs1\b|\bs3\b|\bsrc\b|\bhro\b|demar|befado)#u',
             $nameSku
-        ) || preg_match('#(demar|befado)#u', $brand)) {
+        ) || preg_match('#(demar|befado)#u', $brand) || $this->skuImpliesFootwear($product)) {
             return 'buty ochronne';
         }
 
@@ -2952,19 +3058,29 @@ final class ProductSearchIdentity
         if ($sku === '') {
             return [];
         }
+        $fromSize = $this->catalogSkuWithoutSize($product);
+        $fromSizeList = ($fromSize !== '' && mb_strtolower($fromSize) !== mb_strtolower($sku)
+            && $this->isUsableSizeVariant($fromSize))
+            ? [$fromSize]
+            : [];
         // „ONE4ALL-IT08” — IT to rozmiar (taille), nie litera I i osobne T08
         if (preg_match('/^(.+)-IT(0\d|1[0-4])$/u', $sku, $it) === 1) {
             $core = rtrim($it[1], "-/+_. \t");
 
-            return $this->isUsableSizeVariant($core) ? [$core] : [];
+            return $this->isUsableSizeVariant($core)
+                ? array_values(array_unique(array_merge($fromSizeList, [$core])))
+                : $fromSizeList;
         }
         if (preg_match('/^(.*?)([A-Za-z0-9]{0,3})T(?:0\d|1[0-4])$/u', $sku, $m) !== 1) {
-            return [];
+            return $fromSizeList;
         }
 
         // „CROSSFOREST10” — tu „T” kończy słowo FOREST, a rozmiarem jest samo 10.
         // Którego odczytu użyć, wie dopiero strona sklepu, więc dajemy oba.
         $out = [];
+        foreach ($fromSizeList as $candidate) {
+            $out[$candidate] = true;
+        }
         foreach ([$m[1].$m[2], $m[1].$m[2].'T', $m[1]] as $candidate) {
             $candidate = rtrim($candidate, "-/+_. \t");
             if ($this->isUsableSizeVariant($candidate)) {
@@ -3421,6 +3537,52 @@ final class ProductSearchIdentity
      */
     private function preferSpecificShopPhrases(array $phrases, Product $product): array
     {
+        if ($phrases === []) {
+            return [];
+        }
+        if ($this->skuIsWarehousePrefix($product)) {
+            return $this->preferBySkuTail($phrases, $product);
+        }
+        $core = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($this->catalogSkuWithoutSize($product))) ?? '';
+        if ($core !== '' && preg_match('/\p{L}/u', $core) === 1 && preg_match('/\d/u', $core) === 1) {
+            $matching = [];
+            $rest = [];
+            foreach ($phrases as $phrase) {
+                $compact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($phrase)) ?? '';
+                if ($compact !== '' && ($compact === $core
+                    || str_contains($core, $compact)
+                    || str_contains($compact, $core))) {
+                    $matching[] = $phrase;
+                } else {
+                    $rest[] = $phrase;
+                }
+            }
+            if ($matching !== []) {
+                return array_values(array_merge($matching, $rest));
+            }
+        }
+
+        return $this->preferBySkuTail($phrases, $product);
+    }
+
+    /** Numer magazynowy / prefiks cennika — bez shopIdentityPhrases, żeby nie zapętlać rankingu. */
+    private function skuIsWarehousePrefix(Product $product): bool
+    {
+        $sku = trim((string) $product->sku);
+
+        return preg_match('/^\d{10,12}$/u', $sku) === 1
+            || preg_match('/^SOR[-]?\d{4,6}(?:-\d{2,3})?$/iu', $sku) === 1
+            || preg_match('/^\d{7,12}[A-Z]$/u', $sku) === 1
+            || preg_match('/^[A-Z0-9.\-]+-(UK|EU|US|CF|SP)$/iu', $sku) === 1
+            || preg_match('/^\d{6,9}$/u', $sku) === 1;
+    }
+
+    /**
+     * @param  list<string>  $phrases
+     * @return list<string>
+     */
+    private function preferBySkuTail(array $phrases, Product $product): array
+    {
         $tail = $this->lastDistinctiveSkuWord($product);
         if ($tail === '' || $phrases === []) {
             return $phrases;
@@ -3583,6 +3745,7 @@ final class ProductSearchIdentity
 
         return in_array($word, [
             'kurtka', 'bluza', 'spodnie', 'kamizelka', 'rekawice', 'rekawica', 'buty', 'polbuty',
+            'obuv', 'boty', 'schuhe', 'chaussure', 'footwear',
             'meska', 'meskie', 'krotka', 'krotki', 'odblaskowa', 'odblaskowy', 'odblaskowe',
             'trzewiki', 'sandaly', 'maska', 'kask', 'fartuch', 'ocieplana', 'ocieplany',
             'ostrzegawcza', 'ostr', 'nylon', 'nylonowa', 'nylonowy', 'polyester', 'polyes',
@@ -3698,7 +3861,8 @@ final class ProductSearchIdentity
 
         return in_array($word, [
             'kurtka', 'bluza', 'spodnie', 'kamizelka', 'rekawice', 'rekawica',
-            'buty', 'polbuty', 'trzewiki', 'sandaly',
+            'buty', 'polbuty', 'trzewiki', 'sandaly', 'obuv', 'boty', 'schuhe',
+            'chaussure', 'footwear', 'rukavice', 'bunda', 'kalhoty',
             'czapka', 'czapki', 'kombinezon', 'koszula', 'plaszcz', 'ogrodniczki',
         ], true);
     }

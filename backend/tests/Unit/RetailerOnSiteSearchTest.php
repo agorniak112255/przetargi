@@ -166,4 +166,16 @@ final class RetailerOnSiteSearchTest extends TestCase
             $urls
         );
     }
+
+    public function test_query_uses_catalog_code_not_generic_model_word(): void
+    {
+        $query = app(RetailerOnSiteSearch::class)->query(new Product([
+            'sku' => 'G3175/40',
+            'name' => 'Obuv TRACK',
+            'manufacturer' => 'ARDON SAFETY',
+        ]));
+
+        $this->assertMatchesRegularExpression('/G\\s*3175/i', $query);
+        $this->assertStringNotContainsString('TRACK', $query);
+    }
 }

@@ -54,6 +54,7 @@ class IndexCatalogHostJob implements ShouldQueue, ShouldBeUnique
                     'pages_count' => $result['saved'],
                     'off_host_count' => $result['off_host'],
                     'last_attempt_at' => now(),
+                    'last_error' => $this->emptyError($result),
                 ]
             );
         } catch (Throwable $e) {
@@ -63,9 +64,28 @@ class IndexCatalogHostJob implements ShouldQueue, ShouldBeUnique
                     'pages_count' => 0,
                     'off_host_count' => 0,
                     'last_attempt_at' => now(),
+                    'last_error' => mb_substr($e->getMessage(), 0, 500),
                 ]
             );
             throw $e;
         }
+    }
+
+    /**
+     * @param  array{saved: int, sitemaps: list<string>, timed_out: bool}  $result
+     */
+    private function emptyError(array $result): ?string
+    {
+        if ($result['saved'] > 0) {
+            return null;
+        }
+        if ($result['timed_out']) {
+            return 'Przerwane limitem czasu, 0 kart.';
+        }
+        if ($result['sitemaps'] === []) {
+            return 'Nie znaleziono sitemapy.';
+        }
+
+        return 'Sitemap bez kart produktu.';
     }
 }

@@ -227,5 +227,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
         Route::get('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'index']);
         Route::post('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'store']);
+        Route::get('/catalog-search-sites/{host}/pages', [AdminCatalogSearchSiteController::class, 'pages'])
+            ->where('host', '[A-Za-z0-9._-]+');
+        Route::post('/catalog-search-sites/{host}/reindex', [AdminCatalogSearchSiteController::class, 'reindex'])
+            ->where('host', '[A-Za-z0-9._-]+');
     });
 });

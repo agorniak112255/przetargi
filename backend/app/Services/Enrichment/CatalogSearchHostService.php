@@ -23,6 +23,7 @@ final class CatalogSearchHostService
      *     source_label: string,
      *     last_seen_at: string|null,
      *     last_attempt_at: string|null,
+     *     empty_reason: string|null,
      *     added_at: string|null
      * }>
      */
@@ -77,14 +78,16 @@ final class CatalogSearchHostService
                 $sources[] = 'indeks';
             }
             $stat = $counts[$host] ?? ['links' => 0, 'last_seen_at' => null];
-            $attempt = $attempts[$host] ?? ['last_attempt_at' => null];
+            $attempt = $attempts[$host] ?? ['last_attempt_at' => null, 'last_error' => null];
+            $links = (int) $stat['links'];
             $out[] = [
                 'host' => $host,
-                'links' => (int) $stat['links'],
+                'links' => $links,
                 'sources' => $sources,
                 'source_label' => $this->sourceLabel($sources),
                 'last_seen_at' => $stat['last_seen_at'],
                 'last_attempt_at' => $attempt['last_attempt_at'],
+                'empty_reason' => $this->emptyReason($host, $links, $attempt['last_attempt_at'], $attempt['last_error']),
                 'added_at' => $manualDates[$host] ?? null,
             ];
         }
@@ -124,7 +127,75 @@ final class CatalogSearchHostService
             'links' => 0,
             'sources' => ['manual'],
             'source_label' => $this->sourceLabel(['manual']),
+            'empty_reason' => 'Jeszcze nie sprawdzana.',
             'already' => false,
+        ];
+    }
+
+    /**
+     * @return array{
+     *     host: string,
+     *     links: int,
+     *     data: list<array{id: int, url: string, title: string|null, last_seen_at: string|null}>,
+     *     meta: array{current_page: int, last_page: int, per_page: int, total: int}
+     * }
+     */
+    public function pages(string $host, string $q = '', int $page = 1, int $perPage = 40): array
+    {
+        $row = $this->requireHost($host);
+        $host = $row['host'];
+        $perPage = max(10, min(100, $perPage));
+        $page = max(1, $page);
+
+        $query = CatalogPage::query()
+            ->whereIn('host', $this->hostAliases($host))
+            ->orderByDesc('last_seen_at')
+            ->orderBy('id');
+
+        $needle = trim($q);
+        if ($needle !== '') {
+            $like = '%'.addcslashes($needle, '%_\\').'%';
+            $query->where(function ($builder) use ($like): void {
+                $builder
+                    ->where('url', 'like', $like)
+                    ->orWhere('title', 'like', $like);
+            });
+        }
+
+        $paginator = $query->paginate($perPage, ['id', 'url', 'title', 'last_seen_at'], 'page', $page);
+
+        return [
+            'host' => $host,
+            'links' => $row['links'],
+            'data' => collect($paginator->items())->map(static function (CatalogPage $item): array {
+                return [
+                    'id' => (int) $item->id,
+                    'url' => (string) $item->url,
+                    'title' => $item->title,
+                    'last_seen_at' => $item->last_seen_at?->toIso8601String(),
+                ];
+            })->values()->all(),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+            ],
+        ];
+    }
+
+    /**
+     * @return array{host: string, queued: bool, message: string}
+     */
+    public function reindex(string $host): array
+    {
+        $row = $this->requireHost($host);
+        IndexCatalogHostJob::dispatch($row['host']);
+
+        return [
+            'host' => $row['host'],
+            'queued' => true,
+            'message' => 'Sprawdzanie '.$row['host'].' w tle.',
         ];
     }
 
@@ -149,6 +220,34 @@ final class CatalogSearchHostService
         }
 
         return null;
+    }
+
+    /**
+     * @return array{host: string, links: int, sources: list<string>, source_label: string, last_seen_at: string|null, last_attempt_at: string|null, empty_reason: string|null, added_at: string|null}
+     */
+    private function requireHost(string $host): array
+    {
+        $row = $this->find($host);
+        if ($row === null) {
+            throw ValidationException::withMessages([
+                'host' => 'Nieznana domena '.$this->normalizeHost($host).'.',
+            ]);
+        }
+
+        return $row;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function hostAliases(string $host): array
+    {
+        $host = $this->normalizeHost($host);
+        if ($host === '') {
+            return [];
+        }
+
+        return array_values(array_unique([$host, 'www.'.$host]));
     }
 
     /**
@@ -180,7 +279,7 @@ final class CatalogSearchHostService
     }
 
     /**
-     * @return array<string, array{last_attempt_at: string|null}>
+     * @return array<string, array{last_attempt_at: string|null, last_error: string|null}>
      */
     private function attemptStats(): array
     {
@@ -189,13 +288,19 @@ final class CatalogSearchHostService
         }
 
         $out = [];
-        foreach (CatalogHost::query()->get(['host', 'last_attempt_at']) as $row) {
+        $hasError = $this->hasColumn('catalog_hosts', 'last_error');
+        $columns = $hasError ? ['host', 'last_attempt_at', 'last_error'] : ['host', 'last_attempt_at'];
+        foreach (CatalogHost::query()->get($columns) as $row) {
             $host = $this->normalizeHost((string) $row->host);
             if ($host === '') {
                 continue;
             }
+            $error = $hasError && is_string($row->last_error) && $row->last_error !== ''
+                ? $row->last_error
+                : null;
             $out[$host] = [
                 'last_attempt_at' => $this->laterIso($out[$host]['last_attempt_at'] ?? null, $row->last_attempt_at),
+                'last_error' => $error ?? ($out[$host]['last_error'] ?? null),
             ];
         }
 
@@ -297,6 +402,55 @@ final class CatalogSearchHostService
     private function looksLikeHost(string $host): bool
     {
         return preg_match('/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i', $host) === 1;
+    }
+
+    private function emptyReason(string $host, int $links, ?string $lastAttempt, ?string $lastError): ?string
+    {
+        if ($links > 0) {
+            return null;
+        }
+        if ($this->isCdnHost($host)) {
+            return 'CDN — przy pełnym skanie pomijany.';
+        }
+        if ($this->isSkippedHost($host)) {
+            return 'Pominięta na liście catalog_skip_hosts.';
+        }
+        if (is_string($lastError) && $lastError !== '') {
+            return $lastError;
+        }
+        if ($lastAttempt === null) {
+            return 'Jeszcze nie sprawdzana.';
+        }
+
+        return 'Sprawdzona — 0 kart (brak sitemapy, WAF albo nie-sklep).';
+    }
+
+    private function isSkippedHost(string $host): bool
+    {
+        foreach ((array) config('enrichment.catalog_skip_hosts', []) as $domain) {
+            if (! is_string($domain)) {
+                continue;
+            }
+            if ($this->normalizeHost($domain) === $host) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isCdnHost(string $host): bool
+    {
+        return str_contains($host, 'cloudfront.net');
+    }
+
+    private function hasColumn(string $table, string $column): bool
+    {
+        try {
+            return Schema::hasColumn($table, $column);
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     private function laterIso(mixed $current, mixed $candidate): ?string

@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Models\Product;
+use App\Services\Enrichment\CatalogIndexSearch;
+use App\Services\Enrichment\HybridWebSearchService;
 use App\Services\Enrichment\ProductSearchIdentity;
+use ReflectionClass;
 use Tests\TestCase;
 
 final class ProductSearchIdentityTest extends TestCase
@@ -323,6 +326,32 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertStringContainsString('site:kams.com.pl', $joined);
         $this->assertStringContainsString('site:aitbhp.pl', $joined);
         $this->assertStringContainsString('site:optimumbhp.pl', $joined);
+    }
+
+    public function test_open_search_keeps_more_than_two_shop_hosts(): void
+    {
+        $product = new Product([
+            'sku' => 'G3175/40',
+            'name' => 'Obuv TRACK',
+            'manufacturer' => 'ARDON SAFETY',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+        /** @var list<string> $ladder */
+        $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
+        $joined = implode(' | ', $ladder);
+
+        $this->assertStringContainsString('site:kams.com.pl', $joined);
+        $this->assertMatchesRegularExpression('/site:kams\\.com\\.pl[^|]*3175/i', $joined);
+        foreach ($ladder as $query) {
+            if (str_starts_with($query, 'site:')) {
+                $this->assertStringNotContainsString('G3175/40', $query);
+            }
+        }
     }
 
     public function test_marelplus_search_queries_target_official_shop(): void
@@ -770,6 +799,52 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertFalse($id->imageUrlMentionsProduct(
             'https://www.tcichemicals.com/assets/structure/1868-00-4.png',
             $king
+        ));
+    }
+
+    public function test_size_suffix_sku_searches_model_and_rejects_other_type(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'G3175/40',
+            'name' => 'Obuv TRACK',
+            'manufacturer' => 'ARDON SAFETY',
+        ]);
+
+        $this->assertSame('G3175', $id->catalogSkuWithoutSize($product));
+        $this->assertContains('G3175', $id->skuSizeVariants($product));
+        $this->assertTrue($id->hasDistinctiveCatalogSku($product));
+        $this->assertSame('G 3175', $id->firstStrongShopPhrase($product));
+        $this->assertTrue($id->isWeakShopIndexPhrase('TRACK', $product));
+        $this->assertTrue($id->isWeakShopIndexPhrase('Obuv', $product));
+        $this->assertFalse($id->isWeakShopIndexPhrase('G 3175', $product));
+        $this->assertSame('obuwie', $id->requiredArticleTypeLabel($product));
+        $indexCodes = app(CatalogIndexSearch::class)->codes($product);
+        $this->assertContains('g3175', $indexCodes);
+        $this->assertNotContains('track', $indexCodes);
+        $this->assertNotContains('obuv', $indexCodes);
+
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://kams.com.pl/p6119,track-ardon-buty-do-kostki-g3175-38-46.html '
+            .'TRACK ARDON buty do kostki G3175',
+            $product
+        ));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://optimumbhp.pl/kurtka-zimowa-ardon-track '
+            .'Kurtka ostrzegawcza ARDON TRACK EN 342',
+            $product
+        ));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://optimumbhp.pl/kurtka-zimowa-ardon-track',
+            'Kurtka ostrzegawcza ARDON TRACK',
+            'Kurtka zimowa ARDON TRACK EN 342 EN 343 EN ISO 20471',
+            $product
+        ));
+        $this->assertTrue($id->isConfirmedProductCard(
+            'https://kams.com.pl/p6119,track-ardon-buty-do-kostki-z-nubuku-g3175-38-46.html',
+            'TRACK ARDON buty do kostki',
+            'Buty do kostki z nubuku G3175 38-46 ARDON',
+            $product
         ));
     }
 }

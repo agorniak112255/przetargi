@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Jobs\IndexCatalogHostJob;
+use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
 use App\Models\User;
@@ -79,14 +80,84 @@ final class CatalogSearchSiteApiTest extends TestCase
 
         $this->getJson('/api/admin/catalog-search-sites')->assertForbidden();
         $this->postJson('/api/admin/catalog-search-sites', ['url' => 'x.pl'])->assertForbidden();
+        $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/pages')->assertForbidden();
+        $this->postJson('/api/admin/catalog-search-sites/sklepbhp.pl/reindex')->assertForbidden();
     }
 
-    private function seedPage(string $url): void
+    public function test_admin_lists_pages_for_host_including_www(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedPage('https://www.sklepbhp.pl/buty-s3', 'Buty S3');
+        $this->seedPage('https://sklepbhp.pl/kalosze');
+
+        $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/pages')
+            ->assertOk()
+            ->assertJsonPath('host', 'sklepbhp.pl')
+            ->assertJsonPath('meta.total', 2)
+            ->assertJsonFragment(['url' => 'https://www.sklepbhp.pl/buty-s3', 'title' => 'Buty S3']);
+
+        $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/pages?q=buty')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 1);
+
+        $this->getJson('/api/admin/catalog-search-sites/nieznana-domena.pl/pages')
+            ->assertStatus(422);
+    }
+
+    public function test_admin_reindexes_existing_host(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        Queue::fake();
+
+        $this->postJson('/api/admin/catalog-search-sites/sklepbhp.pl/reindex')
+            ->assertOk()
+            ->assertJsonPath('host', 'sklepbhp.pl')
+            ->assertJsonPath('queued', true);
+
+        Queue::assertPushed(IndexCatalogHostJob::class, fn (IndexCatalogHostJob $job): bool => $job->host === 'sklepbhp.pl');
+
+        $this->postJson('/api/admin/catalog-search-sites/nieznana-domena.pl/reindex')
+            ->assertStatus(422);
+    }
+
+    public function test_empty_reason_explains_zero_link_hosts(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        config([
+            'enrichment.retailer_domains' => ['sklepbhp.pl', '3m.com', 'cdn.example.cloudfront.net'],
+            'enrichment.catalog_skip_hosts' => ['3m.com'],
+        ]);
+        CatalogHost::query()->create([
+            'host' => 'sklepbhp.pl',
+            'pages_count' => 0,
+            'last_attempt_at' => now(),
+            'last_error' => 'Nie znalazłem sitemapy dla sklepbhp.pl.',
+        ]);
+
+        $this->getJson('/api/admin/catalog-search-sites')
+            ->assertOk()
+            ->assertJsonFragment([
+                'host' => 'sklepbhp.pl',
+                'links' => 0,
+                'empty_reason' => 'Nie znalazłem sitemapy dla sklepbhp.pl.',
+            ])
+            ->assertJsonFragment([
+                'host' => '3m.com',
+                'empty_reason' => 'Pominięta na liście catalog_skip_hosts.',
+            ])
+            ->assertJsonFragment([
+                'host' => 'cdn.example.cloudfront.net',
+                'empty_reason' => 'CDN — przy pełnym skanie pomijany.',
+            ]);
+    }
+
+    private function seedPage(string $url, ?string $title = null): void
     {
         CatalogPage::query()->create([
             'host' => (string) parse_url($url, PHP_URL_HOST),
             'url_hash' => CatalogPage::hashFor($url),
             'url' => $url,
+            'title' => $title,
             'haystack' => mb_strtolower($url),
             'last_seen_at' => now(),
         ]);

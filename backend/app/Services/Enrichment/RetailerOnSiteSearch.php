@@ -98,12 +98,19 @@ final class RetailerOnSiteSearch
                 return $sku;
             }
         }
-        $shop = $this->identity->shopIdentityPhrases($product);
-        if ($shop !== []) {
-            return $shop[0];
+        $shop = $this->identity->firstStrongShopPhrase($product);
+        if ($shop === '') {
+            $shop = $this->identity->shopIdentityPhrases($product)[0] ?? '';
+        }
+        $coded = $this->identity->catalogSkuWithoutSize($product);
+        if ($coded !== '' && preg_match('/\d/u', $coded) === 1 && preg_match('/\d/u', $shop) !== 1) {
+            return $coded;
+        }
+        if ($shop !== '') {
+            return $shop;
         }
 
-        $sku = trim((string) $product->sku);
+        $sku = $this->identity->catalogSkuWithoutSize($product);
         if ($sku !== '' && ! $this->identity->looksLikeInternalSku($product)) {
             return trim($this->identity->shortBrand((string) $product->manufacturer).' '.$sku);
         }
