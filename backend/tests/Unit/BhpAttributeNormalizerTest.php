@@ -57,6 +57,22 @@ final class BhpAttributeNormalizerTest extends TestCase
             'name' => 'Spodnie robocze',
             'description' => 'Rozmiary od S do XXL.',
         ])['rozmiar']);
+        $this->assertNull($n->normalize(
+            ['kategoria_bhp' => 'obuwie', 'rozmiar' => '1-5XL'],
+            [
+                'name' => 'OWERTON (05 NERO)',
+                'description' => 'Chodaki Cofra, EN 20347. Brak tabeli w akapicie.',
+                'category' => 'Obuwie',
+            ]
+        )['rozmiar']);
+        $this->assertSame('39-47', $n->normalize(
+            ['kategoria_bhp' => 'obuwie', 'rozmiar' => '1-5XL'],
+            [
+                'name' => 'OWERTON',
+                'description' => 'Chodaki Cofra. Taglie 39-47.',
+                'category' => 'Obuwie',
+            ]
+        )['rozmiar']);
     }
 
     public function test_for_product_derives_from_enrichment_lists(): void

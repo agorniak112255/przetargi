@@ -170,7 +170,7 @@ final class ProductCatalogHealthTest extends TestCase
 
         $this->postJson('/api/products/catalog-health/backfill-sizes')
             ->assertOk()
-            ->assertJsonPath('updated', 3)
+            ->assertJsonPath('updated', 4)
             ->assertJsonPath('scanned', 5);
 
         $this->assertSame('36-48', $buty->refresh()->packaging);

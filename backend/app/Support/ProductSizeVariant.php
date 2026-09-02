@@ -37,7 +37,7 @@ final class ProductSizeVariant
         'xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl', 'xxxl', 'xxxxl', '5xl', '6xl',
     ];
 
-    private const KEYWORD = '(?:dost[eę]pne\\s+rozmiary|available\\s+sizes?|rozmiary|rozmiar(?:ów|y)?|sizes?|tailles?|pointures?|gr(?:o|ö)sse?n?)';
+    private const KEYWORD = '(?:dost[eę]pne\\s+rozmiary|available\\s+sizes?|rozmiary|rozmiar(?:ów|y)?|sizes?|tailles?|pointures?|taglie|misure|numeri|gr(?:o|ö)sse?n?)';
 
     private const NUM = '(\\d{1,2}(?:[.,]\\d)?)';
 
@@ -196,7 +196,28 @@ final class ProductSizeVariant
             return ['onesize'];
         }
 
-        return [];
+        return $this->parseBareFootwearRange($text);
+    }
+
+    /**
+     * Etykieta z AI / opisu: odrzuca śmieci w stylu „1-5XL” przy obuwiu.
+     */
+    public function labelFromTexts(?string $claimed, string $text, ?string $category = null): ?string
+    {
+        $best = [];
+        foreach ([$claimed ?? '', $text] as $chunk) {
+            if (trim($chunk) === '') {
+                continue;
+            }
+            foreach ([$this->parseSizesFromText($chunk), $this->parseBareFootwearRange($chunk)] as $parsed) {
+                $parsed = $this->filterByCategory($parsed, $category);
+                if (count($parsed) > count($best)) {
+                    $best = $parsed;
+                }
+            }
+        }
+
+        return $this->formatPackaging($best);
     }
 
     /**
@@ -316,6 +337,69 @@ final class ProductSizeVariant
     {
         return number_format(round((float) $catalog, 2), 2, '.', '')
             .'|'.number_format(round((float) $purchase, 2), 2, '.', '');
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function parseBareFootwearRange(string $text): array
+    {
+        if (preg_match(
+            '/(?<![\d.:])\b(3[2-9]|4[0-9]|5[0-2])\s*[-–—]\s*(3[2-9]|4[0-9]|5[0-2])\b(?!\d)/',
+            $text,
+            $m
+        ) !== 1) {
+            return [];
+        }
+
+        return $this->expandNumericRange($m[1], $m[2]);
+    }
+
+    /**
+     * @param  list<string>  $sizes
+     * @return list<string>
+     */
+    public function filterByCategory(array $sizes, ?string $category): array
+    {
+        $cat = mb_strtolower(trim((string) $category));
+        $footwear = $cat === 'obuwie' || str_contains($cat, 'obuw') || str_contains($cat, 'but');
+        $gloves = $cat === 'rekawice' || str_contains($cat, 'rękaw') || str_contains($cat, 'rekaw');
+        $out = [];
+        foreach ($sizes as $size) {
+            if ($footwear && ! $this->isFootwearToken($size)) {
+                continue;
+            }
+            if ($gloves && ! $this->isGloveToken($size)) {
+                continue;
+            }
+            $out[] = $size;
+        }
+
+        return $out;
+    }
+
+    private function isFootwearToken(string $size): bool
+    {
+        if ($size === 'onesize') {
+            return true;
+        }
+
+        return preg_match('/^\d{2}$/', $size) === 1
+            && (int) $size >= 32
+            && (int) $size <= 52;
+    }
+
+    private function isGloveToken(string $size): bool
+    {
+        if (preg_match('/^(xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l|[2-6]xl|onesize)$/', $size) === 1) {
+            return true;
+        }
+        if (preg_match('/^\d{1,2}(?:\.\d)?$/', $size) !== 1) {
+            return false;
+        }
+        $n = (float) $size;
+
+        return $n >= 4 && $n <= 16;
     }
 
     /**

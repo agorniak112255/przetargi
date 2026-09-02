@@ -120,4 +120,19 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertTrue($svc->shouldFillPackaging('42', $sizes));
         $this->assertFalse($svc->shouldFillPackaging('7, 8, 9, 10, 11', $sizes));
     }
+
+    #[Test]
+    public function rejects_clothing_label_for_footwear_and_reads_bare_eu_range(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame([], $svc->parseSizesFromText('1-5XL'));
+        $this->assertNull($svc->labelFromTexts('1-5XL', 'EN 20347, EN 13688', 'obuwie'));
+        $this->assertSame('39-47', $svc->labelFromTexts('1-5XL', 'Taglie disponibili 39-47', 'obuwie'));
+        $this->assertSame(
+            ['38', '39', '40', '41', '42', '43', '44', '45', '46', '47'],
+            $svc->parseBareFootwearRange('EN 20347 SRC. 38-47. ESD.')
+        );
+        $this->assertSame([], $svc->parseBareFootwearRange('EN ISO 20345:2011 S1 P SRC'));
+    }
 }

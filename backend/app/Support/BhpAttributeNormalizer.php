@@ -189,10 +189,11 @@ final class BhpAttributeNormalizer
         $out['klasa_ochrony'] = $parsed['klasa'];
         $out['oznaczenia'] = $parsed['oznaczenia'];
 
-        $out['rozmiar'] = $this->nullableString($raw['rozmiar'] ?? null)
-            ?? $this->detectRozmiar(
-                implode(' ', $this->stringList($context['specs'] ?? null)).' '.($context['description'] ?? '')
-            );
+        $out['rozmiar'] = $this->detectRozmiar(
+            implode(' ', $this->stringList($context['specs'] ?? null)).' '.($context['description'] ?? ''),
+            $this->nullableString($raw['rozmiar'] ?? null),
+            $out['kategoria_bhp']
+        );
 
         $out['poziomy_en388'] = $this->nullableString($raw['poziomy_en388'] ?? null)
             ?? $this->detectEn388($descBlob);
@@ -567,15 +568,9 @@ final class BhpAttributeNormalizer
         return null;
     }
 
-    private function detectRozmiar(string $text): ?string
+    private function detectRozmiar(string $text, ?string $claimed = null, ?string $category = null): ?string
     {
-        $sizes = new ProductSizeVariant;
-        $found = $sizes->parseSizesFromText($text);
-        if ($found === []) {
-            return null;
-        }
-
-        return $sizes->formatPackaging($found);
+        return (new ProductSizeVariant)->labelFromTexts($claimed, $text, $category);
     }
 
     private function detectEn388(string $text): ?string

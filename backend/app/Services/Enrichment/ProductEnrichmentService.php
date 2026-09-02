@@ -1575,6 +1575,15 @@ final class ProductEnrichmentService
             $extracted['use_cases'] = $this->extractUseCasesFromText($hay);
         }
 
+        $attrs = is_array($extracted['attributes'] ?? null) ? $extracted['attributes'] : [];
+        $category = is_string($attrs['kategoria_bhp'] ?? null) ? $attrs['kategoria_bhp'] : null;
+        $claimed = is_string($attrs['rozmiar'] ?? null) ? $attrs['rozmiar'] : null;
+        $label = (new ProductSizeVariant)->labelFromTexts($claimed, $hay, $category);
+        if ($label !== null) {
+            $attrs['rozmiar'] = $label;
+            $extracted['attributes'] = $attrs;
+        }
+
         return $extracted;
     }
 
@@ -1590,16 +1599,18 @@ final class ProductEnrichmentService
         string $description,
     ): array {
         $sizes = new ProductSizeVariant;
-        $found = [];
-        foreach (array_merge([(string) ($attributes['rozmiar'] ?? '')], $specs, [$description]) as $chunk) {
-            $parsed = $sizes->parseSizesFromText((string) $chunk);
-            if (count($parsed) > count($found)) {
-                $found = $parsed;
-            }
+        $category = is_string($attributes['kategoria_bhp'] ?? null) ? $attributes['kategoria_bhp'] : null;
+        $blob = implode("\n", array_merge($specs, [$description]));
+        $label = $sizes->labelFromTexts(
+            is_string($attributes['rozmiar'] ?? null) ? $attributes['rozmiar'] : null,
+            $blob,
+            $category
+        );
+        $found = $label !== null ? $sizes->parseSizeList($label) : [];
+        if ($found === [] && $label !== null) {
+            $found = $sizes->parseSizesFromText($label);
         }
-        if ($found !== [] && ($attributes['rozmiar'] ?? null) === null) {
-            $attributes['rozmiar'] = $sizes->formatPackaging($found);
-        }
+        $attributes['rozmiar'] = $label;
         $packaging = null;
         if ($found !== [] && $sizes->shouldFillPackaging($product->packaging, $found)) {
             $packaging = $sizes->formatPackaging($found);
@@ -2650,7 +2661,7 @@ Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"d
     "materialy": ["lista materiałów"],
     "normy_en": ["EN 388", "EN ISO 20345"],
     "klasa_ochrony": "S3 / kat. II / …",
-    "rozmiar": "np. 9 lub 42-46 albo null",
+    "rozmiar": "obuwie: tylko EU 36-48 ze źródeł; rękawice: 7-11; odzież: S-XXL; nigdy 1-5XL przy butach; brak w źródłach → null",
     "poziomy_en388": "np. 4544C albo null"
   },
   "image_urls": ["https://… tylko realny URL zdjęcia produktu"],

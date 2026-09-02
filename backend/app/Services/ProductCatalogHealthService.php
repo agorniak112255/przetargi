@@ -253,7 +253,7 @@ final class ProductCatalogHealthService
         $updated = 0;
         $skipped = 0;
         $query = Product::query()
-            ->select(['id', 'description', 'packaging', 'enrichment_payload'])
+            ->select(['id', 'description', 'packaging', 'category', 'enrichment_payload'])
             ->whereNotNull('description')
             ->where('description', '!=', '')
             ->orderBy('id');
@@ -265,31 +265,39 @@ final class ProductCatalogHealthService
             foreach ($products as $product) {
                 /** @var Product $product */
                 $scanned++;
-                $pack = trim((string) ($product->packaging ?? ''));
-                if ($pack !== '' && preg_match('/[,;]/', $pack) === 1) {
-                    $skipped++;
-
-                    continue;
-                }
-                $found = $this->sizesFromStoredText($product);
-                if ($found === [] || ! $this->sizes->shouldFillPackaging($product->packaging, $found)) {
-                    $skipped++;
-
-                    continue;
-                }
-                $label = $this->sizes->formatPackaging($found);
-                if ($label === null) {
-                    $skipped++;
-
-                    continue;
-                }
-                $product->packaging = $label;
                 $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
                 $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
-                if (($attrs['rozmiar'] ?? null) === null || $attrs['rozmiar'] === '') {
+                $category = is_string($attrs['kategoria_bhp'] ?? null)
+                    ? $attrs['kategoria_bhp']
+                    : ($product->category !== null ? (string) $product->category : null);
+                $chunks = [];
+                foreach ($payload['specs'] ?? [] as $spec) {
+                    if (is_string($spec) && trim($spec) !== '') {
+                        $chunks[] = $spec;
+                    }
+                }
+                $chunks[] = (string) ($product->description ?? '');
+                $label = $this->sizes->labelFromTexts(
+                    is_string($attrs['rozmiar'] ?? null) ? $attrs['rozmiar'] : null,
+                    implode("\n", $chunks),
+                    $category
+                );
+                $changed = false;
+                if (($attrs['rozmiar'] ?? null) !== $label) {
                     $attrs['rozmiar'] = $label;
                     $payload['attributes'] = $attrs;
                     $product->enrichment_payload = $payload;
+                    $changed = true;
+                }
+                $found = $label !== null ? $this->sizes->parseSizesFromText($label) : [];
+                if ($found !== [] && $this->sizes->shouldFillPackaging($product->packaging, $found)) {
+                    $product->packaging = $label;
+                    $changed = true;
+                }
+                if (! $changed) {
+                    $skipped++;
+
+                    continue;
                 }
                 $product->saveQuietly();
                 $updated++;
@@ -297,31 +305,6 @@ final class ProductCatalogHealthService
         });
 
         return ['scanned' => $scanned, 'updated' => $updated, 'skipped' => $skipped];
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function sizesFromStoredText(Product $product): array
-    {
-        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
-        $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
-        $found = [];
-        $chunks = [(string) ($attrs['rozmiar'] ?? '')];
-        foreach ($payload['specs'] ?? [] as $spec) {
-            if (is_string($spec) && trim($spec) !== '') {
-                $chunks[] = $spec;
-            }
-        }
-        $chunks[] = (string) ($product->description ?? '');
-        foreach ($chunks as $chunk) {
-            $parsed = $this->sizes->parseSizesFromText($chunk);
-            if (count($parsed) > count($found)) {
-                $found = $parsed;
-            }
-        }
-
-        return $found;
     }
 
     /** @return list<int> */
