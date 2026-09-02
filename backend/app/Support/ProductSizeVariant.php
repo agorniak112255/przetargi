@@ -181,6 +181,23 @@ final class ProductSizeVariant
             }
         }
 
+        // Siatka sklepu: „Rozmiar: 36 37 38 39…” — spacje, nie przecinki.
+        if (preg_match(
+            '/\b(?:rozmiar(?:y|ów)?|sizes?|tailles?|pointures?)\s*[:=]?\s*((?:'.$num.'|'.$alpha.')(?:\s+(?:'.$num.'|'.$alpha.')){2,24})\b/iu',
+            $text,
+            $m
+        ) === 1) {
+            $list = $this->parseSpaceList($m[1]);
+            if (count($list) >= 3) {
+                return $list;
+            }
+        }
+
+        $fromCodes = $this->sizesFromManufacturerCodes($text);
+        if (count($fromCodes) >= 4) {
+            return $fromCodes;
+        }
+
         if (preg_match(
             '/\b(?:rozmiar|size|taille|rozm\.?)\s*[:=]?\s*('.$num.'|'.$alpha.')\b/iu',
             $text,
@@ -197,6 +214,37 @@ final class ProductSizeVariant
         }
 
         return $this->parseBareFootwearRange($text);
+    }
+
+    /**
+     * Opcje zakupu ze sklepu: select/przyciski „36…47”, nie opis.
+     *
+     * @return list<string>
+     */
+    public function parseShopOptionSizes(string $html): array
+    {
+        if (trim($html) === '') {
+            return [];
+        }
+        $html = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $best = [];
+        foreach ($this->shopOptionBlocks($html) as $block) {
+            $tokens = $this->tokensFromShopBlock($block);
+            if (count($tokens) > count($best)) {
+                $best = $tokens;
+            }
+        }
+        $fromCodes = $this->sizesFromManufacturerCodes($html);
+        if (count($fromCodes) > count($best)) {
+            $best = $fromCodes;
+        }
+        $plain = trim(html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $fromText = $this->parseSizesFromText($plain);
+        if (count($fromText) > count($best)) {
+            $best = $fromText;
+        }
+
+        return $this->uniqueSortedSizes($best);
     }
 
     /**
@@ -494,6 +542,138 @@ final class ProductSizeVariant
         }
 
         return $found;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function parseSpaceList(string $raw): array
+    {
+        $found = [];
+        foreach (preg_split('/\s+/u', trim($raw)) ?: [] as $part) {
+            $norm = $this->normalizeSizeToken(trim((string) $part));
+            if ($norm !== null && ! in_array($norm, $found, true)) {
+                $found[] = $norm;
+            }
+        }
+
+        return $found;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function shopOptionBlocks(string $html): array
+    {
+        $blocks = [];
+        if (preg_match_all(
+            '#<(?:select|ul|ol|div|fieldset|table)[^>]*(?:name|id|class|aria-label|data-name|data-attribute)=["\'][^"\']*(?:rozmiar|size|taille|pointure|taglia|groesse|größe|attribute)[^"\']*["\'][^>]*>(.*?)</(?:select|ul|ol|div|fieldset|table)>#is',
+            $html,
+            $m
+        )) {
+            foreach ($m[1] as $block) {
+                $blocks[] = (string) $block;
+            }
+        }
+        if (preg_match_all(
+            '#(?:rozmiar|size|taille|pointure)\s*:?\s*</[^>]+>\s*<(?:select|ul|div|fieldset)[^>]*>(.*?)</(?:select|ul|div|fieldset)>#iu',
+            $html,
+            $m
+        )) {
+            foreach ($m[1] as $block) {
+                $blocks[] = (string) $block;
+            }
+        }
+
+        return $blocks;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function tokensFromShopBlock(string $block): array
+    {
+        $found = [];
+        if (preg_match_all(
+            '#<(?:option|label|button|a|span|li|td)[^>]*>\s*([^<]{1,16})\s*</#iu',
+            $block,
+            $m
+        )) {
+            foreach ($m[1] as $raw) {
+                $norm = $this->normalizeSizeToken(trim((string) $raw));
+                if ($norm !== null && ! in_array($norm, $found, true)) {
+                    $found[] = $norm;
+                }
+            }
+        }
+        if (preg_match_all('/\b(?:data-size|data-value)=["\']([^"\']+)["\']/iu', $block, $m)) {
+            foreach ($m[1] as $raw) {
+                $norm = $this->normalizeSizeToken(trim((string) $raw));
+                if ($norm !== null && ! in_array($norm, $found, true)) {
+                    $found[] = $norm;
+                }
+            }
+        }
+
+        return count($found) >= 2 ? $found : [];
+    }
+
+    /**
+     * JET3SPNO36 / JET3SPNO47 — wariant rozmiaru w kodzie producenta.
+     *
+     * @return list<string>
+     */
+    private function sizesFromManufacturerCodes(string $text): array
+    {
+        if (preg_match_all('/\b[A-Z][A-Z0-9]{2,28}[A-Z](3[2-9]|4[0-9]|5[0-2])\b/', $text, $m) < 1) {
+            return [];
+        }
+        $found = [];
+        foreach ($m[1] as $size) {
+            if (! in_array($size, $found, true)) {
+                $found[] = $size;
+            }
+        }
+        if (count($found) < 4) {
+            return [];
+        }
+        $nums = array_map(static fn (string $s): int => (int) $s, $found);
+        if (max($nums) - min($nums) > 20) {
+            return [];
+        }
+
+        return $this->uniqueSortedSizes($found);
+    }
+
+    /**
+     * @param  list<string>  $sizes
+     * @return list<string>
+     */
+    private function uniqueSortedSizes(array $sizes): array
+    {
+        $sizes = array_values(array_unique(array_filter(
+            $sizes,
+            static fn (string $s): bool => trim($s) !== ''
+        )));
+        usort($sizes, function (string $a, string $b): int {
+            $na = is_numeric($a);
+            $nb = is_numeric($b);
+            if ($na && $nb) {
+                return ((float) $a <=> (float) $b);
+            }
+            if ($na !== $nb) {
+                return $na ? -1 : 1;
+            }
+            $ia = array_search($a, self::ALPHA_ORDER, true);
+            $ib = array_search($b, self::ALPHA_ORDER, true);
+            if (is_int($ia) && is_int($ib)) {
+                return $ia <=> $ib;
+            }
+
+            return $a <=> $b;
+        });
+
+        return $sizes;
     }
 
     /**

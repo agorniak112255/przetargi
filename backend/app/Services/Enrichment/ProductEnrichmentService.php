@@ -627,7 +627,13 @@ final class ProductEnrichmentService
                     'norms_column' => (string) ($product->norms ?? ''),
                 ]
             );
-            $sized = $this->applyExtractedSizes($product, $attributes, $specs, $description);
+            $sized = $this->applyExtractedSizes(
+                $product,
+                $attributes,
+                $specs,
+                $description,
+                $this->collectOptionSizes($pageSnippets)
+            );
             $attributes = $sized['attributes'];
             $packaging = $sized['packaging'];
 
@@ -1544,7 +1550,11 @@ final class ProductEnrichmentService
                 continue;
             }
             $seen[$url] = true;
-            $out[] = ['url' => (string) $page['url'], 'text' => $text];
+            $row = ['url' => (string) $page['url'], 'text' => $text];
+            if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
+                $row['option_sizes'] = $page['option_sizes'];
+            }
+            $out[] = $row;
         }
 
         return $out;
@@ -1598,6 +1608,7 @@ final class ProductEnrichmentService
     /**
      * @param  array<string, mixed>  $attributes
      * @param  list<string>  $specs
+     * @param  list<string>  $optionSizes
      * @return array{attributes: array<string, mixed>, packaging: string|null}
      */
     private function applyExtractedSizes(
@@ -1605,9 +1616,21 @@ final class ProductEnrichmentService
         array $attributes,
         array $specs,
         string $description,
+        array $optionSizes = [],
     ): array {
         $sizes = new ProductSizeVariant;
         $category = is_string($attributes['kategoria_bhp'] ?? null) ? $attributes['kategoria_bhp'] : null;
+        $fromShop = $sizes->filterByCategory($optionSizes, $category);
+        if (count($fromShop) >= 2) {
+            $label = $sizes->formatPackaging($fromShop);
+            $attributes['rozmiar'] = $label;
+            $packaging = null;
+            if ($sizes->shouldFillPackaging($product->packaging, $fromShop)) {
+                $packaging = $label;
+            }
+
+            return ['attributes' => $attributes, 'packaging' => $packaging];
+        }
         $blob = implode("\n", array_merge($specs, [$description]));
         $label = $sizes->labelFromTexts(
             is_string($attributes['rozmiar'] ?? null) ? $attributes['rozmiar'] : null,
@@ -1625,6 +1648,32 @@ final class ProductEnrichmentService
         }
 
         return ['attributes' => $attributes, 'packaging' => $packaging];
+    }
+
+    /**
+     * @param  list<array{url?: string, text?: string, option_sizes?: list<string>}>  $pages
+     * @return list<string>
+     */
+    private function collectOptionSizes(array $pages): array
+    {
+        $best = [];
+        foreach ($pages as $page) {
+            $row = $page['option_sizes'] ?? [];
+            if (! is_array($row)) {
+                continue;
+            }
+            $tokens = [];
+            foreach ($row as $size) {
+                if (is_string($size) && trim($size) !== '') {
+                    $tokens[] = $size;
+                }
+            }
+            if (count($tokens) > count($best)) {
+                $best = $tokens;
+            }
+        }
+
+        return $best;
     }
 
     /** @return list<string> */
@@ -1928,7 +1977,11 @@ final class ProductEnrichmentService
                 continue;
             }
             if ($this->identity->isConfirmedProductCard($url, '', $text, $product)) {
-                $out[] = ['url' => $url, 'text' => $text];
+                $row = ['url' => $url, 'text' => $text];
+                if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
+                    $row['option_sizes'] = $page['option_sizes'];
+                }
+                $out[] = $row;
             }
         }
 
@@ -2586,7 +2639,11 @@ SYS,
         foreach ($compact as $orig) {
             $key = mb_strtolower((string) ($orig['url'] ?? ''));
             if ($key !== '' && isset($byUrl[$key])) {
-                $cleaned[] = $byUrl[$key];
+                $row = $byUrl[$key];
+                if (isset($orig['option_sizes']) && is_array($orig['option_sizes'])) {
+                    $row['option_sizes'] = $orig['option_sizes'];
+                }
+                $cleaned[] = $row;
             }
         }
         if ($cleaned === [] && $byUrl !== []) {

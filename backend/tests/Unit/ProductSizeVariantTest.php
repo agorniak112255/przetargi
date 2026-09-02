@@ -135,4 +135,50 @@ final class ProductSizeVariantTest extends TestCase
         );
         $this->assertSame([], $svc->parseBareFootwearRange('EN ISO 20345:2011 S1 P SRC'));
     }
+
+    #[Test]
+    public function extracts_shop_buy_options_and_spaced_size_grid(): void
+    {
+        $svc = new ProductSizeVariant;
+        $this->assertSame(
+            ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47'],
+            $svc->parseSizesFromText('Rozmiar: 36 37 38 39 40 41 42 43 44 45 46 47')
+        );
+        $this->assertSame(
+            ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47'],
+            $svc->parseShopOptionSizes(
+                '<label>Rozmiar:</label><div class="product-sizes">'
+                .'<button>36</button><button>37</button><button>38</button>'
+                .'<button>39</button><button>40</button><button>41</button>'
+                .'<button>42</button><button>43</button><button>44</button>'
+                .'<button>45</button><button>46</button><button>47</button></div>'
+            )
+        );
+        $this->assertSame(
+            ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47'],
+            $svc->parseShopOptionSizes(
+                'Kody producenta: JET3SPNO36, JET3SPNO47, JET3SPNO46, JET3SPNO45, '
+                .'JET3SPNO44, JET3SPNO43, JET3SPNO42, JET3SPNO41, JET3SPNO40, '
+                .'JET3SPNO39, JET3SPNO38, JET3SPNO37'
+            )
+        );
+        $this->assertSame(
+            ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47'],
+            $svc->parseShopOptionSizes(
+                '<select id="group_1" class="form-control" name="group[1]" aria-label="Rozmiar">'
+                .'<option>36</option><option>37</option><option>38</option><option>39</option>'
+                .'<option>40</option><option>41</option><option>42</option><option>43</option>'
+                .'<option>44</option><option>45</option><option>46</option><option>47</option>'
+                .'</select>'
+            )
+        );
+        $this->assertSame(
+            [],
+            $svc->parseShopOptionSizes('EN ISO 20345:2011 S1 P SRC. ID produktu 22243.')
+        );
+        $this->assertSame(
+            '36-47',
+            $svc->labelFromTexts(null, 'Rozmiar: 36 37 38 39 40 41 42 43 44 45 46 47', 'obuwie')
+        );
+    }
 }

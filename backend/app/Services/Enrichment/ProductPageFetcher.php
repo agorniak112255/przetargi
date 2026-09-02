@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use App\Support\ProductSizeVariant;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Http\Client\Pool;
@@ -352,7 +353,11 @@ final class ProductPageFetcher
             return;
         }
 
+        $optionSizes = (new ProductSizeVariant)->parseShopOptionSizes($html);
         $text = $this->extractProductPageText($html, $skuNorm);
+        if ($optionSizes !== []) {
+            $text = trim('Dostępne rozmiary: '.implode(', ', $optionSizes)."\n\n".$text);
+        }
         $title = (string) ($row['title'] ?? '');
         if ($this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
             return;
@@ -363,7 +368,11 @@ final class ProductPageFetcher
                 || $this->pageMatchesProductIdentity($url, $text, $title));
 
         if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
-            $goodPages[] = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
+            $page = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
+            if ($optionSizes !== []) {
+                $page['option_sizes'] = $optionSizes;
+            }
+            $goodPages[] = $page;
         }
 
         // Zdjęcia tylko z potwierdzonej karty — nie z „klienci kupili też” ani z obcej marki.
