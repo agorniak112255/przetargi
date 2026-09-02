@@ -289,6 +289,7 @@ final class PrestaShopExportClient implements PrestaExportGateway
         if ($manufacturerId > 0) {
             $product->id_manufacturer = (string) $manufacturerId;
         }
+        $this->stripReadOnlyProductFields($product);
         $this->putXml('products/'.$prestaId, $this->sanitizeForWrite((string) $existing->asXML()));
 
         $rewrite = (string) ($data['link_rewrite'] ?? '');
@@ -492,9 +493,35 @@ final class PrestaShopExportClient implements PrestaExportGateway
         return $this->parseXml($this->request('PUT', $resource, $this->sanitizeForWrite($xml)));
     }
 
+    /**
+     * GET produktu zwraca pola tylko do odczytu — PUT z nimi kończy się HTTP 400.
+     */
+    private function stripReadOnlyProductFields(SimpleXMLElement $product): void
+    {
+        foreach ([
+            'manufacturer_name',
+            'quantity',
+            'position_in_category',
+            'type',
+            'id_default_image',
+            'cache_default_attribute',
+            'cache_has_attachments',
+            'cache_is_pack',
+            'indexed',
+        ] as $field) {
+            unset($product->{$field});
+        }
+    }
+
     private function sanitizeForWrite(string $xml): string
     {
-        return preg_replace('/\s+xlink:href="[^"]*"/', '', $xml) ?? $xml;
+        $xml = preg_replace('/\s+xlink:href="[^"]*"/', '', $xml) ?? $xml;
+
+        return preg_replace(
+            '#<(manufacturer_name|quantity|position_in_category)(\s[^>]*)?>.*?</\1>#s',
+            '',
+            $xml
+        ) ?? $xml;
     }
 
     private function getXml(string $resource): SimpleXMLElement
