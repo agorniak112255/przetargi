@@ -29,6 +29,41 @@ final class ProductSizeVariant
         '130' => '13',
     ];
 
+    /**
+     * Lista rozmiarów z pola opakowania (np. „7, 8, 9, 10”) albo jeden rozmiar z nazwy/SKU.
+     *
+     * @return list<string>
+     */
+    public function parseSizeList(?string $packaging, ?string $name = null, ?string $sku = null): array
+    {
+        $found = [];
+        $raw = trim((string) $packaging);
+        if ($raw !== '' && preg_match('/[,;]/', $raw) === 1) {
+            foreach (preg_split('/[,;]+/', $raw) ?: [] as $part) {
+                $part = trim((string) $part);
+                if ($part === '') {
+                    continue;
+                }
+                $norm = $this->normalizeSizeToken($part);
+                if ($norm === null && preg_match('/^\d{1,2}(?:[.,]\d)?\s*-\s*\d{1,2}(?:[.,]\d)?$/', $part) === 1) {
+                    $norm = str_replace(',', '.', preg_replace('/\s+/', '', $part) ?? $part);
+                }
+                if ($norm !== null && ! in_array($norm, $found, true)) {
+                    $found[] = $norm;
+                }
+            }
+        }
+        if ($found !== []) {
+            return $found;
+        }
+        $one = $this->extractSize($name, $sku, $packaging);
+        if ($one === null) {
+            return [];
+        }
+
+        return [$one];
+    }
+
     public function extractSize(?string $name, ?string $sku = null, ?string $packaging = null): ?string
     {
         $fromPack = $this->normalizeSizeToken((string) $packaging);

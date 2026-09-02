@@ -12,7 +12,10 @@ type PrestaSettings = {
   prefix: string
   id_lang: number
   shop_url: string
+  id_category_default?: number
+  delivery_label?: string
   has_password: boolean
+  has_webservice_key?: boolean
   source: string
 }
 
@@ -34,6 +37,10 @@ export function AdminPresta() {
   const [prefix, setPrefix] = useState('ps_')
   const [idLang, setIdLang] = useState('1')
   const [shopUrl, setShopUrl] = useState('https://supon.rzeszow.pl')
+  const [webserviceKey, setWebserviceKey] = useState('')
+  const [hasWebserviceKey, setHasWebserviceKey] = useState(false)
+  const [idCategoryDefault, setIdCategoryDefault] = useState('2')
+  const [deliveryLabel, setDeliveryLabel] = useState('Na zamówienie')
   const [source, setSource] = useState('')
   const [catalogQ, setCatalogQ] = useState('')
   const [catalogRows, setCatalogRows] = useState<Product[]>([])
@@ -55,6 +62,9 @@ export function AdminPresta() {
     setPrefix(data.prefix || 'ps_')
     setIdLang(String(data.id_lang || 1))
     setShopUrl(data.shop_url || 'https://supon.rzeszow.pl')
+    setHasWebserviceKey(Boolean(data.has_webservice_key))
+    setIdCategoryDefault(String(data.id_category_default || 2))
+    setDeliveryLabel(data.delivery_label || 'Na zamówienie')
     setSource(data.source)
   }
 
@@ -77,13 +87,17 @@ export function AdminPresta() {
         prefix: prefix.trim() || 'ps_',
         id_lang: Number(idLang),
         shop_url: shopUrl.trim() || null,
+        id_category_default: Number(idCategoryDefault) || 2,
+        delivery_label: deliveryLabel.trim() || 'Na zamówienie',
       }
       if (password.trim()) body.password = password.trim()
+      if (webserviceKey.trim()) body.webservice_key = webserviceKey.trim()
       await api('/admin/presta-settings', {
         method: 'PUT',
         body: JSON.stringify(body),
       })
       setPassword('')
+      setWebserviceKey('')
       setMsg('Zapisano ustawienia sklepu.')
       await load()
     } catch (ex) {
@@ -165,10 +179,11 @@ export function AdminPresta() {
 
       <form onSubmit={(e) => void onSave(e)} className="mb-4 grid max-w-3xl gap-3 rounded-xl bg-white p-4 shadow-sm sm:grid-cols-2">
         <div className="sm:col-span-2">
-          <h2 className="text-sm font-semibold">Sklep PrestaShop (tylko odczyt)</h2>
+          <h2 className="text-sm font-semibold">Sklep PrestaShop</h2>
           <p className="mt-1 text-xs text-slate-500">
-            Połączenie z bazą sklepu. Wyszukiwanie opisów i zdjęć jest poniżej — nie miesza się z
-            pobieraniem AI. Ceny i stany ze sklepu nie są zapisywane
+            Baza (SELECT) do wyszukiwania opisów. Klucz Webservice jest potrzebny, żeby wysyłać
+            produkty do sklepu (rozmiary + termin na zamówienie). Ceny i stany ze sklepu nie są
+            zapisywane przy imporcie
             {source ? ` · źródło: ${source}` : ''}.
           </p>
         </div>
@@ -245,6 +260,33 @@ export function AdminPresta() {
             className="mt-1 w-full rounded border px-2 py-1.5 text-sm"
             value={shopUrl}
             onChange={(e) => setShopUrl(e.target.value)}
+          />
+        </label>
+        <label className="text-xs sm:col-span-2">
+          Klucz Webservice (zapis do sklepu)
+          <input
+            type="password"
+            className="mt-1 w-full rounded border px-2 py-1.5 text-sm"
+            value={webserviceKey}
+            onChange={(e) => setWebserviceKey(e.target.value)}
+            autoComplete="new-password"
+            placeholder={hasWebserviceKey ? 'zapisany, wpisz aby zmienić' : 'klucz z Presta → Parametry zaawansowane → Webservice'}
+          />
+        </label>
+        <label className="text-xs">
+          id kategorii domyślnej
+          <input
+            className="mt-1 w-full rounded border px-2 py-1.5 text-sm"
+            value={idCategoryDefault}
+            onChange={(e) => setIdCategoryDefault(e.target.value)}
+          />
+        </label>
+        <label className="text-xs">
+          Termin dostawy
+          <input
+            className="mt-1 w-full rounded border px-2 py-1.5 text-sm"
+            value={deliveryLabel}
+            onChange={(e) => setDeliveryLabel(e.target.value)}
           />
         </label>
 

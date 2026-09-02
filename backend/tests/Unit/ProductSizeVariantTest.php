@@ -51,4 +51,14 @@ final class ProductSizeVariantTest extends TestCase
 
         $this->assertNull($svc->groupKey('X', 'Rękawice test', 'MAXIFLEX34874'));
     }
+
+    #[Test]
+    public function parse_size_list_from_packaging(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame(['7', '8', '9', '10', '11'], $svc->parseSizeList('7, 8, 9, 10, 11'));
+        $this->assertSame(['6.5-7', '7.5-8'], $svc->parseSizeList('6.5-7, 7.5-8'));
+        $this->assertSame(['10'], $svc->parseSizeList(null, 'AlphaTec Size 10.0', '37695VP100'));
+    }
 }

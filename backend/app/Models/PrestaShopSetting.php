@@ -15,9 +15,12 @@ class PrestaShopSetting extends Model
         'database_name',
         'username',
         'password',
+        'webservice_key',
         'table_prefix',
         'id_lang',
         'shop_url',
+        'id_category_default',
+        'delivery_label',
     ];
 
     protected function casts(): array
@@ -26,7 +29,9 @@ class PrestaShopSetting extends Model
             'enabled' => 'boolean',
             'port' => 'integer',
             'id_lang' => 'integer',
+            'id_category_default' => 'integer',
             'password' => 'encrypted',
+            'webservice_key' => 'encrypted',
         ];
     }
 }

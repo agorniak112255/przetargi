@@ -8,6 +8,7 @@ use App\Support\ProductSearchBlob;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Product extends Model
 {
@@ -117,5 +118,15 @@ class Product extends Model
     public function specialPrices(): HasMany
     {
         return $this->hasMany(ProductSpecialPrice::class)->orderBy('client_name');
+    }
+
+    public function prestaMatches(): HasMany
+    {
+        return $this->hasMany(PrestaProductMatch::class);
+    }
+
+    public function prestaExport(): HasOne
+    {
+        return $this->hasOne(PrestaProductMatch::class)->latestOfMany();
     }
 }

@@ -12,4 +12,7 @@ return [
     'prefix' => env('PRESTA_TABLE_PREFIX', 'ps_'),
     'id_lang' => (int) env('PRESTA_ID_LANG', 1),
     'shop_url' => env('PRESTA_SHOP_URL', 'https://supon.rzeszow.pl'),
+    'webservice_key' => env('PRESTA_WEBSERVICE_KEY', ''),
+    'id_category_default' => (int) env('PRESTA_ID_CATEGORY_DEFAULT', 2),
+    'delivery_label' => env('PRESTA_DELIVERY_LABEL', 'Na zamówienie'),
 ];

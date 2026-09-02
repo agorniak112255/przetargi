@@ -11,6 +11,8 @@ class PrestaProductMatch extends Model
 {
     public const STATUS_APPLIED = 'applied';
 
+    public const STATUS_EXPORTED = 'exported';
+
     public const STATUS_REVIEW = 'review';
 
     public const STATUS_REJECTED = 'rejected';

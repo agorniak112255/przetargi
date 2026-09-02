@@ -40,6 +40,7 @@ final class PermissionCatalog
         'admin.roles.manage',
         'admin.activity.view',
         'admin.mail.manage',
+        'presta.export',
     ];
 
     public const ROLES = [
@@ -181,6 +182,7 @@ final class PermissionCatalog
             ['admin.roles.manage', 'Zarządzanie rolami', 'Może zmieniać zestaw uprawnień przypisanych do ról.', 'Administracja'],
             ['admin.activity.view', 'Dziennik aktywności', 'Może przeglądać logowania i historię działań użytkowników (120 dni).', 'Administracja'],
             ['admin.mail.manage', 'Konfiguracja SMTP', 'Może zmieniać ustawienia poczty wychodzącej i wysyłać test e-mail.', 'Administracja'],
+            ['presta.export', 'Eksport do Presty', 'Może wysyłać produkty (opis, rozmiary, termin na zamówienie) do sklepu PrestaShop.', 'Administracja'],
         ];
 
         $out = [];

@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\PrestaExportController;
 use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\PriceListController;
 use App\Http\Controllers\Api\PriceListImportController;
@@ -130,6 +131,10 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:price_lists.import');
     Route::post('/products/{product}/presta-apply', [PrestaShopSearchController::class, 'apply'])
         ->middleware('permission:price_lists.import');
+    Route::post('/products/{product}/presta-export', [PrestaExportController::class, 'exportProduct'])
+        ->middleware('permission:presta.export');
+    Route::post('/products/presta-export', [PrestaExportController::class, 'exportProducts'])
+        ->middleware('permission:presta.export');
     Route::get('/product-enrichment/limits', [ProductEnrichmentController::class, 'limits'])
         ->middleware('permission:price_lists.import|products.view');
     Route::get('/product-enrichment-batches/active', [ProductEnrichmentController::class, 'activeBatches'])
@@ -175,6 +180,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::post('/price-lists/import', [PriceListImportController::class, 'store'])->middleware('permission:price_lists.import');
     Route::post('/price-lists/{priceList}/enrich', [ProductEnrichmentController::class, 'enrichPriceList'])
         ->middleware('permission:price_lists.import');
+    Route::post('/price-lists/{priceList}/presta-export', [PrestaExportController::class, 'exportPriceList'])
+        ->middleware('permission:presta.export');
 
     Route::get('/ai-settings', [AiSettingsController::class, 'show'])->middleware('permission:ai_settings.manage');
     Route::put('/ai-settings', [AiSettingsController::class, 'update'])->middleware('permission:ai_settings.manage');

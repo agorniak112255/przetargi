@@ -7,6 +7,7 @@ import {
   api,
   can,
   type EnrichmentBatch,
+  type PrestaExportResult,
   type Product,
   type Substitute,
 } from '../lib/api'
@@ -36,6 +37,7 @@ export function ProductDetail() {
   const { id } = useParams()
   const { user } = useAuth()
   const canEnrich = can(user, 'price_lists.import')
+  const canExportPresta = can(user, 'presta.export')
   const [p, setP] = useState<Detail | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -45,6 +47,8 @@ export function ProductDetail() {
   const [prestaBusy, setPrestaBusy] = useState(false)
   const [prestaErr, setPrestaErr] = useState('')
   const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportMsg, setExportMsg] = useState('')
   const [priceHistory, setPriceHistory] = useState<
     {
       id: number
@@ -136,6 +140,40 @@ export function ProductDetail() {
     }
   }
 
+  async function exportPresta() {
+    if (!id) return
+    const already = Boolean(p?.presta_export?.presta_id)
+    const ok = window.confirm(
+      already
+        ? 'Produkt jest już w Preście. Zaktualizować opis, rozmiary i termin „Na zamówienie”?'
+        : 'Wysłać ten produkt do Presty? Wejdą opis, rozmiary z opakowania i termin „Na zamówienie”.',
+    )
+    if (!ok) return
+    setExportBusy(true)
+    setErr('')
+    setExportMsg('')
+    try {
+      const res = await api<PrestaExportResult>(`/products/${id}/presta-export`, {
+        method: 'POST',
+        body: JSON.stringify({ force: already }),
+      })
+      const missing =
+        res.sizes_missing.length > 0 ? ` · brak atrybutów: ${res.sizes_missing.join(', ')}` : ''
+      setExportMsg(
+        res.action === 'exists'
+          ? `Już w Preście (#${res.presta_id}).`
+          : `Wysłano do Presty (#${res.presta_id}, ${res.action}` +
+              (res.sizes.length > 0 ? `, rozmiary ${res.sizes.join('/')}` : '') +
+              `)${missing}`,
+      )
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd wysyłki do Presty')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   if (!p) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
   const status = p.enrichment_status ?? 'none'
@@ -206,6 +244,21 @@ export function ProductDetail() {
               {prestaBusy ? 'Szukam…' : 'Wyszukaj w Presta'}
             </button>
           )}
+          {canExportPresta && (
+            <button
+              type="button"
+              disabled={exportBusy}
+              onClick={() => void exportPresta()}
+              className="rounded bg-violet-700 px-3 py-2 text-xs text-white disabled:opacity-50"
+              title="Wysyła kartę do sklepu: opis, rozmiary, termin na zamówienie"
+            >
+              {exportBusy
+                ? 'Wysyłam…'
+                : p.presta_export?.presta_id
+                  ? 'Aktualizuj w Preście'
+                  : 'Wyślij do Presty'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -213,7 +266,16 @@ export function ProductDetail() {
         <CrossRefPanel initialCode={p.sku} />
       </div>
 
+      {exportMsg && <p className="mt-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{exportMsg}</p>}
       {err && <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {p.presta_export?.url && (
+        <p className="mt-2 text-xs text-slate-500">
+          W sklepie:{' '}
+          <a href={p.presta_export.url} target="_blank" rel="noreferrer" className="text-violet-700 underline">
+            karta Presta #{p.presta_export.presta_id}
+          </a>
+        </p>
+      )}
       {p.enrichment_error && status === 'failed' && (
         <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{p.enrichment_error}</p>
       )}

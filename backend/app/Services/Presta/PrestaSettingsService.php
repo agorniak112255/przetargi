@@ -18,10 +18,14 @@ final class PrestaSettingsService
      *     database: string,
      *     username: string,
      *     password: string,
+     *     webservice_key: string,
      *     prefix: string,
      *     id_lang: int,
      *     shop_url: string,
+     *     id_category_default: int,
+     *     delivery_label: string,
      *     has_password: bool,
+     *     has_webservice_key: bool,
      *     source: string
      * }
      */
@@ -37,13 +41,22 @@ final class PrestaSettingsService
             return $env;
         }
 
-        $password = $this->safePassword($row);
+        $password = $this->safeEncrypted($row, 'password');
         if ($password === '') {
             $password = $env['password'];
+        }
+        $key = '';
+        if (Schema::hasColumn('presta_shop_settings', 'webservice_key')) {
+            $key = $this->safeEncrypted($row, 'webservice_key');
+        }
+        if ($key === '') {
+            $key = $env['webservice_key'];
         }
 
         $host = trim((string) ($row->host ?? ''));
         $database = trim((string) ($row->database_name ?? ''));
+        $delivery = trim((string) ($row->delivery_label ?? ''));
+        $category = (int) ($row->id_category_default ?? 0);
 
         return [
             'enabled' => (bool) $row->enabled,
@@ -52,10 +65,14 @@ final class PrestaSettingsService
             'database' => $database !== '' ? $database : $env['database'],
             'username' => trim((string) ($row->username ?? '')) ?: $env['username'],
             'password' => $password,
+            'webservice_key' => $key,
             'prefix' => $this->safePrefix((string) ($row->table_prefix ?: $env['prefix'])),
             'id_lang' => (int) ($row->id_lang ?: $env['id_lang']),
             'shop_url' => rtrim((string) ($row->shop_url ?: $env['shop_url']), '/'),
+            'id_category_default' => $category > 0 ? $category : $env['id_category_default'],
+            'delivery_label' => $delivery !== '' ? $delivery : $env['delivery_label'],
             'has_password' => $password !== '',
+            'has_webservice_key' => $key !== '',
             'source' => 'database',
         ];
     }
@@ -66,7 +83,7 @@ final class PrestaSettingsService
     public function publicView(): array
     {
         $cfg = $this->resolve();
-        unset($cfg['password']);
+        unset($cfg['password'], $cfg['webservice_key']);
 
         return $cfg;
     }
@@ -95,6 +112,9 @@ final class PrestaSettingsService
         if (array_key_exists('password', $data) && is_string($data['password']) && $data['password'] !== '') {
             $row->password = $data['password'];
         }
+        if (array_key_exists('webservice_key', $data) && is_string($data['webservice_key']) && $data['webservice_key'] !== '') {
+            $row->webservice_key = $data['webservice_key'];
+        }
         if (array_key_exists('prefix', $data)) {
             $row->table_prefix = $this->safePrefix((string) ($data['prefix'] ?? 'ps_'));
         }
@@ -103,6 +123,13 @@ final class PrestaSettingsService
         }
         if (array_key_exists('shop_url', $data)) {
             $row->shop_url = $this->nullableString($data['shop_url'] ?? null);
+        }
+        if (array_key_exists('id_category_default', $data)) {
+            $row->id_category_default = max(1, (int) $data['id_category_default']);
+        }
+        if (array_key_exists('delivery_label', $data)) {
+            $label = $this->nullableString($data['delivery_label'] ?? null);
+            $row->delivery_label = $label ?? 'Na zamówienie';
         }
         $row->save();
     }
@@ -115,16 +142,22 @@ final class PrestaSettingsService
      *     database: string,
      *     username: string,
      *     password: string,
+     *     webservice_key: string,
      *     prefix: string,
      *     id_lang: int,
      *     shop_url: string,
+     *     id_category_default: int,
+     *     delivery_label: string,
      *     has_password: bool,
+     *     has_webservice_key: bool,
      *     source: string
      * }
      */
     private function fromEnv(): array
     {
         $password = (string) config('prestashop.password', '');
+        $key = (string) config('prestashop.webservice_key', '');
+        $label = trim((string) config('prestashop.delivery_label', 'Na zamówienie'));
 
         return [
             'enabled' => (bool) config('prestashop.enabled', false),
@@ -133,23 +166,27 @@ final class PrestaSettingsService
             'database' => (string) config('prestashop.database', ''),
             'username' => (string) config('prestashop.username', ''),
             'password' => $password,
+            'webservice_key' => $key,
             'prefix' => $this->safePrefix((string) config('prestashop.prefix', 'ps_')),
             'id_lang' => max(1, (int) config('prestashop.id_lang', 1)),
             'shop_url' => rtrim((string) config('prestashop.shop_url', 'https://supon.rzeszow.pl'), '/'),
+            'id_category_default' => max(1, (int) config('prestashop.id_category_default', 2)),
+            'delivery_label' => $label !== '' ? $label : 'Na zamówienie',
             'has_password' => $password !== '',
+            'has_webservice_key' => $key !== '',
             'source' => 'env',
         ];
     }
 
-    private function safePassword(PrestaShopSetting $row): string
+    private function safeEncrypted(PrestaShopSetting $row, string $attribute): string
     {
         try {
-            $password = $row->password;
+            $value = $row->getAttribute($attribute);
         } catch (DecryptException) {
             return '';
         }
 
-        return is_string($password) ? $password : '';
+        return is_string($value) ? $value : '';
     }
 
     private function safePrefix(string $prefix): string

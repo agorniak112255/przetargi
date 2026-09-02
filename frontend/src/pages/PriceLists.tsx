@@ -4,7 +4,7 @@ import { useAuth } from '../auth'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
-import { api, can, parseActiveEnrichment, type EnrichmentBatch } from '../lib/api'
+import { api, can, parseActiveEnrichment, type EnrichmentBatch, type PrestaExportBatch } from '../lib/api'
 
 type ProgressMode = 'analyze' | 'import' | null
 
@@ -378,6 +378,7 @@ export function PriceLists() {
   const { user } = useAuth()
   const [searchParams] = useSearchParams()
   const canEnrich = can(user, 'price_lists.import')
+  const canExportPresta = can(user, 'presta.export')
   const canDelete = can(user, 'price_lists.delete')
   const historyColSpan = 9 + (canEnrich ? 1 : 0) + (canEnrich || canDelete ? 1 : 0)
   const [rows, setRows] = useState<PriceList[]>([])
@@ -412,6 +413,7 @@ export function PriceLists() {
   const [newGroupName, setNewGroupName] = useState('')
   const [enrichBatches, setEnrichBatches] = useState<Record<number, EnrichmentBatch>>({})
   const [enrichBusyId, setEnrichBusyId] = useState<number | null>(null)
+  const [prestaBusyId, setPrestaBusyId] = useState<number | null>(null)
   const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
   const [enrichConcurrency, setEnrichConcurrency] = useState(4)
   const [enrichConfirm, setEnrichConfirm] = useState<{
@@ -571,6 +573,39 @@ export function PriceLists() {
       setErr(ex instanceof Error ? ex.message : 'Błąd usuwania cennika')
     } finally {
       setDeleteBusyId(null)
+    }
+  }
+
+  async function exportPriceListToPresta(row: PriceList) {
+    const count = (row.product_ids ?? historyCache[row.id]?.product_ids ?? []).length
+    const ok = window.confirm(
+      `Wysłać ${count} produktów z „${row.manufacturer} / ${row.version}” do Presty?\n` +
+        'Wejdą opisy, rozmiary z opakowania i termin „Na zamówienie”.',
+    )
+    if (!ok) return
+    setPrestaBusyId(row.id)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<PrestaExportBatch>(`/price-lists/${row.id}/presta-export`, {
+        method: 'POST',
+        body: JSON.stringify({ force: false }),
+      })
+      if ((res.queued ?? 0) > 0) {
+        setMsg(
+          `Zlecono ${res.queued} produktów z „${row.manufacturer} / ${row.version}” do Presty. ` +
+            'Kolejka przetworzy je w tle.',
+        )
+        return
+      }
+      const errs = (res.errors ?? []).length > 0 ? ` · ${res.errors?.slice(0, 3).join('; ')}` : ''
+      setMsg(
+        `Presta (${row.manufacturer}): wysłano ${res.exported ?? 0}, pominięto ${res.skipped ?? 0}, błędy ${res.failed ?? 0}${errs}`,
+      )
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd wysyłki do Presty')
+    } finally {
+      setPrestaBusyId(null)
     }
   }
 
@@ -1823,6 +1858,17 @@ export function PriceLists() {
                               Edytuj
                             </button>
                           ))}
+                        {canExportPresta && (
+                          <button
+                            type="button"
+                            disabled={prestaBusyId === r.id || productCount === 0 || editing}
+                            onClick={() => void exportPriceListToPresta(r)}
+                            className="rounded bg-violet-700 px-2 py-1 text-[11px] text-white disabled:opacity-50"
+                            title="Wysyła produkty z tego cennika do sklepu Presta"
+                          >
+                            {prestaBusyId === r.id ? 'Wysyłam…' : 'Do Presty'}
+                          </button>
+                        )}
                         {canDelete && (
                           <button
                             type="button"

@@ -34,6 +34,9 @@ class PrestaShopSettingsController extends Controller
             'prefix' => ['nullable', 'string', 'max:16'],
             'id_lang' => ['sometimes', 'integer', 'min:1', 'max:20'],
             'shop_url' => ['nullable', 'url', 'max:255'],
+            'webservice_key' => ['nullable', 'string', 'max:128'],
+            'id_category_default' => ['sometimes', 'integer', 'min:1', 'max:999999'],
+            'delivery_label' => ['nullable', 'string', 'max:120'],
         ]);
 
         $this->settings->update($data);

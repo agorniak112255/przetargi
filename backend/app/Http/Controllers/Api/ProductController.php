@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Services\NbpExchangeRateService;
@@ -42,6 +43,7 @@ class ProductController extends Controller
             ->with([
                 'images' => static fn ($q) => $q->orderBy('sort_order')->orderBy('id'),
                 'documents' => static fn ($q) => $q->orderBy('sort_order')->orderBy('id'),
+                'prestaExport',
             ]);
 
         if ($request->filled('q')) {
@@ -138,6 +140,7 @@ class ProductController extends Controller
                 'size_bytes' => $doc->size_bytes,
                 'sort_order' => $doc->sort_order,
             ])->values()->all();
+            $row['presta_export'] = $this->prestaExportPayload($product);
 
             return $this->fx->appendPricePln($row);
         });
@@ -167,6 +170,7 @@ class ProductController extends Controller
             'images',
             'documents',
             'specialPrices.client:id,name',
+            'prestaExport',
         ]);
 
         $payload = $product->toArray();
@@ -211,6 +215,7 @@ class ProductController extends Controller
         $payload['price_change_percent'] = $catalogChangePct;
         $payload['price_history_latest_at'] = $latest?->created_at;
         $payload = $this->fx->appendPricePln($payload);
+        $payload['presta_export'] = $this->prestaExportPayload($product);
         $payload['special_prices'] = $product->specialPrices->map(static fn ($row): array => [
             'id' => $row->id,
             'client_id' => $row->client_id,
@@ -234,5 +239,22 @@ class ProductController extends Controller
             ->get();
 
         return response()->json(['data' => $rows]);
+    }
+
+    /**
+     * @return array{presta_id: int, url: string, status: string}|null
+     */
+    private function prestaExportPayload(Product $product): ?array
+    {
+        $match = $product->prestaExport;
+        if (! $match instanceof PrestaProductMatch || (int) $match->presta_id <= 0) {
+            return null;
+        }
+
+        return [
+            'presta_id' => (int) $match->presta_id,
+            'url' => (string) ($match->presta_url ?? ''),
+            'status' => (string) $match->status,
+        ];
     }
 }

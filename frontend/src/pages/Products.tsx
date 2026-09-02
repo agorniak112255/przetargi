@@ -9,7 +9,7 @@ import { ProductAiSearchModal } from '../components/ProductAiSearchModal'
 import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { applyCheckboxRange } from '../lib/checkboxRange'
-import { api, can, parseActiveEnrichment, type EnrichmentBatch, type Product } from '../lib/api'
+import { api, can, parseActiveEnrichment, type EnrichmentBatch, type PrestaExportBatch, type Product } from '../lib/api'
 
 type Page = {
   data: Product[]
@@ -241,6 +241,7 @@ export function Products() {
   const { user } = useAuth()
   const [searchParams] = useSearchParams()
   const canEnrich = can(user, 'price_lists.import')
+  const canExportPresta = can(user, 'presta.export')
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
   const [manufacturer, setManufacturer] = useState(() => searchParams.get('manufacturer') ?? '')
@@ -270,6 +271,8 @@ export function Products() {
   const [prestaBusy, setPrestaBusy] = useState(false)
   const [prestaErr, setPrestaErr] = useState('')
   const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportRowId, setExportRowId] = useState<number | null>(null)
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
   const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
   const [skipPrompt, setSkipPrompt] = useState<{
@@ -594,6 +597,54 @@ export function Products() {
     }
   }
 
+  async function exportPrestaIds(ids: number[], force = false) {
+    if (ids.length === 0) return
+    const ok = window.confirm(
+      ids.length === 1
+        ? force
+          ? 'Zaktualizować ten produkt w Preście (opis, rozmiary, na zamówienie)?'
+          : 'Wysłać ten produkt do Presty? Wejdą opis, rozmiary i termin „Na zamówienie”.'
+        : `Wysłać ${ids.length} produktów do Presty? Wejdą opisy, rozmiary i termin „Na zamówienie”.`,
+    )
+    if (!ok) return
+    setExportBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      if (ids.length === 1) {
+        setExportRowId(ids[0])
+        const res = await api<PrestaExportBatch & { action?: string; presta_id?: number; sizes?: string[] }>(
+          `/products/${ids[0]}/presta-export`,
+          { method: 'POST', body: JSON.stringify({ force }) },
+        )
+        setMsg(
+          res.action === 'exists'
+            ? `Już w Preście (#${res.presta_id}).`
+            : `Wysłano do Presty (#${res.presta_id}${res.sizes?.length ? `, rozmiary ${res.sizes.join('/')}` : ''}).`,
+        )
+      } else {
+        const res = await api<PrestaExportBatch>('/products/presta-export', {
+          method: 'POST',
+          body: JSON.stringify({ product_ids: ids, force }),
+        })
+        if ((res.queued ?? 0) > 0) {
+          setMsg(`Zlecono ${res.queued} produktów do Presty — kolejka przetworzy je w tle.`)
+        } else {
+          const errs = (res.errors ?? []).length > 0 ? ` · błędy: ${res.errors?.slice(0, 3).join('; ')}` : ''
+          setMsg(
+            `Presta: wysłano ${res.exported ?? 0}, pominięto ${res.skipped ?? 0}, błędy ${res.failed ?? 0}${errs}`,
+          )
+        }
+      }
+      setResult(await api<Page>(`/products?${buildParams()}`))
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd wysyłki do Presty')
+    } finally {
+      setExportBusy(false)
+      setExportRowId(null)
+    }
+  }
+
   const pages = result ? pageNumbers(result.current_page, result.last_page) : []
   const displayRows = useMemo(() => {
     const data = result?.data ?? []
@@ -610,7 +661,7 @@ export function Products() {
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selected[id])
   const batchActive = batch?.status === 'queued' || batch?.status === 'running'
-  const tableCols = 9 + (aiMode ? 1 : 0) + (canEnrich ? 2 : 0)
+  const tableCols = 9 + (aiMode ? 1 : 0) + (canEnrich ? 1 : 0) + (canEnrich || canExportPresta ? 1 : 0)
 
   return (
     <div>
@@ -743,6 +794,24 @@ export function Products() {
               </button>
             </>
           )}
+          {canExportPresta && (
+            <button
+              type="button"
+              disabled={exportBusy || selectedIds.length === 0}
+              onClick={() =>
+                void exportPrestaIds(
+                  selectedIds,
+                  selectedIds.some((id) => displayRows.find((row) => row.id === id)?.presta_export?.presta_id),
+                )
+              }
+              className="rounded bg-violet-700 px-3 py-2 text-xs text-white disabled:opacity-50"
+              title="Wysyła zaznaczone do sklepu: opis, rozmiary, termin na zamówienie"
+            >
+              {exportBusy
+                ? 'Wysyłam…'
+                : `Wyślij do Presty${selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}`}
+            </button>
+          )}
           <select
             className="rounded border border-slate-300 px-3 py-2 text-sm"
             value={manufacturer}
@@ -838,7 +907,7 @@ export function Products() {
               <SortTh label="Upust" col="discount_percent" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Opis" col="description" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Zdjęcia" col="images_count" sort={sort} dir={dir} onSort={onSort} />
-              {canEnrich && <th className="p-2">Akcja</th>}
+              {(canEnrich || canExportPresta) && <th className="p-2">Akcja</th>}
             </tr>
           </thead>
           <tbody>
@@ -950,24 +1019,43 @@ export function Products() {
                       <span className="text-slate-400">—</span>
                     )}
                   </td>
-                  {canEnrich && (
+                  {(canEnrich || canExportPresta) && (
                     <td className="p-2">
-                      <button
-                        type="button"
-                        disabled={
-                          enrichBusy ||
-                          status === 'queued' ||
-                          status === 'running'
-                        }
-                        onClick={() => void enrichOne(p, status === 'done')}
-                        className="rounded border border-slate-300 px-2 py-1 text-[11px] disabled:opacity-50"
-                      >
-                        {enrichRowId === p.id
-                          ? '…'
-                          : status === 'done'
-                            ? 'Ponów'
-                            : 'Pobierz'}
-                      </button>
+                      <div className="flex flex-wrap gap-1">
+                        {canEnrich && (
+                          <button
+                            type="button"
+                            disabled={
+                              enrichBusy ||
+                              status === 'queued' ||
+                              status === 'running'
+                            }
+                            onClick={() => void enrichOne(p, status === 'done')}
+                            className="rounded border border-slate-300 px-2 py-1 text-[11px] disabled:opacity-50"
+                          >
+                            {enrichRowId === p.id
+                              ? '…'
+                              : status === 'done'
+                                ? 'Ponów'
+                                : 'Pobierz'}
+                          </button>
+                        )}
+                        {canExportPresta && (
+                          <button
+                            type="button"
+                            disabled={exportBusy}
+                            onClick={() => void exportPrestaIds([p.id], Boolean(p.presta_export?.presta_id))}
+                            className="rounded bg-violet-700 px-2 py-1 text-[11px] text-white disabled:opacity-50"
+                            title={p.presta_export?.url ? `W Preście #${p.presta_export.presta_id}` : 'Wyślij do sklepu'}
+                          >
+                            {exportRowId === p.id
+                              ? '…'
+                              : p.presta_export?.presta_id
+                                ? 'Presta ✓'
+                                : 'Do Presty'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   )}
                 </tr>

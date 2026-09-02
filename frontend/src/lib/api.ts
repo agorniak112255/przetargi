@@ -142,6 +142,11 @@ export type Product = {
   documents_count?: number
   ai_match_percent?: number
   ai_match_reason?: string | null
+  presta_export?: {
+    presta_id: number
+    url: string
+    status: string
+  } | null
   special_prices?: Array<{
     id: number
     client_id: number | null
@@ -151,6 +156,27 @@ export type Product = {
     valid_from: string | null
     contract_ref: string | null
   }>
+}
+
+export type PrestaExportResult = {
+  product_id: number
+  sku: string
+  action: string
+  presta_id: number
+  url: string
+  sizes: string[]
+  sizes_missing: string[]
+  images: number
+}
+
+export type PrestaExportBatch = {
+  exported?: number
+  skipped?: number
+  failed?: number
+  queued?: number
+  items?: PrestaExportResult[]
+  errors?: string[]
+  product_ids?: number[]
 }
 
 export type EnrichmentBatch = {
