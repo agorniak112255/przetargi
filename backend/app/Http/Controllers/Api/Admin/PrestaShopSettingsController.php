@@ -9,6 +9,7 @@ use App\Services\Presta\PrestaCatalogGateway;
 use App\Services\Presta\PrestaSettingsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use InvalidArgumentException;
 
 class PrestaShopSettingsController extends Controller
 {
@@ -39,7 +40,11 @@ class PrestaShopSettingsController extends Controller
             'delivery_label' => ['nullable', 'string', 'max:120'],
         ]);
 
-        $this->settings->update($data);
+        try {
+            $this->settings->update($data);
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
 
         return response()->json($this->settings->publicView());
     }

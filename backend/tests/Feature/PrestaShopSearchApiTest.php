@@ -202,6 +202,15 @@ final class PrestaShopSearchApiTest extends TestCase
             ->assertJsonMissing(['password' => 'secret-pass']);
     }
 
+    public function test_settings_reject_invalid_webservice_key(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->putJson('/api/admin/presta-settings', [
+            'webservice_key' => 'za-krotki',
+        ])->assertStatus(422);
+    }
+
     /**
      * @param  array<string, mixed>  $overrides
      */

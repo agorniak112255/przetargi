@@ -7,6 +7,7 @@ namespace App\Services\Presta;
 use App\Models\PrestaShopSetting;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Schema;
+use InvalidArgumentException;
 
 final class PrestaSettingsService
 {
@@ -52,6 +53,7 @@ final class PrestaSettingsService
         if ($key === '') {
             $key = $env['webservice_key'];
         }
+        $key = self::normalizeWebserviceKey($key);
 
         $host = trim((string) ($row->host ?? ''));
         $database = trim((string) ($row->database_name ?? ''));
@@ -73,6 +75,7 @@ final class PrestaSettingsService
             'delivery_label' => $delivery !== '' ? $delivery : $env['delivery_label'],
             'has_password' => $password !== '',
             'has_webservice_key' => $key !== '',
+            'webservice_key_ok' => self::isValidWebserviceKey($key),
             'source' => 'database',
         ];
     }
@@ -113,7 +116,13 @@ final class PrestaSettingsService
             $row->password = $data['password'];
         }
         if (array_key_exists('webservice_key', $data) && is_string($data['webservice_key']) && $data['webservice_key'] !== '') {
-            $row->webservice_key = $data['webservice_key'];
+            $normalized = self::normalizeWebserviceKey($data['webservice_key']);
+            if (! self::isValidWebserviceKey($normalized)) {
+                throw new \InvalidArgumentException(
+                    'Klucz Webservice musi mieć dokładnie 32 znaki A–Z i 0–9 (z Presta → Parametry zaawansowane → Webservice).'
+                );
+            }
+            $row->webservice_key = $normalized;
         }
         if (array_key_exists('prefix', $data)) {
             $row->table_prefix = $this->safePrefix((string) ($data['prefix'] ?? 'ps_'));
@@ -156,7 +165,7 @@ final class PrestaSettingsService
     private function fromEnv(): array
     {
         $password = (string) config('prestashop.password', '');
-        $key = (string) config('prestashop.webservice_key', '');
+        $key = self::normalizeWebserviceKey((string) config('prestashop.webservice_key', ''));
         $label = trim((string) config('prestashop.delivery_label', 'Na zamówienie'));
 
         return [
@@ -174,8 +183,26 @@ final class PrestaSettingsService
             'delivery_label' => $label !== '' ? $label : 'Na zamówienie',
             'has_password' => $password !== '',
             'has_webservice_key' => $key !== '',
+            'webservice_key_ok' => self::isValidWebserviceKey($key),
             'source' => 'env',
         ];
+    }
+
+    public static function normalizeWebserviceKey(string $raw): string
+    {
+        $t = trim($raw);
+        $t = trim($t, "\"'");
+        if (preg_match('/(?:[?&]ws_key=|key=)([A-Za-z0-9]+)/', $t, $m) === 1) {
+            $t = $m[1];
+        }
+        $t = preg_replace('/[^A-Za-z0-9]+/', '', $t) ?? $t;
+
+        return $t;
+    }
+
+    public static function isValidWebserviceKey(string $key): bool
+    {
+        return preg_match('/^[A-Za-z0-9]{32}$/', $key) === 1;
     }
 
     private function safeEncrypted(PrestaShopSetting $row, string $attribute): string

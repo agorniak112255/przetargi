@@ -105,22 +105,29 @@ final class PrestaShopExportClient implements PrestaExportGateway
         try {
             $this->connectDb();
             $prefix = $this->prefix();
+            $needle = mb_strtolower($name);
             $row = DB::connection('prestashop')->table($prefix.'manufacturer')
-                ->whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
+                ->whereRaw('LOWER(name) = ?', [$needle])
                 ->first(['id_manufacturer']);
+            if ($row === null && mb_strlen($needle) >= 3) {
+                $row = DB::connection('prestashop')->table($prefix.'manufacturer')
+                    ->whereRaw('LOWER(name) LIKE ?', [$needle.'%'])
+                    ->orderBy('id_manufacturer')
+                    ->first(['id_manufacturer']);
+            }
+            if ($row === null && mb_strlen($needle) >= 4) {
+                $row = DB::connection('prestashop')->table($prefix.'manufacturer')
+                    ->whereRaw('LOWER(name) LIKE ?', ['%'.$needle.'%'])
+                    ->orderBy('id_manufacturer')
+                    ->first(['id_manufacturer']);
+            }
             if ($row !== null) {
                 return (int) $row->id_manufacturer;
             }
         } catch (Throwable) {
         }
 
-        $xml = $this->xmlRoot('manufacturer', [
-            'active' => '1',
-            'name' => $this->cdata($name),
-        ]);
-        $created = $this->postXml('manufacturers', $xml);
-
-        return (int) ($created->manufacturer->id ?? 0);
+        return 0;
     }
 
     public function resolveCategoryId(?string $name): int
@@ -323,7 +330,6 @@ final class PrestaShopExportClient implements PrestaExportGateway
         $label = (string) ($data['delivery_label'] ?? 'Na zamówienie');
         $categoryId = (string) max(1, (int) ($data['id_category'] ?? 2));
         $fields = [
-            'id_manufacturer' => (string) (int) ($data['id_manufacturer'] ?? 0),
             'id_category_default' => $categoryId,
             'id_tax_rules_group' => (string) max(1, (int) ($data['id_tax_rules_group'] ?? 1)),
             'id_shop_default' => '1',
@@ -352,6 +358,10 @@ final class PrestaShopExportClient implements PrestaExportGateway
                 ],
             ],
         ];
+        $manufacturerId = (int) ($data['id_manufacturer'] ?? 0);
+        if ($manufacturerId > 0) {
+            $fields = ['id_manufacturer' => (string) $manufacturerId] + $fields;
+        }
         if ($id !== null && $id > 0) {
             $fields = ['id' => (string) $id] + $fields;
         }
@@ -471,6 +481,12 @@ final class PrestaShopExportClient implements PrestaExportGateway
             default => $pending->get($url),
         };
         if ($response->failed()) {
+            if (str_contains($response->body(), 'is not allowed')) {
+                throw new RuntimeException(
+                    'Klucz Webservice nie ma uprawnienia do „'.$resource.'”. '
+                    .'W Preście: Parametry zaawansowane → Webservice → ten klucz → zaznacz zasób i GET/POST/PUT.'
+                );
+            }
             $snippet = mb_substr(trim($response->body()), 0, 220);
             throw new RuntimeException(
                 'Presta API '.$method.' /'.$resource.' HTTP '.$response->status()
