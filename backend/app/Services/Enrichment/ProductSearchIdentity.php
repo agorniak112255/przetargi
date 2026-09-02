@@ -1997,18 +1997,14 @@ final class ProductSearchIdentity
     public function inferredCatalogHosts(Product $product): array
     {
         $code = $this->distributorPrefixedCatalogSku($product);
-        if ($code === '') {
+        if ($code === '' || preg_match('/^ST\d{3}[A-Z]{2}$/u', $code) !== 1) {
             return [];
         }
-        $hosts = ['misterworker.com'];
-        if (preg_match('/^ST\d{3}[A-Z]{2}$/u', $code) === 1) {
-            $hosts = array_merge(
-                $hosts,
-                (array) config('enrichment.manufacturer_domains.u-power', []),
-            );
-        }
 
-        return $this->bareHosts($hosts);
+        return $this->bareHosts(array_merge(
+            ['misterworker.com'],
+            (array) config('enrichment.manufacturer_domains.u-power', []),
+        ));
     }
 
     public function inferredBrandHint(Product $product): string

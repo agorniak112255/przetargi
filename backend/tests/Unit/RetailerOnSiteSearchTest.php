@@ -209,4 +209,133 @@ final class RetailerOnSiteSearchTest extends TestCase
         );
         $this->assertNotContains('https://kams.com.pl/p100,kurtka-ardon-track.html', $urls);
     }
+
+    public function test_misterworker_clerk_resolves_catalog_code_without_gvarant(): void
+    {
+        $this->fakeMisterworkerResolve(
+            'https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html'
+        );
+
+        $hits = app(RetailerOnSiteSearch::class)->find($this->upowerAlfa());
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains(
+            'https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html',
+            $urls
+        );
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'gvarant.pl'));
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), '/en/search'));
+    }
+
+    public function test_misterworker_uses_config_key_when_search_html_is_forbidden(): void
+    {
+        config(['enrichment.misterworker_clerk_key' => 'testClerkKey123456']);
+        $this->fakeMisterworkerResolve(
+            '/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html',
+            searchStatus: 403
+        );
+
+        $urls = array_column(app(RetailerOnSiteSearch::class)->find($this->upowerAlfa()), 'url');
+        $this->assertContains(
+            'https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html',
+            $urls
+        );
+    }
+
+    public function test_misterworker_accepts_relative_and_protocol_relative_location(): void
+    {
+        foreach ([
+            'en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html',
+            '//www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html',
+        ] as $location) {
+            $this->fakeMisterworkerResolve($location);
+            $urls = array_column(app(RetailerOnSiteSearch::class)->find($this->upowerAlfa()), 'url');
+            $this->assertContains(
+                'https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html',
+                $urls,
+                $location
+            );
+        }
+    }
+
+    public function test_misterworker_reads_canonical_when_product_returns_200(): void
+    {
+        config(['enrichment.misterworker_clerk_key' => 'testClerkKey123456']);
+        Http::fake([
+            'https://api.clerk.io/v2/search/search*' => Http::response(['result' => [74275]], 200),
+            'https://www.misterworker.com/en/index.php?controller=product&id_product=74275' => Http::response(
+                '<link rel="canonical" href="https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html">',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $urls = array_column(app(RetailerOnSiteSearch::class)->find($this->upowerAlfa()), 'url');
+        $this->assertContains(
+            'https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html',
+            $urls
+        );
+    }
+
+    public function test_misterworker_rejects_foreign_host_and_card_without_sku(): void
+    {
+        config(['enrichment.misterworker_clerk_key' => 'testClerkKey123456']);
+        Http::fake([
+            'https://api.clerk.io/v2/search/search*' => Http::response(['result' => [1, 74275]], 200),
+            'https://www.misterworker.com/en/index.php?controller=product&id_product=1' => Http::response(
+                '',
+                301,
+                ['Location' => 'https://evil.example/phish']
+            ),
+            'https://www.misterworker.com/en/index.php?controller=product&id_product=74275' => Http::response(
+                '',
+                301,
+                ['Location' => 'https://www.misterworker.com/en/u-power/other-alfa-pants/99.html']
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $this->assertSame([], app(RetailerOnSiteSearch::class)->find($this->upowerAlfa()));
+    }
+
+    public function test_misterworker_resolves_at_most_three_clerk_ids(): void
+    {
+        config(['enrichment.misterworker_clerk_key' => 'testClerkKey123456']);
+        Http::fake([
+            'https://api.clerk.io/v2/search/search*' => Http::response(['result' => [1, 2, 3, 4, 5]], 200),
+            'https://www.misterworker.com/en/index.php*' => Http::response('', 404),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        app(RetailerOnSiteSearch::class)->find($this->upowerAlfa());
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'id_product=4'));
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'id_product=5'));
+    }
+
+    private function upowerAlfa(): Product
+    {
+        return new Product([
+            'sku' => 'WST068GM',
+            'name' => 'ALFA Grey Meteorite',
+            'manufacturer' => 'Whirlpool',
+        ]);
+    }
+
+    private function fakeMisterworkerResolve(string $location, int $searchStatus = 200): void
+    {
+        config(['enrichment.misterworker_clerk_key' => 'testClerkKey123456']);
+        Http::fake([
+            'https://www.misterworker.com/en/search*' => Http::response('blocked', $searchStatus),
+            'https://api.clerk.io/v2/search/search*' => Http::response([
+                'status' => 'ok',
+                'result' => [74275],
+            ], 200),
+            'https://www.misterworker.com/en/index.php?controller=product&id_product=74275' => Http::response(
+                '',
+                301,
+                ['Location' => $location]
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+    }
 }

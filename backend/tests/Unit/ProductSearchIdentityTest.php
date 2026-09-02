@@ -898,5 +898,13 @@ final class ProductSearchIdentityTest extends TestCase
             'https://www.imdb.com/title/tt123/ APEX movie Charlize Theron',
             $product
         ));
+        $other = new Product([
+            'sku' => 'WAB123CD',
+            'name' => 'Inny model',
+            'manufacturer' => 'Whirlpool',
+        ]);
+        $this->assertSame('AB123CD', $id->distributorPrefixedCatalogSku($other));
+        $this->assertSame([], $id->inferredCatalogHosts($other));
+        $this->assertSame('', $id->inferredBrandHint($other));
     }
 }

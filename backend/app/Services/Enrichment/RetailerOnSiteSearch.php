@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -43,6 +45,22 @@ final class RetailerOnSiteSearch
         'template' => 'https://marelplus.pl/szukaj?controller=search&s={q}',
     ];
 
+    /** @var array{host: string, template: string} */
+    private const MISTERWORKER_ENDPOINT = [
+        'host' => 'misterworker.com',
+        'template' => 'https://www.misterworker.com/en/search?q={q}',
+    ];
+
+    private const MISTERWORKER_CLERK_SEARCH = 'https://api.clerk.io/v2/search/search';
+
+    private const MISTERWORKER_ORIGIN = 'https://www.misterworker.com';
+
+    private const MISTERWORKER_RESOLVE_LIMIT = 3;
+
+    private const MISTERWORKER_REDIRECT_HOPS = 3;
+
+    private const CLERK_KEY_CACHE = 'enrichment:misterworker_clerk_key';
+
     public function __construct(private readonly ProductSearchIdentity $identity) {}
 
     /**
@@ -63,11 +81,15 @@ final class RetailerOnSiteSearch
         $seen = [];
         foreach ($queries as $query) {
             foreach ($endpoints as $endpoint) {
-                $page = $this->fetch(str_replace('{q}', rawurlencode($query), $endpoint['template']));
-                $hits = $this->productLinks($page['html'], $endpoint['host']);
-                $redirect = $this->productPageFromRedirect($page['url'], $endpoint['host']);
-                if ($redirect !== null) {
-                    array_unshift($hits, $redirect);
+                if ($endpoint['host'] === 'misterworker.com') {
+                    $hits = $this->misterworkerHits($query);
+                } else {
+                    $page = $this->fetch(str_replace('{q}', rawurlencode($query), $endpoint['template']));
+                    $hits = $this->productLinks($page['html'], $endpoint['host']);
+                    $redirect = $this->productPageFromRedirect($page['url'], $endpoint['host']);
+                    if ($redirect !== null) {
+                        array_unshift($hits, $redirect);
+                    }
                 }
                 if ($hits === []) {
                     continue;
@@ -80,6 +102,10 @@ final class RetailerOnSiteSearch
                     $hay = $hit['url'].' '.$hit['title'];
                     if (! $this->identity->hayMentionsProduct($hay, $product)
                         || $this->identity->pageClaimsAnotherCode($hit['url'], $hit['title'], $product)) {
+                        continue;
+                    }
+                    if ($endpoint['host'] === 'misterworker.com'
+                        && ! $this->identity->hayHasProductCode(mb_strtolower($hay), $product)) {
                         continue;
                     }
                     $seen[$key] = true;
@@ -204,7 +230,12 @@ final class RetailerOnSiteSearch
             return self::ENDPOINTS;
         }
         $hosts = $this->identity->catalogSearchHosts($product);
-        $known = array_merge(self::IDOSELL_ENDPOINTS, [self::MAPA_ENDPOINT, self::MAREL_ENDPOINT], self::ENDPOINTS);
+        $known = array_merge(
+            [self::MISTERWORKER_ENDPOINT],
+            self::IDOSELL_ENDPOINTS,
+            [self::MAPA_ENDPOINT, self::MAREL_ENDPOINT],
+            self::ENDPOINTS
+        );
         $out = [];
         foreach ($known as $row) {
             if (in_array($row['host'], $hosts, true)) {
@@ -268,6 +299,259 @@ final class RetailerOnSiteSearch
     }
 
     /**
+     * Clerk.io + przekierowanie PrestaShop. Klucz: cache / config / HTML /search.
+     *
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function misterworkerHits(string $query): array
+    {
+        $query = trim($query);
+        if ($query === '') {
+            return [];
+        }
+        $key = $this->resolvedClerkKey();
+        if ($key === '') {
+            return [];
+        }
+        $out = [];
+        foreach (array_slice($this->clerkProductIds($key, $query), 0, self::MISTERWORKER_RESOLVE_LIMIT) as $id) {
+            $hit = $this->resolveMisterworkerProduct($id);
+            if ($hit !== null) {
+                $out[] = $hit;
+            }
+        }
+
+        return $out;
+    }
+
+    private function resolvedClerkKey(): string
+    {
+        $cached = Cache::get(self::CLERK_KEY_CACHE);
+        if ($this->isClerkKey($cached)) {
+            return (string) $cached;
+        }
+        $cfg = config('enrichment.misterworker_clerk_key');
+        if ($this->isClerkKey($cfg)) {
+            return (string) $cfg;
+        }
+        $page = $this->fetch(self::MISTERWORKER_ORIGIN.'/en/search?q=1');
+        $fromHtml = $this->clerkKeyFromHtml($page['html']);
+        if ($fromHtml !== '') {
+            Cache::put(self::CLERK_KEY_CACHE, $fromHtml, now()->addDay());
+        }
+
+        return $fromHtml;
+    }
+
+    private function isClerkKey(mixed $key): bool
+    {
+        return is_string($key) && preg_match('/^[A-Za-z0-9]{16,64}$/', $key) === 1;
+    }
+
+    private function clerkKeyFromHtml(string $html): string
+    {
+        if (preg_match("/Clerk\(\s*'config'\s*,\s*\{[^}]{0,400}key:\s*'([A-Za-z0-9]{16,64})'/", $html, $m) === 1
+            && $this->isClerkKey($m[1])) {
+            return $m[1];
+        }
+
+        return '';
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function clerkProductIds(string $key, string $query): array
+    {
+        try {
+            $response = Http::timeout(8)
+                ->connectTimeout(4)
+                ->acceptJson()
+                ->get(self::MISTERWORKER_CLERK_SEARCH, [
+                    'key' => $key,
+                    'query' => $query,
+                    'limit' => self::MISTERWORKER_RESOLVE_LIMIT,
+                ]);
+            if (! $response->successful()) {
+                return [];
+            }
+            $ids = $response->json('result');
+            if (! is_array($ids)) {
+                return [];
+            }
+            $out = [];
+            foreach ($ids as $id) {
+                $n = (int) $id;
+                if ($n > 0) {
+                    $out[] = $n;
+                }
+            }
+
+            return $out;
+        } catch (Throwable $e) {
+            Log::info('Misterworker Clerk search failed', [
+                'query' => $query,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+    }
+
+    /**
+     * @return array{url: string, title: string, snippet: string}|null
+     */
+    private function resolveMisterworkerProduct(int $id): ?array
+    {
+        $current = self::MISTERWORKER_ORIGIN.'/en/index.php?controller=product&id_product='.$id;
+        try {
+            for ($hop = 0; $hop < self::MISTERWORKER_REDIRECT_HOPS; $hop++) {
+                $response = Http::timeout(8)
+                    ->connectTimeout(4)
+                    ->withOptions(['allow_redirects' => false])
+                    ->withHeaders($this->browserHeaders())
+                    ->get($current);
+                $status = $response->status();
+                if ($status >= 300 && $status < 400) {
+                    $next = $this->absolutizeMisterworkerUrl($this->firstLocationHeader($response));
+                    if ($next === '' || ! $this->isMisterworkerHttpUrl($next)) {
+                        return null;
+                    }
+                    if ($this->isMisterworkerProductUrl($next)) {
+                        return $this->hitFromMisterworkerUrl($next);
+                    }
+                    $current = $next;
+                    continue;
+                }
+                if (! $response->successful()) {
+                    return null;
+                }
+                $final = (string) ($response->effectiveUri() ?? $current);
+                if ($this->isMisterworkerProductUrl($final)) {
+                    return $this->hitFromMisterworkerUrl($final);
+                }
+                $canonical = $this->canonicalFromHtml((string) $response->body());
+                if ($this->isMisterworkerProductUrl($canonical)) {
+                    return $this->hitFromMisterworkerUrl($canonical);
+                }
+
+                return null;
+            }
+
+            return null;
+        } catch (Throwable $e) {
+            Log::info('Misterworker product resolve failed', [
+                'id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * @return array{url: string, title: string, snippet: string}
+     */
+    private function hitFromMisterworkerUrl(string $url): array
+    {
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+        $title = $this->titleFromPrettySlug($path);
+
+        return [
+            'url' => $url,
+            'title' => $title !== '' ? $title : $url,
+            'snippet' => '',
+        ];
+    }
+
+    private function firstLocationHeader(Response $response): string
+    {
+        $location = $response->header('Location');
+        if (is_array($location)) {
+            $location = $location[0] ?? '';
+        }
+
+        return is_string($location) ? trim($location) : '';
+    }
+
+    private function absolutizeMisterworkerUrl(string $location): string
+    {
+        $location = trim($location);
+        if ($location === '') {
+            return '';
+        }
+        if (str_starts_with($location, '//')) {
+            return 'https:'.$location;
+        }
+        if (str_starts_with($location, '/')) {
+            return self::MISTERWORKER_ORIGIN.$location;
+        }
+        if (preg_match('#^https?://#i', $location) !== 1) {
+            return self::MISTERWORKER_ORIGIN.'/'.ltrim($location, '/');
+        }
+
+        return $location;
+    }
+
+    private function isMisterworkerHttpUrl(string $url): bool
+    {
+        $scheme = mb_strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        if ($scheme !== 'http' && $scheme !== 'https') {
+            return false;
+        }
+        $host = preg_replace('/^www\./', '', mb_strtolower((string) parse_url($url, PHP_URL_HOST))) ?? '';
+
+        return $host === 'misterworker.com';
+    }
+
+    private function isMisterworkerProductUrl(string $url): bool
+    {
+        if (! $this->isMisterworkerHttpUrl($url)) {
+            return false;
+        }
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+
+        return $path !== '' && $path !== '/' && ! str_contains($path, 'index.php');
+    }
+
+    private function canonicalFromHtml(string $html): string
+    {
+        if (preg_match('/<link\b[^>]*\brel=["\']canonical["\'][^>]*\bhref=["\']([^"\']+)["\']/i', $html, $m) !== 1
+            && preg_match('/<link\b[^>]*\bhref=["\']([^"\']+)["\'][^>]*\brel=["\']canonical["\']/i', $html, $m) !== 1) {
+            return '';
+        }
+
+        return $this->absolutizeMisterworkerUrl(
+            html_entity_decode(trim($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8')
+        );
+    }
+
+    private function titleFromPrettySlug(string $path): string
+    {
+        $parts = array_values(array_filter(explode('/', trim($path, '/')), static fn (string $p): bool => $p !== ''));
+        if ($parts === []) {
+            return '';
+        }
+        $last = preg_replace('/\.html?$/i', '', (string) $parts[array_key_last($parts)]) ?? '';
+        if (preg_match('/^\d+$/', $last) === 1 && count($parts) >= 2) {
+            $last = (string) $parts[count($parts) - 2];
+        }
+
+        return trim((string) preg_replace('/[-_]+/u', ' ', $last));
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function browserHeaders(): array
+    {
+        return [
+            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+            'Accept' => 'text/html',
+        ];
+    }
+
+    /**
      * @return array{html: string, url: string}
      */
     private function fetch(string $url): array
@@ -275,10 +559,7 @@ final class RetailerOnSiteSearch
         try {
             $response = Http::timeout(8)
                 ->connectTimeout(4)
-                ->withHeaders([
-                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-                    'Accept' => 'text/html',
-                ])
+                ->withHeaders($this->browserHeaders())
                 ->get($url);
             if (! $response->successful()) {
                 return ['html' => '', 'url' => ''];

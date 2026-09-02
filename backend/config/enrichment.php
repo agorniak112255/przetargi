@@ -539,4 +539,10 @@ return [
         'customguns.pl',
         'www.customguns.pl',
     ],
+
+    /*
+    | Publiczny klucz storefront Clerk.io (jest w HTML misterworker, nie sekret).
+    | Używany, gdy GET /search zwraca 403.
+    */
+    'misterworker_clerk_key' => env('MISTERWORKER_CLERK_KEY', 'heKTvDthcZZhEM2SflZBzxKB499ewM8P'),
 ];
