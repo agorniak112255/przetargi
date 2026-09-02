@@ -9,6 +9,7 @@ use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\EnrichProductJob;
 use App\Jobs\PrefetchProductSourcesJob;
 use App\Jobs\ReindexProductEmbeddingJob;
+use App\Models\CatalogSearchSite;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
@@ -1326,10 +1327,10 @@ final class ProductEnrichmentService
     {
         $raw = config('enrichment.retailer_domains', []);
         if (! is_array($raw)) {
-            return [];
+            $raw = [];
         }
         $out = [];
-        foreach ($raw as $domain) {
+        foreach ([...$raw, ...CatalogSearchSite::allHosts()] as $domain) {
             if (! is_string($domain)) {
                 continue;
             }

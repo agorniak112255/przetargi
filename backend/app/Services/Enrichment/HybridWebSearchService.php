@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Exceptions\TavilyQuotaExceededException;
+use App\Models\CatalogSearchSite;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
@@ -1560,7 +1561,10 @@ PROMPT;
      */
     private function retailerDomains(): array
     {
-        $list = $this->normalizeDomainList(config('enrichment.retailer_domains', []));
+        $list = $this->normalizeDomainList(array_merge(
+            (array) config('enrichment.retailer_domains', []),
+            CatalogSearchSite::allHosts(),
+        ));
 
         return $list !== [] ? $list : $this->preferredDomains();
     }

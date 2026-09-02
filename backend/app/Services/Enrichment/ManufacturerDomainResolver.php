@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Exceptions\TavilyQuotaExceededException;
+use App\Models\CatalogSearchSite;
 use App\Models\ManufacturerSite;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
@@ -367,19 +368,19 @@ final class ManufacturerDomainResolver
     {
         $raw = config('enrichment.retailer_domains', config('enrichment.preferred_domains', []));
         if (! is_array($raw)) {
-            return [];
+            $raw = [];
         }
         $out = [];
-        foreach ($raw as $domain) {
+        foreach ([...$raw, ...CatalogSearchSite::allHosts()] as $domain) {
             if (is_string($domain)) {
                 $h = $this->normalizeHost($domain);
                 if ($h !== '') {
-                    $out[] = $h;
+                    $out[$h] = $h;
                 }
             }
         }
 
-        return $out;
+        return array_values($out);
     }
 
     /**

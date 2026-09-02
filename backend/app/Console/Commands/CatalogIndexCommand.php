@@ -6,6 +6,7 @@ namespace App\Console\Commands;
 
 use App\Models\CatalogHost;
 use App\Models\CatalogPage;
+use App\Models\CatalogSearchSite;
 use App\Models\ManufacturerSite;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use Illuminate\Console\Command;
@@ -123,6 +124,9 @@ final class CatalogIndexCommand extends Command
             }
         }
         foreach (ManufacturerSite::allHosts() as $domain) {
+            $out[] = $domain;
+        }
+        foreach (CatalogSearchSite::allHosts() as $domain) {
             $out[] = $domain;
         }
 

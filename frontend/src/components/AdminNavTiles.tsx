@@ -46,6 +46,11 @@ const tiles: Tile[] = [
     label: 'Sklep Presta',
     description: 'Połączenie i wyszukiwanie w sklepie',
   },
+  {
+    to: '/admin/strony-wyszukiwarka',
+    label: 'Strony wyszukiwarka',
+    description: 'Domeny indeksu i liczba linków',
+  },
 ]
 
 export function AdminNavTiles() {
