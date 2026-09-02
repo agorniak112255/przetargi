@@ -921,8 +921,9 @@ final class ProductSizeVariant
         if (preg_match('/[A-Za-z](\d{3})$/', $sku, $m) === 1) {
             return $this->sizeForDigitCode($m[1]);
         }
-        // G3175/40, CADIZ-42, A5016/09 — rozmiar po ukośniku albo myślniku
-        if (preg_match('/[\/\-]0?(\d{1,2})$/', $sku, $m) === 1) {
+        // G3175/40, CADIZ-42, A5016/09 — dokładnie 2 cyfry po separatorze.
+        // „00500-016” to wariant koloru, nie rozmiar 16.
+        if (preg_match('/[\/\-](\d{2})$/', $sku, $m) === 1) {
             return $this->normalizeSizeToken($m[1]);
         }
 

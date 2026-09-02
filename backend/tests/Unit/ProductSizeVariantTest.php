@@ -273,5 +273,6 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertSame('A5016', $svc->skuCore('A5016/09'));
         $this->assertNull($svc->skuCore('MT-212-2'));
         $this->assertNull($svc->skuCore('04-322-100'));
+        $this->assertNull($svc->skuCore('00500-016'));
     }
 }
