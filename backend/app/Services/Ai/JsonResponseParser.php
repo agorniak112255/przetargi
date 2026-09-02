@@ -210,8 +210,11 @@ final class JsonResponseParser
             }
             if ($ch === '[') {
                 $depthArr++;
-                if (! $productsStarted && str_contains(substr($body, max(0, $i - 20), 20), 'products')) {
-                    $productsStarted = true;
+                if (! $productsStarted) {
+                    $before = substr($body, max(0, $i - 24), 24);
+                    if (str_contains($before, 'products') || str_contains($before, 'matches')) {
+                        $productsStarted = true;
+                    }
                 }
             } elseif ($ch === ']') {
                 $depthArr = max(0, $depthArr - 1);
@@ -276,9 +279,19 @@ final class JsonResponseParser
 
                 return $decoded;
             }
+            if (is_array($decoded) && isset($decoded['matches']) && is_array($decoded['matches']) && $decoded['matches'] !== []) {
+                $decoded['_partial'] = true;
+
+                return $decoded;
+            }
             if (is_array($decoded) && $this->isUsableObject($decoded)) {
                 return $decoded;
             }
+        }
+
+        $fromIds = $this->recoverMatchIds($content);
+        if ($fromIds !== null) {
+            return $fromIds;
         }
 
         // awaryjnie: zbierz kompletne obiekty produktów regexem
@@ -312,6 +325,48 @@ final class JsonResponseParser
         }
 
         return null;
+    }
+
+    /**
+     * Ranking katalogu: model często wkleja kartę (sku/name/specs) i urywa JSON.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function recoverMatchIds(string $content): ?array
+    {
+        if (! str_contains($content, '"matches"')) {
+            return null;
+        }
+        if (preg_match_all('/\{\s*"id"\s*:\s*(\d+)/', $content, $found) < 1) {
+            return null;
+        }
+
+        $matches = [];
+        $seen = [];
+        foreach ($found[1] as $rawId) {
+            $id = (int) $rawId;
+            if ($id <= 0 || isset($seen[$id])) {
+                continue;
+            }
+            $seen[$id] = true;
+            $score = 70;
+            if (preg_match('/"id"\s*:\s*'.$id.'[\s\S]{0,800}?"score"\s*:\s*(\d+)/', $content, $scoreMatch) === 1) {
+                $score = (int) $scoreMatch[1];
+            }
+            $matches[] = [
+                'id' => $id,
+                'score' => $score,
+                'reason' => 'odczyt częściowy',
+            ];
+        }
+        if ($matches === []) {
+            return null;
+        }
+
+        return [
+            'matches' => $matches,
+            '_partial' => true,
+        ];
     }
 
     /**

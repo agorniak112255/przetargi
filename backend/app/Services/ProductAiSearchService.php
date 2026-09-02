@@ -1835,13 +1835,17 @@ final class ProductAiSearchService
         AiTask $task = AiTask::ProductSearch,
         array $constraints = [],
     ): array {
-        $raw = $this->llm->chatJson(
-            $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task),
-            null,
-            $this->rankMaxTokens($task),
-            null,
-            $task,
-        );
+        try {
+            $raw = $this->llm->chatJson(
+                $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task),
+                null,
+                $this->rankMaxTokens($task),
+                null,
+                $task,
+            );
+        } catch (Throwable) {
+            return [];
+        }
 
         return $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $needed);
     }
@@ -1860,13 +1864,17 @@ final class ProductAiSearchService
         AiTask $task,
         array $constraints,
     ): array {
-        $raw = $this->llm->chatJson(
-            $this->analyzeAndRankMessages($query, $candidates, $limit, null, $constraints, $task),
-            null,
-            $this->rankMaxTokens($task),
-            null,
-            $task,
-        );
+        try {
+            $raw = $this->llm->chatJson(
+                $this->analyzeAndRankMessages($query, $candidates, $limit, null, $constraints, $task),
+                null,
+                $this->rankMaxTokens($task),
+                null,
+                $task,
+            );
+        } catch (Throwable) {
+            return [$this->localIntent($query), []];
+        }
         $intent = $this->parseIntent($raw, $query);
 
         return [$intent, $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed'])];
@@ -1989,6 +1997,7 @@ final class ProductAiSearchService
                     .'Literówka w wymaganiu nie dyskwalifikuje karty — nazwę czytaj z linii "Szukany produkt (z analizy)" '
                     .'(podnie = spodnie, rekawice = rękawice). '
                     .'Brak zgodnej nazwy albo braku dowodu na warunek: {"matches":[]}. '
+                    .'W matches TYLKO id, score, reason — bez sku, name, specs, opisu i karty. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}. '
                     .$reasonHint
                     .'score>=40 tylko przy zgodnej nazwie I spełnionych warunkach. Max '.$maxMatches.'. '
@@ -2026,6 +2035,9 @@ final class ProductAiSearchService
             }
             $id = (int) ($m['id'] ?? 0);
             $score = (int) ($m['score'] ?? 0);
+            if ($score <= 0 && $id > 0 && (isset($m['sku']) || isset($m['name']))) {
+                $score = 70;
+            }
             if ($id <= 0 || $score < 40 || ! $byId->has($id)) {
                 continue;
             }

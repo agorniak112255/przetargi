@@ -125,6 +125,27 @@ final class OpenAiTokenLimitTest extends TestCase
         });
     }
 
+    public function test_does_not_retry_truncated_rank_matches(): void
+    {
+        $raw = '{"matches": [ {"id": 23935, "sku": "MEDIBUT-PRIMA-CLOG",'
+            .' "name": "PRIMA CLOG", "specs": ["Kod produktu: MEDIBUT-PRIMA-CLOG-SRC-ES"';
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response([
+                'choices' => [[
+                    'message' => ['content' => $raw],
+                    'finish_reason' => 'length',
+                ]],
+            ], 200),
+        ]);
+
+        $json = app(OpenAiCompatibleClient::class)->chatJson([
+            ['role' => 'user', 'content' => 'Ranking drewniakow'],
+        ], 0.0, 800);
+
+        $this->assertSame(23935, (int) ($json['matches'][0]['id'] ?? 0));
+        Http::assertSentCount(1);
+    }
+
     public function test_does_not_retry_complete_json_cut_at_token_cap(): void
     {
         Http::fake([

@@ -675,7 +675,16 @@ class OpenAiCompatibleClient
             ],
         ], 0.0, true, $extra !== [] ? $extra : null, $task);
 
-        return $this->jsonParser->parse($repair['content']);
+        try {
+            return $this->jsonParser->parse($repair['content']);
+        } catch (RuntimeException $e) {
+            $recovered = $this->tryParseJson((string) ($result['content'] ?? ''));
+            if ($recovered !== null) {
+                return $recovered;
+            }
+
+            throw $e;
+        }
     }
 
     /**
@@ -1148,6 +1157,10 @@ class OpenAiCompatibleClient
     private function shouldRetryTruncated(array $result, ?array $parsed): bool
     {
         if (($result['finish_reason'] ?? '') !== 'length') {
+            return false;
+        }
+        $matches = is_array($parsed['matches'] ?? null) ? $parsed['matches'] : [];
+        if ($matches !== []) {
             return false;
         }
         if ($parsed === null || ($parsed['_partial'] ?? false) === true) {

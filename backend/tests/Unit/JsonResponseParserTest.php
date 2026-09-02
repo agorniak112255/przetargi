@@ -54,6 +54,18 @@ final class JsonResponseParserTest extends TestCase
         $this->assertSame('Kombinezon AlphaTec 1500', $json['description']);
     }
 
+    public function test_recovers_truncated_rank_matches_json(): void
+    {
+        $parser = new JsonResponseParser;
+        $raw = '{"matches": [ {"id": 23935, "sku": "MEDIBUT-PRIMA-CLOG-SRC-ESD-MIETOWY",'
+            .' "name": "PRIMA CLOG SRC ESD - MIETOWY", "category": "OBUWIE EVA",'
+            .' "manufacturer": "MEDIBUT", "norms": "SRC (odpornosc na poslizgi)",'
+            .' "heat_celsius": null, "specs": ["Kod produktu: MEDIBUT-PRIMA-CLOG-SRC-ES"';
+
+        $json = $parser->parse($raw);
+        $this->assertSame(23935, (int) ($json['matches'][0]['id'] ?? 0));
+    }
+
     public function test_looks_complete_accepts_closed_object(): void
     {
         $parser = new JsonResponseParser;
