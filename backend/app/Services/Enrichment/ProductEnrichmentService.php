@@ -1822,7 +1822,11 @@ final class ProductEnrichmentService
             || str_contains($d, 'nie udało się znaleźć')
             || str_contains($d, 'brak szczegółowej karty')
             || str_contains($d, 'na podstawie samej nazwy')
-            || str_contains($d, 'wyniki wyszukiwania wskazują');
+            || str_contains($d, 'wyniki wyszukiwania wskazują')
+            || str_contains($d, "you don't have permission to access")
+            || str_contains($d, 'you do not have permission')
+            || str_contains($d, 'access denied')
+            || str_contains($d, '403 forbidden');
     }
 
     /** Krótki slogan sklepu / og:description zamiast pełnego opisu technicznego. */
@@ -1882,6 +1886,7 @@ final class ProductEnrichmentService
             'real estate', 'nieruchomoś', 'leasing opportunity', 'investment or leasing',
             'office, industrial or commercial', 'multi-family housing',
             'powierzchni biurow', 'wynajmu nieruchomości', 'cushman', 'colliers', 'cbre',
+            'oreillyauto', 'crankcase', 'breather hose', 'standard ignition',
         ] as $needle) {
             if (str_contains($low, $needle)) {
                 return true;

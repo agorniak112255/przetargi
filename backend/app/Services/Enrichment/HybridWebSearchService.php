@@ -19,7 +19,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v48';
+    private const SEARCH_CACHE_VERSION = 'v49';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -27,7 +27,7 @@ class HybridWebSearchService
     /** Prefetch: tylko SearXNG / indeks — bez modelu i bez Google/Bing. */
     private bool $localSearchOnly = false;
 
-    /** Ile różnych fraz próbujemy w otwartym internecie, zanim pójdziemy na domenę producenta. */
+    /** Ile fraz z otwartego internetu — dopiero po listach sklepów / producencie. */
     private const OPEN_QUERY_ATTEMPTS = 6;
 
     /** Tyle kart produktu wystarcza, żeby przerwać drabinkę fraz. */
@@ -410,6 +410,7 @@ class HybridWebSearchService
             $title = (string) ($row['title'] ?? '');
             $hay = mb_strtolower($url.' '.$title.' '.($row['snippet'] ?? ''));
             if ($this->isListingWithoutProduct($url, $product)
+                || $this->identity->looksLikeUnrelatedRetailHost($url, $product)
                 || $this->identity->pageClaimsAnotherCode($url, $title, $product)
                 || $this->identity->looksLikeChemicalCatalogHit($hay)
                 || ! $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
@@ -467,6 +468,9 @@ class HybridWebSearchService
             $url = (string) ($row['url'] ?? '');
             $title = (string) ($row['title'] ?? '');
             if ($url === '') {
+                continue;
+            }
+            if ($this->identity->looksLikeUnrelatedRetailHost($url, $product)) {
                 continue;
             }
             $hay = mb_strtolower($url.' '.$title);
@@ -563,8 +567,7 @@ class HybridWebSearchService
             }
         }
         $siteQueries = array_slice($siteQueries, 0, 2);
-        // Najpierw otwarty internet po modelu (CovaSpec 471 KCL) — sklepy indeksują
-        // lepiej niż site:kcl.de. site: na końcu, gdy Google/DDG nic nie da.
+        // Najpierw listy sklepów / katalog (site:) — po to są. Otwarty internet na końcu.
         $ladder = [];
         $legacy = $this->legacySafetyShoePhrase($product);
         if ($legacy !== '') {
@@ -610,8 +613,8 @@ class HybridWebSearchService
         }
 
         return array_merge(
-            array_slice($open, 0, max(1, self::OPEN_QUERY_ATTEMPTS - count($site))),
-            $site
+            $site,
+            array_slice($open, 0, max(1, self::OPEN_QUERY_ATTEMPTS - count($site)))
         );
     }
 
@@ -665,7 +668,7 @@ class HybridWebSearchService
     }
 
     /**
-     * 1) SKU w całym internecie; 2) gdy pusto — domena producenta i SKU na jej stronie.
+     * 1) site: ze sklepów/katalogu; 2) domena producenta; 3) otwarty internet.
      *
      * @param  list<string>  $skuQueries
      * @return array{
@@ -693,14 +696,79 @@ class HybridWebSearchService
             }
         }
 
-        // Jedno trafienie to za mało na pełny opis — zbieramy karty z kolejnych fraz
-        // („1202 Urgent”, potem „Rękawice 1202 kozia czerwona Urgent”), aż uzbiera się kilka.
+        $siteQueries = [];
+        $openQueries = [];
+        foreach ($skuQueries as $query) {
+            if (preg_match('/\bsite:/i', $query) === 1) {
+                $siteQueries[] = $query;
+            } else {
+                $openQueries[] = $query;
+            }
+        }
+
+        foreach ($siteQueries as $query) {
+            $host = $this->siteHostFromQuery($query);
+            $shop = $this->cachedTavilySearch(
+                $product,
+                $query,
+                $host !== null ? [$host] : [],
+                $profile,
+                $cacheMode,
+                $phase,
+                'shop',
+                $errors
+            );
+            $codedShop = $this->resultsCarryProductCode($shop['results'], $product);
+            $usableShop = $codedShop !== [] ? $codedShop : $shop['results'];
+            if ($this->hasEnoughPageResults($usableShop, 1)) {
+                return [
+                    'results' => $usableShop,
+                    'provider' => $this->searchProviderName().'_shop',
+                    'errors' => $errors,
+                ];
+            }
+        }
+
+        $mfrDomains = $this->manufacturers->domainsFor($product);
+        if ($mfrDomains === []) {
+            try {
+                $mfrDomains = $this->manufacturers->discoverOfficialDomains($product);
+            } catch (TavilyQuotaExceededException $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+        $mfrQueries = $openQueries !== [] ? $openQueries : $skuQueries;
+        if ($mfrDomains !== []) {
+            foreach (array_slice($mfrQueries, 0, 2) as $query) {
+                $mfr = $this->cachedTavilySearch(
+                    $product,
+                    $query,
+                    $mfrDomains,
+                    $profile,
+                    $cacheMode,
+                    $phase,
+                    'mfr',
+                    $errors
+                );
+                $codedMfr = $this->resultsCarryProductCode($mfr['results'], $product);
+                $usableMfr = $codedMfr !== [] ? $codedMfr : $mfr['results'];
+                if ($this->hasEnoughPageResults($usableMfr, 1)) {
+                    return [
+                        'results' => $usableMfr,
+                        'provider' => $this->searchProviderName().'_manufacturer',
+                        'errors' => $errors,
+                    ];
+                }
+            }
+        }
+
         $openResults = [];
         $seen = [];
         $openProvider = '';
-        // Tavily jest płatne — tam pierwsze trafienie kończy szukanie.
         $enoughPages = $this->settings->usesFreeWebSearch() ? self::OPEN_ENOUGH_PAGES : 1;
-        foreach ($skuQueries as $query) {
+        foreach ($openQueries as $query) {
             $open = $this->cachedTavilySearch(
                 $product,
                 $query,
@@ -742,46 +810,17 @@ class HybridWebSearchService
                 'errors' => $errors,
             ];
         }
-        $mfrDomains = $this->manufacturers->domainsFor($product);
-        if ($mfrDomains === []) {
-            try {
-                $mfrDomains = $this->manufacturers->discoverOfficialDomains($product);
-            } catch (TavilyQuotaExceededException $e) {
-                throw $e;
-            } catch (Throwable $e) {
-                $errors[] = $e->getMessage();
-            }
-        }
-        if ($mfrDomains === []) {
-            return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => $errors];
-        }
+        return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => $errors];
+    }
 
-        // Na stronie producenta kod bywa zapisany inaczej niż w cenniku, więc gdy
-        // zapytanie po SKU nic nie da, próbujemy drugiej frazy z drabinki (zwykle nazwy).
-        $mfr = ['results' => [], 'provider' => $this->searchProviderName()];
-        foreach (array_slice($skuQueries, 0, 2) as $query) {
-            $mfr = $this->cachedTavilySearch(
-                $product,
-                $query,
-                $mfrDomains,
-                $profile,
-                $cacheMode,
-                $phase,
-                'mfr',
-                $errors
-            );
-            if ($mfr['results'] !== []) {
-                break;
-            }
+    private function siteHostFromQuery(string $query): ?string
+    {
+        if (preg_match('/\bsite:([a-z0-9.-]+)/i', $query, $m) !== 1) {
+            return null;
         }
+        $host = mb_strtolower(rtrim((string) $m[1], '.'));
 
-        return [
-            'results' => $mfr['results'],
-            'provider' => $mfr['results'] !== []
-                ? $this->searchProviderName().'_manufacturer'
-                : $mfr['provider'],
-            'errors' => $errors,
-        ];
+        return $host !== '' ? $host : null;
     }
 
     /**
@@ -893,6 +932,9 @@ class HybridWebSearchService
             if (preg_match('#(ochronki na buty|shoe[- ]?cover|folie na buty|nakladki na obuwie)#i', $hay)) {
                 continue;
             }
+            if ($this->identity->looksLikeUnrelatedRetailHost($url, $product)) {
+                continue;
+            }
             if ($this->isListingWithoutProduct($url, $product)) {
                 continue;
             }
@@ -970,6 +1012,9 @@ class HybridWebSearchService
             $url = (string) ($row['url'] ?? '');
             $title = (string) ($row['title'] ?? '');
             $snippet = (string) ($row['snippet'] ?? '');
+            if ($url === '' || $this->identity->looksLikeUnrelatedRetailHost($url, $product)) {
+                continue;
+            }
             $hay = mb_strtolower($url.' '.$title.' '.$snippet);
             $hasCode = false;
             foreach ($codes as $code) {
@@ -1217,6 +1262,13 @@ class HybridWebSearchService
         }
         $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
         $host = preg_replace('/^www\./', '', $host) ?? $host;
+        foreach ($this->manufacturers->domainsFor($product) as $official) {
+            $official = preg_replace('/^www\./', '', mb_strtolower(trim($official))) ?? '';
+            if ($official !== '' && ($host === $official || str_ends_with($host, '.'.$official))) {
+                $score += 80;
+                break;
+            }
+        }
         foreach ($this->preferredDomains() as $domain) {
             if ($host === $domain || str_ends_with($host, '.'.$domain)) {
                 $score += 35;

@@ -2048,6 +2048,35 @@ final class ProductSearchIdentity
         return false;
     }
 
+    /** Motoryzacja / marketplace z kolizją SKU (V742 → O'Reilly), nie karta BHP. */
+    public function looksLikeUnrelatedRetailHost(string $url, Product $product): bool
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        if ($host === '') {
+            return false;
+        }
+        $brand = mb_strtolower(trim((string) $product->manufacturer));
+        if ($brand !== '' && mb_strlen($brand) >= 3 && str_contains($host, $brand)) {
+            return false;
+        }
+        foreach ([
+            'oreillyauto.com', 'autozone.com', 'rockauto.com', 'napaonline.com',
+            'advanceautoparts.com', 'autopartswarehouse.com', 'etsy.com',
+        ] as $blocked) {
+            if ($host === $blocked || str_ends_with($host, '.'.$blocked)) {
+                return true;
+            }
+        }
+        $hay = mb_strtolower($url);
+        foreach (['crankcase', 'breather-hose', 'ignition-coil', 'spark-plug'] as $auto) {
+            if (str_contains($hay, $auto)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Katalog odczynników (TCI, Acros, CAS) — nie karta BHP, nawet gdy snippet powtarza frazę z zapytania.
      */

@@ -487,8 +487,10 @@ final class EnrichmentQueryLadderTest extends TestCase
         /** @var list<string> $ladder */
         $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
 
-        $this->assertSame('URG-914 Urgent', $ladder[0] ?? null);
+        $this->assertStringStartsWith('site:', $ladder[0] ?? '');
+        $this->assertStringContainsString('URG-914', $ladder[0] ?? '');
         $this->assertLessThanOrEqual(6, count($ladder));
+        $this->assertContains('URG-914 Urgent', $ladder);
         $this->assertContains('Kurtka ostrzegawcza Urgent', $ladder);
         $this->assertContains('Kurtka ostrzegawcza URG-914 Urgent', $ladder);
     }
@@ -511,8 +513,8 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
 
         $this->assertNotEmpty($ladder);
+        $this->assertStringStartsWith('site:mapa-pro.pl', $ladder[0] ?? '');
         $this->assertStringContainsString('KRYTECH 563', $ladder[0] ?? '');
-        $this->assertDoesNotMatchRegularExpression('/^\s*site:/', $ladder[0] ?? '');
         $this->assertStringContainsString('site:mapa-pro.pl', implode(' | ', $ladder));
     }
 
@@ -534,7 +536,7 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
 
         $this->assertNotEmpty($ladder);
-        $this->assertDoesNotMatchRegularExpression('/^\s*site:/', $ladder[0] ?? '');
+        $this->assertStringStartsWith('site:bpbhp.pl', $ladder[0] ?? '');
         $this->assertMatchesRegularExpression('/121/', $ladder[0] ?? '');
         $this->assertStringContainsString('site:bpbhp.pl', implode(' | ', $ladder));
     }
@@ -711,7 +713,8 @@ final class EnrichmentQueryLadderTest extends TestCase
         $open->setAccessible(true);
         /** @var list<string> $ladder */
         $ladder = $open->invoke($service, $beagle, $build->invoke($service, $beagle, 'manufacturer'));
-        $this->assertSame('BEAGLE CANIS SAFETY', $ladder[0] ?? null);
+        $this->assertStringStartsWith('site:cxs.net.pl', $ladder[0] ?? '');
+        $this->assertStringContainsString('BEAGLE', $ladder[0] ?? '');
         $this->assertContains('BEAGLE CANIS SAFETY', $ladder);
         $this->assertStringContainsString('site:cxs.net.pl BEAGLE', implode(' | ', $ladder));
         $this->assertNotSame('211600170000 CANIS SAFETY', $ladder[0] ?? null);
@@ -757,9 +760,10 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $eider, $build->invoke($service, $eider, 'manufacturer'));
 
         $this->assertSame('Carbon ESD PU Top Eider', $identity->primaryQueries($eider)[0] ?? null);
-        $this->assertSame('Carbon ESD PU Top Eider', $ladder[0] ?? null);
+        $this->assertStringStartsWith('site:', $ladder[0] ?? '');
+        $this->assertContains('Carbon ESD PU Top Eider', $ladder);
         $this->assertContains('9011080 Eider', $ladder);
-        $this->assertNotSame('Carbon Eider', $ladder[0] ?? null);
+        $this->assertNotContains('Carbon Eider', $ladder);
     }
 
     public function test_catalog_code_opens_official_site_after_short_query(): void
@@ -782,7 +786,9 @@ final class EnrichmentQueryLadderTest extends TestCase
         /** @var list<string> $ladder */
         $ladder = $open->invoke($service, $tx39, $build->invoke($service, $tx39, 'manufacturer'));
 
-        $this->assertSame('TX39 Portwest', $ladder[0] ?? null);
+        $this->assertStringStartsWith('site:', $ladder[0] ?? '');
+        $this->assertStringContainsString('TX39', $ladder[0] ?? '');
+        $this->assertContains('TX39 Portwest', $ladder);
         $this->assertStringContainsString('site:gvarant.pl TX39', implode(' | ', $ladder));
         $this->assertTrue($identity->hayMentionsProduct(
             'https://sklep-system.pl/ogrodniczki-portwest-tx39-bremen Ogrodniczki robocze Portwest TX39 BREMEN',
@@ -1019,8 +1025,8 @@ final class EnrichmentQueryLadderTest extends TestCase
         $build = $ref->getMethod('buildQueries');
         $build->setAccessible(true);
         $kclLadder = $open->invoke($service, $kcl, $build->invoke($service, $kcl, 'manufacturer'));
+        $this->assertStringStartsWith('site:', $kclLadder[0] ?? '');
         $this->assertStringContainsString('CovaSpec 471', $kclLadder[0] ?? '');
-        $this->assertDoesNotMatchRegularExpression('/^\s*site:/', $kclLadder[0] ?? '');
         $this->assertTrue($identity->hayMentionsProduct(
             'https://sps.honeywell.com/altochut-1012 ALTOCHUT 1012 CE harness',
             $honeywell
@@ -1066,6 +1072,24 @@ final class EnrichmentQueryLadderTest extends TestCase
         ]], $kcl);
         $this->assertNotSame([], $kept);
         $this->assertStringContainsString('hygi.de', (string) ($kept[0]['url'] ?? ''));
+
+        $owerton = new Product([
+            'manufacturer' => 'Cofra',
+            'sku' => 'V742-0-02',
+            'name' => 'OWERTON (02 NAVY)',
+        ]);
+        $owertonLadder = $open->invoke($service, $owerton, $build->invoke($service, $owerton, 'manufacturer'));
+        $this->assertStringStartsWith('site:cofra.it', $owertonLadder[0] ?? '');
+        $this->assertTrue($identity->looksLikeUnrelatedRetailHost(
+            'https://www.oreillyauto.com/detail/c/standard-ignition/standard-ignition-plastic-crankcase-breather-hose/std0/v742',
+            $owerton
+        ));
+        $dropped = $filter->invoke($service, [[
+            'url' => 'https://www.oreillyauto.com/detail/c/standard-ignition/std0/v742',
+            'title' => 'Standard Ignition Plastic Crankcase Breather Hose',
+            'snippet' => 'V742 breather hose',
+        ]], $owerton);
+        $this->assertSame([], $dropped);
     }
 
     public function test_g10_flex_glove_rejects_knife_and_keeps_sibling_size_card(): void
