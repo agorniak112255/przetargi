@@ -26,7 +26,8 @@ final class ProductSearchIdentity
         'gloves' => ['rekawic', 'glove', 'glv', 'handschuh', 'gant'],
         'coverall' => ['kombinezon', 'coverall', 'overall', 'cvrl', 'protective suit', 'protection suit'],
         'jacket' => ['kurtk', 'jacket', 'plaszcz'],
-        'trousers' => ['spodn', 'trouser', 'pant'],
+        'trousers' => ['spodn', 'trouser', 'pant', 'ogrodniczk', 'dungaree', 'bib brace'],
+        'cap' => ['czapk', 'czepek', 'czepk'],
         'sweatshirt' => ['bluza', 'sweatshirt'],
         'vest' => ['kamizelk', 'vest'],
         'mask' => ['maska', 'maski', 'maske'],
@@ -149,6 +150,9 @@ final class ProductSearchIdentity
         if ($this->urlSkuOnlyAsCasNumber($hay, $product)) {
             return false;
         }
+        if ($this->imageUrlHasForeignType($url, $product)) {
+            return false;
+        }
 
         $sku = mb_strtolower(trim((string) $product->sku));
         $skuCompact = preg_replace('/[^a-z0-9]+/iu', '', $sku) ?? $sku;
@@ -190,7 +194,12 @@ final class ProductSearchIdentity
             // model (ringers, rubiflex) — TYLKO ze ścieżką BHP/CDN, nigdy sam „…/product/…” (LEGO)
             if (mb_strlen($token) >= 4 && (str_contains($hay, $token) || str_contains($hayCompact, $token))) {
                 if (preg_match('#(glove|handschuh|rekaw|shop-media|product-assets|fileadmin/.+products|pim/products|media/catalog/product)#i', $hay) === 1) {
-                    return true;
+                    // „GRZMOT” to linia (czapka + spodnie) — bez typu w URL nie pomijaj Vision
+                    if ($this->isAlphanumericProductCode($token)
+                        || preg_match('/^\d{4,}$/', $token) === 1
+                        || $this->imageHayHasRequiredType($url, $product)) {
+                        return true;
+                    }
                 }
             }
         }
@@ -2151,6 +2160,100 @@ final class ProductSearchIdentity
     }
 
     /**
+     * Typ z nazwy (czapka / spodnie) — bez kategorii „Odzież”, żeby nie wymagać „odziez” w URL.
+     */
+    public function imageHayHasRequiredType(string $hay, Product $product): bool
+    {
+        if ($this->ansellOfficialPathHasModel($hay, $product)) {
+            return true;
+        }
+        $name = $this->normalizeTypeText((string) $product->name);
+        $page = $this->normalizeTypeText($hay);
+        $required = [];
+        foreach (self::TYPE_STEMS as $stems) {
+            if ($this->textHasTypeStem($name, $stems)) {
+                $required[] = $stems;
+            }
+        }
+        if ($required === []) {
+            return true;
+        }
+        foreach ($required as $stems) {
+            if (! $this->textHasTypeStem($page, $stems)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public function nameRequiresArticleType(Product $product): bool
+    {
+        $name = $this->normalizeTypeText((string) $product->name);
+        foreach (self::TYPE_STEMS as $stems) {
+            if ($this->textHasTypeStem($name, $stems)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function imageUrlHasForeignType(string $url, Product $product): bool
+    {
+        $name = $this->normalizeTypeText((string) $product->name);
+        $hay = $this->normalizeTypeText(urldecode($url).' '.$this->decodeEmbeddedUrls($url));
+        $own = [];
+        foreach (self::TYPE_STEMS as $key => $stems) {
+            if ($this->textHasTypeStem($name, $stems)) {
+                $own[$key] = true;
+            }
+        }
+        if ($own === []) {
+            return false;
+        }
+        foreach (self::TYPE_STEMS as $key => $stems) {
+            if (isset($own[$key])) {
+                continue;
+            }
+            if ($this->textHasTypeStem($hay, $stems)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function requiredArticleTypeLabel(Product $product): ?string
+    {
+        $name = $this->normalizeTypeText((string) $product->name);
+        $labels = [
+            'gloves' => 'rękawice',
+            'coverall' => 'kombinezon',
+            'jacket' => 'kurtka',
+            'trousers' => 'spodnie lub ogrodniczki',
+            'cap' => 'czapka / nakrycie głowy z daszkiem',
+            'sweatshirt' => 'bluza',
+            'vest' => 'kamizelka',
+            'mask' => 'maska',
+            'footwear' => 'obuwie',
+            'helmet' => 'kask / hełm',
+            'goggles' => 'okulary lub gogle',
+            'apron' => 'fartuch',
+            'hearing' => 'nauszniki',
+            'harness' => 'szelki',
+            'clothing' => 'odzież',
+        ];
+        foreach (self::TYPE_STEMS as $key => $stems) {
+            if ($this->textHasTypeStem($name, $stems)) {
+                return $labels[$key] ?? $key;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @param  list<string>  $stems
      */
     private function textHasTypeStem(string $normalized, array $stems): bool
@@ -2169,6 +2272,13 @@ final class ProductSearchIdentity
             }
             if ($stem === 'glv') {
                 if (preg_match('/\bglv\b/u', $normalized) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if ($stem === 'pant') {
+                if (preg_match('/\bpant(?:s|aloon)?\b/u', $normalized) === 1) {
                     return true;
                 }
 

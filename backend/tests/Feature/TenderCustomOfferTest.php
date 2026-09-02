@@ -415,15 +415,15 @@ final class TenderCustomOfferTest extends TestCase
 
         $this->postJson("/api/tenders/{$tender->id}/items/{$item->id}/match", ['force' => true])
             ->assertOk()
-            ->assertJsonPath('matched', true);
+            ->assertJsonPath('matched', false);
 
         $item->refresh();
         $this->assertNull($item->main_product_id);
         $this->assertNull($item->ai_match_percent);
-        $this->assertSame('external', $item->match_source);
-        $this->assertSame('Czapka polarowa pod hełm', $item->custom_name);
-        $this->assertSame('https://sklep.example/czapka-polarowa', $item->custom_url);
-        $this->assertSame('matched', $item->status);
+        $this->assertNull($item->match_source);
+        $this->assertNull($item->custom_name);
+        $this->assertNull($item->custom_url);
+        $this->assertSame('brak', $item->status);
     }
 
     public function test_bulk_saves_custom_offer(): void
@@ -456,7 +456,7 @@ final class TenderCustomOfferTest extends TestCase
         $this->assertSame('custom', $item->match_source);
     }
 
-    public function test_rematch_saves_first_external_hint_as_offer_and_keeps_link(): void
+    public function test_rematch_does_not_save_external_hint_as_offer(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         AiSetting::query()->create([
@@ -474,6 +474,13 @@ final class TenderCustomOfferTest extends TestCase
             'needed' => 'recznik 50x100',
             'search_phrases' => ['recznik', 'bawelniany'],
             'matches' => [],
+        ]);
+        $llm->shouldReceive('chatJsonMany')->andReturn([
+            [
+                'needed' => 'ręcznik',
+                'search_phrases' => ['ręcznik bawełniany'],
+                'matches' => [],
+            ],
         ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         Http::fake([
@@ -499,16 +506,16 @@ final class TenderCustomOfferTest extends TestCase
             'item_ids' => [$item->id],
         ])
             ->assertOk()
-            ->assertJsonPath('matched', 1)
-            ->assertJsonPath('changes.0.action', 'changed');
+            ->assertJsonPath('matched', 0)
+            ->assertJsonPath('no_match', 1);
 
         $item->refresh();
-        $this->assertSame('Ręcznik bawełniany 50x100 500 g/m2', $item->custom_name);
-        $this->assertSame('https://sklep.example/recznik-50x100', $item->custom_url);
-        $this->assertSame('external', $item->match_source);
-        $this->assertSame('matched', $item->status);
+        $this->assertNull($item->custom_name);
+        $this->assertNull($item->custom_url);
+        $this->assertNull($item->match_source);
+        $this->assertSame('brak', $item->status);
         $this->assertNull($item->main_product_id);
-        $this->assertContains('external_link', array_column($item->ai_match_reasons ?? [], 'code'));
+        Http::assertNotSent(fn ($request): bool => str_contains((string) $request->url(), 'tavily'));
     }
 
     public function test_rematch_keeps_compatible_catalog_product_when_no_new_pick(): void

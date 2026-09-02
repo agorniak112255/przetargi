@@ -70,7 +70,7 @@ final class CatalogDescriptionMatchTest extends TestCase
             ->assertJsonPath('products', []);
     }
 
-    public function test_no_catalog_match_saves_external_link_not_product(): void
+    public function test_no_catalog_match_does_not_save_external_link(): void
     {
         Product::query()->create([
             'sku' => 'BARE-2',
@@ -120,13 +120,13 @@ final class CatalogDescriptionMatchTest extends TestCase
 
         $this->postJson("/api/tenders/{$tender->id}/items/{$item->id}/match", ['force' => true])
             ->assertOk()
-            ->assertJsonPath('matched', true)
+            ->assertJsonPath('matched', false)
             ->assertJsonPath('product_id', null);
 
         $item->refresh();
         $this->assertNull($item->main_product_id);
-        $this->assertSame('matched', $item->status);
-        $this->assertSame('external', $item->match_source);
-        $this->assertSame('https://example.com/lab-coat', $item->custom_url);
+        $this->assertSame('brak', $item->status);
+        $this->assertNull($item->match_source);
+        $this->assertNull($item->custom_url);
     }
 }

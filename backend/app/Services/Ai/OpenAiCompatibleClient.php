@@ -710,6 +710,7 @@ class OpenAiCompatibleClient
         $content = [
             ['type' => 'text', 'text' => $prompt],
         ];
+        $detail = $task === AiTask::ImageVerification ? 'high' : 'low';
         foreach ($images as $index => $image) {
             $content[] = [
                 'type' => 'text',
@@ -719,7 +720,7 @@ class OpenAiCompatibleClient
                 'type' => 'image_url',
                 'image_url' => [
                     'url' => 'data:'.$image['mime'].';base64,'.base64_encode($image['bytes']),
-                    'detail' => 'low',
+                    'detail' => $detail,
                 ],
             ];
         }
@@ -727,7 +728,10 @@ class OpenAiCompatibleClient
         return $this->chatJson([
             [
                 'role' => 'system',
-                'content' => 'Weryfikujesz zdjęcia produktów BHP. Zwracasz wyłącznie JSON i nie zgadujesz.',
+                'content' => 'Weryfikujesz zdjęcia produktów BHP. '
+                    .'Najpierw nazwij rodzaj przedmiotu na zdjęciu (czapka, spodnie, ogrodniczki, kurtka, bluza, rękawice, buty). '
+                    .'Jeśli rodzaj nie zgadza się z produktem z zapytania — is_relevant_product=false. '
+                    .'Ta sama linia odzieży nie wystarczy. Zwracasz wyłącznie JSON i nie zgadujesz.',
             ],
             [
                 'role' => 'user',

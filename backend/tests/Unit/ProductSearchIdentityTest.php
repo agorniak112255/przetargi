@@ -130,6 +130,20 @@ final class ProductSearchIdentityTest extends TestCase
             'https://shop.example/kombinezon-104 Kombinezon 104 PROS',
             $coverall
         ));
+
+        $cap = new Product([
+            'sku' => 'CZAPKA-DASZKIEM-GRZMOT-43',
+            'name' => 'Czapka daszkiem GRZMOT',
+            'manufacturer' => 'PANTHER',
+        ]);
+        $this->assertFalse($id->hayHasRequiredTypeFromName(
+            'https://shop.example/spodnie-grzmot Spodnie GRZMOT PANTHER',
+            $cap
+        ));
+        $this->assertTrue($id->hayHasRequiredTypeFromName(
+            'https://shop.example/czapka-grzmot Czapka daszkiem GRZMOT',
+            $cap
+        ));
     }
 
     public function test_tegera_104_does_not_match_pros_coverall(): void

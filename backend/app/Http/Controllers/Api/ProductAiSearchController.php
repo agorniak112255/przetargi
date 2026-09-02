@@ -38,7 +38,7 @@ class ProductAiSearchController extends Controller
             $result = $this->search->search(
                 (string) $data['query'],
                 (int) ($data['limit'] ?? ($webOnly ? 8 : 40)),
-                true,
+                false,
                 AiTask::ProductSearch,
                 $webOnly,
             );

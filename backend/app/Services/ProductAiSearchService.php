@@ -78,7 +78,7 @@ final class ProductAiSearchService
     public function search(
         string $query,
         int $limit = 40,
-        bool $withExternalHint = true,
+        bool $withExternalHint = false,
         AiTask $task = AiTask::ProductSearch,
         bool $webOnly = false,
     ): array {
@@ -132,8 +132,10 @@ final class ProductAiSearchService
         $pending = [];
         $done = [];
         $intents = [];
+        $retrieveIntents = [];
         foreach ($clean as $i => $query) {
             $intents[$i] = $this->localIntent($query);
+            $retrieveIntents[$i] = $intents[$i];
             $prepared = $this->prepareSearch($query, $intents[$i], $limit);
             if ($prepared['rank_cards'] === null) {
                 $done[$i] = $this->searchResult($query, $intents[$i], $prepared['products'], $prepared['note'], $withExternalHint);
@@ -170,10 +172,11 @@ final class ProductAiSearchService
                 $clean[$i],
                 $intents[$i],
                 $ranked,
-                $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.' : null,
+                $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
                 $withExternalHint,
             );
         }
+        $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent);
         ksort($done);
 
         return array_values($done);
@@ -209,7 +212,7 @@ final class ProductAiSearchService
         if ($candidates->isEmpty()) {
             return [
                 'products' => [],
-                'note' => 'Brak kart z opisem w katalogu do porównania. Nie dodano produktu z internetu.',
+                'note' => 'Brak kart z opisem w katalogu do porównania.',
                 'rank_cards' => null,
                 'candidates' => $candidates,
             ];
@@ -276,26 +279,284 @@ final class ProductAiSearchService
         int $limit,
         bool $withExternalHint,
         AiTask $task,
+        bool $allowRewrite = true,
     ): array {
+        $retrieveIntent = $intent;
         $prepared = $this->prepareSearch($query, $intent, $limit);
         if ($prepared['rank_cards'] === null) {
-            return $this->searchResult($query, $intent, $prepared['products'], $prepared['note'], $withExternalHint);
+            $result = $this->searchResult($query, $intent, $prepared['products'], $prepared['note'], $withExternalHint);
+            if ($allowRewrite && $result['products'] === []) {
+                return $this->retryAfterRewrite($query, $retrieveIntent, $limit, $withExternalHint, $task);
+            }
+
+            return $result;
         }
-        [$intent, $ranked] = $this->analyzeAndRank(
+        [$rankedIntent, $ranked] = $this->analyzeAndRank(
             $query,
             $prepared['rank_cards'],
             $limit,
             $task,
             $intent['constraints'],
         );
-
-        return $this->searchResult(
+        $result = $this->searchResult(
             $query,
-            $intent,
+            $rankedIntent,
             $ranked,
-            $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu. Nie dodano pozycji z internetu.' : null,
+            $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
             $withExternalHint,
         );
+        if ($result['products'] !== [] || ! $allowRewrite) {
+            return $result;
+        }
+        if ($this->intentChanged($retrieveIntent, $rankedIntent)) {
+            return $this->finishSearch($query, $rankedIntent, $limit, $withExternalHint, $task, false);
+        }
+
+        return $this->retryAfterRewrite($query, $retrieveIntent, $limit, $withExternalHint, $task);
+    }
+
+    /**
+     * @param  array{needed: string, search_phrases: list<string>, constraints: list<string>}  $usedIntent
+     * @return array{
+     *     query: string,
+     *     total: int,
+     *     products: list<array<string, mixed>>,
+     *     needed: string,
+     *     search_phrases: list<string>,
+     *     ai_note: string|null,
+     *     external_hint: array{url: string, title: string}|null
+     * }
+     */
+    private function retryAfterRewrite(
+        string $query,
+        array $usedIntent,
+        int $limit,
+        bool $withExternalHint,
+        AiTask $task,
+    ): array {
+        $rewritten = $this->rewriteCatalogIntent($query, $task);
+        if (! $this->intentChanged($usedIntent, $rewritten)) {
+            return $this->emptyResult(
+                $query,
+                $rewritten,
+                $withExternalHint,
+                'Model nie znalazł pasującego produktu w katalogu.',
+            );
+        }
+
+        return $this->finishSearch($query, $rewritten, $limit, $withExternalHint, $task, false);
+    }
+
+    /**
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
+     */
+    private function rewriteCatalogIntent(string $query, AiTask $task): array
+    {
+        try {
+            $raw = $this->llm->chatJson($this->rewriteMessages($query), null, 900, null, $task);
+
+            return $this->intentFromRewrite(is_array($raw) ? $raw : [], $query);
+        } catch (Throwable) {
+            return $this->localIntent($query);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $raw
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
+     */
+    private function intentFromRewrite(array $raw, string $query): array
+    {
+        $intent = $this->parseIntent($raw, $query);
+        $modelConstraints = [];
+        foreach ([$raw['constraints'] ?? [], $raw['must_evidence'] ?? []] as $list) {
+            if (! is_array($list)) {
+                continue;
+            }
+            foreach ($list as $term) {
+                if (is_string($term) && mb_strlen(trim($term)) >= 3) {
+                    $modelConstraints[] = trim($term);
+                }
+            }
+        }
+        $intent['constraints'] = $modelConstraints !== []
+            ? array_values(array_unique($modelConstraints))
+            : $this->fallbackConstraints($intent['needed']);
+
+        return $intent;
+    }
+
+    /**
+     * @param  array{needed: string, search_phrases: list<string>}  $before
+     * @param  array{needed: string, search_phrases: list<string>}  $after
+     */
+    private function intentChanged(array $before, array $after): bool
+    {
+        $beforeSet = $this->normalizedPhraseSet($before['search_phrases']);
+        foreach ($this->normalizedPhraseSet($after['search_phrases']) as $phrase) {
+            if (! isset($beforeSet[$phrase])) {
+                return true;
+            }
+        }
+
+        return $this->lexicalNormalize($before['needed']) !== $this->lexicalNormalize($after['needed']);
+    }
+
+    /**
+     * @param  list<string>  $phrases
+     * @return array<string, true>
+     */
+    private function normalizedPhraseSet(array $phrases): array
+    {
+        $out = [];
+        foreach ($phrases as $phrase) {
+            $n = trim($this->lexicalNormalize($phrase));
+            if ($n !== '') {
+                $out[$n] = true;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<string>  $clean
+     * @param  array<int, array<string, mixed>>  $done
+     * @param  array<int, array{needed: string, search_phrases: list<string>, constraints: list<string>}>  $intents
+     * @param  array<int, array{needed: string, search_phrases: list<string>, constraints: list<string>}>  $retrieveIntents
+     */
+    private function rewriteEmptySearchMany(
+        array $clean,
+        array &$done,
+        array &$intents,
+        array $retrieveIntents,
+        int $limit,
+        bool $withExternalHint,
+        AiTask $task,
+        int $maxConcurrent,
+    ): void {
+        $empty = [];
+        foreach ($done as $i => $row) {
+            if (($row['products'] ?? []) === []) {
+                $empty[] = $i;
+            }
+        }
+        if ($empty === []) {
+            return;
+        }
+
+        $pending = [];
+        $needLlm = [];
+        foreach ($empty as $i) {
+            $current = $intents[$i];
+            if ($this->intentChanged($retrieveIntents[$i], $current)) {
+                $prepared = $this->prepareSearch($clean[$i], $current, $limit);
+                if ($prepared['rank_cards'] === null) {
+                    $done[$i] = $this->searchResult(
+                        $clean[$i],
+                        $current,
+                        $prepared['products'],
+                        $prepared['note'],
+                        $withExternalHint,
+                    );
+                } else {
+                    $pending[$i] = $prepared;
+                }
+            } else {
+                $needLlm[] = $i;
+            }
+        }
+
+        if ($needLlm !== []) {
+            $messages = [];
+            foreach ($needLlm as $i) {
+                $messages[] = $this->rewriteMessages($clean[$i]);
+            }
+            $raws = $this->llm->chatJsonMany($messages, 900, $task, $maxConcurrent);
+            foreach ($needLlm as $pos => $i) {
+                $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
+                $rewritten = $this->intentFromRewrite($raw, $clean[$i]);
+                if (! $this->intentChanged($intents[$i], $rewritten)) {
+                    continue;
+                }
+                $intents[$i] = $rewritten;
+                $prepared = $this->prepareSearch($clean[$i], $rewritten, $limit);
+                if ($prepared['rank_cards'] === null) {
+                    $done[$i] = $this->searchResult(
+                        $clean[$i],
+                        $rewritten,
+                        $prepared['products'],
+                        $prepared['note'],
+                        $withExternalHint,
+                    );
+                } else {
+                    $pending[$i] = $prepared;
+                }
+            }
+        }
+
+        if ($pending === []) {
+            return;
+        }
+
+        $rankMessages = [];
+        $rankOrder = [];
+        foreach ($pending as $i => $prepared) {
+            $rankOrder[] = $i;
+            $rankMessages[] = $this->analyzeAndRankMessages(
+                $clean[$i],
+                $prepared['rank_cards'],
+                $limit,
+                $intents[$i]['needed'],
+                $intents[$i]['constraints'],
+                $task,
+            );
+        }
+        $rankRaws = $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent);
+        foreach ($rankOrder as $pos => $i) {
+            $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
+            $intents[$i] = $this->parseIntent($raw, $clean[$i]);
+            $ranked = $this->rowsFromLlmMatches(
+                $clean[$i],
+                $pending[$i]['rank_cards'] ?? $pending[$i]['candidates'],
+                $raw,
+                $limit,
+                $intents[$i]['needed'],
+            );
+            $done[$i] = $this->searchResult(
+                $clean[$i],
+                $intents[$i],
+                $ranked,
+                $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
+                $withExternalHint,
+            );
+        }
+    }
+
+    /**
+     * @return list<array{role: string, content: string}>
+     */
+    private function rewriteMessages(string $query): array
+    {
+        return [
+            [
+                'role' => 'system',
+                'content' => 'Jesteś ekspertem BHP i katalogów odzieży roboczej. '
+                    .'Pierwsze wyszukiwanie w katalogu nic nie dało. '
+                    .'Przepisz wymaganie na frazy, pod którymi sklepy BHP sprzedają ten produkt. '
+                    .'needed: krótka nazwa katalogowa (rzeczownik + typ). '
+                    .'search_phrases: 2-8; pierwsze 2 = nazwa/synonim sklepowy. '
+                    .'Przykłady: czapka drelichowa → czapka z daszkiem, czapka robocza; '
+                    .'drelich = tkanina bawełniana, nie osobny asortyment. '
+                    .'Nie zmieniaj rodzaju produktu. Nie zgaduj marki. '
+                    .'constraints: tylko twarde warunki (norma, klasa), bez żargonu SIWZ. '
+                    .'JSON: {"needed":"...","search_phrases":["..."],"constraints":[]}.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $query,
+            ],
+        ];
     }
 
     /**

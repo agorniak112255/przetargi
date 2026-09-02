@@ -149,4 +149,30 @@ final class ProductImageRelevanceTest extends TestCase
         ]);
         $this->assertFalse($identity->imageUrlMentionsForeignBrand($portwestUrl, $portwest));
     }
+
+    public function test_grzmot_line_does_not_accept_pants_image_for_a_cap(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $cap = new Product([
+            'sku' => 'CZAPKA-DASZKIEM-GRZMOT-43',
+            'name' => 'Czapka daszkiem GRZMOT',
+            'manufacturer' => 'PANTHER',
+        ]);
+        $catalog = 'https://sklep.example/media/catalog/product/g/r/grzmot';
+
+        $this->assertTrue($identity->imageUrlHasForeignType($catalog.'-spodnie.jpg', $cap));
+        $this->assertFalse($identity->imageUrlMentionsProduct($catalog.'-spodnie.jpg', $cap));
+        $this->assertFalse($identity->imageUrlMentionsProduct($catalog.'-ogrodniczki.jpg', $cap));
+        $this->assertFalse($identity->imageUrlMentionsProduct($catalog.'.jpg', $cap));
+        $this->assertTrue($identity->imageUrlMentionsProduct($catalog.'-czapka-daszkiem.jpg', $cap));
+        $this->assertTrue($identity->imageUrlMentionsProduct(
+            'https://sklep.example/media/catalog/product/c/z/czapka-daszkiem-grzmot-43.jpg',
+            $cap
+        ));
+        $this->assertFalse($identity->imageUrlHasForeignType(
+            'https://sklep.example/media/catalog/product/p/a/panther-czapka-grzmot.jpg',
+            $cap
+        ));
+        $this->assertSame('czapka / nakrycie głowy z daszkiem', $identity->requiredArticleTypeLabel($cap));
+    }
 }

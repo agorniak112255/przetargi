@@ -1289,6 +1289,62 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame([$gloveUrl], $selected);
     }
 
+    public function test_cap_vision_prompt_requires_headwear_and_rejects_line_name_only(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'CZAPKA-DASZKIEM-GRZMOT-43',
+            'name' => 'Czapka daszkiem GRZMOT',
+            'manufacturer' => 'PANTHER',
+        ]);
+        $pantsUrl = 'https://cdn.example.com/media/cache/grzmot-kolekcja.jpg';
+        Http::fake([
+            'https://cdn.example.com/*' => Http::response(
+                $this->tinyJpeg(),
+                200,
+                ['Content-Type' => 'image/jpeg']
+            ),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonWithImages')
+            ->once()
+            ->with(
+                Mockery::on(static function (string $prompt): bool {
+                    return str_contains($prompt, 'czapka / nakrycie głowy z daszkiem')
+                        && str_contains($prompt, 'spodnie')
+                        && str_contains($prompt, 'GRZMOT');
+                }),
+                Mockery::on(static fn (array $images): bool => count($images) === 1),
+                AiTask::ImageVerification
+            )
+            ->andReturn([
+                'candidates' => [[
+                    'index' => 0,
+                    'is_relevant_product' => false,
+                    'is_logo_or_banner' => false,
+                    'confidence' => 0.99,
+                    'reason' => 'Na zdjęciu spodnie, nie czapka.',
+                ]],
+            ]);
+
+        $verifier = new ProductImageCandidateVerifier(
+            app(ProductSearchIdentity::class),
+            $llm,
+        );
+        $selected = $verifier->select(
+            $product,
+            [$pantsUrl],
+            [[
+                'url' => 'https://sklep.example.com/czapka-grzmot',
+                'text' => 'Czapka daszkiem GRZMOT PANTHER.',
+            ]],
+            1,
+            [$pantsUrl]
+        );
+
+        $this->assertSame([], $selected);
+    }
+
     public function test_structured_product_image_skips_ai_even_without_sku_in_url(): void
     {
         $product = $this->makeProduct([

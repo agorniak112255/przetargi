@@ -1158,7 +1158,7 @@ final class ProductMatchService
         }
 
         try {
-            $result = $this->aiSearch->search($requirement, $limit, true, AiTask::TenderMatch);
+            $result = $this->aiSearch->search($requirement, $limit, false, AiTask::TenderMatch);
         } catch (Throwable) {
             return [];
         }
@@ -1358,24 +1358,15 @@ final class ProductMatchService
             return;
         }
 
-        $hint = $this->lastExternalHint ?? $this->externalHints->hint($item->requirement);
         $item->loadMissing('mainProduct');
         $existing = $item->mainProduct;
         if ($existing instanceof Product) {
             $proposed = max((int) ($item->ai_match_percent ?? 0), 100);
             if ($this->persistableScore($item->requirement, $existing, $proposed) !== null) {
-                $reasons = is_array($item->ai_match_reasons) ? $item->ai_match_reasons : [];
-                $item->ai_match_reasons = $this->appendExternalHint($reasons, $hint);
                 $item->save();
 
                 return;
             }
-        }
-
-        if ($hint !== null) {
-            $this->applyExternalHintAsOffer($item, $hint);
-
-            return;
         }
 
         $item->main_product_id = null;
@@ -1385,7 +1376,7 @@ final class ProductMatchService
         $item->ai_match_reasons = [
             [
                 'code' => 'no_match',
-                'label' => 'Brak produktu w katalogu (szukano w opisach). Nie dodano pozycji z internetu.',
+                'label' => 'Brak produktu w katalogu (szukano w opisach).',
                 'points' => 0,
             ],
         ];

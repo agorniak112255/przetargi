@@ -61,11 +61,11 @@ final class ProductImageCandidateVerifier
         $selected = [];
         $unverified = [];
         foreach ($urls as $url) {
-            if ($this->identity->imageUrlMentionsForeignBrand($url, $product)) {
+            if ($this->identity->imageUrlMentionsForeignBrand($url, $product)
+                || $this->identity->imageUrlHasForeignType($url, $product)) {
                 continue;
             }
-            if ($this->identity->imageUrlMentionsProduct($url, $product)
-                || (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url))) {
+            if ($this->identity->imageUrlMentionsProduct($url, $product)) {
                 $selected[] = $url;
                 if (count($selected) >= $max) {
                     return array_slice($selected, 0, $max);
@@ -73,9 +73,19 @@ final class ProductImageCandidateVerifier
 
                 continue;
             }
-            if ($this->isPotentialProductImage($url)) {
-                $unverified[] = $url;
+            if (! $this->isPotentialProductImage($url)) {
+                continue;
             }
+            // og:image kolekcji (GRZMOT) bez typu w URL — Vision, nie ślepe zaufanie
+            if (isset($trusted[mb_strtolower($url)]) && ! $this->identity->nameRequiresArticleType($product)) {
+                $selected[] = $url;
+                if (count($selected) >= $max) {
+                    return array_slice($selected, 0, $max);
+                }
+
+                continue;
+            }
+            $unverified[] = $url;
         }
 
         usort(
@@ -174,13 +184,16 @@ final class ProductImageCandidateVerifier
         $selected = array_values(array_filter(
             $selected,
             fn (string $url): bool => ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
+                && ! $this->identity->imageUrlHasForeignType($url, $product)
         ));
         if ($selected !== []) {
             return array_values(array_unique(array_slice($selected, 0, $max)));
         }
         foreach ($urls as $url) {
             if (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url)
-                && ! $this->identity->imageUrlMentionsForeignBrand($url, $product)) {
+                && ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
+                && ! $this->identity->imageUrlHasForeignType($url, $product)
+                && ! $this->identity->nameRequiresArticleType($product)) {
                 return [$url];
             }
         }
@@ -272,6 +285,12 @@ final class ProductImageCandidateVerifier
                 ."\nTreść: ".mb_substr((string) ($page['text'] ?? ''), 0, 1000);
         }
         $countMinusOne = $count - 1;
+        $typeLine = $this->identity->requiredArticleTypeLabel($product);
+        $typeBlock = $typeLine !== null
+            ? "Szukany rodzaj na zdjęciu: {$typeLine}.\n"
+                .'Jeśli widać inny rodzaj (spodnie, ogrodniczki, kombinezon, kurtka, bluza, buty, rękawice, czapka) — is_relevant_product=false.'."\n"
+                .'Ta sama linia (np. GRZMOT) nie wystarczy.'
+            : 'Zaakceptuj tylko ten sam rodzaj produktu co nazwa. Inny asortyment (spodnie przy czapce) — odrzuć.';
 
         return <<<PROMPT
 Oceń {$count} kandydatów na główne zdjęcie tego produktu:
@@ -281,8 +300,10 @@ Oceń {$count} kandydatów na główne zdjęcie tego produktu:
 - kategoria: {$product->category}
 - normy: {$product->norms}
 
+{$typeBlock}
+
 Kandydaci pochodzą ze stron znalezionych dla produktu. Zaakceptuj zdjęcie tylko wtedy, gdy:
-1. przedstawia pojedynczy produkt odpowiadający typowi i opisowi powyżej,
+1. na zdjęciu widać pojedynczy produkt tego samego rodzaju co nazwa (nie inny z tej samej kolekcji),
 2. nie jest logo, ikoną, banerem, mapą, reklamą, dokumentem ani zdjęciem innego rodzaju produktu,
 3. kontekst strony wspiera powiązanie z podanym SKU/modelem.
 Nie wymagaj widocznego SKU na samym zdjęciu, ale nie zgaduj marki ani modelu wyłącznie z wyglądu.

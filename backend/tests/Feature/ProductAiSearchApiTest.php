@@ -306,7 +306,7 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('external_hint', null);
     }
 
-    public function test_empty_catalog_returns_external_link_not_product(): void
+    public function test_empty_catalog_does_not_search_web(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         AiSetting::query()->create([
@@ -343,7 +343,10 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('total', 0)
             ->assertJsonPath('products', [])
-            ->assertJsonPath('external_hint.url', 'https://example.com/kurtka-ochronna');
+            ->assertJsonPath('external_hint', null)
+            ->assertJsonPath('external_hints', []);
+
+        Http::assertNotSent(fn ($request): bool => str_contains((string) $request->url(), 'tavily'));
     }
 
     public function test_ai_search_finds_catalog_filter_with_no_and_skips_a2b2e2k2(): void
@@ -549,7 +552,7 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertSame(['015-302'], array_column($reis->json('products') ?? [], 'sku'));
     }
 
-    public function test_empty_catalog_retries_web_until_no_class_appears(): void
+    public function test_web_search_retries_until_no_class_appears(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         AiSetting::query()->create([
@@ -590,6 +593,7 @@ final class ProductAiSearchApiTest extends TestCase
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'pochłaniacz wielogazowy a2b2e2k2no (dodatkowa ochrona na tlenki azotu)',
+            'web' => true,
         ])
             ->assertOk()
             ->assertJsonPath('total', 0)
@@ -599,7 +603,7 @@ final class ProductAiSearchApiTest extends TestCase
             );
     }
 
-    public function test_empty_catalog_skips_web_hint_without_no_class(): void
+    public function test_web_search_skips_hint_without_no_class(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         AiSetting::query()->create([
@@ -638,6 +642,7 @@ final class ProductAiSearchApiTest extends TestCase
 
         $this->postJson('/api/products/ai-search', [
             'query' => 'pochłaniacz wielogazowy a2b2e2k2no dodatkowa ochrona na tlenki azoty NO',
+            'web' => true,
         ])
             ->assertOk()
             ->assertJsonPath('total', 0)
@@ -865,7 +870,10 @@ final class ProductAiSearchApiTest extends TestCase
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
             ->andReturnUsing(function (array $messages) use (&$cards): array {
-                $cards = (string) $messages[1]['content'];
+                $content = (string) $messages[1]['content'];
+                if ($cards === null && str_contains($content, 'Karty katalogu:')) {
+                    $cards = $content;
+                }
 
                 return [
                     'needed' => 'spodnie robocze',
@@ -1165,7 +1173,10 @@ final class ProductAiSearchApiTest extends TestCase
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
             ->andReturnUsing(function (array $messages) use (&$cards): array {
-                $cards = (string) $messages[1]['content'];
+                $content = (string) $messages[1]['content'];
+                if ($cards === null && str_contains($content, 'Karty katalogu:')) {
+                    $cards = $content;
+                }
 
                 return [
                     'needed' => 'rękawice',
@@ -1818,6 +1829,75 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertSame('G-CHEM', $rows[0]['products'][0]['sku'] ?? null);
         $this->assertSame('K-CHEM', $rows[1]['products'][0]['sku'] ?? null);
         $this->assertSame(1, $waves);
+    }
+
+    public function test_empty_rank_rewrites_query_and_retries_catalog(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $cap = Product::query()->create([
+            'sku' => 'CZ-DASZEK',
+            'name' => 'Czapka z daszkiem robocza',
+            'manufacturer' => 'Reis',
+            'category' => 'Czapki',
+            'description' => 'Czapka robocza z daszkiem, bawełna.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 7,
+            'stock' => 10,
+            'ppe_family' => 'head',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $rankCalls = 0;
+        $rewrites = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(function (array $messages) use (&$rankCalls, &$rewrites, $cap): array {
+            $user = (string) ($messages[1]['content'] ?? '');
+            if (str_contains($user, 'Karty katalogu:')) {
+                $rankCalls++;
+                if ($rankCalls === 1) {
+                    return [
+                        'needed' => 'czapka drelichowa',
+                        'search_phrases' => ['czapka drelichowa', 'czapka'],
+                        'constraints' => ['drelichowa'],
+                        'matches' => [],
+                    ];
+                }
+
+                return [
+                    'needed' => 'czapka z daszkiem',
+                    'search_phrases' => ['czapka z daszkiem', 'czapka robocza'],
+                    'matches' => [
+                        ['id' => $cap->id, 'score' => 78, 'reason' => 'czapka robocza'],
+                    ],
+                ];
+            }
+            $rewrites++;
+
+            return [
+                'needed' => 'czapka z daszkiem',
+                'search_phrases' => ['czapka z daszkiem', 'czapka robocza'],
+                'constraints' => [],
+            ];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        Http::fake();
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Czapka drelichowa',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'CZ-DASZEK')
+            ->assertJsonPath('external_hint', null);
+
+        $this->assertGreaterThanOrEqual(1, $rankCalls);
+        $this->assertTrue(
+            $rewrites === 1 || $rankCalls >= 2,
+            "rewrite={$rewrites} rank={$rankCalls}"
+        );
+        Http::assertNotSent(fn ($request): bool => str_contains((string) $request->url(), 'tavily'));
     }
 
     /**
