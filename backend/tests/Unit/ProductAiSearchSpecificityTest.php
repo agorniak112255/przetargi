@@ -36,5 +36,6 @@ final class ProductAiSearchSpecificityTest extends TestCase
         $this->assertTrue($svc->isSpecificRequirement('KOMINIARKA ANTYELEKTROSTATYCZNA'));
         $this->assertTrue($svc->isSpecificRequirement('gogle polaryzacyjne'));
         $this->assertTrue($svc->isSpecificRequirement('kombinezon na kwas'));
+        $this->assertTrue($svc->isSpecificRequirement('Buty robocze z metalowymi noskami'));
     }
 }

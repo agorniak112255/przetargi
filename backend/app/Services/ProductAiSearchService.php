@@ -92,11 +92,17 @@ final class ProductAiSearchService
             return $this->webOnlyResult($query, $limit);
         }
 
-        return $this->finishSearch($query, $this->localIntent($query), $limit, $withExternalHint, $task);
+        return $this->finishSearch(
+            $query,
+            $this->intentForSearch($query, $task),
+            $limit,
+            $withExternalHint,
+            $task,
+        );
     }
 
     /**
-     * Wiele zapytań: retrieval od razu, potem jedna fala analizy+rankingu (max $maxConcurrent).
+     * Wiele zapytań: fala analizy wymagań, retrieval, potem fala rankingu (max $maxConcurrent).
      *
      * @param  list<string>  $queries
      * @return list<array{
@@ -131,10 +137,9 @@ final class ProductAiSearchService
 
         $pending = [];
         $done = [];
-        $intents = [];
+        $intents = $this->analyzeQueriesForRetrieve($clean, $task, $maxConcurrent);
         $retrieveIntents = [];
         foreach ($clean as $i => $query) {
-            $intents[$i] = $this->localIntent($query);
             $retrieveIntents[$i] = $intents[$i];
             $prepared = $this->prepareSearch($query, $intents[$i], $limit);
             if ($prepared['rank_cards'] === null) {
@@ -559,7 +564,7 @@ final class ProductAiSearchService
                     .'Przykłady: czapka drelichowa → czapka z daszkiem, czapka robocza; '
                     .'drelich = tkanina bawełniana, nie osobny asortyment. '
                     .'Nie zmieniaj rodzaju produktu. Nie zgaduj marki. '
-                    .'constraints: tylko twarde warunki (norma, klasa), bez żargonu SIWZ. '
+                    .'constraints: twarde warunki z równoważnym dowodem (podnosek stalowy, EN 374), nie cytat SIWZ. '
                     .'JSON: {"needed":"...","search_phrases":["..."],"constraints":[]}.',
             ],
             [
@@ -577,19 +582,19 @@ final class ProductAiSearchService
         return [
             [
                 'role' => 'system',
-                'content' => 'Jesteś ekspertem BHP. Z SIWZ wyodrębnij NAZWĘ produktu (rzeczownik), zanim cechy i normy. '
-                    .'needed: krótka nazwa na początku (np. kamizelka odblaskowa żółta) — bez EN i bez samego przymiotnika. '
-                    .'search_phrases: 2-8 fraz; PIERWSZE 2 to wyłącznie nazwa/synonim (kamizelka, kamizelka odblaskowa). '
-                    .'Cechy (siatkowa, nadruk) i normy EN dopiero na końcu. '
-                    .'constraints: 0-6 warunków z wymagania (albo równoważna norma/klasa, którą znasz jako ekspert BHP). '
-                    .'Dotyczy dowolnej cechy: substancja, stężenie, klasa, typ, norma, napięcie, temperatura, ESD, gramatura. '
-                    .'Nie wstawiaj samej nazwy produktu. Pusta tablica, gdy wymaganie to tylko nazwa asortymentu. '
-                    .'Przymiotnik wspólny nie zastępuje nazwy: kamizelka ≠ osłona twarzy; rękawy ≠ rękawice. '
-                    .'Synonimy: obuwie/buty/trzewiki, kurtka/bluza ochronna. '
-                    .'Popraw literówki — w modelu (TEPM-ICE → TEMP-ICE) i w nazwie produktu '
-                    .'(podnie → spodnie, rekawice → rękawice, kamizelaka → kamizelka). '
-                    .'needed i pierwsze frazy zawsze w poprawnej pisowni. Nie klasyfikuj sztywną listą typów. '
-                    .'JSON: {"needed":"nazwa","search_phrases":["najpierw nazwa","potem cechy/normy"],"constraints":[]}.',
+                'content' => 'Jesteś ekspertem BHP i katalogów. Najpierw ZROZUM wymaganie, potem zbuduj frazy sklepowe. '
+                    .'Nie tnij SIWZ na pojedyncze przymiotniki do wyszukiwania słów. '
+                    .'needed: rodzaj produktu (rzeczownik + typ), bez normy i bez surowego cytatu SIWZ. '
+                    .'search_phrases: 3-8; pierwsze 2 = nazwa/synonim asortymentu; dalej równoważniki cechy z cenników '
+                    .'(podnosek stalowy, steel toe, EN 374, Typ 3/4, Tychem) — nie „metalowymi noskami”. '
+                    .'constraints: 0-6 twardych warunków z równoważnym dowodem, który karta ma potwierdzić. '
+                    .'Przykłady: buty z metalowymi noskami → buty robocze + podnosek stalowy/steel toe, '
+                    .'constraint: podnosek metalowy/stalowy (nie kompozytowy); '
+                    .'kombinezon na kwas → kombinezon chemoodporny + Typ 3/4 / EN 13034; '
+                    .'czapka drelichowa → czapka z daszkiem, czapka robocza, constraints []. '
+                    .'Pusta constraints, gdy jest tylko nazwa, tkanina albo kolor. '
+                    .'Nie zmieniaj rodzaju. Nie zgaduj marki. Popraw literówki (podnie→spodnie, TEPM-ICE→TEMP-ICE). '
+                    .'JSON: {"needed":"...","search_phrases":["..."],"constraints":[]}.',
             ],
             [
                 'role' => 'user',
@@ -631,10 +636,64 @@ final class ProductAiSearchService
         try {
             $raw = $this->llm->chatJson($this->understandMessages($query), null, 900, null, $task);
 
-            return $this->parseIntent($raw, $query);
+            return $this->withCatalogAliases($this->parseIntent($raw, $query), $query);
         } catch (Throwable) {
             return $this->localIntent($query);
         }
+    }
+
+    /**
+     * Przy warunku (norma, cecha, zagrożenie) najpierw analiza, potem frazy katalogowe.
+     * Sam SKU/model albo goła nazwa asortymentu — od razu retrieval.
+     *
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
+     */
+    private function intentForSearch(string $query, AiTask $task): array
+    {
+        if (! $this->needsRequirementAnalysis($query)) {
+            return $this->localIntent($query);
+        }
+
+        return $this->understandRequirement($query, $task);
+    }
+
+    private function needsRequirementAnalysis(string $query): bool
+    {
+        return $this->isSpecificRequirement($query) && ! $this->modelFuzzy->hasNamedModel($query);
+    }
+
+    /**
+     * @param  list<string>  $queries
+     * @return array<int, array{needed: string, search_phrases: list<string>, constraints: list<string>}>
+     */
+    private function analyzeQueriesForRetrieve(array $queries, AiTask $task, int $maxConcurrent): array
+    {
+        $intents = [];
+        $need = [];
+        foreach ($queries as $i => $query) {
+            if ($this->needsRequirementAnalysis($query)) {
+                $need[] = $i;
+            } else {
+                $intents[$i] = $this->localIntent($query);
+            }
+        }
+        if ($need === []) {
+            return $intents;
+        }
+
+        $messages = [];
+        foreach ($need as $i) {
+            $messages[] = $this->understandMessages($queries[$i]);
+        }
+        $raws = $this->llm->chatJsonMany($messages, 900, $task, $maxConcurrent);
+        foreach ($need as $pos => $i) {
+            $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
+            $intents[$i] = $raw === []
+                ? $this->localIntent($queries[$i])
+                : $this->withCatalogAliases($this->parseIntent($raw, $queries[$i]), $queries[$i]);
+        }
+
+        return $intents;
     }
 
     /**
@@ -804,7 +863,8 @@ final class ProductAiSearchService
                 }
             }
         }
-        if ($constraints === []) {
+        $rawGaveConstraints = array_key_exists('constraints', $raw) || array_key_exists('must_evidence', $raw);
+        if ($constraints === [] && ! $rawGaveConstraints) {
             $constraints = $this->fallbackConstraints($query);
         }
 
@@ -1918,7 +1978,10 @@ final class ProductAiSearchService
                     .'2) WARUNEK: substancja, stężenie, klasa, typ, norma, napięcie — tylko gdy widać to '
                     .'w polach '.$proofFields.'. '
                     .'Brak potwierdzenia → nie zwracaj (kombinezon pszczelarski / EN 343 ≠ kwas siarkowy). '
-                    .'Równoznaczna norma/klasa (np. EN 13034, Typ 3/4, Tychem przy kwasie) = spełnione. '
+                    .'Równoważny dowód = spełnione: synonim katalogowy, norma/klasa, materiał konstrukcyjny '
+                    .'(metalowy nosek = podnosek stalowy/steel toe; chemoodporny = EN 374 / Typ 3/4 / Tychem; '
+                    .'antystatyczny = EN 1149). Nie wymagaj dosłownego cytatu z SIWZ. '
+                    .'Przeciwieństwo cechy (kompozyt vs metal, Typ 6 vs Typ 3) → nie zwracaj. '
                     .'Nie zgaduj z nazwy handlowej. '
                     .'Wspólna cecha (siatkowa) albo przypadkowa norma EN NIE wystarczy. '
                     .'Marka/model z SIWZ wygrywa przy literówce (TEPM-ICE=TEMP-ICE); nie zmieniaj marki przez EN. '

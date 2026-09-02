@@ -65,10 +65,10 @@ final class ProductAiSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->once()
             ->andReturn([
                 'needed' => 'rękawice ochronne do pracy z amoniakiem',
                 'search_phrases' => ['rękawice chemiczne', 'amoniak', 'nitryl'],
+                'constraints' => ['amoniak', 'EN 374'],
                 'matches' => [
                     ['id' => $match->id, 'score' => 92, 'reason' => 'Odporność na amoniak'],
                 ],
@@ -206,7 +206,6 @@ final class ProductAiSearchApiTest extends TestCase
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
-            ->once()
             ->andReturn([
                 'needed' => 'półmaska 3M 6503',
                 'search_phrases' => ['półmaska', '6503'],
@@ -1581,7 +1580,7 @@ final class ProductAiSearchApiTest extends TestCase
             ['KOM-ESD', 'XISPAL-RS'],
             collect($skus)->pluck('sku')->all()
         );
-        $this->assertSame(1, $call);
+        $this->assertSame(2, $call);
     }
 
     public function test_ai_search_head_liner_prefers_catalog_cap_over_esd_jacket(): void
@@ -1674,7 +1673,10 @@ final class ProductAiSearchApiTest extends TestCase
         $llm->shouldReceive('chatJson')
             ->andReturnUsing(function (array $messages) use (&$cards, &$call, $chem): array {
                 $call++;
-                $cards = (string) $messages[1]['content'];
+                $user = (string) ($messages[1]['content'] ?? '');
+                if (str_contains($user, 'Karty katalogu:')) {
+                    $cards = $user;
+                }
 
                 return [
                     'needed' => 'kombinezon chemoodporny',
@@ -1697,7 +1699,7 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertNotNull($cards);
         $this->assertStringContainsString('kwas siarkowy 96%', $cards);
         $this->assertStringContainsString('EN 13034', $cards);
-        $this->assertSame(1, $call);
+        $this->assertSame(2, $call);
         unset($bee);
     }
 
@@ -1797,10 +1799,24 @@ final class ProductAiSearchApiTest extends TestCase
         $waves = 0;
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJsonMany')
-            ->once()
             ->andReturnUsing(function (array $sets) use (&$waves, $gloves, $boots): array {
                 $waves++;
                 $this->assertCount(2, $sets);
+                $user = (string) ($sets[0][1]['content'] ?? '');
+                if (! str_contains($user, 'Karty katalogu:')) {
+                    return [
+                        [
+                            'needed' => 'rękawice chemoodporne',
+                            'search_phrases' => ['rękawice chemoodporne', 'EN 374'],
+                            'constraints' => ['EN 374'],
+                        ],
+                        [
+                            'needed' => 'kalosze chemoodporne',
+                            'search_phrases' => ['kalosze chemoodporne'],
+                            'constraints' => ['chemoodporne'],
+                        ],
+                    ];
+                }
 
                 return [
                     [
@@ -1828,7 +1844,76 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertCount(2, $rows);
         $this->assertSame('G-CHEM', $rows[0]['products'][0]['sku'] ?? null);
         $this->assertSame('K-CHEM', $rows[1]['products'][0]['sku'] ?? null);
-        $this->assertSame(1, $waves);
+        $this->assertSame(2, $waves);
+    }
+
+    public function test_specific_query_analyzes_first_then_searches_catalog_synonyms(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $steel = Product::query()->create([
+            'sku' => 'STEEL-S3',
+            'name' => 'Trzewiki S3 SRC',
+            'manufacturer' => 'Reis',
+            'category' => 'Obuwie',
+            'description' => 'Obuwie ochronne, podnosek stalowy, wkładka antyprzebiciowa.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 10,
+            'ppe_family' => 'footwear',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'COMP-S3',
+            'name' => 'Trzewiki S3 kompozyt',
+            'manufacturer' => 'Reis',
+            'category' => 'Obuwie',
+            'description' => 'Obuwie z podnoskiem kompozytowym, bez metalu.',
+            'catalog_price_net' => 90,
+            'purchase_price' => 55,
+            'stock' => 10,
+            'ppe_family' => 'footwear',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $understood = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(function (array $messages) use (&$understood, $steel): array {
+            $user = (string) ($messages[1]['content'] ?? '');
+            if (! str_contains($user, 'Karty katalogu:')) {
+                $understood++;
+
+                return [
+                    'needed' => 'buty robocze',
+                    'search_phrases' => ['buty robocze', 'podnosek stalowy', 'steel toe'],
+                    'constraints' => ['podnosek metalowy lub stalowy, nie kompozytowy'],
+                ];
+            }
+
+            return [
+                'needed' => 'buty robocze',
+                'search_phrases' => ['buty robocze', 'podnosek stalowy'],
+                'constraints' => ['podnosek metalowy lub stalowy, nie kompozytowy'],
+                'matches' => [
+                    ['id' => $steel->id, 'score' => 88, 'reason' => 'podnosek stalowy'],
+                ],
+            ];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        Http::fake();
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Buty robocze z metalowymi noskami',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'STEEL-S3')
+            ->assertJsonPath('search_phrases.1', 'podnosek stalowy');
+
+        $this->assertSame(1, $understood);
+        Http::assertNotSent(fn ($request): bool => str_contains((string) $request->url(), 'tavily'));
     }
 
     public function test_generic_fabric_query_returns_catalog_cap_without_rewrite(): void
