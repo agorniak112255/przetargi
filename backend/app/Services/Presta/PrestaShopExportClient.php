@@ -8,6 +8,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use SimpleXMLElement;
@@ -127,17 +128,37 @@ final class PrestaShopExportClient implements PrestaExportGateway
         } catch (Throwable) {
         }
 
-        $xml = $this->xmlRoot('manufacturer', [
-            'active' => '1',
-            'name' => $this->cdata($name),
-        ]);
-        $created = $this->postXml('manufacturers', $xml);
-        $id = (int) ($created->manufacturer->id ?? 0);
-        if ($id <= 0) {
-            throw new RuntimeException('Presta nie zwróciła id kontrahenta „'.$name.'”.');
+        try {
+            $xml = $this->xmlRoot('manufacturer', [
+                'active' => '1',
+                'name' => $this->cdata($name),
+            ]);
+            $created = $this->postXml('manufacturers', $xml);
+            $id = (int) ($created->manufacturer->id ?? 0);
+            if ($id > 0) {
+                return $id;
+            }
+        } catch (Throwable $e) {
+            Log::warning('Presta: API nie utworzyło kontrahenta, próba zapisu w bazie.', [
+                'name' => $name,
+                'error' => $e->getMessage(),
+            ]);
         }
 
-        return $id;
+        try {
+            return $this->createManufacturerInDb($name);
+        } catch (Throwable $e) {
+            Log::warning('Presta: nie udało się dodać kontrahenta w bazie sklepu.', [
+                'name' => $name,
+                'error' => $e->getMessage(),
+            ]);
+
+            throw new RuntimeException(
+                'Nie można dodać kontrahenta „'.$name.'”: Presta API pada na HTMLPurifier (PHP 8.2), '
+                .'a zapis w bazie sklepu nie wyszedł ('.$e->getMessage().'). '
+                .'Daj INSERT do tabel manufacturer, manufacturer_lang i manufacturer_shop.'
+            );
+        }
     }
 
     public function resolveCategoryId(?string $name): int
@@ -495,17 +516,7 @@ final class PrestaShopExportClient implements PrestaExportGateway
             default => $pending->get($url),
         };
         if ($response->failed()) {
-            if (str_contains($response->body(), 'is not allowed')) {
-                throw new RuntimeException(
-                    'Klucz Webservice nie ma uprawnienia do „'.$resource.'”. '
-                    .'W Preście: Parametry zaawansowane → Webservice → ten klucz → zaznacz zasób i GET/POST/PUT.'
-                );
-            }
-            $snippet = mb_substr(trim($response->body()), 0, 220);
-            throw new RuntimeException(
-                'Presta API '.$method.' /'.$resource.' HTTP '.$response->status()
-                .($snippet !== '' ? ': '.$snippet : '')
-            );
+            throw new RuntimeException($this->formatApiError($method, $resource, $response));
         }
 
         return $response;
@@ -523,6 +534,146 @@ final class PrestaShopExportClient implements PrestaExportGateway
         }
 
         return $xml;
+    }
+
+    private function formatApiError(string $method, string $resource, Response $response): string
+    {
+        $body = $response->body();
+        if (str_contains($body, 'is not allowed')) {
+            return 'Klucz Webservice nie ma uprawnienia do „'.$resource.'”. '
+                .'W Preście: Parametry zaawansowane → Webservice → ten klucz → zaznacz zasób i GET/POST/PUT.';
+        }
+        $xml = @simplexml_load_string($body);
+        $prestaMsg = '';
+        if ($xml instanceof SimpleXMLElement && isset($xml->errors->error->message)) {
+            $prestaMsg = trim((string) $xml->errors->error->message);
+        }
+        if ($prestaMsg !== '') {
+            return 'Presta API '.$method.' /'.$resource.' HTTP '.$response->status().': '.$prestaMsg;
+        }
+        $snippet = mb_substr(trim($body), 0, 220);
+
+        return 'Presta API '.$method.' /'.$resource.' HTTP '.$response->status()
+            .($snippet !== '' ? ': '.$snippet : '');
+    }
+
+    private function createManufacturerInDb(string $name): int
+    {
+        $this->connectDb();
+        $prefix = $this->prefix();
+        $table = $prefix.'manufacturer';
+        $safeName = mb_substr($name, 0, 64);
+        $now = now()->format('Y-m-d H:i:s');
+        $row = [];
+        foreach (['name' => $safeName, 'date_add' => $now, 'date_upd' => $now, 'active' => 1] as $column => $value) {
+            if (Schema::connection('prestashop')->hasColumn($table, $column)) {
+                $row[$column] = $value;
+            }
+        }
+        try {
+            $id = (int) DB::connection('prestashop')->table($table)->insertGetId($row, 'id_manufacturer');
+        } catch (Throwable $e) {
+            $existing = DB::connection('prestashop')->table($table)
+                ->whereRaw('LOWER(name) = ?', [mb_strtolower($safeName)])
+                ->first(['id_manufacturer']);
+            if ($existing !== null) {
+                return (int) $existing->id_manufacturer;
+            }
+            throw $e;
+        }
+        if ($id <= 0) {
+            throw new RuntimeException('Baza Presty nie zwróciła id kontrahenta.');
+        }
+        $this->insertManufacturerLang($prefix, $id);
+        $this->insertManufacturerShop($prefix, $id);
+
+        return $id;
+    }
+
+    private function insertManufacturerLang(string $prefix, int $id): void
+    {
+        $table = $prefix.'manufacturer_lang';
+        if (! Schema::connection('prestashop')->hasTable($table)) {
+            return;
+        }
+        foreach ($this->prestaLangIds() as $langId) {
+            $row = [
+                'id_manufacturer' => $id,
+                'id_lang' => $langId,
+            ];
+            foreach (['description', 'short_description', 'meta_title', 'meta_keywords', 'meta_description'] as $column) {
+                if (Schema::connection('prestashop')->hasColumn($table, $column)) {
+                    $row[$column] = '';
+                }
+            }
+            try {
+                DB::connection('prestashop')->table($table)->insert($row);
+            } catch (Throwable) {
+            }
+        }
+    }
+
+    private function insertManufacturerShop(string $prefix, int $id): void
+    {
+        $table = $prefix.'manufacturer_shop';
+        if (! Schema::connection('prestashop')->hasTable($table)) {
+            return;
+        }
+        foreach ($this->prestaShopIds() as $shopId) {
+            try {
+                DB::connection('prestashop')->table($table)->insert([
+                    'id_manufacturer' => $id,
+                    'id_shop' => $shopId,
+                ]);
+            } catch (Throwable) {
+            }
+        }
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function prestaLangIds(): array
+    {
+        $prefix = $this->prefix();
+        try {
+            if (Schema::connection('prestashop')->hasTable($prefix.'lang')) {
+                $query = DB::connection('prestashop')->table($prefix.'lang');
+                if (Schema::connection('prestashop')->hasColumn($prefix.'lang', 'active')) {
+                    $query->where('active', 1);
+                }
+                $ids = array_values(array_filter(array_map('intval', $query->pluck('id_lang')->all())));
+                if ($ids !== []) {
+                    return $ids;
+                }
+            }
+        } catch (Throwable) {
+        }
+
+        return [$this->idLang()];
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function prestaShopIds(): array
+    {
+        $prefix = $this->prefix();
+        try {
+            if (Schema::connection('prestashop')->hasTable($prefix.'shop')) {
+                $query = DB::connection('prestashop')->table($prefix.'shop');
+                if (Schema::connection('prestashop')->hasColumn($prefix.'shop', 'active')) {
+                    $query->where('active', 1);
+                }
+                $ids = array_values(array_filter(array_map('intval', $query->pluck('id_shop')->all())));
+                if ($ids !== []) {
+                    return $ids;
+                }
+            }
+        } catch (Throwable) {
+        }
+
+        return [1];
     }
 
     private function connectDb(): void
