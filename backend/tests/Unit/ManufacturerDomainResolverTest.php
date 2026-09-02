@@ -163,7 +163,6 @@ final class ManufacturerDomainResolverTest extends TestCase
             'jaskon.pl',
             'regera.pl',
             'sklep.renex.pl',
-            'kaufland.pl',
             'customguns.pl',
             'sklep.aio.com.pl',
             'bhpstar.pl',

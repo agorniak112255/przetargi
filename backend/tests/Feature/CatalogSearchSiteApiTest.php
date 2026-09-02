@@ -164,12 +164,35 @@ final class CatalogSearchSiteApiTest extends TestCase
             ->assertStatus(422);
     }
 
+    public function test_junk_hosts_are_hidden_after_exclusion_seed(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        config([
+            'enrichment.retailer_domains' => ['sklepbhp.pl', '3m.com', 'kaufland.pl'],
+            'enrichment.manufacturer_domains' => [
+                'uvex' => ['uvex-safety.com', 'media.uvex.de', 'd3nan4w00fsv2d.cloudfront.net'],
+                '3m' => ['3m.com'],
+            ],
+            'enrichment.preferred_domains' => ['sklepbhp.pl'],
+            'enrichment.catalog_skip_hosts' => [],
+        ]);
+
+        $this->getJson('/api/admin/catalog-search-sites')
+            ->assertOk()
+            ->assertJsonFragment(['host' => 'sklepbhp.pl'])
+            ->assertJsonFragment(['host' => 'uvex-safety.com'])
+            ->assertJsonMissing(['host' => '3m.com'])
+            ->assertJsonMissing(['host' => 'kaufland.pl'])
+            ->assertJsonMissing(['host' => 'media.uvex.de'])
+            ->assertJsonMissing(['host' => 'd3nan4w00fsv2d.cloudfront.net']);
+    }
+
     public function test_empty_reason_explains_zero_link_hosts(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         config([
-            'enrichment.retailer_domains' => ['sklepbhp.pl', '3m.com', 'cdn.example.cloudfront.net'],
-            'enrichment.catalog_skip_hosts' => ['3m.com'],
+            'enrichment.retailer_domains' => ['sklepbhp.pl', 'blocked-shop.test', 'cdn.example.cloudfront.net'],
+            'enrichment.catalog_skip_hosts' => ['blocked-shop.test'],
         ]);
         CatalogHost::query()->create([
             'host' => 'sklepbhp.pl',
@@ -186,7 +209,7 @@ final class CatalogSearchSiteApiTest extends TestCase
                 'empty_reason' => 'Nie znalazłem sitemapy dla sklepbhp.pl.',
             ])
             ->assertJsonFragment([
-                'host' => '3m.com',
+                'host' => 'blocked-shop.test',
                 'empty_reason' => 'Pominięta na liście catalog_skip_hosts.',
             ])
             ->assertJsonFragment([

@@ -44,9 +44,8 @@ return [
             'www.uvex.com',
             'uvex-safety.de',
             'www.uvex-safety.de',
-            'media.uvex.de',
             'uvex.de',
-            // CDN kart katalogowych / datasheetów
+            // CDN zostaje — PDF/zdjęcia Uvex; indeks i lista admina je pomijają
             'd3nan4w00fsv2d.cloudfront.net',
             'd3rbxgeqn1ye9j.cloudfront.net',
         ],
@@ -324,8 +323,6 @@ return [
         'regera.pl',
         'www.regera.pl',
         'sklep.renex.pl',
-        'kaufland.pl',
-        'www.kaufland.pl',
         'customguns.pl',
         'www.customguns.pl',
         // research 2026-09: sklepy spoza indeksu + marki już w preferred_domains
@@ -384,6 +381,14 @@ return [
         'sps.honeywell.com',
         'kaufland.pl',
         'www.kaufland.pl',
+        'agnes-ai.com',
+        'app.agnes-ai.com',
+        'sir.ezdrowie.gov.pl',
+        'media.uvex.de',
+        'whirlpool.com',
+        'www.whirlpool.com',
+        'd3nan4w00fsv2d.cloudfront.net',
+        'd3rbxgeqn1ye9j.cloudfront.net',
     ],
 
     /*
@@ -531,8 +536,6 @@ return [
         'regera.pl',
         'www.regera.pl',
         'sklep.renex.pl',
-        'kaufland.pl',
-        'www.kaufland.pl',
         'customguns.pl',
         'www.customguns.pl',
     ],

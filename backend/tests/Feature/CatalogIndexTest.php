@@ -664,6 +664,81 @@ final class CatalogIndexTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_reads_wordpress_sitemap_index_served_as_html(): void
+    {
+        $this->fakeHttp([
+            'https://bhpsupply.pl/robots.txt' => Http::response(
+                "Sitemap: https://bhpsupply.pl/sitemap_index.xml\n",
+                200
+            ),
+            'https://bhpsupply.pl/sitemap_index.xml' => Http::response(
+                '<?xml version="1.0"?><sitemapindex>'
+                .'<sitemap><loc>https://bhpsupply.pl/product-sitemap.xml</loc></sitemap>'
+                .'</sitemapindex>',
+                200,
+                ['Content-Type' => 'text/html; charset=UTF-8']
+            ),
+            'https://bhpsupply.pl/product-sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://bhpsupply.pl/produkt/rekawice-nitrilowe</loc></url>'
+                .'</urlset>',
+                200,
+                ['Content-Type' => 'text/html; charset=UTF-8']
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('bhpsupply.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://bhpsupply.pl/produkt/rekawice-nitrilowe',
+        ]);
+    }
+
+    public function test_uses_magento_media_sitemap_en_from_robots(): void
+    {
+        $this->fakeHttp([
+            'https://ox-on.com/robots.txt' => Http::response(
+                "Sitemap: https://www.ox-on.com/media/sitemap/sitemap_en.xml\n",
+                200
+            ),
+            'https://www.ox-on.com/media/sitemap/sitemap_en.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.ox-on.com/gloves/nitril-4500</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('ox-on.com');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.ox-on.com/gloves/nitril-4500',
+        ]);
+    }
+
+    public function test_guesses_media_sitemap_en_when_robots_empty(): void
+    {
+        $this->fakeHttp([
+            'https://ox-on.com/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://ox-on.com/media/sitemap/sitemap_en.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://ox-on.com/gloves/cut-c</loc></url>'
+                .'</urlset>',
+                200
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('ox-on.com');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://ox-on.com/gloves/cut-c',
+        ]);
+    }
+
     public function test_rejects_jpeg_disguised_as_sitemap(): void
     {
         $this->fakeHttp([

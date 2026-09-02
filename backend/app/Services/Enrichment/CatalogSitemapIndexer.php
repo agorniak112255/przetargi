@@ -52,6 +52,9 @@ final class CatalogSitemapIndexer
         '/media/sitemap.xml',
         '/pub/media/sitemap.xml',
         '/media/sitemap/sitemap.xml',
+        '/media/sitemap/sitemap_en.xml',
+        '/media/sitemap/sitemap_pl.xml',
+        '/media/sitemap/sitemap_de.xml',
         '/sitemap_index.xml',
         '/sitemap-index.xml',
         '/sitemapindex.xml',
@@ -242,7 +245,16 @@ final class CatalogSitemapIndexer
             $out[] = 'https://'.$host.$path;
         }
         // www tylko dla najczęściej działających ścieżek — reszta tylko wydłuża update
-        foreach (['/sitemap.xml', '/sitemap.xml.gz', '/media/sitemap.xml', '/pub/media/sitemap.xml', '/xmlsitemap.php'] as $path) {
+        foreach ([
+            '/sitemap.xml',
+            '/sitemap.xml.gz',
+            '/media/sitemap.xml',
+            '/pub/media/sitemap.xml',
+            '/xmlsitemap.php',
+            '/sitemap_index.xml',
+            '/media/sitemap/sitemap.xml',
+            '/media/sitemap/sitemap_en.xml',
+        ] as $path) {
             $out[] = 'https://www.'.$host.$path;
         }
 
@@ -289,9 +301,6 @@ final class CatalogSitemapIndexer
         // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
         // bez tego pobralibyśmy 130 kB HTML-a dla każdej zgadywanej ścieżki
         $contentType = mb_strtolower((string) $response->header('Content-Type'));
-        if (str_contains($contentType, 'text/html')) {
-            return $this->streamFromCurl($url, $onLocation, $timeout);
-        }
         if (str_contains($contentType, 'image/') || str_contains($contentType, 'video/') || str_contains($contentType, 'font/')) {
             return false;
         }
@@ -830,14 +839,17 @@ final class CatalogSitemapIndexer
         return trim((string) preg_replace('/\s+/u', ' ', $decoded));
     }
 
-    /** Część serwerów podaje HTML jako text/plain — rozstrzyga dopiero początek treści. */
+    /** Część serwerów podaje XML sitemapy jako text/html — rozstrzyga początek treści. */
     private function looksLikeHtml(string $chunk): bool
     {
         $head = mb_strtolower(ltrim(mb_substr($chunk, 0, 512)));
+        if (str_contains($head, '<urlset') || str_contains($head, '<sitemapindex') || str_contains($head, '<loc')) {
+            return false;
+        }
 
         return str_starts_with($head, '<!doctype html')
             || str_starts_with($head, '<html')
-            || (str_contains($head, '<head') && ! str_contains($head, '<loc'));
+            || str_contains($head, '<head');
     }
 
     private function looksLikeSitemap(string $url): bool
