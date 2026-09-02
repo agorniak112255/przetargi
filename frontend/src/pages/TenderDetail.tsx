@@ -2674,6 +2674,9 @@ function ItemRow({
     sku: string
     name: string
     description?: string | null
+    purchase_price?: string | number | null
+    purchase_price_pln?: number | null
+    currency?: string | null
   } | null>(
     item.main_product
       ? {
@@ -2681,6 +2684,9 @@ function ItemRow({
           sku: item.main_product.sku,
           name: item.main_product.name,
           description: item.main_product.description,
+          purchase_price: item.main_product.purchase_price,
+          purchase_price_pln: item.main_product.purchase_price_pln,
+          currency: item.main_product.currency,
         }
       : null,
   )
@@ -2707,6 +2713,9 @@ function ItemRow({
             sku: item.main_product.sku,
             name: item.main_product.name,
             description: item.main_product.description,
+            purchase_price: item.main_product.purchase_price,
+            purchase_price_pln: item.main_product.purchase_price_pln,
+            currency: item.main_product.currency,
           }
         : null,
     )
@@ -2740,9 +2749,32 @@ function ItemRow({
   const isExternal = isExternalOfferItem(item, productId)
   const markup = offerMarkupFactor(targetMarginPercent)
 
-  function applyCatalogPrice(purchase: string | number | null | undefined) {
+  function applyCatalogPrice(purchase: string | number | null | undefined): number | null {
     const next = suggestedOfferPrice(purchase == null || purchase === '' ? null : Number(purchase), markup)
     if (next != null) setPrice(next.toFixed(2))
+    return next
+  }
+
+  function catalogPurchase(): number | null {
+    const fromList = products.find((p) => String(p.id) === productId)
+
+    return (
+      purchaseForOffer(fromList) ??
+      purchaseForOffer(selectedProduct) ??
+      purchaseForOffer(item.main_product)
+    )
+  }
+
+  function applyTenderMarginToOffer(purchase?: string | number | null): void {
+    const next = applyCatalogPrice(purchase ?? catalogPurchase())
+    if (next == null) return
+    void onSave(item.id, {
+      main_product_id: productId ? Number(productId) : null,
+      quantity: Number(qty) || 1,
+      offer_price: next,
+      custom_name: customName.trim() || null,
+      custom_url: customUrl.trim() || null,
+    })
   }
 
   return (
@@ -2787,6 +2819,9 @@ function ItemRow({
                 value={productId}
                 selectedProduct={selectedProduct}
                 disabled={busy}
+                applyMarginPercent={targetMarginPercent}
+                applyMarginDisabled={busy || catalogPurchase() == null}
+                onApplyMargin={() => applyTenderMarginToOffer()}
                 onChange={(id, product) => {
                   setProductId(id)
                   setPicked(product ?? null)
@@ -2975,6 +3010,9 @@ function ItemRow({
               enabled={Boolean(item.main_product_id ?? item.main_product?.id)}
               canSelectSubstitute
               selectedProductId={item.main_product_id ?? item.main_product?.id ?? null}
+              onApplySelectedOffer={(p: BattlecardProduct) => {
+                applyTenderMarginToOffer(p.purchase_price)
+              }}
               onSelectSubstitute={(p: BattlecardProduct) => {
                 applyCatalogPrice(p.purchase_price)
                 return onSave(item.id, {

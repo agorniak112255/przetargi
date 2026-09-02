@@ -85,6 +85,29 @@ final class TenderItemCurrencyTest extends TestCase
             ->assertJsonPath('battlecard.ours.offer_price', 365.04);
     }
 
+    public function test_tender_show_includes_main_product_purchase_in_pln(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->eurHoodie();
+        $tender = $this->tender(18);
+        TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Bluza damska',
+            'quantity' => 1,
+            'main_product_id' => $product->id,
+            'offer_price' => 91.26,
+            'ai_match_percent' => 90,
+            'ai_match_reasons' => [['code' => 'test', 'label' => 'test', 'points' => 90]],
+            'status' => 'ok',
+        ]);
+
+        $this->getJson("/api/tenders/{$tender->id}")
+            ->assertOk()
+            ->assertJsonPath('tender.items.0.main_product.sku', 'EY212GF')
+            ->assertJsonPath('tender.items.0.main_product.purchase_price_pln', 309.36);
+    }
+
     private function eurHoodie(): Product
     {
         return Product::query()->create([

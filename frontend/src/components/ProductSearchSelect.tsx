@@ -10,6 +10,8 @@ type MiniProduct = {
   manufacturer?: string | null
   description?: string | null
   purchase_price?: string | number | null
+  purchase_price_pln?: number | null
+  currency?: string | null
 }
 
 type Props = {
@@ -19,6 +21,9 @@ type Props = {
   disabled?: boolean
   onChange: (productId: string, product?: MiniProduct | null) => void
   hint?: string
+  applyMarginPercent?: number
+  onApplyMargin?: () => void
+  applyMarginDisabled?: boolean
 }
 
 function norm(s: string): string {
@@ -39,6 +44,9 @@ export function ProductSearchSelect({
   disabled,
   onChange,
   hint,
+  applyMarginPercent,
+  onApplyMargin,
+  applyMarginDisabled,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -127,24 +135,33 @@ export function ProductSearchSelect({
         }}
       />
       {selected && !open && (
-        <button
-          type="button"
-          className="mt-1 flex w-full max-w-full items-start gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left shadow-sm transition hover:border-sky-400 hover:bg-sky-100"
-          title="Kliknij, aby zobaczyć szczegóły produktu"
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            setPreviewId(selected.id)
-          }}
-        >
-          <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
-          <span className="min-w-0">
-            <span className="block truncate text-[11px] font-medium text-sky-900">{selected.sku}</span>
-            <span className="block truncate text-[10px] text-slate-600" title={selected.name}>
-              {productDisplayName(selected)}
+        <div className="mt-1 w-full max-w-full rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 shadow-sm">
+          <button
+            type="button"
+            className="flex w-full items-start gap-1.5 text-left transition hover:opacity-90"
+            title="Kliknij, aby zobaczyć szczegóły produktu"
+            onClick={() => setPreviewId(selected.id)}
+          >
+            <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
+            <span className="min-w-0">
+              <span className="block truncate text-[11px] font-medium text-sky-900">{selected.sku}</span>
+              <span className="block truncate text-[10px] text-slate-600" title={selected.name}>
+                {productDisplayName(selected)}
+              </span>
             </span>
-          </span>
-        </button>
+          </button>
+          {onApplyMargin ? (
+            <button
+              type="button"
+              disabled={applyMarginDisabled}
+              className="mt-1 rounded bg-emerald-700 px-1.5 py-0.5 text-[9px] font-semibold text-white hover:bg-emerald-800 disabled:opacity-40"
+              title={`Ustaw cenę oferty = zakup × (1 + ${applyMarginPercent ?? 18}% z przetargu)`}
+              onClick={onApplyMargin}
+            >
+              Przelicz +{applyMarginPercent ?? 18}%
+            </button>
+          ) : null}
+        </div>
       )}
       {hint && <p className="mt-0.5 text-[10px] text-violet-700">{hint}</p>}
       {open && !disabled && (

@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ProductSubstitute;
 use App\Models\Tender;
 use App\Models\TenderItem;
+use App\Services\NbpExchangeRateService;
 use App\Services\ProductMatchService;
 use App\Services\TenderActivityLogger;
 use App\Services\TenderCoverageService;
@@ -26,6 +27,7 @@ class TenderController extends Controller
         private readonly TenderActivityLogger $activities,
         private readonly ProductMatchService $matcher,
         private readonly TenderPricingService $pricing,
+        private readonly NbpExchangeRateService $fx,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -227,6 +229,16 @@ class TenderController extends Controller
                     return $d;
                 })
         );
+
+        foreach ($tender->items as $item) {
+            $product = $item->mainProduct;
+            if ($product === null) {
+                continue;
+            }
+            $withFx = $this->fx->appendPricePln($product->toArray());
+            $product->setAttribute('purchase_price_pln', $withFx['purchase_price_pln'] ?? null);
+            $product->setAttribute('price_pln', $withFx['price_pln'] ?? null);
+        }
 
         $mainIds = $tender->items
             ->pluck('main_product_id')

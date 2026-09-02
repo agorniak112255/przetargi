@@ -68,6 +68,7 @@ function Col({
   selected,
   onSelect,
   onPreview,
+  onApplyMargin,
   cheaperBadge,
   markupPercent = 18,
 }: {
@@ -78,6 +79,7 @@ function Col({
   selected?: boolean
   onSelect?: () => void
   onPreview?: () => void
+  onApplyMargin?: () => void
   cheaperBadge?: string | null
   markupPercent?: number
 }) {
@@ -172,7 +174,19 @@ function Col({
           Opis
         </button>
         {selected ? (
-          <span className="text-[9px] font-semibold text-violet-700">Wybrane w ofercie</span>
+          <span className="flex flex-wrap items-center gap-1">
+            <span className="text-[9px] font-semibold text-violet-700">Wybrane w ofercie</span>
+            {onApplyMargin ? (
+              <button
+                type="button"
+                onClick={onApplyMargin}
+                className="rounded bg-emerald-700 px-1.5 py-0.5 text-[9px] font-semibold text-white hover:bg-emerald-800"
+                title={`Ustaw cenę oferty = zakup × (1 + ${markupPercent}% z przetargu)`}
+              >
+                Przelicz +{markupPercent}%
+              </button>
+            ) : null}
+          </span>
         ) : clickable && onSelect ? (
           <button
             type="button"
@@ -268,6 +282,7 @@ export function ItemBattlecard({
   canSelectSubstitute = false,
   selectedProductId = null,
   onSelectSubstitute,
+  onApplySelectedOffer,
 }: {
   tenderId: number
   itemId: number
@@ -276,6 +291,7 @@ export function ItemBattlecard({
   canSelectSubstitute?: boolean
   selectedProductId?: number | null
   onSelectSubstitute?: (product: BattlecardProduct) => Promise<void> | void
+  onApplySelectedOffer?: (product: BattlecardProduct) => void
 }) {
   const [open, setOpen] = useState(true)
   const [loading, setLoading] = useState(false)
@@ -377,6 +393,11 @@ export function ItemBattlecard({
                 p={card.ours}
                 selected={isSelected(card.ours)}
                 clickable={canPick(card.ours)}
+                onApplyMargin={
+                  isSelected(card.ours) && card.ours && onApplySelectedOffer
+                    ? () => onApplySelectedOffer(card.ours!)
+                    : undefined
+                }
                 onPreview={() => {
                   if (card.ours) setDescribeId(card.ours.product_id)
                 }}
@@ -392,6 +413,11 @@ export function ItemBattlecard({
                 cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[0] ?? null)}
                 selected={isSelected(card.substitutes[0] ?? null)}
                 clickable={canPick(card.substitutes[0] ?? null)}
+                onApplyMargin={
+                  isSelected(card.substitutes[0] ?? null) && card.substitutes[0] && onApplySelectedOffer
+                    ? () => onApplySelectedOffer(card.substitutes[0])
+                    : undefined
+                }
                 onPreview={() => {
                   const s = card.substitutes[0]
                   if (s) setDescribeId(s.product_id)
@@ -409,6 +435,11 @@ export function ItemBattlecard({
                 cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[1] ?? null)}
                 selected={isSelected(card.substitutes[1] ?? null)}
                 clickable={canPick(card.substitutes[1] ?? null)}
+                onApplyMargin={
+                  isSelected(card.substitutes[1] ?? null) && card.substitutes[1] && onApplySelectedOffer
+                    ? () => onApplySelectedOffer(card.substitutes[1])
+                    : undefined
+                }
                 onPreview={() => {
                   const s = card.substitutes[1]
                   if (s) setDescribeId(s.product_id)
