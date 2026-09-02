@@ -19,7 +19,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v51';
+    private const SEARCH_CACHE_VERSION = 'v52';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -859,8 +859,13 @@ class HybridWebSearchService
                 $packResults = $this->keepHitsMentioningSkuOnPage($pack['results'], $product);
             }
             if ($packResults === [] && $pack['results'] !== []) {
+                $bare = $this->identity->catalogSkuWithoutSize($product);
+                $skuLabel = (string) $product->sku;
+                if ($bare !== '' && mb_strtolower($bare) !== mb_strtolower($skuLabel)) {
+                    $skuLabel .= ' / '.$bare;
+                }
                 $errors[] = 'Odrzucono '.count($pack['results'])
-                    .' stron bez SKU '.$product->sku.' w tytule/URL (sprawdzono też treść kart).';
+                    .' stron bez SKU '.$skuLabel.' w tytule/URL (sprawdzono też treść kart).';
                 Log::info('Search results rejected by identity', [
                     'product_id' => $product->id,
                     'sku' => $product->sku,
@@ -996,7 +1001,11 @@ class HybridWebSearchService
     private function fallbackDistinctiveHits(array $results, Product $product): array
     {
         $codes = [];
-        foreach ([(string) $product->sku, $this->identity->internalSkuCore($product)] as $code) {
+        foreach ([
+            (string) $product->sku,
+            $this->identity->catalogSkuWithoutSize($product),
+            $this->identity->internalSkuCore($product),
+        ] as $code) {
             $code = mb_strtolower(trim($code));
             if ($code !== '' && mb_strlen($code) >= 4) {
                 $codes[] = $code;
@@ -1070,7 +1079,8 @@ class HybridWebSearchService
     private function keepHitsMentioningSkuOnPage(array $results, Product $product): array
     {
         $skuHint = $this->identity->ansellCatalogBits($product)['model']
-            ?? ($this->identity->shopIdentityPhrases($product)[0] ?? '')
+            ?? $this->identity->catalogSkuWithoutSize($product)
+            ?: ($this->identity->shopIdentityPhrases($product)[0] ?? '')
             ?: (string) $product->sku;
         $fetched = $this->pages->fetch($results, $skuHint !== '' ? $skuHint : (string) $product->sku, 5, [], $product);
         $out = [];

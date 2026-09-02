@@ -346,10 +346,15 @@ final class ProductSearchIdentityTest extends TestCase
         $joined = implode(' | ', $ladder);
 
         $this->assertStringContainsString('site:kams.com.pl', $joined);
-        $this->assertMatchesRegularExpression('/site:kams\\.com\\.pl[^|]*3175/i', $joined);
+        $this->assertMatchesRegularExpression('/site:kams\\.com\\.pl\\s+G3175\\b/i', $joined);
+        $this->assertContains('G3175 ARDON SAFETY', $ladder);
+        $identity = new ProductSearchIdentity;
+        $this->assertContains('G3175/40 ARDON SAFETY', $identity->searchQueries($product, 'manufacturer'));
+        $this->assertContains('G3175/40 ARDON SAFETY', $identity->primaryQueries($product));
         foreach ($ladder as $query) {
             if (str_starts_with($query, 'site:')) {
                 $this->assertStringNotContainsString('G3175/40', $query);
+                $this->assertStringNotContainsString('ARDON', $query);
             }
         }
     }
@@ -812,7 +817,18 @@ final class ProductSearchIdentityTest extends TestCase
         ]);
 
         $this->assertSame('G3175', $id->catalogSkuWithoutSize($product));
+        $this->assertSame('A5016', $id->catalogSkuWithoutSize(new Product([
+            'sku' => 'A5016/9',
+            'name' => 'Rękawice BRAD',
+            'manufacturer' => 'ARDON SAFETY',
+        ])));
+        $this->assertSame('PARKA', $id->catalogSkuWithoutSize(new Product([
+            'sku' => 'PARKA/XL',
+            'name' => 'Parka zimowa',
+            'manufacturer' => 'ARDON SAFETY',
+        ])));
         $this->assertContains('G3175', $id->skuSizeVariants($product));
+        $this->assertSame('G3175 ARDON SAFETY', $id->primaryQueries($product)[0] ?? null);
         $this->assertTrue($id->hasDistinctiveCatalogSku($product));
         $this->assertSame('G 3175', $id->firstStrongShopPhrase($product));
         $this->assertTrue($id->isWeakShopIndexPhrase('TRACK', $product));

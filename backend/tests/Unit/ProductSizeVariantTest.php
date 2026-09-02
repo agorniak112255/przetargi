@@ -271,8 +271,19 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertSame('G3175', $svc->skuCore('G3175/40'));
         $this->assertSame('CADIZ', $svc->skuCore('CADIZ-42'));
         $this->assertSame('A5016', $svc->skuCore('A5016/09'));
+        $this->assertSame('A5016', $svc->stripWearSizeSuffix('A5016/9'));
+        $this->assertSame('A5016', $svc->stripWearSizeSuffix('A5016/09'));
+        $this->assertSame('KRYTECH-563', $svc->stripWearSizeSuffix('KRYTECH-563-11'));
+        $this->assertSame('PARKA', $svc->stripWearSizeSuffix('PARKA/XL'));
+        $this->assertSame('JACKET', $svc->stripWearSizeSuffix('JACKET-XXXL'));
+        $this->assertSame('TROUSERS', $svc->stripWearSizeSuffix('TROUSERS/56'));
+        $this->assertSame('TX39', $svc->stripWearSizeSuffix('TX39-L'));
         $this->assertNull($svc->skuCore('MT-212-2'));
         $this->assertNull($svc->skuCore('04-322-100'));
         $this->assertNull($svc->skuCore('00500-016'));
+        $this->assertNull($svc->stripWearSizeSuffix('URG-914'));
+        $this->assertNull($svc->stripWearSizeSuffix('CADIZ-S1PS'));
+        $this->assertNull($svc->stripWearSizeSuffix('BALTIK-BLACK-CZARNY-NYLON-PO-70'));
+        $this->assertNull($svc->skuCore('BALTIK-BLACK-CZARNY-NYLON-PO-70'));
     }
 }

@@ -378,11 +378,47 @@ final class ProductSizeVariant
         return trim(preg_replace('/\s+/u', ' ', $t) ?? $t);
     }
 
+    /**
+     * Ostatni człon po / albo - to rozmiar (40, 09, XL) — sklepy trzymają sam model.
+     */
+    public function stripWearSizeSuffix(string $sku): ?string
+    {
+        $sku = trim($sku);
+        if ($sku === '' || preg_match('/[\/\-_]/u', $sku) !== 1) {
+            return null;
+        }
+        $parts = preg_split('/[\/\-_]+/u', $sku) ?: [];
+        if (count($parts) < 2 || count($parts) > 3) {
+            return null;
+        }
+        if (preg_match('/^(.+?)[\/\-_](xxxxl|xxxl|xxl|xxs|xs|xl|[2-6]xl|[sml])$/iu', $sku, $m) === 1
+            && $this->isUsableCore($m[1])) {
+            return rtrim($m[1], "-/_ \t");
+        }
+        if (preg_match('/^(.+?)[\/\-_](\d{1,2}(?:[.,]\d)?)$/u', $sku, $m) === 1
+            && $this->looksLikeWearSize($m[2])
+            && $this->isUsableCore($m[1])) {
+            return rtrim($m[1], "-/_ \t");
+        }
+
+        return null;
+    }
+
+    /** Rękawice 5–13, obuwie 32–50, odzież 44–78 albo litera (S–XXXL). */
+    public function looksLikeWearSize(string $raw): bool
+    {
+        return $this->normalizeSizeToken($raw) !== null;
+    }
+
     public function skuCore(?string $sku, ?string $name = null): ?string
     {
         $sku = trim((string) $sku);
         if ($sku === '') {
             return null;
+        }
+        $stripped = $this->stripWearSizeSuffix($sku);
+        if ($stripped !== null) {
+            return $stripped;
         }
         $size = $this->extractSize($name, $sku);
         if ($size === null) {
@@ -392,13 +428,8 @@ final class ProductSizeVariant
         if ($code !== null && preg_match('/^(.+)'.$code.'$/i', $sku, $m) === 1 && $this->isUsableCore($m[1])) {
             return rtrim($m[1], "-/_ \t");
         }
-        if (preg_match('/^\d+(?:\.\d)?$/', $size) === 1) {
+        if (preg_match('/^\d+(?:\.\d)?$/', $size) === 1 && preg_match('/[\/\-_]/u', $sku) !== 1) {
             $two = (string) (int) $size;
-            $padded = str_pad($two, 2, '0', STR_PAD_LEFT);
-            if (preg_match('/^(.+?)[\/\-](?:'.$padded.'|'.$two.')$/i', $sku, $m) === 1
-                && $this->isUsableCore($m[1])) {
-                return rtrim($m[1], "-/_ \t");
-            }
             if (preg_match('/^(.+)'.$two.'$/i', $sku, $m) === 1 && $this->isUsableCore($m[1])) {
                 return rtrim($m[1], "-/_ \t");
             }
@@ -921,10 +952,8 @@ final class ProductSizeVariant
         if (preg_match('/[A-Za-z](\d{3})$/', $sku, $m) === 1) {
             return $this->sizeForDigitCode($m[1]);
         }
-        // G3175/40, CADIZ-42, A5016/09 — dokładnie 2 cyfry po separatorze.
-        // „00500-016” to wariant koloru, nie rozmiar 16.
-        if (preg_match('/[\/\-](\d{2})$/', $sku, $m) === 1) {
-            return $this->normalizeSizeToken($m[1]);
+        if (preg_match('/[\/\-_]([A-Za-z0-9]+(?:[.,]\d)?)$/', $sku, $m) === 1) {
+            return $this->looksLikeWearSize($m[1]) ? $this->normalizeSizeToken($m[1]) : null;
         }
 
         return null;

@@ -792,11 +792,7 @@ final class ProductSearchIdentity
 
         if ($phase === 'manufacturer' && ! $this->queriesContainSite($queries)) {
             $hosts = $this->catalogSearchHosts($product);
-            $phrase = $shopPhrase !== ''
-                ? $shopPhrase
-                : (($sku !== '' && ! $internalSku && ! $warehouseSku)
-                    ? $this->catalogSkuWithoutSize($product)
-                    : ($this->catalogArticleCodes($product)[0] ?? $this->strippedProductName($product)));
+            $phrase = $this->siteSearchPhrase($product, $shopPhrase, $internalSku, $warehouseSku);
             if ($phrase !== '' && $hosts !== []) {
                 $extra = $this->sharedShortSkuQueryExtra($product);
                 $sitePhrase = trim($phrase.($extra !== '' ? ' '.$extra : ''));
@@ -810,6 +806,10 @@ final class ProductSearchIdentity
 
         // 1) Jak Google — kod / nazwa zawsze z producentem (też 12-cyfrowy numer CXS)
         if ($sku !== '' && ! $internalSku) {
+            $withoutSize = $this->catalogSkuWithoutSize($product);
+            if ($withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)) {
+                $queries[] = $this->queryWithManufacturer($withoutSize, $product);
+            }
             $queries[] = $this->queryWithManufacturer($sku, $product);
             $queries[] = $this->queryWithManufacturer('"'.$sku.'"', $product);
         }
@@ -893,6 +893,10 @@ final class ProductSearchIdentity
                 && ! $this->hasDistinctiveCatalogSku($product));
 
         $skuQueries = [];
+        $withoutSize = $this->catalogSkuWithoutSize($product);
+        if ($usableSku && $withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)) {
+            $skuQueries[] = $this->queryWithManufacturer($withoutSize, $product);
+        }
         if ($usableSku && $shopName === '') {
             $skuQueries[] = $this->queryWithManufacturer($sku, $product);
             $bare = $this->stripBrandPrefix($sku, $brand);
@@ -968,6 +972,10 @@ final class ProductSearchIdentity
         foreach ($this->variantBaseCodes($product) as $base) {
             $out[] = $this->queryWithManufacturer($base, $product);
         }
+        if ($withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)
+            && ! $composedSku && ! $this->looksLikeInternalSku($product)) {
+            array_unshift($out, $this->queryWithManufacturer($withoutSize, $product));
+        }
 
         return array_values(array_unique(array_filter(
             $out,
@@ -1031,6 +1039,9 @@ final class ProductSearchIdentity
     public function queryWithManufacturer(string $query, Product $product): string
     {
         $query = trim((string) preg_replace('/\s+/u', ' ', $query));
+        if (preg_match('/\bsite:/i', $query) === 1) {
+            return $query;
+        }
         $nameBrand = $this->leadingNameBrand($product);
         $brand = $this->shortBrand((string) $product->manufacturer);
         if ($query === '') {
@@ -2069,12 +2080,64 @@ final class ProductSearchIdentity
         if ($sku === '') {
             return '';
         }
-        $core = (new ProductSizeVariant)->skuCore($sku, $product->name);
+        $sizes = new ProductSizeVariant;
+        $stripped = $sizes->stripWearSizeSuffix($sku);
+        if (is_string($stripped) && $stripped !== '' && mb_strtolower($stripped) !== mb_strtolower($sku)) {
+            return $stripped;
+        }
+        $core = $sizes->skuCore($sku, $product->name);
         if (is_string($core) && $core !== '' && mb_strtolower($core) !== mb_strtolower($sku)) {
             return $core;
         }
 
         return $sku;
+    }
+
+    /**
+     * site: — kod bez rozmiaru, bez marki. „G 3175” → „G3175”; „KRYTECH 563” zostaje.
+     */
+    private function siteSearchPhrase(
+        Product $product,
+        string $shopPhrase,
+        bool $internalSku,
+        bool $warehouseSku,
+    ): string {
+        $sku = trim((string) $product->sku);
+        $coded = $this->catalogSkuWithoutSize($product);
+        $stripped = $coded !== '' && mb_strtolower($coded) !== mb_strtolower($sku);
+        if ($shopPhrase !== '' && (! $stripped || ! $this->phraseContainsSizeTail($shopPhrase, $sku, $coded))) {
+            $shopCompact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($shopPhrase)) ?? '';
+            $codeCompact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($coded)) ?? '';
+            if ($stripped && $shopCompact === $codeCompact
+                && preg_match('/^\p{L}{1,2}\s*\d{2,6}$/u', $shopPhrase) === 1
+                && preg_match('/\p{L}/u', $coded) === 1
+                && preg_match('/\d/u', $coded) === 1) {
+                return (string) preg_replace('/\s+/u', '', $coded);
+            }
+
+            return $shopPhrase;
+        }
+        if ($coded !== '' && preg_match('/\p{L}/u', $coded) === 1 && preg_match('/\d/u', $coded) === 1) {
+            return (string) preg_replace('/\s+/u', '', $coded);
+        }
+        if ($sku !== '' && ! $internalSku && ! $warehouseSku) {
+            return $coded !== '' ? $coded : $sku;
+        }
+
+        return $this->catalogArticleCodes($product)[0] ?? $this->strippedProductName($product);
+    }
+
+    private function phraseContainsSizeTail(string $phrase, string $sku, string $coded): bool
+    {
+        $tail = ltrim(mb_substr($sku, mb_strlen($coded)), "/-_ \t");
+        if ($tail === '') {
+            return false;
+        }
+
+        return preg_match(
+            '/(?<![a-z0-9])'.preg_quote(mb_strtolower($tail), '/').'(?![a-z0-9])/u',
+            mb_strtolower($phrase)
+        ) === 1;
     }
 
     /**

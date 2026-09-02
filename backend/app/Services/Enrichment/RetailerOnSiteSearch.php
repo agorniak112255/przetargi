@@ -103,8 +103,13 @@ final class RetailerOnSiteSearch
             $shop = $this->identity->shopIdentityPhrases($product)[0] ?? '';
         }
         $coded = $this->identity->catalogSkuWithoutSize($product);
-        if ($coded !== '' && preg_match('/\d/u', $coded) === 1 && preg_match('/\d/u', $shop) !== 1) {
-            return $coded;
+        if ($coded !== '' && preg_match('/\p{L}/u', $coded) === 1 && preg_match('/\d/u', $coded) === 1) {
+            $compact = (string) preg_replace('/\s+/u', '', $coded);
+            if ($shop === ''
+                || preg_match('/\d/u', $shop) !== 1
+                || preg_match('/^\p{L}{1,2}\s*\d{2,6}$/u', $shop) === 1) {
+                return $compact;
+            }
         }
         if ($shop !== '') {
             return $shop;
