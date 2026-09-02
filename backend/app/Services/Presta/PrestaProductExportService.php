@@ -24,6 +24,7 @@ final class PrestaProductExportService
         private readonly ProductSizeVariant $sizes,
         private readonly NbpExchangeRateService $fx,
         private readonly PrestaCategoryMapService $categories,
+        private readonly PrestaDescriptionHtml $descriptions,
     ) {}
 
     /**
@@ -48,12 +49,15 @@ final class PrestaProductExportService
         $product->loadMissing('images', 'prestaExport');
         $existing = $this->resolveExisting($product);
         if ($existing !== null && ! $force && $this->alreadyExported($product, (int) $existing['id_product'])) {
+            $saved = $this->gateway->updateProduct((int) $existing['id_product'], $this->payload($product));
+            $this->rememberMatch($product, (int) $saved['id_product'], (string) $saved['url']);
+
             return [
                 'product_id' => (int) $product->id,
                 'sku' => (string) $product->sku,
-                'action' => 'exists',
-                'presta_id' => (int) $existing['id_product'],
-                'url' => (string) $existing['url'],
+                'action' => 'updated',
+                'presta_id' => (int) $saved['id_product'],
+                'url' => (string) $saved['url'],
                 'sizes' => $this->sizes->parseSizeList($product->packaging, $product->name, $product->sku),
                 'sizes_missing' => [],
                 'images' => 0,
@@ -93,17 +97,7 @@ final class PrestaProductExportService
             $images = $this->uploadImages($product, $prestaId);
         }
 
-        $match = PrestaProductMatch::query()->updateOrCreate(
-            ['product_id' => $product->id, 'presta_id' => $prestaId],
-            [
-                'method' => 'export',
-                'score' => 100,
-                'status' => PrestaProductMatch::STATUS_EXPORTED,
-                'presta_url' => (string) $saved['url'],
-                'presta_reference' => mb_substr((string) $product->sku, 0, 128),
-                'presta_name' => mb_substr((string) $product->name, 0, 255),
-            ]
-        );
+        $match = $this->rememberMatch($product, $prestaId, (string) $saved['url']);
 
         return [
             'product_id' => (int) $product->id,
@@ -188,8 +182,8 @@ final class PrestaProductExportService
         if ($name === '') {
             $name = trim((string) $product->sku) !== '' ? (string) $product->sku : 'Produkt';
         }
-        $description = $this->descriptionHtml((string) ($product->description ?? ''));
-        $short = $this->shortDescription((string) ($product->description ?? ''), $name);
+        $description = $this->descriptions->fromProduct($product);
+        $short = $this->shortDescription($this->descriptions->prose((string) ($product->description ?? '')), $name);
         $rewrite = Str::slug($name, '-', 'pl');
         if ($rewrite === '') {
             $rewrite = 'produkt-'.(int) $product->id;
@@ -238,6 +232,21 @@ final class PrestaProductExportService
         return $match instanceof PrestaProductMatch
             && (int) $match->presta_id === $prestaId
             && $match->status === PrestaProductMatch::STATUS_EXPORTED;
+    }
+
+    private function rememberMatch(Product $product, int $prestaId, string $url): PrestaProductMatch
+    {
+        return PrestaProductMatch::query()->updateOrCreate(
+            ['product_id' => $product->id, 'presta_id' => $prestaId],
+            [
+                'method' => 'export',
+                'score' => 100,
+                'status' => PrestaProductMatch::STATUS_EXPORTED,
+                'presta_url' => $url,
+                'presta_reference' => mb_substr((string) $product->sku, 0, 128),
+                'presta_name' => mb_substr((string) $product->name, 0, 255),
+            ]
+        );
     }
 
     private function combinationReference(string $sku, string $size): string
@@ -304,20 +313,6 @@ final class PrestaProductExportService
         }
 
         return is_string($bytes) && $bytes !== '' ? $bytes : null;
-    }
-
-    private function descriptionHtml(string $text): string
-    {
-        $text = trim($text);
-        if ($text === '') {
-            return '<p></p>';
-        }
-        if (str_contains($text, '<p') || str_contains($text, '<div') || str_contains($text, '<ul')) {
-            return $text;
-        }
-        $escaped = htmlspecialchars($text, \ENT_QUOTES | \ENT_HTML5, 'UTF-8');
-
-        return '<p>'.nl2br($escaped, false).'</p>';
     }
 
     private function shortDescription(string $text, string $fallback): string

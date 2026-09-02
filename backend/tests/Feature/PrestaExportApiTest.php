@@ -101,20 +101,52 @@ final class PrestaExportApiTest extends TestCase
             ->assertJsonPath('message', $this->presta->error);
     }
 
-    public function test_second_export_without_force_is_skipped(): void
+    public function test_second_export_without_force_refreshes_description_only(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $product = $this->makeProduct(['sku' => '11-931']);
 
         $this->postJson('/api/products/'.$product->id.'/presta-export')->assertOk()->assertJsonPath('action', 'created');
-        $this->postJson('/api/products/'.$product->id.'/presta-export')->assertOk()->assertJsonPath('action', 'exists');
+        $this->postJson('/api/products/'.$product->id.'/presta-export')->assertOk()->assertJsonPath('action', 'updated');
         $this->assertCount(1, $this->presta->created);
-        $this->assertCount(0, $this->presta->updated);
+        $this->assertCount(1, $this->presta->updated);
+        $this->assertCount(0, $this->presta->deletedImageProducts);
 
         $this->postJson('/api/products/'.$product->id.'/presta-export', ['force' => true])
             ->assertOk()
             ->assertJsonPath('action', 'updated');
-        $this->assertCount(1, $this->presta->updated);
+        $this->assertCount(2, $this->presta->updated);
+    }
+
+    public function test_export_sends_structured_enrichment_html(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct([
+            'sku' => '072007141E',
+            'name' => 'Camapren 720',
+            'description' => 'Rękawice chemiczne z polichloroprenu.',
+            'enrichment_payload' => [
+                'attributes' => [
+                    'kategoria_bhp' => 'rekawice',
+                    'kod_producenta' => '072007141E',
+                    'material' => 'polichloropren',
+                    'rozmiar' => '10',
+                    'normy_en' => ['EN 374', 'EN 388'],
+                ],
+                'specs' => ['nr art./SKU: 072007141E'],
+                'features' => ['wysoka elastyczność'],
+            ],
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created');
+
+        $html = (string) $this->presta->created[0]['description'];
+        $this->assertStringContainsString('Atrybuty BHP', $html);
+        $this->assertStringContainsString('Specyfikacja', $html);
+        $this->assertStringContainsString('wysoka elastyczność', $html);
+        $this->assertStringNotContainsString('Specyfikacja', (string) $this->presta->created[0]['description_short']);
     }
 
     public function test_update_sends_images_when_presta_has_none(): void

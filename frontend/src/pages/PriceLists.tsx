@@ -580,7 +580,8 @@ export function PriceLists() {
     const count = (row.product_ids ?? historyCache[row.id]?.product_ids ?? []).length
     const ok = window.confirm(
       `Wysłać ${count} produktów z „${row.manufacturer} / ${row.version}” do Presty?\n` +
-        'Wejdą opisy, rozmiary z opakowania i termin „Na zamówienie”.',
+        'Wejdą opisy (atrybuty BHP i listy jak w przetargach), rozmiary i termin „Na zamówienie”.\n' +
+        'Produkty już w Preście dostaną nowy opis — bez ponownego wgrywania zdjęć.',
     )
     if (!ok) return
     setPrestaBusyId(row.id)
