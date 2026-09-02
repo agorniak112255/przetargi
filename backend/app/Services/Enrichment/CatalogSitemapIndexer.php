@@ -35,6 +35,9 @@ final class CatalogSitemapIndexer
     /** Sklepy bez XML (IAI) — ile stron HTML zbieramy z menu. */
     private const HTML_CRAWL_PAGES = 35;
 
+    /** Poniżej tylu adresów z sitemapy dokładamy pełzanie po ładnych URL-ach kart. */
+    private const SPARSE_SITEMAP_LIMIT = 50;
+
     /** Sklepy za WAF-em odrzucają nagłówki botów, więc przedstawiamy się jak przeglądarka. */
     private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -168,7 +171,7 @@ final class CatalogSitemapIndexer
             }
         }
 
-        if (count($seen) === 0 && ! $timedOut) {
+        if (count($seen) < self::SPARSE_SITEMAP_LIMIT && ! $timedOut) {
             foreach ($this->crawlShopPages($host, $maxUrls, $deadline) as $row) {
                 $url = (string) $row['url'];
                 if (isset($seen[$url])) {
@@ -494,15 +497,27 @@ final class CatalogSitemapIndexer
                 if ($this->isSkippableUrl($href)) {
                     continue;
                 }
-                if ($this->looksLikeProductUrl($href)) {
-                    if (isset($seen[$href])) {
-                        continue;
+                if ($this->looksLikeClassicProductUrl($href)) {
+                    if (! isset($seen[$href])) {
+                        $seen[$href] = true;
+                        $rows[] = $this->rowForHref($href, $host);
                     }
-                    $seen[$href] = true;
-                    $locHost = $this->normalizeHost((string) (parse_url($href, PHP_URL_HOST) ?? $host));
-                    $rows[] = $this->rowFor($locHost !== '' ? $locHost : $host, $href);
                     if (count($rows) >= $maxUrls) {
                         break 2;
+                    }
+
+                    continue;
+                }
+                if ($this->looksLikePrettyProductUrl($href)) {
+                    if (! isset($seen[$href])) {
+                        $seen[$href] = true;
+                        $rows[] = $this->rowForHref($href, $host);
+                    }
+                    if (count($rows) >= $maxUrls) {
+                        break 2;
+                    }
+                    if (count($queue) < 80 && $this->looksLikeListingPath($href)) {
+                        $queue[] = $href;
                     }
 
                     continue;
@@ -561,6 +576,11 @@ final class CatalogSitemapIndexer
 
     private function looksLikeProductUrl(string $url): bool
     {
+        return $this->looksLikeClassicProductUrl($url) || $this->looksLikePrettyProductUrl($url);
+    }
+
+    private function looksLikeClassicProductUrl(string $url): bool
+    {
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
         $query = mb_strtolower((string) (parse_url($url, PHP_URL_QUERY) ?? ''));
         if (str_contains($query, 'id_product=')) {
@@ -568,9 +588,65 @@ final class CatalogSitemapIndexer
         }
 
         return preg_match('#/p\d+,#', $path) === 1
-            || preg_match('#-p\d+(\.html)?$#', $path) === 1
+            || preg_match('#-p\d{2,}(\.html)?$#', $path) === 1
             || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
             || preg_match('#/p/[^/]+/\d+#', $path) === 1;
+    }
+
+    private function looksLikePrettyProductUrl(string $url): bool
+    {
+        $path = mb_strtolower(trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/'));
+        if ($path === '') {
+            return false;
+        }
+        $segments = explode('/', $path);
+        $slug = preg_replace('/\.(html?|php)$/i', '', (string) end($segments)) ?? '';
+        if ($slug === '' || ! str_contains($slug, '-') || mb_strlen($slug) < 8) {
+            return false;
+        }
+        if (preg_match('/\p{L}/u', $slug) !== 1) {
+            return false;
+        }
+
+        return ! $this->isInformationalSlug($slug);
+    }
+
+    private function looksLikeListingPath(string $url): bool
+    {
+        $path = trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/');
+        if ($path === '') {
+            return false;
+        }
+        $segments = array_values(array_filter(explode('/', $path), static fn (string $s): bool => $s !== ''));
+
+        return $segments !== [] && count($segments) <= 2;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function rowForHref(string $href, string $host): array
+    {
+        $locHost = $this->normalizeHost((string) (parse_url($href, PHP_URL_HOST) ?? $host));
+
+        return $this->rowFor($locHost !== '' ? $locHost : $host, $href);
+    }
+
+    private function isInformationalSlug(string $slug): bool
+    {
+        foreach ([
+            'o-nas', 'o-firmie', 'about-us', 'about', 'kontakt', 'contact-us', 'contact',
+            'regulamin', 'terms', 'polityka-prywatnosci', 'privacy-policy', 'privacy',
+            'polityka-cookies', 'cookies', 'dostawa-i-platnosc', 'dostawa-i-platnosci',
+            'shipping', 'returns', 'reklamacje', 'rodo', 'faq', 'pomoc',
+            'logowanie', 'rejestracja', 'moje-konto', 'objasnienia-kodow', 'objasnienia-kodow',
+        ] as $bad) {
+            if ($slug === $bad) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function looksLikeCategoryUrl(string $url): bool

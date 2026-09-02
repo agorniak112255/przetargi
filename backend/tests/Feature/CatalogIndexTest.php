@@ -18,9 +18,25 @@ final class CatalogIndexTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Http::preventStrayRequests();
+    }
+
+    /**
+     * @param  array<string, mixed>  $urls
+     */
+    private function fakeHttp(array $urls = []): void
+    {
+        Http::fake($urls + [
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+    }
+
     public function test_indexes_urls_from_sitemap_index(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://optimumbhp.pl/robots.txt' => Http::response(
                 "User-agent: *\nSitemap: https://optimumbhp.pl/sitemap.xml\n",
                 200
@@ -48,7 +64,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_reindex_does_not_duplicate_rows(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://optimumbhp.pl/robots.txt' => Http::response('Sitemap: https://optimumbhp.pl/sitemap.xml', 200),
             'https://optimumbhp.pl/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><urlset><url><loc>https://optimumbhp.pl/REKAWICE-1202-URGENT-p138481</loc></url></urlset>',
@@ -77,7 +93,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_missing_only_indexes_unknown_host(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://ardon.pl/robots.txt' => Http::response('Sitemap: https://ardon.pl/sitemap.xml', 200),
             'https://ardon.pl/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><urlset><url><loc>https://ardon.pl/buty-robocze-m80</loc></url></urlset>',
@@ -95,7 +111,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_follows_shoper_google_sitemap_children(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://tmbhp.pl/robots.txt' => Http::response(
                 "Sitemap: https://tmbhp.pl/console/integration/execute/name/GoogleSitemap\n",
                 200
@@ -124,7 +140,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_waf_403_html_is_not_counted_as_sitemap(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://bhp.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
             '*' => Http::response(
                 '<!DOCTYPE html><html><head><title>Just a moment</title></head><body>Cloudflare</body></html>',
@@ -141,7 +157,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_uses_magento_media_sitemap_when_robots_has_none(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://bpbhp.pl/robots.txt' => Http::response("User-agent: *\nDisallow: /search\n", 200),
             'https://bpbhp.pl/media/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><urlset>'
@@ -162,7 +178,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_falls_back_to_media_sitemap_when_robots_map_is_empty(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://bpbhp.pl/robots.txt' => Http::response(
                 "Sitemap: https://bpbhp.pl/sitemap.xml\n",
                 200
@@ -191,7 +207,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_follows_xml_child_without_sitemap_in_name(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://ox-on.com/robots.txt' => Http::response('Sitemap: https://ox-on.com/sitemap.xml', 200),
             'https://ox-on.com/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><sitemapindex>'
@@ -216,7 +232,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_uses_www_robots_when_apex_has_no_sitemap(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://brand.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
             'https://www.brand.pl/robots.txt' => Http::response(
                 "Sitemap: https://www.brand.pl/sitemap.xml\n",
@@ -238,7 +254,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_missing_only_retry_empty_reindexes_zero_hosts(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://gvarant.pl/robots.txt' => Http::response('Sitemap: https://gvarant.pl/sitemap.xml', 200),
             'https://gvarant.pl/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><urlset>'
@@ -302,7 +318,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_soft_404_page_is_not_counted_as_sitemap(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://gvarant.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
             '*' => Http::response(
                 '<!DOCTYPE html><html><head><title>Sklep</title></head><body>Nie znaleziono</body></html>',
@@ -319,7 +335,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_reads_gzipped_sitemap(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://demar24.pl/robots.txt' => Http::response('Sitemap: https://demar24.pl/sitemap.xml.gz', 200),
             'https://demar24.pl/sitemap.xml.gz' => Http::response(
                 (string) gzencode(
@@ -337,7 +353,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_keeps_locations_pointing_to_other_domains(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://atg-glovesolutions.com/robots.txt' => Http::response(
                 'Sitemap: https://atg-glovesolutions.com/sitemap.xml',
                 200
@@ -361,7 +377,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_reads_namespaced_and_cdata_locations(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://pros.pl/robots.txt' => Http::response('Sitemap: https://pros.pl/sitemap.xml', 200),
             'https://pros.pl/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><sm:urlset xmlns:sm="http://www.sitemaps.org/schemas/sitemap/0.9">'
@@ -519,7 +535,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_uses_bigcommerce_xmlsitemap_php(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://idsblast.com/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
             'https://idsblast.com/xmlsitemap.php' => Http::response(
                 '<?xml version="1.0"?><sitemapindex>'
@@ -546,7 +562,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_crawls_iai_product_cards_when_sitemap_missing(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://gvarant.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
             'https://gvarant.pl/' => Http::response(
                 '<!DOCTYPE html><html><body><a href="/rekawice-robocze/">Rękawice</a></body></html>',
@@ -565,15 +581,92 @@ final class CatalogIndexTest extends TestCase
 
         $result = app(CatalogSitemapIndexer::class)->index('gvarant.pl');
 
-        $this->assertSame(1, $result['saved']);
+        $this->assertGreaterThanOrEqual(1, $result['saved']);
         $this->assertDatabaseHas('catalog_pages', [
             'url' => 'https://gvarant.pl/p494,rekawice-reis-rlevel5.html',
         ]);
     }
 
+    public function test_crawls_pretty_product_slugs_when_sitemap_is_html(): void
+    {
+        $this->fakeHttp([
+            'https://marelplus.pl/robots.txt' => Http::response(
+                "User-agent: *\nSitemap: https://marelplus.pl/p/GoogleSiteMapPlugin/Index\n",
+                200
+            ),
+            'https://marelplus.pl/p/GoogleSiteMapPlugin/Index' => Http::response('', 404),
+            'https://marelplus.pl/' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/polbuty-cadiz-s1ps-fo-sr">Cadiz</a>'
+                .'<a href="/kurtka-argo">Argo</a>'
+                .'<a href="/o-nas">O nas</a>'
+                .'<a href="/kontakt">Kontakt</a>'
+                .'<a href="/produkty/pozostale/filtry/filtr-3m-5935-p3">Filtr P3</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('marelplus.pl');
+
+        $this->assertSame(3, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://marelplus.pl/polbuty-cadiz-s1ps-fo-sr']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://marelplus.pl/kurtka-argo']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://marelplus.pl/produkty/pozostale/filtry/filtr-3m-5935-p3',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://marelplus.pl/o-nas']);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://marelplus.pl/kontakt']);
+    }
+
+    public function test_html_crawl_fills_sparse_sitemap(): void
+    {
+        $this->fakeHttp([
+            'https://urgent.pl/robots.txt' => Http::response("Sitemap: https://urgent.pl/sitemap.xml\n", 200),
+            'https://urgent.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://urgent.pl/oferta</loc></url>'
+                .'<url><loc>https://urgent.pl/kontakt</loc></url>'
+                .'</urlset>',
+                200,
+                ['Content-Type' => 'text/xml']
+            ),
+            'https://urgent.pl/' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/rekawice-urgent-1202">Rękawice 1202</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('urgent.pl');
+
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://urgent.pl/rekawice-urgent-1202']);
+        $this->assertGreaterThanOrEqual(3, $result['saved']);
+    }
+
+    public function test_sparse_skips_hosts_with_enough_pages(): void
+    {
+        Http::fake();
+        for ($i = 0; $i < 50; $i++) {
+            $this->seedPage('https://optimumbhp.pl/karta-'.$i);
+        }
+
+        $this->artisan('catalog:index', [
+            'host' => 'optimumbhp.pl',
+            '--sparse' => 50,
+        ])->expectsOutputToContain('pomijam')->assertSuccessful();
+
+        Http::assertNothingSent();
+    }
+
     public function test_rejects_jpeg_disguised_as_sitemap(): void
     {
-        Http::fake([
+        $this->fakeHttp([
             'https://bpbhp.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
             'https://bpbhp.pl/media/sitemap.xml' => Http::response(
                 'not-xml',

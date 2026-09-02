@@ -25,6 +25,7 @@ final class CatalogIndexCommand extends Command
         {--fresh-days=0 : Pomiń domeny odświeżone w ostatnich N dniach}
         {--missing-only : Tylko domeny, których nie ma w indeksie}
         {--retry-empty : Przy --missing-only ponów domeny, które wcześniej dały 0 adresów}
+        {--sparse=0 : Tylko domeny z mniej niż N kart w indeksie (0 = wyłączone)}
         {--skip= : Dodatkowe domeny do pominięcia, po przecinku}';
 
     protected $description = 'Indeksuje karty produktu z sitemap producentów i hurtowni';
@@ -43,11 +44,20 @@ final class CatalogIndexCommand extends Command
         $freshDays = max(0, (int) $this->option('fresh-days'));
         $missingOnly = (bool) $this->option('missing-only');
         $retryEmpty = (bool) $this->option('retry-empty');
+        $sparse = max(0, (int) $this->option('sparse'));
         $total = 0;
         $failed = 0;
 
         foreach ($hosts as $host) {
             $this->line('==> '.$host);
+            if ($sparse > 0) {
+                $pages = $this->indexedPageCount($host);
+                if ($pages >= $sparse) {
+                    $this->line('    pomijam — już '.$pages.' kart');
+
+                    continue;
+                }
+            }
             if ($missingOnly && $this->hasIndexedPages($host)) {
                 $this->line('    pomijam — już w indeksie');
 
@@ -161,7 +171,14 @@ final class CatalogIndexCommand extends Command
 
     private function hasIndexedPages(string $host): bool
     {
-        return CatalogPage::query()->where('host', $host)->exists();
+        return $this->indexedPageCount($host) > 0;
+    }
+
+    private function indexedPageCount(string $host): int
+    {
+        return (int) CatalogPage::query()
+            ->whereIn('host', [$host, 'www.'.$host])
+            ->count();
     }
 
     private function hasAttempted(string $host): bool
