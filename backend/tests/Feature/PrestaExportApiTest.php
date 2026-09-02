@@ -8,11 +8,15 @@ use App\Jobs\ExportProductToPrestaJob;
 use App\Models\PrestaProductMatch;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Presta\PrestaExportGateway;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Tests\Support\FakePrestaExportGateway;
 use Tests\TestCase;
@@ -111,6 +115,61 @@ final class PrestaExportApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('action', 'updated');
         $this->assertCount(1, $this->presta->updated);
+    }
+
+    public function test_update_sends_images_when_presta_has_none(): void
+    {
+        Storage::fake('public');
+        Storage::disk('public')->put('products/protecta.jpg', 'jpeg-bytes');
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct([
+            'sku' => 'AC300G30',
+            'description' => '<p>Pełny opis systemu Protecta.</p><ul><li>lina 8 mm</li></ul>',
+        ]);
+        ProductImage::query()->create([
+            'product_id' => $product->id,
+            'path' => 'products/protecta.jpg',
+            'is_primary' => true,
+            'sort_order' => 0,
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created')
+            ->assertJsonPath('images', 1);
+        $this->assertCount(1, $this->presta->images);
+
+        $this->presta->images = [];
+        $this->postJson('/api/products/'.$product->id.'/presta-export', ['force' => true])
+            ->assertOk()
+            ->assertJsonPath('action', 'updated')
+            ->assertJsonPath('images', 1);
+        $this->assertCount(1, $this->presta->images);
+        $this->assertStringContainsString('Pełny opis', $this->presta->updated[0]['description']);
+    }
+
+    public function test_export_converts_eur_price_to_pln(): void
+    {
+        Cache::forget('nbp.table_a.rates');
+        Http::fake([
+            'api.nbp.pl/*' => Http::response([[
+                'effectiveDate' => '2026-09-02',
+                'rates' => [
+                    ['code' => 'EUR', 'mid' => 4.0],
+                ],
+            ]]),
+        ]);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct([
+            'catalog_price_net' => 10,
+            'currency' => 'EUR',
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created');
+
+        $this->assertSame(40.0, $this->presta->created[0]['price']);
     }
 
     public function test_price_list_export_queues_when_over_limit(): void

@@ -8,7 +8,9 @@ use App\Models\PrestaProductMatch;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Services\NbpExchangeRateService;
 use App\Support\ProductSizeVariant;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -20,6 +22,7 @@ final class PrestaProductExportService
         private readonly PrestaExportGateway $gateway,
         private readonly PrestaSettingsService $settings,
         private readonly ProductSizeVariant $sizes,
+        private readonly NbpExchangeRateService $fx,
     ) {}
 
     /**
@@ -81,7 +84,7 @@ final class PrestaProductExportService
         $this->gateway->ensureCombinations($prestaId, $combinations);
 
         $images = 0;
-        if ($action === 'created') {
+        if ($this->gateway->productImageCount($prestaId) === 0) {
             $images = $this->uploadImages($product, $prestaId);
         }
 
@@ -198,7 +201,7 @@ final class PrestaProductExportService
             'link_rewrite' => $rewrite,
             'reference' => (string) $product->sku,
             'ean13' => $ean,
-            'price' => (float) $product->catalog_price_net,
+            'price' => $this->fx->toPln((float) $product->catalog_price_net, $product->currency),
             'id_manufacturer' => $this->gateway->resolveManufacturerId((string) $product->manufacturer),
             'id_category' => $this->gateway->resolveCategoryId($product->category !== null ? (string) $product->category : null),
             'delivery_label' => $cfg['delivery_label'],
@@ -246,6 +249,7 @@ final class PrestaProductExportService
     private function uploadImages(Product $product, int $prestaId): int
     {
         $count = 0;
+        $lastError = null;
         foreach ($product->images as $image) {
             if (! $image instanceof ProductImage) {
                 continue;
@@ -257,8 +261,18 @@ final class PrestaProductExportService
             try {
                 $this->gateway->uploadImage($prestaId, $binary, 'product-'.$product->id.'-'.$image->id.'.jpg');
                 $count++;
-            } catch (Throwable) {
+            } catch (Throwable $e) {
+                $lastError = $e;
+                Log::warning('Presta: upload zdjęcia nie powiódł się.', [
+                    'product_id' => $product->id,
+                    'presta_id' => $prestaId,
+                    'image_id' => $image->id,
+                    'error' => $e->getMessage(),
+                ]);
             }
+        }
+        if ($count === 0 && $lastError !== null) {
+            throw new RuntimeException($lastError->getMessage(), 0, $lastError);
         }
 
         return $count;

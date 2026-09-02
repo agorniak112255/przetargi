@@ -43,4 +43,6 @@ interface PrestaExportGateway
     public function ensureCombinations(int $prestaId, array $combinations): void;
 
     public function uploadImage(int $prestaId, string $binary, string $filename): void;
+
+    public function productImageCount(int $prestaId): int;
 }

@@ -39,6 +39,8 @@ final class PrestaProductUpdateXmlTest extends TestCase
         $this->assertStringNotContainsString('manufacturer_name', (string) $putBody);
         $this->assertStringNotContainsString('<quantity>', (string) $putBody);
         $this->assertStringContainsString('<id_manufacturer>12</id_manufacturer>', (string) $putBody);
+        $this->assertStringContainsString('<![CDATA[opis]]>', (string) $putBody);
+        $this->assertMatchesRegularExpression('/<description>.*id="1".*id="2"/s', (string) $putBody);
     }
 
     private function client(): PrestaShopExportClient
@@ -62,8 +64,8 @@ final class PrestaProductUpdateXmlTest extends TestCase
             .'<id_manufacturer>1</id_manufacturer>'
             .'<manufacturer_name><![CDATA[Ansell]]></manufacturer_name>'
             .'<quantity>0</quantity>'
-            .'<name><language id="1"><![CDATA[Stary]]></language></name>'
-            .'<description><language id="1"><![CDATA[]]></language></description>'
+            .'<name><language id="1"><![CDATA[Stary]]></language><language id="2"><![CDATA[Old]]></language></name>'
+            .'<description><language id="1"><![CDATA[]]></language><language id="2"><![CDATA[]]></language></description>'
             .'<description_short><language id="1"><![CDATA[]]></language></description_short>'
             .'<available_now><language id="1"><![CDATA[]]></language></available_now>'
             .'<available_later><language id="1"><![CDATA[]]></language></available_later>'

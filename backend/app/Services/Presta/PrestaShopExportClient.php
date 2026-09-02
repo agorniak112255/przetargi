@@ -282,6 +282,7 @@ final class PrestaShopExportClient implements PrestaExportGateway
         $this->setLang($product, 'available_later', (string) ($data['delivery_label'] ?? 'Na zamówienie'));
         $this->setLang($product, 'delivery_in_stock', (string) ($data['delivery_label'] ?? 'Na zamówienie'));
         $this->setLang($product, 'delivery_out_stock', (string) ($data['delivery_label'] ?? 'Na zamówienie'));
+        $this->setLang($product, 'link_rewrite', (string) ($data['link_rewrite'] ?? 'produkt'));
         $product->additional_delivery_times = '2';
         $product->out_of_stock = '1';
         $product->available_for_order = '1';
@@ -354,6 +355,26 @@ final class PrestaShopExportClient implements PrestaExportGateway
             ->post($url);
         if ($response->failed()) {
             throw new RuntimeException('Upload zdjęcia do Presty nie powiódł się (HTTP '.$response->status().').');
+        }
+    }
+
+    public function productImageCount(int $prestaId): int
+    {
+        if ($prestaId <= 0) {
+            return 0;
+        }
+        try {
+            $this->connectDb();
+            $prefix = $this->prefix();
+            if (! Schema::connection('prestashop')->hasTable($prefix.'image')) {
+                return 0;
+            }
+
+            return (int) DB::connection('prestashop')->table($prefix.'image')
+                ->where('id_product', $prestaId)
+                ->count();
+        } catch (Throwable) {
+            return 0;
         }
     }
 
@@ -451,22 +472,27 @@ final class PrestaShopExportClient implements PrestaExportGateway
 
     private function setLang(SimpleXMLElement $product, string $field, string $value): void
     {
-        $langId = (string) $this->idLang();
-        if (! isset($product->{$field})) {
-            $product->addChild($field);
-        }
-        $node = $product->{$field};
-        $found = false;
-        foreach ($node->language ?? [] as $language) {
-            $id = (string) ($language['id'] ?? '');
-            if ($id === $langId || $id === '') {
-                $this->setCdata($language, $value);
-                $found = true;
+        $ids = [];
+        if (isset($product->{$field})) {
+            foreach ($product->{$field}->language ?? [] as $language) {
+                $id = (int) ($language['id'] ?? 0);
+                if ($id > 0) {
+                    $ids[$id] = $id;
+                }
             }
+            unset($product->{$field});
         }
-        if (! $found) {
+        foreach ($this->prestaLangIds() as $id) {
+            $ids[$id] = $id;
+        }
+        $ids[$this->idLang()] = $this->idLang();
+        if ($ids === []) {
+            $ids[1] = 1;
+        }
+        $node = $product->addChild($field);
+        foreach ($ids as $id) {
             $child = $node->addChild('language');
-            $child['id'] = $langId;
+            $child['id'] = (string) $id;
             $this->setCdata($child, $value);
         }
     }

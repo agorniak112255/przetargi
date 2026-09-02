@@ -138,4 +138,12 @@ final class FakePrestaExportGateway implements PrestaExportGateway
         }
         $this->images[] = ['presta_id' => $prestaId, 'filename' => $filename];
     }
+
+    public function productImageCount(int $prestaId): int
+    {
+        return count(array_filter(
+            $this->images,
+            static fn (array $row): bool => (int) $row['presta_id'] === $prestaId
+        ));
+    }
 }

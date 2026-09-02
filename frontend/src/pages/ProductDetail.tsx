@@ -145,8 +145,8 @@ export function ProductDetail() {
     const already = Boolean(p?.presta_export?.presta_id)
     const ok = window.confirm(
       already
-        ? 'Produkt jest już w Preście. Zaktualizować opis, rozmiary i termin „Na zamówienie”?'
-        : 'Wysłać ten produkt do Presty? Wejdą opis, rozmiary z opakowania i termin „Na zamówienie”.',
+        ? 'Produkt jest już w Preście. Zaktualizować opis, zdjęcia, rozmiary i termin „Na zamówienie”?'
+        : 'Wysłać ten produkt do Presty? Wejdą opis, zdjęcia, rozmiary z opakowania i termin „Na zamówienie”.',
     )
     if (!ok) return
     setExportBusy(true)
@@ -164,6 +164,7 @@ export function ProductDetail() {
           ? `Już w Preście (#${res.presta_id}).`
           : `Wysłano do Presty (#${res.presta_id}, ${res.action}` +
               (res.sizes.length > 0 ? `, rozmiary ${res.sizes.join('/')}` : '') +
+              (res.images > 0 ? `, zdjęcia ${res.images}` : '') +
               `)${missing}`,
       )
       await load()
