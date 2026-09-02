@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -81,7 +82,71 @@ final class ProductCrossRefCompareTest extends TestCase
             ->assertOk()
             ->assertJsonPath('seed.sku', 'RNITZ-SEED')
             ->assertJsonPath('seed.product_id', $seed->id)
+            ->assertJsonPath('seed.has_description', true)
             ->assertJsonFragment(['sku' => 'NITRIL-OTHER', 'product_id' => $other->id]);
+    }
+
+    public function test_cross_ref_returns_thumbnail_and_description_flag(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $seed = Product::query()->create([
+            'sku' => 'THUMB-SEED',
+            'name' => 'Rękawice nitrylowe ze ściągaczem',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe THUMB-SEED do prac chemicznych.',
+            'catalog_price_net' => 3.5,
+            'purchase_price' => 2,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['nitryl'],
+                'attributes' => [
+                    'kategoria_bhp' => 'rekawice',
+                    'material' => 'nitryl',
+                    'materialy' => ['nitryl'],
+                    'normy_en' => ['EN 388'],
+                    'klasa_ochrony' => 'kat. II',
+                    'poziomy_en388' => '4544',
+                ],
+            ],
+        ]);
+        $other = Product::query()->create([
+            'sku' => 'THUMB-OTHER',
+            'name' => 'Rękawice nitrylowe ochronne',
+            'manufacturer' => 'OTHERBRAND',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem EN 388.',
+            'catalog_price_net' => 2.9,
+            'purchase_price' => 1.8,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'materials' => ['nitryl'],
+                'attributes' => [
+                    'kategoria_bhp' => 'rekawice',
+                    'material' => 'nitryl',
+                    'materialy' => ['nitryl'],
+                    'normy_en' => ['EN 388'],
+                    'klasa_ochrony' => 'kat. II',
+                    'poziomy_en388' => '4544',
+                ],
+            ],
+        ]);
+        ProductImage::query()->create([
+            'product_id' => $other->id,
+            'path' => 'products/thumb-other.jpg',
+            'is_primary' => true,
+            'sort_order' => 0,
+            'checksum' => 'thumb-other',
+        ]);
+
+        $this->getJson('/api/products/cross-ref?code=THUMB-SEED')
+            ->assertOk()
+            ->assertJsonPath('matches.0.sku', 'THUMB-OTHER')
+            ->assertJsonPath('matches.0.has_description', true)
+            ->assertJsonPath('matches.0.image_url', $other->fresh()->images->first()?->url());
     }
 
     public function test_cross_ref_rejects_footwear_vs_gloves_sibling_skus(): void

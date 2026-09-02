@@ -64,6 +64,7 @@ final class ProductCrossRefService
         if ($seed === null) {
             return ['code' => $code, 'seed' => null, 'groups' => []];
         }
+        $seed->loadMissing('images');
 
         $seedAttrs = $this->bhpAttributes->forProduct($seed);
 
@@ -98,6 +99,7 @@ final class ProductCrossRefService
         if ($seed === null) {
             return ['code' => $code, 'seed' => null, 'matches' => [], 'total' => 0, 'applied_filters' => []];
         }
+        $seed->loadMissing('images');
 
         $seedAttrs = $this->bhpAttributes->forProduct($seed);
         $groups = $this->filters->groupsFor($seed, $seedAttrs);
@@ -105,7 +107,7 @@ final class ProductCrossRefService
         $seedMfr = mb_strtolower(trim((string) $seed->manufacturer));
 
         // Cały katalog — bez limitu i bez wycinania po rodzinie (ppe_family bywa puste).
-        $pool = Product::query()->where('id', '!=', $seed->id)->get();
+        $pool = Product::query()->where('id', '!=', $seed->id)->with('images')->get();
 
         $matches = [];
         foreach ($pool as $product) {
@@ -445,6 +447,9 @@ final class ProductCrossRefService
         array $attrs,
         array $matchedFilters = [],
     ): array {
+        $product->loadMissing('images');
+        $thumb = $product->images->firstWhere('is_primary', true) ?? $product->images->first();
+
         return [
             'product_id' => $product->id,
             'sku' => $product->sku,
@@ -456,6 +461,8 @@ final class ProductCrossRefService
                 : null,
             'match_percent' => $score,
             'cross_brand' => $crossBrand,
+            'image_url' => $thumb?->url(),
+            'has_description' => $product->hasUsableDescription(),
             'attributes' => $attrs,
             'matched_filters' => $matchedFilters,
         ];

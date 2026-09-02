@@ -6,6 +6,7 @@ import {
   type CrossRefAppliedFilter,
   type CrossRefFilterGroup,
 } from './CrossRefFilterModal'
+import { ProductPreviewModal } from './ProductPreviewModal'
 
 type CrossRefProduct = {
   product_id: number
@@ -15,6 +16,8 @@ type CrossRefProduct = {
   catalog_price_net: number | null
   match_percent: number
   cross_brand: boolean
+  image_url?: string | null
+  has_description?: boolean
   matched_filters?: CrossRefAppliedFilter[]
   attributes?: {
     material?: string | null
@@ -72,6 +75,8 @@ export function CrossRefPanel({
   const [optionsBusy, setOptionsBusy] = useState(false)
   const [optionsErr, setOptionsErr] = useState('')
   const [seedLabel, setSeedLabel] = useState('')
+  const [previewId, setPreviewId] = useState<number | null>(null)
+  const [imageModal, setImageModal] = useState<{ name: string; url: string } | null>(null)
 
   async function run(override?: string, filterIds: string[] = []) {
     const q = (override ?? code).trim()
@@ -142,6 +147,15 @@ export function CrossRefPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on mount / initialCode from URL
   }, [initialCode, autoRun])
 
+  useEffect(() => {
+    if (!imageModal) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setImageModal(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [imageModal])
+
   const seedId = result?.seed?.product_id
   const applied = result?.applied_filters ?? []
   const selectedProducts = result
@@ -199,13 +213,24 @@ export function CrossRefPanel({
       {result && (
         <div className="mt-3 space-y-2">
           {result.seed ? (
-            <p className="text-xs text-slate-600">
-              Baza:{' '}
-              <Link to={`/products/${result.seed.product_id}`} className="font-medium text-blue-700 hover:underline">
-                {result.seed.sku}
-              </Link>
-              {' · '}
-              {result.seed.manufacturer} · {result.seed.name}
+            <p className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <span>
+                Baza:{' '}
+                <Link to={`/products/${result.seed.product_id}`} className="font-medium text-blue-700 hover:underline">
+                  {result.seed.sku}
+                </Link>
+                {' · '}
+                {result.seed.manufacturer} · {result.seed.name}
+              </span>
+              {result.seed.has_description && (
+                <button
+                  type="button"
+                  onClick={() => setPreviewId(result.seed!.product_id)}
+                  className="rounded border border-green-300 bg-green-50 px-2 py-0.5 text-[11px] text-green-800 hover:bg-green-100"
+                >
+                  Opis
+                </button>
+              )}
             </p>
           ) : (
             <p className="text-xs text-amber-800">
@@ -303,10 +328,12 @@ export function CrossRefPanel({
                   <tr className="border-b bg-slate-50">
                     <th className="p-2 text-center">Wybierz</th>
                     <th className="p-2">%</th>
+                    <th className="p-2">Zdjęcie</th>
                     <th className="p-2">SKU</th>
                     <th className="p-2">Producent</th>
                     <th className="p-2">Nazwa</th>
                     <th className="p-2">Cena</th>
+                    <th className="p-2">Opis</th>
                     <th className="p-2">{applied.length > 0 ? 'Spełnia / atrybuty' : 'Atrybuty'}</th>
                   </tr>
                 </thead>
@@ -332,6 +359,20 @@ export function CrossRefPanel({
                         </td>
                         <td className="p-2 font-semibold text-violet-700">{m.match_percent}%</td>
                         <td className="p-2">
+                          {m.image_url ? (
+                            <button
+                              type="button"
+                              onClick={() => setImageModal({ name: m.name, url: m.image_url! })}
+                              className="block overflow-hidden rounded border border-slate-200 bg-slate-50"
+                              title="Pokaż pełne zdjęcie"
+                            >
+                              <img src={m.image_url} alt="" className="h-10 w-10 object-cover" />
+                            </button>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="p-2">
                           <Link to={`/products/${m.product_id}`} className="text-blue-600 hover:underline">
                             {m.sku}
                           </Link>
@@ -346,6 +387,19 @@ export function CrossRefPanel({
                           {m.name}
                         </td>
                         <td className="p-2 whitespace-nowrap">{fmtPrice(m.catalog_price_net)}</td>
+                        <td className="p-2">
+                          {m.has_description ? (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewId(m.product_id)}
+                              className="rounded border border-green-300 bg-green-50 px-2 py-1 text-[11px] text-green-800 hover:bg-green-100"
+                            >
+                              Opis
+                            </button>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
                         <td className="p-2 text-[10px] text-slate-500">
                           {hits.length > 0 && (
                             <div className="mb-1 flex flex-wrap gap-1">
@@ -391,6 +445,34 @@ export function CrossRefPanel({
         onSearchMust={(ids) => void run(code, ids)}
         onClose={() => setModalOpen(false)}
       />
+      <ProductPreviewModal
+        productId={previewId}
+        query={[result?.seed?.sku, result?.seed?.name, result?.code].filter(Boolean).join(' ')}
+        onClose={() => setPreviewId(null)}
+      />
+      {imageModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setImageModal(null)}
+        >
+          <div className="relative max-h-[90vh] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => setImageModal(null)}
+              className="absolute -right-2 -top-2 rounded bg-white px-2 py-1 text-xs shadow"
+            >
+              Zamknij
+            </button>
+            <img
+              src={imageModal.url}
+              alt={imageModal.name}
+              className="max-h-[85vh] max-w-[90vw] rounded bg-white object-contain"
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
