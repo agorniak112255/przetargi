@@ -423,30 +423,87 @@ final class RetailerOnSiteSearch
                     $current = $next;
                     continue;
                 }
-                if (! $response->successful()) {
-                    return null;
-                }
-                $final = (string) ($response->effectiveUri() ?? $current);
-                if ($this->isMisterworkerProductUrl($final)) {
-                    return $this->hitFromMisterworkerUrl($final);
-                }
-                $canonical = $this->canonicalFromHtml((string) $response->body());
-                if ($this->isMisterworkerProductUrl($canonical)) {
-                    return $this->hitFromMisterworkerUrl($canonical);
+                if ($response->successful()) {
+                    $final = (string) ($response->effectiveUri() ?? $current);
+                    if ($this->isMisterworkerProductUrl($final)) {
+                        return $this->hitFromMisterworkerUrl($final);
+                    }
+                    $canonical = $this->canonicalFromHtml((string) $response->body());
+                    if ($this->isMisterworkerProductUrl($canonical)) {
+                        return $this->hitFromMisterworkerUrl($canonical);
+                    }
                 }
 
-                return null;
+                return $this->prettyUrlViaReader($id);
             }
 
-            return null;
+            return $this->prettyUrlViaReader($id);
         } catch (Throwable $e) {
             Log::info('Misterworker product resolve failed', [
                 'id' => $id,
                 'error' => $e->getMessage(),
             ]);
 
+            return $this->prettyUrlViaReader($id);
+        }
+    }
+
+    /**
+     * Cloudflare blokuje Guzzle na misterworker — Jina zwraca markdown z pretty URL.
+     *
+     * @return array{url: string, title: string, snippet: string}|null
+     */
+    private function prettyUrlViaReader(int $id): ?array
+    {
+        $source = self::MISTERWORKER_ORIGIN.'/en/index.php?controller=product&id_product='.$id;
+        try {
+            $response = Http::timeout(35)
+                ->connectTimeout(8)
+                ->withHeaders([
+                    'Accept' => 'text/plain,text/markdown,*/*',
+                    'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
+                ])
+                ->get('https://r.jina.ai/'.$source);
+            if (! $response->successful()) {
+                return null;
+            }
+            $url = $this->prettyUrlFromMarkdown((string) $response->body(), $id);
+            if ($url === '') {
+                return null;
+            }
+
+            return $this->hitFromMisterworkerUrl($url);
+        } catch (Throwable $e) {
+            Log::info('Misterworker Jina resolve failed', [
+                'id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+
             return null;
         }
+    }
+
+    private function prettyUrlFromMarkdown(string $markdown, int $id): string
+    {
+        if (preg_match_all('#https://(?:www\.)?misterworker\.com/[^\s<>"\')]+#i', $markdown, $hits) === 0) {
+            return '';
+        }
+        $suffix = '/'.$id.'.html';
+        foreach ($hits[0] as $raw) {
+            $raw = html_entity_decode(rtrim((string) $raw, '.,);'), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $path = (string) (parse_url($raw, PHP_URL_PATH) ?? '');
+            if (! str_ends_with($path, $suffix)) {
+                continue;
+            }
+            $host = (string) (parse_url($raw, PHP_URL_HOST) ?? '');
+            $scheme = (string) (parse_url($raw, PHP_URL_SCHEME) ?? 'https');
+            $clean = $scheme.'://'.$host.$path;
+            if ($this->isMisterworkerProductUrl($clean)) {
+                return $clean;
+            }
+        }
+
+        return '';
     }
 
     /**

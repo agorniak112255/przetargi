@@ -298,6 +298,35 @@ final class RetailerOnSiteSearchTest extends TestCase
         $this->assertSame([], app(RetailerOnSiteSearch::class)->find($this->upowerAlfa()));
     }
 
+    public function test_misterworker_uses_jina_when_cloudflare_blocks_product(): void
+    {
+        config(['enrichment.misterworker_clerk_key' => 'testClerkKey123456']);
+        Http::fake(function ($request) {
+            $url = $request->url();
+            if (str_contains($url, 'api.clerk.io')) {
+                return Http::response(['result' => [74275]], 200);
+            }
+            if (str_contains($url, 'r.jina.ai')) {
+                return Http::response(
+                    'Title: U-POWER ST068GM Alfa Grey Meteorite'
+                    ."\n[pants](https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html?id_currency=1)",
+                    200
+                );
+            }
+            if (str_contains($url, 'misterworker.com')) {
+                return Http::response('<title>Attention Required! | Cloudflare</title>', 403);
+            }
+
+            return Http::response('empty', 200);
+        });
+
+        $urls = array_column(app(RetailerOnSiteSearch::class)->find($this->upowerAlfa()), 'url');
+        $this->assertContains(
+            'https://www.misterworker.com/en/u-power/alfa-grey-meteorite-four-seasons-work-pants-st068gm/74275.html',
+            $urls
+        );
+    }
+
     public function test_misterworker_resolves_at_most_three_clerk_ids(): void
     {
         config(['enrichment.misterworker_clerk_key' => 'testClerkKey123456']);
