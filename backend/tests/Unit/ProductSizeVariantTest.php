@@ -214,4 +214,51 @@ final class ProductSizeVariantTest extends TestCase
             $svc->labelFromTexts(null, 'Rozmiar: 36 37 38 39 40 41 42 43 44 45 46 47', 'obuwie')
         );
     }
+
+    #[Test]
+    public function reads_idosell_select2_glove_sizes_not_footwear_chart(): void
+    {
+        $svc = new ProductSizeVariant;
+        $html = '<table class="product-parameters"><tr><td>'
+            .'<span class="parameter-name">Rozmiary rękawic</span> <br></td><td>'
+            .'<select class="select-field-select2 core_parseOption" data-placeholder="Wybierz">'
+            .'<option></option>'
+            .'<option value="14220" name="option_15-134792">6</option>'
+            .'<option value="14221" name="option_15-134792">7</option>'
+            .'<option value="14222" name="option_15-134792">8</option>'
+            .'<option value="14223" name="option_15-134792">9</option>'
+            .'<option value="14224" name="option_15-134792">10</option>'
+            .'<option value="14225" name="option_15-134792">11</option>'
+            .'</select></td></tr></table>'
+            .'<footer>Rozmiary unisex od 35 do 49. Tabela obuwia.</footer>';
+
+        $this->assertSame(
+            ['6', '7', '8', '9', '10', '11'],
+            $svc->parseShopOptionSizes($html)
+        );
+        $this->assertSame(
+            ['6', '7', '8', '9', '10', '11'],
+            $svc->pickBestSizeList(
+                [$svc->parseShopOptionSizes($html), ['35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49']],
+                'rekawice'
+            )
+        );
+    }
+
+    #[Test]
+    public function reads_glove_sizes_from_sku_slash_table(): void
+    {
+        $svc = new ProductSizeVariant;
+        $html = '<table><tr><td>A5016/06</td><td>A5016/07</td><td>A5016/08</td>'
+            .'<td>A5016/09</td><td>A5016/10</td><td>A5016/11</td></tr></table>';
+        $this->assertSame(
+            ['6', '7', '8', '9', '10', '11'],
+            $svc->parseShopOptionSizes('A5016/06 A5016/07 A5016/08 A5016/09 A5016/10 A5016/11')
+        );
+
+        $this->assertSame(
+            ['6', '7', '8', '9', '10', '11'],
+            $svc->parseShopOptionSizes($html)
+        );
+    }
 }

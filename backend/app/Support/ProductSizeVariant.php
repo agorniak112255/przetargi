@@ -234,17 +234,61 @@ final class ProductSizeVariant
                 $best = $tokens;
             }
         }
+        // Opcje zakupu mają pierwszeństwo przed tabelą / opisem (np. 36-48 w stopce).
+        if ($best !== []) {
+            return $this->uniqueSortedSizes($best);
+        }
         $fromCodes = $this->sizesFromManufacturerCodes($html);
-        if (count($fromCodes) > count($best)) {
-            $best = $fromCodes;
+        if ($fromCodes === []) {
+            $fromCodes = $this->sizesFromVariantSkuSuffixes($html);
+        }
+        if ($fromCodes !== []) {
+            return $fromCodes;
         }
         $plain = trim(html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-        $fromText = $this->parseSizesFromText($plain);
-        if (count($fromText) > count($best)) {
-            $best = $fromText;
+
+        return $this->uniqueSortedSizes($this->parseSizesFromText($plain));
+    }
+
+    /**
+     * Najdłuższa lista pasująca do kategorii (rękawice ≠ 35-49 z tabeli butów).
+     *
+     * @param  list<list<string>>  $lists
+     * @return list<string>
+     */
+    public function pickBestSizeList(array $lists, ?string $category): array
+    {
+        $bestFiltered = [];
+        $bestRaw = [];
+        foreach ($lists as $list) {
+            if (! is_array($list) || count($list) < 2) {
+                continue;
+            }
+            $tokens = [];
+            foreach ($list as $size) {
+                if (is_string($size) && trim($size) !== '') {
+                    $tokens[] = $size;
+                }
+            }
+            if (count($tokens) < 2) {
+                continue;
+            }
+            $filtered = $this->filterByCategory($tokens, $category);
+            if (count($filtered) > count($bestFiltered)) {
+                $bestFiltered = $filtered;
+            }
+            if ($bestFiltered === [] && count($tokens) > count($bestRaw)) {
+                $bestRaw = $tokens;
+            }
+        }
+        if ($bestFiltered !== []) {
+            return $this->uniqueSortedSizes($bestFiltered);
+        }
+        if ($category !== null && trim($category) !== '') {
+            return [];
         }
 
-        return $this->uniqueSortedSizes($best);
+        return $this->uniqueSortedSizes($bestRaw);
     }
 
     /**
@@ -576,10 +620,25 @@ final class ProductSizeVariant
             }
         }
         if (preg_match_all(
-            '#(?:rozmiar|size|taille|pointure)\s*:?\s*</[^>]+>\s*<(?:select|ul|div|fieldset)[^>]*>(.*?)</(?:select|ul|div|fieldset)>#iu',
+            '#(?:rozmiar|size|taille|pointure)[^<]{0,40}</[^>]+>\s*(?:<br\s*/?>\s*)*<(?:select|ul|div|fieldset)[^>]*>(.*?)</(?:select|ul|div|fieldset)>#iu',
             $html,
             $m
         )) {
+            foreach ($m[1] as $block) {
+                $blocks[] = (string) $block;
+            }
+        }
+        // IdoSell / Sote: select2 bez „rozmiar” w class/id (etykieta w sąsiedniej komórce).
+        if (preg_match_all(
+            '#<select[^>]*(?:select-field-select2|core_parseOption|select2-hidden-accessible)[^>]*>(.*?)</select>#is',
+            $html,
+            $m
+        )) {
+            foreach ($m[1] as $block) {
+                $blocks[] = (string) $block;
+            }
+        }
+        if (preg_match_all('#<select[^>]*>(.*?)</select>#is', $html, $m)) {
             foreach ($m[1] as $block) {
                 $blocks[] = (string) $block;
             }
@@ -662,6 +721,41 @@ final class ProductSizeVariant
         }
 
         return $this->uniqueSortedSizes($found);
+    }
+
+    /**
+     * A5016/06 … A5016/11 — wariant rozmiaru po ukośniku, nie w opisie.
+     *
+     * @return list<string>
+     */
+    private function sizesFromVariantSkuSuffixes(string $text): array
+    {
+        $plain = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $hay = $text."\n".$plain;
+        if (preg_match_all('/\b([A-Z][A-Z0-9]{2,20})[\/\-]0?(\d{1,2})(?![0-9])/', $hay, $m) < 1) {
+            return [];
+        }
+        $byPrefix = [];
+        foreach ($m[1] as $i => $prefix) {
+            $norm = $this->normalizeSizeToken((string) $m[2][$i]);
+            if ($norm === null) {
+                continue;
+            }
+            if (! isset($byPrefix[$prefix])) {
+                $byPrefix[$prefix] = [];
+            }
+            if (! in_array($norm, $byPrefix[$prefix], true)) {
+                $byPrefix[$prefix][] = $norm;
+            }
+        }
+        $best = [];
+        foreach ($byPrefix as $list) {
+            if (count($list) >= 3 && count($list) > count($best)) {
+                $best = $list;
+            }
+        }
+
+        return $this->uniqueSortedSizes($best);
     }
 
     /**

@@ -276,7 +276,16 @@ final class ProductPageFetcher
 
         $used = false;
         if ($viaReader['text'] !== '') {
-            $goodPages[] = ['url' => $url, 'text' => $viaReader['text']];
+            $text = $viaReader['text'];
+            $optionSizes = (new ProductSizeVariant)->parseShopOptionSizes($text);
+            if ($optionSizes !== []) {
+                $text = trim('Dostępne rozmiary: '.implode(', ', $optionSizes)."\n\n".$text);
+            }
+            $page = ['url' => $url, 'text' => $text];
+            if ($optionSizes !== []) {
+                $page['option_sizes'] = $optionSizes;
+            }
+            $goodPages[] = $page;
             $used = true;
         }
         foreach ($viaReader['image_urls'] as $img) {

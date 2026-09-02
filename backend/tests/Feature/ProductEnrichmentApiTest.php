@@ -1285,6 +1285,91 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame('36-47', $product->packaging);
     }
 
+    public function test_keeps_idosell_select2_glove_sizes_not_footwear_range(): void
+    {
+        Storage::fake('public');
+        $product = $this->makeProduct([
+            'sku' => 'A5016',
+            'name' => 'Rękawice robocze BRAD A5016 ARDON',
+            'manufacturer' => 'Ardon',
+            'category' => 'Rękawice',
+        ]);
+        $shopUrl = 'https://optimumbhp.pl/REKAWICE-ROBOCZE-Z-POWLOKA-NITRYLOWA-BRAD-A5016-ARDON-p134792';
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')->once()->andReturn([
+            'results' => [[
+                'url' => $shopUrl,
+                'title' => 'Rękawice robocze BRAD A5016 ARDON',
+                'snippet' => 'Rękawice robocze BRAD A5016 ARDON nitryl',
+            ]],
+            'errors' => [],
+        ]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        $desc = 'Rękawice robocze Brad A5016 Ardon z nylonu z powłoką nitrylową. '
+            .'Bezszwowe, niepylące, odporne na oleje i tłuszcze. '
+            .'Przeznaczone do prac technicznych, przemysłowych i montażu. Norma EN 388:2016 212XX.';
+        $this->app->instance(OpenAiCompatibleClient::class, $this->mockLlmWithSanitize([
+            'description' => $desc,
+            'features' => ['nitryl', 'bezszwowe'],
+            'specs' => ['Powłoka: nitryl'],
+            'norms' => ['EN 388:2016'],
+            'materials' => ['nitryl', 'nylon'],
+            'use_cases' => ['przemysł'],
+            'image_urls' => [],
+            'source_urls' => [$shopUrl],
+            'confidence' => 0.9,
+            'attributes' => ['kategoria_bhp' => 'rekawice', 'rozmiar' => '35-49'],
+        ]));
+
+        Http::fake([
+            '*' => Http::response(
+                '<html><body><h1>Rękawice robocze BRAD A5016 ARDON</h1>'
+                .'<article><p>Rękawice robocze Brad A5016 Ardon z nylonu z powłoką nitrylową. '
+                .'Model bezszwowy, niepylący, odporny na oleje i tłuszcze. '
+                .'Przeznaczone do prac technicznych, przemysłowych, montażu i transportu. '
+                .'EN 388:2016 212XX. Producent Ardon Safety. Kod A5016. '
+                .str_repeat('Opis karty produktu BHP. ', 20)
+                .'</p></article>'
+                .'<table class="product-parameters"><tr><td>'
+                .'<span class="parameter-name">Rozmiary rękawic</span> <br></td><td>'
+                .'<select class="select-field-select2 core_parseOption" data-placeholder="Wybierz">'
+                .'<option></option>'
+                .'<option value="14220" name="option_15-134792">6</option>'
+                .'<option value="14221" name="option_15-134792">7</option>'
+                .'<option value="14222" name="option_15-134792">8</option>'
+                .'<option value="14223" name="option_15-134792">9</option>'
+                .'<option value="14224" name="option_15-134792">10</option>'
+                .'<option value="14225" name="option_15-134792">11</option>'
+                .'</select></td></tr></table>'
+                .'<p>Rozmiary unisex od 35 do 49.</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://api.tavily.com/*' => Http::response(['results' => []], 200),
+        ]);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [['url' => $shopUrl, 'title' => 'Rękawice robocze BRAD A5016 ARDON', 'snippet' => 'A5016']],
+            'A5016',
+            3,
+            [],
+            $product
+        );
+        $this->assertSame(
+            ['6', '7', '8', '9', '10', '11'],
+            $fetched['pages'][0]['option_sizes'] ?? []
+        );
+
+        app(ProductEnrichmentService::class)->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertSame('6-11', $product->enrichment_payload['attributes']['rozmiar'] ?? null);
+        $this->assertSame('6-11', $product->packaging);
+    }
+
     public function test_retries_shop_image_instead_of_manufacturer_screenshot(): void
     {
         Storage::fake('public');

@@ -464,7 +464,10 @@ final class ProductEnrichmentService
             $this->assertBatchNotCancelled($batchId);
 
             // opcje zakupu (radio/select) — zanim LLM wytnie je z tekstu karty
-            $optionSizes = $this->collectOptionSizes($pageSnippets);
+            $optionSizes = $this->collectOptionSizes(
+                $pageSnippets,
+                $this->sizeCategoryHint($product)
+            );
 
             // sklep → opis PL; producent → normy/materiały — jedno sanitize, żeby nie dublować vLLM
             $t = microtime(true);
@@ -528,7 +531,10 @@ final class ProductEnrichmentService
                         $supplementedPages,
                         $this->mergeOptionSizeLists(
                             $optionSizes,
-                            $this->collectOptionSizes($supplementedPages)
+                            $this->collectOptionSizes(
+                                $supplementedPages,
+                                $this->sizeCategoryHint($product)
+                            )
                         )
                     );
                 }
@@ -644,7 +650,7 @@ final class ProductEnrichmentService
                 $attributes,
                 $specs,
                 $description,
-                $this->collectOptionSizes($pageSnippets)
+                $this->collectOptionSizes($pageSnippets, $this->sizeCategoryHint($product, $attributes))
             );
             $attributes = $sized['attributes'];
             $packaging = $sized['packaging'];
@@ -1633,7 +1639,7 @@ final class ProductEnrichmentService
         $sizes = new ProductSizeVariant;
         $category = is_string($attributes['kategoria_bhp'] ?? null) ? $attributes['kategoria_bhp'] : null;
         $fromShop = $sizes->filterByCategory($optionSizes, $category);
-        if (count($fromShop) < 2 && count($optionSizes) >= 2) {
+        if (count($fromShop) < 2 && count($optionSizes) >= 2 && ($category === null || trim($category) === '')) {
             $fromShop = $optionSizes;
         }
         if (count($fromShop) >= 2) {
@@ -1669,9 +1675,9 @@ final class ProductEnrichmentService
      * @param  list<array{url?: string, text?: string, option_sizes?: list<string>}>  $pages
      * @return list<string>
      */
-    private function collectOptionSizes(array $pages): array
+    private function collectOptionSizes(array $pages, ?string $category = null): array
     {
-        $best = [];
+        $lists = [];
         foreach ($pages as $page) {
             $row = $page['option_sizes'] ?? [];
             if (! is_array($row)) {
@@ -1683,12 +1689,34 @@ final class ProductEnrichmentService
                     $tokens[] = $size;
                 }
             }
-            if (count($tokens) > count($best)) {
-                $best = $tokens;
+            if (count($tokens) >= 2) {
+                $lists[] = $tokens;
             }
         }
 
-        return $best;
+        return (new ProductSizeVariant)->pickBestSizeList($lists, $category);
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $attributes
+     */
+    private function sizeCategoryHint(Product $product, ?array $attributes = null): ?string
+    {
+        if (is_string($attributes['kategoria_bhp'] ?? null) && trim((string) $attributes['kategoria_bhp']) !== '') {
+            return (string) $attributes['kategoria_bhp'];
+        }
+        if (is_string($product->category) && trim($product->category) !== '') {
+            return $product->category;
+        }
+        $name = mb_strtolower((string) $product->name);
+        if (str_contains($name, 'rękaw') || str_contains($name, 'rekaw') || str_contains($name, 'glove')) {
+            return 'rekawice';
+        }
+        if (preg_match('/\b(but|półbut|polbut|obuwie|trzewik|sanda[łl])\w*/u', $name) === 1) {
+            return 'obuwie';
+        }
+
+        return null;
     }
 
     /**
