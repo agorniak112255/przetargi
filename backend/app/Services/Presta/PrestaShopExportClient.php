@@ -360,21 +360,56 @@ final class PrestaShopExportClient implements PrestaExportGateway
 
     public function productImageCount(int $prestaId): int
     {
+        return count($this->productImageIds($prestaId));
+    }
+
+    public function deleteProductImages(int $prestaId): int
+    {
+        $ids = $this->productImageIds($prestaId);
+        $cfg = $this->settings->resolve();
+        $deleted = 0;
+        foreach ($ids as $imageId) {
+            $url = rtrim($cfg['shop_url'], '/').'/api/images/products/'.$prestaId.'/'.$imageId;
+            $response = Http::timeout(60)
+                ->withBasicAuth($cfg['webservice_key'], '')
+                ->withQueryParameters(['ws_key' => $cfg['webservice_key']])
+                ->delete($url);
+            if ($response->failed()) {
+                throw new RuntimeException(
+                    'Usuwanie zdjęcia Presta #'.$imageId.' nie powiodło się (HTTP '.$response->status().').'
+                );
+            }
+            $deleted++;
+        }
+
+        return $deleted;
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function productImageIds(int $prestaId): array
+    {
         if ($prestaId <= 0) {
-            return 0;
+            return [];
         }
         try {
             $this->connectDb();
             $prefix = $this->prefix();
             if (! Schema::connection('prestashop')->hasTable($prefix.'image')) {
-                return 0;
+                return [];
             }
 
-            return (int) DB::connection('prestashop')->table($prefix.'image')
-                ->where('id_product', $prestaId)
-                ->count();
+            return array_values(array_filter(array_map(
+                'intval',
+                DB::connection('prestashop')->table($prefix.'image')
+                    ->where('id_product', $prestaId)
+                    ->orderBy('id_image')
+                    ->pluck('id_image')
+                    ->all()
+            )));
         } catch (Throwable) {
-            return 0;
+            return [];
         }
     }
 

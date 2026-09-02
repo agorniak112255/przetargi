@@ -41,6 +41,9 @@ final class FakePrestaExportGateway implements PrestaExportGateway
     /** @var list<array{presta_id: int, filename: string}> */
     public array $images = [];
 
+    /** @var list<int> */
+    public array $deletedImageProducts = [];
+
     private int $nextId = 9000;
 
     public function writeConfigured(): bool
@@ -145,5 +148,17 @@ final class FakePrestaExportGateway implements PrestaExportGateway
             $this->images,
             static fn (array $row): bool => (int) $row['presta_id'] === $prestaId
         ));
+    }
+
+    public function deleteProductImages(int $prestaId): int
+    {
+        $before = count($this->images);
+        $this->images = array_values(array_filter(
+            $this->images,
+            static fn (array $row): bool => (int) $row['presta_id'] !== $prestaId
+        ));
+        $this->deletedImageProducts[] = $prestaId;
+
+        return $before - count($this->images);
     }
 }

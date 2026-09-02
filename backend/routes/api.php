@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Http\Controllers\Api\Admin\ActivityLogController as AdminActivityLogController;
 use App\Http\Controllers\Api\Admin\CatalogSearchSiteController as AdminCatalogSearchSiteController;
 use App\Http\Controllers\Api\Admin\MailSettingsController as AdminMailSettingsController;
+use App\Http\Controllers\Api\Admin\PrestaCategoryController as AdminPrestaCategoryController;
 use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaShopSettingsController;
 use App\Http\Controllers\Api\Admin\RoleController as AdminRoleController;
 use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
@@ -213,6 +214,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::get('/presta-settings', [AdminPrestaShopSettingsController::class, 'show']);
         Route::put('/presta-settings', [AdminPrestaShopSettingsController::class, 'update']);
         Route::post('/presta-settings/test', [AdminPrestaShopSettingsController::class, 'test']);
+        Route::get('/presta-categories', [AdminPrestaCategoryController::class, 'index']);
+        Route::post('/presta-categories/sync', [AdminPrestaCategoryController::class, 'sync']);
+        Route::put('/presta-categories/maps', [AdminPrestaCategoryController::class, 'updateMaps']);
 
         Route::get('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'index']);
         Route::post('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'store']);

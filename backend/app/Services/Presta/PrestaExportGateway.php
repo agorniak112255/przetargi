@@ -45,4 +45,6 @@ interface PrestaExportGateway
     public function uploadImage(int $prestaId, string $binary, string $filename): void;
 
     public function productImageCount(int $prestaId): int;
+
+    public function deleteProductImages(int $prestaId): int;
 }

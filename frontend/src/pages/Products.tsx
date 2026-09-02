@@ -913,6 +913,7 @@ export function Products() {
           <tbody>
             {displayRows.map((p) => {
               const status = p.enrichment_status ?? 'none'
+              const thumb = p.images?.find((img) => img.is_primary) ?? p.images?.[0]
               return (
                 <tr key={p.id} className={`border-b ${selected[p.id] ? 'bg-blue-50/40' : ''}`}>
                   {canEnrich && (
@@ -1005,15 +1006,14 @@ export function Products() {
                     )}
                   </td>
                   <td className="p-2">
-                    {(p.images_count ?? 0) > 0 && p.images?.[0]?.url ? (
+                    {thumb?.url ? (
                       <button
                         type="button"
-                        onClick={() =>
-                          setImageModal({ name: p.name, url: p.images![0].url })
-                        }
-                        className="rounded border border-blue-300 bg-blue-50 px-2 py-1 text-[11px] text-blue-800 hover:bg-blue-100"
+                        onClick={() => setImageModal({ name: p.name, url: thumb.url })}
+                        className="block overflow-hidden rounded border border-slate-200 bg-slate-50"
+                        title="Pokaż pełne zdjęcie"
                       >
-                        Zdjęcie
+                        <img src={thumb.url} alt="" className="h-10 w-10 object-cover" />
                       </button>
                     ) : (
                       <span className="text-slate-400">—</span>

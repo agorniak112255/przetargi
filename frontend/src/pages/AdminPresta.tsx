@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../auth'
+import { PrestaCategoryMapTab } from '../components/PrestaCategoryMapTab'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { api, can, type Product } from '../lib/api'
 
@@ -50,6 +51,7 @@ export function AdminPresta() {
   const [prestaBusy, setPrestaBusy] = useState(false)
   const [prestaErr, setPrestaErr] = useState('')
   const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
+  const [tab, setTab] = useState<'polaczenie' | 'kategorie'>('polaczenie')
 
   async function load() {
     const data = await api<PrestaSettings>('/admin/presta-settings')
@@ -177,6 +179,27 @@ export function AdminPresta() {
       {err && <p className="mb-2 text-sm text-red-600">{err}</p>}
       {msg && <p className="mb-2 text-sm text-green-700">{msg}</p>}
 
+      <div className="mb-3 flex gap-1 text-xs">
+        <button
+          type="button"
+          className={`rounded px-3 py-1.5 ${tab === 'polaczenie' ? 'bg-slate-800 text-white' : 'bg-white text-slate-700 shadow-sm'}`}
+          onClick={() => setTab('polaczenie')}
+        >
+          Połączenie
+        </button>
+        <button
+          type="button"
+          className={`rounded px-3 py-1.5 ${tab === 'kategorie' ? 'bg-slate-800 text-white' : 'bg-white text-slate-700 shadow-sm'}`}
+          onClick={() => setTab('kategorie')}
+        >
+          Kategorie
+        </button>
+      </div>
+
+      {tab === 'kategorie' && <PrestaCategoryMapTab />}
+
+      {tab === 'polaczenie' && (
+        <>
       <form onSubmit={(e) => void onSave(e)} className="mb-4 grid max-w-3xl gap-3 rounded-xl bg-white p-4 shadow-sm sm:grid-cols-2">
         <div className="sm:col-span-2">
           <h2 className="text-sm font-semibold">Sklep PrestaShop</h2>
@@ -375,6 +398,8 @@ export function AdminPresta() {
             onApplied={() => setMsg('Zastosowano dane ze sklepu.')}
           />
         </div>
+      )}
+        </>
       )}
     </div>
   )

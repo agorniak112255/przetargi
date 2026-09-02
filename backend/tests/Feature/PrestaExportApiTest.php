@@ -139,12 +139,13 @@ final class PrestaExportApiTest extends TestCase
             ->assertJsonPath('images', 1);
         $this->assertCount(1, $this->presta->images);
 
-        $this->presta->images = [];
         $this->postJson('/api/products/'.$product->id.'/presta-export', ['force' => true])
             ->assertOk()
             ->assertJsonPath('action', 'updated')
             ->assertJsonPath('images', 1);
+        $this->assertSame([$prestaId = $this->presta->created[0]['id_product']], $this->presta->deletedImageProducts);
         $this->assertCount(1, $this->presta->images);
+        $this->assertSame($prestaId, $this->presta->images[0]['presta_id']);
         $this->assertStringContainsString('Pełny opis', $this->presta->updated[0]['description']);
     }
 

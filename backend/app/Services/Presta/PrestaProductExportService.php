@@ -23,6 +23,7 @@ final class PrestaProductExportService
         private readonly PrestaSettingsService $settings,
         private readonly ProductSizeVariant $sizes,
         private readonly NbpExchangeRateService $fx,
+        private readonly PrestaCategoryMapService $categories,
     ) {}
 
     /**
@@ -84,7 +85,11 @@ final class PrestaProductExportService
         $this->gateway->ensureCombinations($prestaId, $combinations);
 
         $images = 0;
-        if ($this->gateway->productImageCount($prestaId) === 0) {
+        $hasLocalImages = $product->images->isNotEmpty();
+        if ($hasLocalImages && $action === 'updated') {
+            $this->gateway->deleteProductImages($prestaId);
+        }
+        if ($hasLocalImages && ($action === 'created' || $action === 'updated')) {
             $images = $this->uploadImages($product, $prestaId);
         }
 
@@ -203,7 +208,7 @@ final class PrestaProductExportService
             'ean13' => $ean,
             'price' => $this->fx->toPln((float) $product->catalog_price_net, $product->currency),
             'id_manufacturer' => $this->gateway->resolveManufacturerId((string) $product->manufacturer),
-            'id_category' => $this->gateway->resolveCategoryId($product->category !== null ? (string) $product->category : null),
+            'id_category' => $this->categories->resolveId($product->category !== null ? (string) $product->category : null),
             'delivery_label' => $cfg['delivery_label'],
         ];
     }
