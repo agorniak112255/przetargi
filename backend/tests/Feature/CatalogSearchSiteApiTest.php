@@ -8,6 +8,7 @@ use App\Jobs\IndexCatalogHostJob;
 use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
+use App\Models\CatalogSearchSiteExclusion;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -82,6 +83,49 @@ final class CatalogSearchSiteApiTest extends TestCase
         $this->postJson('/api/admin/catalog-search-sites', ['url' => 'x.pl'])->assertForbidden();
         $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/pages')->assertForbidden();
         $this->postJson('/api/admin/catalog-search-sites/sklepbhp.pl/reindex')->assertForbidden();
+        $this->deleteJson('/api/admin/catalog-search-sites/sklepbhp.pl')->assertForbidden();
+    }
+
+    public function test_admin_deletes_site_pages_and_hides_config_host(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedPage('https://sklepbhp.pl/buty-s3');
+        $this->seedPage('https://www.sklepbhp.pl/kalosze');
+
+        $this->deleteJson('/api/admin/catalog-search-sites/sklepbhp.pl')
+            ->assertOk()
+            ->assertJsonPath('host', 'sklepbhp.pl')
+            ->assertJsonPath('deleted', true)
+            ->assertJsonPath('pages', 2);
+
+        $this->assertFalse(CatalogPage::query()->where('host', 'sklepbhp.pl')->exists());
+        $this->assertFalse(CatalogPage::query()->where('host', 'www.sklepbhp.pl')->exists());
+        $this->assertTrue(CatalogSearchSiteExclusion::hasHost('sklepbhp.pl'));
+
+        $this->getJson('/api/admin/catalog-search-sites')
+            ->assertOk()
+            ->assertJsonMissing(['host' => 'sklepbhp.pl']);
+
+        $this->deleteJson('/api/admin/catalog-search-sites/sklepbhp.pl')
+            ->assertStatus(422);
+    }
+
+    public function test_admin_can_add_site_again_after_delete(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        Queue::fake();
+        config(['enrichment.retailer_domains' => [], 'enrichment.preferred_domains' => []]);
+        CatalogSearchSite::query()->create(['host' => 'nowysklep-bhp.pl', 'source' => 'manual']);
+
+        $this->deleteJson('/api/admin/catalog-search-sites/nowysklep-bhp.pl')->assertOk();
+        $this->assertFalse(CatalogSearchSite::hasHost('nowysklep-bhp.pl'));
+
+        $this->postJson('/api/admin/catalog-search-sites', ['url' => 'nowysklep-bhp.pl'])
+            ->assertCreated()
+            ->assertJsonPath('host', 'nowysklep-bhp.pl');
+
+        $this->assertTrue(CatalogSearchSite::hasHost('nowysklep-bhp.pl'));
+        $this->assertFalse(CatalogSearchSiteExclusion::hasHost('nowysklep-bhp.pl'));
     }
 
     public function test_admin_lists_pages_for_host_including_www(): void

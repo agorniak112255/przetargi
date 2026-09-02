@@ -8,6 +8,7 @@ use App\Jobs\IndexCatalogHostJob;
 use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
+use App\Models\CatalogSearchSiteExclusion;
 use App\Models\ManufacturerSite;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -62,8 +63,15 @@ final class CatalogSearchHostService
         }
 
         $manualDates = $this->manualAddedAt();
+        $blocked = array_fill_keys(
+            array_map(fn (string $host): string => $this->normalizeHost($host), CatalogSearchSiteExclusion::allHosts()),
+            true
+        );
         $out = [];
         foreach ($hosts as $host => $flags) {
+            if (isset($blocked[$host]) || $host === '') {
+                continue;
+            }
             $sources = [];
             if (! empty($flags['manual'])) {
                 $sources[] = 'manual';
@@ -116,6 +124,7 @@ final class CatalogSearchHostService
             ]);
         }
 
+        CatalogSearchSiteExclusion::forget($host);
         CatalogSearchSite::query()->create([
             'host' => $host,
             'source' => 'manual',
@@ -181,6 +190,32 @@ final class CatalogSearchHostService
                 'per_page' => $paginator->perPage(),
                 'total' => $paginator->total(),
             ],
+        ];
+    }
+
+    /**
+     * @return array{host: string, deleted: bool, pages: int, message: string}
+     */
+    public function remove(string $host): array
+    {
+        $row = $this->requireHost($host);
+        $host = $row['host'];
+        $aliases = $this->hostAliases($host);
+        $pages = CatalogPage::query()->whereIn('host', $aliases)->count();
+
+        CatalogPage::query()->whereIn('host', $aliases)->delete();
+        CatalogHost::query()->whereIn('host', $aliases)->delete();
+        CatalogSearchSite::query()->whereIn('host', $aliases)->delete();
+        if (Schema::hasTable('manufacturer_sites')) {
+            ManufacturerSite::query()->whereIn('host', $aliases)->delete();
+        }
+        CatalogSearchSiteExclusion::remember($host);
+
+        return [
+            'host' => $host,
+            'deleted' => true,
+            'pages' => $pages,
+            'message' => 'Usunięto '.$host.($pages > 0 ? ' ('.$pages.' kart).' : '.'),
         ];
     }
 

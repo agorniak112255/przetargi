@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
+use App\Models\CatalogSearchSiteExclusion;
 use App\Models\ManufacturerSite;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use Illuminate\Console\Command;
@@ -112,6 +113,7 @@ final class CatalogIndexCommand extends Command
         $skip = [];
         foreach (array_merge(
             (array) config('enrichment.catalog_skip_hosts', []),
+            CatalogSearchSiteExclusion::allHosts(),
             explode(',', (string) $this->option('skip'))
         ) as $domain) {
             $host = $this->normalizeHost((string) $domain);

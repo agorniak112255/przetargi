@@ -81,6 +81,7 @@ export function AdminSearchSites() {
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [reindexHost, setReindexHost] = useState('')
+  const [deleteHost, setDeleteHost] = useState('')
   const [pagesHost, setPagesHost] = useState<SearchSite | null>(null)
 
   async function load() {
@@ -154,6 +155,30 @@ export function AdminSearchSites() {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się dodać strony')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function onDelete(host: string) {
+    if (!window.confirm(`Usunąć ${host} z indeksu i z tej listy?`)) {
+      return
+    }
+    setDeleteHost(host)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>(
+        `/admin/catalog-search-sites/${encodeURIComponent(host)}`,
+        { method: 'DELETE' },
+      )
+      setMsg(res.message)
+      if (pagesHost?.host === host) {
+        setPagesHost(null)
+      }
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się usunąć strony')
+    } finally {
+      setDeleteHost('')
     }
   }
 
@@ -318,6 +343,14 @@ export function AdminSearchSites() {
                       >
                         {reindexHost === row.host ? 'Zlecam…' : 'Sprawdź'}
                       </button>
+                      <button
+                        type="button"
+                        disabled={deleteHost === row.host}
+                        onClick={() => void onDelete(row.host)}
+                        className="rounded-lg border border-rose-300 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                      >
+                        {deleteHost === row.host ? 'Usuwam…' : 'Usuń'}
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -339,7 +372,9 @@ export function AdminSearchSites() {
           site={pagesHost}
           onClose={() => setPagesHost(null)}
           onReindex={() => void onReindex(pagesHost.host)}
+          onDelete={() => void onDelete(pagesHost.host)}
           reindexing={reindexHost === pagesHost.host}
+          deleting={deleteHost === pagesHost.host}
         />
       )}
     </div>
@@ -350,12 +385,16 @@ function CatalogPagesModal({
   site,
   onClose,
   onReindex,
+  onDelete,
   reindexing,
+  deleting,
 }: {
   site: SearchSite
   onClose: () => void
   onReindex: () => void
+  onDelete: () => void
   reindexing: boolean
+  deleting: boolean
 }) {
   const [q, setQ] = useState('')
   const [page, setPage] = useState(1)
@@ -429,6 +468,14 @@ function CatalogPagesModal({
               className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
             >
               {reindexing ? 'Zlecam…' : 'Sprawdź ponownie'}
+            </button>
+            <button
+              type="button"
+              disabled={deleting}
+              onClick={onDelete}
+              className="rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+            >
+              {deleting ? 'Usuwam…' : 'Usuń'}
             </button>
             <button
               type="button"

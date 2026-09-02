@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\DestroyCatalogSearchSiteRequest;
 use App\Http\Requests\Admin\ShowCatalogSearchSitePagesRequest;
 use App\Http\Requests\Admin\StoreCatalogSearchSiteRequest;
 use App\Services\Enrichment\CatalogSearchHostService;
@@ -58,5 +59,10 @@ class CatalogSearchSiteController extends Controller
     public function reindex(string $host): JsonResponse
     {
         return response()->json($this->sites->reindex($host));
+    }
+
+    public function destroy(DestroyCatalogSearchSiteRequest $request, string $host): JsonResponse
+    {
+        return response()->json($this->sites->remove($host));
     }
 }
