@@ -378,6 +378,8 @@ return [
     */
     'catalog_skip_hosts' => [
         '3m.com',
+        '3mpolska.pl',
+        'www.3mpolska.pl',
         'honeywell.com',
         'sps.honeywell.com',
         'kaufland.pl',

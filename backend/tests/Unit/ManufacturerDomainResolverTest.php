@@ -273,6 +273,7 @@ final class ManufacturerDomainResolverTest extends TestCase
         $this->assertContains('sklep.renex.pl', $hosts);
         $this->assertContains('antar.pl', config('enrichment.preferred_domains'));
         $this->assertContains('kaufland.pl', config('enrichment.catalog_skip_hosts'));
+        $this->assertContains('3mpolska.pl', config('enrichment.catalog_skip_hosts'));
     }
 
     public function test_resolves_mapa_polish_catalog_domain(): void

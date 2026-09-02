@@ -85,7 +85,8 @@ final class CatalogSitemapIndexer
             throw new RuntimeException('Pusty host.');
         }
 
-        $sitemaps = $this->discoverSitemaps($host);
+        $deadline = microtime(true) + max(30, $maxSeconds);
+        $sitemaps = $this->discoverSitemaps($host, $deadline);
         $guessed = array_flip($this->candidateUrls($host));
         if ($sitemaps === []) {
             throw new RuntimeException('Nie znalazłem sitemapy dla '.$host.'.');
@@ -96,8 +97,7 @@ final class CatalogSitemapIndexer
         $saved = 0;
         $used = [];
         $offHost = 0;
-        $timedOut = false;
-        $deadline = microtime(true) + max(30, $maxSeconds);
+        $timedOut = microtime(true) >= $deadline;
 
         // indeks sitemap dokłada kolejne pliki w trakcie — foreach nie zobaczyłby dopisanych
         for ($i = 0; $i < count($sitemaps) && $i < self::MAX_SITEMAP_FILES; $i++) {
@@ -151,7 +151,7 @@ final class CatalogSitemapIndexer
 
             // liczymy tylko mapy, które faktycznie coś dały — inaczej raport
             // pokazuje soft-404 sklepu jako znalezioną sitemapę
-            $timeout = isset($guessed[$sitemap]) ? self::CANDIDATE_TIMEOUT : 90;
+            $timeout = isset($guessed[$sitemap]) ? self::CANDIDATE_TIMEOUT : 45;
             if ($this->streamLocations($sitemap, $consume, $deadline, $timeout) && $found > 0) {
                 $used[] = $sitemap;
             }
@@ -200,7 +200,7 @@ final class CatalogSitemapIndexer
     /**
      * @return list<string>
      */
-    public function discoverSitemaps(string $host): array
+    public function discoverSitemaps(string $host, float $deadline = 0.0): array
     {
         $out = [];
         $hosts = [$host];
@@ -208,17 +208,20 @@ final class CatalogSitemapIndexer
             $hosts[] = 'www.'.$host;
         }
         foreach ($hosts as $name) {
-            $robots = $this->fetch('https://'.$name.'/robots.txt');
+            if ($deadline > 0.0 && microtime(true) >= $deadline) {
+                break;
+            }
+            $robots = $this->fetch('https://'.$name.'/robots.txt', 12);
             $this->collectRobotSitemaps($robots, $out);
             if ($out === [] && ! app()->environment('testing')) {
-                $this->collectRobotSitemaps($this->fetchViaCurl('https://'.$name.'/robots.txt'), $out);
+                $this->collectRobotSitemaps($this->fetchViaCurl('https://'.$name.'/robots.txt', 12), $out);
             }
             if ($out !== []) {
                 break;
             }
         }
 
-        if ($out === []) {
+        if ($out === [] && ($deadline <= 0.0 || microtime(true) < $deadline)) {
             $this->collectHtmlSitemaps($host, $out);
         }
         if ($out === []) {
@@ -927,13 +930,13 @@ final class CatalogSitemapIndexer
         }
     }
 
-    private function fetch(string $url): ?string
+    private function fetch(string $url, int $timeout = 30): ?string
     {
         try {
             $response = Http::withHeaders([
                 'User-Agent' => self::USER_AGENT,
                 'Accept' => 'application/xml,text/xml,text/plain,*/*',
-            ])->timeout(30)->connectTimeout(8)->get($url);
+            ])->timeout(max(5, $timeout))->connectTimeout(8)->get($url);
         } catch (Throwable $e) {
             Log::info('Sitemap fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
 
