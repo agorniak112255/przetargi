@@ -1956,14 +1956,15 @@ final class ProductEnrichmentService
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
         if ($this->identity->hayHasProductCode($hay, $product)) {
-            return true;
+            return $this->identity->pageAgreesWithBrandAndName($hay, '', $product)
+                && $this->identity->hayHasRequiredTypeFromName($hay, $product);
         }
         if ($this->identity->looksLikeUnrelatedSignage($hay, $product)) {
             return false;
         }
         if ($this->identity->hayHasShopIdentity($hay, $hayCompact, $product)
             && $this->identity->hayHasBrand($hay, $product)) {
-            return true;
+            return $this->identity->hayHasRequiredTypeFromName($hay, $product);
         }
 
         $tokens = $this->discriminativeNameTokens($product);
@@ -1979,7 +1980,7 @@ final class ProductEnrichmentService
             $score++;
         }
         if ($score >= 2) {
-            return true;
+            return $this->identity->hayHasRequiredTypeFromName($hay, $product);
         }
 
         // Nazwa z samych słów ogólnych („Rękawice robocze”) nie da się potwierdzić kodem —

@@ -719,10 +719,9 @@ class HybridWebSearchService
                 $errors
             );
             $codedShop = $this->resultsCarryProductCode($shop['results'], $product);
-            $usableShop = $codedShop !== [] ? $codedShop : $shop['results'];
-            if ($this->hasEnoughPageResults($usableShop, 1)) {
+            if ($this->hasEnoughPageResults($codedShop, 1)) {
                 return [
-                    'results' => $usableShop,
+                    'results' => $codedShop,
                     'provider' => $this->searchProviderName().'_shop',
                     'errors' => $errors,
                 ];
@@ -943,7 +942,9 @@ class HybridWebSearchService
             $oursInHit = $this->identity->urlOrTitleCarriesShopModelNumber($url, $title.' '.$snippet, $product)
                 || $this->identity->urlOrTitleHasNamedShopIdentity($url, $title.' '.$snippet, $product);
             if ($oursInHit) {
-                if ($oursInHeadline || ! $this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+                $named = $this->identity->urlOrTitleHasNamedShopIdentity($url, $title.' '.$snippet, $product);
+                if (($oursInHeadline || ! $this->identity->pageClaimsAnotherCode($url, $title, $product))
+                    && ($named || $this->identity->pageAgreesWithBrandAndName($hay, $url, $product))) {
                     $matched[] = [
                         'url' => $url,
                         'title' => $title !== '' ? $title : $url,
@@ -963,6 +964,10 @@ class HybridWebSearchService
                 continue;
             }
             if ($this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+                continue;
+            }
+            if (! $this->identity->urlOrTitleHasNamedShopIdentity($url, $title.' '.$snippet, $product)
+                && ! $this->identity->pageAgreesWithBrandAndName($hay, $url, $product)) {
                 continue;
             }
             $matched[] = [
@@ -1034,6 +1039,10 @@ class HybridWebSearchService
             $shopOnPage = $shopHit !== '' && $this->identity->codeInText($hay, $shopHit);
             // sam kod to za mało: „1202” to też alarm Apollo 11 i szerokość zdjęcia
             if (! $shopOnPage && ! $this->identity->hayHasBrand($hay, $product)) {
+                continue;
+            }
+            if (! $this->identity->urlOrTitleHasNamedShopIdentity($url, $title.' '.$snippet, $product)
+                && ! $this->identity->pageAgreesWithBrandAndName($hay, $url, $product)) {
                 continue;
             }
             $out[] = [

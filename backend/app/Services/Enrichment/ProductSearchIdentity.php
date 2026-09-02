@@ -38,6 +38,10 @@ final class ProductSearchIdentity
         'hearing' => ['nausznik', 'ochronnik', 'earmuff', 'headset'],
         'harness' => ['szelk'],
         'clothing' => ['ubranie', 'odziez'],
+        'signage' => ['tablic', 'piktogram', 'oznakowan', 'znak kierunk'],
+        'extinguisher' => ['gasnic', 'extinguisher', 'feuerlosch'],
+        'firstaid' => ['aptecz', 'first aid', 'firstaid', 'verbandkasten'],
+        'tape' => ['tasma', 'tasmy', 'tasmow', 'adhesive tape', 'warning tape', 'isolierband'],
     ];
 
     /**
@@ -1244,6 +1248,9 @@ final class ProductSearchIdentity
                     && ! $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
                     continue;
                 }
+                if ($this->tokenIsProductCode($token, $product)) {
+                    return $this->pageAgreesWithBrandAndName($hay, '', $product);
+                }
 
                 return true;
             }
@@ -1306,8 +1313,141 @@ final class ProductSearchIdentity
         if (! $this->hayMentionsProduct($hay, $product)) {
             return false;
         }
+        if ($this->pageClaimsAnotherCode($url, $title, $product)) {
+            return false;
+        }
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($hay)) ?? '';
+        if ($this->urlOrTitleHasNamedShopIdentity($url, $title, $product)
+            || $this->hayHasShopIdentity(mb_strtolower($hay), $hayCompact, $product)) {
+            return $this->hayHasRequiredTypeFromName($hay, $product);
+        }
 
-        return ! $this->pageClaimsAnotherCode($url, $title, $product);
+        return $this->pageAgreesWithBrandAndName($hay, $url, $product);
+    }
+
+    private function tokenIsProductCode(string $token, Product $product): bool
+    {
+        $token = mb_strtolower(trim($token));
+        if ($token === '') {
+            return false;
+        }
+        $compact = $this->compactCode($token);
+        foreach ($this->productCodes($product) as $code) {
+            if ($token === $code || ($compact !== '' && $compact === $this->compactCode($code))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Po trafieniu kodu karta musi mieć markę (albo domenę producenta)
+     * i choć część nazwy — inaczej T-31 z Ardon przechodzi jako tablica CABINAID.
+     */
+    public function pageAgreesWithBrandAndName(string $hay, string $url, Product $product): bool
+    {
+        $blob = mb_strtolower(trim($url.' '.$hay));
+        if ($blob === '') {
+            return false;
+        }
+        if (! $this->hayHasBrand($blob, $product) && ! $this->hayHasOfficialHost($blob, $url, $product)) {
+            return false;
+        }
+        $nameTokens = $this->distinctiveIdentityNameTokens($product);
+        if ($nameTokens === []) {
+            return true;
+        }
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $blob) ?? $blob;
+        foreach ($nameTokens as $token) {
+            if ($this->tokenInHay($blob, $hayCompact, $token)) {
+                return true;
+            }
+            $stemLen = max(4, min(6, mb_strlen($token)));
+            $stem = mb_substr($token, 0, $stemLen);
+            if (mb_strlen($stem) >= 4 && str_contains($blob, $stem)) {
+                return true;
+            }
+        }
+        // TX39 po angielsku („Bib & Brace”) bez „ogrodniczki” — zostaje typ z nazwy.
+        // Sam kod+marka (V742 Cofra bez OWERTON) nie wystarcza.
+        if ($this->skuIsSharedShortCode($product)) {
+            return false;
+        }
+
+        return $this->nameRequiresArticleType($product)
+            && $this->hayHasRequiredTypeFromName($blob, $product);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function distinctiveIdentityNameTokens(Product $product): array
+    {
+        $out = [];
+        foreach ($this->nameWords($product) as $word) {
+            if ($this->isColorWord($word)) {
+                continue;
+            }
+            $out[] = $word;
+        }
+        foreach (preg_split('/[^\p{L}\p{N}]+/u', trim((string) $product->name)) ?: [] as $raw) {
+            if (preg_match('/^\p{L}{3}$/u', $raw) !== 1) {
+                continue;
+            }
+            $word = mb_strtolower($raw);
+            if ($this->isColorWord($word) || $this->isGenericCatalogNameWord($word)
+                || $this->tokenIsProductCode($word, $product)) {
+                continue;
+            }
+            $out[] = $word;
+        }
+        $skuCompact = $this->compactCode((string) $product->sku);
+        foreach ($this->shopIdentityPhrases($product) as $phrase) {
+            $phrase = mb_strtolower(trim($phrase));
+            if ($phrase === '' || $this->tokenIsProductCode($phrase, $product) || $this->isColorWord($phrase)) {
+                continue;
+            }
+            $phraseCompact = $this->compactCode($phrase);
+            if ($skuCompact !== '' && $phraseCompact !== ''
+                && (str_contains($skuCompact, $phraseCompact) || str_contains($phraseCompact, $skuCompact))) {
+                continue;
+            }
+            $out[] = $phrase;
+            foreach (preg_split('/[^\p{L}\p{N}]+/u', $phrase) ?: [] as $word) {
+                if (mb_strlen($word) < 3 || $this->isColorWord($word) || $this->tokenIsProductCode($word, $product)) {
+                    continue;
+                }
+                $wordCompact = $this->compactCode($word);
+                if ($skuCompact !== '' && $wordCompact !== '' && str_contains($skuCompact, $wordCompact)) {
+                    continue;
+                }
+                $out[] = $word;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    private function hayHasOfficialHost(string $hay, string $url, Product $product): bool
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $host = preg_replace('/^www\./', '', $host) ?? $host;
+        $blob = mb_strtolower($url.' '.$hay);
+        foreach ($this->officialCatalogHosts($product) as $official) {
+            $official = preg_replace('/^www\./', '', mb_strtolower(trim($official))) ?? '';
+            if ($official === '') {
+                continue;
+            }
+            if ($host === $official || ($host !== '' && str_ends_with($host, '.'.$official))) {
+                return true;
+            }
+            if (str_contains($blob, $official)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Token bez cyfr to zwykłe słowo („casque”, „cut resistant gloves”), nie oznaczenie modelu. */
@@ -1837,6 +1977,12 @@ final class ProductSearchIdentity
         ) === 1;
     }
 
+    /** T-31 / A12 — za krótki kod, koliduje między katalogami. */
+    public function skuIsSharedShortCode(Product $product): bool
+    {
+        return preg_match('/^[A-Z]-?\d{1,3}$/iu', trim((string) $product->sku)) === 1;
+    }
+
     /**
      * Sklepy, które indeksują kod katalogowy (TX39) — oficjalna strona marki często nie.
      *
@@ -2272,6 +2418,10 @@ final class ProductSearchIdentity
             'hearing' => 'nauszniki',
             'harness' => 'szelki',
             'clothing' => 'odzież',
+            'signage' => 'tablica / oznakowanie',
+            'extinguisher' => 'gaśnica',
+            'firstaid' => 'apteczka',
+            'tape' => 'taśma',
         ];
         foreach (self::TYPE_STEMS as $key => $stems) {
             if ($this->textHasTypeStem($name, $stems)) {
@@ -2863,8 +3013,10 @@ final class ProductSearchIdentity
         }
         // „Rękawica … TEGERA 104” przy producencie Ejendals — sklepy piszą Tegera, nie Ejendals
         foreach (preg_split('/[^\p{L}\p{N}]+/u', (string) $product->name) ?: [] as $raw) {
-            if (preg_match('/^\p{Lu}{4,}$/u', $raw) === 1 && $this->looksLikeBrandToken(mb_strtolower($raw))) {
-                $out[] = mb_strtolower($raw);
+            $low = mb_strtolower($raw);
+            if (preg_match('/^\p{Lu}{4,}$/u', $raw) === 1 && $this->looksLikeBrandToken($low)
+                && ! $this->isColorWord($low)) {
+                $out[] = $low;
             }
         }
         foreach ($this->nameBrandKeys($product) as $key) {
@@ -3410,10 +3562,23 @@ final class ProductSearchIdentity
         $word = mb_strtolower(trim($word));
         $word = strtr($word, ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z']);
 
-        return in_array($word, [
+        if (in_array($word, [
             'black', 'white', 'grey', 'gray', 'blue', 'green', 'red', 'yellow',
             'orange', 'navy', 'brown', 'beige', 'pink',
-        ], true);
+            'zielony', 'zielona', 'zielone', 'zolty', 'zolta', 'zolte',
+            'czarny', 'czarna', 'czarne', 'bialy', 'biala', 'biale',
+            'granatowy', 'granatowa', 'niebieski', 'niebieska',
+            'czerwony', 'czerwona', 'czerwone',
+        ], true)) {
+            return true;
+        }
+        foreach (['zielon', 'zolt', 'czarn', 'bial', 'granat', 'niebiesk', 'czerwon', 'czerw'] as $stem) {
+            if (str_starts_with($word, $stem)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function skuHasDigitSegment(string $sku): bool

@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use App\Models\Product;
 use App\Services\Enrichment\HybridWebSearchService;
+use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\ProductSearchIdentity;
 use ReflectionClass;
 use Tests\TestCase;
@@ -1260,5 +1261,185 @@ final class EnrichmentQueryLadderTest extends TestCase
             'Sordin Supreme Pro-X Neckband Green. Kod 76302-X-G-S.',
             $product
         ));
+    }
+
+    public function test_short_sku_requires_brand_and_name_not_just_code(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $t31 = new Product([
+            'manufacturer' => 'CABINAID',
+            'sku' => 'T-31',
+            'name' => 'Tablica pionowa AED + krok po kroku ZIELONA',
+            'category' => 'Tablice / Oznakowanie',
+        ]);
+        $t34 = new Product([
+            'manufacturer' => 'CABINAID',
+            'sku' => 'T-34',
+            'name' => 'Tablica kierunkowa w prawo ZIELONA',
+            'category' => 'Tablice / Oznakowanie',
+        ]);
+        $owerton = new Product([
+            'manufacturer' => 'Cofra',
+            'sku' => 'V742-0-02',
+            'name' => 'OWERTON (02 NAVY)',
+        ]);
+        $kcl = new Product([
+            'manufacturer' => 'KCL',
+            'sku' => '047106941E',
+            'name' => 'CovaSpec 471',
+        ]);
+        $tx39 = new Product([
+            'manufacturer' => 'Portwest',
+            'sku' => 'TX39',
+            'name' => 'Ogrodniczki robocze',
+        ]);
+
+        $ardon = 'https://sklep.example/ardon-urban-plus-t-31 Koszula flanelowa ARDON URBAN+ T-31 zielona';
+        $this->assertFalse($identity->hayMentionsProduct($ardon, $t31));
+        $this->assertFalse($identity->pageAgreesWithBrandAndName($ardon, 'https://sklep.example/ardon-urban-plus-t-31', $t31));
+        $this->assertFalse($identity->isConfirmedProductCard(
+            'https://sklep.example/ardon-urban-plus-t-31',
+            'Koszula flanelowa ARDON URBAN+ T-31',
+            'Koszula ARDON URBAN+ kod T-31, rozmiary S-4XL, 100% bawełna.',
+            $t31
+        ));
+
+        $brixton = 'https://sklep.example/brixton-classic-t-34 Bluza BRIXTON CLASSIC T-34 zielona';
+        $this->assertFalse($identity->hayMentionsProduct($brixton, $t34));
+        $this->assertFalse($identity->pageAgreesWithBrandAndName($brixton, 'https://sklep.example/brixton-classic-t-34', $t34));
+
+        $cabinaid = 'https://sklep.example/tablica-aed-t-31-cabinaid Tablica pionowa AED CABINAID T-31 krok po kroku';
+        $this->assertTrue($identity->hayMentionsProduct($cabinaid, $t31));
+        $this->assertTrue($identity->pageAgreesWithBrandAndName($cabinaid, 'https://sklep.example/tablica-aed-t-31-cabinaid', $t31));
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://sklep.example/tablica-aed-t-31-cabinaid',
+            'Tablica pionowa AED CABINAID T-31',
+            'Tablica AED CABINAID T-31, instrukcja krok po kroku.',
+            $t31
+        ));
+
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.cofra.it/en/products/owerton OWERTON Cofra ROAD-WEAR V742-0-02 navy',
+            $owerton
+        ));
+        $this->assertTrue($identity->pageAgreesWithBrandAndName(
+            'OWERTON Cofra ROAD-WEAR V742-0-02',
+            'https://www.cofra.it/en/products/owerton',
+            $owerton
+        ));
+
+        $service = app(HybridWebSearchService::class);
+        $filter = (new ReflectionClass($service))->getMethod('filterResultsByIdentity');
+        $filter->setAccessible(true);
+        $dropped = $filter->invoke($service, [[
+            'url' => 'https://sklep.example/ardon-urban-plus-t-31',
+            'title' => 'Koszula flanelowa ARDON URBAN+ T-31',
+            'snippet' => 'T-31 zielona flanela S-4XL',
+        ]], $t31);
+        $this->assertSame([], $dropped);
+        $kept = $filter->invoke($service, [[
+            'url' => 'https://sklep.example/tablica-aed-t-31-cabinaid',
+            'title' => 'Tablica pionowa AED CABINAID T-31',
+            'snippet' => 'Tablica AED krok po kroku',
+        ]], $t31);
+        $this->assertNotSame([], $kept);
+
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.hygi.de/kcl-covaspec-471 KCL CovaSpec 471 Schutzhandschuhe',
+            $kcl
+        ));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://sklep-system.pl/ogrodniczki-portwest-tx39-bremen Ogrodniczki robocze Portwest TX39 BREMEN',
+            $tx39
+        ));
+
+        $this->assertTrue($identity->hasDistinctiveCatalogSku($t31));
+        $this->assertTrue($identity->skuIsSharedShortCode($t31));
+        $this->assertTrue($identity->skuIsSharedShortCode($t34));
+        $this->assertFalse($identity->skuIsSharedShortCode($tx39));
+        $this->assertFalse($identity->skuIsSharedShortCode($owerton));
+
+        $cabinaidShirt = 'https://sklep.example/t-31 CABINAID T-31 koszula flanelowa zielona S-XL';
+        $this->assertFalse($identity->pageAgreesWithBrandAndName(
+            $cabinaidShirt,
+            'https://sklep.example/t-31',
+            $t31
+        ));
+        $this->assertFalse($identity->hayMentionsProduct($cabinaidShirt, $t31));
+        $this->assertFalse($identity->hayHasRequiredTypeFromName($cabinaidShirt, $t31));
+
+        $service = app(ProductEnrichmentService::class);
+        $desc = (new ReflectionClass($service))->getMethod('descriptionMentionsProduct');
+        $desc->setAccessible(true);
+        $this->assertFalse($desc->invoke(
+            $service,
+            'Koszula flanelowa ARDON URBAN+ kod T-31, 100% bawełna, rozmiary S-4XL.',
+            $t31
+        ));
+        $this->assertFalse($desc->invoke(
+            $service,
+            'CABINAID T-31 koszula flanelowa zielona, bawełna 140 g/m2.',
+            $t31
+        ));
+        $this->assertTrue($desc->invoke(
+            $service,
+            'Tablica pionowa AED CABINAID T-31, instrukcja krok po kroku.',
+            $t31
+        ));
+
+        $open = (new ReflectionClass(app(HybridWebSearchService::class)))->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+        $build = (new ReflectionClass(app(HybridWebSearchService::class)))->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $web = app(HybridWebSearchService::class);
+        $cofraLadder = $open->invoke($web, $owerton, $build->invoke($web, $owerton, 'manufacturer'));
+        $this->assertStringStartsWith('site:cofra.it', $cofraLadder[0] ?? '');
+        $this->assertSame([], $identity->officialCatalogHosts($t31));
+        $this->assertContains('gvarant.pl', $identity->catalogSearchHosts($t31));
+        $cabinaidLadder = $open->invoke($web, $t31, $build->invoke($web, $t31, 'manufacturer'));
+        $this->assertStringStartsWith('site:', $cabinaidLadder[0] ?? '');
+        $this->assertStringContainsString('T-31', $cabinaidLadder[0] ?? '');
+
+        $this->assertFalse($identity->pageAgreesWithBrandAndName(
+            'https://www.cofra.it/en/products/other Cofra V742-0-02 safety shoe S3',
+            'https://www.cofra.it/en/products/other',
+            $owerton
+        ));
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://www.portwest.com/tx39-softshell Portwest TX39 Softshell Jacket',
+            $tx39
+        ));
+        $kclGlove = new Product([
+            'manufacturer' => 'KCL',
+            'sku' => '047106941E',
+            'name' => 'CovaSpec 471 rękawice',
+        ]);
+        $this->assertFalse($desc->invoke(
+            $service,
+            'KCL CovaSpec 471 bluza polarowa, polar 280 g/m2, rozmiary S-XL.',
+            $kclGlove
+        ));
+
+        $ext = new Product([
+            'manufacturer' => 'Gloria',
+            'sku' => 'P4PRO',
+            'name' => 'Gaśnica proszkowa 4 kg',
+        ]);
+        $this->assertTrue($identity->hayHasRequiredTypeFromName('gaśnica proszkowa ABC 4kg gloria', $ext));
+        $this->assertFalse($identity->hayHasRequiredTypeFromName('kurtka ostrzegawcza gloria żółta', $ext));
+        $kit = new Product([
+            'manufacturer' => 'Boxmet',
+            'sku' => 'AP-10',
+            'name' => 'Apteczka ścienna 10 os.',
+        ]);
+        $this->assertTrue($identity->hayHasRequiredTypeFromName('apteczka ścienna 10 osób', $kit));
+        $this->assertFalse($identity->hayHasRequiredTypeFromName('taśma ostrzegawcza żółto-czarna', $kit));
+        $tape = new Product([
+            'manufacturer' => '3M',
+            'sku' => '2903',
+            'name' => 'Taśma naprawcza srebrna',
+        ]);
+        $this->assertTrue($identity->hayHasRequiredTypeFromName('taśma naprawcza 3M 2903', $tape));
+        $this->assertFalse($identity->hayHasRequiredTypeFromName('rękawice nitrylowe 3M', $tape));
     }
 }

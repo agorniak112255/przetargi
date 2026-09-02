@@ -237,6 +237,12 @@ return [
             'customguns.pl',
             'hellberg-safety.com',
         ],
+        'cabinaid' => [
+            'gvarant.pl',
+            'optimumbhp.pl',
+            'bpbhp.pl',
+            'behapownia.pl',
+        ],
     ],
 
     /*

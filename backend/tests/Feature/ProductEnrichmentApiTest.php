@@ -108,7 +108,7 @@ final class ProductEnrichmentApiTest extends TestCase
                 'results' => [[
                     'url' => 'https://example.com/product/'.$product->sku,
                     'title' => 'Karta',
-                    'snippet' => 'RÄ™kawice '.$product->sku,
+                    'snippet' => 'Rękawice Ansell '.$product->sku,
                 ]],
                 'errors' => [],
             ]);
@@ -130,7 +130,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
         Http::fake([
             'https://example.com/*' => Http::response(
-                '<html><body>'.$product->sku.' <img src="https://cdn.example.com/glove-'.$product->sku.'.jpg" alt="'.$product->sku.'"></body></html>',
+                '<html><body>Ansell Rękawice testowe '.$product->sku.' <img src="https://cdn.example.com/glove-'.$product->sku.'.jpg" alt="'.$product->sku.'"></body></html>',
                 200
             ),
             'https://cdn.example.com/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
@@ -189,7 +189,7 @@ final class ProductEnrichmentApiTest extends TestCase
                 'results' => [[
                     'url' => 'https://example.com/product/'.$product->sku,
                     'title' => 'Karta',
-                    'snippet' => $product->sku,
+                    'snippet' => 'Ansell '.$product->sku,
                 ]],
                 'errors' => [],
             ]);
@@ -211,7 +211,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
         Http::fake([
             'https://example.com/*' => Http::response(
-                '<html>'.$product->sku.' <img src="https://cdn.example.com/glove-'.$product->sku.'.jpg"></html>',
+                '<html>Ansell Rękawice testowe '.$product->sku.' <img src="https://cdn.example.com/glove-'.$product->sku.'.jpg"></html>',
                 200
             ),
             'https://cdn.example.com/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
@@ -713,8 +713,8 @@ final class ProductEnrichmentApiTest extends TestCase
             ->andReturn([
                 'results' => [[
                     'url' => 'https://shop.example.com/pf-reuse',
-                    'title' => 'PF-REUSE',
-                    'snippet' => 'Rękawice PF-REUSE',
+                    'title' => 'PF-REUSE Uvex',
+                    'snippet' => 'Rękawice PF-REUSE Uvex',
                 ]],
                 'errors' => [],
             ]);
@@ -722,7 +722,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->app->instance(HybridWebSearchService::class, $search);
 
         $llm = $this->mockLlmWithSanitize([
-            'description' => 'Rękawice PF-REUSE do montażu. Spełniają EN 388. Chronią przed ścieraniem w suchych warunkach. Trwała powłoka do codziennej pracy w zakładzie. Przeznaczone do prac precyzyjnych i kompletacji. Wygodny mankiet nie ogranicza ruchów.',
+            'description' => 'Rękawice Uvex PF-REUSE do montażu. Spełniają EN 388. Chronią przed ścieraniem w suchych warunkach. Trwała powłoka do codziennej pracy w zakładzie. Przeznaczone do prac precyzyjnych i kompletacji. Wygodny mankiet nie ogranicza ruchów.',
             'features' => ['nitryl'],
             'specs' => ['SKU: PF-REUSE'],
             'norms' => ['EN 388'],
@@ -737,7 +737,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
         Http::fake([
             'https://shop.example.com/*' => Http::response(
-                '<html><body><h1>PF-REUSE</h1><p>'.str_repeat('Rękawice PF-REUSE EN 388. ', 40).'</p></body></html>',
+                '<html><body><h1>Uvex PF-REUSE</h1><p>'.str_repeat('Rękawice Uvex PF-REUSE EN 388. ', 40).'</p></body></html>',
                 200,
                 ['Content-Type' => 'text/html']
             ),
@@ -1731,27 +1731,35 @@ final class ProductEnrichmentApiTest extends TestCase
         $product = $this->makeProduct([
             'sku' => 'NV2032CE',
             'name' => 'Astro Cleat',
-            'manufacturer' => 'GVS',
+            'manufacturer' => 'NoSuchBrandXYZ',
         ]);
-        $hitUrl = 'https://hurtownia.example/products/nv2032ce';
-        $tavilyCalls = 0;
-        Http::fake(function ($request) use ($hitUrl, &$tavilyCalls) {
+        $hitUrl = 'https://hurtownia.example/products/nv2032ce-astro-cleat';
+        $openCalls = 0;
+        Http::fake(function ($request) use ($hitUrl, &$openCalls) {
             $this->assertStringContainsString('tavily.com', $request->url());
-            $tavilyCalls++;
-            $this->assertSame([], $request->data()['include_domains'] ?? []);
+            $data = $request->data();
+            $query = (string) ($data['query'] ?? '');
+            $domains = $data['include_domains'] ?? [];
+            if ((is_array($domains) && $domains !== [])
+                || str_contains(mb_strtolower($query), 'official')
+                || str_contains(mb_strtolower($query), 'strona oficjalna')
+                || preg_match('/\bsite:/i', $query) === 1) {
+                return Http::response(['results' => []], 200);
+            }
+            $openCalls++;
 
             return Http::response([
                 'results' => [[
                     'url' => $hitUrl,
-                    'title' => 'NV2032CE Astro Cleat',
-                    'content' => 'Cable cleat',
+                    'title' => 'NV2032CE Astro Cleat NoSuchBrandXYZ',
+                    'content' => 'Astro Cleat cable cleat NV2032CE',
                 ]],
             ], 200);
         });
 
         $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
 
-        $this->assertSame(1, $tavilyCalls);
+        $this->assertSame(1, $openCalls);
         $this->assertSame('tavily', $pack['provider']);
         $this->assertSame($hitUrl, $pack['results'][0]['url'] ?? null);
     }
@@ -1895,13 +1903,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
 
-        // najpierw sam kod z producentem, potem nazwa z kodem, fraza z BHP, na końcu kod w cudzysłowie
-        $this->assertSame([
-            'NV2032CE Novacleat',
-            'Astro Cleat NV2032CE Novacleat',
-            'Astro Cleat NV2032CE Novacleat BHP',
-            '"NV2032CE" Novacleat',
-        ], $openQueries);
+        $this->assertSame([], $openQueries);
         $this->assertNotEmpty($discoverQueries);
         $this->assertStringContainsString('NV2032CE', $discoverQueries[0]);
         $this->assertStringContainsString('Novacleat', $discoverQueries[0]);
