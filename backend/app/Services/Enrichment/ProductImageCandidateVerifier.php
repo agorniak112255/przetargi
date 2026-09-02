@@ -287,13 +287,11 @@ final class ProductImageCandidateVerifier
         $countMinusOne = $count - 1;
         $typeLine = $this->identity->requiredArticleTypeLabel($product);
         $typeBlock = $typeLine !== null
-            ? "Szukany rodzaj na zdjęciu: {$typeLine}.\n"
-                .'Jeśli widać inny rodzaj (spodnie, ogrodniczki, kombinezon, kurtka, bluza, buty, rękawice, czapka) — is_relevant_product=false.'."\n"
-                .'Ta sama linia (np. GRZMOT) nie wystarczy.'
-            : 'Zaakceptuj tylko ten sam rodzaj produktu co nazwa. Inny asortyment (spodnie przy czapce) — odrzuć.';
+            ? "Szukany rodzaj na zdjęciu: {$typeLine}. Inny rodzaj — is_relevant_product=false. Ta sama linia (np. GRZMOT) nie wystarczy."
+            : 'Rodzaj bierz wyłącznie z nazwy (ręcznik ≠ kurtka ≠ kombinezon ≠ odzież robocza ≠ chemia).';
 
         return <<<PROMPT
-Oceń {$count} kandydatów na główne zdjęcie tego produktu:
+Oceń {$count} kandydatów na GŁÓWNE zdjęcie katalogowe (packshot) tego produktu:
 - SKU: {$product->sku}
 - marka: {$product->manufacturer}
 - nazwa: {$product->name}
@@ -302,11 +300,14 @@ Oceń {$count} kandydatów na główne zdjęcie tego produktu:
 
 {$typeBlock}
 
-Kandydaci pochodzą ze stron znalezionych dla produktu. Zaakceptuj zdjęcie tylko wtedy, gdy:
-1. na zdjęciu widać pojedynczy produkt tego samego rodzaju co nazwa (nie inny z tej samej kolekcji),
-2. nie jest logo, ikoną, banerem, mapą, reklamą, dokumentem ani zdjęciem innego rodzaju produktu,
-3. kontekst strony wspiera powiązanie z podanym SKU/modelem.
-Nie wymagaj widocznego SKU na samym zdjęciu, ale nie zgaduj marki ani modelu wyłącznie z wyglądu.
+Zaakceptuj TYLKO gdy widać sam ten produkt (pierwszy plan, ostro, studio/białe tło).
+Zawsze is_relevant_product=false gdy:
+- na zdjęciu są ludzie (twarz, ręce, kucharze, kelnerzy, personel, model w ubraniu, lifestyle, kuchnia, hotel jako motyw),
+- widać inny asortyment niż nazwa (kurtka/kombinezon/słoik przy ręczniku; ręcznik przy odzieży),
+- widać inną markę niż podana,
+- to logo, ikona, baner, mapa, reklama, dokument lub miniatura kolekcji.
+
+Kontekst stron jest wskazówką, nie dowodem. Gdy obraz nie zgadza się z nazwą/marką — odrzuć, nawet jeśli strona wygląda na kartę produktu. Nie zgaduj modelu z wyglądu. Wątpliwość → confidence poniżej 0.85 i is_relevant_product=false.
 
 Kontekst stron:
 {$this->joinContext($context)}

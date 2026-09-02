@@ -1311,8 +1311,9 @@ final class ProductEnrichmentApiTest extends TestCase
             ->with(
                 Mockery::on(static function (string $prompt): bool {
                     return str_contains($prompt, 'czapka / nakrycie głowy z daszkiem')
-                        && str_contains($prompt, 'spodnie')
-                        && str_contains($prompt, 'GRZMOT');
+                        && str_contains($prompt, 'Inny rodzaj')
+                        && str_contains($prompt, 'GRZMOT')
+                        && str_contains($prompt, 'ludzie');
                 }),
                 Mockery::on(static fn (array $images): bool => count($images) === 1),
                 AiTask::ImageVerification
