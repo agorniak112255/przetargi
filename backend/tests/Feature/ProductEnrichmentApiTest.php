@@ -1216,6 +1216,75 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(1, ProductDocument::query()->where('product_id', $product->id)->count());
     }
 
+    public function test_keeps_shop_radio_sizes_after_llm_drops_them_from_text(): void
+    {
+        Storage::fake('public');
+        $product = $this->makeProduct([
+            'sku' => 'NAVARA-S1P',
+            'name' => 'Półbuty Jet3 S1P SRC NAVARA',
+            'manufacturer' => 'Delta Plus',
+            'category' => 'Obuwie',
+        ]);
+        $shopUrl = 'https://www.bhp-gabi.pl/p22243,polbuty-jet3-s1p-src.html';
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')->once()->andReturn([
+            'results' => [[
+                'url' => $shopUrl,
+                'title' => 'Półbuty Jet3 S1P SRC Delta Plus NAVARA-S1P',
+                'snippet' => 'Półbuty Jet3 S1P SRC Delta Plus NAVARA-S1P',
+            ]],
+            'errors' => [],
+        ]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        $desc = 'Półbuty Jet3 S1P SRC NAVARA-S1P marki Delta Plus ze skórzanego kruponu. '
+            .'Podszewka poliamid mesh, wkładka EVA, podeszwa poliuretanowa. '
+            .'Przeznaczone do prac na budowie i w warsztacie. Norma EN ISO 20345 S1P SRC.';
+        $this->app->instance(OpenAiCompatibleClient::class, $this->mockLlmWithSanitize([
+            'description' => $desc,
+            'features' => ['S1P', 'SRC'],
+            'specs' => ['Cholewka: skóra'],
+            'norms' => ['EN ISO 20345', 'S1P', 'SRC'],
+            'materials' => ['skóra'],
+            'use_cases' => ['budowa'],
+            'image_urls' => [],
+            'source_urls' => [$shopUrl],
+            'confidence' => 0.9,
+            'attributes' => ['kategoria_bhp' => 'obuwie'],
+        ]));
+
+        $radios = '';
+        foreach (range(36, 47) as $i => $size) {
+            $id = $i === 0 ? 'atrybuty_22243_20_0' : 'atrybuty_22243_20_0_'.($i + 1);
+            $radios .= '<p><input type="radio" name="atrybuty_22243[20]" id="'.$id.'">'
+                .' <label for="'.$id.'">'.$size.'</label></p>';
+        }
+
+        Http::fake([
+            'https://www.bhp-gabi.pl/*' => Http::response(
+                '<html><body><h1>Półbuty Jet3 S1P SRC Delta Plus NAVARA-S1P</h1>'
+                .'<article id="mod_opis"><p>Półbuty Jet3 S1P SRC NAVARA-S1P Delta Plus. '
+                .'Cholewka skórzany krupon. Podszewka poliamid. Podeszwa poliuretan. '
+                .'EN ISO 20345 S1P SRC do budowy i warsztatu.</p></article>'
+                .'<div class="attributes-box"><div class="attribute-a">'
+                .'<div class="name"><p>Rozmiar:</p><div class="selected"><p>Wybrano:</p></div></div>'
+                .'<div class="list"><div id="opcja_22243_20_0">'.$radios.'</div></div>'
+                .'</div></div></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://api.tavily.com/*' => Http::response(['results' => []], 200),
+        ]);
+
+        app(ProductEnrichmentService::class)->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertSame('36-47', $product->enrichment_payload['attributes']['rozmiar'] ?? null);
+        $this->assertSame('36-47', $product->packaging);
+    }
+
     public function test_retries_shop_image_instead_of_manufacturer_screenshot(): void
     {
         Storage::fake('public');

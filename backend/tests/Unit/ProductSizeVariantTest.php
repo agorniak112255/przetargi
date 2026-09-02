@@ -177,6 +177,39 @@ final class ProductSizeVariantTest extends TestCase
             $svc->parseShopOptionSizes('EN ISO 20345:2011 S1 P SRC. ID produktu 22243.')
         );
         $this->assertSame(
+            ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47'],
+            $svc->parseShopOptionSizes(
+                '<div class="attributes-box"><div class="attribute-a">'
+                .'<div class="name"><p>Rozmiar:</p><div class="selected"><p>Wybrano:</p></div></div>'
+                .'<div class="list"><div id="opcja_22243_20_0">'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0">'
+                .' <label for="atrybuty_22243_20_0">36</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_2">'
+                .' <label for="atrybuty_22243_20_0_2">37</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_3">'
+                .' <label for="atrybuty_22243_20_0_3">38</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_4">'
+                .' <label for="atrybuty_22243_20_0_4">39</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_5">'
+                .' <label for="atrybuty_22243_20_0_5">40</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_6">'
+                .' <label for="atrybuty_22243_20_0_6">41</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_7">'
+                .' <label for="atrybuty_22243_20_0_7">42</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_8">'
+                .' <label for="atrybuty_22243_20_0_8">43</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_9">'
+                .' <label for="atrybuty_22243_20_0_9">44</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_10">'
+                .' <label for="atrybuty_22243_20_0_10">45</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_11">'
+                .' <label for="atrybuty_22243_20_0_11">46</label></p>'
+                .'<p><input type="radio" name="atrybuty_22243[20]" id="atrybuty_22243_20_0_12">'
+                .' <label for="atrybuty_22243_20_0_12">47</label></p>'
+                .'</div></div></div></div>'
+            )
+        );
+        $this->assertSame(
             '36-47',
             $svc->labelFromTexts(null, 'Rozmiar: 36 37 38 39 40 41 42 43 44 45 46 47', 'obuwie')
         );

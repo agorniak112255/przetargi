@@ -463,9 +463,15 @@ final class ProductEnrichmentService
 
             $this->assertBatchNotCancelled($batchId);
 
+            // opcje zakupu (radio/select) — zanim LLM wytnie je z tekstu karty
+            $optionSizes = $this->collectOptionSizes($pageSnippets);
+
             // sklep → opis PL; producent → normy/materiały — jedno sanitize, żeby nie dublować vLLM
             $t = microtime(true);
-            $pageSnippets = $this->sanitizePagesWithLlm($product, $pageSnippets);
+            $pageSnippets = $this->rememberOptionSizes(
+                $this->sanitizePagesWithLlm($product, $pageSnippets),
+                $optionSizes
+            );
             $timing['llm_sanitize_ms'] = $this->elapsedMs($t);
 
             $t = microtime(true);
@@ -518,7 +524,13 @@ final class ProductEnrichmentService
                 );
                 $supplementedPages = $this->keepConfirmedCardPages($product, $supplement['pages']);
                 if ($supplementedPages !== []) {
-                    $pageSnippets = $supplementedPages;
+                    $pageSnippets = $this->rememberOptionSizes(
+                        $supplementedPages,
+                        $this->mergeOptionSizeLists(
+                            $optionSizes,
+                            $this->collectOptionSizes($supplementedPages)
+                        )
+                    );
                 }
                 foreach ($supplement['image_urls'] as $url) {
                     $fetched['image_urls'][] = $url;
@@ -1621,6 +1633,9 @@ final class ProductEnrichmentService
         $sizes = new ProductSizeVariant;
         $category = is_string($attributes['kategoria_bhp'] ?? null) ? $attributes['kategoria_bhp'] : null;
         $fromShop = $sizes->filterByCategory($optionSizes, $category);
+        if (count($fromShop) < 2 && count($optionSizes) >= 2) {
+            $fromShop = $optionSizes;
+        }
         if (count($fromShop) >= 2) {
             $label = $sizes->formatPackaging($fromShop);
             $attributes['rozmiar'] = $label;
@@ -1674,6 +1689,35 @@ final class ProductEnrichmentService
         }
 
         return $best;
+    }
+
+    /**
+     * @param  list<array{url?: string, text?: string, option_sizes?: list<string>}>  $pages
+     * @param  list<string>  $sizes
+     * @return list<array{url?: string, text?: string, option_sizes?: list<string>}>
+     */
+    private function rememberOptionSizes(array $pages, array $sizes): array
+    {
+        if ($pages === []) {
+            return [];
+        }
+        $best = $this->mergeOptionSizeLists($this->collectOptionSizes($pages), $sizes);
+        if ($best === []) {
+            return $pages;
+        }
+        $pages[0]['option_sizes'] = $best;
+
+        return $pages;
+    }
+
+    /**
+     * @param  list<string>  $left
+     * @param  list<string>  $right
+     * @return list<string>
+     */
+    private function mergeOptionSizeLists(array $left, array $right): array
+    {
+        return count($right) > count($left) ? $right : $left;
     }
 
     /** @return list<string> */
@@ -2693,7 +2737,11 @@ SYS,
             }
             $text = mb_substr($text, 0, min($perPage, $left));
             $left -= mb_strlen($text);
-            $out[] = ['url' => (string) ($page['url'] ?? ''), 'text' => $text];
+            $row = ['url' => (string) ($page['url'] ?? ''), 'text' => $text];
+            if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
+                $row['option_sizes'] = $page['option_sizes'];
+            }
+            $out[] = $row;
         }
 
         return $out;

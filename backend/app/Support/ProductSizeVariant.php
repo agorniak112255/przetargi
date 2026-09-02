@@ -584,6 +584,25 @@ final class ProductSizeVariant
                 $blocks[] = (string) $block;
             }
         }
+        // IdoSell: <div id="opcja_22243_20_0"> + <label for="atrybuty_…">36</label>
+        if (preg_match_all('#<div[^>]+id=["\']opcja_\d[^"\']*["\'][^>]*>(.*?)</div>#is', $html, $m)) {
+            foreach ($m[1] as $block) {
+                $blocks[] = (string) $block;
+            }
+        }
+        if (preg_match_all(
+            '#<label[^>]+(?:for|id)=["\']atrybuty_[^"\']+["\'][^>]*>\s*([^<]{1,16})\s*</label>#iu',
+            $html,
+            $m
+        )) {
+            $labels = [];
+            foreach ($m[1] as $raw) {
+                $labels[] = '<label>'.trim((string) $raw).'</label>';
+            }
+            if ($labels !== []) {
+                $blocks[] = implode('', $labels);
+            }
+        }
 
         return $blocks;
     }
