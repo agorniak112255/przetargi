@@ -160,7 +160,7 @@ final class ProductAiSearchService
         $rankRaws = $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent);
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
-            $intents[$i] = $this->parseIntent($raw, $clean[$i]);
+            $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
             $ranked = $this->rowsFromLlmMatches(
                 $clean[$i],
                 $pending[$i]['rank_cards'] ?? $pending[$i]['candidates'],
@@ -168,6 +168,9 @@ final class ProductAiSearchService
                 $limit,
                 $intents[$i]['needed'],
             );
+            if ($ranked === []) {
+                $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit);
+            }
             $done[$i] = $this->searchResult(
                 $clean[$i],
                 $intents[$i],
@@ -298,6 +301,10 @@ final class ProductAiSearchService
             $task,
             $intent['constraints'],
         );
+        $rankedIntent = $this->withCatalogAliases($rankedIntent, $query);
+        if ($ranked === []) {
+            $ranked = $this->rowsFromGenericCatalog($query, $prepared['candidates'], $limit);
+        }
         $result = $this->searchResult(
             $query,
             $rankedIntent,
@@ -379,9 +386,9 @@ final class ProductAiSearchService
                 }
             }
         }
-        $intent['constraints'] = $modelConstraints !== []
-            ? array_values(array_unique($modelConstraints))
-            : $this->fallbackConstraints($intent['needed']);
+        $intent['constraints'] = $this->sanitizeConstraints(
+            $modelConstraints !== [] ? $modelConstraints : $this->fallbackConstraints($intent['needed'])
+        );
 
         return $intent;
     }
@@ -515,7 +522,7 @@ final class ProductAiSearchService
         $rankRaws = $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent);
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
-            $intents[$i] = $this->parseIntent($raw, $clean[$i]);
+            $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
             $ranked = $this->rowsFromLlmMatches(
                 $clean[$i],
                 $pending[$i]['rank_cards'] ?? $pending[$i]['candidates'],
@@ -523,6 +530,9 @@ final class ProductAiSearchService
                 $limit,
                 $intents[$i]['needed'],
             );
+            if ($ranked === []) {
+                $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit);
+            }
             $done[$i] = $this->searchResult(
                 $clean[$i],
                 $intents[$i],
@@ -641,6 +651,7 @@ final class ProductAiSearchService
             'search_phrases' => array_values(array_unique(array_filter([
                 $corrected,
                 $query,
+                ...$this->catalogAliasPhrases($corrected),
                 ...$this->fallbackPhrases($corrected),
                 ...$this->fallbackPhrases($query),
             ]))),
@@ -664,6 +675,78 @@ final class ProductAiSearchService
         ], $query);
 
         return is_string($fixed) ? $fixed : $query;
+    }
+
+    /**
+     * @param  array{needed: string, search_phrases: list<string>, constraints: list<string>}  $intent
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
+     */
+    private function withCatalogAliases(array $intent, string $query): array
+    {
+        $intent['search_phrases'] = array_values(array_unique(array_filter([
+            ...$intent['search_phrases'],
+            ...$this->catalogAliasPhrases((string) ($intent['needed'] ?? '')),
+            ...$this->catalogAliasPhrases($query),
+        ])));
+
+        return $intent;
+    }
+
+    /**
+     * Nazwy sklepowe, gdy SIWZ używa tkaniny/żargonu zamiast asortymentu z cennika.
+     *
+     * @return list<string>
+     */
+    private function catalogAliasPhrases(string $query): array
+    {
+        $query = trim($query);
+        if ($query === '') {
+            return [];
+        }
+        if ($this->assortment->isUnderHelmetLiner($query)) {
+            return [];
+        }
+        if ($this->assortment->articleType($query) === 'cap') {
+            return ['czapka z daszkiem', 'czapka robocza'];
+        }
+
+        return [];
+    }
+
+    /**
+     * Proste wymaganie (sam rodzaj + tkanina/kolor): nie czekaj na przepisanie przez model.
+     *
+     * @param  Collection<int, Product>  $candidates
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromGenericCatalog(string $query, Collection $candidates, int $limit): array
+    {
+        if ($this->isSpecificRequirement($query) || $candidates->isEmpty()) {
+            return [];
+        }
+
+        $requirement = $this->assortmentText($query, null);
+        $products = $this->withResponseRelations(
+            $candidates
+                ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
+                    && $this->filterType->covers($requirement, $this->filterHaystack($p)))
+                ->sortByDesc(fn (Product $p): int => $this->articleTypeScore($query, $p))
+                ->take(max(1, min(80, $limit)))
+                ->values()
+        );
+
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $row['ai_match_percent'] = min(86, max(55, 48 + $this->articleTypeScore($query, $product)));
+            $row['ai_match_reason'] = 'Ten sam rodzaj w katalogu (np. czapka robocza / z daszkiem).';
+            $out[] = $row;
+        }
+
+        return $out;
     }
 
     /**
@@ -703,6 +786,12 @@ final class ProductAiSearchService
             $phrases[] = $code;
             $phrases[] = $this->filterType->hyphenated($code);
         }
+        foreach ($this->catalogAliasPhrases($needed) as $alias) {
+            $phrases[] = $alias;
+        }
+        foreach ($this->catalogAliasPhrases($query) as $alias) {
+            $phrases[] = $alias;
+        }
 
         $constraints = [];
         foreach ([$raw['constraints'] ?? [], $raw['must_evidence'] ?? []] as $list) {
@@ -722,7 +811,7 @@ final class ProductAiSearchService
         return [
             'needed' => $needed,
             'search_phrases' => array_values(array_unique($phrases)),
-            'constraints' => array_values(array_unique($constraints)),
+            'constraints' => $this->sanitizeConstraints($constraints),
         ];
     }
 
@@ -740,6 +829,33 @@ final class ProductAiSearchService
         }
 
         return $this->fallbackConstraints($query) !== [];
+    }
+
+    /**
+     * @param  list<string>  $constraints
+     * @return list<string>
+     */
+    private function sanitizeConstraints(array $constraints): array
+    {
+        $out = [];
+        foreach ($constraints as $term) {
+            $term = trim($term);
+            if ($term === '') {
+                continue;
+            }
+            $kept = [];
+            foreach (preg_split('/\s+/u', $this->lexicalNormalize($term)) ?: [] as $part) {
+                if ($part === '' || $this->isNonTechnicalToken($part) || $this->isGenericAssortmentToken($part)) {
+                    continue;
+                }
+                $kept[] = $part;
+            }
+            if ($kept !== []) {
+                $out[] = $term;
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**
@@ -786,7 +902,8 @@ final class ProductAiSearchService
         return preg_match(
             '/^(czarn|bial|zol|niebies|czerw|zielon|szar|granat|pomaranc|brazow|bezow'
             .'|srebrn|zlot|grafit|khaki|navy|black|white|yellow|blue|red|green|grey|gray|orange'
-            .'|polar(?!yz)|poliestr|baweln|nylon|elastan|lycra|ociepl|kolor|rozmiar)/u',
+            .'|polar(?!yz)|poliestr|baweln|nylon|elastan|lycra|ociepl|kolor|rozmiar'
+            .'|drelich|drill|twill|denim|kanw|flanel|welur|sztruks|oxford|ripstop|softshell)/u',
             $t
         ) === 1;
     }
@@ -1794,7 +1911,8 @@ final class ProductAiSearchService
                 'role' => 'system',
                 'content' => 'Jesteś ekspertem BHP. Ranking w dwóch krokach — nie mieszaj ich. '
                     .'1) NAZWA: rzeczownik z wymagania = ten sam produkt co w polu name karty '
-                    .'(synonimy: buty=obuwie=trzewiki; kurtka≈bluza ochronna). '
+                    .'(synonimy: buty=obuwie=trzewiki; kurtka≈bluza ochronna; '
+                    .'czapka drelichowa=czapka z daszkiem=czapka robocza — drelich to tkanina, nie asortyment). '
                     .'Inny rodzaj → nie zwracaj: kamizelka ≠ osłona twarzy; rękawice ≠ obuwie. '
                     .'Sam ten sam rodzaj (kombinezon, kalosz) NIE wystarczy, gdy wymaganie ma warunek. '
                     .'2) WARUNEK: substancja, stężenie, klasa, typ, norma, napięcie — tylko gdy widać to '

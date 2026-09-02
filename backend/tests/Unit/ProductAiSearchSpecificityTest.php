@@ -23,6 +23,7 @@ final class ProductAiSearchSpecificityTest extends TestCase
         $this->assertFalse($svc->isSpecificRequirement('gogle'));
         $this->assertFalse($svc->isSpecificRequirement('CZAPKA KOMINIARKA Z POLARU czarna lub granatowa'));
         $this->assertFalse($svc->isSpecificRequirement('kombinezon roboczy'));
+        $this->assertFalse($svc->isSpecificRequirement('Czapka drelichowa'));
     }
 
     public function test_hazard_or_norm_makes_requirement_specific(): void

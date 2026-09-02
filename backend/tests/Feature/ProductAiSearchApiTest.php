@@ -1831,6 +1831,59 @@ final class ProductAiSearchApiTest extends TestCase
         $this->assertSame(1, $waves);
     }
 
+    public function test_generic_fabric_query_returns_catalog_cap_without_rewrite(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $cap = Product::query()->create([
+            'sku' => 'CZ-DASZEK',
+            'name' => 'Czapka z daszkiem robocza',
+            'manufacturer' => 'Reis',
+            'category' => 'Czapki',
+            'description' => 'Czapka robocza z daszkiem, bawełna.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 7,
+            'stock' => 10,
+            'ppe_family' => 'head',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $rewrites = 0;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(function (array $messages) use (&$rewrites): array {
+            $user = (string) ($messages[1]['content'] ?? '');
+            if (str_contains($user, 'Karty katalogu:')) {
+                return [
+                    'needed' => 'czapka drelichowa',
+                    'search_phrases' => ['czapka drelichowa'],
+                    'constraints' => ['drelichowa'],
+                    'matches' => [],
+                ];
+            }
+            $rewrites++;
+
+            return [
+                'needed' => 'czapka z daszkiem',
+                'search_phrases' => ['czapka z daszkiem', 'czapka robocza'],
+                'constraints' => [],
+            ];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        Http::fake();
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Czapka drelichowa',
+        ])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('products.0.sku', 'CZ-DASZEK')
+            ->assertJsonPath('external_hint', null);
+
+        $this->assertSame(0, $rewrites);
+        Http::assertNotSent(fn ($request): bool => str_contains((string) $request->url(), 'tavily'));
+    }
+
     public function test_empty_rank_rewrites_query_and_retries_catalog(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
@@ -1885,7 +1938,7 @@ final class ProductAiSearchApiTest extends TestCase
         Http::fake();
 
         $this->postJson('/api/products/ai-search', [
-            'query' => 'Czapka drelichowa',
+            'query' => 'Czapka drelichowa EN 812',
         ])
             ->assertOk()
             ->assertJsonPath('total', 1)
