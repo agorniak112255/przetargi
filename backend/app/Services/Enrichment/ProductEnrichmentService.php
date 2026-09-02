@@ -21,6 +21,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
+use App\Support\ProductSizeVariant;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -622,9 +623,13 @@ final class ProductEnrichmentService
                     'category' => (string) ($product->category ?? ''),
                     'sku' => (string) $product->sku,
                     'name' => (string) $product->name,
+                    'description' => $description,
                     'norms_column' => (string) ($product->norms ?? ''),
                 ]
             );
+            $sized = $this->applyExtractedSizes($product, $attributes, $specs, $description);
+            $attributes = $sized['attributes'];
+            $packaging = $sized['packaging'];
 
             $payload = [
                 'features' => $features,
@@ -762,7 +767,7 @@ final class ProductEnrichmentService
             )));
 
             $product->refresh();
-            $product->update([
+            $saved = [
                 'description' => mb_substr($description, 0, 10000),
                 'enrichment_payload' => $payload,
                 'enrichment_status' => Product::ENRICHMENT_DONE,
@@ -770,7 +775,11 @@ final class ProductEnrichmentService
                 'enrichment_error' => $cachedImageUrls === []
                     ? 'Opis OK, nie udało się pobrać zdjęcia (źródła zwróciły błędne URL).'
                     : null,
-            ]);
+            ];
+            if ($packaging !== null) {
+                $saved['packaging'] = $packaging;
+            }
+            $product->update($saved);
 
             ReindexProductEmbeddingJob::dispatch($product->id, true);
 
@@ -917,19 +926,25 @@ final class ProductEnrichmentService
 
         $payload = is_array($cache->enrichment_payload) ? $cache->enrichment_payload : [];
         $payload['from_cache'] = true;
+        $cacheDescription = (string) $cache->description;
+        $cacheSpecs = $this->stringList($payload['specs'] ?? null);
         $payload['attributes'] = $this->bhpAttributes->normalize(
             is_array($payload['attributes'] ?? null) ? $payload['attributes'] : null,
             [
                 'materials' => $this->stringList($payload['materials'] ?? null),
                 'norms' => $this->stringList($payload['norms'] ?? null),
-                'specs' => $this->stringList($payload['specs'] ?? null),
+                'specs' => $cacheSpecs,
                 'certificates' => $this->stringList($payload['certificates'] ?? null),
                 'category' => (string) ($product->category ?? ''),
                 'sku' => (string) $product->sku,
                 'name' => (string) $product->name,
+                'description' => $cacheDescription,
                 'norms_column' => (string) ($product->norms ?? ''),
             ]
         );
+        $sized = $this->applyExtractedSizes($product, $payload['attributes'], $cacheSpecs, $cacheDescription);
+        $payload['attributes'] = $sized['attributes'];
+        $cachePackaging = $sized['packaging'];
 
         $rawImageUrls = is_array($cache->image_urls) ? $cache->image_urls : [];
         $imageUrls = [];
@@ -961,13 +976,17 @@ final class ProductEnrichmentService
         }
 
         $product->refresh();
-        $product->update([
+        $cached = [
             'description' => mb_substr((string) $cache->description, 0, 10000),
             'enrichment_payload' => $payload,
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
             'enrichment_error' => null,
-        ]);
+        ];
+        if ($cachePackaging !== null) {
+            $cached['packaging'] = $cachePackaging;
+        }
+        $product->update($cached);
 
         ReindexProductEmbeddingJob::dispatch($product->id, true);
 
@@ -1557,6 +1576,36 @@ final class ProductEnrichmentService
         }
 
         return $extracted;
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     * @param  list<string>  $specs
+     * @return array{attributes: array<string, mixed>, packaging: string|null}
+     */
+    private function applyExtractedSizes(
+        Product $product,
+        array $attributes,
+        array $specs,
+        string $description,
+    ): array {
+        $sizes = new ProductSizeVariant;
+        $found = [];
+        foreach (array_merge([(string) ($attributes['rozmiar'] ?? '')], $specs, [$description]) as $chunk) {
+            $parsed = $sizes->parseSizesFromText((string) $chunk);
+            if (count($parsed) > count($found)) {
+                $found = $parsed;
+            }
+        }
+        if ($found !== [] && ($attributes['rozmiar'] ?? null) === null) {
+            $attributes['rozmiar'] = $sizes->formatPackaging($found);
+        }
+        $packaging = null;
+        if ($found !== [] && $sizes->shouldFillPackaging($product->packaging, $found)) {
+            $packaging = $sizes->formatPackaging($found);
+        }
+
+        return ['attributes' => $attributes, 'packaging' => $packaging];
     }
 
     /** @return list<string> */

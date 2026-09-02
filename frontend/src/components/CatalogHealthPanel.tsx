@@ -9,6 +9,7 @@ type Report = {
   not_enriched: number
   manual_review?: number
   with_description: number
+  empty_packaging?: number
   by_manufacturer: Array<{ manufacturer: string; count: number }>
   offer_markup_percent?: number
   vector?: VectorReport
@@ -118,6 +119,37 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
     }
   }
 
+  async function backfillSizes() {
+    if (
+      !window.confirm(
+        'Uzupełnić rozmiary z już zapisanych opisów? Tylko lokalna baza — bez internetu i AI.',
+      )
+    ) {
+      return
+    }
+    setBusy(true)
+    setMsg('')
+    setErr('')
+    try {
+      const res = await api<{ message: string }>(
+        '/products/catalog-health/backfill-sizes',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            manufacturer: manufacturerFilter || null,
+          }),
+        },
+      )
+      setMsg(res.message)
+      await load()
+      onChanged?.()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd uzupełniania rozmiarów')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function backfillAttrs() {
     setBusy(true)
     setMsg('')
@@ -170,6 +202,7 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
         <Stat label="Bez atrybutów BHP" value={report.missing_attributes} warn />
         <Stat label="Nie wzbogacone" value={report.not_enriched} warn />
         <Stat label="Z opisem" value={report.with_description} />
+        <Stat label="Opis bez rozmiaru w opakowaniu" value={report.empty_packaging ?? 0} warn />
         {(report.manual_review ?? 0) > 0 && (
           <Stat label="Do ręcznego opisu" value={report.manual_review ?? 0} warn />
         )}
@@ -209,6 +242,14 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
             className="rounded border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-800 disabled:opacity-50"
           >
             Uzupełnij atrybuty lokalnie ({report.missing_attributes})
+          </button>
+          <button
+            type="button"
+            disabled={busy || (report.with_description ?? 0) === 0}
+            onClick={() => void backfillSizes()}
+            className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold text-emerald-950 disabled:opacity-50"
+          >
+            Uzupełnij rozmiary z opisów ({report.empty_packaging ?? 0})
           </button>
           <button
             type="button"

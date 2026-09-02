@@ -36,6 +36,30 @@ final class PrestaExportApiTest extends TestCase
         $this->app->instance(PrestaExportGateway::class, $this->presta);
     }
 
+    public function test_export_reads_size_range_from_description_when_packaging_empty(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        foreach (range(36, 48) as $size) {
+            $this->presta->sizeAttributes[(string) $size] = 200 + $size;
+        }
+        $product = $this->makeProduct([
+            'sku' => 'AROSIO-AIR',
+            'name' => 'Artra AROSIO Air S1P',
+            'manufacturer' => 'Artra',
+            'category' => 'Obuwie',
+            'packaging' => null,
+            'description' => 'Rozmiary obuwia. — Rozmiary unisex od 36 do 48. Tabela producenta.',
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created')
+            ->assertJsonPath('sizes.0', '36')
+            ->assertJsonPath('sizes.12', '48');
+
+        $this->assertCount(13, $this->presta->combinations[0]['items']);
+    }
+
     public function test_admin_exports_product_with_sizes_and_on_order_delivery(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

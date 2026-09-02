@@ -101,6 +101,22 @@ class ProductCatalogHealthController extends Controller
         ]);
     }
 
+    public function backfillSizes(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'manufacturer' => ['sometimes', 'nullable', 'string', 'max:120'],
+        ]);
+        set_time_limit(0);
+        $result = $this->health->backfillSizesFromDescriptions($data['manufacturer'] ?? null);
+        $message = "Z opisów uzupełniono rozmiary w {$result['updated']} produktach"
+            ." (przeskanowano {$result['scanned']}, bez zmian {$result['skipped']}). Bez AI i bez sieci.";
+
+        return response()->json([
+            ...$result,
+            'message' => $message,
+        ]);
+    }
+
     public function mergeSizes(Request $request): JsonResponse
     {
         $data = $request->validate([

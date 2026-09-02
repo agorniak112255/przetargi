@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\ProductSizeVariant;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -24,6 +25,7 @@ final class ProductCatalogHealthService
         private readonly ProductEnrichmentService $enrichment,
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly AiSettingsService $aiSettings,
+        private readonly ProductSizeVariant $sizes,
     ) {}
 
     /**
@@ -52,6 +54,13 @@ final class ProductCatalogHealthService
             ->count();
         $manualReview = (clone $base)
             ->where('enrichment_status', Product::ENRICHMENT_MANUAL)
+            ->count();
+        $emptyPackaging = (clone $base)
+            ->whereNotNull('description')
+            ->where('description', '!=', '')
+            ->where(function ($q): void {
+                $q->whereNull('packaging')->orWhere('packaging', '');
+            })
             ->count();
 
         $missingAttributes = 0;
@@ -109,6 +118,7 @@ final class ProductCatalogHealthService
             'missing_attributes' => $missingAttributes,
             'not_enriched' => $notEnriched,
             'manual_review' => $manualReview,
+            'empty_packaging' => $emptyPackaging,
             'with_description' => max(0, $total - $missingDescription),
             'vector' => $this->vectorProgress($base),
             'by_manufacturer' => $byManufacturer,
@@ -230,6 +240,88 @@ final class ProductCatalogHealthService
         });
 
         return ['updated' => $filled + $pending, 'filled' => $filled, 'pending' => $pending];
+    }
+
+    /**
+     * Uzupełnia packaging / rozmiar z już zapisanego opisu — bez AI i bez sieci.
+     *
+     * @return array{scanned: int, updated: int, skipped: int}
+     */
+    public function backfillSizesFromDescriptions(?string $manufacturer = null): array
+    {
+        $scanned = 0;
+        $updated = 0;
+        $skipped = 0;
+        $query = Product::query()
+            ->select(['id', 'description', 'packaging', 'enrichment_payload'])
+            ->whereNotNull('description')
+            ->where('description', '!=', '')
+            ->orderBy('id');
+        if ($manufacturer !== null && trim($manufacturer) !== '') {
+            $query->where('manufacturer', $manufacturer);
+        }
+
+        $query->chunkById(500, function ($products) use (&$scanned, &$updated, &$skipped): void {
+            foreach ($products as $product) {
+                /** @var Product $product */
+                $scanned++;
+                $pack = trim((string) ($product->packaging ?? ''));
+                if ($pack !== '' && preg_match('/[,;]/', $pack) === 1) {
+                    $skipped++;
+
+                    continue;
+                }
+                $found = $this->sizesFromStoredText($product);
+                if ($found === [] || ! $this->sizes->shouldFillPackaging($product->packaging, $found)) {
+                    $skipped++;
+
+                    continue;
+                }
+                $label = $this->sizes->formatPackaging($found);
+                if ($label === null) {
+                    $skipped++;
+
+                    continue;
+                }
+                $product->packaging = $label;
+                $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+                $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
+                if (($attrs['rozmiar'] ?? null) === null || $attrs['rozmiar'] === '') {
+                    $attrs['rozmiar'] = $label;
+                    $payload['attributes'] = $attrs;
+                    $product->enrichment_payload = $payload;
+                }
+                $product->saveQuietly();
+                $updated++;
+            }
+        });
+
+        return ['scanned' => $scanned, 'updated' => $updated, 'skipped' => $skipped];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function sizesFromStoredText(Product $product): array
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
+        $found = [];
+        $chunks = [(string) ($attrs['rozmiar'] ?? '')];
+        foreach ($payload['specs'] ?? [] as $spec) {
+            if (is_string($spec) && trim($spec) !== '') {
+                $chunks[] = $spec;
+            }
+        }
+        $chunks[] = (string) ($product->description ?? '');
+        foreach ($chunks as $chunk) {
+            $parsed = $this->sizes->parseSizesFromText($chunk);
+            if (count($parsed) > count($found)) {
+                $found = $parsed;
+            }
+        }
+
+        return $found;
     }
 
     /** @return list<int> */

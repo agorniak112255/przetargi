@@ -41,6 +41,24 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertSame('9', $attrs['rozmiar']);
     }
 
+    public function test_detects_size_ranges_from_description(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame('36-48', $n->normalize([], [
+            'name' => 'Artra AROSIO Air S1P',
+            'description' => 'Rozmiary unisex od 36 do 48. Tabela rozmiarów producenta.',
+        ])['rozmiar']);
+        $this->assertSame('7-11', $n->normalize([], [
+            'name' => 'Rękawice nitrylowe',
+            'description' => 'Dostępne rozmiary: 7, 8, 9, 10, 11',
+        ])['rozmiar']);
+        $this->assertSame('s-xxl', $n->normalize([], [
+            'name' => 'Spodnie robocze',
+            'description' => 'Rozmiary od S do XXL.',
+        ])['rozmiar']);
+    }
+
     public function test_for_product_derives_from_enrichment_lists(): void
     {
         $product = Product::query()->create([

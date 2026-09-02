@@ -58,7 +58,7 @@ final class PrestaProductExportService
                 'action' => 'updated',
                 'presta_id' => (int) $saved['id_product'],
                 'url' => (string) $saved['url'],
-                'sizes' => $this->sizes->parseSizeList($product->packaging, $product->name, $product->sku),
+                'sizes' => $this->sizes->sizesForProduct($product),
                 'sizes_missing' => [],
                 'images' => 0,
             ];
@@ -74,7 +74,7 @@ final class PrestaProductExportService
         }
 
         $prestaId = (int) $saved['id_product'];
-        $sizeNames = $this->sizes->parseSizeList($product->packaging, $product->name, $product->sku);
+        $sizeNames = $this->sizes->sizesForProduct($product);
         $hint = trim((string) $product->category.' '.$product->name);
         $resolved = $this->gateway->resolveSizeAttributes($sizeNames, $hint);
         $combinations = [];

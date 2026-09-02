@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace App\Support;
 
+use App\Models\Product;
+
 /**
  * Grupuje warianty, które różnią się tylko rozmiarem (np. AlphaTec 37695VP Size 7.0 / 10.0).
+ * Wyciąga też zakresy z opisu: rękawice, obuwie, odzież, spodnie.
  */
 final class ProductSizeVariant
 {
@@ -29,6 +32,19 @@ final class ProductSizeVariant
         '130' => '13',
     ];
 
+    /** @var list<string> */
+    private const ALPHA_ORDER = [
+        'xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl', 'xxxl', 'xxxxl', '5xl', '6xl',
+    ];
+
+    private const KEYWORD = '(?:dost[eę]pne\\s+rozmiary|available\\s+sizes?|rozmiary|rozmiar(?:ów|y)?|sizes?|tailles?|pointures?|gr(?:o|ö)sse?n?)';
+
+    private const NUM = '(\\d{1,2}(?:[.,]\\d)?)';
+
+    private const ALPHA = '(xxxxl|xxxl|xxl|xl|xxs|xs|[2-6]\\s*xl|[sml])';
+
+    private const RANGE_SEP = '(?:do|to|à|au|bis|[-–—])';
+
     /**
      * Lista rozmiarów z pola opakowania (np. „7, 8, 9, 10”) albo jeden rozmiar z nazwy/SKU.
      *
@@ -36,8 +52,13 @@ final class ProductSizeVariant
      */
     public function parseSizeList(?string $packaging, ?string $name = null, ?string $sku = null): array
     {
-        $found = [];
         $raw = trim((string) $packaging);
+        $range = $this->expandIfSingleRange($raw);
+        if ($range !== []) {
+            return $range;
+        }
+
+        $found = [];
         if ($raw !== '' && preg_match('/[,;]/', $raw) === 1) {
             foreach (preg_split('/[,;]+/', $raw) ?: [] as $part) {
                 $part = trim((string) $part);
@@ -62,6 +83,159 @@ final class ProductSizeVariant
         }
 
         return [$one];
+    }
+
+    /**
+     * Rozmiary do Presty / opakowania: lista z cennika, potem zakres z opisu.
+     *
+     * @return list<string>
+     */
+    public function sizesForProduct(Product $product): array
+    {
+        $fromPack = $this->parseSizeList($product->packaging, $product->name, $product->sku);
+        if (count($fromPack) >= 2) {
+            return $fromPack;
+        }
+
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
+        $chunks = [
+            (string) ($attrs['rozmiar'] ?? ''),
+        ];
+        foreach ($payload['specs'] ?? [] as $spec) {
+            if (is_string($spec) && trim($spec) !== '') {
+                $chunks[] = $spec;
+            }
+        }
+        $chunks[] = (string) ($product->description ?? '');
+
+        $fromText = [];
+        foreach ($chunks as $chunk) {
+            $parsed = $this->parseSizesFromText($chunk);
+            if (count($parsed) > count($fromText)) {
+                $fromText = $parsed;
+            }
+        }
+        if (count($fromText) >= 2) {
+            return $fromText;
+        }
+        if ($fromText !== [] && $fromPack === []) {
+            return $fromText;
+        }
+
+        return $fromPack;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function parseSizesFromText(string $text): array
+    {
+        $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = str_replace("\xc2\xa0", ' ', $text);
+        $text = trim($text);
+        if ($text === '') {
+            return [];
+        }
+
+        $asWhole = $this->expandIfSingleRange($text);
+        if ($asWhole !== []) {
+            return $asWhole;
+        }
+
+        $keyword = self::KEYWORD;
+        $num = self::NUM;
+        $alpha = self::ALPHA;
+        $sep = self::RANGE_SEP;
+
+        if (preg_match(
+            '/\b'.$keyword.'\b.{0,48}?(?:od|from|de|du|von)?\s*'.$num.'\s*'.$sep.'\s*'.$num.'\b/iu',
+            $text,
+            $m
+        ) === 1) {
+            $expanded = $this->expandNumericRange($m[1], $m[2]);
+            if ($expanded !== []) {
+                return $expanded;
+            }
+        }
+
+        if (preg_match(
+            '/\b'.$keyword.'\b.{0,48}?(?:od|from|de|du|von)?\s*'.$alpha.'\s*'.$sep.'\s*'.$alpha.'\b/iu',
+            $text,
+            $m
+        ) === 1) {
+            $expanded = $this->expandAlphaRange($m[1], $m[2]);
+            if ($expanded !== []) {
+                return $expanded;
+            }
+        }
+
+        if (preg_match(
+            '/\b'.$keyword.'\b(?:\s+\p{L}+){0,4}\s*[:.\-—]?\s*\b((?:'.$num.'|'.$alpha.')(?:\s*[,\/;]\s*(?:'.$num.'|'.$alpha.')){1,24})/iu',
+            $text,
+            $m
+        ) === 1) {
+            $list = $this->parseCommaList($m[1]);
+            if ($list !== []) {
+                return $list;
+            }
+        }
+
+        if (preg_match(
+            '/\b(?:rozmiar|size|taille|rozm\.?)\s*[:=]?\s*('.$num.'|'.$alpha.')\b/iu',
+            $text,
+            $m
+        ) === 1) {
+            $one = $this->normalizeSizeToken($m[1]);
+            if ($one !== null) {
+                return [$one];
+            }
+        }
+
+        if (preg_match('/\b(?:rozmiar\s+uniwersaln\w*|one\s*size|onesize|taille\s+unique)\b/iu', $text) === 1) {
+            return ['onesize'];
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  list<string>  $sizes
+     */
+    public function formatPackaging(array $sizes): ?string
+    {
+        $sizes = array_values(array_filter(
+            $sizes,
+            static fn (string $s): bool => trim($s) !== ''
+        ));
+        if ($sizes === []) {
+            return null;
+        }
+        if (count($sizes) === 1) {
+            return $sizes[0];
+        }
+        $compact = $this->compactContiguous($sizes);
+
+        return $compact ?? implode(', ', $sizes);
+    }
+
+    /**
+     * @param  list<string>  $sizes
+     */
+    public function shouldFillPackaging(?string $current, array $sizes): bool
+    {
+        if ($sizes === []) {
+            return false;
+        }
+        $existing = $this->parseSizeList($current);
+        if ($existing === []) {
+            return true;
+        }
+        if (count($existing) >= 2) {
+            return false;
+        }
+
+        return count($sizes) >= 2;
     }
 
     public function extractSize(?string $name, ?string $sku = null, ?string $packaging = null): ?string
@@ -144,6 +318,209 @@ final class ProductSizeVariant
             .'|'.number_format(round((float) $purchase, 2), 2, '.', '');
     }
 
+    /**
+     * @return list<string>
+     */
+    private function expandIfSingleRange(string $raw): array
+    {
+        $t = trim(preg_replace('/\s+/u', ' ', $raw) ?? $raw);
+        if ($t === '' || preg_match('/[,;\/]/', $t) === 1) {
+            return [];
+        }
+
+        $num = self::NUM;
+        $alpha = self::ALPHA;
+        $sep = self::RANGE_SEP;
+
+        if (preg_match('/^(?:od|from|de|du|von)\s+'.$num.'\s+'.$sep.'\s+'.$num.'$/iu', $t, $m) === 1
+            || preg_match('/^'.$num.'\s*'.$sep.'\s*'.$num.'$/iu', $t, $m) === 1) {
+            return $this->expandNumericRange($m[1], $m[2]);
+        }
+
+        if (preg_match('/^(?:od|from|de|du|von)\s+'.$alpha.'\s+'.$sep.'\s+'.$alpha.'$/iu', $t, $m) === 1
+            || preg_match('/^'.$alpha.'\s*'.$sep.'\s*'.$alpha.'$/iu', $t, $m) === 1) {
+            return $this->expandAlphaRange($m[1], $m[2]);
+        }
+
+        return [];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function expandNumericRange(string $fromRaw, string $toRaw): array
+    {
+        $from = (float) str_replace(',', '.', $fromRaw);
+        $to = (float) str_replace(',', '.', $toRaw);
+        if ($from > $to) {
+            [$from, $to] = [$to, $from];
+        }
+        if (! $this->isPlausibleNumericRange($from, $to)) {
+            return [];
+        }
+        if ($this->isHalfPair($from, $to)) {
+            return [$this->formatNumeric($from).'-'.$this->formatNumeric($to)];
+        }
+
+        $step = $this->numericStep($from, $to);
+        $out = [];
+        for ($n = $from; $n <= $to + 0.001; $n += $step) {
+            $out[] = $this->formatNumeric(round($n * 2) / 2);
+            if (count($out) > 25) {
+                return [];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function expandAlphaRange(string $fromRaw, string $toRaw): array
+    {
+        $from = $this->normalizeSizeToken($fromRaw);
+        $to = $this->normalizeSizeToken($toRaw);
+        if ($from === null || $to === null) {
+            return [];
+        }
+        $i = array_search($from, self::ALPHA_ORDER, true);
+        $j = array_search($to, self::ALPHA_ORDER, true);
+        if (! is_int($i) || ! is_int($j)) {
+            return [];
+        }
+        if ($i > $j) {
+            [$i, $j] = [$j, $i];
+        }
+
+        return array_values(array_slice(self::ALPHA_ORDER, $i, $j - $i + 1));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function parseCommaList(string $raw): array
+    {
+        $found = [];
+        foreach (preg_split('/[,;\/]+/', $raw) ?: [] as $part) {
+            $norm = $this->normalizeSizeToken(trim((string) $part));
+            if ($norm !== null && ! in_array($norm, $found, true)) {
+                $found[] = $norm;
+            }
+        }
+
+        return $found;
+    }
+
+    /**
+     * @param  list<string>  $sizes
+     */
+    private function compactContiguous(array $sizes): ?string
+    {
+        if (count($sizes) < 2) {
+            return null;
+        }
+        if ($this->areNumericContiguous($sizes)) {
+            return $sizes[0].'-'.$sizes[array_key_last($sizes)];
+        }
+        if ($this->areAlphaContiguous($sizes)) {
+            return $sizes[0].'-'.$sizes[array_key_last($sizes)];
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  list<string>  $sizes
+     */
+    private function areNumericContiguous(array $sizes): bool
+    {
+        $nums = [];
+        foreach ($sizes as $size) {
+            if (preg_match('/^\d{1,2}(?:\.\d)?$/', $size) !== 1) {
+                return false;
+            }
+            $nums[] = (float) $size;
+        }
+        $step = $this->numericStep($nums[0], $nums[array_key_last($nums)]);
+        for ($i = 1, $n = count($nums); $i < $n; $i++) {
+            if (abs(($nums[$i] - $nums[$i - 1]) - $step) > 0.001) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  list<string>  $sizes
+     */
+    private function areAlphaContiguous(array $sizes): bool
+    {
+        $idx = [];
+        foreach ($sizes as $size) {
+            $i = array_search($size, self::ALPHA_ORDER, true);
+            if (! is_int($i)) {
+                return false;
+            }
+            $idx[] = $i;
+        }
+        for ($i = 1, $n = count($idx); $i < $n; $i++) {
+            if ($idx[$i] !== $idx[$i - 1] + 1) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isPlausibleNumericRange(float $from, float $to): bool
+    {
+        $glove = $from >= 4 && $to <= 16;
+        $shoe = $from >= 32 && $to <= 52;
+        $cloth = $from >= 40 && $to <= 78;
+        if (! $glove && ! $shoe && ! $cloth) {
+            return false;
+        }
+        if ($glove && ($to - $from) > 12) {
+            return false;
+        }
+        if (! $glove && ($to - $from) > 28) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function numericStep(float $from, float $to): float
+    {
+        if (fmod($from, 1.0) !== 0.0 || fmod($to, 1.0) !== 0.0) {
+            return 0.5;
+        }
+        $a = (int) $from;
+        $b = (int) $to;
+        if ($a >= 44 && $b >= 54 && $a % 2 === 0 && $b % 2 === 0) {
+            return 2.0;
+        }
+
+        return 1.0;
+    }
+
+    private function isHalfPair(float $from, float $to): bool
+    {
+        if ($from < 4 || $to > 16 || $from === $to) {
+            return false;
+        }
+
+        return ($to - $from) <= 1.0001
+            && (fmod($from, 1.0) !== 0.0 || fmod($to, 1.0) !== 0.0);
+    }
+
+    private function formatNumeric(float $n): string
+    {
+        return fmod($n, 1.0) === 0.0 ? (string) (int) $n : (string) $n;
+    }
+
     private function sizeFromName(string $name): ?string
     {
         if (preg_match(
@@ -173,6 +550,12 @@ final class ProductSizeVariant
         if ($t === '') {
             return null;
         }
+        $t = match ($t) {
+            '2xl' => 'xxl',
+            '3xl' => 'xxxl',
+            '4xl' => 'xxxxl',
+            default => $t,
+        };
         if (preg_match('/^(xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l|[2-6]xl|onesize)$/', $t) === 1) {
             return $t;
         }
@@ -180,6 +563,9 @@ final class ProductSizeVariant
             $n = (float) $t;
             if ($n >= 4 && $n <= 16) {
                 return fmod($n, 1.0) === 0.0 ? (string) (int) $n : (string) $n;
+            }
+            if (fmod($n, 1.0) === 0.0 && $n >= 32 && $n <= 78) {
+                return (string) (int) $n;
             }
         }
 

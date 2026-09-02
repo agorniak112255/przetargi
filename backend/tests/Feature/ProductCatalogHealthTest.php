@@ -109,6 +109,78 @@ final class ProductCatalogHealthTest extends TestCase
         $this->assertNull($puste['kategoria_bhp'] ?? null);
     }
 
+    public function test_backfill_sizes_from_stored_descriptions(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $buty = Product::query()->create([
+            'sku' => 'AROSIO',
+            'name' => 'Artra AROSIO Air S1P',
+            'manufacturer' => 'Artra',
+            'description' => 'Rozmiary unisex od 36 do 48. Tabela producenta.',
+            'packaging' => null,
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+        ]);
+        $rekawice = Product::query()->create([
+            'sku' => 'NIT-1',
+            'name' => 'Rękawice nitrylowe',
+            'manufacturer' => 'ATG',
+            'description' => 'Dostępne rozmiary: 7, 8, 9, 10, 11',
+            'packaging' => null,
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+        ]);
+        $spodnie = Product::query()->create([
+            'sku' => 'SP-46',
+            'name' => 'Spodnie robocze',
+            'manufacturer' => 'Canis',
+            'description' => 'Rozmiary spodni: 46-62',
+            'packaging' => null,
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+        ]);
+        $zLista = Product::query()->create([
+            'sku' => 'KEEP',
+            'name' => 'Już ma listę',
+            'manufacturer' => 'ATG',
+            'description' => 'Rozmiary unisex od 36 do 48.',
+            'packaging' => '7, 8, 9, 10, 11',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+        ]);
+        $bezZakresu = Product::query()->create([
+            'sku' => 'NONE',
+            'name' => 'Bez rozmiaru',
+            'manufacturer' => 'ATG',
+            'description' => 'EN ISO 20345:2011 S1 P SRC. ESD wg EN IEC 61340-4-3:2018.',
+            'packaging' => null,
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+        ]);
+
+        $this->getJson('/api/products/catalog-health')
+            ->assertOk()
+            ->assertJsonPath('empty_packaging', 4);
+
+        $this->postJson('/api/products/catalog-health/backfill-sizes')
+            ->assertOk()
+            ->assertJsonPath('updated', 3)
+            ->assertJsonPath('scanned', 5);
+
+        $this->assertSame('36-48', $buty->refresh()->packaging);
+        $this->assertSame('36-48', $buty->enrichment_payload['attributes']['rozmiar'] ?? null);
+        $this->assertSame('7-11', $rekawice->refresh()->packaging);
+        $this->assertSame('46-62', $spodnie->refresh()->packaging);
+        $this->assertSame('7, 8, 9, 10, 11', $zLista->refresh()->packaging);
+        $this->assertNull($bezZakresu->refresh()->packaging);
+    }
+
     public function test_vector_progress_endpoint_counts_indexed_products(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

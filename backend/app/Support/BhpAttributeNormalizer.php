@@ -569,11 +569,13 @@ final class BhpAttributeNormalizer
 
     private function detectRozmiar(string $text): ?string
     {
-        if (preg_match('/\b(?:rozmiar|size|sizes?)\s*[:=]?\s*([0-9]{1,2}(?:\s*[-–\/]\s*[0-9]{1,2})?|[XSML]{1,3})\b/iu', $text, $m) === 1) {
-            return trim($m[1]);
+        $sizes = new ProductSizeVariant;
+        $found = $sizes->parseSizesFromText($text);
+        if ($found === []) {
+            return null;
         }
 
-        return null;
+        return $sizes->formatPackaging($found);
     }
 
     private function detectEn388(string $text): ?string
