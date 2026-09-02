@@ -18,6 +18,11 @@ final class FakePrestaExportGateway implements PrestaExportGateway
     /** @var array<string, int> */
     public array $manufacturers = [];
 
+    /** @var list<string> */
+    public array $createdManufacturers = [];
+
+    private int $nextManufacturerId = 100;
+
     /** @var array<string, int> */
     public array $categories = [];
 
@@ -62,9 +67,19 @@ final class FakePrestaExportGateway implements PrestaExportGateway
 
     public function resolveManufacturerId(string $name): int
     {
-        $key = mb_strtolower(trim($name));
+        $name = trim($name);
+        $key = mb_strtolower($name);
+        if ($key === '') {
+            return 0;
+        }
+        if (isset($this->manufacturers[$key])) {
+            return $this->manufacturers[$key];
+        }
+        $id = $this->nextManufacturerId++;
+        $this->manufacturers[$key] = $id;
+        $this->createdManufacturers[] = $name;
 
-        return $this->manufacturers[$key] ?? 8;
+        return $id;
     }
 
     public function resolveCategoryId(?string $name): int

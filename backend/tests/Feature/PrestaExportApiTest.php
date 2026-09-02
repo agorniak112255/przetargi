@@ -51,6 +51,8 @@ final class PrestaExportApiTest extends TestCase
             ->assertJsonPath('sizes.4', '11');
 
         $this->assertCount(1, $this->presta->created);
+        $this->assertSame(['Ansell'], $this->presta->createdManufacturers);
+        $this->assertSame(100, $this->presta->created[0]['id_manufacturer']);
         $this->assertSame('Na zamówienie', $this->presta->created[0]['delivery_label']);
         $this->assertStringContainsString('antyprzecięciowe', $this->presta->created[0]['description']);
         $this->assertNotEmpty($this->presta->combinations);
@@ -59,6 +61,20 @@ final class PrestaExportApiTest extends TestCase
             'product_id' => $product->id,
             'status' => PrestaProductMatch::STATUS_EXPORTED,
         ]);
+    }
+
+    public function test_export_reuses_existing_manufacturer(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->presta->manufacturers['ansell'] = 12;
+        $product = $this->makeProduct(['manufacturer' => 'Ansell']);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created');
+
+        $this->assertSame([], $this->presta->createdManufacturers);
+        $this->assertSame(12, $this->presta->created[0]['id_manufacturer']);
     }
 
     public function test_handlowiec_cannot_export(): void

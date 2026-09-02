@@ -127,7 +127,17 @@ final class PrestaShopExportClient implements PrestaExportGateway
         } catch (Throwable) {
         }
 
-        return 0;
+        $xml = $this->xmlRoot('manufacturer', [
+            'active' => '1',
+            'name' => $this->cdata($name),
+        ]);
+        $created = $this->postXml('manufacturers', $xml);
+        $id = (int) ($created->manufacturer->id ?? 0);
+        if ($id <= 0) {
+            throw new RuntimeException('Presta nie zwróciła id kontrahenta „'.$name.'”.');
+        }
+
+        return $id;
     }
 
     public function resolveCategoryId(?string $name): int
@@ -254,6 +264,10 @@ final class PrestaShopExportClient implements PrestaExportGateway
         $product->additional_delivery_times = '2';
         $product->out_of_stock = '1';
         $product->available_for_order = '1';
+        $manufacturerId = (int) ($data['id_manufacturer'] ?? 0);
+        if ($manufacturerId > 0) {
+            $product->id_manufacturer = (string) $manufacturerId;
+        }
         $this->putXml('products/'.$prestaId, $this->sanitizeForWrite((string) $existing->asXML()));
 
         $rewrite = (string) ($data['link_rewrite'] ?? '');
