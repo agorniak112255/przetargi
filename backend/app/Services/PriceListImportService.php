@@ -10,6 +10,7 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\User;
+use App\Services\Presta\ProductCategorySanitizer;
 use App\Support\ProductSizeVariant;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -25,6 +26,7 @@ final class PriceListImportService
         private readonly SpreadsheetColumnMapper $columnMapper,
         private readonly ProductSpecialPriceImporter $specialPrices,
         private readonly SpreadsheetCellReader $cells,
+        private readonly ProductCategorySanitizer $categorySanitizer,
     ) {}
 
     /**
@@ -185,9 +187,12 @@ final class PriceListImportService
                 'name' => $name,
                 'manufacturer' => $manufacturer,
                 'ean' => isset($row['ean']) ? (trim((string) $row['ean']) ?: null) : null,
-                'category' => isset($row['category']) && is_string($row['category']) && $row['category'] !== ''
-                    ? $row['category']
-                    : $defaultCategory,
+                'category' => $this->cleanCategory(
+                    isset($row['category']) && is_string($row['category']) && $row['category'] !== ''
+                        ? $row['category']
+                        : $defaultCategory,
+                    $name
+                ),
                 'norms' => null,
                 'catalog_price_net' => (float) $price,
                 'discount_percent' => $discount,
@@ -1217,7 +1222,7 @@ final class PriceListImportService
                 'name' => $name,
                 'manufacturer' => $manufacturer,
                 'ean' => isset($map['ean']) ? trim((string) ($row[$map['ean']] ?? '')) ?: null : null,
-                'category' => $category,
+                'category' => $this->cleanCategory(is_string($category) ? $category : null, $name),
                 'description' => $description,
                 'norms' => null,
                 'catalog_price_net' => $catalog,
@@ -1493,6 +1498,11 @@ final class PriceListImportService
         }
 
         return $s;
+    }
+
+    private function cleanCategory(?string $category, string $name = ''): ?string
+    {
+        return $this->categorySanitizer->imported($category, $name);
     }
 
     /**

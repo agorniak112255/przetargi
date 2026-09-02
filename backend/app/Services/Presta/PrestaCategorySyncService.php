@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace App\Services\Presta;
 
 use App\Models\PrestaCategory;
-use App\Models\PrestaCategoryMap;
-use App\Models\Product;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -17,6 +15,7 @@ final class PrestaCategorySyncService
 {
     public function __construct(
         private readonly PrestaSettingsService $settings,
+        private readonly PrestaCategoryMapService $maps,
     ) {}
 
     /**
@@ -117,34 +116,7 @@ final class PrestaCategorySyncService
 
     public function ensureLocalMaps(): int
     {
-        $locals = Product::query()
-            ->whereNotNull('category')
-            ->where('category', '!=', '')
-            ->distinct()
-            ->orderBy('category')
-            ->pluck('category');
-        $exact = [];
-        foreach (PrestaCategory::query()->where('active', true)->get() as $cat) {
-            $exact[mb_strtolower(trim((string) $cat->name))] = (int) $cat->presta_id;
-        }
-        $count = 0;
-        foreach ($locals as $local) {
-            $local = trim((string) $local);
-            if ($local === '') {
-                continue;
-            }
-            $map = PrestaCategoryMap::query()->firstOrNew(['local_category' => $local]);
-            if (! $map->exists) {
-                $key = mb_strtolower($local);
-                if (isset($exact[$key])) {
-                    $map->presta_id = $exact[$key];
-                }
-                $map->save();
-            }
-            $count++;
-        }
-
-        return $count;
+        return $this->maps->autoFillMaps();
     }
 
     /**

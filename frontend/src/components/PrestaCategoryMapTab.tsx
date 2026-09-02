@@ -21,6 +21,13 @@ type Listing = {
   maps: MapRow[]
   default_presta_id: number
   imported?: number
+  filled?: number
+  applied?: number
+  updated?: number
+  cleared?: number
+  skipped?: number
+  garbage_categories?: number
+  garbage_products?: number
 }
 
 export function PrestaCategoryMapTab() {
@@ -30,12 +37,12 @@ export function PrestaCategoryMapTab() {
   const [categories, setCategories] = useState<PrestaCat[]>([])
   const [maps, setMaps] = useState<MapRow[]>([])
   const [defaultId, setDefaultId] = useState(2)
+  const [garbageCats, setGarbageCats] = useState(0)
+  const [garbageProducts, setGarbageProducts] = useState(0)
 
   async function load() {
     const data = await api<Listing>('/admin/presta-categories')
-    setCategories(data.categories)
-    setMaps(data.maps)
-    setDefaultId(data.default_presta_id)
+    applyListing(data)
   }
 
   useEffect(() => {
@@ -48,9 +55,7 @@ export function PrestaCategoryMapTab() {
     setMsg('')
     try {
       const data = await api<Listing>('/admin/presta-categories/sync', { method: 'POST', body: '{}' })
-      setCategories(data.categories)
-      setMaps(data.maps)
-      setDefaultId(data.default_presta_id)
+      applyListing(data)
       setMsg(`Pobrano ${data.imported ?? data.categories.length} kategorii z Presty.`)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd pobierania kategorii')
@@ -67,6 +72,46 @@ export function PrestaCategoryMapTab() {
     )
   }
 
+  function applyListing(data: Listing) {
+    setCategories(data.categories)
+    setMaps(data.maps)
+    setDefaultId(data.default_presta_id)
+    setGarbageCats(data.garbage_categories ?? 0)
+    setGarbageProducts(data.garbage_products ?? 0)
+  }
+
+  async function onAutoMap() {
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const data = await api<Listing>('/admin/presta-categories/auto-map', { method: 'POST', body: '{}' })
+      applyListing(data)
+      setMsg(`Dopasowano automatycznie ${data.filled ?? 0} kategorii (tylko jednoznaczne nazwy).`)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd dopasowania')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onRewrite() {
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const data = await api<Listing>('/admin/presta-categories/rewrite', { method: 'POST', body: '{}' })
+      applyListing(data)
+      setMsg(
+        `Przepisano ${data.updated ?? 0} produktów, wyczyszczono ${data.cleared ?? 0} śmieci, pominięto ${data.skipped ?? 0}.`,
+      )
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd przepisywania kategorii')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function onSave() {
     setBusy(true)
     setErr('')
@@ -81,8 +126,8 @@ export function PrestaCategoryMapTab() {
           })),
         }),
       })
-      setMaps(data.maps)
-      setMsg('Zapisano mapowanie kategorii.')
+      applyListing(data)
+      setMsg(`Zapisano mapowanie i podmieniono kategorie w ${data.applied ?? 0} produktach.`)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd zapisu mapowania')
     } finally {
@@ -96,10 +141,16 @@ export function PrestaCategoryMapTab() {
       {msg && <p className="mb-2 text-sm text-green-700">{msg}</p>}
       <h2 className="text-sm font-semibold">Mapowanie kategorii</h2>
       <p className="mt-1 text-xs text-slate-500">
-        Pobierz drzewo z Presty i przypisz kategorię z Przetargów do konkretnej kategorii sklepu.
-        Bez mapowania produkt idzie do kategorii domyślnej (#{defaultId}).
+        Automat dopasowuje tylko jednoznaczne nazwy (bez zgadywania „Ręczniki” → papierowe).
+        Zapis nadpisuje kategorię produktu ścieżką z Presty. Domyślna w eksporcie: #{defaultId}.
       </p>
-      <div className="mt-3 flex gap-2">
+      {(garbageCats > 0 || garbageProducts > 0) && (
+        <p className="mt-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+          Śmieci z cenników: {garbageCats} kategorii / {garbageProducts} produktów (Excel, modele, kolumny A/B/C).
+          Nie pokazujemy ich na liście — użyj „Wyczyść śmieci i przepisz”.
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
           disabled={busy}
@@ -110,11 +161,27 @@ export function PrestaCategoryMapTab() {
         </button>
         <button
           type="button"
+          disabled={busy || categories.length === 0}
+          onClick={() => void onAutoMap()}
+          className="rounded bg-blue-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+        >
+          Dopasuj automatycznie
+        </button>
+        <button
+          type="button"
           disabled={busy || maps.length === 0}
           onClick={() => void onSave()}
           className="rounded bg-slate-800 px-3 py-1.5 text-xs text-white disabled:opacity-50"
         >
-          Zapisz mapowanie
+          Zapisz i podmień w produktach
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void onRewrite()}
+          className="rounded bg-orange-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+        >
+          Wyczyść śmieci i przepisz
         </button>
       </div>
       <div className="mt-3 max-h-[32rem] overflow-auto rounded border border-slate-100">

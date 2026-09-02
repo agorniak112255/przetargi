@@ -216,6 +216,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/presta-settings/test', [AdminPrestaShopSettingsController::class, 'test']);
         Route::get('/presta-categories', [AdminPrestaCategoryController::class, 'index']);
         Route::post('/presta-categories/sync', [AdminPrestaCategoryController::class, 'sync']);
+        Route::post('/presta-categories/auto-map', [AdminPrestaCategoryController::class, 'autoMap']);
+        Route::post('/presta-categories/apply', [AdminPrestaCategoryController::class, 'apply']);
+        Route::post('/presta-categories/rewrite', [AdminPrestaCategoryController::class, 'rewrite']);
         Route::put('/presta-categories/maps', [AdminPrestaCategoryController::class, 'updateMaps']);
 
         Route::get('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'index']);
