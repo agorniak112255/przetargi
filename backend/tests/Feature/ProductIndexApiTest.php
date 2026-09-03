@@ -84,8 +84,34 @@ final class ProductIndexApiTest extends TestCase
 
         $this->getJson('/api/products?q='.rawurlencode('Adapter P3E do hełmu 3M'))
             ->assertOk()
+            ->assertJsonFragment(['sku' => 'P3E']);
+    }
+
+    public function test_products_q_respects_brand_in_phrase(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'MSA-LOW',
+            'name' => 'Ochronniki słuchu na hełm MSA',
+            'manufacturer' => 'MSA',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 2,
+        ]);
+        Product::query()->create([
+            'sku' => 'PW75',
+            'name' => 'Ochronniki słuchu na hełm, niski poziom tłumienia',
+            'manufacturer' => 'Portwest',
+            'catalog_price_net' => 40,
+            'purchase_price' => 25,
+            'stock' => 2,
+        ]);
+
+        $this->getJson('/api/products?q='.rawurlencode('Ochronniki słuchu na hełm MSA'))
+            ->assertOk()
             ->assertJsonPath('total', 1)
-            ->assertJsonPath('data.0.sku', 'P3E');
+            ->assertJsonPath('data.0.sku', 'MSA-LOW');
     }
 
     public function test_manufacturers_endpoint_returns_distinct_sorted_list(): void

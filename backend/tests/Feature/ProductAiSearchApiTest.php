@@ -178,6 +178,55 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonMissing(['sku' => 'PROS-106']);
     }
 
+    public function test_ai_search_keeps_named_brand_and_drops_other_makers(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $msa = Product::query()->create([
+            'sku' => 'MSA-LOW',
+            'name' => 'Ochronniki słuchu na hełm MSA niski tłumienie',
+            'manufacturer' => 'MSA',
+            'category' => 'Ochrona słuchu',
+            'description' => 'Ochronniki słuchu nahełmowe MSA, niski poziom tłumienia SNR 22 dB.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $portwest = Product::query()->create([
+            'sku' => 'PW75',
+            'name' => 'Ochronniki słuchu na hełm, niski poziom tłumienia SNR 22 dB',
+            'manufacturer' => 'Portwest',
+            'category' => 'Ochrona słuchu',
+            'description' => 'Ochronniki słuchu na hełm, niski poziom tłumienia SNR 22 dB.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 25,
+            'stock' => 6,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'ochronniki słuchu na hełm MSA niski poziom tłumienia',
+            'search_phrases' => ['ochronniki słuchu', 'hełm', 'niski poziom tłumienia'],
+            'matches' => [
+                ['id' => $portwest->id, 'score' => 90, 'reason' => 'Niski poziom tłumienia'],
+                ['id' => $msa->id, 'score' => 70, 'reason' => 'MSA'],
+            ],
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Ochronniki słuchu na hełm MSA - niski poziom tłumienia',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'MSA-LOW')
+            ->assertJsonPath('products.0.id', $msa->id)
+            ->assertJsonMissing(['sku' => 'PW75']);
+    }
+
     public function test_ai_search_finds_short_code_p3e_despite_helmet_family(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

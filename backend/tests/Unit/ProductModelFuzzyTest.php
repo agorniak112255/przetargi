@@ -65,6 +65,17 @@ final class ProductModelFuzzyTest extends TestCase
     }
 
     #[Test]
+    public function catalog_brand_msa_is_detected_not_common_nouns(): void
+    {
+        $req = 'Ochronniki słuchu na hełm MSA - niski poziom tłumienia';
+
+        $this->assertContains('msa', $this->fuzzy->catalogBrands($req));
+        $this->assertNotContains('ochronniki', $this->fuzzy->catalogBrands($req));
+        $this->assertTrue($this->fuzzy->matchesCatalogBrand($this->product('X', 'Nauszniki', 'MSA'), ['msa']));
+        $this->assertFalse($this->fuzzy->matchesCatalogBrand($this->product('PW75', 'PW75', 'Portwest'), ['msa']));
+    }
+
+    #[Test]
     public function short_alnum_code_p3e_is_a_named_model(): void
     {
         $req = 'Adapter P3E do hełmu 3M';

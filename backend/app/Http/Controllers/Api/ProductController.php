@@ -54,7 +54,9 @@ class ProductController extends Controller
             $term = trim((string) $request->string('q'));
             $like = '%'.$term.'%';
             $codes = $this->modelFuzzy->shortCodes($term);
-            $query->where(function ($builder) use ($like, $term, $codes) {
+            $brands = $this->modelFuzzy->catalogBrands($term);
+            $tokens = $brands === [] ? [] : $this->queryTokens($term, $brands);
+            $query->where(function ($builder) use ($like, $term, $codes, $brands, $tokens) {
                 $builder->where('sku', 'like', $like)
                     ->orWhere('name', 'like', $like)
                     ->orWhere('manufacturer', 'like', $like);
@@ -66,7 +68,28 @@ class ProductController extends Controller
                     $builder->orWhere('sku', 'like', $esc)
                         ->orWhere('name', 'like', $esc);
                 }
+                foreach ($tokens as $token) {
+                    $esc = '%'.addcslashes($token, '%_\\').'%';
+                    $builder->orWhere('sku', 'like', $esc)
+                        ->orWhere('name', 'like', $esc);
+                }
+                if ($brands !== [] && $codes === [] && $tokens === []) {
+                    foreach ($brands as $brand) {
+                        $esc = '%'.addcslashes($brand, '%_\\').'%';
+                        $builder->orWhere('manufacturer', 'like', $esc)
+                            ->orWhere('name', 'like', $esc);
+                    }
+                }
             });
+            if ($brands !== []) {
+                $query->where(function ($builder) use ($brands) {
+                    foreach ($brands as $brand) {
+                        $esc = '%'.addcslashes($brand, '%_\\').'%';
+                        $builder->orWhere('manufacturer', 'like', $esc)
+                            ->orWhere('name', 'like', $esc);
+                    }
+                });
+            }
         }
 
         if ($request->filled('category')) {
@@ -282,6 +305,26 @@ class ProductController extends Controller
             ->get();
 
         return response()->json(['data' => $rows]);
+    }
+
+    /**
+     * @param  list<string>  $brands
+     * @return list<string>
+     */
+    private function queryTokens(string $term, array $brands): array
+    {
+        $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z'];
+        $norm = strtr(mb_strtolower($term), $map);
+        $out = [];
+        foreach (preg_split('/[\s,;:·•\/|+]+/u', $norm) ?: [] as $token) {
+            $c = preg_replace('/[^a-z0-9]/', '', $token) ?? '';
+            if (mb_strlen($c) < 4 || in_array($c, $brands, true)) {
+                continue;
+            }
+            $out[] = $c;
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**

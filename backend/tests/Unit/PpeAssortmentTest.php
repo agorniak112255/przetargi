@@ -40,6 +40,7 @@ final class PpeAssortmentTest extends TestCase
             ['Okulary ochronne przyciemniane', PpeAssortment::FAMILY_EYES],
             ['Gogle chemiczne', PpeAssortment::FAMILY_EYES],
             ['Nauszniki przeciwhałasowe', PpeAssortment::FAMILY_HEARING],
+            ['Ochronniki słuchu na hełm MSA - niski poziom tłumienia', PpeAssortment::FAMILY_HEARING],
             ['Półmaska 3M 6503 część twarzowa', PpeAssortment::FAMILY_RESPIRATORY],
             ['Pochłaniacz wielogazowy A2B2E2K2NO', PpeAssortment::FAMILY_RESPIRATORY],
             ['Filtropochłaniacz FP 211/1', PpeAssortment::FAMILY_RESPIRATORY],

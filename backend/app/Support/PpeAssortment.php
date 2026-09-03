@@ -120,7 +120,8 @@ final class PpeAssortment
         }
 
         if (preg_match(
-            '/\b(nausznik|wkladk\w*\s+sluch|stoper\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron)\w*/u',
+            '/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|wkladk\w*\s+sluch'
+            .'|stoper\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron)\w*/u',
             $t
         ) === 1) {
             return self::FAMILY_HEARING;
@@ -387,7 +388,7 @@ final class PpeAssortment
 
     private function hearingType(string $t): ?string
     {
-        if (preg_match('/\b(nausznik|sluchawk\w*\s+ochron)\w*/u', $t) === 1) {
+        if (preg_match('/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|sluchawk\w*\s+ochron)\w*/u', $t) === 1) {
             return 'earmuff';
         }
         if (preg_match('/\b(wkladk\w*\s+sluch|stoper)\w*/u', $t) === 1) {
@@ -622,7 +623,7 @@ final class PpeAssortment
             self::TYPE_POLBUT => ['mokasyn', 'polbut'],
             'goggles' => ['gogl'],
             'glasses' => ['okular'],
-            'earmuff' => ['nausznik'],
+            'earmuff' => ['nausznik', 'ochronnik', 'czasze'],
             'earplug' => ['stoper'],
             'kneepad' => ['nakolann'],
             'welding_helmet' => ['przylbic'],

@@ -1041,10 +1041,17 @@ final class ProductAiSearchService
         $codeHits = $this->retrieveByModelCode($query.' '.$searchText, $limit);
         $fuzzyHits = $this->retrieveByFuzzyModel($query.' '.$searchText, $limit);
         $filterHits = $this->retrieveByFilterType($query, $limit);
-        $priority = $this->uniqueProducts($filterHits->concat($fuzzyHits)->concat($codeHits), $limit);
+        $brandHits = $this->retrieveByManufacturer($query.' '.$searchText, $limit);
+        $priority = $this->uniqueProducts(
+            $filterHits->concat($fuzzyHits)->concat($codeHits)->concat($brandHits),
+            $limit
+        );
 
         if ($this->modelFuzzy->hasNamedModel($query) && $priority->isNotEmpty()) {
-            $namedPriority = $this->keepCompatible($requirement, $priority);
+            $namedPriority = $this->preferCatalogBrands(
+                $requirement,
+                $this->keepCompatible($requirement, $priority)
+            );
             if ($namedPriority->isNotEmpty()) {
                 return $namedPriority;
             }
@@ -1082,9 +1089,12 @@ final class ProductAiSearchService
             ->concat($this->retrieveByHeadLiner($query, $limit))
             ->concat($this->retrieveByArticleType($query, $limit));
 
-        return $this->keepCompatible(
+        return $this->preferCatalogBrands(
             $requirement,
-            $this->uniqueProducts($this->hydrate($fused)->concat($recall), $limit)
+            $this->keepCompatible(
+                $requirement,
+                $this->uniqueProducts($this->hydrate($fused)->concat($recall)->concat($brandHits), $limit)
+            )
         )->values();
     }
 
@@ -1425,6 +1435,47 @@ final class ProductAiSearchService
 
             return false;
         })->values();
+    }
+
+    /**
+     * Marka z SIWZ jest twardym znacznikiem — nie pokazuj Portwest, gdy napisano MSA.
+     *
+     * @param  Collection<int, Product>  $products
+     * @return Collection<int, Product>
+     */
+    private function preferCatalogBrands(string $query, Collection $products): Collection
+    {
+        $brands = $this->modelFuzzy->catalogBrands($query);
+        if ($brands === [] || $products->isEmpty()) {
+            return $products;
+        }
+        $matched = $products
+            ->filter(fn (Product $p): bool => $this->modelFuzzy->matchesCatalogBrand($p, $brands))
+            ->values();
+
+        return $matched->isNotEmpty() ? $matched : collect();
+    }
+
+    /**
+     * @return Collection<int, Product>
+     */
+    private function retrieveByManufacturer(string $query, int $limit): Collection
+    {
+        $brands = $this->modelFuzzy->catalogBrands($query);
+        if ($brands === []) {
+            return collect();
+        }
+
+        $q = $this->productBaseQuery();
+        $q->where(function ($outer) use ($brands): void {
+            foreach ($brands as $brand) {
+                $like = '%'.addcslashes($brand, '%_\\').'%';
+                $outer->orWhere('manufacturer', 'like', $like)
+                    ->orWhere('name', 'like', $like);
+            }
+        });
+
+        return $q->limit(max(24, $limit * 3))->get()->values();
     }
 
     /**
@@ -2001,6 +2052,7 @@ final class ProductAiSearchService
                     .'Przeciwieństwo cechy (kompozyt vs metal, Typ 6 vs Typ 3) → nie zwracaj. '
                     .'Nie zgaduj z nazwy handlowej. '
                     .'Wspólna cecha (siatkowa) albo przypadkowa norma EN NIE wystarczy. '
+                    .'Marka z wymagania (MSA, 3M, uvex, Portwest…) jest twardym warunkiem — inna marka → nie zwracaj. '
                     .'Marka/model z SIWZ wygrywa przy literówce (TEPM-ICE=TEMP-ICE); nie zmieniaj marki przez EN. '
                     .'Pochłaniacz/filtr EN 14387: A2B2E2K2 ≠ A2B2E2K2NO — bez NO/Hg/CO z wymagania nie zwracaj karty. '
                     .'Literówka w wymaganiu nie dyskwalifikuje karty — nazwę czytaj z linii "Szukany produkt (z analizy)" '
@@ -2054,6 +2106,10 @@ final class ProductAiSearchService
             $product = $byId->get($id);
             if (! $this->assortment->compatibleProduct($requirement, $product)
                 && ! $this->modelFuzzy->matches($requirement, $product)) {
+                continue;
+            }
+            $brands = $this->modelFuzzy->catalogBrands($requirement);
+            if ($brands !== [] && ! $this->modelFuzzy->matchesCatalogBrand($product, $brands)) {
                 continue;
             }
             if (! $this->filterType->covers($requirement, $this->filterHaystack($product))) {

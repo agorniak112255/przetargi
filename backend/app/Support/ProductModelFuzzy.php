@@ -106,6 +106,48 @@ final class ProductModelFuzzy
     }
 
     /**
+     * Znane marki z SIWZ (MSA, 3M, uvex) — nie rzeczowniki typu „ochronniki”.
+     *
+     * @return list<string>
+     */
+    public function catalogBrands(string $requirement): array
+    {
+        $known = $this->knownCatalogBrandTokens();
+        if ($known === []) {
+            return [];
+        }
+        $found = [];
+        $text = $this->stripNorms($requirement);
+        $tokens = preg_split('/[\s,;:·•\/|+]+/u', $text) ?: [];
+        foreach ($tokens as $token) {
+            $c = $this->compact($token);
+            if ($c !== '' && isset($known[$c])) {
+                $found[$c] = true;
+            }
+        }
+
+        return array_keys($found);
+    }
+
+    /**
+     * @param  list<string>  $brands
+     */
+    public function matchesCatalogBrand(Product $product, array $brands): bool
+    {
+        if ($brands === []) {
+            return true;
+        }
+        $hay = $this->compact((string) $product->manufacturer.' '.(string) $product->name);
+        foreach ($brands as $brand) {
+            if ($brand !== '' && str_contains($hay, $brand)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Marka z SIWZ — bez tokenu modelu (tepmice).
      *
      * @return list<string>
@@ -365,5 +407,39 @@ final class ProductModelFuzzy
     private function isStop(string $token): bool
     {
         return in_array($token, self::STOP, true);
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private function knownCatalogBrandTokens(): array
+    {
+        static $cached = null;
+        if (is_array($cached)) {
+            return $cached;
+        }
+        $skip = ['safety', 'group', 'plus', 'auer', 'gloves', 'protection', 'the', 'and'];
+        $out = [];
+        foreach (array_keys((array) config('enrichment.manufacturer_domains', [])) as $key) {
+            $c = $this->compact((string) $key);
+            if ($c !== '' && mb_strlen($c) >= 2 && ! in_array($c, $skip, true)) {
+                $out[$c] = true;
+            }
+            foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower((string) $key)) ?: [] as $part) {
+                $p = $this->compact($part);
+                if ($p === '' || in_array($p, $skip, true)) {
+                    continue;
+                }
+                if (mb_strlen($p) >= 3 || in_array($p, ['3m', 'msa', 'atg', 'kcl', 'gvs', 'pip'], true)) {
+                    $out[$p] = true;
+                }
+            }
+        }
+        foreach (['portwest', 'tegera', 'ejendals', 'showa', 'jalas', 'kleenguard', 'cofra', 'coverguard'] as $extra) {
+            $out[$extra] = true;
+        }
+        $cached = $out;
+
+        return $cached;
     }
 }
