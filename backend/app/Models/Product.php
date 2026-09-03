@@ -36,6 +36,7 @@ class Product extends Model
         'enrichment_status',
         'enriched_at',
         'enrichment_error',
+        'enrichment_trace',
         'enrichment_payload',
         'embedding_synced_at',
         'embedding_hash',
@@ -77,6 +78,7 @@ class Product extends Model
             'enriched_at' => 'datetime',
             'embedding_synced_at' => 'datetime',
             'enrichment_payload' => 'array',
+            'enrichment_trace' => 'array',
         ];
     }
 

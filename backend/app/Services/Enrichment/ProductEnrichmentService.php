@@ -60,7 +60,13 @@ final class ProductEnrichmentService
         private readonly ProductSearchIdentity $identity,
         private readonly ProductImageCandidateVerifier $imageVerifier,
         private readonly PpeAssortment $assortment,
+        private readonly ?EnrichmentAttemptLog $attemptLog = null,
     ) {}
+
+    private function attemptLog(): EnrichmentAttemptLog
+    {
+        return $this->attemptLog ?? app(EnrichmentAttemptLog::class);
+    }
 
     public function enqueueProduct(Product $product, User $user, bool $force = false): ProductEnrichmentBatch
     {
@@ -82,6 +88,7 @@ final class ProductEnrichmentService
         $product->update([
             'enrichment_status' => Product::ENRICHMENT_QUEUED,
             'enrichment_error' => null,
+            'enrichment_trace' => null,
         ]);
 
         $this->seedBatchItems($batch, [$product]);
@@ -178,6 +185,7 @@ final class ProductEnrichmentService
         Product::query()->whereIn('id', $productIds)->update([
             'enrichment_status' => Product::ENRICHMENT_QUEUED,
             'enrichment_error' => null,
+            'enrichment_trace' => null,
         ]);
 
         $this->seedBatchItems($batch, Product::query()->whereIn('id', $productIds)->get());
@@ -365,6 +373,8 @@ final class ProductEnrichmentService
 
         $this->assertBatchNotCancelled($batchId);
 
+        $this->attemptLog()->reset();
+        $this->attemptLog()->add('start', trim($product->sku.' · '.$product->name.' · '.$product->manufacturer));
         $product->update([
             'enrichment_status' => Product::ENRICHMENT_RUNNING,
             'enrichment_error' => null,
@@ -407,6 +417,7 @@ final class ProductEnrichmentService
                 : 'brak wyników';
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
             if ($searchResults === []) {
+                $this->attemptLog()->add('search', $searchEmptyDetail);
                 throw new ProductSourcesNotFoundException(
                     $this->searchFailedDueToEngineOutage($searchEmptyDetail)
                         ? 'Nie znaleziono stron z tym SKU w internecie. '.$searchEmptyDetail
@@ -430,6 +441,10 @@ final class ProductEnrichmentService
             $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
             $t = microtime(true);
             $fetched = $this->pages->fetch($descResults, (string) $product->sku, 3, [], $product);
+            $this->attemptLog()->add(
+                'fetch',
+                count($fetched['pages']).' stron HTML, '.count($fetched['image_urls']).' zdjęć z kart'
+            );
             $pageSnippets = $this->keepConfirmedCardPages($product, $fetched['pages']);
 
             // Certyfikaty + fakty techniczne: osobny fetch producenta (nie mieszać rankingu opisu).
@@ -455,6 +470,14 @@ final class ProductEnrichmentService
                 $this->mergePageSnippets($pageSnippets, $mfrPageSnippets)
             );
             if ($pageSnippets === []) {
+                $this->attemptLog()->add(
+                    'page',
+                    'pobrane strony nie potwierdzają produktu',
+                    urls: array_values(array_filter(array_map(
+                        static fn ($p): string => is_array($p) ? (string) ($p['url'] ?? '') : '',
+                        $fetched['pages']
+                    )))
+                );
                 throw new ProductSourcesNotFoundException(
                     'Nie znaleziono karty potwierdzającej produkt '.$product->sku
                         .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.'
@@ -571,6 +594,24 @@ final class ProductEnrichmentService
                     'final_head' => mb_substr($description, 0, 300),
                 ]);
 
+                $why = [];
+                if ($pageSnippets === []) {
+                    $why[] = 'brak potwierdzonej karty';
+                }
+                if ($description === '') {
+                    $why[] = 'pusty opis';
+                }
+                if ($description !== '' && $this->looksLikeThinDescription($description)) {
+                    $why[] = 'opis za krótki';
+                }
+                if ($description !== '' && $this->looksLikeMissingCardMeta($description)) {
+                    $why[] = 'brak danych z karty';
+                }
+                $this->attemptLog()->add(
+                    'desc',
+                    $why !== [] ? implode('; ', $why) : 'karta nie potwierdziła produktu',
+                    urls: array_column($pageSnippets, 'url')
+                );
                 throw new ProductSourcesNotFoundException(
                     $searchResults === []
                         ? 'Nie znaleziono stron z tym SKU w internecie. '.$searchEmptyDetail
@@ -799,6 +840,7 @@ final class ProductEnrichmentService
                 'enrichment_error' => $cachedImageUrls === []
                     ? 'Opis OK, nie udało się pobrać zdjęcia (źródła zwróciły błędne URL).'
                     : null,
+                'enrichment_trace' => $cachedImageUrls === [] ? $this->attemptLog()->snapshot($product) : null,
             ];
             if ($packaging !== null) {
                 $saved['packaging'] = $packaging;
@@ -823,9 +865,11 @@ final class ProductEnrichmentService
                 'error' => $e->getMessage(),
             ]);
             try {
+                $this->attemptLog()->add('fail', $e->getMessage());
                 $failed = [
                     'enrichment_status' => $this->enrichmentStatusForFailure($e),
                     'enrichment_error' => mb_substr($e->getMessage(), 0, 2000),
+                    'enrichment_trace' => $this->attemptLog()->snapshot($product),
                 ];
                 if ($force && $e instanceof ProductSourcesNotFoundException) {
                     $old = trim((string) $product->description);
@@ -1014,6 +1058,7 @@ final class ProductEnrichmentService
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
             'enrichment_error' => null,
+            'enrichment_trace' => null,
         ];
         if ($cachePackaging !== null) {
             $cached['packaging'] = $cachePackaging;

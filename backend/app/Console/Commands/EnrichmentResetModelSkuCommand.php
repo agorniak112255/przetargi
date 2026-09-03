@@ -55,6 +55,7 @@ final class EnrichmentResetModelSkuCommand extends Command
                         'enrichment_status' => Product::ENRICHMENT_NONE,
                         'enriched_at' => null,
                         'enrichment_error' => null,
+                        'enrichment_trace' => null,
                     ]);
                     $cleared++;
                 }

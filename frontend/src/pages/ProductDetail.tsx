@@ -23,6 +23,20 @@ const STATUS_LABEL: Record<string, string> = {
   manual: 'Ręcznie',
 }
 
+const TRACE_LABEL: Record<string, string> = {
+  start: 'start',
+  ident: 'tożsamość',
+  catalog: 'indeks',
+  query: 'zapytanie',
+  drop: 'odrzucono',
+  err: 'błąd',
+  search: 'szukanie',
+  fetch: 'pobranie',
+  page: 'strona',
+  desc: 'opis',
+  fail: 'koniec',
+}
+
 /** Opis tekstowy bez list — listy są osobno z enrichment_payload. */
 function descriptionProse(text: string | null | undefined): string {
   if (!text) return ''
@@ -333,7 +347,44 @@ export function ProductDetail() {
         </p>
       )}
       {p.enrichment_error && (status === 'failed' || status === 'manual') && (
-        <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{p.enrichment_error}</p>
+        <div className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">
+          <p>{p.enrichment_error}</p>
+          {p.enrichment_trace?.steps && p.enrichment_trace.steps.length > 0 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer font-medium text-red-800">
+                Przebieg wyszukiwania ({p.enrichment_trace.steps.length} kroków)
+              </summary>
+              <ol className="mt-2 list-decimal space-y-1 pl-4 text-red-800">
+                {p.enrichment_trace.steps.map((step, i) => (
+                  <li key={`${step.t}-${i}`}>
+                    <span className="font-medium">{TRACE_LABEL[step.t] ?? step.t}</span>
+                    {': '}
+                    {step.m}
+                    {step.url && (
+                      <>
+                        {' '}
+                        <a href={step.url} target="_blank" rel="noreferrer" className="underline break-all">
+                          {step.url}
+                        </a>
+                      </>
+                    )}
+                    {step.urls && step.urls.length > 0 && (
+                      <ul className="mt-0.5 list-disc pl-4">
+                        {step.urls.map((url) => (
+                          <li key={url}>
+                            <a href={url} target="_blank" rel="noreferrer" className="underline break-all">
+                              {url}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          )}
+        </div>
       )}
       {batch && (batch.status === 'queued' || batch.status === 'running') && (
         <p className="mt-2 text-xs text-slate-500">

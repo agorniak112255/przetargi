@@ -114,6 +114,13 @@ export type Product = {
   enrichment_status?: 'none' | 'queued' | 'running' | 'done' | 'failed' | 'manual'
   enriched_at?: string | null
   enrichment_error?: string | null
+  enrichment_trace?: {
+    at?: string
+    sku?: string
+    name?: string
+    manufacturer?: string
+    steps?: { t: string; m: string; url?: string; urls?: string[] }[]
+  } | null
   price_change_percent?: number | null
   price_history_latest_at?: string | null
   enrichment_payload?: {

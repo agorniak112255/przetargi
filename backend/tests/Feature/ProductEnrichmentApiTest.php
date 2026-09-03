@@ -749,6 +749,8 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $product->refresh();
         $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertNotNull($product->enrichment_error);
+        $this->assertIsArray($product->enrichment_trace);
     }
 
     public function test_prefetch_waits_when_all_search_slots_busy(): void
@@ -1020,7 +1022,13 @@ final class ProductEnrichmentApiTest extends TestCase
         } catch (ProductSourcesNotFoundException $e) {
             $this->assertStringContainsString('bez strony', $e->getMessage());
         }
-        $this->assertNotSame(Product::ENRICHMENT_DONE, $product->fresh()?->enrichment_status);
+        $fresh = $product->fresh();
+        $this->assertNotSame(Product::ENRICHMENT_DONE, $fresh?->enrichment_status);
+        $this->assertIsArray($fresh?->enrichment_trace);
+        $types = array_column($fresh?->enrichment_trace['steps'] ?? [], 't');
+        $this->assertContains('start', $types);
+        $this->assertContains('search', $types);
+        $this->assertContains('fail', $types);
     }
 
     public function test_force_without_sign_card_clears_foreign_clothing_description(): void
@@ -1070,6 +1078,8 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame('', (string) $product->description);
         $this->assertNull($product->enrichment_payload);
         $this->assertNotEmpty($product->enrichment_error);
+        $this->assertIsArray($product->enrichment_trace);
+        $this->assertNotEmpty($product->enrichment_trace['steps'] ?? []);
     }
 
     public function test_searxng_outage_marks_failed_not_manual(): void
@@ -1214,6 +1224,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(['nitryl', 'antypoślizgowe'], $product->enrichment_payload['features'] ?? null);
         $this->assertSame(1, ProductImage::query()->where('product_id', $product->id)->count());
         $this->assertSame(1, ProductDocument::query()->where('product_id', $product->id)->count());
+        $this->assertNull($product->enrichment_trace);
     }
 
     public function test_keeps_shop_radio_sizes_after_llm_drops_them_from_text(): void

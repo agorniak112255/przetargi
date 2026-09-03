@@ -49,7 +49,13 @@ class HybridWebSearchService
         private readonly CatalogIndexSearch $catalog,
         private readonly RetailerOnSiteSearch $retailerSearch,
         private readonly AnsellOfficialCatalog $ansellOfficial,
+        private readonly ?EnrichmentAttemptLog $attemptLog = null,
     ) {}
+
+    private function attemptLog(): EnrichmentAttemptLog
+    {
+        return $this->attemptLog ?? app(EnrichmentAttemptLog::class);
+    }
 
     /**
      * Lokalny indeks sitemap — darmowy i bez limitów, więc pytamy go pierwszego.
@@ -83,6 +89,12 @@ class HybridWebSearchService
     private function hitsFromLocalSources(Product $product): ?array
     {
         $catalogHits = $this->confirmedCatalogHits($this->catalogHits($product), $product);
+        $this->attemptLog()->add(
+            'catalog',
+            $catalogHits === []
+                ? 'indeks sitemap: brak potwierdzonej karty'
+                : 'indeks sitemap: '.count($catalogHits).' kart'
+        );
         if ($this->hasEnoughPageResults($catalogHits, 1)) {
             return [
                 'results' => array_slice($catalogHits, 0, 8),
@@ -123,6 +135,7 @@ class HybridWebSearchService
      */
     public function searchProduct(Product $product, string $phase = 'manufacturer'): array
     {
+        $this->logSearchIdentity($product, $phase);
         $queries = $this->buildQueries($product, $phase);
         if ($this->settings->enrichmentUsesLargeModel()) {
             return $this->searchViaLargeModel($product, $phase, $queries);
@@ -161,6 +174,7 @@ class HybridWebSearchService
                 (string) $product->sku,
                 $this->identity->shortBrand((string) $product->manufacturer)
             );
+            $this->attemptLog()->add('fail', 'faza '.$phase.': brak karty po filtrze');
             throw new RuntimeException(
                 'Brak stron produktu (SKU '.$product->sku
                 .($bare !== '' && $bare !== $product->sku ? ' / '.$bare : '')
@@ -347,6 +361,7 @@ class HybridWebSearchService
                 throw $e;
             } catch (Throwable $e) {
                 $errors[] = $phase.': '.$e->getMessage();
+                $this->attemptLog()->add('err', $phase.': '.$e->getMessage());
                 Log::warning('Product search phase failed', [
                     'product_id' => $product->id,
                     'phase' => $phase,
@@ -876,12 +891,21 @@ class HybridWebSearchService
                 }
                 $errors[] = 'Odrzucono '.count($pack['results'])
                     .' stron bez SKU '.$skuLabel.' w tytule/URL (sprawdzono też treść kart).';
+                $this->logRejectedHits($pack['results'], $product, $query);
                 Log::info('Search results rejected by identity', [
                     'product_id' => $product->id,
                     'sku' => $product->sku,
                     'query' => $query,
                     'urls' => array_slice(array_column($pack['results'], 'url'), 0, 10),
                 ]);
+            } elseif ($packResults !== []) {
+                $this->attemptLog()->add(
+                    'query',
+                    '„'.$query.'” → '.count($pack['results']).' wyników, '.count($packResults).' po filtrze',
+                    urls: array_column($packResults, 'url')
+                );
+            } else {
+                $this->attemptLog()->add('query', '„'.$query.'” → 0 wyników');
             }
             $provider = (string) ($pack['provider'] ?? $this->searchProviderName());
             if ($includeDomains !== [] && ! str_contains($provider, 'manufacturer')) {
@@ -900,9 +924,80 @@ class HybridWebSearchService
             throw $e;
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
+            $this->attemptLog()->add('err', '„'.$query.'”: '.$e->getMessage());
 
             return ['results' => [], 'provider' => $this->searchProviderName()];
         }
+    }
+
+    private function logSearchIdentity(Product $product, string $phase): void
+    {
+        $shop = $this->identity->firstStrongShopPhrase($product);
+        $hosts = array_values(array_unique(array_merge(
+            $this->identity->officialCatalogHosts($product),
+            $this->manufacturers->domainsFor($product),
+        )));
+        $type = $this->identity->requiredArticleTypeLabel($product);
+        $this->attemptLog()->add(
+            'ident',
+            $phase
+            .': model „'.($shop !== '' ? $shop : $product->name).'”'
+            .($hosts !== [] ? '; site:'.implode(', ', array_slice($hosts, 0, 4)) : '; brak domeny producenta')
+            .($type !== null ? '; typ: '.$type : '')
+        );
+    }
+
+    /**
+     * @param  list<array{url?: string, title?: string, snippet?: string}>  $results
+     */
+    private function logRejectedHits(array $results, Product $product, string $query): void
+    {
+        $this->attemptLog()->add(
+            'query',
+            '„'.$query.'” → '.count($results).' wyników, 0 po filtrze'
+        );
+        foreach (array_slice($results, 0, 6) as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $url = (string) ($row['url'] ?? '');
+            if ($url === '') {
+                continue;
+            }
+            $this->attemptLog()->add(
+                'drop',
+                $this->identityRejectReason($url, (string) ($row['title'] ?? ''), (string) ($row['snippet'] ?? ''), $product),
+                $url
+            );
+        }
+    }
+
+    private function identityRejectReason(string $url, string $title, string $snippet, Product $product): string
+    {
+        $hay = mb_strtolower($url.' '.$title.' '.$snippet);
+        if ($this->identity->looksLikeUnrelatedRetailHost($url, $product)) {
+            return 'obca domena sklepu';
+        }
+        if ($this->isListingWithoutProduct($url, $product)) {
+            return 'lista / kategoria, nie karta';
+        }
+        if ($this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+            return 'w tytule/URL inny kod modelu';
+        }
+        if (! $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
+            $need = $this->identity->requiredArticleTypeLabel($product);
+
+            return $need !== null ? 'brak typu „'.$need.'” na stronie' : 'nie ten typ artykułu';
+        }
+        if (! $this->identity->hayMentionsProduct($hay, $product)) {
+            return 'brak SKU/modelu w tytule, URL i zajawce';
+        }
+        if (! $this->identity->hayHasBrand($hay, $product)
+            && ! $this->identity->pageAgreesWithBrandAndName($hay, $url, $product)) {
+            return 'brak marki producenta na stronie';
+        }
+
+        return 'karta nie przeszła filtra tożsamości';
     }
 
     /** Preferuj nazwę z normami („7-003 B S1 SRC”) zamiast SKU z kodem katalogowym. */
