@@ -27,6 +27,21 @@ HTML;
         $this->assertNotContains('https://duckduckgo.com/about', $urls);
     }
 
+    public function test_drops_social_and_engine_junk_hosts(): void
+    {
+        $html = <<<'HTML'
+<a class="result__a" href="https://www.reddit.com/r/ChatGPT">Reddit</a>
+<a class="result__a" href="https://github.com/login">GitHub</a>
+<a class="result__a" href="https://www.microsoft.com/word">Word</a>
+<a class="result__a" href="https://safespec.dupont.com/product/tychem-6000">Tychem</a>
+HTML;
+
+        $results = (new DuckDuckGoHtmlSearch)->parseHtml($html);
+        $urls = array_column($results, 'url');
+
+        $this->assertSame(['https://safespec.dupont.com/product/tychem-6000'], $urls);
+    }
+
     public function test_searxng_retries_fallback_engines_when_blocked(): void
     {
         $hit = 'https://shop.example/portwest-2205';

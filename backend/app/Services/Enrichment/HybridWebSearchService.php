@@ -19,7 +19,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v57';
+    private const SEARCH_CACHE_VERSION = 'v58';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -655,6 +655,7 @@ class HybridWebSearchService
             $q = ($coded !== '' && preg_match('/\p{L}/u', $coded) === 1 && preg_match('/\d/u', $coded) === 1)
                 ? $coded
                 : ($phrase !== '' ? $phrase : trim((string) $product->sku));
+            $q = $this->identity->quoteSearchOperators($q);
             if ($q === '') {
                 return [];
             }
@@ -672,7 +673,7 @@ class HybridWebSearchService
             || ! $this->identity->hasDistinctiveCatalogSku($product)) {
             return [];
         }
-        $sku = $this->identity->catalogSkuWithoutSize($product);
+        $sku = $this->identity->quoteSearchOperators($this->identity->catalogSkuWithoutSize($product));
         if ($sku === '') {
             return [];
         }

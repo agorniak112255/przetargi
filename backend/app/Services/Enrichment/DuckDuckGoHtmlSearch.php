@@ -830,7 +830,8 @@ final class DuckDuckGoHtmlSearch
             || str_contains($host, 'qwant.com')
             || preg_match('/(^|\.)google\./', $host) === 1
             || str_contains($host, 'googleusercontent.com')
-            || str_contains($host, 'gstatic.com')) {
+            || str_contains($host, 'gstatic.com')
+            || ProductSearchIdentity::isJunkSearchHost($href)) {
             return null;
         }
 

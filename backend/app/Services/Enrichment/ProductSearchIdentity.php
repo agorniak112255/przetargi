@@ -810,9 +810,9 @@ final class ProductSearchIdentity
         if ($sku !== '' && ! $internalSku) {
             $withoutSize = $this->catalogSkuWithoutSize($product);
             if ($withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)) {
-                $queries[] = $this->queryWithManufacturer($withoutSize, $product);
+                $queries[] = $this->queryWithManufacturer($this->quoteSearchOperators($withoutSize), $product);
             }
-            $queries[] = $this->queryWithManufacturer($sku, $product);
+            $queries[] = $this->queryWithManufacturer($this->quoteSearchOperators($sku), $product);
             $queries[] = $this->queryWithManufacturer('"'.$sku.'"', $product);
         }
         foreach ($this->catalogArticleCodes($product) as $article) {
@@ -897,16 +897,16 @@ final class ProductSearchIdentity
         $skuQueries = [];
         $withoutSize = $this->catalogSkuWithoutSize($product);
         if ($usableSku && $withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)) {
-            $skuQueries[] = $this->queryWithManufacturer($withoutSize, $product);
+            $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($withoutSize), $product);
         }
         if ($usableSku && $shopName === '') {
-            $skuQueries[] = $this->queryWithManufacturer($sku, $product);
+            $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($sku), $product);
             $bare = $this->stripBrandPrefix($sku, $brand);
             if ($bare !== '' && $bare !== $sku) {
-                $skuQueries[] = $this->queryWithManufacturer($bare, $product);
+                $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($bare), $product);
             }
         } elseif ($usableSku) {
-            $skuQueries[] = $this->queryWithManufacturer($sku, $product);
+            $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($sku), $product);
         }
         if ($usableSku && $this->skuIsSharedShortCode($product)) {
             $extra = $this->sharedShortSkuQueryExtra($product);
@@ -1029,7 +1029,7 @@ final class ProductSearchIdentity
             && ! $this->hasDescriptiveWordSegment($sku)
             && ($name === '' || ! $this->phraseHasToken($name, $sku))) {
             $catalog = $this->distributorPrefixedCatalogSku($product);
-            $parts[] = $catalog !== '' ? $catalog : $sku;
+            $parts[] = $this->quoteSearchOperators($catalog !== '' ? $catalog : $sku);
         }
         if ($parts === [] && $sku !== '') {
             $parts[] = $sku;
@@ -1077,6 +1077,55 @@ final class ProductSearchIdentity
         }
 
         return $query.' '.$brand;
+    }
+
+    /**
+     * SKU „TP 0 275T OR CE-L” — OR/AND/NOT to operatory wyszukiwarki, nie część kodu.
+     */
+    public function quoteSearchOperators(string $phrase): string
+    {
+        $phrase = trim((string) preg_replace('/\s+/u', ' ', $phrase));
+        if ($phrase === '' || (str_starts_with($phrase, '"') && str_ends_with($phrase, '"'))) {
+            return $phrase;
+        }
+        if (preg_match('/^(site:\S+)\s+(.+)$/i', $phrase, $site) === 1) {
+            return $site[1].' '.$this->quoteSearchOperators($site[2]);
+        }
+        if (preg_match('/\b(?:OR|AND|NOT)\b/', $phrase) !== 1) {
+            return $phrase;
+        }
+
+        return '"'.$phrase.'"';
+    }
+
+    /** Reddit / GitHub / pornosy — nie karta BHP, tylko śmieci z zepsutej wyszukiwarki. */
+    public static function isJunkSearchHost(string $url): bool
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $host = preg_replace('/^www\./', '', $host) ?? $host;
+        if ($host === '') {
+            return false;
+        }
+        foreach ([
+            'reddit.com', 'github.com', 'githubusercontent.com',
+            'microsoft.com', 'office.com', 'live.com', 'msn.com',
+            'telegram.org', 't.me',
+            'wikipedia.org', 'zhihu.com', 'quora.com',
+            'facebook.com', 'instagram.com', 'twitter.com', 'x.com',
+            'tiktok.com', 'youtube.com', 'youtu.be',
+            'pinterest.com', 'linkedin.com',
+            'stackoverflow.com', 'stackexchange.com',
+            'medium.com', 'blogspot.com',
+            'joyclub.de', 'joyclub.com', 'joy-club.de',
+            'spankingtube.com', 'xhamster.com', 'xgaytube.com',
+            'pornhub.com', 'xvideos.com', 'xnxx.com',
+        ] as $blocked) {
+            if ($host === $blocked || str_ends_with($host, '.'.$blocked)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** CEJN w nazwie przy producencie GVS — szukaj marki z nazwy, nie z cennika. */
@@ -1222,6 +1271,27 @@ final class ProductSearchIdentity
         $shopWords = preg_split('/\s+/u', $shop) ?: [];
 
         return count($shopWords) === 1 && $this->phraseHasToken($name, $shop);
+    }
+
+    /** „6000” przy „Tychem 6000 FR ThermoPro” — za ogólne na site:/zapytanie. */
+    private function shopPhraseIsBareSeriesNumberWeakerThanTradeName(string $phrase, string $name): bool
+    {
+        if (preg_match('/^\d{3,5}$/u', trim($phrase)) !== 1) {
+            return false;
+        }
+        foreach (preg_split('/[^\p{L}\p{N}]+/u', $name) ?: [] as $word) {
+            $word = trim((string) $word);
+            if ($word === '' || mb_strtolower($word) === mb_strtolower($phrase)) {
+                continue;
+            }
+            if (mb_strlen($word) >= 5 && preg_match('/^\p{L}{5,16}$/u', $word) === 1
+                && ! $this->isGenericCatalogNameWord($word)
+                && ! $this->isApparelTypeWord($word)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function phraseHasToken(string $hay, string $token): bool
@@ -1744,6 +1814,12 @@ final class ProductSearchIdentity
                 && ! $this->isGenericCatalogNameWord($pro[1])) {
                 $out[] = $pro[1].' Pro-X';
             }
+            if (preg_match('/(\p{L}{4,14})[®™]?\s+(\d{3,5})\b/u', $raw, $line) === 1
+                && ! $this->isDescriptiveIdentityWord($line[1])
+                && ! $this->isApparelTypeWord($line[1])
+                && ! $this->isGenericCatalogNameWord($line[1])) {
+                $out[] = $line[1].' '.$line[2];
+            }
             if (preg_match_all(
                 '/(?<![\p{L}\d])(\p{L}{2,3})\s+(\d{2,3})(?=\s+(?:S[1-5]S?|ESD|SRC|HRO)\b)/u',
                 $raw,
@@ -2045,12 +2121,18 @@ final class ProductSearchIdentity
             if ($prefixed !== '' && mb_strtolower($phrase) === $prefixed && $this->looksLikeCompactTradeName($name)) {
                 continue;
             }
+            if ($this->shopPhraseIsBareSeriesNumberWeakerThanTradeName($phrase, $name)) {
+                continue;
+            }
             if (! $this->shopPhraseIsWeakerThanName($phrase, $name)) {
                 return $phrase;
             }
         }
         foreach ($this->shopIdentityPhrases($product) as $phrase) {
             if ($prefixed !== '' && mb_strtolower($phrase) === $prefixed && $this->looksLikeCompactTradeName($name)) {
+                continue;
+            }
+            if ($this->shopPhraseIsBareSeriesNumberWeakerThanTradeName($phrase, $name)) {
                 continue;
             }
             if ($this->isStrongShopPhrase($phrase)
@@ -2175,7 +2257,7 @@ final class ProductSearchIdentity
     ): string {
         $prefixed = $this->distributorPrefixedCatalogSku($product);
         if ($prefixed !== '') {
-            return $prefixed;
+            return $this->quoteSearchOperators($prefixed);
         }
         $sku = trim((string) $product->sku);
         $coded = $this->catalogSkuWithoutSize($product);
@@ -2187,19 +2269,21 @@ final class ProductSearchIdentity
                 && preg_match('/^\p{L}{1,2}\s*\d{2,6}$/u', $shopPhrase) === 1
                 && preg_match('/\p{L}/u', $coded) === 1
                 && preg_match('/\d/u', $coded) === 1) {
-                return (string) preg_replace('/\s+/u', '', $coded);
+                return $this->quoteSearchOperators((string) preg_replace('/\s+/u', '', $coded));
             }
 
-            return $shopPhrase;
+            return $this->quoteSearchOperators($shopPhrase);
         }
         if ($coded !== '' && preg_match('/\p{L}/u', $coded) === 1 && preg_match('/\d/u', $coded) === 1) {
-            return (string) preg_replace('/\s+/u', '', $coded);
+            return $this->quoteSearchOperators((string) preg_replace('/\s+/u', '', $coded));
         }
         if ($sku !== '' && ! $internalSku && ! $warehouseSku) {
-            return $coded !== '' ? $coded : $sku;
+            return $this->quoteSearchOperators($coded !== '' ? $coded : $sku);
         }
 
-        return $this->catalogArticleCodes($product)[0] ?? $this->strippedProductName($product);
+        return $this->quoteSearchOperators(
+            $this->catalogArticleCodes($product)[0] ?? $this->strippedProductName($product)
+        );
     }
 
     private function phraseContainsSizeTail(string $phrase, string $sku, string $coded): bool
@@ -2466,6 +2550,9 @@ final class ProductSearchIdentity
         $brand = mb_strtolower(trim((string) $product->manufacturer));
         if ($brand !== '' && mb_strlen($brand) >= 3 && str_contains($host, $brand)) {
             return false;
+        }
+        if (self::isJunkSearchHost($url)) {
+            return true;
         }
         foreach ([
             'oreillyauto.com', 'autozone.com', 'rockauto.com', 'napaonline.com',

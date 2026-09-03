@@ -170,6 +170,31 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertStringNotContainsString('site:cofra.it 50PCS', $joined);
     }
 
+    public function test_dupont_tychem_quotes_or_in_sku_and_skips_bare_6000(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'TP 0 275T OR CE-L',
+            'name' => 'Tychem® 6000 FR ThermoPro Apron',
+            'manufacturer' => 'DuPont',
+            'category' => 'Ochrona ciała',
+        ]);
+
+        $this->assertSame('Tychem 6000', $id->firstStrongShopPhrase($product));
+        $this->assertTrue($id->looksLikeUnrelatedRetailHost('https://www.reddit.com/r/foo', $product));
+        $this->assertTrue(ProductSearchIdentity::isJunkSearchHost('https://github.com/login'));
+
+        $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('"TP 0 275T OR CE-L"', $joined);
+        $this->assertStringContainsString('site:dupont.com Tychem 6000', $joined);
+        $this->assertStringNotContainsString('site:dupont.com 6000', $joined);
+        foreach ($id->searchQueries($product, 'manufacturer') as $query) {
+            if (str_contains($query, '275T') && str_contains($query, ' OR ') && ! str_contains($query, '"')) {
+                $this->fail('Niewycytowane OR w SKU: '.$query);
+            }
+        }
+    }
+
     public function test_sir_waders_match_official_card_without_sku_in_url(): void
     {
         $id = new ProductSearchIdentity;
