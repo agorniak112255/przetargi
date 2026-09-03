@@ -186,7 +186,7 @@ class OpenAiCompatibleClient
         if ($maxTokens !== null) {
             $extra['max_tokens'] = max(256, $maxTokens);
         }
-        $maxConcurrent = max(1, min(10, $maxConcurrent));
+        $maxConcurrent = max(1, min(AiSettingsService::CONCURRENCY_MAX, $maxConcurrent));
         $parsed = [];
         foreach (array_chunk($messageSets, $maxConcurrent) as $chunk) {
             foreach ($this->chatMany($chunk, true, $extra !== [] ? $extra : null, $task) as $row) {

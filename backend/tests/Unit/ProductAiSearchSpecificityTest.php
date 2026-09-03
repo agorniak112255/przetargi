@@ -29,6 +29,7 @@ final class ProductAiSearchSpecificityTest extends TestCase
         $this->assertFalse($svc->isSpecificRequirement(
             'Ochronniki słuchu na hełm MSA - niski poziom tłumienia'
         ));
+        $this->assertFalse($svc->isSpecificRequirement('OKULARY OCHRONNE MSA PERSPECTA 010'));
     }
 
     public function test_hazard_or_norm_makes_requirement_specific(): void

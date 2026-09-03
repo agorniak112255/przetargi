@@ -301,7 +301,18 @@ final class PpeAssortment
 
     private function footwearType(string $t): ?string
     {
-        if (preg_match('/\b(kalosz|wellington|gumowc|gumiak|purofort|wader|gumboot)\w*/u', $t) === 1) {
+        if (preg_match(
+            '/\b(mata|arkusz|tasm|taśm|stolow|podlogow|wkladk|filtr|pasek|linka)\w*/u',
+            $t
+        ) === 1
+            && preg_match('/\b(kalosz|buty|obuwie|trzewik|sztyblet|polbut|mokasyn)\w*/u', $t) !== 1) {
+            return null;
+        }
+        if (preg_match('/\b(kalosz|wellington|gumowc|gumiak|purofort|wader|gumboot|gumow\w*|spodniobut|woder)\w*/u', $t) === 1) {
+            return self::TYPE_KALOSZ;
+        }
+        if (preg_match('/\bguma\b/u', $t) === 1
+            && preg_match('/\b(mata|arkusz|tasm|taśm)\w*/u', $t) !== 1) {
             return self::TYPE_KALOSZ;
         }
         if (preg_match('/\b(sandal)\w*/u', $t) === 1) {
@@ -376,14 +387,28 @@ final class PpeAssortment
 
     private function eyeType(string $t): ?string
     {
-        if (preg_match('/\b(gogl)\w*/u', $t) === 1) {
+        $gogl = $this->firstWordOffset('/\b(gogl)\w*/u', $t);
+        $okul = $this->firstWordOffset('/\b(okular)\w*/u', $t);
+        if ($gogl !== null && $okul !== null) {
+            return $okul <= $gogl ? 'glasses' : 'goggles';
+        }
+        if ($gogl !== null) {
             return 'goggles';
         }
-        if (preg_match('/\b(okular)\w*/u', $t) === 1) {
+        if ($okul !== null) {
             return 'glasses';
         }
 
         return null;
+    }
+
+    private function firstWordOffset(string $pattern, string $text): ?int
+    {
+        if (preg_match($pattern, $text, $m, PREG_OFFSET_CAPTURE) !== 1) {
+            return null;
+        }
+
+        return (int) $m[0][1];
     }
 
     private function hearingType(string $t): ?string
@@ -576,6 +601,9 @@ final class PpeAssortment
                 return false;
             }
         }
+        if ($reqFamily === self::FAMILY_EYES) {
+            return $this->eyeCompatible($requirement, $productText);
+        }
 
         return true;
     }
@@ -626,7 +654,7 @@ final class PpeAssortment
             'vest' => ['kamizelk', 'waistcoat'],
             'underwear' => ['kaleson', 'podkoszul'],
             'coverall' => ['kombinezon'],
-            self::TYPE_KALOSZ => ['kalosz', 'wellington', 'gumowc', 'gumiak', 'purofort'],
+            self::TYPE_KALOSZ => ['kalosz', 'wellington', 'gumowc', 'gumiak', 'purofort', 'gumow', 'guma'],
             self::TYPE_SANDAL => ['sandal'],
             self::TYPE_SZTYBLET => ['sztyblet', 'chelsea'],
             self::TYPE_TRZEWIK => ['trzewik'],
@@ -685,8 +713,198 @@ final class PpeAssortment
         if ($reqFamily === self::FAMILY_HEARING) {
             return $this->hearingCompatible($requirement, $product);
         }
+        if ($reqFamily === self::FAMILY_EYES) {
+            return $this->eyeCompatible(
+                $requirement,
+                $this->productNameText($product),
+                $this->productIdentityText($product),
+            );
+        }
+        if ($reqFamily === self::FAMILY_FOOTWEAR) {
+            return $this->footwearCompatible(
+                $requirement,
+                $this->productIdentityText($product),
+                $this->productFullText($product),
+            );
+        }
 
         return true;
+    }
+
+    /** Getry / nogawki — nie buty ani kalosze. */
+    public function isFootwearLegwear(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match('/\b(getry|gaiter|nogawki|chaps|stirrup)\w*/u', $t) === 1;
+    }
+
+    private function footwearCompatible(string $requirement, string $productText, ?string $productEvidenceText = null): bool
+    {
+        $evidence = $productEvidenceText ?? $productText;
+        if ($this->isFootwearLegwear($productText) && ! $this->isFootwearLegwear($requirement)) {
+            $reqShoe = preg_match(
+                '/\b(buty|obuwie|kalosz|trzewik|sztyblet|polbut|mokasyn|sandal|gumow\w*)\w*/u',
+                $this->normalize($requirement)
+            ) === 1;
+            if ($reqShoe) {
+                return false;
+            }
+        }
+        if ($this->requiresAntistatic($requirement) && ! $this->productShowsAntistatic($evidence)) {
+            return false;
+        }
+        $reqType = $this->articleType($requirement, self::FAMILY_FOOTWEAR);
+        if ($reqType === null) {
+            return true;
+        }
+        $prodType = $this->articleType($productText, self::FAMILY_FOOTWEAR);
+        if ($prodType === null) {
+            if ($reqType !== null) {
+                $t = $this->normalize($productText);
+                if ($reqType === self::TYPE_KALOSZ) {
+                    if (preg_match(
+                        '/\b(mata|arkusz|tasm|taśm|stolow|podlogow)\w*/u',
+                        $t
+                    ) === 1) {
+                        return false;
+                    }
+
+                    return preg_match(
+                        '/\b(kalosz|wellington|gumowc|gumiak|gumow\w*|guma|spodniobut|woder|overshoe)\w*/u',
+                        $t
+                    ) === 1;
+                }
+
+                return $this->productLooksLikeFootwear($productText);
+            }
+
+            return true;
+        }
+
+        if ($reqType !== $prodType) {
+            if ($this->requiresAntistatic($requirement)
+                && $reqType === self::TYPE_KALOSZ
+                && preg_match('/\b(gumow\w*|guma)\b/u', $this->normalize($evidence)) === 1
+                && in_array($prodType, [self::TYPE_TRZEWIK, self::TYPE_POLBUT, self::TYPE_SZTYBLET], true)) {
+                return true;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /** Obuwie w katalogu bez typu w nazwie — S1/S3, „obuwie”, kalosz itd. */
+    private function productLooksLikeFootwear(string $productText): bool
+    {
+        $t = $this->normalize($productText);
+        if (preg_match(
+            '/\b(mata|arkusz|tasm|taśm|stolow|podlogow|senso\s+dial)\w*/u',
+            $t
+        ) === 1) {
+            return false;
+        }
+
+        return preg_match(
+            '/\b(buty|obuwie|kalosz|trzewik|sztyblet|polbut|mokasyn|sandal|footwear'
+            .'|\bs1p?\b|\bs[2-5]\b|\bo[1-5]\b|\bsrc\b|\bfo\b|\bsr\b)\b/u',
+            $t
+        ) === 1;
+    }
+
+    public function requiresAntistatic(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match(
+            '/\b(esd|antyelektrostat|antystatyczn|en\s*1149|1149[\s-]*5|61340)\w*/u',
+            $t
+        ) === 1;
+    }
+
+    public function productShowsAntistatic(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match(
+            '/\b(esd|antyelektrostat|antystatyczn|en\s*1149|1149[\s-]*5|61340)\w*/u',
+            $t
+        ) === 1;
+    }
+
+    /** Obuwie: S1P + „antystatyczna podeszwa” ≠ ESD z SIWZ — stosuj przy dopisywaniu katalogu (PHP %), nie przy ocenie modelu. */
+    public function productMeetsAntistaticRequirement(string $requirement, Product $product): bool
+    {
+        if (! $this->requiresAntistatic($requirement)) {
+            return true;
+        }
+        if ($this->family($requirement) !== self::FAMILY_FOOTWEAR) {
+            return $this->productShowsAntistatic($this->productCatalogEvidenceText($product));
+        }
+
+        return $this->footwearMeetsAntistaticRequirement($product);
+    }
+
+    private function footwearMeetsAntistaticRequirement(Product $product): bool
+    {
+        $identity = trim(implode(' ', array_filter([
+            (string) $product->name,
+            (string) $product->sku,
+            (string) ($product->norms ?? ''),
+            (string) ($product->category ?? ''),
+        ])));
+        $idN = $this->normalize($identity);
+        if (preg_match('/\b(esd|antyelektrostat|1149[\s-]*5|61340)\b/u', $idN) === 1) {
+            return true;
+        }
+        $desc = $this->normalize((string) ($product->description ?? ''));
+        if (preg_match('/\b(esd|antyelektrostat)\b/u', $desc) !== 1) {
+            return false;
+        }
+
+        return preg_match('/\b(gumow|guma|kalosz|wellington|gumowc|gumiak|esd)\b/u', $idN) === 1;
+    }
+
+    private function productCatalogEvidenceText(Product $product): string
+    {
+        return trim(implode(' ', array_filter([
+            (string) $product->name,
+            (string) $product->sku,
+            (string) ($product->norms ?? ''),
+            (string) ($product->description ?? ''),
+        ])));
+    }
+
+    /** Etui / pojemnik — nie okulary ani gogle, nawet gdy w nazwie jest „okulary”. */
+    public function isEyeWearAccessory(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match(
+            '/\b(etui|futeral|case|pojemnik|pudelko|box|wkladk\w*\s+piank)\w*/u',
+            $t
+        ) === 1;
+    }
+
+    private function eyeCompatible(string $requirement, string $productText, ?string $fullText = null): bool
+    {
+        $nameText = $productText;
+        $hay = $fullText ?? $productText;
+        if ($this->isEyeWearAccessory($nameText) && ! $this->isEyeWearAccessory($requirement)) {
+            return false;
+        }
+        $reqType = $this->articleType($requirement, self::FAMILY_EYES);
+        if ($reqType === null) {
+            return true;
+        }
+        $prodType = $this->articleTypePreferIdentity($nameText, $hay, self::FAMILY_EYES);
+        if ($prodType === null) {
+            return false;
+        }
+
+        return $reqType === $prodType;
     }
 
     /** Wkładki / komplet higieniczny do nauszników — nie jest ochronnikiem słuchu. */
@@ -748,10 +966,18 @@ final class PpeAssortment
         ) === 1;
     }
 
-    private function productIdentityText(Product $product): string
+    private function productNameText(Product $product): string
     {
         return trim(implode(' ', array_filter([
             (string) $product->name,
+            (string) $product->sku,
+        ])));
+    }
+
+    private function productIdentityText(Product $product): string
+    {
+        return trim(implode(' ', array_filter([
+            $this->productNameText($product),
             (string) ($product->category ?? ''),
         ])));
     }

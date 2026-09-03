@@ -11,6 +11,8 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Search\ProductTextSearch;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\CatalogManufacturerContext;
+use App\Support\CatalogRequirementRecall;
 use App\Support\PpeAssortment;
 use App\Support\PpeFilterType;
 use App\Support\ProductModelFuzzy;
@@ -62,6 +64,8 @@ final class ProductAiSearchService
         private readonly RrfFusion $rrf,
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly AiSettingsService $aiSettings,
+        private readonly CatalogManufacturerContext $manufacturerContext,
+        private readonly CatalogRequirementRecall $catalogRecall,
     ) {}
 
     /**
@@ -103,6 +107,33 @@ final class ProductAiSearchService
     }
 
     /**
+     * To samo wyszukiwanie co fioletowy „Szukaj AI” w modalu / na liście produktów.
+     */
+    public function searchForTenderMatch(string $query, int $limit = 5): array
+    {
+        return $this->search($query, $limit, false, AiTask::ProductSearch);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function requirementCatalogRows(string $query, int $limit): array
+    {
+        $query = trim($query);
+        if ($query === '') {
+            return [];
+        }
+        $intent = $this->normalizeIntent($this->localIntent($query));
+        $intent = $this->enrichIntentManufacturers($intent, $query);
+        $catalogQ = $this->catalogSearchQuery($query, $intent);
+        if (! $this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent)) {
+            return [];
+        }
+
+        return $this->rowsFromRequirementCatalog($catalogQ, max(1, min(80, $limit)));
+    }
+
+    /**
      * Wiele zapytań: fala analizy wymagań, retrieval, potem fala rankingu (max $maxConcurrent).
      *
      * @param  list<string>  $queries
@@ -134,7 +165,7 @@ final class ProductAiSearchService
             return [];
         }
         $limit = max(1, min(80, $limit));
-        $maxConcurrent = max(1, min(10, $maxConcurrent));
+        $maxConcurrent = $this->clampLlmConcurrency($maxConcurrent);
 
         $pending = [];
         $done = [];
@@ -143,6 +174,9 @@ final class ProductAiSearchService
         foreach ($clean as $i => $query) {
             $retrieveIntents[$i] = $intents[$i];
             $prepared = $this->prepareSearch($query, $intents[$i], $limit);
+            if ($task === AiTask::TenderMatch && $prepared['rank_cards'] !== null) {
+                $prepared['rank_cards'] = $prepared['rank_cards']->take(12)->values();
+            }
             if ($prepared['rank_cards'] === null) {
                 $done[$i] = $this->searchResult($query, $intents[$i], $prepared['products'], $prepared['note'], $withExternalHint);
             } else {
@@ -167,25 +201,34 @@ final class ProductAiSearchService
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
             $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
+            $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $retrieveIntents[$i]);
             $ranked = $this->rowsFromLlmMatches(
                 $clean[$i],
                 $pending[$i]['rank_cards'] ?? $pending[$i]['candidates'],
                 $raw,
                 $limit,
-                $intents[$i]['needed'],
+                $retrieveIntent['needed'],
+                $retrieveIntent,
             );
+            $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
+            $ranked = $this->filterRankedCompatible($catalogQ, $ranked);
             if ($ranked === []) {
-                $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit);
+                $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
+            } else {
+                $ranked = $this->mergeRequirementCatalogRows($clean[$i], $ranked, $limit, $retrieveIntent);
             }
+            $ranked = $this->sortRankedByMatchPercent($ranked);
             $done[$i] = $this->searchResult(
                 $clean[$i],
-                $intents[$i],
+                $retrieveIntent,
                 $ranked,
                 $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
                 $withExternalHint,
             );
         }
-        $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent);
+        if ($task !== AiTask::TenderMatch) {
+            $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent);
+        }
         ksort($done);
 
         return array_values($done);
@@ -202,21 +245,27 @@ final class ProductAiSearchService
      */
     private function prepareSearch(string $query, array $intent, int $limit): array
     {
+        $intent = $this->normalizeIntent($intent);
+        $searchIntent = $this->intentForRetrieval($intent);
+        $modelQuery = $this->intentModelQuery($query, $searchIntent);
         $candidates = $this->keepCompatible(
             $this->assortmentText($query, $intent['needed']),
-            $this->retrieveCandidates($query, $intent, self::CANDIDATE_POOL)
+            $this->retrieveCandidates($query, $searchIntent, self::CANDIDATE_POOL)
         );
         $named = $candidates->filter(
-            fn (Product $p): bool => $this->modelFuzzy->matches($query, $p)
+            fn (Product $p): bool => $this->modelFuzzy->matches($modelQuery, $p)
                 && $this->filterType->covers($query, $this->filterHaystack($p))
         )->values();
         if ($named->isNotEmpty()) {
-            return [
-                'products' => $this->rowsFromNamedModels($query, $named, $limit),
-                'note' => null,
-                'rank_cards' => null,
-                'candidates' => $candidates,
-            ];
+            $namedRows = $this->rowsFromNamedModels($modelQuery, $named, $limit);
+            if ($namedRows !== []) {
+                return [
+                    'products' => $namedRows,
+                    'note' => null,
+                    'rank_cards' => null,
+                    'candidates' => $candidates,
+                ];
+            }
         }
         if ($candidates->isEmpty()) {
             return [
@@ -233,6 +282,194 @@ final class ProductAiSearchService
             'rank_cards' => $this->cardsForRanking($candidates, $intent['constraints']),
             'candidates' => $candidates,
         ];
+    }
+
+    /** @param array<string, mixed> $intent */
+    private function normalizeIntent(array $intent): array
+    {
+        return [
+            'needed' => trim((string) ($intent['needed'] ?? '')),
+            'search_phrases' => is_array($intent['search_phrases'] ?? null) ? $intent['search_phrases'] : [],
+            'constraints' => is_array($intent['constraints'] ?? null) ? $intent['constraints'] : [],
+            'manufacturer' => isset($intent['manufacturer']) && is_string($intent['manufacturer'])
+                ? trim($intent['manufacturer'])
+                : null,
+            'manufacturer_requested' => isset($intent['manufacturer_requested']) && is_string($intent['manufacturer_requested'])
+                ? trim($intent['manufacturer_requested'])
+                : null,
+            'model_name' => isset($intent['model_name']) && is_string($intent['model_name'])
+                ? trim($intent['model_name'])
+                : null,
+            'size_note' => isset($intent['size_note']) && is_string($intent['size_note'])
+                ? trim($intent['size_note'])
+                : null,
+            'manufacturer_absent_in_catalog' => (bool) ($intent['manufacturer_absent_in_catalog'] ?? false),
+        ];
+    }
+
+    private function needsStructuredIntent(string $query): bool
+    {
+        $query = trim($query);
+        if ($query === '') {
+            return false;
+        }
+        if (mb_strlen($query) < 25 && $this->modelFuzzy->usesModelAnchoredCatalogSearch($query)) {
+            return false;
+        }
+        if (mb_strlen($query) < 18 && preg_match('/^[A-Za-z0-9\-\/\._]+$/u', $query) === 1) {
+            return false;
+        }
+        $should = false;
+        if (preg_match('/\b(?:en|iso|pn-?en|iec|astm|din)\s*-?\s*\d/ui', $query) === 1) {
+            $should = true;
+        }
+        if (preg_match('/\bprod\.?\s*\w+/ui', $query) === 1) {
+            $should = true;
+        }
+        if (preg_match('/\b[A-ZĄĆĘŁŃÓŚŹŻ]{6,}\b/u', $query) === 1) {
+            $should = true;
+        }
+        if (mb_strlen($query) >= 40) {
+            $should = true;
+        }
+        if ($this->isSpecificRequirement($query)) {
+            $should = true;
+        }
+        if (! $should) {
+            return false;
+        }
+        if ($this->hasHighConfidenceNamedModelMatch($query)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function hasHighConfidenceNamedModelMatch(string $query): bool
+    {
+        $local = $this->normalizeIntent($this->localIntent($query));
+        $modelQuery = $this->intentModelQuery($query, $local);
+        if (! $this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)) {
+            return false;
+        }
+        $candidates = $this->retrieveCandidates($query, $local, 12);
+
+        return $candidates->contains(
+            fn (Product $p): bool => $this->modelFuzzy->matches($modelQuery, $p)
+        );
+    }
+
+    /** @param array<string, mixed> $intent */
+    private function intentModelQuery(string $query, array $intent): string
+    {
+        $intent = $this->normalizeIntent($intent);
+        if ($intent['manufacturer_absent_in_catalog']) {
+            $needed = trim($intent['needed']);
+
+            return $needed !== '' ? $needed : $query;
+        }
+        $model = trim((string) ($intent['model_name'] ?? ''));
+        if ($model === '') {
+            return $query;
+        }
+
+        return $model.' '.$query;
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return list<string>
+     */
+    private function intentCatalogBrandTokens(string $query, array $intent): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        if ($intent['manufacturer_absent_in_catalog']) {
+            return [];
+        }
+        $canonical = trim((string) ($intent['manufacturer'] ?? ''));
+        if ($canonical !== '' && ! ($intent['manufacturer_absent_in_catalog'] ?? false)) {
+            $compact = mb_strtolower(preg_replace('/[^a-z0-9]/iu', '', $canonical) ?? '');
+
+            return $compact !== '' ? [$compact] : [];
+        }
+
+        return $this->modelFuzzy->catalogBrands($query);
+    }
+
+    private function intentForRetrieval(array $intent): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        if (! $intent['manufacturer_absent_in_catalog']) {
+            return $intent;
+        }
+        $intent['manufacturer'] = null;
+        $intent['model_name'] = null;
+
+        return $intent;
+    }
+
+    /** @param array<string, mixed> $intent */
+    private function manufacturerAbsentNote(array $intent): string
+    {
+        $name = trim((string) ($intent['manufacturer_requested'] ?? ''));
+        if ($name === '') {
+            $name = 'podanej marki';
+        }
+
+        return "Marki {$name} nie ma w katalogu — dodaj cennik albo użyj AI Internet.";
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @param  list<array<string, mixed>>  $products
+     */
+    private function manufacturerSubstituteNote(array $intent, array $products): string
+    {
+        $name = trim((string) ($intent['manufacturer_requested'] ?? ''));
+        if ($name === '') {
+            $name = 'Podanej marki';
+        }
+        $makers = [];
+        foreach ($products as $row) {
+            $maker = trim((string) ($row['manufacturer'] ?? ''));
+            if ($maker === '' || in_array($maker, $makers, true)) {
+                continue;
+            }
+            $makers[] = $maker;
+            if (count($makers) >= 5) {
+                break;
+            }
+        }
+        if ($makers === []) {
+            return "Marki {$name} nie ma w katalogu — poniżej produkty innych producentów spełniające wymaganie.";
+        }
+
+        return 'Marki '.$name.' nie ma w katalogu — poniżej zamienniki od '
+            .implode(', ', $makers).' (to samo wymaganie, inny producent).';
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return array<string, mixed>
+     */
+    private function publicIntentSlice(array $intent): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        $out = [];
+        if ($intent['manufacturer'] !== null && $intent['manufacturer'] !== '') {
+            $out['manufacturer'] = $intent['manufacturer'];
+        }
+        if ($intent['model_name'] !== null && $intent['model_name'] !== '') {
+            $out['model_name'] = $intent['model_name'];
+        }
+        if ($intent['manufacturer_requested'] !== null && $intent['manufacturer_requested'] !== '') {
+            $out['manufacturer_requested'] = $intent['manufacturer_requested'];
+        }
+        if ($intent['manufacturer_absent_in_catalog']) {
+            $out['manufacturer_absent_in_catalog'] = true;
+        }
+
+        return $out;
     }
 
     /**
@@ -255,6 +492,13 @@ final class ProductAiSearchService
         ?string $note,
         bool $withExternalHint,
     ): array {
+        $intent = $this->normalizeIntent($intent);
+        if ($products === [] && $intent['manufacturer_absent_in_catalog']) {
+            $note = $this->manufacturerAbsentNote($intent);
+        }
+        if ($products !== [] && $intent['manufacturer_absent_in_catalog']) {
+            $note = $this->manufacturerSubstituteNote($intent, $products);
+        }
         if ($products === [] && $note !== null) {
             return $this->emptyResult($query, $intent, $withExternalHint, $note);
         }
@@ -265,7 +509,8 @@ final class ProductAiSearchService
             'products' => $products,
             'needed' => $intent['needed'],
             'search_phrases' => $intent['search_phrases'],
-            'ai_note' => null,
+            'parsed_intent' => $this->publicIntentSlice($intent),
+            'ai_note' => $note,
             'external_hint' => null,
         ];
     }
@@ -292,9 +537,12 @@ final class ProductAiSearchService
     ): array {
         $retrieveIntent = $intent;
         $prepared = $this->prepareSearch($query, $intent, $limit);
+        if ($task === AiTask::TenderMatch && $prepared['rank_cards'] !== null) {
+            $prepared['rank_cards'] = $prepared['rank_cards']->take(12)->values();
+        }
         if ($prepared['rank_cards'] === null) {
             $result = $this->searchResult($query, $intent, $prepared['products'], $prepared['note'], $withExternalHint);
-            if ($allowRewrite && $result['products'] === []) {
+            if ($allowRewrite && $result['products'] === [] && ! $this->normalizeIntent($intent)['manufacturer_absent_in_catalog']) {
                 return $this->retryAfterRewrite($query, $retrieveIntent, $limit, $withExternalHint, $task);
             }
 
@@ -306,17 +554,29 @@ final class ProductAiSearchService
             $limit,
             $task,
             $intent['constraints'],
+            $intent,
         );
         $rankedIntent = $this->withCatalogAliases($rankedIntent, $query);
-        if ($ranked === []) {
-            $ranked = $this->rowsFromGenericCatalog($query, $prepared['candidates'], $limit);
+        $catalogQ = $this->catalogSearchQuery($query, $intent);
+        $ranked = $this->filterRankedCompatible($catalogQ, $ranked);
+        $useCatalog = $this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent);
+        $deferCatalogMerge = $task === AiTask::TenderMatch;
+        if (! $deferCatalogMerge && $useCatalog && count($ranked) < $limit) {
+            $ranked = $this->mergeRequirementCatalogRows($query, $ranked, $limit, $intent);
         }
+        if (! $deferCatalogMerge && $ranked === [] && $useCatalog) {
+            $ranked = $this->rowsFromRequirementCatalog($catalogQ, $limit);
+        } elseif ($ranked === []) {
+            $ranked = $this->rowsFromGenericCatalog($query, $prepared['candidates'], $limit, $intent);
+        }
+        $ranked = $this->sortRankedByMatchPercent($ranked);
         $emptyNote = $rankFailed
             ? 'Nie udało się ocenić kart przez model. Spróbuj ponownie albo użyj zwykłego wyszukiwania.'
             : 'Model nie znalazł pasującego produktu w katalogu.';
+        $resultIntent = $this->mergeRetrieveIntent($rankedIntent, $intent);
         $result = $this->searchResult(
             $query,
-            $rankedIntent,
+            $resultIntent,
             $ranked,
             $ranked === [] ? $emptyNote : null,
             $withExternalHint,
@@ -532,19 +792,26 @@ final class ProductAiSearchService
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
             $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
+            $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $retrieveIntents[$i] ?? $intents[$i]);
             $ranked = $this->rowsFromLlmMatches(
                 $clean[$i],
                 $pending[$i]['rank_cards'] ?? $pending[$i]['candidates'],
                 $raw,
                 $limit,
-                $intents[$i]['needed'],
+                $retrieveIntent['needed'],
+                $retrieveIntent,
             );
+            $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
+            $ranked = $this->filterRankedCompatible($catalogQ, $ranked);
             if ($ranked === []) {
-                $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit);
+                $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
+            } else {
+                $ranked = $this->mergeRequirementCatalogRows($clean[$i], $ranked, $limit, $retrieveIntent);
             }
+            $ranked = $this->sortRankedByMatchPercent($ranked);
             $done[$i] = $this->searchResult(
                 $clean[$i],
-                $intents[$i],
+                $retrieveIntent,
                 $ranked,
                 $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
                 $withExternalHint,
@@ -583,22 +850,24 @@ final class ProductAiSearchService
      */
     private function understandMessages(string $query): array
     {
+        $manufacturers = $this->manufacturerContext->promptBlock();
+
         return [
             [
                 'role' => 'system',
-                'content' => 'Jesteś ekspertem BHP i katalogów. Najpierw ZROZUM wymaganie, potem zbuduj frazy sklepowe. '
+                'content' => 'Jesteś ekspertem BHP i katalogów. Najpierw ZROZUM wymaganie SIWZ, potem zbuduj frazy sklepowe. '
+                    .$manufacturers.' '
+                    .'manufacturer: dokładnie jedna nazwa z listy katalogu albo null (nie zgaduj spoza listy). '
+                    .'model_name: nazwa modelu/kolekcji (np. TRONCHETTO, PERSPECTA 010) — nie producent. '
+                    .'size_note: rozmiary (np. 35-41) — nie łącz z modelem. '
                     .'Nie tnij SIWZ na pojedyncze przymiotniki do wyszukiwania słów. '
                     .'needed: rodzaj produktu (rzeczownik + typ), bez normy i bez surowego cytatu SIWZ. '
-                    .'search_phrases: 3-8; pierwsze 2 = nazwa/synonim asortymentu; dalej równoważniki cechy z cenników '
-                    .'(podnosek stalowy, steel toe, EN 374, Typ 3/4, Tychem) — nie „metalowymi noskami”. '
+                    .'search_phrases: 3-8; pierwsze 2 = nazwa/synonim asortymentu; dalej równoważniki cechy z cenników. '
                     .'constraints: 0-6 twardych warunków z równoważnym dowodem, który karta ma potwierdzić. '
-                    .'Przykłady: buty z metalowymi noskami → buty robocze + podnosek stalowy/steel toe, '
-                    .'constraint: podnosek metalowy/stalowy (nie kompozytowy); '
-                    .'kombinezon na kwas → kombinezon chemoodporny + Typ 3/4 / EN 13034; '
-                    .'czapka drelichowa → czapka z daszkiem, czapka robocza, constraints []. '
                     .'Pusta constraints, gdy jest tylko nazwa, tkanina albo kolor. '
-                    .'Nie zmieniaj rodzaju. Nie zgaduj marki. Popraw literówki (podnie→spodnie, TEPM-ICE→TEMP-ICE). '
-                    .'JSON: {"needed":"...","search_phrases":["..."],"constraints":[]}.',
+                    .'Nie zmieniaj rodzaju. Popraw literówki (podnie→spodnie, TEPM-ICE→TEMP-ICE). '
+                    .'JSON: {"needed":"...","manufacturer":null,"model_name":null,"size_note":null,'
+                    .'"search_phrases":["..."],"constraints":[]}.',
             ],
             [
                 'role' => 'user',
@@ -654,16 +923,14 @@ final class ProductAiSearchService
      */
     private function intentForSearch(string $query, AiTask $task): array
     {
-        if (! $this->needsRequirementAnalysis($query)) {
-            return $this->localIntent($query);
+        if ($task === AiTask::TenderMatch) {
+            return $this->normalizeIntent($this->localIntent($query));
+        }
+        if (! $this->needsStructuredIntent($query)) {
+            return $this->normalizeIntent($this->localIntent($query));
         }
 
-        return $this->understandRequirement($query, $task);
-    }
-
-    private function needsRequirementAnalysis(string $query): bool
-    {
-        return $this->isSpecificRequirement($query) && ! $this->modelFuzzy->hasNamedModel($query);
+        return $this->normalizeIntent($this->understandRequirement($query, $task));
     }
 
     /**
@@ -675,10 +942,10 @@ final class ProductAiSearchService
         $intents = [];
         $need = [];
         foreach ($queries as $i => $query) {
-            if ($this->needsRequirementAnalysis($query)) {
+            if ($task !== AiTask::TenderMatch && $this->needsStructuredIntent($query)) {
                 $need[] = $i;
             } else {
-                $intents[$i] = $this->localIntent($query);
+                $intents[$i] = $this->normalizeIntent($this->localIntent($query));
             }
         }
         if ($need === []) {
@@ -693,11 +960,16 @@ final class ProductAiSearchService
         foreach ($need as $pos => $i) {
             $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
             $intents[$i] = $raw === []
-                ? $this->localIntent($queries[$i])
-                : $this->withCatalogAliases($this->parseIntent($raw, $queries[$i]), $queries[$i]);
+                ? $this->normalizeIntent($this->localIntent($queries[$i]))
+                : $this->normalizeIntent($this->withCatalogAliases($this->parseIntent($raw, $queries[$i]), $queries[$i]));
         }
 
         return $intents;
+    }
+
+    private function clampLlmConcurrency(int $maxConcurrent): int
+    {
+        return max(1, min(AiSettingsService::CONCURRENCY_MAX, $maxConcurrent));
     }
 
     /**
@@ -776,14 +1048,81 @@ final class ProductAiSearchService
         return [];
     }
 
+    /** @param array<string, mixed> $intent */
+    private function catalogSearchQuery(string $query, array $intent): string
+    {
+        $intent = $this->normalizeIntent($intent);
+        $base = $intent['needed'] !== '' ? trim($intent['needed']) : trim($query);
+        $chunks = $base !== '' ? [$base] : [];
+        foreach ($intent['constraints'] as $constraint) {
+            $constraint = trim((string) $constraint);
+            if ($constraint !== '') {
+                $chunks[] = $constraint;
+            }
+        }
+        $merged = trim(implode(' ', $chunks));
+        if ($this->assortment->requiresAntistatic($query)
+            && ! $this->assortment->requiresAntistatic($merged)) {
+            $chunks[] = 'antyelektrostatyczne';
+        }
+        if (preg_match('/\bgumow\w*/u', $this->lexicalNormalize($query)) === 1
+            && preg_match('/\bgumow\w*/u', $this->lexicalNormalize($merged)) !== 1) {
+            $chunks[] = 'gumowe';
+        }
+        if (preg_match('/\bdamsk\w*/u', $this->lexicalNormalize($query)) === 1
+            && preg_match('/\bdamsk\w*/u', $this->lexicalNormalize($merged)) !== 1) {
+            $chunks[] = 'damskie';
+        }
+        $merged = trim(implode(' ', array_unique($chunks)));
+
+        return $merged !== '' ? $merged : $query;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $ranked
+     * @return list<array<string, mixed>>
+     */
+    private function filterRankedCompatible(string $requirement, array $ranked): array
+    {
+        if ($ranked === []) {
+            return [];
+        }
+        $ids = array_values(array_filter(array_map(
+            static fn (array $row): int => (int) ($row['id'] ?? 0),
+            $ranked,
+        )));
+        if ($ids === []) {
+            return [];
+        }
+        $byId = Product::query()->whereIn('id', $ids)->get()->keyBy('id');
+        $out = [];
+        foreach ($ranked as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            $product = $byId->get($id);
+            if (! $product instanceof Product) {
+                continue;
+            }
+            if (! $this->assortment->compatibleProduct($requirement, $product)) {
+                continue;
+            }
+            $out[] = $row;
+        }
+
+        return $out;
+    }
+
     /**
      * Proste wymaganie (sam rodzaj + tkanina/kolor): nie czekaj na przepisanie przez model.
      *
      * @param  Collection<int, Product>  $candidates
      * @return list<array<string, mixed>>
      */
-    private function rowsFromGenericCatalog(string $query, Collection $candidates, int $limit): array
+    private function rowsFromGenericCatalog(string $query, Collection $candidates, int $limit, array $intent = []): array
     {
+        $catalogQ = $this->catalogSearchQuery($query, $intent);
+        if ($this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent)) {
+            return $this->rowsFromRequirementCatalog($catalogQ, $limit);
+        }
         if ($this->isSpecificRequirement($query) || $candidates->isEmpty()) {
             return [];
         }
@@ -810,6 +1149,122 @@ final class ProductAiSearchService
         }
 
         return $out;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromRequirementCatalog(string $query, int $limit): array
+    {
+        $products = $this->withResponseRelations(
+            $this->retrieveByRequirementCatalog($query, max(40, $limit))
+        );
+        $reason = $this->catalogRecall->catalogMatchReason($query);
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $score = min(88, max(52, 50 + $this->requirementCatalogScore($query, $product)));
+            $row['ai_match_percent'] = $score;
+            $row['ai_match_reason'] = $reason;
+            $out[] = $row;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $ranked
+     * @return list<array<string, mixed>>
+     */
+    private function mergeRequirementCatalogRows(string $query, array $ranked, int $limit, array $intent = []): array
+    {
+        $catalogQ = $this->catalogSearchQuery($query, $intent);
+        if (! $this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent)) {
+            return $ranked;
+        }
+        $seen = [];
+        foreach ($ranked as $row) {
+            $seen[(int) ($row['id'] ?? 0)] = true;
+        }
+        foreach ($this->rowsFromRequirementCatalog($catalogQ, $limit) as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            if ($id <= 0 || isset($seen[$id])) {
+                continue;
+            }
+            $ranked[] = $row;
+            $seen[$id] = true;
+            if (count($ranked) >= $limit) {
+                break;
+            }
+        }
+
+        return $this->sortRankedByMatchPercent($ranked);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $ranked
+     * @return list<array<string, mixed>>
+     */
+    private function sortRankedByMatchPercent(array $ranked): array
+    {
+        usort($ranked, static fn (array $a, array $b): int => ($b['ai_match_percent'] ?? 0) <=> ($a['ai_match_percent'] ?? 0));
+
+        return $ranked;
+    }
+
+    /**
+     * @return Collection<int, Product>
+     */
+    private function retrieveByRequirementCatalog(string $query, int $limit): Collection
+    {
+        $rows = $this->catalogRecall->retrieve(
+            fn (): Builder => $this->productBaseQuery(),
+            $query,
+            $limit,
+            fn (Product $p): string => $this->filterHaystack($p),
+            fn (string $q, Product $p): int => $this->requirementCatalogScore($q, $p),
+            fn (Product $p): ?int => $this->productHeatCelsius($p),
+        );
+
+        return $this->preferQueryManufacturers($query, $rows)->values();
+    }
+
+    private function requirementCatalogScore(string $query, Product $product): int
+    {
+        $score = $this->articleTypeScore($query, $product);
+        if ($this->filterType->sqlLikes($query) !== []) {
+            $score += $this->filterType->coverageScore($query, $this->filterHaystack($product));
+        }
+        $minHeat = $this->bhpAttributes->requiredCelsius($query);
+        if ($minHeat !== null) {
+            $c = $this->productHeatCelsius($product);
+            if ($c !== null) {
+                $score += min(25, (int) floor($c / 20));
+            }
+        }
+        if (! $this->assortment->requiresAntistatic($query)) {
+            return $score;
+        }
+        $hay = $this->lexicalNormalize($this->filterHaystack($product));
+        if (preg_match('/\bdamsk\w*/u', $this->lexicalNormalize($query)) === 1
+            && preg_match('/\bdamsk\w*/u', $hay) === 1) {
+            $score += 12;
+        }
+        if (preg_match('/\bgumow\w*/u', $this->lexicalNormalize($query)) === 1
+            && (preg_match('/\bgumow\w*/u', $hay) === 1 || preg_match('/\bguma\b/u', $hay) === 1)) {
+            $score += 10;
+        }
+        if (str_contains($hay, 'esd')) {
+            $score += 8;
+        }
+
+        return $score;
     }
 
     /**
@@ -872,11 +1327,56 @@ final class ProductAiSearchService
             $constraints = $this->fallbackConstraints($query);
         }
 
-        return [
+        $manufacturerRequested = trim((string) ($raw['manufacturer'] ?? ''));
+        $canonical = $manufacturerRequested !== ''
+            ? $this->manufacturerContext->matchManufacturer($manufacturerRequested)
+            : null;
+        $manufacturerAbsent = false;
+        if ($manufacturerRequested !== '' && $canonical === null) {
+            $manufacturerAbsent = true;
+        } elseif ($canonical !== null && ! $this->manufacturerContext->hasProductsForManufacturer($canonical)) {
+            $manufacturerAbsent = true;
+            $canonical = null;
+        }
+        $modelName = trim((string) ($raw['model_name'] ?? $raw['model'] ?? ''));
+        $sizeNote = trim((string) ($raw['size_note'] ?? ''));
+
+        return $this->normalizeIntent($this->enrichIntentManufacturers([
             'needed' => $needed,
             'search_phrases' => array_values(array_unique($phrases)),
             'constraints' => $this->sanitizeConstraints($constraints),
-        ];
+            'manufacturer' => $canonical,
+            'manufacturer_requested' => $manufacturerRequested !== '' ? $manufacturerRequested : null,
+            'model_name' => $modelName !== '' ? $modelName : null,
+            'size_note' => $sizeNote !== '' ? $sizeNote : null,
+            'manufacturer_absent_in_catalog' => $manufacturerAbsent,
+        ], $query));
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return array<string, mixed>
+     */
+    private function enrichIntentManufacturers(array $intent, string $query): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        if ($intent['manufacturer'] !== null || $intent['manufacturer_absent_in_catalog']) {
+            return $intent;
+        }
+        foreach ($this->modelFuzzy->catalogBrands($query) as $token) {
+            $canonical = $this->manufacturerContext->matchManufacturer($token);
+            if ($canonical === null) {
+                $intent['manufacturer_requested'] = strtoupper($token);
+                $intent['manufacturer_absent_in_catalog'] = true;
+
+                return $intent;
+            }
+            $intent['manufacturer'] = $canonical;
+
+            return $intent;
+        }
+
+        return $intent;
     }
 
     /**
@@ -884,6 +1384,9 @@ final class ProductAiSearchService
      */
     public function isSpecificRequirement(string $query): bool
     {
+        if ($this->modelFuzzy->usesModelAnchoredCatalogSearch($query)) {
+            return false;
+        }
         $stripped = $this->stripNonTechnicalTokens($query);
         if (preg_match('/\b(?:en|iso|pn-?en|iec|astm|din)\s*-?\s*\d/ui', $stripped) === 1) {
             return true;
@@ -1041,21 +1544,27 @@ final class ProductAiSearchService
      */
     private function retrieveCandidates(string $query, array $intent, int $limit): Collection
     {
+        $intent = $this->normalizeIntent($intent);
+        $intent = $this->intentForRetrieval($intent);
+        $modelQuery = $this->intentModelQuery($query, $intent);
         $searchText = $intent['needed'] !== '' ? $intent['needed'] : $query;
         $requirement = $this->assortmentText($query, $intent['needed']);
-        $codeHits = $this->retrieveByModelCode($query.' '.$searchText, $limit);
-        $fuzzyHits = $this->retrieveByFuzzyModel($query.' '.$searchText, $limit);
+        $codeHits = $this->retrieveByModelCode($modelQuery.' '.$searchText, $limit);
+        $fuzzyHits = $this->retrieveByFuzzyModel($modelQuery.' '.$searchText, $limit);
         $filterHits = $this->retrieveByFilterType($query, $limit);
-        $brandHits = $this->retrieveByManufacturer($query.' '.$searchText, $limit);
+        $brandHits = $this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)
+            ? collect()
+            : $this->retrieveByManufacturer($query, $intent, $limit);
         $priority = $this->uniqueProducts(
             $filterHits->concat($fuzzyHits)->concat($codeHits)->concat($brandHits),
             $limit
         );
 
-        if ($this->modelFuzzy->hasNamedModel($query) && $priority->isNotEmpty()) {
+        if ($this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)) {
             $namedPriority = $this->preferCatalogBrands(
-                $requirement,
-                $this->keepCompatible($requirement, $priority)
+                $query,
+                $this->keepCompatible($requirement, $priority),
+                $intent
             );
             if ($namedPriority->isNotEmpty()) {
                 return $namedPriority;
@@ -1089,10 +1598,12 @@ final class ProductAiSearchService
             $limit * 2,
         );
 
-        $recall = $this->retrieveByFootwearClass($query, $limit)
-            ->concat($this->retrieveByHeatRating($query, $limit))
-            ->concat($this->retrieveByHeadLiner($query, $limit))
-            ->concat($this->retrieveByArticleType($query, $limit));
+        $recall = $this->catalogRecall->shouldRecallToCandidatePool(
+            $this->catalogSearchQuery($query, $intent),
+            $intent,
+        )
+            ? $this->retrieveByRequirementCatalog($this->catalogSearchQuery($query, $intent), $limit)
+            : collect();
 
         $merged = $this->keepCompatible(
             $requirement,
@@ -1101,7 +1612,7 @@ final class ProductAiSearchService
                 $limit * 3
             )
         );
-        $branded = $this->preferCatalogBrands($requirement, $merged);
+        $branded = $this->preferCatalogBrands($query, $merged, $intent);
 
         return $this->uniqueProducts($branded, $limit)->values();
     }
@@ -1189,189 +1700,6 @@ final class ProductAiSearchService
             ->values();
     }
 
-    /**
-     * Klasa obuwia z nazwy (S2, O2) — działa też bez opisu, bo FULLTEXT gubi tokeny 2-literowe.
-     *
-     * @return Collection<int, Product>
-     */
-    private function retrieveByFootwearClass(string $query, int $limit): Collection
-    {
-        $class = $this->bhpAttributes->footwearClass($query);
-        if ($class === null || $this->assortment->family($query) !== PpeAssortment::FAMILY_FOOTWEAR) {
-            return collect();
-        }
-
-        $token = $this->bhpAttributes->footwearClassToken($class);
-        $likeClass = '%'.addcslashes($class, '%_\\').'%';
-        $likeToken = '%'.addcslashes($token, '%_\\').'%';
-
-        $rows = $this->productBaseQuery()
-            ->where(function (Builder $outer) use ($likeClass, $likeToken): void {
-                $outer->where('name', 'like', $likeClass)
-                    ->orWhere('sku', 'like', $likeClass)
-                    ->orWhere('search_blob', 'like', $likeToken)
-                    ->orWhere('search_blob', 'like', $likeClass);
-            })
-            ->where(function (Builder $outer): void {
-                $outer->where('ppe_family', PpeAssortment::FAMILY_FOOTWEAR)
-                    ->orWhereNull('ppe_family');
-            })
-            ->limit(400)
-            ->get()
-            ->filter(function (Product $product) use ($query, $class): bool {
-                $identity = trim($product->name.' '.$product->sku.' '.(string) ($product->category ?? ''));
-                if ($this->bhpAttributes->footwearClass($identity) !== $class) {
-                    return false;
-                }
-                $reqType = $this->assortment->articleType($query, PpeAssortment::FAMILY_FOOTWEAR);
-                $prodType = $this->assortment->articleType($product->name, PpeAssortment::FAMILY_FOOTWEAR);
-                if ($reqType !== null && $prodType !== null && $reqType !== $prodType) {
-                    return false;
-                }
-
-                return $this->assortment->compatibleProduct($query, $product);
-            })
-            ->values();
-
-        return $this->preferQueryManufacturers($query, $rows)->take(max(8, $limit))->values();
-    }
-
-    /**
-     * Rękawice / asortyment z podaną odpornością °C — bez LLM, bo model zwraca jedną kartę.
-     *
-     * @return Collection<int, Product>
-     */
-    private function retrieveByHeatRating(string $query, int $limit): Collection
-    {
-        $minC = $this->bhpAttributes->requiredCelsius($query);
-        if ($minC === null) {
-            return collect();
-        }
-
-        $family = $this->assortment->family($query);
-        $rows = $this->productBaseQuery()
-            ->where(function (Builder $outer): void {
-                foreach (['%°C%', '%° C%', '%stopni%', '%st. C%', '%st.C%', '% C', '% C.', '% C,'] as $like) {
-                    $outer->orWhere('name', 'like', $like)
-                        ->orWhere('description', 'like', $like)
-                        ->orWhere('search_blob', 'like', $like)
-                        ->orWhere('norms', 'like', $like);
-                }
-            })
-            ->when(
-                $family !== null,
-                function (Builder $q) use ($family): void {
-                    $q->where(function (Builder $outer) use ($family): void {
-                        $outer->where('ppe_family', $family)->orWhereNull('ppe_family');
-                    });
-                }
-            )
-            ->limit(400)
-            ->get()
-            ->filter(function (Product $product) use ($query, $minC): bool {
-                $maxC = $this->productHeatCelsius($product);
-                if ($maxC === null || $maxC < $minC) {
-                    return false;
-                }
-
-                return $this->assortment->compatibleProduct($query, $product);
-            })
-            ->sortByDesc(fn (Product $p): int => $this->productHeatCelsius($p) ?? 0)
-            ->values();
-
-        return $rows->take(max(8, $limit))->values();
-    }
-
-    /**
-     * Czepek / wkładka pod hełm — bez LLM, bo EN 1149/ESD ciągnie kurtki.
-     *
-     * @return Collection<int, Product>
-     */
-    private function retrieveByHeadLiner(string $query, int $limit): Collection
-    {
-        if (! $this->assortment->isUnderHelmetLiner($query)) {
-            return collect();
-        }
-
-        $rows = $this->productBaseQuery()
-            ->where(function (Builder $outer): void {
-                $outer->where('name', 'like', '%czepek%')
-                    ->orWhere('name', 'like', '%czepk%')
-                    ->orWhere('name', 'like', '%kominiark%')
-                    ->orWhere('name', 'like', '%balaclava%')
-                    ->orWhere('category', 'like', '%czepek%')
-                    ->orWhere('category', 'like', '%kominiark%')
-                    ->orWhere(function (Builder $inner): void {
-                        $inner->where(function (Builder $w): void {
-                            $w->where('name', 'like', '%wkładk%')
-                                ->orWhere('name', 'like', '%wkladk%')
-                                ->orWhere('search_blob', 'like', '%wkladk%');
-                        })->where(function (Builder $h): void {
-                            $h->where('name', 'like', '%hełm%')
-                                ->orWhere('name', 'like', '%helm%')
-                                ->orWhere('name', 'like', '%kask%')
-                                ->orWhere('description', 'like', '%hełm%')
-                                ->orWhere('description', 'like', '%helm%')
-                                ->orWhere('search_blob', 'like', '%helm%');
-                        });
-                    })
-                    ->orWhere(function (Builder $cap): void {
-                        $cap->where(function (Builder $n): void {
-                            $n->where('name', 'like', '%czapk%')
-                                ->orWhere('category', 'like', '%czapk%');
-                        })->where(function (Builder $ctx): void {
-                            $ctx->where('name', 'like', '%ociepl%')
-                                ->orWhere('name', 'like', '%hełm%')
-                                ->orWhere('name', 'like', '%helm%')
-                                ->orWhere('name', 'like', '%kask%')
-                                ->orWhere('name', 'like', '%esd%')
-                                ->orWhere('description', 'like', '%hełm%');
-                        });
-                    });
-            })
-            ->limit(200)
-            ->get()
-            ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p))
-            ->values();
-
-        return $rows->take(max(8, $limit))->values();
-    }
-
-    /**
-     * Kominiarka / kalosz / gogle — wszystkie karty tego kroju, cechy (ESD, 1149) na górze.
-     *
-     * @return Collection<int, Product>
-     */
-    private function retrieveByArticleType(string $query, int $limit): Collection
-    {
-        if ($this->modelFuzzy->hasNamedModel($query)) {
-            return collect();
-        }
-        $likes = $this->assortment->catalogNounLikes($query);
-        if ($likes === []) {
-            return collect();
-        }
-
-        $rows = $this->productBaseQuery()
-            ->where(function (Builder $outer) use ($likes): void {
-                foreach ($likes as $like) {
-                    $esc = '%'.$like.'%';
-                    $outer->orWhere('name', 'like', $esc)
-                        ->orWhere('sku', 'like', $esc)
-                        ->orWhere('category', 'like', $esc)
-                        ->orWhere('description', 'like', $esc)
-                        ->orWhere('search_blob', 'like', $esc);
-                }
-            })
-            ->limit(400)
-            ->get()
-            ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p))
-            ->sortByDesc(fn (Product $p): int => $this->articleTypeScore($query, $p))
-            ->values();
-
-        return $rows->take(max(8, $limit))->values();
-    }
-
     private function articleTypeScore(string $query, Product $product): int
     {
         $name = $this->lexicalNormalize(
@@ -1451,9 +1779,16 @@ final class ProductAiSearchService
      * @param  Collection<int, Product>  $products
      * @return Collection<int, Product>
      */
-    private function preferCatalogBrands(string $query, Collection $products): Collection
+    private function preferCatalogBrands(string $query, Collection $products, ?array $intent = null): Collection
     {
-        $brands = $this->modelFuzzy->catalogBrands($query);
+        $intent = $this->normalizeIntent($intent ?? []);
+        if ($intent['manufacturer_absent_in_catalog']) {
+            return $products;
+        }
+        $brands = $this->intentCatalogBrandTokens($query, $intent);
+        if ($brands === [] && $intent['manufacturer'] === null) {
+            $brands = $this->modelFuzzy->catalogBrands($query);
+        }
         if ($brands === [] || $products->isEmpty()) {
             return $products;
         }
@@ -1467,19 +1802,28 @@ final class ProductAiSearchService
     /**
      * @return Collection<int, Product>
      */
-    private function retrieveByManufacturer(string $query, int $limit): Collection
+    private function retrieveByManufacturer(string $query, array $intent, int $limit): Collection
     {
-        $brands = $this->modelFuzzy->catalogBrands($query);
+        $intent = $this->normalizeIntent($intent);
+        $brands = $this->intentCatalogBrandTokens($query, $intent);
+        if ($brands === []) {
+            $brands = $this->modelFuzzy->catalogBrands($query);
+        }
         if ($brands === []) {
             return collect();
         }
 
         $q = $this->productBaseQuery();
-        $q->where(function ($outer) use ($brands): void {
+        $q->where(function ($outer) use ($brands, $intent): void {
             foreach ($brands as $brand) {
                 $like = '%'.addcslashes($brand, '%_\\').'%';
                 $outer->orWhere('manufacturer', 'like', $like)
                     ->orWhere('name', 'like', $like);
+            }
+            $canonical = trim((string) ($intent['manufacturer'] ?? ''));
+            if ($canonical !== '') {
+                $like = '%'.addcslashes($canonical, '%_\\').'%';
+                $outer->orWhere('manufacturer', 'like', $like);
             }
         });
 
@@ -1521,6 +1865,7 @@ final class ProductAiSearchService
         $brands = $this->modelFuzzy->manufacturerHints($query);
         $q = $this->productBaseQuery();
 
+        $nums = $this->modelFuzzy->modelNumbers($query);
         if ($brands !== []) {
             $q->where(function ($outer) use ($brands): void {
                 foreach ($brands as $brand) {
@@ -1531,7 +1876,6 @@ final class ProductAiSearchService
             });
         } elseif ($this->modelFuzzy->hasNamedModel($query)) {
             $parts = $this->modelFuzzy->hyphenLetterParts($query);
-            $nums = $this->modelFuzzy->modelNumbers($query);
             if ($parts === [] && $nums === []) {
                 return collect();
             }
@@ -1541,16 +1885,16 @@ final class ProductAiSearchService
                     $w->where('name', 'like', $like)->orWhere('sku', 'like', $like);
                 });
             }
-            if ($nums !== []) {
-                $q->where(function ($w) use ($nums): void {
-                    foreach ($nums as $num) {
-                        $like = '%'.addcslashes($num, '%_\\').'%';
-                        $w->orWhere('name', 'like', $like)->orWhere('sku', 'like', $like);
-                    }
-                });
-            }
         } else {
             return collect();
+        }
+        if ($nums !== []) {
+            $q->where(function ($w) use ($nums): void {
+                foreach ($nums as $num) {
+                    $like = '%'.addcslashes($num, '%_\\').'%';
+                    $w->orWhere('name', 'like', $like)->orWhere('sku', 'like', $like);
+                }
+            });
         }
 
         return $q->limit(800)
@@ -1723,6 +2067,10 @@ final class ProductAiSearchService
             if (! $product instanceof Product) {
                 continue;
             }
+            if (! $this->modelFuzzy->matches($query, $product)
+                && ! $this->assortment->compatibleProduct($query, $product)) {
+                continue;
+            }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(80, $this->modelFuzzy->score($query, $product)));
             $row['ai_match_reason'] = 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).';
@@ -1853,6 +2201,7 @@ final class ProductAiSearchService
             'products' => [],
             'needed' => $intent['needed'],
             'search_phrases' => $intent['search_phrases'],
+            'parsed_intent' => $this->publicIntentSlice($intent),
             'ai_note' => $note,
             'external_hint' => $hint,
             'external_hints' => $hint !== null ? [$hint] : [],
@@ -1931,10 +2280,11 @@ final class ProductAiSearchService
         int $limit,
         AiTask $task,
         array $constraints,
+        array $retrieveIntent = [],
     ): array {
         try {
             $raw = $this->llm->chatJson(
-                $this->analyzeAndRankMessages($query, $candidates, $limit, null, $constraints, $task),
+                $this->analyzeAndRankMessages($query, $candidates, $limit, null, $constraints, $task, $retrieveIntent),
                 null,
                 $this->rankMaxTokens($task),
                 null,
@@ -1945,9 +2295,26 @@ final class ProductAiSearchService
 
             return [$this->localIntent($query), [], true];
         }
-        $intent = $this->parseIntent($raw, $query);
+        $intent = $this->mergeRetrieveIntent($this->parseIntent($raw, $query), $retrieveIntent);
 
-        return [$intent, $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed']), false];
+        return [$intent, $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed'], $intent), false];
+    }
+
+    /** @param array<string, mixed> $parsed @param array<string, mixed> $retrieve */
+    private function mergeRetrieveIntent(array $parsed, array $retrieve): array
+    {
+        $parsed = $this->normalizeIntent($parsed);
+        $retrieve = $this->normalizeIntent($retrieve);
+        if (! $retrieve['manufacturer_absent_in_catalog']) {
+            return $parsed;
+        }
+        $parsed['manufacturer_absent_in_catalog'] = true;
+        if ($retrieve['manufacturer_requested'] !== null) {
+            $parsed['manufacturer_requested'] = $retrieve['manufacturer_requested'];
+        }
+        $parsed['manufacturer'] = null;
+
+        return $parsed;
     }
 
     /**
@@ -1962,8 +2329,9 @@ final class ProductAiSearchService
         ?string $needed,
         array $constraints,
         AiTask $task,
+        array $retrieveIntent = [],
     ): array {
-        $messages = $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task);
+        $messages = $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task, $retrieveIntent);
         $messages[0]['content'] = str_replace(
             'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}.',
             'needed: krótka nazwa (rzeczownik); search_phrases: 2-8, pierwsze 2 = nazwa; constraints: 0-6. '
@@ -2026,6 +2394,7 @@ final class ProductAiSearchService
         ?string $needed,
         array $constraints,
         AiTask $task,
+        array $retrieveIntent = [],
     ): array {
         $short = $this->useShortSearchCards($task);
         $cards = $candidates->map(fn (Product $p): array => $this->rankCard($p, $short))->values()->all();
@@ -2033,6 +2402,14 @@ final class ProductAiSearchService
         $neededLine = is_string($needed) && trim($needed) !== ''
             ? "\nSzukany produkt (z analizy):\n".trim($needed)
             : '';
+        $intent = $this->normalizeIntent($retrieveIntent);
+        $intentLine = '';
+        if ($intent['manufacturer'] !== null && $intent['manufacturer'] !== '') {
+            $intentLine .= "\nMarka z analizy SIWZ: ".$intent['manufacturer'];
+        }
+        if ($intent['model_name'] !== null && $intent['model_name'] !== '') {
+            $intentLine .= "\nModel z analizy: ".$intent['model_name'];
+        }
         $proofFields = $short
             ? 'norms/specs/payload_norms/use_cases/heat_celsius'
             : 'norms/specs/payload_norms/features/use_cases/description';
@@ -2059,6 +2436,10 @@ final class ProductAiSearchService
                     .'Równoważny dowód = spełnione: synonim katalogowy, norma/klasa, materiał konstrukcyjny '
                     .'(metalowy nosek = podnosek stalowy/steel toe; chemoodporny = EN 374 / Typ 3/4 / Tychem; '
                     .'antystatyczny = EN 1149). Nie wymagaj dosłownego cytatu z SIWZ. '
+                    .'Obuwie: antyelektrostatyczne/ESD z SIWZ to nie to samo co antystatyczna podeszwa '
+                    .'ani klasa O1/S1/S1P bez ESD w dowodzie — zwracaj tylko przy ESD/antyelektrostat '
+                    .'lub EN 1149/61340 w polach dowodu; przy wymaganiu butów gumowych/kaloszy '
+                    .'nie zwracaj trzewika/półbuta tylko dlatego, że w opisie jest „funkcja ESD”. '
                     .'Przeciwieństwo cechy (kompozyt vs metal, Typ 6 vs Typ 3) → nie zwracaj. '
                     .'Nie zgaduj z nazwy handlowej. '
                     .'Wspólna cecha (siatkowa) albo przypadkowa norma EN NIE wystarczy. '
@@ -2077,7 +2458,7 @@ final class ProductAiSearchService
             ],
             [
                 'role' => 'user',
-                'content' => "Wymaganie:\n{$query}{$neededLine}{$constraintLine}\n\nKarty katalogu:\n{$json}",
+                'content' => "Wymaganie:\n{$query}{$neededLine}{$intentLine}{$constraintLine}\n\nKarty katalogu:\n{$json}",
             ],
         ];
     }
@@ -2093,7 +2474,9 @@ final class ProductAiSearchService
         array $raw,
         int $limit,
         ?string $needed,
+        ?array $intent = null,
     ): array {
+        $intent = $this->normalizeIntent($intent ?? []);
         $requirement = $this->assortmentText($query, $needed);
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
         $candidates = $this->withResponseRelations($candidates);
@@ -2118,8 +2501,15 @@ final class ProductAiSearchService
                 && ! $this->modelFuzzy->matches($requirement, $product)) {
                 continue;
             }
-            $brands = $this->modelFuzzy->catalogBrands($requirement);
+            $brands = $intent['manufacturer_absent_in_catalog']
+                ? []
+                : $this->modelFuzzy->catalogBrands($requirement);
             if ($brands !== [] && ! $this->modelFuzzy->matchesCatalogBrand($product, $brands)) {
+                continue;
+            }
+            if (! $intent['manufacturer_absent_in_catalog']
+                && $this->modelFuzzy->usesModelAnchoredCatalogSearch($requirement)
+                && ! $this->modelFuzzy->matches($requirement, $product)) {
                 continue;
             }
             if (! $this->filterType->covers($requirement, $this->filterHaystack($product))) {

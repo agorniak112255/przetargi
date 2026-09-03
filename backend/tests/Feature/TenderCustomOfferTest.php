@@ -115,6 +115,43 @@ final class TenderCustomOfferTest extends TestCase
         $this->assertSame('matched', $item->status);
     }
 
+    public function test_only_empty_does_not_wipe_manual_catalog_pick(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = Product::query()->create([
+            'sku' => '10045641',
+            'name' => 'Okulary PERSPECTA 010 (12szt), bezbarwne',
+            'manufacturer' => 'MSA',
+            'ppe_family' => 'eyes',
+            'category' => 'Sklep - kategorie / Ochrona wzroku i twarzy / Akcesoria do okularów i gogli',
+            'description' => 'Okulary ochronne MSA PERSPECTA 010.',
+            'catalog_price_net' => 50,
+            'purchase_price' => 30,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $tender = $this->makeTender();
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'OKULARY OCHRONNE MSA PERSPECTA 010',
+            'quantity' => 1,
+            'status' => 'matched',
+            'main_product_id' => $product->id,
+            'ai_match_percent' => null,
+            'match_source' => 'manual',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/match", ['only_empty' => true])
+            ->assertOk()
+            ->assertJsonPath('processed', 0);
+
+        $item->refresh();
+        $this->assertSame($product->id, $item->main_product_id);
+        $this->assertSame('manual', $item->match_source);
+        $this->assertNull($item->ai_match_percent);
+    }
+
     public function test_rematch_searches_catalog_for_external_ai_link(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

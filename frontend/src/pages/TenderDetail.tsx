@@ -48,6 +48,14 @@ function isExternalOfferItem(item: Item, productId = ''): boolean {
   )
 }
 
+function isBrandSubstituteItem(item: Item): boolean {
+  const src = item.match_source ?? ''
+  if (src === 'ai_substitute') {
+    return true
+  }
+  return (item.ai_match_reasons ?? []).some((r) => r.code === 'brand_substitute')
+}
+
 function ExternalOfferBanner({
   name,
   url,
@@ -293,7 +301,9 @@ function matchReportStorageKey(tenderId: string): string {
   return `tender-match-report-${tenderId}`
 }
 
-const MATCH_BATCH_SIZE = 1
+function matchBatchSize(concurrency: number): number {
+  return Math.max(1, concurrency)
+}
 
 function matchTargetIds(
   items: Item[],
@@ -314,7 +324,7 @@ function matchTargetIds(
         return true
       }
       if (i.ai_match_percent == null) {
-        return true
+        return false
       }
       return i.ai_match_percent < minScore
     })
@@ -477,6 +487,10 @@ export function TenderDetail() {
   const matchDoneRef = useRef(0)
   const [matchReport, setMatchReport] = useState<MatchReport | null>(null)
   const [showAiChanges, setShowAiChanges] = useState(false)
+  const [focusItemId, setFocusItemId] = useState<number | null>(null)
+  const [focusTick, setFocusTick] = useState(0)
+  const [reportPreviewId, setReportPreviewId] = useState<number | null>(null)
+  const [reportPreviewQuery, setReportPreviewQuery] = useState('')
   const [transitionNote, setTransitionNote] = useState('')
   const [activities, setActivities] = useState<ActivityRow[]>([])
   const [comments, setComments] = useState<CommentRow[]>([])
@@ -1157,16 +1171,18 @@ export function TenderDetail() {
       changes: [],
     }
     const scoreParts: number[] = []
+    const concurrency = clampAiConcurrency(data?.coverage?.thresholds.match_concurrency)
+    const batchSize = matchBatchSize(concurrency)
     const chunks: number[][] = []
-    for (let i = 0; i < targets.length; i += MATCH_BATCH_SIZE) {
-      chunks.push(targets.slice(i, i + MATCH_BATCH_SIZE))
+    for (let i = 0; i < targets.length; i += batchSize) {
+      chunks.push(targets.slice(i, i + batchSize))
     }
     const errors: string[] = []
-    const concurrency = clampAiConcurrency(data?.coverage?.thresholds.match_concurrency)
     try {
-      await mapPool(chunks, concurrency, async (chunk) => {
+      await mapPool(chunks, 1, async (chunk) => {
         const ac = new AbortController()
-        const abortTimer = window.setTimeout(() => ac.abort(), 180_000)
+        const abortMs = 180_000 + Math.max(0, chunk.length - 1) * 12_000
+        const abortTimer = window.setTimeout(() => ac.abort(), abortMs)
         try {
           const res = await api<MatchApiRes>(`/tenders/${id}/match`, {
             method: 'POST',
@@ -1253,6 +1269,19 @@ export function TenderDetail() {
     }
   }
 
+  useEffect(() => {
+    if (tab !== 'pozycje' || focusItemId == null) {
+      return
+    }
+    const timer = window.setTimeout(() => {
+      document.getElementById(`tender-item-${focusItemId}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      })
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [tab, focusItemId, focusTick, showAiChanges, coverageFilter, itemQuery])
+
   async function exportOffer(kind: 'excel' | 'pdf' | 'docx') {
     setErr('')
     setBusy(true)
@@ -1287,6 +1316,41 @@ export function TenderDetail() {
   })
   const listNarrowed = itemQuery.trim() !== '' || coverageFilter != null
   const listFiltered = listNarrowed || showAiChanges
+
+  function openMatchChange(change: MatchChange) {
+    const item = tender.items.find((i) => i.id === change.id)
+    setTab('pozycje')
+    setCoverageFilter(null)
+    setItemQuery('')
+    setShowAiChanges(true)
+    setFocusItemId(change.id)
+    setFocusTick((n) => n + 1)
+    const productId =
+      item?.main_product?.id ??
+      item?.main_product_id ??
+      products.find((p) => p.sku === change.to_sku)?.id ??
+      null
+    const canPreview = Boolean(productId) && change.action !== 'cleared' && change.action !== 'no_match'
+    setReportPreviewId(canPreview ? productId : null)
+    setReportPreviewQuery(item?.requirement ?? '')
+    if (!productId && change.to_sku && change.action !== 'cleared' && change.action !== 'no_match') {
+      void api<{ data: Product[] }>(`/products?q=${encodeURIComponent(change.to_sku)}&per_page=8`).then((res) => {
+        const hit = (res.data ?? []).find((p) => p.sku === change.to_sku) ?? res.data?.[0]
+        if (hit) {
+          setReportPreviewId(hit.id)
+        }
+      })
+    }
+  }
+
+  function matchChangeProductName(change: MatchChange): string | null {
+    const item = tender.items.find((i) => i.id === change.id)
+    if (item?.main_product && (!change.to_sku || item.main_product.sku === change.to_sku)) {
+      return productDisplayName(item.main_product, 64)
+    }
+    const fromList = products.find((p) => p.sku === change.to_sku)
+    return fromList ? productDisplayName(fromList, 64) : null
+  }
 
   return (
     <div>
@@ -1393,8 +1457,8 @@ export function TenderDetail() {
           <div className="w-full max-w-md rounded-xl bg-white p-4 text-sm shadow-xl">
             <p className="font-semibold text-slate-900">Trwa dopasowanie AI…</p>
             <p className="mt-1 text-xs text-slate-600">
-              Nie odświeżaj strony. Lecą {clampAiConcurrency(coverage?.thresholds.match_concurrency)}{' '}
-              wyszukiwania naraz — przy ~80 pustych to zwykle kilka minut.
+              Nie odświeżaj strony. W paczce leci {clampAiConcurrency(coverage?.thresholds.match_concurrency)}{' '}
+              pozycji naraz (równoległy ranking w modelu).
             </p>
             {(() => {
               const total = Math.max(matchProgress?.total ?? 0, 0)
@@ -1479,6 +1543,8 @@ export function TenderDetail() {
                 onClick={() => {
                   setMatchReport(null)
                   setShowAiChanges(false)
+                  setFocusItemId(null)
+                  setReportPreviewId(null)
                   if (id) {
                     sessionStorage.removeItem(matchReportStorageKey(id))
                   }
@@ -1489,13 +1555,24 @@ export function TenderDetail() {
             </div>
           </div>
           {matchReport.changes.length > 0 && (
-            <ul className="mt-2 max-h-32 space-y-0.5 overflow-y-auto font-mono text-[11px]">
-              {matchReport.changes.slice(0, 80).map((c) => (
-                <li key={c.id}>
-                  Poz. {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku ?? 'brak'}
-                  {c.action === 'cleared' ? ' (zdjęto)' : ''}
-                </li>
-              ))}
+            <ul className="mt-2 max-h-40 space-y-0.5 overflow-y-auto text-[11px]">
+              {matchReport.changes.slice(0, 80).map((c) => {
+                const name = matchChangeProductName(c)
+                return (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onClick={() => openMatchChange(c)}
+                      title="Pokaż pozycję i produkt zapisany przez AI"
+                      className="max-w-full text-left font-mono text-violet-900 underline decoration-violet-400 hover:text-violet-950"
+                    >
+                      Poz. {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku ?? 'brak'}
+                      {c.action === 'cleared' ? ' (zdjęto)' : ''}
+                      {name ? ` · ${name}` : ''}
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </div>
@@ -1747,6 +1824,7 @@ export function TenderDetail() {
                     canEdit={can_edit}
                     canComment={canComment}
                     busy={busy}
+                    focused={focusItemId === item.id}
                     changedByAi={aiChangedIds.has(item.id)}
                     comments={comments.filter((c) => c.tender_item_id === item.id)}
                     itemActivities={activities.filter(
@@ -2635,6 +2713,14 @@ export function TenderDetail() {
           </div>
         </div>
       )}
+      <ProductPreviewModal
+        productId={reportPreviewId}
+        query={reportPreviewQuery}
+        onClose={() => {
+          setReportPreviewId(null)
+          setReportPreviewQuery('')
+        }}
+      />
     </div>
   )
 }
@@ -2647,6 +2733,7 @@ function ItemRow({
   canEdit,
   canComment,
   busy,
+  focused,
   changedByAi,
   comments,
   itemActivities,
@@ -2661,6 +2748,7 @@ function ItemRow({
   canEdit: boolean
   canComment: boolean
   busy: boolean
+  focused?: boolean
   changedByAi?: boolean
   comments: CommentRow[]
   itemActivities: ActivityRow[]
@@ -2748,6 +2836,7 @@ function ItemRow({
     selectedProduct || productId || (item.custom_name ?? '').trim(),
   )
   const isExternal = isExternalOfferItem(item, productId)
+  const isSubstitute = isBrandSubstituteItem(item)
   const markup = offerMarkupFactor(targetMarginPercent)
 
   function applyCatalogPrice(purchase: string | number | null | undefined): number | null {
@@ -2781,12 +2870,17 @@ function ItemRow({
   return (
     <>
     <tr
+      id={`tender-item-${item.id}`}
       className={`${showComment ? 'align-top' : 'border-b align-top'} ${
-        isExternal
-          ? 'bg-orange-50 ring-1 ring-inset ring-orange-400'
-          : changedByAi
-            ? 'bg-violet-50 ring-1 ring-inset ring-violet-200'
-            : ''
+        focused
+          ? 'bg-violet-100 ring-2 ring-inset ring-violet-600'
+          : isExternal
+            ? 'bg-orange-50 ring-1 ring-inset ring-orange-400'
+            : isSubstitute
+              ? 'bg-teal-50 ring-1 ring-inset ring-teal-300'
+              : changedByAi
+                ? 'bg-violet-50 ring-1 ring-inset ring-violet-200'
+                : ''
       }`}
     >
       <td className="p-2">
@@ -2797,9 +2891,17 @@ function ItemRow({
               Zewn.
             </span>
           )}
-          {changedByAi && !isExternal && (
+          {changedByAi && !isExternal && !isSubstitute && (
             <span className="rounded bg-violet-700 px-1 py-px text-[9px] font-bold uppercase text-white">
               AI
+            </span>
+          )}
+          {isSubstitute && !isExternal && (
+            <span
+              title="Inna marka/model niż w SIWZ — zamiennik spełniający wymaganie"
+              className="rounded bg-teal-700 px-1 py-px text-[9px] font-bold uppercase text-white"
+            >
+              Zam.
             </span>
           )}
           {hasChanges && (
@@ -3075,12 +3177,24 @@ function ItemRow({
             {item.main_product ? (
               <button
                 type="button"
-                className="flex w-full max-w-[280px] items-start gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left shadow-sm transition hover:border-sky-400 hover:bg-sky-100"
+                className={`flex w-full max-w-[280px] items-start gap-1.5 rounded-md border px-2 py-1.5 text-left shadow-sm transition ${
+                  isSubstitute
+                    ? 'border-teal-300 bg-teal-50 hover:border-teal-500 hover:bg-teal-100'
+                    : 'border-sky-200 bg-sky-50 hover:border-sky-400 hover:bg-sky-100'
+                }`}
                 onClick={() => setPreviewId(item.main_product!.id)}
               >
-                <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
+                <span
+                  className={`mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                    isSubstitute ? 'bg-teal-600' : 'bg-sky-500'
+                  }`}
+                />
                 <span className="min-w-0">
-                  <span className="block truncate text-[11px] font-medium text-sky-900">
+                  <span
+                    className={`block truncate text-[11px] font-medium ${
+                      isSubstitute ? 'text-teal-950' : 'text-sky-900'
+                    }`}
+                  >
                     {item.main_product.sku}
                   </span>
                   <span
@@ -3090,7 +3204,11 @@ function ItemRow({
                     {productDisplayName(item.main_product)}
                   </span>
                   {item.ai_match_percent != null && (
-                    <span className="mt-0.5 block text-[10px] text-violet-700">
+                    <span
+                      className={`mt-0.5 block text-[10px] ${
+                        isSubstitute ? 'text-teal-800' : 'text-violet-700'
+                      }`}
+                    >
                       Dopasowanie AI: {item.ai_match_percent}%
                     </span>
                   )}

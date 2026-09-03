@@ -179,6 +179,7 @@ return [
         'stoko' => ['scjp.com', 'www.scjp.com'],
         'deb' => ['scjp.com', 'www.scjp.com', 'debgroup.com', 'www.debgroup.com'],
         'deb-stoko' => ['scjp.com', 'www.scjp.com', 'debgroup.com', 'www.debgroup.com'],
+        'cerva' => ['cerva.cz', 'www.cerva.cz', 'cerva.com', 'www.cerva.com'],
     ],
 
     /*

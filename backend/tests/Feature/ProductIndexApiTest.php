@@ -114,6 +114,33 @@ final class ProductIndexApiTest extends TestCase
             ->assertJsonPath('data.0.sku', 'MSA-LOW');
     }
 
+    public function test_products_q_with_named_model_skips_generic_okulary_tokens(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => '10061279',
+            'name' => 'MSA PERSPECTA 010 - Okulary ochronne',
+            'manufacturer' => 'MSA',
+            'catalog_price_net' => 50,
+            'purchase_price' => 30,
+            'stock' => 3,
+        ]);
+        Product::query()->create([
+            'sku' => 'ETUI-1',
+            'name' => 'Etui na okulary ochronne MSA',
+            'manufacturer' => 'MSA',
+            'catalog_price_net' => 15,
+            'purchase_price' => 8,
+            'stock' => 5,
+        ]);
+
+        $this->getJson('/api/products?q='.rawurlencode('OKULARY OCHRONNE MSA PERSPECTA 010'))
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.sku', '10061279');
+    }
+
     public function test_manufacturers_endpoint_returns_distinct_sorted_list(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

@@ -106,6 +106,59 @@ final class ProductModelFuzzyTest extends TestCase
         )));
     }
 
+    #[Test]
+    public function perspecta_and_numeric_suffix_form_model_needle(): void
+    {
+        $req = 'OKULARY OCHRONNE MSA PERSPECTA 010';
+
+        $this->assertTrue($this->fuzzy->hasNamedModel($req));
+        $this->assertContains('perspecta010', $this->fuzzy->needles($req));
+        $this->assertContains('perspecta010', $this->fuzzy->catalogModelNeedles($req));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            '10061279',
+            'MSA PERSPECTA 010 - Okulary ochronne',
+            'MSA',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            '10045516',
+            'Okulary PERSPECTA 9000 (12szt), bezbarwne',
+            'MSA',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            '10081939',
+            'Sztywne etui na okulary Perspecta (6szt)',
+            'MSA',
+        )));
+        $this->assertNotContains('perspecta', $this->fuzzy->needles($req));
+    }
+
+    #[Test]
+    public function disposable_cap_pack_is_not_a_named_model(): void
+    {
+        $req = 'CZEPEK JEDNORAZOWY -1 OP.-100 szt.';
+
+        $this->assertFalse($this->fuzzy->usesModelAnchoredCatalogSearch($req));
+        $this->assertSame([], $this->fuzzy->catalogModelNeedles($req));
+        $this->assertNotContains('czepek', $this->fuzzy->needles($req));
+        $this->assertNotContains('jednorazowy', $this->fuzzy->needles($req));
+        $this->assertNotContains('op100', $this->fuzzy->needles($req));
+    }
+
+    #[Test]
+    public function shoe_size_range_is_not_a_catalog_model(): void
+    {
+        $req = 'BUTY gumowe DAMSKIE antyelektrostatyczne rozm. 35-41 TRONCHETTO OB. SRA prod.CERVA · EN ISO 20347';
+
+        $this->assertNotContains('rozm3541', $this->fuzzy->catalogModelNeedles($req));
+        $this->assertContains('tronchetto', $this->fuzzy->catalogModelNeedles($req));
+        $this->assertContains('cerva', $this->fuzzy->catalogBrands($req));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            '28-0001.00/858.0_3400',
+            'Getry żaroodp. metalizowane 858.0 wys. 34 cm, taśma spręż., rozm. 41-42',
+            'ALWIT POLAND',
+        )));
+    }
+
     private function product(string $sku, string $name, string $manufacturer): Product
     {
         $p = new Product;

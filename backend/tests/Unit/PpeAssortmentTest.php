@@ -335,4 +335,86 @@ final class PpeAssortmentTest extends TestCase
         ]);
         $this->assertFalse($this->assortment->compatibleProduct($req, $helmet));
     }
+
+    #[Test]
+    public function perspecta_requirement_rejects_etui_and_accepts_glasses(): void
+    {
+        $req = 'OKULARY OCHRONNE MSA PERSPECTA 010';
+        $glasses = new Product;
+        $glasses->forceFill([
+            'name' => 'MSA PERSPECTA 010 - Okulary ochronne',
+            'sku' => '10061279',
+            'manufacturer' => 'MSA',
+            'category' => 'Ochrona oczu',
+        ]);
+        $case = new Product;
+        $case->forceFill([
+            'name' => 'Etui na okulary ochronne MSA',
+            'sku' => 'ETUI-MSA',
+            'manufacturer' => 'MSA',
+            'category' => 'Ochrona oczu',
+        ]);
+
+        $this->assertTrue($this->assortment->isEyeWearAccessory((string) $case->name));
+        $this->assertFalse($this->assortment->isEyeWearAccessory((string) $glasses->name));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $glasses));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $case));
+    }
+
+    #[Test]
+    public function shop_category_gogli_does_not_override_glasses_in_name(): void
+    {
+        $req = 'OKULARY OCHRONNE MSA PERSPECTA 010';
+        $glasses = new Product;
+        $glasses->forceFill([
+            'name' => 'Okulary PERSPECTA 010 (12szt), bezbarwne',
+            'sku' => '10045641',
+            'manufacturer' => 'MSA',
+            'ppe_family' => PpeAssortment::FAMILY_EYES,
+            'category' => 'Sklep - kategorie / Ochrona wzroku i twarzy / Akcesoria do okularów i gogli',
+        ]);
+
+        $this->assertSame('glasses', $this->assortment->articleType((string) $glasses->name, PpeAssortment::FAMILY_EYES));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $glasses));
+    }
+
+    #[Test]
+    public function rubber_boot_requirement_rejects_gaiters(): void
+    {
+        $req = 'BUTY gumowe DAMSKIE antyelektrostatyczne rozm. 35-41 TRONCHETTO prod.CERVA EN ISO 20347';
+        $gaiters = new Product;
+        $gaiters->forceFill([
+            'name' => 'Getry żaroodp. metalizowane 858.0 wys. 34 cm, rozm. 41-42',
+            'sku' => '28-0001.00/858.0_3400',
+            'manufacturer' => 'ALWIT POLAND',
+            'category' => 'Ochrona ciała',
+        ]);
+
+        $this->assertTrue($this->assortment->isFootwearLegwear((string) $gaiters->name));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $gaiters));
+    }
+
+    #[Test]
+    public function fireman_gum_boot_is_not_antistatic_for_esd_requirement(): void
+    {
+        $req = 'BUTY gumowe DAMSKIE antyelektrostatyczne';
+        $fireman = new Product;
+        $fireman->forceFill([
+            'name' => 'FIREMAN (02 NAVY)',
+            'sku' => 'V262-0-02',
+            'manufacturer' => 'Cofra',
+            'description' => 'Buty gumowe FIREMAN',
+        ]);
+        $esd = new Product;
+        $esd->forceFill([
+            'name' => 'Kalosze damskie ESD',
+            'sku' => 'ESD-1',
+            'manufacturer' => 'VM',
+            'description' => 'antyelektrostatyczne EN 1149',
+        ]);
+
+        $this->assertTrue($this->assortment->requiresAntistatic($req));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $fireman));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $esd));
+    }
 }

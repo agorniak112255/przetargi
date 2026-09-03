@@ -52,35 +52,60 @@ class ProductController extends Controller
 
         if ($request->filled('q')) {
             $term = trim((string) $request->string('q'));
-            $like = '%'.$term.'%';
-            $codes = $this->modelFuzzy->shortCodes($term);
             $brands = $this->modelFuzzy->catalogBrands($term);
-            $tokens = $brands === [] ? [] : $this->queryTokens($term, $brands);
-            $query->where(function ($builder) use ($like, $term, $codes, $brands, $tokens) {
-                $builder->where('sku', 'like', $like)
-                    ->orWhere('name', 'like', $like)
-                    ->orWhere('manufacturer', 'like', $like);
-                if ($term !== '') {
-                    $builder->orWhere('sku', $term);
-                }
-                foreach ($codes as $code) {
-                    $esc = '%'.addcslashes($code, '%_\\').'%';
-                    $builder->orWhere('sku', 'like', $esc)
-                        ->orWhere('name', 'like', $esc);
-                }
-                foreach ($tokens as $token) {
-                    $esc = '%'.addcslashes($token, '%_\\').'%';
-                    $builder->orWhere('sku', 'like', $esc)
-                        ->orWhere('name', 'like', $esc);
-                }
-                if ($brands !== [] && $codes === [] && $tokens === []) {
-                    foreach ($brands as $brand) {
-                        $esc = '%'.addcslashes($brand, '%_\\').'%';
-                        $builder->orWhere('manufacturer', 'like', $esc)
+            $modelNeedles = $this->modelFuzzy->catalogModelNeedles($term);
+
+            if ($modelNeedles !== []) {
+                $wordDigitPairs = $this->modelFuzzy->catalogModelWordDigitPairs($term);
+                $query->where(function ($builder) use ($modelNeedles, $wordDigitPairs) {
+                    foreach ($modelNeedles as $needle) {
+                        $esc = '%'.addcslashes($needle, '%_\\').'%';
+                        $builder->orWhere('sku', 'like', $esc)
+                            ->orWhere('name', 'like', $esc)
+                            ->orWhere('search_blob', 'like', $esc);
+                    }
+                    foreach ($wordDigitPairs as [$word, $num]) {
+                        $w = '%'.addcslashes($word, '%_\\').'%';
+                        $n = '%'.addcslashes($num, '%_\\').'%';
+                        $builder->orWhere(function ($q) use ($w, $n) {
+                            foreach (['sku', 'name', 'search_blob'] as $col) {
+                                $q->orWhere(function ($q2) use ($col, $w, $n) {
+                                    $q2->where($col, 'like', $w)->where($col, 'like', $n);
+                                });
+                            }
+                        });
+                    }
+                });
+            } else {
+                $like = '%'.$term.'%';
+                $codes = $this->modelFuzzy->shortCodes($term);
+                $tokens = $brands === [] ? [] : $this->queryTokens($term, $brands);
+                $query->where(function ($builder) use ($like, $term, $codes, $brands, $tokens) {
+                    $builder->where('sku', 'like', $like)
+                        ->orWhere('name', 'like', $like)
+                        ->orWhere('manufacturer', 'like', $like);
+                    if ($term !== '') {
+                        $builder->orWhere('sku', $term);
+                    }
+                    foreach ($codes as $code) {
+                        $esc = '%'.addcslashes($code, '%_\\').'%';
+                        $builder->orWhere('sku', 'like', $esc)
                             ->orWhere('name', 'like', $esc);
                     }
-                }
-            });
+                    foreach ($tokens as $token) {
+                        $esc = '%'.addcslashes($token, '%_\\').'%';
+                        $builder->orWhere('sku', 'like', $esc)
+                            ->orWhere('name', 'like', $esc);
+                    }
+                    if ($brands !== [] && $codes === [] && $tokens === []) {
+                        foreach ($brands as $brand) {
+                            $esc = '%'.addcslashes($brand, '%_\\').'%';
+                            $builder->orWhere('manufacturer', 'like', $esc)
+                                ->orWhere('name', 'like', $esc);
+                        }
+                    }
+                });
+            }
             if ($brands !== []) {
                 $query->where(function ($builder) use ($brands) {
                     foreach ($brands as $brand) {

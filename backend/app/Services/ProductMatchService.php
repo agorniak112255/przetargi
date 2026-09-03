@@ -11,6 +11,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\CatalogManufacturerContext;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
 use App\Support\ProductModelFuzzy;
@@ -25,6 +26,12 @@ final class ProductMatchService
 
     /** Od tego wyniku zapisujemy pierwszy trafiony produkt AI w ofercie. */
     public const APPLY_MATCH_SCORE = 40;
+
+    /** Inna marka/model niż w SIWZ — zapis zamiennika od tego progu (po zgodności rodzaju). */
+    public const SUBSTITUTE_MATCH_SCORE = 55;
+
+    /** @var array<string, list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>> */
+    private array $aiCandidatesCache = [];
 
     /** @var array{url: string, title: string}|null */
     private ?array $lastExternalHint = null;
@@ -62,6 +69,7 @@ final class ProductMatchService
         private readonly ExternalCatalogHintService $externalHints,
         private readonly ProductModelFuzzy $modelFuzzy,
         private readonly PpeAssortment $assortment,
+        private readonly CatalogManufacturerContext $manufacturerContext,
     ) {}
 
     /**
@@ -124,11 +132,31 @@ final class ProductMatchService
                         $w->whereNull('custom_name')->orWhere('custom_name', '');
                     })->where(function ($q) {
                         $q->whereNull('main_product_id')
-                            ->orWhereNull('ai_match_percent')
-                            ->orWhere('ai_match_percent', '<', self::MIN_MATCH_SCORE);
+                            ->orWhere(function ($w) {
+                                $w->whereNotNull('ai_match_percent')
+                                    ->where('ai_match_percent', '<', self::MIN_MATCH_SCORE);
+                            });
                     });
                 })
             )->get();
+
+        $this->prefetchAiCandidates(
+            $items
+                ->filter(fn (TenderItem $item): bool => ! $item->isManualCustomOffer())
+                ->filter(function (TenderItem $item) use ($products): bool {
+                    $skuPick = $this->strongSkuPick($item->requirement, $products);
+                    if ($skuPick === null) {
+                        return true;
+                    }
+                    return $this->persistableScore(
+                        $item->requirement,
+                        $skuPick['product'],
+                        $skuPick['score']
+                    ) === null;
+                })
+                ->map(static fn (TenderItem $item): string => $item->requirement)
+                ->all()
+        );
 
         $startedAt = time();
         $batchCount = $items->count();
@@ -332,7 +360,10 @@ final class ProductMatchService
                 fn (Product $p): bool => $this->modelFuzzy->matches($requirement, $p)
             );
             if ($named->isNotEmpty()) {
-                $products = $named;
+                $compatibleNamed = $named->filter(
+                    fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
+                );
+                $products = $compatibleNamed->isNotEmpty() ? $compatibleNamed : $products;
             }
         }
         $scored = [];
@@ -357,7 +388,7 @@ final class ProductMatchService
                 $product->name.' '.$product->sku.' '.$product->manufacturer.' '
                 .($product->norms ?? '').' '.($product->category ?? '').' '.$extra
             );
-            if (! $this->assortmentsCompatible($req, $hay, $product, $attrs)) {
+            if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
             $score = $this->score($req, $reqTokens, $reqCodes, $hay, $product, $materials, $attrs);
@@ -371,20 +402,6 @@ final class ProductMatchService
         usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
 
         return array_slice($scored, 0, max(1, $limit));
-    }
-
-    /**
-     * Rękawice ≠ obuwie — kategoria z atrybutów ma pierwszeństwo przed zgadywaniem z tekstu.
-     *
-     * @param  array<string, mixed>  $attrs
-     */
-    private function assortmentsCompatible(string $req, string $hay, Product $product, array $attrs = []): bool
-    {
-        $prodText = $hay.' '.$this->normalize((string) ($product->category ?? ''))
-            .' '.$this->normalize((string) ($product->name ?? ''));
-        $kat = is_string($attrs['kategoria_bhp'] ?? null) ? $attrs['kategoria_bhp'] : null;
-
-        return $this->assortment->compatible($req, $prodText, $kat);
     }
 
     private function familyFromKategoria(mixed $kategoria): ?string
@@ -875,7 +892,7 @@ final class ProductMatchService
 
         $candidates = $this->mergeCandidates($heuristic, $aiCandidates);
         $this->lastExternalHint = null;
-        $pick = $this->resolveBestPick($item->requirement, $products);
+        $pick = $this->resolveBestPick($item->requirement, $products, $aiCandidates);
 
         if ($pick === null) {
             if ($item->hasCustomOffer()) {
@@ -960,7 +977,7 @@ final class ProductMatchService
      * @param  Collection<int, Product>  $products
      * @return array{product: Product, score: int, source: string}|null
      */
-    private function resolveBestPick(string $requirement, Collection $products): ?array
+    private function resolveBestPick(string $requirement, Collection $products, ?array $aiCandidates = null): ?array
     {
         $skuPick = $this->strongSkuPick($requirement, $products);
         if ($skuPick !== null) {
@@ -974,7 +991,7 @@ final class ProductMatchService
 
         $described = $this->withDescriptions($products);
         $heuristic = $described->isEmpty() ? null : $this->bestMatch($requirement, $described);
-        $aiCandidates = $this->aiTopCandidates($requirement, 5);
+        $aiCandidates ??= $this->aiTopCandidates($requirement, 5);
         $picked = $this->pickAuto($requirement, $heuristic, $aiCandidates, $described);
         if ($picked === null) {
             return null;
@@ -985,7 +1002,7 @@ final class ProductMatchService
             $requirement,
             $picked['product'],
             $picked['score'],
-            in_array($picked['source'] ?? '', ['ai', 'vector'], true)
+            in_array($picked['source'] ?? '', ['ai', 'vector', 'ai_substitute'], true)
         );
         if ($honest === null) {
             return null;
@@ -1119,9 +1136,6 @@ final class ProductMatchService
         }
 
         foreach ($aiCandidates as $topAi) {
-            if ($topAi['score'] < self::APPLY_MATCH_SCORE) {
-                continue;
-            }
             $product = $products->firstWhere('id', $topAi['id'])
                 ?? Product::query()->find($topAi['id']);
             if (! $product instanceof Product) {
@@ -1130,39 +1144,138 @@ final class ProductMatchService
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
-            if (! $this->honorsSpecificModelCodes($requirement, $product)) {
+            $exact = $this->honorsSpecificModelCodes($requirement, $product);
+            $minScore = $exact ? self::APPLY_MATCH_SCORE : self::SUBSTITUTE_MATCH_SCORE;
+            if ($topAi['score'] < $minScore) {
                 continue;
             }
             $honest = $this->persistableScore($requirement, $product, $topAi['score'], true);
             if ($honest === null) {
                 continue;
             }
+            if (! $exact && $honest < self::SUBSTITUTE_MATCH_SCORE
+                && $topAi['score'] < self::SUBSTITUTE_MATCH_SCORE) {
+                continue;
+            }
 
             return [
                 'product' => $product,
                 'score' => $honest,
-                'source' => (string) ($topAi['source'] ?? 'ai'),
+                'source' => $exact ? (string) ($topAi['source'] ?? 'ai') : 'ai_substitute',
             ];
+        }
+
+        if ($heuristic !== null && $heuristic['score'] >= self::APPLY_MATCH_SCORE) {
+            $honest = $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']);
+            if ($honest !== null) {
+                return [
+                    'product' => $heuristic['product'],
+                    'score' => $honest,
+                    'source' => 'heuristic',
+                ];
+            }
         }
 
         return null;
     }
 
-    /**
-     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
-     */
-    private function aiTopCandidates(string $requirement, int $limit = 5): array
+    /** Marka/model z SIWZ, ale inny producent / inny model w katalogu — zamiennik merytoryczny. */
+    private function qualifiesAsBrandSubstitute(string $requirement, Product $product): bool
     {
-        if (! $this->aiSettings->isReady()) {
-            return [];
+        if ($this->honorsSpecificModelCodes($requirement, $product)) {
+            return false;
+        }
+
+        $requestedMfg = $this->requestedManufacturerFromSiwz($requirement);
+        if ($requestedMfg !== null) {
+            $canonical = $this->manufacturerContext->matchManufacturer($requestedMfg);
+            if ($canonical !== null && $this->manufacturerContext->hasProductsForManufacturer($canonical)) {
+                return ! $this->productMatchesManufacturer($product, $canonical);
+            }
+
+            return true;
+        }
+
+        return $this->modelFuzzy->hasNamedModel($requirement)
+            && ! $this->modelFuzzy->matches($requirement, $product);
+    }
+
+    private function requestedManufacturerFromSiwz(string $requirement): ?string
+    {
+        if (preg_match('/\bprod\.?\s*([A-Za-zĄĆĘŁŃÓŚŹŻ0-9\-]+)/ui', $requirement, $m) === 1) {
+            $token = trim($m[1]);
+            if ($token !== '') {
+                return $token;
+            }
+        }
+
+        foreach ($this->codeCandidates($requirement) as $code) {
+            if (mb_strlen($code) < 3) {
+                continue;
+            }
+            $canonical = $this->manufacturerContext->matchManufacturer($code);
+            if ($canonical !== null) {
+                return $canonical;
+            }
+        }
+
+        return null;
+    }
+
+    private function productMatchesManufacturer(Product $product, string $canonical): bool
+    {
+        $canonical = trim($canonical);
+        if ($canonical === '') {
+            return false;
+        }
+        $prod = mb_strtolower(trim((string) $product->manufacturer));
+        $can = mb_strtolower($canonical);
+
+        return $prod !== '' && ($prod === $can || str_contains($prod, $can) || str_contains($can, $prod));
+    }
+
+    /**
+     * @param  list<string>  $requirements
+     */
+    private function prefetchAiCandidates(array $requirements): void
+    {
+        $queries = [];
+        foreach ($requirements as $requirement) {
+            $requirement = trim($requirement);
+            if ($requirement !== '') {
+                $queries[$requirement] = true;
+            }
+        }
+        $queries = array_keys($queries);
+        if ($queries === [] || ! $this->aiSettings->isReady()) {
+            return;
         }
 
         try {
-            $result = $this->aiSearch->search($requirement, $limit, false, AiTask::TenderMatch);
+            $rows = $this->aiSearch->searchMany(
+                $queries,
+                5,
+                false,
+                AiTask::ProductSearch,
+                $this->aiSettings->matchConcurrency(),
+            );
         } catch (Throwable) {
-            return [];
+            return;
         }
 
+        $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
+        foreach ($queries as $i => $requirement) {
+            $this->rememberAiCandidates($requirement, is_array($rows[$i] ?? null) ? $rows[$i] : [], 5, $source);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
+     */
+    private function rememberAiCandidates(string $requirement, array $result, int $limit, string $source): array
+    {
+        $cacheKey = md5($requirement.'|'.$limit);
         $hint = $result['external_hint'] ?? null;
         if (is_array($hint) && isset($hint['url'], $hint['title'])) {
             $this->lastExternalHint = [
@@ -1171,9 +1284,11 @@ final class ProductMatchService
             ];
         }
 
-        $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
         $mapped = $this->mapAiSearchRows($result['products'] ?? [], $limit, $source);
+        $mapped = $this->mergeCatalogCandidatesForTender($requirement, $mapped, $limit);
         if ($mapped === []) {
+            $this->aiCandidatesCache[$cacheKey] = [];
+
             return [];
         }
 
@@ -1193,7 +1308,69 @@ final class ProductMatchService
             $out[] = $row;
         }
 
+        $this->aiCandidatesCache[$cacheKey] = $out;
+
         return $out;
+    }
+
+    /**
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
+     */
+    private function aiTopCandidates(string $requirement, int $limit = 5): array
+    {
+        $cacheKey = md5($requirement.'|'.$limit);
+        if (isset($this->aiCandidatesCache[$cacheKey])) {
+            return $this->aiCandidatesCache[$cacheKey];
+        }
+
+        if (! $this->aiSettings->isReady()) {
+            return [];
+        }
+
+        try {
+            $result = $this->aiSearch->search($requirement, $limit, false, AiTask::ProductSearch);
+        } catch (Throwable) {
+            return [];
+        }
+
+        $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
+
+        return $this->rememberAiCandidates($requirement, $result, $limit, $source);
+    }
+
+    /**
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $mapped
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
+     */
+    private function mergeCatalogCandidatesForTender(string $requirement, array $mapped, int $limit): array
+    {
+        $top = 0;
+        foreach ($mapped as $row) {
+            $top = max($top, (int) ($row['score'] ?? 0));
+        }
+        if ($top >= self::SUBSTITUTE_MATCH_SCORE) {
+            return $mapped;
+        }
+
+        $catalogRows = $this->aiSearch->requirementCatalogRows($requirement, $limit);
+        if ($catalogRows === []) {
+            return $mapped;
+        }
+
+        $byId = [];
+        foreach ($mapped as $row) {
+            $byId[$row['id']] = $row;
+        }
+        foreach ($this->mapAiSearchRows($catalogRows, $limit, 'catalog') as $row) {
+            $id = $row['id'];
+            if (! isset($byId[$id]) || $row['score'] > $byId[$id]['score']) {
+                $byId[$id] = $row;
+            }
+        }
+        $merged = array_values($byId);
+        usort($merged, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+
+        return array_slice($merged, 0, $limit);
     }
 
     /**
@@ -1304,7 +1481,7 @@ final class ProductMatchService
             $item->requirement,
             $product,
             $score,
-            in_array($source, ['ai', 'vector'], true)
+            in_array($source, ['ai', 'vector', 'ai_substitute'], true)
         );
         if ($honest === null) {
             return false;
@@ -1314,6 +1491,14 @@ final class ProductMatchService
         $reasons = $explained['reasons'];
         if (($reasons[0]['code'] ?? '') === 'asortyment_reject') {
             return false;
+        }
+        if ($source === 'ai_substitute') {
+            $label = $this->substituteReasonLabel($item->requirement);
+            array_unshift($reasons, [
+                'code' => 'brand_substitute',
+                'label' => $label,
+                'points' => $honest,
+            ]);
         }
         if ($aiReason !== null && $aiReason !== '') {
             array_unshift($reasons, [
@@ -1347,6 +1532,23 @@ final class ProductMatchService
         $this->pricing->recalculateItemMargin($item);
 
         return true;
+    }
+
+    private function substituteReasonLabel(string $requirement): string
+    {
+        $parts = ['Zamiennik — inna marka/model niż w SIWZ'];
+        $mfg = $this->requestedManufacturerFromSiwz($requirement);
+        if ($mfg !== null) {
+            $parts[] = '(wymagano: '.$mfg.')';
+        }
+        if ($this->modelFuzzy->hasNamedModel($requirement)) {
+            $needles = $this->modelFuzzy->catalogModelNeedles($requirement);
+            if ($needles !== []) {
+                $parts[] = 'model: '.implode(', ', array_slice($needles, 0, 2));
+            }
+        }
+
+        return implode(' ', $parts).'.';
     }
 
     /**
@@ -1468,7 +1670,7 @@ final class ProductMatchService
         $reasons = [];
         $score = 0;
 
-        if (! $this->assortmentsCompatible($req, $hay, $product, $attrs)) {
+        if (! $this->assortment->compatibleProduct($requirement, $product)) {
             $reqFamily = $this->detectAssortmentFamily($req) ?? '?';
             $prodFamily = $this->familyFromKategoria($attrs['kategoria_bhp'] ?? null)
                 ?? $this->detectAssortmentFamily($hay.' '.$this->normalize((string) ($product->category ?? '')))

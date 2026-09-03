@@ -26,12 +26,76 @@ final class ProductModelFuzzy
         'elektryka', 'elektryczne', 'ubranie', 'komplet', 'zestaw',
         'wodoochronna', 'wodoochronny', 'przeciwdeszczowa', 'przeciwdeszczowy',
         'polar', 'polaru', 'polarowa', 'polarowy', 'damska', 'damski', 'meska', 'meski',
-        'granatowy', 'granatowa', 'granat',
+        'granatowy', 'granatowa', 'granat', 'czapka', 'czepek', 'czepki', 'kominiarka', 'kominiarki',
+        'gramatura', 'gramatury', 'gram', 'gramy', 'gramow', 'gsm',
+        'rozm', 'gumowe', 'gumowa', 'gumowy', 'damskie', 'meskie', 'antyelektrostatyczne',
+        'antyelektrostatyczna', 'prod', 'jednorazowy', 'jednorazowa', 'jednorazowe',
+        'opakowanie', 'opakowaniu',
     ];
 
     public function hasNamedModel(string $requirement): bool
     {
         return $this->needles($requirement) !== [];
+    }
+
+    /**
+     * Igły do wyszukiwania po modelu (PERSPECTA + 010 → perspecta010) — wspólne dla listy i AI.
+     *
+     * @return list<string>
+     */
+    public function catalogModelNeedles(string $requirement): array
+    {
+        $needles = $this->needles($requirement);
+        $out = [];
+        foreach ($needles as $needle) {
+            if ($this->isJunkCatalogModelNeedle($needle)) {
+                continue;
+            }
+            if (mb_strlen($needle) >= 4 || $this->isMixedModelCode($needle)) {
+                $out[] = $needle;
+            }
+        }
+        usort($out, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
+
+        return array_values(array_unique($out));
+    }
+
+    public function usesModelAnchoredCatalogSearch(string $requirement): bool
+    {
+        return $this->catalogModelNeedles($requirement) !== [];
+    }
+
+    /**
+     * Para słowo + kod (PERSPECTA, 010) — dopasowanie w nazwie ze spacją między tokenami.
+     *
+     * @return list<array{0: string, 1: string}>
+     */
+    public function catalogModelWordDigitPairs(string $requirement): array
+    {
+        $text = $this->stripNorms($requirement);
+        $tokens = preg_split('/[\s,;:·•\/|+]+/u', $text) ?: [];
+        $tokens = array_values(array_filter($tokens, static fn (string $t): bool => $t !== ''));
+        $pairs = [];
+        $count = count($tokens);
+        for ($i = 0; $i < $count - 1; $i++) {
+            $aWord = $this->lettersOnly($tokens[$i]);
+            $num = $this->compact($tokens[$i + 1]);
+            if (
+                $aWord === ''
+                || mb_strlen($aWord) < 3
+                || $this->isStop($aWord)
+                || $this->isSizeLabelWord($aWord)
+                || ! ctype_digit($num)
+                || $this->isSizeRangeDigits($num, $tokens[$i + 1] ?? '')
+                || mb_strlen($num) < 3
+                || mb_strlen($num) > 5
+            ) {
+                continue;
+            }
+            $pairs[] = [$aWord, $num];
+        }
+
+        return $pairs;
     }
 
     /**
@@ -56,6 +120,22 @@ final class ProductModelFuzzy
         $tokens = array_values(array_filter($tokens, static fn (string $t): bool => $t !== ''));
         $count = count($tokens);
         for ($i = 0; $i < $count; $i++) {
+            if (isset($tokens[$i + 1])) {
+                $aWord = $this->lettersOnly($tokens[$i]);
+                $num = $this->compact($tokens[$i + 1]);
+                if (
+                    $aWord !== ''
+                    && mb_strlen($aWord) >= 3
+                    && ! $this->isStop($aWord)
+                    && ! $this->isSizeLabelWord($aWord)
+                    && ctype_digit($num)
+                    && mb_strlen($num) >= 3
+                    && mb_strlen($num) <= 5
+                    && ! $this->isSizeRangeDigits($num, $tokens[$i + 1] ?? '')
+                ) {
+                    $this->pushNeedle($out, $aWord.$num);
+                }
+            }
             if (str_contains($tokens[$i], '-') || (isset($tokens[$i + 1]) && str_contains($tokens[$i + 1], '-'))) {
                 continue;
             }
@@ -73,9 +153,20 @@ final class ProductModelFuzzy
             if ($hasDigit) {
                 $this->pushNeedle($out, $pair);
             }
-            if ($nextNum !== null) {
+            if ($nextNum !== null && ! $this->isSizeRangeDigits($nextNum, $tokens[$i + 2] ?? '')) {
                 $this->pushNeedle($out, $pair.$nextNum);
             }
+        }
+
+        foreach ($tokens as $token) {
+            if (! $this->isSiwxUpperModelToken($token, $requirement)) {
+                continue;
+            }
+            $letters = $this->lettersOnly($token);
+            if ($this->hasNumberedNeedleForPrefix($out, $letters)) {
+                continue;
+            }
+            $this->pushNeedle($out, $letters);
         }
 
         foreach ($tokens as $token) {
@@ -123,6 +214,12 @@ final class ProductModelFuzzy
             $c = $this->compact($token);
             if ($c !== '' && isset($known[$c])) {
                 $found[$c] = true;
+            }
+            foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower($token)) ?: [] as $part) {
+                $p = $this->compact($part);
+                if ($p !== '' && isset($known[$p])) {
+                    $found[$p] = true;
+                }
             }
         }
 
@@ -304,6 +401,9 @@ final class ProductModelFuzzy
         if ($len < 5 && ! $this->isMixedModelCode($c)) {
             return;
         }
+        if ($this->isJunkCatalogModelNeedle($c) || $this->isStop($c)) {
+            return;
+        }
         $out[] = $c;
     }
 
@@ -329,7 +429,11 @@ final class ProductModelFuzzy
         if (! isset($tokens[$index])) {
             return null;
         }
-        $n = $this->compact($tokens[$index]);
+        $raw = $tokens[$index];
+        if ($this->isSizeRangeToken($raw)) {
+            return null;
+        }
+        $n = $this->compact($raw);
         if ($n === '' || ! ctype_digit($n) || mb_strlen($n) < 3 || mb_strlen($n) > 5) {
             return null;
         }
@@ -340,6 +444,9 @@ final class ProductModelFuzzy
     private function windowDistance(string $needle, string $hay): int
     {
         if ($needle === '' || $hay === '') {
+            return 99;
+        }
+        if (preg_match('/^(.*[a-z])(\d{3,5})$/u', $needle, $m) === 1 && ! str_contains($hay, $m[2])) {
             return 99;
         }
         if ($hay === $needle || str_contains($hay, $needle) || str_starts_with($hay, $needle)) {
@@ -406,7 +513,87 @@ final class ProductModelFuzzy
 
     private function isStop(string $token): bool
     {
-        return in_array($token, self::STOP, true);
+        if (in_array($token, self::STOP, true)) {
+            return true;
+        }
+
+        if (str_starts_with($token, 'gramatur') || str_starts_with($token, 'gramat')) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function isSizeLabelWord(string $word): bool
+    {
+        return preg_match('/^rozm/i', $word) === 1 || str_starts_with($word, 'rozmiar');
+    }
+
+    private function isSizeRangeToken(string $raw): bool
+    {
+        $norm = preg_replace('/\s/u', '', $raw) ?? '';
+
+        return preg_match('/^\d{2,3}-\d{2,3}$/', $norm) === 1;
+    }
+
+    private function isSizeRangeDigits(string $digits, string $rawToken): bool
+    {
+        if ($this->isSizeRangeToken($rawToken)) {
+            return true;
+        }
+        if (mb_strlen($digits) === 4 && preg_match('/^(\d{2})(\d{2})$/', $digits, $m) === 1) {
+            $a = (int) $m[1];
+            $b = (int) $m[2];
+
+            return $a >= 28 && $a <= 52 && $b >= 28 && $b <= 52 && $b >= $a && ($b - $a) <= 16;
+        }
+
+        return false;
+    }
+
+    private function isJunkCatalogModelNeedle(string $needle): bool
+    {
+        if (preg_match('/rozm|antyelektrostat|damsk|mesk|gumow|obuw|buty|czepek|jednorazow/u', $needle) === 1) {
+            return true;
+        }
+        if (preg_match('/^(op|opak|szt|sztuk)\d+$/u', $needle) === 1) {
+            return true;
+        }
+        if (preg_match('/^\d+(gr|g|gsm)$/u', $needle) === 1) {
+            return true;
+        }
+
+        return $this->isSizeRangeDigits($needle, $needle);
+    }
+
+    /** PERSPECTA 010 → nie używaj samego „perspecta” (9000 / etui dostałyby 99%). */
+    private function hasNumberedNeedleForPrefix(array $needles, string $prefix): bool
+    {
+        if ($prefix === '' || mb_strlen($prefix) < 3) {
+            return false;
+        }
+        foreach ($needles as $needle) {
+            if (preg_match('/^'.preg_quote($prefix, '/').'\d{3,5}$/u', $needle) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isSiwxUpperModelToken(string $token, string $rawRequirement): bool
+    {
+        $trim = trim($token);
+        if ($trim === '' || preg_match('/\d/u', $trim) === 1) {
+            return false;
+        }
+        $letters = $this->lettersOnly($trim);
+        if (mb_strlen($letters) < 6 || $this->isStop($letters)) {
+            return false;
+        }
+        $upper = mb_strtoupper($letters, 'UTF-8');
+
+        return preg_match('/\b'.preg_quote($upper, '/').'\b/u', $rawRequirement) === 1;
     }
 
     /**
