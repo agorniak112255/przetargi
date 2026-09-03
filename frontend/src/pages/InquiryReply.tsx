@@ -165,13 +165,15 @@ export function InquiryReply() {
                   · {p.manufacturer || '—'}
                   {p.norms ? ` · ${p.norms}` : ''}
                   {p.catalog_price_net
-                    ? ` · kat. ${p.catalog_price_net} ${p.currency}`
+                    ? ` · kat. ${p.catalog_price_net} zł`
                     : ''}
                 </span>
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-[11px] text-slate-400">Ceny zakupu nie są pokazywane ani wklejane do listu.</p>
+          <p className="mt-2 text-[11px] text-slate-400">
+            Ceny w liście są w złotych. Zakupu i stanu magazynu nie wklejamy do maila.
+          </p>
         </div>
       )}
 

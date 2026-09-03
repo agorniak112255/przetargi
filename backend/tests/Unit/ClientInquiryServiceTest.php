@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ClientInquiryService;
+use App\Services\NbpExchangeRateService;
 use App\Services\ProductInquirySearch;
 use Mockery;
 use Tests\TestCase;
@@ -17,6 +18,7 @@ final class ClientInquiryServiceTest extends TestCase
         return new ClientInquiryService(
             Mockery::mock(OpenAiCompatibleClient::class),
             Mockery::mock(ProductInquirySearch::class),
+            $this->app->make(NbpExchangeRateService::class),
         );
     }
 
@@ -37,6 +39,30 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertNotNull($safe);
         $this->assertArrayNotHasKey('purchase_price', $safe);
         $this->assertSame('2.40', $safe['catalog_price_net']);
+        $this->assertSame('PLN', $safe['currency']);
+        $this->assertSame(2.4, $safe['catalog_pln']);
+        $this->assertEqualsWithDelta(1.30, (float) $safe['offer_pln'], 0.001);
+    }
+
+    public function test_safe_product_converts_eur_catalog_to_pln(): void
+    {
+        $safe = $this->service()->safeProduct([
+            'id' => 8,
+            'sku' => '37900VP',
+            'name' => 'AlphaTec',
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => '4.67',
+            'purchase_price' => '3.50',
+            'currency' => 'EUR',
+            'stock' => 0,
+        ]);
+
+        $this->assertNotNull($safe);
+        $this->assertSame('PLN', $safe['currency']);
+        $this->assertGreaterThan(15.0, (float) $safe['catalog_pln']);
+        $this->assertGreaterThan(12.0, (float) $safe['offer_pln']);
+        $this->assertLessThan((float) $safe['catalog_pln'], (float) $safe['offer_pln']);
+        $this->assertStringNotContainsString('EUR', (string) json_encode($safe));
     }
 
     public function test_build_cards_skips_modal_for_one_confident_match(): void
@@ -103,14 +129,16 @@ final class ClientInquiryServiceTest extends TestCase
             [[
                 'id' => 1,
                 'sku' => 'G10',
-                'catalog_price_net' => '100.00',
+                'catalog_price_net' => '150.00',
+                'catalog_pln' => 150.0,
+                'offer_pln' => 118.0,
                 'currency' => 'PLN',
             ]],
         );
 
         $this->assertNotNull($block);
         $this->assertStringContainsString('+ 18%', (string) $block);
-        $this->assertStringContainsString('oferta 118.00 PLN', (string) $block);
+        $this->assertStringContainsString('oferta 118,00 zł', (string) $block);
         $this->assertSame(18.0, $this->service()->marginPercent(['price' => ['option_id' => 'catalog_margin']]));
     }
 

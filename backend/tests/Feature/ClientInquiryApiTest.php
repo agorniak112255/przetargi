@@ -220,13 +220,6 @@ final class ClientInquiryApiTest extends TestCase
             ],
         ]);
 
-        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
-            $mock->shouldReceive('chatJson')->once()->andReturn([
-                'subject' => 'Rękawice nitrylowe RNITZ-100',
-                'body' => "Dzień dobry,\n\nPotwierdzamy dostępność RNITZ-100.\n\nPozdrawiamy,\nZespół Supon",
-            ]);
-        });
-
         Sanctum::actingAs($user);
 
         $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
@@ -236,11 +229,91 @@ final class ClientInquiryApiTest extends TestCase
             'extra_note' => 'Nie podawaj terminu',
         ])
             ->assertOk()
-            ->assertJsonPath('reply_subject', 'Rękawice nitrylowe RNITZ-100')
             ->assertJsonPath('extra_note', 'Nie podawaj terminu');
 
-        $this->assertStringContainsString('RNITZ-100', (string) $inquiry->fresh()->reply_body);
-        $this->assertStringNotContainsString('1.10', (string) $inquiry->fresh()->reply_body);
+        $body = (string) $inquiry->fresh()->reply_body;
+        $this->assertStringContainsString('RNITZ-100', $body);
+        $this->assertStringNotContainsString('1.10', $body);
+        $this->assertStringNotContainsString('magazyn', mb_strtolower($body));
+        $this->assertStringNotContainsString('Stan magazynowy', $body);
+    }
+
+    public function test_compose_letter_quotes_pln_offer_not_eur_catalog(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_subject' => 'Rękawice i kalosze',
+            'source_body' => "30szt Rękawice chemoodporne rozmiar 10\n4szt Kalosze chemoodporne rozmiar 43",
+            'analysis' => [
+                'line_items' => [
+                    [
+                        'id' => 'item_1',
+                        'quote' => '30szt Rękawice chemoodporne rozmiar 10',
+                        'qty' => '30 szt.',
+                        'size' => '10',
+                        'query' => 'Rękawice chemoodporne',
+                    ],
+                    [
+                        'id' => 'item_2',
+                        'quote' => '4szt Kalosze chemoodporne rozmiar 43',
+                        'qty' => '4 szt.',
+                        'size' => '43',
+                        'query' => 'Kalosze chemoodporne',
+                    ],
+                ],
+                'matches' => [[
+                    'query' => 'Rękawice chemoodporne',
+                    'products' => [[
+                        'id' => 11,
+                        'sku' => '37900VP',
+                        'name' => 'AlphaTec 37900VP',
+                        'manufacturer' => 'Ansell',
+                        'norms' => 'EN ISO 374-1',
+                        'catalog_price_net' => '19.85',
+                        'currency' => 'PLN',
+                        'catalog_pln' => 19.85,
+                        'offer_pln' => 22.15,
+                        'stock' => 0,
+                        'score' => 90,
+                    ]],
+                ], [
+                    'query' => 'Kalosze chemoodporne',
+                    'products' => [[
+                        'id' => 22,
+                        'sku' => 'FW94',
+                        'name' => 'Kalosze S4',
+                        'manufacturer' => 'Portwest',
+                        'norms' => 'S4',
+                        'catalog_price_net' => '55.46',
+                        'currency' => 'PLN',
+                        'catalog_pln' => 55.46,
+                        'offer_pln' => 65.44,
+                        'stock' => 0,
+                        'score' => 88,
+                    ]],
+                ]],
+                'cards' => [],
+            ],
+        ]);
+
+        Sanctum::actingAs($user);
+        $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => [
+                'price' => ['option_id' => 'catalog_margin'],
+            ],
+        ])->assertOk();
+
+        $body = (string) $inquiry->fresh()->reply_body;
+        $this->assertStringContainsString('30 szt., rozmiar 10', $body);
+        $this->assertStringContainsString('SKU 37900VP', $body);
+        $this->assertStringContainsString('22,15 zł netto / szt.', $body);
+        $this->assertStringContainsString('65,44 zł netto / szt.', $body);
+        $this->assertStringNotContainsString('EUR', $body);
+        $this->assertStringNotContainsString('Stan magazynowy', $body);
+        $this->assertStringNotContainsString('4.67', $body);
+        $this->assertSame('Oferta — Rękawice i kalosze', $inquiry->fresh()->reply_subject);
     }
 
     public function test_other_user_cannot_open_inquiry(): void

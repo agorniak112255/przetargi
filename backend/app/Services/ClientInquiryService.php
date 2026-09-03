@@ -26,6 +26,7 @@ final class ClientInquiryService
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductInquirySearch $search,
+        private readonly NbpExchangeRateService $fx,
     ) {}
 
     public function analyze(
@@ -278,11 +279,11 @@ final class ClientInquiryService
             [
                 'id' => 'price',
                 'title' => 'Ceny',
-                'prompt' => 'Czy podać cenę w liście? Ceny zakupu nigdy nie idą do listu.',
+                'prompt' => 'Czy podać cenę w liście? Zawsze w złotych (NBP). Ceny zakupu nigdy nie idą do listu.',
                 'options' => [
                     ['id' => 'none', 'label' => 'Bez ceny'],
-                    ['id' => 'catalog', 'label' => 'Cena katalogowa'],
-                    ['id' => 'catalog_margin', 'label' => 'Cena katalogowa + marża'],
+                    ['id' => 'catalog', 'label' => 'Cena katalogowa (PLN)'],
+                    ['id' => 'catalog_margin', 'label' => 'Cena oferty (zakup + marża, PLN)'],
                 ],
                 'allow_custom' => false,
             ],
@@ -605,6 +606,7 @@ final class ClientInquiryService
                 'manufacturer' => $sub->manufacturer,
                 'norms' => $sub->norms,
                 'catalog_price_net' => $sub->catalog_price_net,
+                'purchase_price' => $sub->purchase_price,
                 'currency' => $sub->currency ?? 'PLN',
                 'stock' => $sub->stock,
             ]);
@@ -734,49 +736,220 @@ final class ClientInquiryService
      */
     private function writeReply(ClientInquiry $inquiry, array $answers, ?string $extraNote): array
     {
-        $facts = $this->factsBlock($inquiry, $answers);
-        $decisions = $this->decisionsBlock($inquiry, $answers, $extraNote);
-        $clientName = $inquiry->client?->name;
+        $priceMode = trim((string) ($answers['price']['option_id'] ?? 'none'));
+        $margin = $this->marginPercent($answers);
+        $intro = $inquiry->tone === 'handlowy'
+            ? "Dzień dobry,\n\nprzesyłamy ofertę do zapytania."
+            : "Dzień dobry,\n\nw odpowiedzi na przesłane zapytanie przedstawiamy ofertę:";
+        $parts = [
+            $intro,
+            '',
+            $this->offerPositionBlocks($inquiry, $answers, $priceMode, $margin),
+        ];
+        $note = $this->nullable($extraNote);
+        if ($note !== null) {
+            $parts[] = '';
+            $parts[] = $note;
+        }
+        $parts[] = '';
+        $parts[] = 'W razie pytań zapraszamy do kontaktu.';
+        $parts[] = '';
+        $parts[] = 'Z poważaniem,';
+        $parts[] = 'Zespół Supon';
 
-        try {
-            $raw = $this->llm->chatJson([
-                [
-                    'role' => 'system',
-                    'content' => 'Piszesz odpowiedź e-mail po polsku dla handlowca BHP/PPE (Supon). '
-                        .'Używaj WYŁĄCZNIE faktów z bloku katalogu i decyzji handlowca. '
-                        .'Odpowiedz na KAŻDĄ pozycję osobno: cytat/ilość, wybrany towar, ewentualny zamiennik. '
-                        .'Nie wymyślaj SKU, norm, stanów ani cen. '
-                        .'Ceny zakupu są zakazane. Cenę katalogową albo ofertę (katalog + marża) podaj tylko gdy decyzja to pozwala. '
-                        .'Brak faktu → wstaw [DO UZUPEŁNIENIA: …], nie zgaduj. '
-                        .'Ton: '.($inquiry->tone === 'handlowy' ? 'luźniejszy handlowy, nadal rzeczowy' : 'formalny, uprzejmy').'. '
-                        .'Bez markdown. Zwykły tekst maila: powitanie, treść, pozdrowienia (zespół Supon). '
-                        .'JSON: {"subject":"temat bez Re:","body":"pełna treść"}.',
-                ],
-                [
-                    'role' => 'user',
-                    'content' => implode("\n\n", array_filter([
-                        $clientName !== null && $clientName !== '' ? 'Klient: '.$clientName : null,
-                        $inquiry->source_subject ? 'Temat zapytania: '.$inquiry->source_subject : null,
-                        "Zapytanie klienta:\n".$inquiry->source_body,
-                        $this->lineItemsBlock($inquiry),
-                        "Fakty z katalogu:\n".$facts,
-                        "Decyzje handlowca:\n".$decisions,
-                    ])),
-                ],
-            ], 0.2, 2500, null, AiTask::ClientInquiry);
-        } catch (Throwable $e) {
-            throw new RuntimeException('Nie udało się napisać odpowiedzi: '.$e->getMessage(), 0, $e);
+        return [
+            'subject' => $this->offerSubject($inquiry),
+            'body' => implode("\n", $parts),
+        ];
+    }
+
+    private function offerSubject(ClientInquiry $inquiry): string
+    {
+        $base = $this->nullable($inquiry->source_subject);
+        if ($base === null) {
+            $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+            $base = $this->nullable($analysis['subject'] ?? null);
+        }
+        if ($base === null) {
+            return 'Oferta do zapytania';
+        }
+        if (preg_match('/^oferta\b/iu', $base) === 1) {
+            return $base;
         }
 
-        $subject = $this->nullable($raw['subject'] ?? null)
-            ?? $inquiry->source_subject
-            ?? 'Odpowiedź na zapytanie';
-        $body = $this->nullable($raw['body'] ?? null);
-        if ($body === null) {
-            throw new RuntimeException('Model nie zwrócił treści listu.');
+        return 'Oferta — '.$base;
+    }
+
+    /**
+     * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
+     */
+    private function offerPositionBlocks(ClientInquiry $inquiry, array $answers, string $priceMode, float $margin): string
+    {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $items = is_array($analysis['line_items'] ?? null) ? $analysis['line_items'] : [];
+        $matches = is_array($analysis['matches'] ?? null) ? $analysis['matches'] : [];
+        $flat = $this->flatProducts($matches);
+
+        if ($items !== []) {
+            $out = [];
+            foreach ($items as $index => $item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+                $product = $this->chosenProductForItem($item, $matches, $flat, $answers);
+                $out[] = $this->formatProductBlock($index + 1, $item, $product, $priceMode, $margin);
+            }
+
+            return implode("\n\n", $out);
         }
 
-        return ['subject' => $subject, 'body' => $body];
+        $selected = $this->selectedProducts($flat, $answers);
+        if ($selected === []) {
+            return 'Nie dobraliśmy produktu z katalogu — uzupełnimy ofertę po weryfikacji.';
+        }
+        $out = [];
+        foreach ($selected as $i => $product) {
+            $out[] = $this->formatProductBlock($i + 1, null, $product, $priceMode, $margin);
+        }
+
+        return implode("\n\n", $out);
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
+     * @param  list<array<string, mixed>>  $flat
+     * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
+     * @return array<string, mixed>|null
+     */
+    private function chosenProductForItem(array $item, array $matches, array $flat, array $answers): ?array
+    {
+        $itemId = (string) ($item['id'] ?? '');
+        foreach (['substitutes:'.$itemId, 'product:'.$itemId, 'product'] as $cardId) {
+            $option = trim((string) ($answers[$cardId]['option_id'] ?? ''));
+            if (str_starts_with($option, 'p:')) {
+                $pid = (int) substr($option, 2);
+                foreach ($flat as $product) {
+                    if ((int) ($product['id'] ?? 0) === $pid) {
+                        return $product;
+                    }
+                }
+            }
+            if (in_array($option, ['check', 'category'], true)) {
+                return null;
+            }
+        }
+        $forItem = $this->productsForItem($matches, $item);
+
+        return $forItem[0] ?? null;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $item
+     * @param  array<string, mixed>|null  $product
+     */
+    private function formatProductBlock(int $n, ?array $item, ?array $product, string $priceMode, float $margin): string
+    {
+        $qty = trim((string) ($item['qty'] ?? ''));
+        $size = trim((string) ($item['size'] ?? ''));
+        $quote = trim((string) ($item['quote'] ?? ''));
+        $head = (string) $n.'.';
+        $meta = array_values(array_filter([
+            $qty !== '' ? $qty : null,
+            $size !== '' ? 'rozmiar '.$size : null,
+        ]));
+        if ($meta !== []) {
+            $head .= ' '.implode(', ', $meta);
+        }
+        $lines = [$head];
+        if ($quote !== '') {
+            $lines[] = $quote;
+        }
+        if ($product === null) {
+            $lines[] = 'Produkt: do potwierdzenia.';
+
+            return implode("\n", $lines);
+        }
+        $maker = trim((string) ($product['manufacturer'] ?? ''));
+        $lines[] = sprintf(
+            'Produkt: %s (SKU %s)%s',
+            $product['name'],
+            $product['sku'],
+            $maker !== '' ? ', '.$maker : ''
+        );
+        $norms = trim((string) ($product['norms'] ?? ''));
+        if ($norms !== '') {
+            $lines[] = 'Normy: '.$norms;
+        }
+        $price = $this->letterPrice($product, $priceMode, $margin);
+        if ($price !== null) {
+            $lines[] = 'Cena: '.$price.' netto / szt.';
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     */
+    private function letterPrice(array $product, string $priceMode, float $margin): ?string
+    {
+        if ($priceMode === '' || $priceMode === 'none') {
+            return null;
+        }
+        if ($priceMode === 'catalog') {
+            $pln = $this->catalogPln($product);
+
+            return $pln === null ? null : $this->formatPln($pln);
+        }
+        if ($priceMode === 'catalog_margin') {
+            $offer = $this->offerPln($product, $margin);
+
+            return $offer === null ? null : $this->formatPln($offer);
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     */
+    private function catalogPln(array $product): ?float
+    {
+        if (isset($product['catalog_pln']) && is_numeric($product['catalog_pln'])) {
+            $value = (float) $product['catalog_pln'];
+
+            return $value > 0 ? $value : null;
+        }
+
+        return $this->fx->toPlnOrNull($product['catalog_price_net'] ?? null, $product['currency'] ?? 'PLN');
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     */
+    private function offerPln(array $product, float $margin): ?float
+    {
+        if (isset($product['offer_pln']) && is_numeric($product['offer_pln'])) {
+            $stored = (float) $product['offer_pln'];
+            if ($stored <= 0) {
+                return null;
+            }
+            $default = OfferPricing::markupPercent();
+            if (abs($margin - $default) < 0.05) {
+                return $stored;
+            }
+            $purchase = $stored / OfferPricing::factorFromPercent($default);
+
+            return OfferPricing::fromPurchase($purchase, $margin);
+        }
+
+        return null;
+    }
+
+    private function formatPln(float $amount): string
+    {
+        return number_format($amount, 2, ',', ' ').' zł';
     }
 
     private function lineItemsBlock(ClientInquiry $inquiry): ?string
@@ -878,19 +1051,16 @@ final class ClientInquiryService
      */
     private function productFactLine(array $product): string
     {
-        $price = $product['catalog_price_net'] ?? null;
-        $priceText = $price !== null && $price !== ''
-            ? $price.' '.($product['currency'] ?? 'PLN')
-            : 'brak';
+        $catalog = $this->catalogPln($product);
+        $priceText = $catalog !== null ? $this->formatPln($catalog) : 'brak';
 
         return sprintf(
-            'SKU %s, nazwa: %s, producent: %s, normy: %s, cena katalogowa: %s, stan: %s',
+            'SKU %s, nazwa: %s, producent: %s, normy: %s, cena katalogowa: %s',
             $product['sku'],
             $product['name'],
             $product['manufacturer'] !== '' ? $product['manufacturer'] : '—',
             $product['norms'] !== '' ? $product['norms'] : '—',
-            $priceText,
-            $product['stock'] !== null ? (string) $product['stock'] : 'brak'
+            $priceText
         );
     }
 
@@ -913,24 +1083,23 @@ final class ClientInquiryService
 
         $percent = $this->marginPercent($answers);
         $lines = [
-            'Ceny: podaj cenę oferty = katalog + '.$percent.'% marży. Nie podawaj zakupu ani samej ceny katalogowej.',
+            'Ceny: podaj cenę oferty w PLN = zakup (NBP) + '.$percent.'% marży. Nie podawaj zakupu ani waluty cennika.',
         ];
         foreach ($products as $product) {
-            $offer = OfferPricing::fromPurchase($product['catalog_price_net'] ?? null, $percent);
+            $offer = $this->offerPln($product, $percent);
             if ($offer === null) {
                 $lines[] = sprintf(
-                    '- %s: brak ceny katalogowej → [DO UZUPEŁNIENIA: cena oferty]',
+                    '- %s: brak ceny zakupu → [DO UZUPEŁNIENIA: cena oferty]',
                     $product['sku']
                 );
                 continue;
             }
+            $catalog = $this->catalogPln($product);
             $lines[] = sprintf(
-                '- %s: oferta %s %s (katalog %s + %s%%)',
+                '- %s: oferta %s (katalog %s)',
                 $product['sku'],
-                number_format($offer, 2, '.', ''),
-                $product['currency'] ?? 'PLN',
-                (string) ($product['catalog_price_net'] ?? ''),
-                rtrim(rtrim(number_format($percent, 2, '.', ''), '0'), '.')
+                $this->formatPln($offer),
+                $catalog !== null ? $this->formatPln($catalog) : 'brak'
             );
         }
 
@@ -1087,6 +1256,14 @@ final class ClientInquiryService
         }
 
         $price = $row['catalog_price_net'] ?? null;
+        $currency = trim((string) ($row['currency'] ?? 'PLN')) ?: 'PLN';
+        $catalogPln = isset($row['price_pln']) && is_numeric($row['price_pln'])
+            ? $this->fx->toPlnOrNull($row['price_pln'], 'PLN')
+            : $this->fx->toPlnOrNull($price, $currency);
+        $purchasePln = isset($row['purchase_price_pln']) && is_numeric($row['purchase_price_pln'])
+            ? $this->fx->toPlnOrNull($row['purchase_price_pln'], 'PLN')
+            : $this->fx->toPlnOrNull($row['purchase_price'] ?? null, $currency);
+        $offerPln = OfferPricing::fromPurchase($purchasePln);
 
         return [
             'id' => $id,
@@ -1094,8 +1271,10 @@ final class ClientInquiryService
             'name' => $name,
             'manufacturer' => trim((string) ($row['manufacturer'] ?? '')),
             'norms' => trim((string) ($row['norms'] ?? '')),
-            'catalog_price_net' => $price !== null && $price !== '' ? (string) $price : null,
-            'currency' => trim((string) ($row['currency'] ?? 'PLN')) ?: 'PLN',
+            'catalog_price_net' => $catalogPln !== null ? number_format($catalogPln, 2, '.', '') : null,
+            'currency' => 'PLN',
+            'catalog_pln' => $catalogPln,
+            'offer_pln' => $offerPln,
             'stock' => isset($row['stock']) ? (int) $row['stock'] : null,
             'score' => (int) ($row['ai_match_percent'] ?? $row['score'] ?? 0),
         ];
