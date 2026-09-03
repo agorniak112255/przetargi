@@ -2094,7 +2094,8 @@ final class ProductSearchIdentity
         $useful = [];
         foreach (preg_split('/[\s\-]+/u', $phrase) ?: [] as $word) {
             $word = trim((string) $word);
-            if ($word === '' || $this->isGenericCatalogNameWord($word) || $this->isHouseSkuPrefix($word)) {
+            if ($word === '' || $this->isGenericCatalogNameWord($word) || $this->isHouseSkuPrefix($word)
+                || $this->isPackOrSizeToken($word)) {
                 continue;
             }
             $useful[] = $word;
@@ -3557,11 +3558,31 @@ final class ProductSearchIdentity
         $sku = trim((string) $product->sku);
         if ($name !== '' && mb_strtolower($name) !== mb_strtolower($sku)) {
             $stripped = (new ProductSizeVariant)->stripSizeFromName($name);
+            $stripped = $this->stripPackagingFromName($stripped !== '' ? $stripped : $name);
 
             return $stripped !== '' ? $stripped : $name;
         }
 
         return $this->variantBaseCodes($product)[0] ?? $sku;
+    }
+
+    /** „LEEMED (BOX/50PCS)” → „LEEMED” — opakowanie nie jest modelem. */
+    private function stripPackagingFromName(string $name): string
+    {
+        $name = trim($name);
+        $name = preg_replace(
+            '/\s*[\(\[\{]\s*(?:box|carton|pack|opak\.?)[\s\/.\-]*\d{0,5}\s*(?:pcs?|szt|stk)?\s*[\)\]\}]\s*/iu',
+            '',
+            $name
+        ) ?? $name;
+        $name = preg_replace(
+            '/\s*\b(?:box|carton|pack)\s*[\/\-]?\s*\d{1,5}\s*(?:pcs?|szt|stk)\b/iu',
+            '',
+            $name
+        ) ?? $name;
+        $name = preg_replace('/\s*\b\d{1,5}\s*(?:pcs?|szt|stk)\b/iu', '', $name) ?? $name;
+
+        return trim($name, " \t-–()");
     }
 
     private function seriesFromDescriptiveName(string $name): string
@@ -4138,8 +4159,12 @@ final class ProductSearchIdentity
             return [];
         }
         foreach ($hits[1] as $code) {
-            if ($this->isStrongShopPhrase((string) $code)) {
-                $out[] = str_replace('/', '-', (string) $code);
+            $code = (string) $code;
+            if ($this->isPackagingPhrase($code)) {
+                continue;
+            }
+            if ($this->isStrongShopPhrase($code)) {
+                $out[] = str_replace('/', '-', $code);
             }
         }
 
@@ -4173,8 +4198,29 @@ final class ProductSearchIdentity
     private function isPackOrSizeToken(string $token): bool
     {
         $token = mb_strtolower(trim($token));
+        if (preg_match('/^(0?[5-9]|1[0-4]|0[0-9])$/u', $token) === 1) {
+            return true;
+        }
+        if (in_array($token, ['box', 'pcs', 'pc', 'carton', 'pack', 'packs', 'pair', 'pairs'], true)) {
+            return true;
+        }
 
-        return preg_match('/^(0?[5-9]|1[0-4]|0[0-9])$/u', $token) === 1;
+        return preg_match('/^\d{1,5}(?:pcs?|szt|stk)$/u', $token) === 1;
+    }
+
+    private function isPackagingPhrase(string $phrase): bool
+    {
+        $parts = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower(trim($phrase)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if ($parts === []) {
+            return false;
+        }
+        foreach ($parts as $part) {
+            if (! $this->isPackOrSizeToken((string) $part)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function manufacturerKeyCandidates(Product $product): array

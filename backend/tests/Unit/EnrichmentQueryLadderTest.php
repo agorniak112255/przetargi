@@ -470,6 +470,38 @@ final class EnrichmentQueryLadderTest extends TestCase
         );
     }
 
+    public function test_catalog_keeps_cofra_leemed_card_without_sku_in_url(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'Cofra',
+            'sku' => 'M040-B000',
+            'name' => 'LEEMED (BOX/50PCS)',
+            'category' => 'SANIWEAR',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $confirm = $ref->getMethod('confirmedCatalogHits');
+        $confirm->setAccessible(true);
+
+        $confirmed = $confirm->invoke($service, [
+            [
+                'url' => 'https://www.cofra.it/en/protettori_vie_respiratorie/prodotto/136',
+                'title' => 'LEEMED',
+                'snippet' => '',
+            ],
+            [
+                'url' => 'https://www.cofra.it/en/protettori_vie_respiratorie/prodotto/200',
+                'title' => 'Other mask 50PCS',
+                'snippet' => '50PCS',
+            ],
+        ], $product);
+
+        $this->assertSame(
+            ['https://www.cofra.it/en/protettori_vie_respiratorie/prodotto/136'],
+            array_column($confirmed, 'url')
+        );
+    }
+
     public function test_catalog_keeps_sir_waders_official_card(): void
     {
         $product = new Product([
