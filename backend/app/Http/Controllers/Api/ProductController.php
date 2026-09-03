@@ -11,6 +11,7 @@ use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Services\NbpExchangeRateService;
+use App\Support\ProductModelFuzzy;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -18,6 +19,7 @@ class ProductController extends Controller
 {
     public function __construct(
         private readonly NbpExchangeRateService $fx,
+        private readonly ProductModelFuzzy $modelFuzzy,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -51,13 +53,18 @@ class ProductController extends Controller
         if ($request->filled('q')) {
             $term = trim((string) $request->string('q'));
             $like = '%'.$term.'%';
-            $query->where(function ($builder) use ($like, $term) {
+            $codes = $this->modelFuzzy->shortCodes($term);
+            $query->where(function ($builder) use ($like, $term, $codes) {
                 $builder->where('sku', 'like', $like)
                     ->orWhere('name', 'like', $like)
                     ->orWhere('manufacturer', 'like', $like);
-                // szybka ścieżka dokładnego SKU
                 if ($term !== '') {
                     $builder->orWhere('sku', $term);
+                }
+                foreach ($codes as $code) {
+                    $esc = '%'.addcslashes($code, '%_\\').'%';
+                    $builder->orWhere('sku', 'like', $esc)
+                        ->orWhere('name', 'like', $esc);
                 }
             });
         }

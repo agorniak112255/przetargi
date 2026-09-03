@@ -1134,7 +1134,8 @@ final class ProductAiSearchService
     private function keepCompatible(string $query, Collection $products): Collection
     {
         return $products
-            ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p))
+            ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p)
+                || $this->modelFuzzy->matches($query, $p))
             ->values();
     }
 
@@ -1443,8 +1444,8 @@ final class ProductAiSearchService
         $q->where(function ($outer) use ($codes): void {
             foreach ($codes as $code) {
                 $like = addcslashes($code, '%_\\');
-                $outer->orWhere('sku', 'like', $like.'%')
-                    ->orWhere('name', 'like', '%'.$like.'%');
+                $outer->orWhere('name', 'like', '%'.$like.'%');
+                $outer->orWhere('sku', 'like', mb_strlen($code) <= 4 ? '%'.$like.'%' : $like.'%');
             }
         });
 
@@ -1652,7 +1653,12 @@ final class ProductAiSearchService
      */
     private function rowsFromNamedModels(string $query, Collection $products, int $limit): array
     {
-        $products = $this->withResponseRelations($products);
+        $products = $this->withResponseRelations(
+            $products->sortByDesc(
+                fn (Product $p): int => $this->modelFuzzy->score($query, $p) * 100
+                    + $this->articleTypeScore($query, $p)
+            )->values()
+        );
         $out = [];
         foreach ($products as $product) {
             if (! $product instanceof Product) {
@@ -1682,7 +1688,10 @@ final class ProductAiSearchService
         if (preg_match_all('/\b[a-z]{0,6}\d[a-z0-9\-\/]{1,}\b/u', $norm, $m)) {
             foreach ($m[0] as $raw) {
                 $c = preg_replace('/[^a-z0-9]/', '', $raw) ?? '';
-                if ($c === '' || mb_strlen($c) < 4) {
+                if ($c === '' || mb_strlen($c) < 3) {
+                    continue;
+                }
+                if (mb_strlen($c) < 4 && (ctype_digit($c) || preg_match('/[a-z]/', $c) !== 1)) {
                     continue;
                 }
                 if (ctype_digit($c) && mb_strlen($c) < 4) {
@@ -2043,7 +2052,8 @@ final class ProductAiSearchService
             }
             /** @var Product $product */
             $product = $byId->get($id);
-            if (! $this->assortment->compatibleProduct($requirement, $product)) {
+            if (! $this->assortment->compatibleProduct($requirement, $product)
+                && ! $this->modelFuzzy->matches($requirement, $product)) {
                 continue;
             }
             if (! $this->filterType->covers($requirement, $this->filterHaystack($product))) {

@@ -61,6 +61,33 @@ final class ProductIndexApiTest extends TestCase
             ->assertJsonPath('data.0.manufacturer', 'PROS');
     }
 
+    public function test_products_q_finds_short_code_inside_longer_phrase(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'P3E',
+            'name' => '3M Adapter P3E do mocowania osłony twarzy',
+            'manufacturer' => '3M',
+            'catalog_price_net' => 9,
+            'purchase_price' => 6,
+            'stock' => 2,
+        ]);
+        Product::query()->create([
+            'sku' => 'FH-934',
+            'name' => 'Adapter kaptura ochronnego 3M',
+            'manufacturer' => '3M',
+            'catalog_price_net' => 31,
+            'purchase_price' => 15,
+            'stock' => 1,
+        ]);
+
+        $this->getJson('/api/products?q='.rawurlencode('Adapter P3E do hełmu 3M'))
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.sku', 'P3E');
+    }
+
     public function test_manufacturers_endpoint_returns_distinct_sorted_list(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

@@ -653,18 +653,24 @@ function TendersHelp() {
         },
         {
           action: 'Ręczna zmiana produktu',
-          does: 'Lupka otwiera katalog. Wybierasz inny SKU, gdy AI trafiło słabo albo klient chce konkretną markę.',
-          click: 'Ikona lupy w wierszu, potem „Wybierz” przy produkcie.',
+          does: 'Niebieski „Szukaj” w wierszu szuka po nazwie/SKU jak na liście produktów — bez AI. Wybierasz inny SKU, gdy AI trafiło słabo albo klient chce konkretną markę.',
+          click: 'Przycisk „Szukaj” przy pozycji, potem „Wybierz”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Przetargi">
               <TenderHead />
               <TenderTabs active="pozycje" />
               <Card>
+                <div className="mb-3 flex flex-wrap gap-1.5">
+                  <Mark>
+                    <span className="rounded bg-sky-600 px-2 py-1 text-white">Szukaj</span>
+                  </Mark>
+                  <span className="rounded bg-violet-600 px-2 py-1 text-white">AI</span>
+                </div>
                 <input
                   readOnly
                   className="mb-3 w-full rounded border border-slate-300 px-2 py-1.5 text-xs"
-                  value="Szukaj w SIWZ / produkcie głównym…"
+                  value="Adapter P3E do hełmu 3M"
                 />
                 <table className="w-full text-left text-xs">
                   <thead>

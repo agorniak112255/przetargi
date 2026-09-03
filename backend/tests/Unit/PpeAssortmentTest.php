@@ -133,6 +133,27 @@ final class PpeAssortmentTest extends TestCase
     }
 
     #[Test]
+    public function helmet_adapter_allows_face_mount(): void
+    {
+        $adapter = new Product;
+        $adapter->forceFill([
+            'name' => '3M Adapter P3E do mocowania osłony twarzy',
+            'sku' => 'P3E',
+            'category' => 'Ochrona twarzy',
+            'manufacturer' => '3M',
+        ]);
+
+        $this->assertTrue($this->assortment->compatibleProduct(
+            'Adapter P3E do hełmu 3M',
+            $adapter
+        ));
+        $this->assertFalse($this->assortment->compatibleProduct(
+            'Hełm przemysłowy 3M',
+            $adapter
+        ));
+    }
+
+    #[Test]
     public function compatible_product_drops_face_shield_for_vest(): void
     {
         $shield = new Product;

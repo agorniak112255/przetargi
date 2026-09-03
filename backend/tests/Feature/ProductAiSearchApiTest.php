@@ -178,6 +178,48 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonMissing(['sku' => 'PROS-106']);
     }
 
+    public function test_ai_search_finds_short_code_p3e_despite_helmet_family(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $adapter = Product::query()->create([
+            'sku' => 'P3E',
+            'name' => '3M Adapter P3E do mocowania osłony twarzy',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona twarzy',
+            'description' => 'Adapter do mocowania osłony twarzy na hełmie.',
+            'catalog_price_net' => 9.04,
+            'purchase_price' => 6,
+            'stock' => 8,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'FH-934',
+            'name' => 'Adapter kaptura ochronnego 3M systemu z wymuszonym przepływem powietrza',
+            'manufacturer' => '3M',
+            'category' => 'Drogi oddechowe',
+            'description' => 'Adapter kaptura ochronnego do systemu z wymuszonym przepływem.',
+            'catalog_price_net' => 31.05,
+            'purchase_price' => 15.53,
+            'stock' => 2,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Adapter P3E do hełmu 3M',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'P3E')
+            ->assertJsonPath('products.0.id', $adapter->id)
+            ->assertJsonMissing(['sku' => 'FH-934']);
+    }
+
     public function test_ai_search_finds_sku_without_description(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

@@ -78,6 +78,30 @@ final class ProductModelFuzzy
             }
         }
 
+        foreach ($tokens as $token) {
+            $c = $this->compact($token);
+            if ($this->isMixedModelCode($c)) {
+                $this->pushNeedle($out, $c);
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Krótki kod katalogowy (P3E, H31, WFU255DG) — litera + cyfra, min. 3 znaki.
+     *
+     * @return list<string>
+     */
+    public function shortCodes(string $requirement): array
+    {
+        $out = [];
+        foreach ($this->needles($requirement) as $needle) {
+            if ($this->isMixedModelCode($needle)) {
+                $out[] = $needle;
+            }
+        }
+
         return array_values(array_unique($out));
     }
 
@@ -228,10 +252,31 @@ final class ProductModelFuzzy
     private function pushNeedle(array &$out, string $raw): void
     {
         $c = $this->compact($raw);
-        if ($c === '' || mb_strlen($c) < 5 || ctype_digit($c)) {
+        if ($c === '' || ctype_digit($c)) {
+            return;
+        }
+        $len = mb_strlen($c);
+        if ($len < 3) {
+            return;
+        }
+        if ($len < 5 && ! $this->isMixedModelCode($c)) {
             return;
         }
         $out[] = $c;
+    }
+
+    /** P3E / H31P3E / WFU255DG — nie czysty wyraz i nie sama liczba. */
+    private function isMixedModelCode(string $compact): bool
+    {
+        $len = mb_strlen($compact);
+        if ($len < 3 || $len > 16 || ctype_digit($compact)) {
+            return false;
+        }
+        if (preg_match('/[a-z]/', $compact) !== 1 || preg_match('/\d/', $compact) !== 1) {
+            return false;
+        }
+
+        return ! $this->isStop($this->lettersOnly($compact));
     }
 
     /**

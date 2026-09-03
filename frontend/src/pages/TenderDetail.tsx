@@ -2698,6 +2698,7 @@ function ItemRow({
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [aiModalOpen, setAiModalOpen] = useState(false)
   const [aiModalWeb, setAiModalWeb] = useState(false)
+  const [aiModalCatalog, setAiModalCatalog] = useState(false)
   const [pendingAiScore, setPendingAiScore] = useState<number | null>(null)
   const [commentText, setCommentText] = useState('')
   const [showComment, setShowComment] = useState(false)
@@ -2844,10 +2845,24 @@ function ItemRow({
               />
               <button
                 type="button"
+                title="Szukaj w katalogu po nazwie / SKU (bez AI)"
+                disabled={busy}
+                onClick={() => {
+                  setAiModalWeb(false)
+                  setAiModalCatalog(true)
+                  setAiModalOpen(true)
+                }}
+                className="shrink-0 rounded bg-sky-600 px-2 py-1 text-[10px] text-white hover:bg-sky-700 disabled:opacity-50"
+              >
+                Szukaj
+              </button>
+              <button
+                type="button"
                 title="Otwórz wyszukiwanie AI (katalog → top 5)"
                 disabled={busy}
                 onClick={() => {
                   setAiModalWeb(false)
+                  setAiModalCatalog(false)
                   setAiModalOpen(true)
                 }}
                 className="shrink-0 rounded bg-violet-600 px-2 py-1 text-[10px] text-white hover:bg-violet-700 disabled:opacity-50"
@@ -2860,6 +2875,7 @@ function ItemRow({
                 disabled={busy}
                 onClick={() => {
                   setAiModalWeb(true)
+                  setAiModalCatalog(false)
                   setAiModalOpen(true)
                 }}
                 className="shrink-0 rounded bg-red-600 px-2 py-1 text-[10px] text-white hover:bg-red-700 disabled:opacity-50"
@@ -2871,11 +2887,14 @@ function ItemRow({
               open={aiModalOpen}
               initialQuery={item.requirement}
               initialWeb={aiModalWeb}
+              initialMode={aiModalCatalog ? 'catalog' : aiModalWeb ? 'web' : 'ai'}
               onClose={() => {
                 setAiModalOpen(false)
                 setAiModalWeb(false)
+                setAiModalCatalog(false)
               }}
               onSelect={(p) => {
+                const fromCatalog = p.source === 'catalog'
                 setProductId(String(p.id))
                 setPicked({
                   id: p.id,
@@ -2883,26 +2902,45 @@ function ItemRow({
                   name: p.name,
                   description: p.description,
                 })
-                setMatchHint(`AI: ${p.sku} (${p.score}%)`)
-                setPendingAiScore(p.score)
+                setMatchHint(
+                  fromCatalog
+                    ? `Katalog: ${p.sku}`
+                    : `AI: ${p.sku} (${p.score}%)`,
+                )
+                setPendingAiScore(fromCatalog ? null : p.score)
                 setCustomName('')
                 setCustomUrl('')
                 setAiModalOpen(false)
+                setAiModalCatalog(false)
                 applyCatalogPrice(purchaseForOffer(p))
                 void onSave(item.id, {
                   main_product_id: p.id,
                   custom_name: null,
                   custom_url: null,
                   quantity: Number(qty) || 1,
-                  ai_match_percent: p.score,
-                  match_source: 'ai',
-                  ai_match_reasons: [
-                    {
-                      code: 'ai',
-                      label: 'Wybór z wyszukiwania AI',
-                      points: p.score,
-                    },
-                  ],
+                  ...(fromCatalog
+                    ? {
+                        ai_match_percent: null,
+                        match_source: 'manual',
+                        ai_match_reasons: [
+                          {
+                            code: 'catalog',
+                            label: 'Wybór z wyszukiwania po nazwie / SKU',
+                            points: 100,
+                          },
+                        ],
+                      }
+                    : {
+                        ai_match_percent: p.score,
+                        match_source: 'ai',
+                        ai_match_reasons: [
+                          {
+                            code: 'ai',
+                            label: 'Wybór z wyszukiwania AI',
+                            points: p.score,
+                          },
+                        ],
+                      }),
                 })
               }}
               onAddExternal={(hint) => {
@@ -2912,6 +2950,7 @@ function ItemRow({
                 setPicked(null)
                 setPendingAiScore(null)
                 setAiModalOpen(false)
+                setAiModalCatalog(false)
                 void onSave(item.id, {
                   main_product_id: null,
                   custom_name: hint.title,

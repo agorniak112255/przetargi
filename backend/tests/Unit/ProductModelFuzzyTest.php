@@ -65,6 +65,26 @@ final class ProductModelFuzzyTest extends TestCase
     }
 
     #[Test]
+    public function short_alnum_code_p3e_is_a_named_model(): void
+    {
+        $req = 'Adapter P3E do hełmu 3M';
+
+        $this->assertTrue($this->fuzzy->hasNamedModel($req));
+        $this->assertContains('p3e', $this->fuzzy->needles($req));
+        $this->assertContains('p3e', $this->fuzzy->shortCodes($req));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            'P3E',
+            '3M Adapter P3E do mocowania osłony twarzy',
+            '3M',
+        )));
+        $this->assertSame(0, $this->fuzzy->score($req, $this->product(
+            'FH-934',
+            'Adapter kaptura ochronnego 3M systemu z wymuszonym przepływem',
+            '3M',
+        )));
+    }
+
+    #[Test]
     public function polar_fabric_is_not_sku_pola(): void
     {
         $req = 'KURTKA DAMSKA - POLAR granatowy rozm. S - XXXXL';

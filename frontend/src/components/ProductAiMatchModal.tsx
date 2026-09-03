@@ -14,14 +14,18 @@ export type AiMatchPick = {
   currency?: string | null
   score: number
   reason?: string | null
+  source?: 'ai' | 'catalog'
 }
 
 type ExternalHint = { url: string; title: string }
+
+type SearchKind = 'catalog' | 'ai' | 'web'
 
 type Props = {
   open: boolean
   initialQuery: string
   initialWeb?: boolean
+  initialMode?: SearchKind
   onClose: () => void
   onSelect: (product: AiMatchPick) => void
   onAddExternal?: (hint: ExternalHint) => void
@@ -31,12 +35,13 @@ export function ProductAiMatchModal({
   open,
   initialQuery,
   initialWeb = false,
+  initialMode,
   onClose,
   onSelect,
   onAddExternal,
 }: Props) {
   const [query, setQuery] = useState(initialQuery)
-  const [busy, setBusy] = useState<'catalog' | 'web' | false>(false)
+  const [busy, setBusy] = useState<SearchKind | false>(false)
   const [error, setError] = useState('')
   const [results, setResults] = useState<AiMatchPick[]>([])
   const [externalHints, setExternalHints] = useState<ExternalHint[]>([])
@@ -49,7 +54,7 @@ export function ProductAiMatchModal({
     setResults([])
     setExternalHints([])
     setDescribeId(null)
-  }, [open, initialQuery, initialWeb])
+  }, [open, initialQuery, initialWeb, initialMode])
 
   useEffect(() => {
     if (!open) return
@@ -60,13 +65,51 @@ export function ProductAiMatchModal({
     return () => document.removeEventListener('keydown', onKey)
   }, [open, busy, describeId, onClose])
 
+  async function runCatalogSearch(text = query) {
+    const q = text.trim()
+    if (q.length < 2) {
+      setError('Wpisz co najmniej 2 znaki zapytania.')
+      return
+    }
+    setBusy('catalog')
+    setError('')
+    setResults([])
+    setExternalHints([])
+    try {
+      const res = await api<{ data: Product[] }>(
+        `/products?q=${encodeURIComponent(q)}&per_page=20`,
+      )
+      const mapped: AiMatchPick[] = (res.data ?? []).map((p) => ({
+        id: p.id,
+        sku: p.sku,
+        name: p.name,
+        manufacturer: p.manufacturer,
+        purchase_price: p.purchase_price,
+        purchase_price_pln: p.purchase_price_pln ?? null,
+        catalog_price_net: p.catalog_price_net,
+        currency: p.currency ?? 'PLN',
+        score: 100,
+        reason: 'Trafienie w nazwę / SKU',
+        source: 'catalog',
+      }))
+      setResults(mapped)
+      if (mapped.length === 0) {
+        setError('Brak produktów w katalogu dla tego zapytania.')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Błąd wyszukiwania')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function runSearch(web: boolean, text = query) {
     const q = text.trim()
     if (q.length < 3) {
       setError('Wpisz co najmniej 3 znaki zapytania.')
       return
     }
-    setBusy(web ? 'web' : 'catalog')
+    setBusy(web ? 'web' : 'ai')
     setError('')
     setResults([])
     setExternalHints([])
@@ -91,6 +134,7 @@ export function ProductAiMatchModal({
         currency: p.currency ?? 'PLN',
         score: p.ai_match_percent ?? 0,
         reason: p.ai_match_reason ?? null,
+        source: 'ai',
       }))
       const hints =
         res.external_hints ?? (res.external_hint ? [res.external_hint] : [])
@@ -111,11 +155,17 @@ export function ProductAiMatchModal({
     }
   }
 
+  const startMode: SearchKind = initialMode ?? (initialWeb ? 'web' : 'ai')
+
   useEffect(() => {
-    if (!open || !initialWeb) return
-    void runSearch(true, initialQuery)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tylko przy otwarciu w trybie internet
-  }, [open, initialWeb, initialQuery])
+    if (!open) return
+    if (startMode === 'web') {
+      void runSearch(true, initialQuery)
+    } else if (startMode === 'catalog') {
+      void runCatalogSearch(initialQuery)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tylko przy otwarciu
+  }, [open, startMode, initialQuery])
 
   if (!open) return null
 
@@ -134,9 +184,9 @@ export function ProductAiMatchModal({
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
           <div>
-            <p className="text-sm font-semibold text-slate-900">Wyszukiwanie AI</p>
+            <p className="text-sm font-semibold text-slate-900">Wyszukiwanie produktu</p>
             <p className="text-xs text-slate-500">
-              AI — katalog (top 5). AI Internet — strony produktu spoza bazy.
+              Szukaj — nazwa/SKU jak na liście produktów. AI — katalog (top 5). AI Internet — poza bazą.
             </p>
           </div>
           <button
@@ -165,10 +215,18 @@ export function ProductAiMatchModal({
             <button
               type="button"
               disabled={Boolean(busy)}
+              onClick={() => void runCatalogSearch()}
+              className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+            >
+              {busy === 'catalog' ? 'Szukam…' : 'Szukaj'}
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(busy)}
               onClick={() => void runSearch(false)}
               className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
             >
-              {busy === 'catalog' ? 'Szukam…' : 'Szukaj AI (top 5)'}
+              {busy === 'ai' ? 'Szukam…' : 'Szukaj AI (top 5)'}
             </button>
             <button
               type="button"
@@ -224,13 +282,29 @@ export function ProductAiMatchModal({
               {results.map((r) => (
                 <div
                   key={r.id}
-                  className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2"
+                  className={
+                    r.source === 'catalog'
+                      ? 'rounded-md border border-sky-200 bg-sky-50 px-3 py-2'
+                      : 'rounded-md border border-violet-200 bg-violet-50 px-3 py-2'
+                  }
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <span className="text-sm font-medium text-violet-950">
+                    <span
+                      className={
+                        r.source === 'catalog'
+                          ? 'text-sm font-medium text-sky-950'
+                          : 'text-sm font-medium text-violet-950'
+                      }
+                    >
                       {r.sku} · {r.name}
                     </span>
-                    <span className="shrink-0 text-xs text-violet-700">{r.score}%</span>
+                    {r.source === 'catalog' ? (
+                      <span className="shrink-0 text-[10px] font-semibold uppercase text-sky-700">
+                        nazwa
+                      </span>
+                    ) : (
+                      <span className="shrink-0 text-xs text-violet-700">{r.score}%</span>
+                    )}
                   </div>
                   <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-700">
                     <span>

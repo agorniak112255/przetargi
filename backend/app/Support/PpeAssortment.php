@@ -555,7 +555,9 @@ final class PpeAssortment
             return false;
         }
         if ($reqFamily !== $prodFamily) {
-            return false;
+            if (! $this->helmetMountAllows($requirement, $reqFamily, $prodFamily)) {
+                return false;
+            }
         }
         if ($reqFamily === self::FAMILY_APPAREL) {
             return $this->apparelCompatible($requirement, $productText);
@@ -655,7 +657,9 @@ final class PpeAssortment
         $prodFamily = $fromName ?? $stored ?? $this->productFamily($product);
 
         if ($prodFamily !== null && $reqFamily !== $prodFamily) {
-            return false;
+            if (! $this->helmetMountAllows($requirement, $reqFamily, $prodFamily)) {
+                return false;
+            }
         }
         if ($reqFamily === self::FAMILY_APPAREL) {
             return $this->apparelCompatible($requirement, $this->productFullText($product));
@@ -669,6 +673,20 @@ final class PpeAssortment
         }
 
         return true;
+    }
+
+    /** Adapter / mocowanie „do hełmu” to zwykle osłona twarzy albo nauszniki, nie sam kask. */
+    private function helmetMountAllows(string $requirement, string $reqFamily, string $prodFamily): bool
+    {
+        if ($reqFamily !== self::FAMILY_HEAD) {
+            return false;
+        }
+        $t = $this->normalize($requirement);
+        if (preg_match('/\b(adapter|przejsc|mocowan)\w*/u', $t) !== 1) {
+            return false;
+        }
+
+        return in_array($prodFamily, [self::FAMILY_FACE, self::FAMILY_HEARING], true);
     }
 
     /** Naramiennik / zarękawek — nie jest rękawicą (dłoń zostaje odkryta). */
