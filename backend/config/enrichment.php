@@ -148,6 +148,7 @@ return [
         'lebon' => ['lebonprotection.com', 'www.lebonprotection.com'],
         'cederroth' => ['cederroth.com', 'www.cederroth.com'],
         'sir-safety' => ['sirsafety.com', 'www.sirsafety.com', 'sir-safety.com', 'www.sir-safety.com'],
+        'sir' => ['sirsafety.com', 'www.sirsafety.com', 'sir-safety.com', 'www.sir-safety.com'],
         'safeline' => ['safeline.pl', 'www.safeline.pl'],
         'i-a-arbeitsschutz' => ['safeline.pl', 'www.safeline.pl'],
         'secubox' => ['secubox.eu', 'www.secubox.eu', 'secubox.pl', 'www.secubox.pl'],

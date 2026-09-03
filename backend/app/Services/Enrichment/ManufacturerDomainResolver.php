@@ -52,6 +52,13 @@ final class ManufacturerDomainResolver
                 ManufacturerSite::hostsForBrand('pros')
             )));
         }
+        if ($brand === 'sir') {
+            $mapped = array_values(array_unique(array_merge(
+                $mapped,
+                $this->domainsFromConfig('sir-safety'),
+                ManufacturerSite::hostsForBrand('sir-safety')
+            )));
+        }
         $mapped = array_values(array_unique(array_merge(
             $mapped,
             ManufacturerSite::hostsForBrand($brand)

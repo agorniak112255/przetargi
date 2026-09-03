@@ -34,7 +34,7 @@ final class ProductSearchIdentity
         'footwear' => [
             'buty', 'butow', 'obuwie', 'obuv', 'boty', 'trzewik', 'polbut', 'footwear',
             'klapk', 'chodak', 'clog', 'sandal', 'schuh', 'chaussure', 'scarpa', 'zapato',
-            'calzado', 'kotnik', 'monterk', 'shoe', 'boot',
+            'calzado', 'kotnik', 'monterk', 'shoe', 'boot', 'wader', 'woder', 'spodniobut',
         ],
         'helmet' => ['kask', 'helm', 'casque'],
         'goggles' => ['okular', 'gogl'],
@@ -3025,7 +3025,7 @@ final class ProductSearchIdentity
 
         if (preg_match(
             '#(trzewik|p[oó]łbut|polbut|\bbuty\b|obuwie|\bobuv\b|\bboty\b|schuh|chaussure|footwear'
-            .'|\bs1\b|\bs3\b|\bsrc\b|\bhro\b|demar|befado)#u',
+            .'|wader|woder|spodniobut|\bs1\b|\bs3\b|\bsrc\b|\bhro\b|demar|befado)#u',
             $nameSku
         ) || preg_match('#(demar|befado)#u', $brand) || $this->skuImpliesFootwear($product)) {
             return 'buty ochronne';
@@ -3464,6 +3464,9 @@ final class ProductSearchIdentity
             'deltaplus' => ['delta', 'deltaplus'],
             'gvs' => ['gvs', 'rpb'],
             'rpb' => ['gvs', 'rpb'],
+            'sir' => ['sir', 'sirsafety'],
+            'sir safety' => ['sir', 'sirsafety'],
+            'sir-safety' => ['sir', 'sirsafety'],
             'sordin' => ['sordin', 'hellberg'],
             'hellberg' => ['sordin', 'hellberg'],
         ];

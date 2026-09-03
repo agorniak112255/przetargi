@@ -470,6 +470,38 @@ final class EnrichmentQueryLadderTest extends TestCase
         );
     }
 
+    public function test_catalog_keeps_sir_waders_official_card(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'SiR',
+            'sku' => 'MB2520',
+            'name' => 'SAFETY PU waders S0 GREEN 39 - 47 1 4 Stock 1 €',
+            'category' => 'Sklep - kategorie / Obuwie robocze i ochronne / Półbuty ochronne',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $confirm = $ref->getMethod('confirmedCatalogHits');
+        $confirm->setAccessible(true);
+
+        $confirmed = $confirm->invoke($service, [
+            [
+                'url' => 'https://www.sirsafety.com/safety-pu-waders',
+                'title' => 'SAFETY PU waders | Sir Safety System',
+                'snippet' => 'MB2520 S0',
+            ],
+            [
+                'url' => 'https://example.com/mb2520-random-gadget',
+                'title' => 'MB2520 gadget',
+                'snippet' => '',
+            ],
+        ], $product);
+
+        $this->assertSame(
+            ['https://www.sirsafety.com/safety-pu-waders'],
+            array_column($confirmed, 'url')
+        );
+    }
+
     public function test_catalog_keeps_pros_kangurka_for_aj_group_jacket(): void
     {
         $product = new Product([

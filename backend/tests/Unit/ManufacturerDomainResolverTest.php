@@ -314,6 +314,24 @@ final class ManufacturerDomainResolverTest extends TestCase
         ));
     }
 
+    public function test_sir_short_brand_uses_sirsafety_domains(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $product = new Product([
+            'manufacturer' => 'SiR',
+            'sku' => 'MB2520',
+            'name' => 'SAFETY PU waders S0 GREEN',
+        ]);
+
+        $domains = $resolver->domainsFor($product);
+        $this->assertContains('sirsafety.com', $domains);
+        $this->assertTrue($resolver->isManufacturerUrl(
+            'https://www.sirsafety.com/safety-pu-waders',
+            $product,
+            $domains
+        ));
+    }
+
     public function test_aj_group_uses_pros_manufacturer_domains(): void
     {
         $resolver = app(ManufacturerDomainResolver::class);
