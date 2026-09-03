@@ -17,6 +17,7 @@ use App\Support\ProductModelFuzzy;
 use App\Support\RrfFusion;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
 
@@ -299,7 +300,7 @@ final class ProductAiSearchService
 
             return $result;
         }
-        [$rankedIntent, $ranked] = $this->analyzeAndRank(
+        [$rankedIntent, $ranked, $rankFailed] = $this->analyzeAndRank(
             $query,
             $prepared['rank_cards'],
             $limit,
@@ -310,11 +311,14 @@ final class ProductAiSearchService
         if ($ranked === []) {
             $ranked = $this->rowsFromGenericCatalog($query, $prepared['candidates'], $limit);
         }
+        $emptyNote = $rankFailed
+            ? 'Nie udało się ocenić kart przez model. Spróbuj ponownie albo użyj zwykłego wyszukiwania.'
+            : 'Model nie znalazł pasującego produktu w katalogu.';
         $result = $this->searchResult(
             $query,
             $rankedIntent,
             $ranked,
-            $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
+            $ranked === [] ? $emptyNote : null,
             $withExternalHint,
         );
         if ($result['products'] !== [] || ! $allowRewrite) {
@@ -963,7 +967,8 @@ final class ProductAiSearchService
             '/^(czarn|bial|zol|niebies|czerw|zielon|szar|granat|pomaranc|brazow|bezow'
             .'|srebrn|zlot|grafit|khaki|navy|black|white|yellow|blue|red|green|grey|gray|orange'
             .'|polar(?!yz)|poliestr|baweln|nylon|elastan|lycra|ociepl|kolor|rozmiar'
-            .'|drelich|drill|twill|denim|kanw|flanel|welur|sztruks|oxford|ripstop|softshell)/u',
+            .'|drelich|drill|twill|denim|kanw|flanel|welur|sztruks|oxford|ripstop|softshell'
+            .'|nisk|wysok|sredn|poziom|stopien|tlumien|attenuat|snr)/u',
             $t
         ) === 1;
     }
@@ -1016,7 +1021,7 @@ final class ProductAiSearchService
             '/^(rekawic|glove|spodn|kurtk|bluz|czapk|czepek|kominiark|balaclava|helm|kask'
             .'|fartuch|kitel|kamizelk|kombinezon|ogrodniczk|buty|obuwie|trzewik|polbut'
             .'|kalosz|gumiak|gumowc|wellington'
-            .'|sztyblet|okular|gogl|nausznik|polmask|respirator|pochlaniacz|filtr'
+            .'|sztyblet|okular|gogl|nausznik|sluch|polmask|respirator|pochlaniacz|filtr'
             .'|nakolann|wkladk|robocz|ochronn|zimow|letni|mesk|damsk)/u',
             trim($normalized)
         ) === 1;
@@ -1089,13 +1094,16 @@ final class ProductAiSearchService
             ->concat($this->retrieveByHeadLiner($query, $limit))
             ->concat($this->retrieveByArticleType($query, $limit));
 
-        return $this->preferCatalogBrands(
+        $merged = $this->keepCompatible(
             $requirement,
-            $this->keepCompatible(
-                $requirement,
-                $this->uniqueProducts($this->hydrate($fused)->concat($recall)->concat($brandHits), $limit)
+            $this->uniqueProducts(
+                $this->hydrate($fused)->concat($recall)->concat($brandHits),
+                $limit * 3
             )
-        )->values();
+        );
+        $branded = $this->preferCatalogBrands($requirement, $merged);
+
+        return $this->uniqueProducts($branded, $limit)->values();
     }
 
     /**
@@ -1915,7 +1923,7 @@ final class ProductAiSearchService
      *
      * @param  Collection<int, Product>  $candidates
      * @param  list<string>  $constraints
-     * @return array{0: array{needed: string, search_phrases: list<string>, constraints: list<string>}, 1: list<array<string, mixed>>}
+     * @return array{0: array{needed: string, search_phrases: list<string>, constraints: list<string>}, 1: list<array<string, mixed>>, 2: bool}
      */
     private function analyzeAndRank(
         string $query,
@@ -1932,12 +1940,14 @@ final class ProductAiSearchService
                 null,
                 $task,
             );
-        } catch (Throwable) {
-            return [$this->localIntent($query), []];
+        } catch (Throwable $e) {
+            Log::warning('product-ai-search.rank-failed', ['message' => $e->getMessage()]);
+
+            return [$this->localIntent($query), [], true];
         }
         $intent = $this->parseIntent($raw, $query);
 
-        return [$intent, $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed'])];
+        return [$intent, $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed']), false];
     }
 
     /**

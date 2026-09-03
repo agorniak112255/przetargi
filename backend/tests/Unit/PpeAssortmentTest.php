@@ -298,4 +298,41 @@ final class PpeAssortmentTest extends TestCase
         $this->assertTrue($this->assortment->compatible($req, 'Wkładka polarowa pod hełm'));
         $this->assertFalse($this->assortment->compatible($req, 'Kurtka antyelektrostatyczna STATICGUARD'));
     }
+
+    #[Test]
+    public function gallet_earmuffs_match_msa_helmet_requirement_but_hygiene_kit_does_not(): void
+    {
+        $req = 'Ochronniki słuchu na hełm MSA - niski poziom tłumienia';
+        $earmuff = new Product;
+        $earmuff->forceFill([
+            'name' => 'Aktywne ochronniki słuchu do GALLET F1XF, kable podhełmowe, przyciski na czaszy',
+            'sku' => 'GA010002D3X',
+            'manufacturer' => 'MSA',
+            'category' => 'Ochrona słuchu',
+        ]);
+        $kit = new Product;
+        $kit->forceFill([
+            'name' => 'Komplet higieniczny do left/RIGHT, niski st. tłumienia',
+            'sku' => '10092878',
+            'manufacturer' => 'MSA',
+            'category' => 'Ochrona słuchu',
+        ]);
+
+        $this->assertSame(PpeAssortment::FAMILY_HEARING, $this->assortment->family((string) $earmuff->name));
+        $this->assertNull($this->assortment->family((string) $kit->name));
+        $this->assertTrue($this->assortment->isHearingHygieneKit((string) $kit->name));
+        $this->assertFalse($this->assortment->isHearingHygieneKit((string) $earmuff->name));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $earmuff));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $kit));
+        $this->assertFalse($this->assortment->isUnderHelmetLiner($req));
+
+        $helmet = new Product;
+        $helmet->forceFill([
+            'name' => 'V-Gard 500',
+            'sku' => 'VGARD-500',
+            'manufacturer' => 'MSA',
+            'category' => 'Ochrona głowy',
+        ]);
+        $this->assertFalse($this->assortment->compatibleProduct($req, $helmet));
+    }
 }

@@ -24,6 +24,11 @@ final class ProductAiSearchSpecificityTest extends TestCase
         $this->assertFalse($svc->isSpecificRequirement('CZAPKA KOMINIARKA Z POLARU czarna lub granatowa'));
         $this->assertFalse($svc->isSpecificRequirement('kombinezon roboczy'));
         $this->assertFalse($svc->isSpecificRequirement('Czapka drelichowa'));
+        $this->assertFalse($svc->isSpecificRequirement('Nauszniki'));
+        $this->assertFalse($svc->isSpecificRequirement('Ochronniki słuchu'));
+        $this->assertFalse($svc->isSpecificRequirement(
+            'Ochronniki słuchu na hełm MSA - niski poziom tłumienia'
+        ));
     }
 
     public function test_hazard_or_norm_makes_requirement_specific(): void
@@ -37,5 +42,17 @@ final class ProductAiSearchSpecificityTest extends TestCase
         $this->assertTrue($svc->isSpecificRequirement('gogle polaryzacyjne'));
         $this->assertTrue($svc->isSpecificRequirement('kombinezon na kwas'));
         $this->assertTrue($svc->isSpecificRequirement('Buty robocze z metalowymi noskami'));
+    }
+
+    public function test_msa_earmuff_query_does_not_invent_hard_constraints_from_soft_words(): void
+    {
+        $svc = $this->service();
+        $ref = new \ReflectionMethod(ProductAiSearchService::class, 'fallbackConstraints');
+        $constraints = $ref->invoke(
+            $svc,
+            'Ochronniki słuchu na hełm MSA - niski poziom tłumienia'
+        );
+
+        $this->assertSame([], $constraints);
     }
 }

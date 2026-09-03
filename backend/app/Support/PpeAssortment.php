@@ -566,6 +566,16 @@ final class PpeAssortment
         if ($reqFamily === self::FAMILY_HEAD) {
             return $this->headCompatible($requirement, $productText);
         }
+        if ($reqFamily === self::FAMILY_HEARING) {
+            if ($this->isHearingHygieneKit($productText) && ! $this->isHearingHygieneKit($requirement)) {
+                return false;
+            }
+            $reqType = $this->articleType($requirement, self::FAMILY_HEARING);
+            $prodType = $this->articleType($productText, self::FAMILY_HEARING);
+            if ($reqType !== null && $prodType !== null && $reqType !== $prodType) {
+                return false;
+            }
+        }
 
         return true;
     }
@@ -671,6 +681,43 @@ final class PpeAssortment
         }
         if ($reqFamily === self::FAMILY_HEAD) {
             return $this->headCompatible($requirement, $this->productIdentityText($product));
+        }
+        if ($reqFamily === self::FAMILY_HEARING) {
+            return $this->hearingCompatible($requirement, $product);
+        }
+
+        return true;
+    }
+
+    /** Wkładki / komplet higieniczny do nauszników — nie jest ochronnikiem słuchu. */
+    public function isHearingHygieneKit(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match(
+            '/\b(komplet\s+higien|zestaw\s+higien|wkladk\w*\s+higien|higieniczn\w*\s+(komplet|zestaw|wklad)'
+            .'|hygiene\s+kit|poduszk\w*\s+higien|cushion\s+kit|hygiene\s+pad)\w*/u',
+            $t
+        ) === 1;
+    }
+
+    private function hearingCompatible(string $requirement, Product $product): bool
+    {
+        $identity = $this->productIdentityText($product);
+        if ($this->isHearingHygieneKit($identity) && ! $this->isHearingHygieneKit($requirement)) {
+            return false;
+        }
+        $fromName = $this->family((string) $product->name);
+        $prodFamily = $fromName
+            ?? ($product->ppe_family !== null && $product->ppe_family !== '' ? (string) $product->ppe_family : null)
+            ?? $this->productFamily($product);
+        if ($prodFamily === null && $this->articleType($identity, self::FAMILY_HEARING) === null) {
+            return false;
+        }
+        $reqType = $this->articleType($requirement, self::FAMILY_HEARING);
+        $prodType = $this->articleType($identity, self::FAMILY_HEARING);
+        if ($reqType !== null && $prodType !== null && $reqType !== $prodType) {
+            return false;
         }
 
         return true;
