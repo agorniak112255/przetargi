@@ -149,6 +149,33 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_aj_group_jacket_matches_pros_kangurka_card(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '3011',
+            'name' => 'Kurtka Kangurka',
+            'manufacturer' => 'AJ Group',
+            'category' => 'Sklep - kategorie / Ochrona ciała i odzież robocza / Kombinezony robocze / Akcesoria do kombinezonów',
+        ]);
+        $card = 'https://pros.pl/pl/pros-extreme/249-kangurka-morska-model-3011.html '
+            .'Kangurka morska model 3011';
+
+        $this->assertContains('pros.pl', $id->officialCatalogHosts($product));
+        $this->assertTrue($id->hayHasBrand($card, $product));
+        $this->assertTrue($id->hayHasRequiredTypeFromName($card, $product));
+        $this->assertTrue($id->hayMentionsProduct($card, $product));
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://pros.pl/pl/pros-extreme/249-kangurka-morska-model-3011.html',
+            'Kangurka morska model 3011',
+            $product
+        ));
+
+        $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('site:pros.pl', $joined);
+        $this->assertStringNotContainsString('kombinezon', $joined);
+    }
+
     public function test_tegera_104_does_not_match_pros_coverall(): void
     {
         $id = new ProductSearchIdentity;

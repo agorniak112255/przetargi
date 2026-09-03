@@ -314,6 +314,24 @@ final class ManufacturerDomainResolverTest extends TestCase
         ));
     }
 
+    public function test_aj_group_uses_pros_manufacturer_domains(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $product = new Product([
+            'manufacturer' => 'AJ Group',
+            'sku' => '3011',
+            'name' => 'Kurtka Kangurka',
+        ]);
+
+        $domains = $resolver->domainsFor($product);
+        $this->assertContains('pros.pl', $domains);
+        $this->assertTrue($resolver->isManufacturerUrl(
+            'https://pros.pl/pl/pros-extreme/249-kangurka-morska-model-3011.html',
+            $product,
+            $domains
+        ));
+    }
+
     public function test_short_brand_key_does_not_steal_other_hosts(): void
     {
         $resolver = app(ManufacturerDomainResolver::class);

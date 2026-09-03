@@ -470,6 +470,46 @@ final class EnrichmentQueryLadderTest extends TestCase
         );
     }
 
+    public function test_catalog_keeps_pros_kangurka_for_aj_group_jacket(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'AJ Group',
+            'sku' => '3011',
+            'name' => 'Kurtka Kangurka',
+            'category' => 'Sklep - kategorie / Ochrona ciała i odzież robocza / Kombinezony robocze / Akcesoria do kombinezonów',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $confirm = $ref->getMethod('confirmedCatalogHits');
+        $confirm->setAccessible(true);
+
+        $confirmed = $confirm->invoke($service, [
+            [
+                'url' => 'https://pros.pl/pl/pros-extreme/249-kangurka-morska-model-3011.html',
+                'title' => 'Kangurka morska model 3011',
+                'snippet' => '',
+            ],
+            [
+                'url' => 'https://www.bhp-gabi.pl/p34164,kangurka-morska-3011-pros-aj-group.html',
+                'title' => 'Kangurka morska 3011 PROS AJ Group',
+                'snippet' => '',
+            ],
+            [
+                'url' => 'https://icd.pl/oa024-fe-bn-tablica-uwaga-niebezpieczenstwo-3011.html',
+                'title' => 'Tablica niebezpieczeństwo 3011',
+                'snippet' => '',
+            ],
+        ], $product);
+
+        $this->assertSame(
+            [
+                'https://pros.pl/pl/pros-extreme/249-kangurka-morska-model-3011.html',
+                'https://www.bhp-gabi.pl/p34164,kangurka-morska-3011-pros-aj-group.html',
+            ],
+            array_column($confirmed, 'url')
+        );
+    }
+
     public function test_open_search_starts_from_short_queries(): void
     {
         $product = new Product([

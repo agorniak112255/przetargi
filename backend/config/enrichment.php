@@ -70,6 +70,8 @@ return [
         'coverguard' => ['coverguard.com', 'www.coverguard.com'],
         'singer' => ['singer.fr', 'www.singer.fr'],
         'pros' => ['pros.pl', 'www.pros.pl'],
+        'aj-group' => ['pros.pl', 'www.pros.pl'],
+        'ajgroup' => ['pros.pl', 'www.pros.pl'],
         'urgent' => [
             'urgent.com.pl',
             'www.urgent.com.pl',

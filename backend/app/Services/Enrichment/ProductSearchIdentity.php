@@ -25,7 +25,7 @@ final class ProductSearchIdentity
     private const TYPE_STEMS = [
         'gloves' => ['rekawic', 'rukavic', 'glove', 'glv', 'handschuh', 'gant'],
         'coverall' => ['kombinezon', 'kombineza', 'coverall', 'overall', 'cvrl', 'protective suit', 'protection suit'],
-        'jacket' => ['kurtk', 'jacket', 'jacke', 'plaszcz', 'bunda', 'parka'],
+        'jacket' => ['kurtk', 'kangurk', 'jacket', 'jacke', 'plaszcz', 'bunda', 'parka'],
         'trousers' => ['spodn', 'trouser', 'pant', 'ogrodniczk', 'dungaree', 'bib brace', 'kalhot'],
         'cap' => ['czapk', 'czepek', 'czepk'],
         'sweatshirt' => ['bluza', 'sweatshirt'],
@@ -2709,17 +2709,34 @@ final class ProductSearchIdentity
      */
     private function requiredTypeStems(Product $product, bool $includeCategory): array
     {
-        $name = $includeCategory
-            ? $this->normalizeTypeText((string) $product->name.' '.(string) ($product->category ?? ''))
-            : $this->normalizeTypeText((string) $product->name);
-        $required = [];
-        foreach (self::TYPE_STEMS as $stems) {
-            if ($this->textHasTypeStem($name, $stems)) {
-                $required[] = $stems;
+        $fromName = $this->typeStemsInText((string) $product->name);
+        if ($fromName !== []) {
+            return $fromName;
+        }
+        if ($includeCategory) {
+            $fromCategory = $this->typeStemsInText((string) ($product->category ?? ''));
+            if ($fromCategory !== []) {
+                return $fromCategory;
             }
         }
-        if ($required === [] && $this->skuImpliesFootwear($product)) {
-            $required[] = self::TYPE_STEMS['footwear'];
+        if ($this->skuImpliesFootwear($product)) {
+            return [self::TYPE_STEMS['footwear']];
+        }
+
+        return [];
+    }
+
+    /**
+     * @return list<list<string>>
+     */
+    private function typeStemsInText(string $text): array
+    {
+        $normalized = $this->normalizeTypeText($text);
+        $required = [];
+        foreach (self::TYPE_STEMS as $stems) {
+            if ($this->textHasTypeStem($normalized, $stems)) {
+                $required[] = $stems;
+            }
         }
 
         return $required;
@@ -3014,8 +3031,8 @@ final class ProductSearchIdentity
             return 'buty ochronne';
         }
 
-        // CVRL / AlphaTec 4000 to kombinezon — zanim Ansell spadnie na domyślne „rękawice”
-        if (preg_match('#(cvrl|coverall|kombinezon|overall|alphatec)#u', $blob) === 1) {
+        // CVRL / AlphaTec 4000 to kombinezon — tylko z nazwy/SKU, nie z „Kombinezony / akcesoria”
+        if (preg_match('#(cvrl|coverall|kombinezon|overall|alphatec)#u', $nameSku) === 1) {
             return 'kombinezon';
         }
 
@@ -3436,6 +3453,10 @@ final class ProductSearchIdentity
             'maxiflex' => ['atg', 'maxiflex', 'maxicut', 'maxidry'],
             'urgent' => ['urgent', 'pilne'],
             'pilne' => ['urgent', 'pilne'],
+            'pros' => ['pros', 'aj group', 'ajgroup'],
+            'aj group' => ['pros', 'aj group', 'ajgroup'],
+            'aj-group' => ['pros', 'aj group', 'ajgroup'],
+            'ajgroup' => ['pros', 'aj group', 'ajgroup'],
             'ejendals' => ['ejendals', 'tegera'],
             'tegera' => ['ejendals', 'tegera'],
             'delta' => ['delta', 'deltaplus'],

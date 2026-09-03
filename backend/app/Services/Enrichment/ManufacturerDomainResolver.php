@@ -45,6 +45,13 @@ final class ManufacturerDomainResolver
                 $this->domainsFromConfig('urgent')
             )));
         }
+        if (in_array($brand, ['aj-group', 'ajgroup'], true)) {
+            $mapped = array_values(array_unique(array_merge(
+                $mapped,
+                $this->domainsFromConfig('pros'),
+                ManufacturerSite::hostsForBrand('pros')
+            )));
+        }
         $mapped = array_values(array_unique(array_merge(
             $mapped,
             ManufacturerSite::hostsForBrand($brand)
