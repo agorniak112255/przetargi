@@ -173,7 +173,9 @@ final class CatalogSlangDictionary
         $note = $this->fold($rewrite['needed']);
         $hay = $this->fold($productText);
         $wantsLiquid = preg_match('/\b(ciecz|olej|plyn)/u', $note) === 1;
-        if (! $wantsLiquid) {
+        $vampire = preg_match('/dziani/', $note) === 1
+            && preg_match('/(powlek|nakrap|dlon)/', $note) === 1;
+        if (! $wantsLiquid && ! $vampire) {
             return false;
         }
         if (preg_match('/\b(esd|antystat|antyelektro|weglow|miedzian|miedzi)\w*/u', $hay) === 1) {
@@ -184,6 +186,20 @@ final class CatalogSlangDictionary
         }
         if (preg_match('/(dlugim mankiet|dlugi mankiet)/u', $hay) === 1) {
             return true;
+        }
+        if ($wantsLiquid || $vampire) {
+            if (preg_match('/(nieflokowan|unflocked|jednorazow|bezpudrow|examinat|powder\s*free)/u', $hay) === 1) {
+                return true;
+            }
+            if (preg_match('/\b(cuffs|manchon)\b|primacuff|(naramiennik|zarekawk)/u', $hay) === 1) {
+                return true;
+            }
+            if (preg_match('/\b(cold|zimow|0\s*c)\b/u', $hay) === 1) {
+                return true;
+            }
+            if (preg_match('/(cut[\s-]*resist|cut[\s-]*protect|antyprzeciec|przecieci)/u', $hay) === 1) {
+                return true;
+            }
         }
         if (preg_match('/(arc flash|para-?aramid|para aramid|wlokna szklan|modakryl|piank\w* neopren)/u', $hay) === 1) {
             return true;
@@ -221,11 +237,98 @@ final class CatalogSlangDictionary
                 ) === 1) {
                     continue;
                 }
-                $out[] = mb_substr($token, 0, 6);
+                $out[] = mb_substr($token, 0, 5);
             }
         }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Grupy AND: karta musi trafić w każdą (wewnątrz grupy wystarczy jedno słowo).
+     *
+     * @return list<list<string>>
+     */
+    public function evidenceGroups(string $query): array
+    {
+        $knit = [];
+        $coat = [];
+        $other = [];
+        foreach ($this->evidenceNeedles($query) as $needle) {
+            $needle = trim($needle);
+            if ($needle === '' || preg_match('/^(ciecz|olej|plyn)/u', $needle) === 1) {
+                continue;
+            }
+            if (preg_match('/^(dzian|knit)/u', $needle) === 1) {
+                $knit[] = $needle;
+                continue;
+            }
+            if (preg_match('/^(powle|nakrap|nakrop|kropk)/u', $needle) === 1) {
+                $coat[] = $needle;
+                continue;
+            }
+            $other[] = $needle;
+        }
+        if ($knit !== []) {
+            $knit[] = 'knit';
+            $knit[] = 'dzian';
+        }
+        if ($knit !== [] || $coat !== []) {
+            array_push($coat, 'powlek', 'nakrap', 'nakrop', 'kropk', 'coat', 'dotted');
+        }
+        $groups = [];
+        foreach ([$knit, $coat, $other] as $group) {
+            $group = array_values(array_unique(array_filter($group)));
+            if ($group !== []) {
+                $groups[] = $group;
+            }
+        }
+
+        return $groups;
+    }
+
+    public function matchesEvidence(string $query, string $productText): bool
+    {
+        if ($this->rejectsProduct($query, $productText)) {
+            return false;
+        }
+        $groups = $this->evidenceGroups($query);
+        if ($groups === []) {
+            return true;
+        }
+        $hay = $this->fold($productText);
+        foreach ($groups as $group) {
+            $hit = false;
+            foreach ($group as $needle) {
+                if ($needle !== '' && str_contains($hay, $needle)) {
+                    $hit = true;
+                    break;
+                }
+            }
+            if (! $hit) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public function requiresTightEvidence(string $query): bool
+    {
+        $hasKnit = false;
+        $hasCoat = false;
+        foreach ($this->evidenceGroups($query) as $group) {
+            foreach ($group as $needle) {
+                if (preg_match('/^(dzian|knit)/u', $needle) === 1) {
+                    $hasKnit = true;
+                }
+                if (preg_match('/^(powle|nakrap|nakrop|kropk|coat|dotted)/u', $needle) === 1) {
+                    $hasCoat = true;
+                }
+            }
+        }
+
+        return $hasKnit && $hasCoat;
     }
 
     public function isJargonNorm(string $normalizedToken): bool
@@ -268,6 +371,17 @@ final class CatalogSlangDictionary
 
         return 'Żargon SIWZ — szukaj po notatce i frazach cennika, nie po żargonie ani po słowach typu uniwersalne: '
             .implode(' | ', $lines).'.';
+    }
+
+    /** Blok do doklejenia do tekstu użytkownika — nie zastępuje wymagania. */
+    public function queryAppendix(string $query): string
+    {
+        $hint = $this->promptHint($query);
+        if ($hint === '') {
+            return '';
+        }
+
+        return "Żargon SIWZ (dodatek do wymagania, nie zastępuje tekstu):\n".$hint;
     }
 
     /**

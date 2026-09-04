@@ -59,6 +59,14 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertStringContainsString('okulary', $eye);
     }
 
+    public function test_slang_is_appended_not_replacing_query(): void
+    {
+        $appendix = $this->dict()->queryAppendix('Rękawice wampirki uniwersalne');
+        $this->assertStringContainsString('dodatek do wymagania', mb_strtolower($appendix));
+        $this->assertStringContainsString('wampirki', mb_strtolower($appendix));
+        $this->assertStringContainsString('powlekan', mb_strtolower($appendix));
+    }
+
     public function test_wampirki_rewrite_uses_note_and_catalog_phrases(): void
     {
         $rewrite = $this->dict()->searchRewrite('Rękawice wampirki uniwersalne');
@@ -72,6 +80,8 @@ final class CatalogSlangDictionaryTest extends TestCase
         $needles = $this->dict()->evidenceNeedles('Rękawice wampirki uniwersalne');
         $this->assertNotSame([], $needles);
         $this->assertFalse(in_array('uniwer', $needles, true));
+        $flat = array_merge(...$this->dict()->evidenceGroups('Rękawice wampirki uniwersalne'));
+        $this->assertFalse(in_array('ciecz', $flat, true));
     }
 
     public function test_wampir_prefix_maps_like_wampirki(): void
@@ -113,6 +123,18 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertFalse($this->dict()->rejectsProduct(
             $q,
             'OPAKOWANIE 10 PAR RĘKAWIC DZIANYCH Z POLIESTRU, DŁOŃ POWLEKANA NITRYLEM'
+        ));
+        $this->assertTrue($this->dict()->rejectsProduct(
+            $q,
+            'Rękawice nitrylowe nieflokowane'
+        ));
+        $this->assertTrue($this->dict()->rejectsProduct(
+            $q,
+            'PRIMACUFF35PO 35CM CUT-RESISTANT KNITTED CUFFS'
+        ));
+        $this->assertTrue($this->dict()->rejectsProduct(
+            $q,
+            'T6 COLD GLOVES 0 C POLYPRO BLUE'
         ));
     }
 

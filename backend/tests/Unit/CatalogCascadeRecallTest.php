@@ -125,4 +125,49 @@ final class CatalogCascadeRecallTest extends TestCase
         $this->assertSame(CatalogCascadeRecall::LEVEL_FAMILY_FEATURE_BRAND, $hit['level']);
         $this->assertSame(['93-843'], $hit['products']->pluck('sku')->all());
     }
+
+    public function test_search_steps_and_then_peel_manufacturer(): void
+    {
+        Product::query()->create([
+            'sku' => 'ANS-LEATHER',
+            'name' => 'Rękawice skórzane spawalnicze',
+            'manufacturer' => 'Ansell',
+            'description' => 'Skóra licowa.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 10,
+            'stock' => 2,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+        ]);
+        $delta = Product::query()->create([
+            'sku' => 'VE727',
+            'name' => 'Rękawice dziane, dłoń powlekana nitrylem',
+            'manufacturer' => 'Delta Plus',
+            'description' => 'Rękawice nitrylowe powlekane.',
+            'catalog_price_net' => 8,
+            'purchase_price' => 4,
+            'stock' => 10,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+        ]);
+        CatalogManufacturerContext::forgetCache();
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'Rękawice nitrylowe Ansell',
+            [
+                'needed' => 'rękawice nitrylowe',
+                'search_phrases' => ['rękawice nitrylowe'],
+                'search_steps' => ['rękawice', 'nitrylowe', 'Ansell'],
+                'constraints' => [],
+                'manufacturer' => 'Ansell',
+                'manufacturer_requested' => 'Ansell',
+                'manufacturer_absent_in_catalog' => false,
+            ],
+            'Rękawice nitrylowe Ansell',
+            20
+        );
+
+        $this->assertSame('steps_2', $hit['level']);
+        $this->assertContains('VE727', $hit['products']->pluck('sku')->all());
+        $this->assertNotContains('ANS-LEATHER', $hit['products']->pluck('sku')->all());
+        $this->assertSame($delta->id, $hit['products']->first()?->id);
+    }
 }

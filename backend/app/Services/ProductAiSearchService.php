@@ -337,6 +337,7 @@ final class ProductAiSearchService
                 ? trim($intent['size_note'])
                 : null,
             'manufacturer_absent_in_catalog' => (bool) ($intent['manufacturer_absent_in_catalog'] ?? false),
+            'search_steps' => $this->stringStepList($intent['search_steps'] ?? []),
         ];
     }
 
@@ -366,6 +367,9 @@ final class ProductAiSearchService
             $should = true;
         }
         if ($this->isSpecificRequirement($query)) {
+            $should = true;
+        }
+        if ($this->slangRewriteFor($query) !== null) {
             $should = true;
         }
         if (! $should) {
@@ -438,7 +442,7 @@ final class ProductAiSearchService
         $intent['manufacturer'] = null;
         $intent['model_name'] = null;
 
-        return $intent;
+        return $this->dropAbsentBrandSteps($intent);
     }
 
     /** @param array<string, mixed> $intent */
@@ -500,6 +504,9 @@ final class ProductAiSearchService
         }
         if ($intent['manufacturer_absent_in_catalog']) {
             $out['manufacturer_absent_in_catalog'] = true;
+        }
+        if ($intent['search_steps'] !== []) {
+            $out['search_steps'] = $intent['search_steps'];
         }
 
         return $out;
@@ -592,12 +599,7 @@ final class ProductAiSearchService
     /** @param array{needed: string, search_phrases: list<string>} $intent */
     private function displayQuery(string $query, array $intent): string
     {
-        $slang = $this->slangRewriteFor($query);
-        if ($slang === null || $slang['needed'] === '') {
-            return $query;
-        }
-
-        return $slang['needed'];
+        return $query;
     }
 
     /**
@@ -915,27 +917,14 @@ final class ProductAiSearchService
      */
     private function rewriteMessages(string $query): array
     {
-        $slang = $this->catalogSlang->promptHint($query);
-        $slang = $slang !== '' ? ' '.$slang : '';
-
         return [
             [
                 'role' => 'system',
-                'content' => 'Jesteś ekspertem BHP i katalogów odzieży roboczej. '
-                    .'Pierwsze wyszukiwanie w katalogu nic nie dało. '
-                    .'Przepisz wymaganie na frazy, pod którymi sklepy BHP sprzedają ten produkt.'
-                    .$slang
-                    .' needed: krótka nazwa katalogowa (rzeczownik + typ). '
-                    .'search_phrases: 2-8; pierwsze 2 = nazwa/synonim sklepowy. '
-                    .'Przykłady: czapka drelichowa → czapka z daszkiem, czapka robocza; '
-                    .'drelich = tkanina bawełniana, nie osobny asortyment. '
-                    .'Nie zmieniaj rodzaju produktu. Nie zgaduj marki. '
-                    .'constraints: twarde warunki z równoważnym dowodem (podnosek stalowy, EN 374), nie cytat SIWZ. '
-                    .'JSON: {"needed":"...","search_phrases":["..."],"constraints":[]}.',
+                'content' => $this->understandSystemPrompt(true),
             ],
             [
                 'role' => 'user',
-                'content' => $query,
+                'content' => $this->requirementWithSlang($query),
             ],
         ];
     }
@@ -945,34 +934,56 @@ final class ProductAiSearchService
      */
     private function understandMessages(string $query): array
     {
-        $manufacturers = $this->manufacturerContext->promptBlock();
-        $slang = $this->catalogSlang->promptHint($query);
-        $slang = $slang !== '' ? $slang.' ' : '';
-
         return [
             [
                 'role' => 'system',
-                'content' => 'Jesteś ekspertem BHP i katalogów. Najpierw ZROZUM wymaganie SIWZ, potem zbuduj frazy sklepowe. '
-                    .$manufacturers.' '
-                    .$slang
-                    .'manufacturer: nazwa z wymagania SIWZ. Jeśli jest na liście katalogu — użyj dokładnej nazwy z listy. '
-                    .'Jeśli nie ma jej na liście — wpisz nazwę z SIWZ (nie null i nie podstawiaj innej marki z listy). '
-                    .'model_name: nazwa modelu/kolekcji (np. TRONCHETTO, PERSPECTA 010) — nie producent. '
-                    .'size_note: rozmiary (np. 35-41) — nie łącz z modelem. '
-                    .'Nie tnij SIWZ na pojedyncze przymiotniki do wyszukiwania słów. '
-                    .'needed: rodzaj produktu (rzeczownik + typ), bez normy i bez surowego cytatu SIWZ. '
-                    .'search_phrases: 3-8; pierwsze 2 = nazwa/synonim asortymentu; dalej równoważniki cechy z cenników. '
-                    .'constraints: 0-6 twardych warunków z równoważnym dowodem, który karta ma potwierdzić. '
-                    .'Pusta constraints, gdy jest tylko nazwa, tkanina albo kolor. '
-                    .'Nie zmieniaj rodzaju. Popraw literówki (podnie→spodnie, TEPM-ICE→TEMP-ICE). '
-                    .'JSON: {"needed":"...","manufacturer":null,"model_name":null,"size_note":null,'
-                    .'"search_phrases":["..."],"constraints":[]}.',
+                'content' => $this->understandSystemPrompt(false),
             ],
             [
                 'role' => 'user',
-                'content' => $query,
+                'content' => $this->requirementWithSlang($query),
             ],
         ];
+    }
+
+    private function understandSystemPrompt(bool $rewriteEmpty): string
+    {
+        $lead = $rewriteEmpty
+            ? 'Jesteś ekspertem BHP i katalogów. Pierwsze wyszukiwanie nic nie dało. '
+                .'Zweryfikuj potrzebę i podaj nowe kroki wyszukiwania w języku cennika. '
+            : 'Jesteś ekspertem BHP i katalogów. Najpierw ZROZUM wymaganie, potem podaj kroki wyszukiwania. ';
+
+        return $lead
+            .$this->manufacturerContext->promptBlock().' '
+            .'Blok „Żargon SIWZ” w wiadomości użytkownika to DODATEK do tekstu — nie zastępuje wymagania. '
+            .'Przetłumacz żargon na frazy cennika; nie cytuj żargonu (wampirki, nitrylki) w krokach. '
+            .'needed: rodzaj produktu (rzeczownik + typ katalogowy), bez normy i bez surowego cytatu SIWZ. '
+            .'search_steps: 2-6 warunków AND, od NAJWAŻNIEJSZEGO do najmniej istotnego. '
+            .'Krok 1 = rodzaj (np. rękawice). Dalej cechy, które karta ma mieć. '
+            .'NA KOŃCU zawsze producent, jeśli jest w wymaganiu; jeśli marki nie ma na liście — i tak daj nazwę z SIWZ jako ostatni krok. '
+            .'Nie zgaduj marki spoza wymagania. Nie podstawiaj innej marki z listy. '
+            .'Nie dawaj ogólników („ochrona przed cieczą”, „uniwersalne”) jako osobnego kroku. '
+            .'wampirki = dzianina + dłoń powlekana / nakrapiane — NIE jednorazowy nitryl, NIE zarękawki, NIE zimowe. '
+            .'Przykład: „Rękawice wampirki uniwersalne” → search_steps: ["rękawice","dzianinowe","dłoń powlekana"]. '
+            .'Przykład: „Rękawice nitrylowe RTELA” → search_steps: ["rękawice","nitrylowe","RTELA"]. '
+            .'manufacturer: nazwa z wymagania. Jeśli jest na liście katalogu — dokładna nazwa z listy. '
+            .'Jeśli nie ma jej na liście — wpisz nazwę z SIWZ (nie null). '
+            .'model_name: model/kolekcja (np. TRONCHETTO), nie producent. size_note: rozmiary, nie łącz z modelem. '
+            .'search_phrases: 3-8 synonimów sklepowych. constraints: 0-6 twardych dowodów (EN 374), puste przy samej nazwie/kolorze. '
+            .'Nie zmieniaj rodzaju. Popraw literówki (podnie→spodnie, TEPM-ICE→TEMP-ICE). '
+            .'JSON: {"needed":"...","search_steps":["..."],"manufacturer":null,"model_name":null,"size_note":null,'
+            .'"search_phrases":["..."],"constraints":[]}.';
+    }
+
+    private function requirementWithSlang(string $query): string
+    {
+        $appendix = $this->catalogSlang->queryAppendix($query);
+        $text = "Wymaganie:\n".$query;
+        if ($appendix !== '') {
+            $text .= "\n\n".$appendix;
+        }
+
+        return $text;
     }
 
     /**
@@ -1169,20 +1180,26 @@ final class ProductAiSearchService
     {
         $intent = $this->normalizeIntent($intent);
         $slang = $this->slangRewriteFor($query);
-        if ($slang === null) {
-            return $this->reconcileManufacturerIntent($intent, $query);
+        if ($slang !== null) {
+            $intent['search_phrases'] = $this->slangSearchPhrases($slang, $query, $intent['search_phrases']);
         }
-        $intent['needed'] = $slang['needed'];
-        $intent['search_phrases'] = $this->slangSearchPhrases($slang, $query);
+        if ($intent['search_steps'] === []) {
+            if ($slang !== null) {
+                $intent['search_steps'] = $this->defaultSearchSteps($query, $intent);
+            }
+        } else {
+            $intent['search_steps'] = $this->sanitizeSearchSteps($intent['search_steps'], $intent);
+        }
 
         return $this->reconcileManufacturerIntent($intent, $query);
     }
 
     /**
      * @param  array{needed: string, search_phrases: list<string>, family: string|null}  $slang
+     * @param  list<string>  $existing
      * @return list<string>
      */
-    private function slangSearchPhrases(array $slang, string $query): array
+    private function slangSearchPhrases(array $slang, string $query, array $existing = []): array
     {
         $extra = [];
         foreach ($this->fallbackPhrases($query) as $token) {
@@ -1198,10 +1215,137 @@ final class ProductAiSearchService
             $extra[] = $token;
         }
 
-        return array_values(array_unique(array_filter([
-            ...$slang['search_phrases'],
-            ...$extra,
-        ])));
+        return array_values(array_unique(array_filter(
+            [...$existing, ...$slang['search_phrases'], ...$extra],
+            fn (string $phrase): bool => ! $this->isWeakSearchStep($phrase)
+        )));
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return list<string>
+     */
+    private function defaultSearchSteps(string $query, array $intent): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        $steps = [];
+        $slang = $this->slangRewriteFor($query);
+        if ($slang !== null) {
+            foreach ($slang['search_phrases'] as $phrase) {
+                if (! $this->isWeakSearchStep((string) $phrase)) {
+                    $steps[] = trim((string) $phrase);
+                    break;
+                }
+            }
+        }
+        if ($steps === []) {
+            $needed = trim((string) $intent['needed']);
+            if ($needed !== '' && mb_strlen($needed) <= 60 && ! $this->isWeakSearchStep($needed)) {
+                $steps[] = $needed;
+            }
+        }
+
+        return $this->sanitizeSearchSteps($steps, $intent);
+    }
+
+    /**
+     * @param  list<mixed>  $steps
+     * @param  array<string, mixed>  $intent
+     * @return list<string>
+     */
+    private function sanitizeSearchSteps(array $steps, array $intent): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        $brand = trim((string) ($intent['manufacturer'] ?? $intent['manufacturer_requested'] ?? ''));
+        $core = [];
+        $brandSteps = [];
+        foreach ($this->stringStepList($steps) as $step) {
+            if ($this->isWeakSearchStep($step)) {
+                continue;
+            }
+            if ($this->catalogSlang->isJargonNorm($this->lexicalNormalize($step))) {
+                continue;
+            }
+            if ($brand !== '' && $this->nameAppearsInQuery($step, $brand)) {
+                $brandSteps[] = $step;
+                continue;
+            }
+            $core[] = $step;
+        }
+        if ($brand !== '' && $brandSteps === [] && ! $intent['manufacturer_absent_in_catalog']) {
+            $brandSteps[] = $brand;
+        }
+        if ($brand !== '' && $brandSteps === [] && $intent['manufacturer_absent_in_catalog']) {
+            $brandSteps[] = $brand;
+        }
+
+        return array_values(array_unique([...$core, ...$brandSteps]));
+    }
+
+    /** @param  list<mixed>  $raw */
+    private function stringStepList(mixed $raw): array
+    {
+        if (! is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        foreach ($raw as $step) {
+            if (! is_string($step)) {
+                continue;
+            }
+            $step = trim($step);
+            if ($step === '' || mb_strlen($step) < 2) {
+                continue;
+            }
+            $out[] = mb_substr($step, 0, 80);
+            if (count($out) >= 8) {
+                break;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    private function isWeakSearchStep(string $step): bool
+    {
+        $meaningful = 0;
+        foreach (preg_split('/[\s,;\/|+]+/u', $this->lexicalNormalize($step)) ?: [] as $token) {
+            $token = trim($token);
+            if ($token === '' || mb_strlen($token) < 4) {
+                continue;
+            }
+            if ($this->catalogSlang->isJargonNorm($token)) {
+                continue;
+            }
+            if (preg_match('/^(ochrona|przed|ciecz|olej|plyn|proste|uniwersaln)/u', $token) === 1) {
+                continue;
+            }
+            $meaningful++;
+        }
+
+        return $meaningful === 0;
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return array<string, mixed>
+     */
+    private function dropAbsentBrandSteps(array $intent): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        $needles = array_values(array_filter([
+            $this->compactLex((string) ($intent['manufacturer_requested'] ?? '')),
+            $this->compactLex((string) ($intent['model_name'] ?? '')),
+        ], static fn (string $n): bool => mb_strlen($n) >= 3));
+        if ($needles === []) {
+            return $intent;
+        }
+        $intent['search_steps'] = array_values(array_filter(
+            $intent['search_steps'],
+            fn (string $step): bool => ! $this->phraseMentionsNeedles($step, $needles)
+        ));
+
+        return $intent;
     }
 
     private function catalogSearchQuery(string $query, array $intent): string
@@ -1532,8 +1676,9 @@ final class ProductAiSearchService
         }
         $modelName = trim((string) ($raw['model_name'] ?? $raw['model'] ?? ''));
         $sizeNote = trim((string) ($raw['size_note'] ?? ''));
+        $steps = $this->stringStepList($raw['search_steps'] ?? $raw['steps'] ?? []);
 
-        return $this->normalizeIntent($this->reconcileManufacturerIntent($this->enrichIntentManufacturers([
+        $intent = $this->normalizeIntent($this->reconcileManufacturerIntent($this->enrichIntentManufacturers([
             'needed' => $needed,
             'search_phrases' => array_values(array_unique($phrases)),
             'constraints' => $this->sanitizeConstraints($constraints),
@@ -1542,7 +1687,11 @@ final class ProductAiSearchService
             'model_name' => $modelName !== '' ? $modelName : null,
             'size_note' => $sizeNote !== '' ? $sizeNote : null,
             'manufacturer_absent_in_catalog' => $manufacturerAbsent,
+            'search_steps' => $steps,
         ], $query), $query));
+        $intent['search_steps'] = $this->sanitizeSearchSteps($intent['search_steps'], $intent);
+
+        return $intent;
     }
 
     /**
@@ -1643,6 +1792,10 @@ final class ProductAiSearchService
         ));
         $intent['constraints'] = array_values(array_filter(
             $intent['constraints'],
+            fn (string $phrase): bool => ! $this->phraseMentionsNeedles($phrase, $needles)
+        ));
+        $intent['search_steps'] = array_values(array_filter(
+            $intent['search_steps'],
             fn (string $phrase): bool => ! $this->phraseMentionsNeedles($phrase, $needles)
         ));
 
@@ -1959,7 +2112,14 @@ final class ProductAiSearchService
             return $this->cascadeRecall->retrieve($query, $intent, $requirement, $limit)['products'];
         });
         if ($cascaded->isNotEmpty()) {
-            return $this->uniqueProducts($priority->concat($cascaded), $limit)->values();
+            $pool = $this->slangRewriteFor($query) !== null
+                ? $cascaded->concat($priority)
+                : $priority->concat($cascaded);
+
+            return $this->uniqueProducts($pool, $limit)->values();
+        }
+        if ($this->catalogSlang->requiresTightEvidence($query)) {
+            return $this->keepCompatible($requirement, $priority)->values();
         }
 
         // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
@@ -2067,21 +2227,8 @@ final class ProductAiSearchService
             return true;
         }
         $hay = $this->slangProductHaystack($product);
-        if ($this->catalogSlang->rejectsProduct($query, $hay)) {
-            return false;
-        }
-        $needles = $this->catalogSlang->evidenceNeedles($query);
-        if ($needles === []) {
-            return true;
-        }
-        $norm = $this->lexicalNormalize($hay);
-        foreach ($needles as $needle) {
-            if ($needle !== '' && str_contains($norm, $needle)) {
-                return true;
-            }
-        }
 
-        return false;
+        return $this->catalogSlang->matchesEvidence($query, $hay);
     }
 
     /**
@@ -2761,6 +2908,9 @@ final class ProductAiSearchService
     {
         $parsed = $this->normalizeIntent($parsed);
         $retrieve = $this->normalizeIntent($retrieve);
+        if ($parsed['search_steps'] === [] && $retrieve['search_steps'] !== []) {
+            $parsed['search_steps'] = $retrieve['search_steps'];
+        }
         if (! $retrieve['manufacturer_absent_in_catalog']) {
             return $parsed;
         }
@@ -2770,7 +2920,7 @@ final class ProductAiSearchService
         }
         $parsed['manufacturer'] = null;
 
-        return $parsed;
+        return $this->dropAbsentBrandSteps($parsed);
     }
 
     /**

@@ -266,6 +266,26 @@ final class PpeAssortmentTest extends TestCase
             'category' => 'Rękawice',
         ]);
         $this->assertTrue($this->assortment->compatibleProduct('rękawice do pracy przy 200 C', $glove));
+
+        $cuffs = new Product;
+        $cuffs->forceFill([
+            'name' => '35CM CUT-RESISTANT KNITTED CUFFS',
+            'sku' => 'PRIMACUFF35PO',
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+        ]);
+        $this->assertTrue($this->assortment->isArmSleeve((string) $cuffs->name));
+        $this->assertFalse($this->assortment->compatibleProduct('rękawice dzianinowe', $cuffs));
+
+        $withCuff = new Product;
+        $withCuff->forceFill([
+            'name' => 'Rękawice dzianinowe z mankietem safety cuff',
+            'sku' => 'VE-CUFF',
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+        ]);
+        $this->assertFalse($this->assortment->isArmSleeve((string) $withCuff->name));
+        $this->assertTrue($this->assortment->compatibleProduct('rękawice dzianinowe', $withCuff));
     }
 
     #[Test]

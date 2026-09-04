@@ -84,10 +84,10 @@ final class ProductAiSearchSlangTest extends TestCase
         $this->assertContains('VE712GRG10', $skus);
         $this->assertNotContains('TC104', $skus);
         $this->assertNotContains('1259913', $skus);
-        $this->assertStringContainsString('rękawice dzianinowe powlekane', mb_strtolower((string) $response->json('query')));
-        $this->assertStringContainsString('ciecz', mb_strtolower((string) $response->json('needed')));
+        $this->assertStringContainsString('wampirki', mb_strtolower((string) $response->json('query')));
         $this->assertStringContainsString('powlekan', $phrases);
         $this->assertStringNotContainsString('uniwersaln', $phrases);
+        $this->assertNotSame([], $response->json('parsed_intent.search_steps') ?? []);
     }
 
     public function test_wampirki_does_not_return_esd_fingertip_gloves(): void
@@ -216,5 +216,97 @@ final class ProductAiSearchSlangTest extends TestCase
             \App\Services\ProductAiSearchService::CATALOG_LIMIT,
             40,
         );
+    }
+
+    public function test_wampirki_does_not_return_disposable_cuffs_or_cold(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        Product::query()->create([
+            'sku' => 'VE712GRG10',
+            'name' => 'OPAKOWANIE 10 PAR RĘKAWIC DZIANYCH Z POLIESTRU, DŁOŃ POWLEKANA NITRYLEM',
+            'manufacturer' => 'Canis',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice dzianinowe powlekane nitrylem, dłoń powlekana.',
+            'catalog_price_net' => 8,
+            'purchase_price' => 4,
+            'stock' => 40,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => '58-008',
+            'name' => 'Rękawice nitrylowe nieflokowane',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Jednorazowe rękawice nitrylowe, ochrona przed cieczą.',
+            'catalog_price_net' => 16,
+            'purchase_price' => 13,
+            'stock' => 10,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'PRIMACUFF35PO',
+            'name' => '35CM CUT-RESISTANT KNITTED CUFFS',
+            'manufacturer' => 'Rostaing',
+            'category' => 'Rękawice',
+            'description' => 'Knitted cuffs, cut protection.',
+            'catalog_price_net' => 7,
+            'purchase_price' => 3,
+            'stock' => 5,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'ZPP25T',
+            'name' => 'T6 COLD GLOVES 0°C POLYPRO BLUE',
+            'manufacturer' => 'Rostaing',
+            'category' => 'Rękawice',
+            'description' => 'Cold gloves 0 C.',
+            'catalog_price_net' => 5,
+            'purchase_price' => 2,
+            'stock' => 5,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'STOP-OILT',
+            'name' => 'DOUBLE-ENDED SANDY NITRILE HANDLING GLOVES',
+            'manufacturer' => 'Rostaing',
+            'category' => 'Rękawice',
+            'description' => 'Sandy nitrile handling gloves, ochrona przed cieczą.',
+            'catalog_price_net' => 5,
+            'purchase_price' => 2,
+            'stock' => 5,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturn([
+                'needed' => 'rękawice dzianinowe powlekane',
+                'search_steps' => ['rękawice', 'dzianinowe', 'dłoń powlekana'],
+                'search_phrases' => ['rękawice dzianinowe powlekane'],
+                'matches' => [],
+            ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $skus = array_column($this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice wampirki uniwersalne',
+            'limit' => 10,
+        ])->assertOk()->json('products') ?? [], 'sku');
+
+        $this->assertContains('VE712GRG10', $skus);
+        $this->assertNotContains('58-008', $skus);
+        $this->assertNotContains('PRIMACUFF35PO', $skus);
+        $this->assertNotContains('ZPP25T', $skus);
+        $this->assertNotContains('STOP-OILT', $skus);
     }
 }

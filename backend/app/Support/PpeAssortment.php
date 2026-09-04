@@ -961,7 +961,7 @@ final class PpeAssortment
         $t = $this->normalize($text);
 
         return preg_match(
-            '/\b(naramiennik|zarekawk|arm\s*sleeves?|armguards?|arm\s*guards?|manchon)\w*/u',
+            '/\b(naramiennik|zarekawk|arm\s*sleeves?|armguards?|arm\s*guards?|manchon)\w*|primacuff|\bcuffs\b/u',
             $t
         ) === 1;
     }

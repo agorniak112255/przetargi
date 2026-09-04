@@ -147,4 +147,32 @@ final class ProductAiSearchStructuredIntentTest extends TestCase
         $this->assertContains('93-843', $skus);
         $this->assertNotContains('REIS-O2-BOOT', $skus);
     }
+
+    public function test_understand_prompt_asks_for_search_steps_and_appends_slang(): void
+    {
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->once()->andReturnUsing(function (array $messages): array {
+            $system = (string) ($messages[0]['content'] ?? '');
+            $user = (string) ($messages[1]['content'] ?? '');
+            $this->assertStringContainsString('search_steps', $system);
+            $this->assertStringContainsString('NA KOŃCU zawsze producent', $system);
+            $this->assertStringContainsString('Wymaganie:', $user);
+            $this->assertStringContainsString('Rękawice wampirki uniwersalne', $user);
+            $this->assertStringContainsString('Żargon SIWZ', $user);
+            $this->assertStringContainsString('dodatek', mb_strtolower($user));
+
+            return [
+                'needed' => 'rękawice dzianinowe powlekane',
+                'search_steps' => ['rękawice', 'dzianinowe', 'dłoń powlekana'],
+                'search_phrases' => ['rękawice dzianinowe powlekane'],
+                'constraints' => [],
+            ];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $intent = $this->app->make(\App\Services\ProductAiSearchService::class)
+            ->understandRequirement('Rękawice wampirki uniwersalne');
+
+        $this->assertSame(['rękawice', 'dzianinowe', 'dłoń powlekana'], $intent['search_steps']);
+    }
 }

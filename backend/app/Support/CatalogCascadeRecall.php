@@ -76,6 +76,10 @@ final class CatalogCascadeRecall
     public function retrieve(string $query, array $intent, string $requirement, int $limit): array
     {
         $layers = $this->layers($query, $intent);
+        $steps = $this->intentSteps($intent, $layers);
+        if ($steps !== []) {
+            return $this->retrieveBySteps($query, $layers, $steps, $requirement, $limit);
+        }
         if ($layers['family'] === null && $layers['features'] === [] && $layers['manufacturer'] === null) {
             return ['products' => collect(), 'level' => null];
         }
@@ -96,6 +100,177 @@ final class CatalogCascadeRecall
         }
 
         return ['products' => collect(), 'level' => null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @param  array{family: ?string, family_nouns: list<string>}  $layers
+     * @return list<array{label: string, kind: 'text'|'brand', tokens: list<string>}>
+     */
+    private function intentSteps(array $intent, array $layers): array
+    {
+        $raw = is_array($intent['search_steps'] ?? null) ? $intent['search_steps'] : [];
+        $brand = trim((string) ($intent['manufacturer'] ?? ''));
+        $requested = trim((string) ($intent['manufacturer_requested'] ?? ''));
+        $out = [];
+        foreach ($raw as $label) {
+            $label = trim((string) $label);
+            if ($label === '') {
+                continue;
+            }
+            if ($this->isBrandLabel($label, $brand, $requested)) {
+                if ($brand !== '' && empty($intent['manufacturer_absent_in_catalog'])) {
+                    $out[] = ['label' => $label, 'kind' => 'brand', 'tokens' => []];
+                }
+
+                continue;
+            }
+            $out[] = [
+                'label' => $label,
+                'kind' => 'text',
+                'tokens' => $this->stepTokens($label, $layers['family'] ?? null),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array{family: ?string, family_nouns: list<string>}  $layers
+     * @param  list<array{label: string, kind: 'text'|'brand', tokens: list<string>}>  $steps
+     * @return array{products: Collection<int, Product>, level: ?string}
+     */
+    private function retrieveBySteps(
+        string $query,
+        array $layers,
+        array $steps,
+        string $requirement,
+        int $limit,
+    ): array {
+        $firstHasFeature = ($steps[0]['kind'] ?? '') === 'text' && ($steps[0]['tokens'] ?? []) !== [];
+        $minKeep = $firstHasFeature ? 1 : min(2, count($steps));
+        for ($n = count($steps); $n >= $minKeep; $n--) {
+            $used = array_slice($steps, 0, $n);
+            $rows = $this->querySteps($layers, $used, max(8, $limit))
+                ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
+                    || $this->modelFuzzy->matches($requirement, $p))
+                ->filter(fn (Product $p): bool => ! $this->slang->rejectsProduct(
+                    $query,
+                    implode(' ', [
+                        (string) $p->name,
+                        (string) $p->sku,
+                        (string) ($p->category ?? ''),
+                        (string) ($p->description ?? ''),
+                        (string) ($p->search_blob ?? ''),
+                    ])
+                ))
+                ->values();
+            if ($rows->isNotEmpty()) {
+                return ['products' => $rows, 'level' => 'steps_'.$n];
+            }
+        }
+
+        return ['products' => collect(), 'level' => null];
+    }
+
+    /**
+     * @param  array{family: ?string, family_nouns: list<string>}  $layers
+     * @param  list<array{label: string, kind: 'text'|'brand', tokens: list<string>}>  $steps
+     * @return Collection<int, Product>
+     */
+    private function querySteps(array $layers, array $steps, int $limit): Collection
+    {
+        $builder = Product::query();
+        $this->applyFamilyScope($builder, $layers);
+        foreach ($steps as $step) {
+            if ($step['kind'] === 'brand') {
+                $brand = $step['label'];
+                $like = '%'.addcslashes($brand, '%_\\').'%';
+                $builder->where(function (Builder $outer) use ($brand, $like): void {
+                    $outer->where('manufacturer', $brand)
+                        ->orWhere('manufacturer', 'like', $like);
+                });
+
+                continue;
+            }
+            foreach ($step['tokens'] as $token) {
+                $this->applyStepToken($builder, $token);
+            }
+        }
+
+        return $builder
+            ->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
+            ->orderByDesc('enriched_at')
+            ->orderBy('id')
+            ->limit($limit)
+            ->get()
+            ->values();
+    }
+
+    private function applyStepToken(Builder $builder, string $token): void
+    {
+        $token = trim($token);
+        if ($token === '') {
+            return;
+        }
+        $like = '%'.addcslashes($token, '%_\\').'%';
+        $builder->where(function (Builder $outer) use ($like): void {
+            $outer->where('name', 'like', $like)
+                ->orWhere('sku', 'like', $like)
+                ->orWhere('description', 'like', $like)
+                ->orWhere('search_blob', 'like', $like);
+        });
+    }
+
+    /** @return list<string> */
+    private function stepTokens(string $step, ?string $family): array
+    {
+        $out = [];
+        foreach ($this->assortment->catalogNounLikes($step) as $like) {
+            $fold = $this->fold($like);
+            if ($fold !== '' && mb_strlen($fold) >= 3) {
+                $out[] = $fold;
+            }
+        }
+        $familyNouns = $this->familyNouns($family);
+        $stop = ['ochrona', 'przed', 'ciecza', 'olej', 'plyn', 'proste', 'uniwersaln', 'oraz', 'dla'];
+        foreach ($this->tokenize($step) as $token) {
+            if (in_array($token, $stop, true) || preg_match('/^(ciecza|olej|plyn|ochrona|przed)/u', $token) === 1) {
+                continue;
+            }
+            $skip = false;
+            foreach ($familyNouns as $noun) {
+                if (str_starts_with($token, $noun) || str_starts_with($noun, $token)) {
+                    $skip = true;
+                    break;
+                }
+            }
+            if ($skip) {
+                continue;
+            }
+            $out[] = mb_strlen($token) > 5 ? mb_substr($token, 0, 5) : $token;
+        }
+
+        return array_values(array_unique(array_filter(
+            $out,
+            static fn (string $t): bool => $t !== '' && mb_strlen($t) >= 3
+        )));
+    }
+
+    private function isBrandLabel(string $label, string $brand, string $requested): bool
+    {
+        $fold = $this->fold($label);
+        if ($fold === '') {
+            return false;
+        }
+        foreach ([$brand, $requested] as $name) {
+            $n = $this->fold($name);
+            if ($n !== '' && (str_contains($fold, $n) || str_contains($n, $fold))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -241,10 +416,11 @@ final class CatalogCascadeRecall
         $brand = $this->fold((string) ($intent['manufacturer'] ?? ''));
         $requested = $this->fold((string) ($intent['manufacturer_requested'] ?? ''));
         $familyNouns = $this->familyNouns($family);
+        $stop = ['ochrona', 'przed', 'ciecza', 'olej', 'plyn', 'proste', 'uniwersaln'];
         $clean = [];
         foreach ($out as $token) {
             $token = trim($token);
-            if ($token === '' || mb_strlen($token) < 3) {
+            if ($token === '' || mb_strlen($token) < 3 || in_array($token, $stop, true)) {
                 continue;
             }
             if ($brand !== '' && str_contains($token, $brand)) {
@@ -303,28 +479,13 @@ final class CatalogCascadeRecall
 
     private function matchesFeatureEvidence(string $query, Product $product): bool
     {
-        $hay = $this->fold(implode(' ', [
+        return $this->slang->matchesEvidence($query, implode(' ', [
             (string) $product->name,
             (string) $product->sku,
             (string) ($product->category ?? ''),
             (string) ($product->description ?? ''),
             (string) ($product->search_blob ?? ''),
         ]));
-        if ($this->slang->rejectsProduct($query, $hay)) {
-            return false;
-        }
-        $needles = $this->slang->evidenceNeedles($query);
-        if ($needles === []) {
-            return true;
-        }
-        foreach ($needles as $needle) {
-            $n = $this->fold($needle);
-            if ($n !== '' && str_contains($hay, $n)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private function fold(string $text): string
