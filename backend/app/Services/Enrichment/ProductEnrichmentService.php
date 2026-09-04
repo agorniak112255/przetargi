@@ -276,11 +276,46 @@ final class ProductEnrichmentService
     private function searchPackForEnrichment(Product $product): array
     {
         $pack = $this->prefetchPack($product);
-        if (is_array($pack) && ($pack['results'] ?? []) !== []) {
+        if (! is_array($pack) || ($pack['results'] ?? []) === []) {
+            $pack = $this->search->searchBothPhases($product);
+        }
+
+        return $this->withHintedShopResult($product, $pack);
+    }
+
+    /**
+     * Ręcznie wskazany URL sklepu idzie pierwszy — nawet gdy SERP nic nie znalazł.
+     *
+     * @param  array{results?: list<array<string, mixed>>, errors?: list<string>}  $pack
+     * @return array{results: list<array<string, mixed>>, errors?: list<string>}
+     */
+    private function withHintedShopResult(Product $product, array $pack): array
+    {
+        $hint = $product->hintedShopUrl();
+        $results = is_array($pack['results'] ?? null) ? $pack['results'] : [];
+        if ($hint === null) {
+            $pack['results'] = $results;
+
             return $pack;
         }
 
-        return $this->search->searchBothPhases($product);
+        foreach ($results as $row) {
+            if ($product->isHintedShopUrl((string) ($row['url'] ?? ''))) {
+                $pack['results'] = $results;
+
+                return $pack;
+            }
+        }
+
+        array_unshift($results, [
+            'url' => $hint,
+            'title' => 'Wskazana karta sklepu',
+            'snippet' => trim((string) $product->name.' '.(string) $product->sku),
+            'hinted' => true,
+        ]);
+        $pack['results'] = $results;
+
+        return $pack;
     }
 
     /** @param  array<string, mixed>  $pack */
@@ -395,7 +430,7 @@ final class ProductEnrichmentService
             'docs_ms' => 0,
         ];
         try {
-            if (! $force && $this->applyFromSkuCache($product)) {
+            if (! $force && $product->hintedShopUrl() === null && $this->applyFromSkuCache($product)) {
                 $this->logEnrichmentTiming($timing, $started, extra: ['from_cache' => true]);
 
                 return;
@@ -424,6 +459,10 @@ final class ProductEnrichmentService
                         : 'Nie znaleziono karty produktu '.$product->sku
                             .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie. '.$searchEmptyDetail
                 );
+            }
+            $hintedUrl = $product->hintedShopUrl();
+            if ($hintedUrl !== null) {
+                $this->attemptLog()->add('search', 'wskazany URL sklepu', urls: [$hintedUrl]);
             }
 
             // Opis/zdjęcia ← sklepy; PDF/certyfikaty ← producent (osobne ścieżki).
@@ -1379,6 +1418,9 @@ final class ProductEnrichmentService
         if ($url === '') {
             return -100;
         }
+        if ($product->isHintedShopUrl($url)) {
+            return 100;
+        }
         if ($this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
             return 0;
         }
@@ -2076,6 +2118,9 @@ final class ProductEnrichmentService
         if ($d === '' || $this->looksLikeMissingCardMeta($d) || $this->looksLikeThinDescription($d)) {
             return false;
         }
+        if ($product->hintedShopUrl() !== null) {
+            return true;
+        }
 
         return $this->descriptionMentionsProduct($d, $product);
     }
@@ -2093,7 +2138,8 @@ final class ProductEnrichmentService
             if ($url === '' || $text === '') {
                 continue;
             }
-            if ($this->identity->isConfirmedProductCard($url, '', $text, $product)) {
+            if ($product->isHintedShopUrl($url)
+                || $this->identity->isConfirmedProductCard($url, '', $text, $product)) {
                 $row = ['url' => $url, 'text' => $text];
                 if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
                     $row['option_sizes'] = $page['option_sizes'];
@@ -2110,6 +2156,9 @@ final class ProductEnrichmentService
      */
     private function sourceUrlIsConfirmedCard(string $url, array $pages, Product $product): bool
     {
+        if ($product->isHintedShopUrl($url)) {
+            return true;
+        }
         foreach ($pages as $page) {
             if (mb_strtolower((string) ($page['url'] ?? '')) === mb_strtolower($url)) {
                 return $this->identity->isConfirmedProductCard(

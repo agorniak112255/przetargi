@@ -76,6 +76,9 @@ export function ProductDetail() {
   const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([])
   const [categoryBusy, setCategoryBusy] = useState(false)
   const [categoryMsg, setCategoryMsg] = useState('')
+  const [shopUrlDraft, setShopUrlDraft] = useState('')
+  const [shopUrlBusy, setShopUrlBusy] = useState(false)
+  const [shopUrlMsg, setShopUrlMsg] = useState('')
 
   const load = useCallback(async () => {
     if (!id) return
@@ -93,6 +96,10 @@ export function ProductDetail() {
       .then((res) => setCategoryOptions(res.data ?? []))
       .catch(() => setCategoryOptions([]))
   }, [])
+
+  useEffect(() => {
+    setShopUrlDraft(p?.shop_source_url ?? '')
+  }, [p?.id, p?.shop_source_url])
 
   async function saveCategory(next: string) {
     if (!id || !p) return
@@ -137,8 +144,40 @@ export function ProductDetail() {
     return () => window.removeEventListener('keydown', onKey)
   }, [imageModalUrl])
 
+  async function persistShopSource(next: string): Promise<boolean> {
+    if (!id || !p) return false
+    const trimmed = next.trim()
+    const current = (p.shop_source_url ?? '').trim()
+    if (trimmed === current) {
+      setShopUrlMsg(trimmed === '' ? '' : 'Zapisano')
+      return true
+    }
+    setShopUrlBusy(true)
+    setShopUrlMsg('')
+    setErr('')
+    try {
+      const res = await api<{ shop_source_url: string | null }>(`/products/${id}/shop-source`, {
+        method: 'PATCH',
+        body: JSON.stringify({ shop_source_url: trimmed === '' ? null : trimmed }),
+      })
+      setP({ ...p, shop_source_url: res.shop_source_url })
+      setShopUrlDraft(res.shop_source_url ?? '')
+      setShopUrlMsg(res.shop_source_url ? 'Zapisano — kliknij Pobierz, żeby zaciągnąć kartę' : 'Usunięto link')
+      return true
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zapisać linku do sklepu')
+      return false
+    } finally {
+      setShopUrlBusy(false)
+    }
+  }
+
   async function enrich(force = false) {
     if (!id) return
+    if (canEnrich && shopUrlDraft.trim() !== (p?.shop_source_url ?? '').trim()) {
+      const saved = await persistShopSource(shopUrlDraft)
+      if (!saved) return
+    }
     setBusy(true)
     setErr('')
     try {
@@ -261,6 +300,40 @@ export function ProductDetail() {
               {categoryBusy ? 'Zapisuję…' : categoryMsg}
             </span>
           </div>
+          {canEnrich && (
+            <form
+              className="mb-2 flex max-w-xl flex-wrap items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void persistShopSource(shopUrlDraft)
+              }}
+            >
+              <label htmlFor="product-shop-url" className="shrink-0 text-xs font-semibold text-slate-600">
+                Link do sklepu
+              </label>
+              <input
+                id="product-shop-url"
+                type="url"
+                inputMode="url"
+                placeholder="https://…"
+                className="min-w-[16rem] flex-1 rounded border border-slate-300 bg-white px-2 py-1.5 text-xs"
+                value={shopUrlDraft}
+                disabled={shopUrlBusy || busy}
+                onChange={(e) => {
+                  setShopUrlDraft(e.target.value)
+                  setShopUrlMsg('')
+                }}
+              />
+              <button
+                type="submit"
+                disabled={shopUrlBusy || busy}
+                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+              >
+                {shopUrlBusy ? 'Zapisuję…' : 'Zapisz'}
+              </button>
+              <span className="text-xs text-slate-500">{shopUrlMsg}</span>
+            </form>
+          )}
           <p className="text-xs text-slate-500">
             Opis/zdjęcia: <b>{STATUS_LABEL[status] ?? status}</b>
             {p.enriched_at ? ` · ${new Date(p.enriched_at).toLocaleString('pl-PL')}` : ''}

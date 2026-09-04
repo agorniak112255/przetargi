@@ -368,13 +368,14 @@ final class ProductPageFetcher
             $text = trim('Dostępne rozmiary: '.implode(', ', $optionSizes)."\n\n".$text);
         }
         $title = (string) ($row['title'] ?? '');
-        if ($this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
+        $hinted = $this->matchingProduct !== null && $this->matchingProduct->isHintedShopUrl($url);
+        if (! $hinted && $this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
             return;
         }
-        $pageLooksLikeProduct = $this->matchingProduct !== null
+        $pageLooksLikeProduct = $hinted || ($this->matchingProduct !== null
             ? $this->identity->isConfirmedProductCard($url, $title, $text, $this->matchingProduct)
             : ($this->pageMentionsSku($url, $text, $title, $skuNorm)
-                || $this->pageMatchesProductIdentity($url, $text, $title));
+                || $this->pageMatchesProductIdentity($url, $text, $title)));
 
         if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
             $page = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
@@ -433,6 +434,9 @@ final class ProductPageFetcher
         $url = (string) ($page['url'] ?? '');
         $text = (string) ($page['text'] ?? '');
         $score = min(3000, mb_strlen($text));
+        if ($this->matchingProduct !== null && $this->matchingProduct->isHintedShopUrl($url)) {
+            $score += 8000;
+        }
         if ($this->pageMentionsSku($url, $text, '', $skuNorm)) {
             $score += 4000;
         }
@@ -448,12 +452,27 @@ final class ProductPageFetcher
     {
         $skuNorm = mb_strtolower(trim($sku));
         $skuCompact = preg_replace('/[^a-z0-9]/i', '', $skuNorm) ?? $skuNorm;
+        $product = $this->matchingProduct;
 
-        usort($results, static function (array $a, array $b) use ($skuNorm, $skuCompact): int {
-            return self::score($b, $skuNorm, $skuCompact) <=> self::score($a, $skuNorm, $skuCompact);
+        usort($results, function (array $a, array $b) use ($skuNorm, $skuCompact, $product): int {
+            return $this->resultScore($b, $skuNorm, $skuCompact, $product)
+                <=> $this->resultScore($a, $skuNorm, $skuCompact, $product);
         });
 
         return $results;
+    }
+
+    /**
+     * @param  array{url: string, title?: string, snippet?: string}  $row
+     */
+    private function resultScore(array $row, string $skuNorm, string $skuCompact, ?Product $product): int
+    {
+        $score = self::score($row, $skuNorm, $skuCompact);
+        if ($product !== null && $product->isHintedShopUrl((string) ($row['url'] ?? ''))) {
+            $score += 10_000;
+        }
+
+        return $score;
     }
 
     /**

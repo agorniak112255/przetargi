@@ -327,4 +327,66 @@ final class ProductIndexApiTest extends TestCase
             'category' => null,
         ]);
     }
+
+    public function test_product_shop_source_url_can_be_saved_and_cleared(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = Product::query()->create([
+            'sku' => 'SHOP-1',
+            'name' => 'Rękawice',
+            'manufacturer' => 'X',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+
+        $this->patchJson('/api/products/'.$product->id.'/shop-source', [
+            'shop_source_url' => 'https://sklep.example.com/produkt/123',
+        ])
+            ->assertOk()
+            ->assertJsonPath('shop_source_url', 'https://sklep.example.com/produkt/123');
+
+        $this->assertDatabaseHas('products', [
+            'id' => $product->id,
+            'shop_source_url' => 'https://sklep.example.com/produkt/123',
+        ]);
+
+        $this->patchJson('/api/products/'.$product->id.'/shop-source', [
+            'shop_source_url' => 'sklep.example.com/bez-protokolu',
+        ])
+            ->assertOk()
+            ->assertJsonPath('shop_source_url', 'https://sklep.example.com/bez-protokolu');
+
+        $this->getJson('/api/products/'.$product->id)
+            ->assertOk()
+            ->assertJsonPath('shop_source_url', 'https://sklep.example.com/bez-protokolu');
+
+        $this->patchJson('/api/products/'.$product->id.'/shop-source', [
+            'shop_source_url' => null,
+        ])
+            ->assertOk()
+            ->assertJsonPath('shop_source_url', null);
+
+        $this->assertDatabaseHas('products', [
+            'id' => $product->id,
+            'shop_source_url' => null,
+        ]);
+    }
+
+    public function test_product_shop_source_rejects_invalid_url(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = Product::query()->create([
+            'sku' => 'SHOP-BAD',
+            'name' => 'Rękawice',
+            'manufacturer' => 'X',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+
+        $this->patchJson('/api/products/'.$product->id.'/shop-source', [
+            'shop_source_url' => 'not a url',
+        ])->assertStatus(422);
+    }
 }

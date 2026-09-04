@@ -931,6 +931,79 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertTrue((bool) ($product->enrichment_payload['from_cache'] ?? false));
     }
 
+    public function test_shop_source_url_skips_sku_cache_and_fetches_hinted_page(): void
+    {
+        Storage::fake('public');
+
+        ProductEnrichmentCache::query()->create([
+            'manufacturer' => 'ansell',
+            'sku' => 'cache-hint',
+            'description' => 'Opis z cache SKU — nie ten sklep.',
+            'enrichment_payload' => ['features' => ['x'], 'from_cache' => false],
+            'image_urls' => [],
+            'source_urls' => ['https://example.com/p'],
+        ]);
+
+        $product = $this->makeProduct([
+            'sku' => 'CACHE-HINT',
+            'name' => 'Rękawice testowe',
+            'manufacturer' => 'Ansell',
+            'shop_source_url' => 'https://hint.example.com/karta-cache-hint',
+        ]);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
+        $search->shouldReceive('forgetProductCache')->zeroOrMoreTimes();
+
+        $llm = $this->mockLlmWithSanitize([
+            'description' => 'Rękawice nitrylowe Ansell CACHE-HINT ze wskazanego sklepu. Spełniają EN 388 i chronią przed ścieraniem. Przeznaczone do montażu oraz prac precyzyjnych w warunkach suchych. Trwała powłoka nitrylowa zwiększa żywotność przy codziennym użytkowaniu.',
+            'features' => ['nitryl'],
+            'specs' => ['SKU: CACHE-HINT'],
+            'norms' => ['EN 388'],
+            'certificates' => [],
+            'materials' => ['nitryl'],
+            'use_cases' => ['montaż'],
+            'image_urls' => [],
+            'source_urls' => ['https://hint.example.com/karta-cache-hint'],
+            'confidence' => 0.8,
+        ]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ProductDocumentFinder::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        Http::fake([
+            'https://hint.example.com/*' => Http::response(
+                '<html><body><h1>Ansell Rękawice testowe CACHE-HINT</h1><p>'
+                .str_repeat('Rękawice nitrylowe Ansell CACHE-HINT EN 388. ', 40)
+                .'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $service->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertNotSame('Opis z cache SKU — nie ten sklep.', $product->description);
+        $this->assertFalse((bool) ($product->enrichment_payload['from_cache'] ?? false));
+        $this->assertStringContainsString('CACHE-HINT', (string) $product->description);
+    }
+
     public function test_product_absent_from_web_goes_to_manual_and_leaves_queues(): void
     {
         Sanctum::actingAs($user = User::factory()->withRole('admin')->create());

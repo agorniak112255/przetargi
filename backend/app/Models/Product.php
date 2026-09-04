@@ -48,6 +48,7 @@ class Product extends Model
         'stock',
         'pack_qty',
         'packaging',
+        'shop_source_url',
     ];
 
     /**
@@ -130,5 +131,39 @@ class Product extends Model
     public function prestaExport(): HasOne
     {
         return $this->hasOne(PrestaProductMatch::class)->latestOfMany();
+    }
+
+    public function hintedShopUrl(): ?string
+    {
+        $raw = trim((string) ($this->shop_source_url ?? ''));
+        if ($raw === '' || preg_match('#^https?://#i', $raw) !== 1) {
+            return null;
+        }
+
+        return mb_substr($raw, 0, 2000);
+    }
+
+    public function isHintedShopUrl(string $url): bool
+    {
+        $hint = $this->hintedShopUrl();
+        if ($hint === null || trim($url) === '') {
+            return false;
+        }
+
+        return self::normalizeShopUrl($hint) === self::normalizeShopUrl($url);
+    }
+
+    public static function normalizeShopUrl(string $url): string
+    {
+        $url = trim($url);
+        $parts = parse_url($url);
+        if (! is_array($parts) || empty($parts['host'])) {
+            return mb_strtolower(rtrim($url, '/'));
+        }
+        $host = mb_strtolower((string) $parts['host']);
+        $path = rtrim((string) ($parts['path'] ?? ''), '/');
+        $query = isset($parts['query']) && $parts['query'] !== '' ? '?'.$parts['query'] : '';
+
+        return $host.$path.$query;
     }
 }

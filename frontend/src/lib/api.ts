@@ -110,6 +110,7 @@ export type Product = {
   stock: number
   pack_qty?: number | null
   packaging?: string | null
+  shop_source_url?: string | null
   substitutes_count?: number
   enrichment_status?: 'none' | 'queued' | 'running' | 'done' | 'failed' | 'manual'
   enriched_at?: string | null

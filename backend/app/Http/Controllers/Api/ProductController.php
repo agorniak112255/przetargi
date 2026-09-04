@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\UpdateProductCategoryRequest;
+use App\Http\Requests\UpdateProductShopSourceRequest;
 use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
@@ -236,6 +237,17 @@ class ProductController extends Controller
 
         return response()->json([
             'category' => $product->category,
+        ]);
+    }
+
+    public function updateShopSource(UpdateProductShopSourceRequest $request, Product $product): JsonResponse
+    {
+        $url = trim((string) ($request->validated('shop_source_url') ?? ''));
+        $product->shop_source_url = $url !== '' ? mb_substr($url, 0, 2000) : null;
+        $product->save();
+
+        return response()->json([
+            'shop_source_url' => $product->shop_source_url,
         ]);
     }
 
