@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Services\ProductAiSearchService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 final class ProductAiSearchSpecificityTest extends TestCase
 {
+    use RefreshDatabase;
     private function service(): ProductAiSearchService
     {
         return $this->app->make(ProductAiSearchService::class);
@@ -30,6 +32,8 @@ final class ProductAiSearchSpecificityTest extends TestCase
             'Ochronniki słuchu na hełm MSA - niski poziom tłumienia'
         ));
         $this->assertFalse($svc->isSpecificRequirement('OKULARY OCHRONNE MSA PERSPECTA 010'));
+        $this->assertFalse($svc->isSpecificRequirement('Rękawice wampirki uniwersalne'));
+        $this->assertFalse($svc->isSpecificRequirement('wampirki'));
     }
 
     public function test_hazard_or_norm_makes_requirement_specific(): void

@@ -321,4 +321,31 @@ final class AiSettingsApiTest extends TestCase
             ->assertJsonPath('results.2.ok', true)
             ->assertJsonFragment(['message' => 'połączono (qwen/qwen3.8-flash)']);
     }
+
+    public function test_catalog_slang_is_returned_and_can_be_saved(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->getJson('/api/ai-settings')
+            ->assertOk()
+            ->assertJsonStructure([
+                'catalog_slang',
+                'catalog_slang_defaults',
+                'catalog_slang_categories',
+            ]);
+
+        $this->putJson('/api/ai-settings', [
+            'catalog_slang' => [[
+                'category' => 'rece',
+                'terms' => ['wampirki'],
+                'phrases' => ['rękawice powlekane'],
+                'note' => 'test',
+                'jargon' => true,
+            ]],
+        ])->assertOk()
+            ->assertJsonPath('catalog_slang.0.terms.0', 'wampirki')
+            ->assertJsonPath('catalog_slang.0.phrases.0', 'rękawice powlekane')
+            ->assertJsonPath('catalog_slang.0.category', 'rece');
+    }
 }

@@ -39,6 +39,7 @@ class AiSetting extends Model
         'embedding_cloud_model',
         'embedding_cloud_api_key',
         'model_profiles',
+        'catalog_slang',
     ];
 
     protected function casts(): array
@@ -51,6 +52,7 @@ class AiSetting extends Model
             'embedding_api_key' => 'encrypted',
             'embedding_cloud_api_key' => 'encrypted',
             'model_profiles' => 'encrypted:array',
+            'catalog_slang' => 'array',
             'timeout_seconds' => 'integer',
             'temperature' => 'float',
             'web_search_enabled' => 'boolean',

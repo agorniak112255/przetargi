@@ -8,6 +8,7 @@ use App\Models\AiSetting;
 use App\Models\Product;
 use App\Services\Enrichment\TavilyQuotaGuard;
 use App\Services\Enrichment\TavilySearchProfile;
+use App\Support\CatalogSlangDictionary;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
@@ -99,6 +100,7 @@ final class AiSettingsService
      *     has_embedding_api_key: bool,
      *     has_embedding_cloud_api_key: bool,
      *     model_profiles: list<array<string, mixed>>,
+     *     catalog_slang: list<array{category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string}>,
      *     source: string
      * }
      */
@@ -188,6 +190,7 @@ final class AiSettingsService
                 'has_embedding_api_key' => $embKey !== null && $embKey !== '',
                 'has_embedding_cloud_api_key' => $cloudEmbKey !== null && $cloudEmbKey !== '',
                 'model_profiles' => $this->safeProfiles($row),
+                'catalog_slang' => $this->slangFromRow($row),
                 'source' => 'database',
             ];
         }
@@ -241,6 +244,7 @@ final class AiSettingsService
             'has_embedding_api_key' => $embKey !== null,
             'has_embedding_cloud_api_key' => $cloudEmbKey !== null,
             'model_profiles' => [],
+            'catalog_slang' => CatalogSlangDictionary::defaults(),
             'source' => 'env',
         ];
     }
@@ -284,6 +288,9 @@ final class AiSettingsService
             'has_embedding_api_key' => $cfg['has_embedding_api_key'],
             'has_embedding_cloud_api_key' => $cfg['has_embedding_cloud_api_key'],
             'model_profiles' => AiModelProfiles::publicView($cfg['model_profiles'], $this->maskKey(...)),
+            'catalog_slang' => $cfg['catalog_slang'],
+            'catalog_slang_defaults' => CatalogSlangDictionary::defaults(),
+            'catalog_slang_categories' => CatalogSlangDictionary::CATEGORY_LABELS,
             'ai_tasks' => AiTask::catalog(),
             'source' => $cfg['source'],
             'api_key_masked' => $this->maskKey($cfg['api_key']),
@@ -399,6 +406,10 @@ final class AiSettingsService
 
         if (array_key_exists('model_profiles', $data) && Schema::hasColumn('ai_settings', 'model_profiles')) {
             $row->model_profiles = AiModelProfiles::normalize($data['model_profiles'], $this->safeProfiles($row));
+        }
+
+        if (array_key_exists('catalog_slang', $data) && Schema::hasColumn('ai_settings', 'catalog_slang')) {
+            $row->catalog_slang = CatalogSlangDictionary::normalize($data['catalog_slang']);
         }
 
         $this->applySecret($row, 'api_key', $data);
@@ -697,6 +708,26 @@ final class AiSettingsService
         $cfg = $this->resolve();
 
         return $this->normalizeMatchConcurrency($cfg['match_concurrency'] ?? null);
+    }
+
+    /**
+     * @return list<array{category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string>}>
+     */
+    public function catalogSlang(): array
+    {
+        return $this->resolve()['catalog_slang'] ?? CatalogSlangDictionary::defaults();
+    }
+
+    /**
+     * @return list<array{category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string>}>
+     */
+    private function slangFromRow(AiSetting $row): array
+    {
+        if (! Schema::hasColumn('ai_settings', 'catalog_slang') || $row->catalog_slang === null) {
+            return CatalogSlangDictionary::defaults();
+        }
+
+        return CatalogSlangDictionary::normalize($row->catalog_slang);
     }
 
     public function productSearchUsesShortCards(): bool

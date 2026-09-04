@@ -45,4 +45,7 @@ return [
     'embedding_provider' => env('AI_EMBEDDING_PROVIDER', 'local'),
     'embedding_cloud_model' => env('AI_EMBEDDING_CLOUD_MODEL'),
     'embedding_cloud_api_key' => env('AI_EMBEDDING_CLOUD_API_KEY'),
+
+    // Żargon SIWZ → frazy z cennika. Edycja w Ustawieniach AI zapisuje kopię do bazy.
+    'catalog_slang' => require __DIR__.'/catalog_slang.php',
 ];

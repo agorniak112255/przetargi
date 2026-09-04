@@ -13,6 +13,7 @@ use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\CatalogManufacturerContext;
 use App\Support\CatalogRequirementRecall;
+use App\Support\CatalogSlangDictionary;
 use App\Support\PpeAssortment;
 use App\Support\PpeFilterType;
 use App\Support\ProductModelFuzzy;
@@ -66,6 +67,7 @@ final class ProductAiSearchService
         private readonly AiSettingsService $aiSettings,
         private readonly CatalogManufacturerContext $manufacturerContext,
         private readonly CatalogRequirementRecall $catalogRecall,
+        private readonly CatalogSlangDictionary $catalogSlang,
     ) {}
 
     /**
@@ -824,13 +826,17 @@ final class ProductAiSearchService
      */
     private function rewriteMessages(string $query): array
     {
+        $slang = $this->catalogSlang->promptHint($query);
+        $slang = $slang !== '' ? ' '.$slang : '';
+
         return [
             [
                 'role' => 'system',
                 'content' => 'Jesteś ekspertem BHP i katalogów odzieży roboczej. '
                     .'Pierwsze wyszukiwanie w katalogu nic nie dało. '
-                    .'Przepisz wymaganie na frazy, pod którymi sklepy BHP sprzedają ten produkt. '
-                    .'needed: krótka nazwa katalogowa (rzeczownik + typ). '
+                    .'Przepisz wymaganie na frazy, pod którymi sklepy BHP sprzedają ten produkt.'
+                    .$slang
+                    .' needed: krótka nazwa katalogowa (rzeczownik + typ). '
                     .'search_phrases: 2-8; pierwsze 2 = nazwa/synonim sklepowy. '
                     .'Przykłady: czapka drelichowa → czapka z daszkiem, czapka robocza; '
                     .'drelich = tkanina bawełniana, nie osobny asortyment. '
@@ -851,12 +857,15 @@ final class ProductAiSearchService
     private function understandMessages(string $query): array
     {
         $manufacturers = $this->manufacturerContext->promptBlock();
+        $slang = $this->catalogSlang->promptHint($query);
+        $slang = $slang !== '' ? $slang.' ' : '';
 
         return [
             [
                 'role' => 'system',
                 'content' => 'Jesteś ekspertem BHP i katalogów. Najpierw ZROZUM wymaganie SIWZ, potem zbuduj frazy sklepowe. '
                     .$manufacturers.' '
+                    .$slang
                     .'manufacturer: dokładnie jedna nazwa z listy katalogu albo null (nie zgaduj spoza listy). '
                     .'model_name: nazwa modelu/kolekcji (np. TRONCHETTO, PERSPECTA 010) — nie producent. '
                     .'size_note: rozmiary (np. 35-41) — nie łącz z modelem. '
@@ -1041,11 +1050,13 @@ final class ProductAiSearchService
         if ($this->assortment->isUnderHelmetLiner($query)) {
             return [];
         }
+        $phrases = $this->catalogSlang->phrasesFor($query);
         if ($this->assortment->articleType($query) === 'cap') {
-            return ['czapka z daszkiem', 'czapka robocza'];
+            $phrases[] = 'czapka z daszkiem';
+            $phrases[] = 'czapka robocza';
         }
 
-        return [];
+        return array_values(array_unique($phrases));
     }
 
     /** @param array<string, mixed> $intent */
@@ -1465,12 +1476,16 @@ final class ProductAiSearchService
         if ($t === '' || $this->isClothingSizePhrase($t) || $this->isGenericAssortmentToken($t)) {
             return true;
         }
+        if ($this->catalogSlang->isJargonNorm($t)) {
+            return true;
+        }
 
         return preg_match(
             '/^(czarn|bial|zol|niebies|czerw|zielon|szar|granat|pomaranc|brazow|bezow'
             .'|srebrn|zlot|grafit|khaki|navy|black|white|yellow|blue|red|green|grey|gray|orange'
             .'|polar(?!yz)|poliestr|baweln|nylon|elastan|lycra|ociepl|kolor|rozmiar'
             .'|drelich|drill|twill|denim|kanw|flanel|welur|sztruks|oxford|ripstop|softshell'
+            .'|uniwersaln'
             .'|nisk|wysok|sredn|poziom|stopien|tlumien|attenuat|snr)/u',
             $t
         ) === 1;
