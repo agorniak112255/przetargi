@@ -59,6 +59,9 @@ final class ProductAiSearchService
     /** Karta bez opisu mówi o sobie mniej, więc jej trafienie waży mniej. */
     private const RRF_WEIGHT_UNCLASSIFIED = 0.6;
 
+    /** @var array<string, int> */
+    private array $timingMs = [];
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductVectorSearch $vectorSearch,
@@ -106,17 +109,28 @@ final class ProductAiSearchService
         }
 
         $wanted = min($wanted, $this->catalogLimit());
-
-        return $this->clipResult(
+        $this->timingMs = [];
+        $started = hrtime(true);
+        $intent = $this->clock('intent', fn (): array => $this->intentForSearch($query, $task));
+        $result = $this->clipResult(
             $this->finishSearch(
                 $query,
-                $this->intentForSearch($query, $task),
+                $intent,
                 $this->rankLimit($wanted),
                 $withExternalHint,
                 $task,
             ),
             $wanted,
         );
+        $this->timingMs['total'] = (int) round((hrtime(true) - $started) / 1e6);
+        $result['timings_ms'] = $this->timingMs;
+        Log::info('product-ai-search.timings', [
+            'query' => mb_substr($query, 0, 80),
+            'timings_ms' => $this->timingMs,
+            'products' => $result['total'] ?? 0,
+        ]);
+
+        return $result;
     }
 
     /**
@@ -537,6 +551,24 @@ final class ProductAiSearchService
         return $this->aiSettings->catalogSearchLimit();
     }
 
+    /**
+     * @template T
+     *
+     * @param  callable(): T  $fn
+     * @return T
+     */
+    private function clock(string $stage, callable $fn): mixed
+    {
+        $started = hrtime(true);
+        try {
+            return $fn();
+        } finally {
+            $this->timingMs[$stage] = (int) round(
+                ($this->timingMs[$stage] ?? 0) + ((hrtime(true) - $started) / 1e6)
+            );
+        }
+    }
+
     private function rankLimit(int $displayLimit): int
     {
         return max($displayLimit, $this->catalogLimit());
@@ -587,7 +619,7 @@ final class ProductAiSearchService
         bool $allowRewrite = true,
     ): array {
         $retrieveIntent = $intent;
-        $prepared = $this->prepareSearch($query, $intent, $limit);
+        $prepared = $this->clock('prepare', fn (): array => $this->prepareSearch($query, $intent, $limit));
         if ($task === AiTask::TenderMatch && $prepared['rank_cards'] !== null) {
             $prepared['rank_cards'] = $prepared['rank_cards']->take(12)->values();
         }
@@ -599,28 +631,34 @@ final class ProductAiSearchService
 
             return $result;
         }
-        [$rankedIntent, $ranked, $rankFailed] = $this->analyzeAndRank(
-            $query,
-            $prepared['rank_cards'],
-            $limit,
-            $task,
-            $intent['constraints'],
-            $intent,
+        [$rankedIntent, $ranked, $rankFailed] = $this->clock(
+            'rank_llm',
+            fn (): array => $this->analyzeAndRank(
+                $query,
+                $prepared['rank_cards'],
+                $limit,
+                $task,
+                $intent['constraints'],
+                $intent,
+            )
         );
-        $rankedIntent = $this->withCatalogAliases($rankedIntent, $query);
-        $catalogQ = $this->catalogSearchQuery($query, $intent);
-        $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $query);
-        $useCatalog = $this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent);
-        $deferCatalogMerge = $task === AiTask::TenderMatch;
-        if (! $deferCatalogMerge && $useCatalog && count($ranked) < $limit) {
-            $ranked = $this->mergeRequirementCatalogRows($query, $ranked, $limit, $intent);
-        }
-        if (! $deferCatalogMerge && $ranked === [] && $useCatalog) {
-            $ranked = $this->rowsFromRequirementCatalog($catalogQ, $limit);
-        } elseif ($ranked === []) {
-            $ranked = $this->rowsFromGenericCatalog($query, $prepared['candidates'], $limit, $intent);
-        }
-        $ranked = $this->sortRankedByMatchPercent($ranked);
+        [$rankedIntent, $ranked] = $this->clock('post_rank', function () use ($query, $intent, $limit, $task, $prepared, $rankedIntent, $ranked): array {
+            $rankedIntent = $this->withCatalogAliases($rankedIntent, $query);
+            $catalogQ = $this->catalogSearchQuery($query, $intent);
+            $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $query);
+            $useCatalog = $this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent);
+            $deferCatalogMerge = $task === AiTask::TenderMatch;
+            if (! $deferCatalogMerge && $useCatalog && count($ranked) < $limit) {
+                $ranked = $this->mergeRequirementCatalogRows($query, $ranked, $limit, $intent);
+            }
+            if (! $deferCatalogMerge && $ranked === [] && $useCatalog) {
+                $ranked = $this->rowsFromRequirementCatalog($catalogQ, $limit);
+            } elseif ($ranked === []) {
+                $ranked = $this->rowsFromGenericCatalog($query, $prepared['candidates'], $limit, $intent);
+            }
+
+            return [$rankedIntent, $this->sortRankedByMatchPercent($ranked)];
+        });
         $emptyNote = $rankFailed
             ? 'Nie udało się ocenić kart przez model. Spróbuj ponownie albo użyj zwykłego wyszukiwania.'
             : 'Model nie znalazł pasującego produktu w katalogu.';
@@ -661,7 +699,7 @@ final class ProductAiSearchService
         bool $withExternalHint,
         AiTask $task,
     ): array {
-        $rewritten = $this->rewriteCatalogIntent($query, $task);
+        $rewritten = $this->clock('rewrite_llm', fn (): array => $this->rewriteCatalogIntent($query, $task));
         if (! $this->intentChanged($usedIntent, $rewritten)) {
             return $this->emptyResult(
                 $query,
@@ -1698,12 +1736,12 @@ final class ProductAiSearchService
         $modelQuery = $this->intentModelQuery($query, $intent);
         $searchText = $intent['needed'] !== '' ? $intent['needed'] : $query;
         $requirement = $this->assortmentText($query, $intent['needed']);
-        $codeHits = $this->retrieveByModelCode($modelQuery.' '.$searchText, $limit);
-        $fuzzyHits = $this->retrieveByFuzzyModel($modelQuery.' '.$searchText, $limit);
-        $filterHits = $this->retrieveByFilterType($query, $limit);
+        $codeHits = $this->clock('retrieve_codes', fn (): Collection => $this->retrieveByModelCode($modelQuery.' '.$searchText, $limit));
+        $fuzzyHits = $this->clock('retrieve_fuzzy', fn (): Collection => $this->retrieveByFuzzyModel($modelQuery.' '.$searchText, $limit));
+        $filterHits = $this->clock('retrieve_filter', fn (): Collection => $this->retrieveByFilterType($query, $limit));
         $brandHits = $this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)
             ? collect()
-            : $this->retrieveByManufacturer($query, $intent, $limit);
+            : $this->clock('retrieve_brand', fn (): Collection => $this->retrieveByManufacturer($query, $intent, $limit));
         $priority = $this->uniqueProducts(
             $filterHits->concat($fuzzyHits)->concat($codeHits)->concat($brandHits),
             $limit
@@ -1726,14 +1764,23 @@ final class ProductAiSearchService
         $family = $this->searchFamily($query, $intent['needed']);
         $rankings = [
             'priority' => $priority->pluck('id')->map(intval(...))->all(),
-            'text' => $this->textSearch->search($intent['search_phrases'], $family, self::TEXT_POOL),
+            'text' => $this->clock(
+                'retrieve_text',
+                fn (): array => $this->textSearch->search($intent['search_phrases'], $family, self::TEXT_POOL)
+            ),
             // Zawężenie do rodziny wycina karty, którym rodziny nie dało się ustalić —
             // w tym katalogu to dwie trzecie pozycji. Wracają osobnym źródłem, ale
             // wyłącznie z trafieniem w tekst, więc nie zalewają zgodnego asortymentu.
             'unclassified' => $family === null
                 ? []
-                : $this->textSearch->searchUnclassified($intent['search_phrases'], self::UNCLASSIFIED_POOL),
-            'vector' => $this->retrieveVectorIds($searchText, self::VECTOR_POOL),
+                : $this->clock(
+                    'retrieve_unclassified',
+                    fn (): array => $this->textSearch->searchUnclassified($intent['search_phrases'], self::UNCLASSIFIED_POOL)
+                ),
+            'vector' => $this->clock(
+                'retrieve_vector',
+                fn (): array => $this->retrieveVectorIds($searchText, self::VECTOR_POOL)
+            ),
         ];
 
         $fused = $this->rrf->fuse(
@@ -1747,20 +1794,24 @@ final class ProductAiSearchService
             $limit * 2,
         );
 
-        $recall = $this->catalogRecall->shouldRecallToCandidatePool(
-            $this->catalogSearchQuery($query, $intent),
-            $intent,
-        )
-            ? $this->retrieveByRequirementCatalog($this->catalogSearchQuery($query, $intent), $limit)
-            : collect();
-
-        $merged = $this->keepCompatible(
-            $requirement,
-            $this->uniqueProducts(
-                $this->hydrate($fused)->concat($recall)->concat($brandHits),
-                $limit * 3
+        $recall = $this->clock('retrieve_catalog', function () use ($query, $intent, $limit): Collection {
+            return $this->catalogRecall->shouldRecallToCandidatePool(
+                $this->catalogSearchQuery($query, $intent),
+                $intent,
             )
-        );
+                ? $this->retrieveByRequirementCatalog($this->catalogSearchQuery($query, $intent), $limit)
+                : collect();
+        });
+
+        $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $fused, $recall, $brandHits, $limit): Collection {
+            return $this->keepCompatible(
+                $requirement,
+                $this->uniqueProducts(
+                    $this->hydrate($fused)->concat($recall)->concat($brandHits),
+                    $limit * 3
+                )
+            );
+        });
         $branded = $this->preferCatalogBrands($query, $merged, $intent);
 
         return $this->uniqueProducts($branded, $limit)->values();

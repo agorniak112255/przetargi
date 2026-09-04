@@ -2,6 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function () {
+        var p = location.pathname
+        var href = p === '/Przetargi' || p.indexOf('/Przetargi/') === 0 ? '/Przetargi/' : '/'
+        document.head.insertAdjacentHTML('afterbegin', '<base href="' + href + '">')
+      })()
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Przetargi Supon</title>
