@@ -7,7 +7,8 @@ namespace App\Support;
 use App\Models\Product;
 
 /**
- * Grupuje warianty, które różnią się tylko rozmiarem (np. AlphaTec 37695VP Size 7.0 / 10.0).
+ * Grupuje warianty, które różnią się tylko rozmiarem
+ * (np. AlphaTec Size 7.0 / 10.0 albo 1st Winter Dry 9 / 10 / 11).
  * Wyciąga też zakresy z opisu: rękawice, obuwie, odzież, spodnie.
  */
 final class ProductSizeVariant
@@ -373,7 +374,10 @@ final class ProductSizeVariant
             '',
             $t
         ) ?? $t;
-        $t = preg_replace('/\s+\d{1,2}[.,]\d\s*$/u', '', $t) ?? $t;
+        if (preg_match('/^(.*?)[\s,\/]+(\d{1,2}(?:[.,]\d)?)\s*$/u', $t, $m) === 1
+            && $this->normalizeSizeToken($m[2]) !== null) {
+            $t = $m[1];
+        }
 
         return trim(preg_replace('/\s+/u', ' ', $t) ?? $t);
     }
@@ -943,6 +947,9 @@ final class ProductSizeVariant
         ) === 1) {
             return $this->normalizeSizeToken($m[1]);
         }
+        if (preg_match('/(?:^|[\s,\/])(\d{1,2}(?:[.,]\d)?)\s*$/u', $name, $m) === 1) {
+            return $this->normalizeSizeToken($m[1]);
+        }
 
         return null;
     }
@@ -950,6 +957,9 @@ final class ProductSizeVariant
     private function sizeFromSku(string $sku): ?string
     {
         if (preg_match('/[A-Za-z](\d{3})$/', $sku, $m) === 1) {
+            return $this->sizeForDigitCode($m[1]);
+        }
+        if (preg_match('/^\d{5,}(\d{3})$/', $sku, $m) === 1) {
             return $this->sizeForDigitCode($m[1]);
         }
         if (preg_match('/[\/\-_]([A-Za-z0-9]+(?:[.,]\d)?)$/', $sku, $m) === 1) {

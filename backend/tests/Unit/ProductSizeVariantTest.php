@@ -25,6 +25,27 @@ final class ProductSizeVariantTest extends TestCase
     }
 
     #[Test]
+    public function groups_names_with_trailing_numeric_size(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $a = $svc->groupKey('Showa', '1st Winter Dry 9', '34703090');
+        $b = $svc->groupKey('Showa', '1st Winter Dry 10', '34703100');
+        $c = $svc->groupKey('Showa', '1st Winter Dry 11', '34703110');
+        $other = $svc->groupKey('Showa', '1st Winter 9', '34704090');
+
+        $this->assertNotNull($a);
+        $this->assertSame($a, $b);
+        $this->assertSame($a, $c);
+        $this->assertNotSame($a, $other);
+        $this->assertSame('9', $svc->extractSize('1st Winter Dry 9', '34703090'));
+        $this->assertSame('10', $svc->extractSize('1st Winter Dry 10', '34703100'));
+        $this->assertSame('1st Winter Dry', $svc->stripSizeFromName('1st Winter Dry 10'));
+        $this->assertSame('34703', $svc->skuCore('34703100', '1st Winter Dry 10'));
+        $this->assertSame('34704', $svc->skuCore('34704090', '1st Winter 9'));
+    }
+
+    #[Test]
     public function does_not_group_different_models(): void
     {
         $svc = new ProductSizeVariant;

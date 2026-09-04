@@ -89,6 +89,57 @@ final class ProductSizeMergeTest extends TestCase
         $this->assertSame([$rich->id], $list->fresh()?->product_ids);
     }
 
+    public function test_merges_trailing_numeric_size_in_name(): void
+    {
+        Queue::fake();
+
+        Product::query()->create([
+            'sku' => '34703090',
+            'name' => '1st Winter Dry 9',
+            'manufacturer' => 'Showa',
+            'catalog_price_net' => 9.75,
+            'purchase_price' => 8.78,
+            'stock' => 1,
+        ]);
+        $ten = Product::query()->create([
+            'sku' => '34703100',
+            'name' => '1st Winter Dry 10',
+            'manufacturer' => 'Showa',
+            'description' => str_repeat('Rękawice Showa 1st Winter Dry. ', 3),
+            'catalog_price_net' => 9.75,
+            'purchase_price' => 8.78,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => '34703110',
+            'name' => '1st Winter Dry 11',
+            'manufacturer' => 'Showa',
+            'catalog_price_net' => 9.75,
+            'purchase_price' => 8.78,
+            'stock' => 1,
+        ]);
+        $other = Product::query()->create([
+            'sku' => '34704090',
+            'name' => '1st Winter 9',
+            'manufacturer' => 'Showa',
+            'catalog_price_net' => 9.65,
+            'purchase_price' => 8.69,
+            'stock' => 1,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('Showa', false);
+
+        $this->assertSame(1, $result['groups']);
+        $this->assertSame(2, $result['deleted']);
+        $kept = Product::query()->find($ten->id);
+        $this->assertNotNull($kept);
+        $this->assertSame('1st Winter Dry', $kept->name);
+        $this->assertSame('34703', $kept->sku);
+        $this->assertSame(3, $kept->stock);
+        $this->assertNotNull(Product::query()->find($other->id));
+        $this->assertSame('34704090', $other->fresh()?->sku);
+    }
+
     public function test_does_not_merge_when_price_differs(): void
     {
         Product::query()->create([
