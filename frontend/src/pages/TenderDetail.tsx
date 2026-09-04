@@ -597,7 +597,7 @@ export function TenderDetail() {
         }
         setMatchProgress((prev) => ({
           status: 'running',
-          done: matchDoneRef.current,
+          done: Math.max(matchDoneRef.current, p.done ?? 0),
           total: prev?.total ?? p.total,
           line_no: p.line_no,
           requirement: p.requirement,
@@ -1189,6 +1189,7 @@ export function TenderDetail() {
             body: JSON.stringify({
               only_empty: onlyEmpty,
               item_ids: chunk,
+              progress_offset: matchDoneRef.current,
               progress_total: estimated,
             }),
             signal: ac.signal,

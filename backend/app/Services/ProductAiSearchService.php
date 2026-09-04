@@ -200,6 +200,7 @@ final class ProductAiSearchService
         $pending = [];
         $done = [];
         $intents = $this->analyzeQueriesForRetrieve($clean, $task, $maxConcurrent);
+        $this->prefetchVectorQueries($clean, $intents);
         $retrieveIntents = [];
         foreach ($clean as $i => $query) {
             $retrieveIntents[$i] = $intents[$i];
@@ -2713,11 +2714,25 @@ final class ProductAiSearchService
     }
 
     /**
-     * Sam ranking id — o zgodności rodziny i o miejscu w puli decyduje dopiero fuzja,
-     * więc odsiewanie kart bez opisu na tym etapie tylko gubiłoby trafienia.
-     *
-     * @return list<int>
+     * @param  list<string>  $queries
+     * @param  array<int, array<string, mixed>>  $intents
      */
+    private function prefetchVectorQueries(array $queries, array $intents): void
+    {
+        if (! $this->vectorSearch->enabled()) {
+            return;
+        }
+
+        $texts = $queries;
+        foreach ($intents as $intent) {
+            $needed = trim((string) ($this->normalizeIntent($intent)['needed'] ?? ''));
+            if ($needed !== '') {
+                $texts[] = $needed;
+            }
+        }
+        $this->vectorSearch->prefetch($texts);
+    }
+
     private function retrieveVectorIds(string $query, int $limit): array
     {
         if (! $this->vectorSearch->enabled()) {

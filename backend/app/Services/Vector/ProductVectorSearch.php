@@ -9,6 +9,11 @@ use Throwable;
 
 final class ProductVectorSearch
 {
+    private const PREFETCH_LIMIT = 150;
+
+    /** @var array<string, list<array{id: int, score: float}>> */
+    private array $hitCache = [];
+
     public function __construct(
         private readonly EmbeddingClient $embeddings,
         private readonly QdrantClient $qdrant,
@@ -17,6 +22,53 @@ final class ProductVectorSearch
     public function enabled(): bool
     {
         return $this->qdrant->isConfigured();
+    }
+
+    /**
+     * Embeddingi wielu zapytań naraz (Http::pool), potem Qdrant.
+     *
+     * @param  list<string>  $queries
+     */
+    public function prefetch(array $queries): void
+    {
+        if (! $this->enabled()) {
+            return;
+        }
+
+        $pending = [];
+        foreach ($queries as $query) {
+            $query = trim((string) $query);
+            if ($query !== '' && ! isset($this->hitCache[$query])) {
+                $pending[$query] = true;
+            }
+        }
+        $texts = array_keys($pending);
+        if ($texts === []) {
+            return;
+        }
+
+        try {
+            $vectors = $this->embeddings->embedMany($texts);
+        } catch (Throwable $e) {
+            Log::warning('Product vector prefetch failed', ['error' => $e->getMessage()]);
+
+            return;
+        }
+
+        foreach ($texts as $text) {
+            $vector = $vectors[$text] ?? [];
+            if ($vector === []) {
+                $this->hitCache[$text] = [];
+
+                continue;
+            }
+            try {
+                $this->hitCache[$text] = $this->qdrant->search($vector, self::PREFETCH_LIMIT);
+            } catch (Throwable $e) {
+                Log::warning('Product vector prefetch search failed', ['error' => $e->getMessage()]);
+                $this->hitCache[$text] = [];
+            }
+        }
     }
 
     /**
@@ -32,11 +84,16 @@ final class ProductVectorSearch
         if ($query === '') {
             return [];
         }
+        if (isset($this->hitCache[$query])) {
+            return array_slice($this->hitCache[$query], 0, max(1, $limit));
+        }
 
         try {
             $vector = $this->embeddings->embed($query);
+            $hits = $this->qdrant->search($vector, $limit);
+            $this->hitCache[$query] = $hits;
 
-            return $this->qdrant->search($vector, $limit);
+            return $hits;
         } catch (Throwable $e) {
             Log::warning('Product vector search failed', ['error' => $e->getMessage()]);
 

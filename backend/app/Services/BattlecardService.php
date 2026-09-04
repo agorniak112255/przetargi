@@ -7,9 +7,12 @@ namespace App\Services;
 use App\Models\Product;
 use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
+use App\Services\Ai\AiSettingsService;
+use App\Services\Ai\AiTask;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
+use Throwable;
 
 /**
  * Snapshot pozycji SIWZ: propozycja główna + do 2 zamienników z katalogu.
@@ -23,6 +26,8 @@ final class BattlecardService
 
     public function __construct(
         private readonly ProductMatchService $matcher,
+        private readonly ProductAiSearchService $aiSearch,
+        private readonly AiSettingsService $aiSettings,
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly PpeAssortment $assortment,
         private readonly NbpExchangeRateService $fx,
@@ -140,23 +145,17 @@ final class BattlecardService
             return $existing;
         }
 
-        $pool = Product::query()
-            ->when($excludeIds !== [], fn ($q) => $q->whereNotIn('id', array_unique($excludeIds)))
-            ->limit(500)
-            ->get();
-
-        if ($pool->isEmpty()) {
+        $scored = $this->scoreCatalogAlternates($requirement, $excludeIds, $need + 8);
+        if ($scored === []) {
             return $existing;
         }
-
-        $ranked = $this->matcher->rankProducts($requirement, $pool, $need + 8);
-        foreach ($ranked as $row) {
-            if ($row['score'] < self::CATALOG_ALT_MIN_SCORE) {
+        $top = $scored[0]['score'];
+        $minKeep = max(self::CATALOG_ALT_MIN_SCORE, $top - 8);
+        foreach ($scored as $row) {
+            if ($row['score'] < $minKeep) {
                 continue;
             }
-            /** @var Product $p */
-            $p = $row['product'];
-            $snap = $this->productSnapshot($p, $row['score'], null, [], null, 'substitute', $markupPercent);
+            $snap = $this->productSnapshot($row['product'], $row['score'], null, [], null, 'substitute', $markupPercent);
             $snap['source'] = 'catalog';
             $snap['substitute_type'] = 'katalog';
             $existing[] = $snap;
@@ -166,6 +165,95 @@ final class BattlecardService
         }
 
         return $existing;
+    }
+
+    /**
+     * Kolejne wyniki z tej samej ścieżki co „Szukaj w katalogu”, nie pierwsze 500 kart po cenie.
+     *
+     * @param  list<int>  $excludeIds
+     * @return list<array{product: Product, score: int}>
+     */
+    private function scoreCatalogAlternates(string $requirement, array $excludeIds, int $limit): array
+    {
+        $rows = [];
+        $fromLlm = false;
+        if ($this->aiSettings->isReady()) {
+            try {
+                $result = $this->aiSearch->search($requirement, max(8, $limit), false, AiTask::ProductSearch);
+                $rows = is_array($result['products'] ?? null) ? $result['products'] : [];
+                $fromLlm = $rows !== [];
+            } catch (Throwable) {
+                $rows = [];
+            }
+        }
+        if ($rows === []) {
+            $rows = $this->aiSearch->requirementCatalogRows($requirement, max(8, $limit));
+        }
+
+        $blocked = array_fill_keys($excludeIds, true);
+        $scored = [];
+        if ($rows === []) {
+            return $this->scoreFamilyAlternates($requirement, $blocked, $limit);
+        }
+        foreach ($rows as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            if ($id <= 0 || isset($blocked[$id])) {
+                continue;
+            }
+            $product = Product::query()->find($id);
+            if (! $product instanceof Product) {
+                continue;
+            }
+            if (! $this->assortment->compatibleProduct($requirement, $product)) {
+                continue;
+            }
+            $explained = $this->matcher->explainMatch($requirement, $product);
+            if (($explained['reasons'][0]['code'] ?? '') === 'asortyment_reject') {
+                continue;
+            }
+            $score = $fromLlm
+                ? (int) ($row['ai_match_percent'] ?? $explained['score'])
+                : $explained['score'];
+            if ($score < self::CATALOG_ALT_MIN_SCORE) {
+                continue;
+            }
+            $scored[] = ['product' => $product, 'score' => $score];
+        }
+        usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+
+        return $scored;
+    }
+
+    /**
+     * @param  array<int, true>  $blocked
+     * @return list<array{product: Product, score: int}>
+     */
+    private function scoreFamilyAlternates(string $requirement, array $blocked, int $limit): array
+    {
+        $family = $this->assortment->family($requirement);
+        $query = Product::query();
+        if ($family !== null) {
+            $query->where('ppe_family', $family);
+        }
+        $exclude = array_keys($blocked);
+        if ($exclude !== []) {
+            $query->whereNotIn('id', $exclude);
+        }
+        $scored = [];
+        foreach ($query->limit(max(20, $limit))->get() as $product) {
+            if (! $product instanceof Product || ! $this->assortment->compatibleProduct($requirement, $product)) {
+                continue;
+            }
+            $explained = $this->matcher->explainMatch($requirement, $product);
+            if (($explained['reasons'][0]['code'] ?? '') === 'asortyment_reject'
+                || $explained['score'] < self::CATALOG_ALT_MIN_SCORE) {
+                continue;
+            }
+            $scored[] = ['product' => $product, 'score' => $explained['score']];
+        }
+        usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+
+        return $scored;
     }
 
     /**

@@ -97,7 +97,6 @@ final class ProductMatchService
         int $progressOffset = 0,
         ?int $progressTotal = null,
     ): array {
-        $products = Product::query()->get();
         $matched = 0;
         $skipped = 0;
         $scores = [];
@@ -142,6 +141,8 @@ final class ProductMatchService
                     });
                 })
             )->get();
+
+        $products = $this->productsForItems($items);
 
         $this->prefetchAiCandidates(
             $items
@@ -984,9 +985,11 @@ final class ProductMatchService
             ];
         }
 
-        $products = Product::query()->get();
-        $heuristic = $this->bestMatch($item->requirement, $products);
+        $products = $this->productsForRequirement($item->requirement);
         $aiCandidates = $this->aiTopCandidates($item->requirement, 5);
+        $pool = $this->heuristicCandidatePool($item->requirement, $products, $aiCandidates, null);
+        $described = $this->withDescriptions($pool);
+        $heuristic = $described->isEmpty() ? null : $this->bestMatch($item->requirement, $described);
 
         $sources = [
             'heuristic' => $heuristic === null ? null : [
@@ -1099,9 +1102,10 @@ final class ProductMatchService
             }
         }
 
-        $described = $this->withDescriptions($products);
-        $heuristic = $described->isEmpty() ? null : $this->bestMatch($requirement, $described);
         $aiCandidates ??= $this->aiTopCandidates($requirement, 5);
+        $pool = $this->heuristicCandidatePool($requirement, $products, $aiCandidates, $skuPick);
+        $described = $this->withDescriptions($pool);
+        $heuristic = $described->isEmpty() ? null : $this->bestMatch($requirement, $described);
         $picked = $this->pickAuto($requirement, $heuristic, $aiCandidates, $described);
         if ($picked === null) {
             return null;
@@ -1149,6 +1153,133 @@ final class ProductMatchService
     }
 
     /**
+     * @param  Collection<int, TenderItem>  $items
+     * @return Collection<int, Product>
+     */
+    private function productsForItems(Collection $items): Collection
+    {
+        $families = [];
+        foreach ($items as $item) {
+            $family = $this->detectAssortmentFamily((string) $item->requirement);
+            if ($family !== null) {
+                $families[$family] = true;
+            }
+        }
+
+        return $this->productsForFamilies(array_keys($families));
+    }
+
+    private function productsForRequirement(string $requirement): Collection
+    {
+        $family = $this->detectAssortmentFamily($requirement);
+
+        return $this->productsForFamilies($family !== null ? [$family] : []);
+    }
+
+    /**
+     * @param  list<string>  $families
+     * @return Collection<int, Product>
+     */
+    private function productsForFamilies(array $families): Collection
+    {
+        $families = array_values(array_unique(array_filter($families)));
+        if ($families === []) {
+            return collect();
+        }
+
+        return Product::query()->whereIn('ppe_family', $families)->get();
+    }
+
+    /**
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     * @param  array{product: Product, score: int, source: string}|null  $skuPick
+     * @param  Collection<int, Product>  $familyProducts
+     * @return Collection<int, Product>
+     */
+    private function heuristicCandidatePool(
+        string $requirement,
+        Collection $familyProducts,
+        array $aiCandidates,
+        ?array $skuPick,
+    ): Collection {
+        $ids = [];
+        foreach ($aiCandidates as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            if ($id > 0) {
+                $ids[$id] = true;
+            }
+        }
+        if ($skuPick !== null) {
+            $ids[(int) $skuPick['product']->id] = true;
+        }
+        if ($ids === []) {
+            if ($familyProducts->count() > 0 && $familyProducts->count() <= 120) {
+                return $familyProducts->values();
+            }
+            foreach ($this->aiSearch->requirementCatalogRows($requirement, 80) as $row) {
+                $id = (int) ($row['id'] ?? 0);
+                if ($id > 0) {
+                    $ids[$id] = true;
+                }
+            }
+        }
+        if ($ids === []) {
+            return collect();
+        }
+
+        $want = array_keys($ids);
+        $fromFamily = $familyProducts->filter(
+            static fn (Product $p): bool => isset($ids[(int) $p->id])
+        )->values();
+        if ($fromFamily->count() >= count($want)) {
+            return $fromFamily;
+        }
+        $have = $fromFamily->pluck('id')->map(static fn (mixed $id): int => (int) $id)->all();
+        $missing = array_values(array_diff($want, $have));
+        if ($missing === []) {
+            return $fromFamily;
+        }
+
+        return $fromFamily->concat(Product::query()->whereIn('id', $missing)->get())->values();
+    }
+
+    /**
+     * @param  list<string>  $reqCodes
+     * @return Collection<int, Product>
+     */
+    private function narrowSkuPool(string $requirement, array $reqCodes, bool $hasNamed): Collection
+    {
+        $needles = $reqCodes;
+        if ($hasNamed) {
+            foreach ($this->modelFuzzy->catalogModelNeedles($requirement) as $needle) {
+                $needles[] = $needle;
+            }
+        }
+        $needles = array_values(array_unique(array_filter(
+            $needles,
+            static fn (string $needle): bool => mb_strlen($needle) >= 3
+        )));
+        if ($needles === []) {
+            return collect();
+        }
+
+        $family = $this->detectAssortmentFamily($requirement);
+        $query = Product::query();
+        if ($family !== null) {
+            $query->where('ppe_family', $family);
+        }
+        $query->where(function ($outer) use ($needles): void {
+            foreach ($needles as $needle) {
+                $like = '%'.addcslashes($needle, '%_\\').'%';
+                $outer->orWhere('sku', 'like', $like)
+                    ->orWhere('name', 'like', $like);
+            }
+        });
+
+        return $query->limit(80)->get();
+    }
+
+    /**
      * @param  Collection<int, Product>  $products
      * @return array{product: Product, score: int, source: string}|null
      */
@@ -1157,6 +1288,13 @@ final class ProductMatchService
         $best = null;
         $reqNorm = $this->normalize($requirement);
         $reqCodes = $this->codeCandidates($requirement);
+        $hasNamed = $this->modelFuzzy->hasNamedModel($requirement);
+        if ($products->count() > 120 || ($products->isEmpty() && ($reqCodes !== [] || $hasNamed))) {
+            $products = $this->narrowSkuPool($requirement, $reqCodes, $hasNamed);
+        }
+        if ($products->isEmpty()) {
+            return null;
+        }
         foreach ($products as $product) {
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;

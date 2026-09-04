@@ -312,4 +312,90 @@ final class TenderItemBattlecardTest extends TestCase
 
         $this->assertNotContains('KALESONY-X', collect($subs)->pluck('sku')->all());
     }
+
+    public function test_battlecard_prefers_next_catalog_match_over_cheap_wrong_material(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $ours = Product::query()->create([
+            'sku' => 'VE846',
+            'name' => 'NITREX VE846 Rękawice z nitrylu długie',
+            'manufacturer' => 'Delta Plus',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice PCV / nitryl długie do łokcia 600 mm.',
+            'catalog_price_net' => 39.97,
+            'purchase_price' => 33.87,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl', 'pcv']],
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'BC-DC-BC15',
+            'name' => 'Pięciopalcowe dziane skórzane BC15',
+            'manufacturer' => 'Lebon',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice skórzane pięciopalcowe.',
+            'catalog_price_net' => 2.57,
+            'purchase_price' => 2.18,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['skóra']],
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'GCRM',
+            'name' => 'Dziane bawełniane GCRM',
+            'manufacturer' => 'Lebon',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice bawełniane dziane i szyte.',
+            'catalog_price_net' => 2.75,
+            'purchase_price' => 2.33,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['bawełna']],
+            'enriched_at' => now(),
+        ]);
+        $pvc = Product::query()->create([
+            'sku' => 'SHOWA-690',
+            'name' => 'SHOWA 690 Long sleeve glove PVC 650mm',
+            'manufacturer' => 'Showa',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice PCV o długości 650 mm, długie do łokci.',
+            'catalog_price_net' => 8.75,
+            'purchase_price' => 7.88,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['pcv', 'pvc']],
+            'enriched_at' => now(),
+        ]);
+
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/BC/PVC',
+            'title' => 'PCV',
+            'client_id' => Client::query()->create(['name' => 'Klient PVC'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 90,
+            'last_activity_at' => now(),
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 15,
+            'requirement' => 'Rękawice PCV długie do łokci',
+            'main_product_id' => $ours->id,
+            'ai_match_percent' => 99,
+            'quantity' => 10,
+            'status' => 'ok',
+        ]);
+
+        $subs = $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")
+            ->assertOk()
+            ->json('battlecard.substitutes');
+
+        $skus = collect($subs)->pluck('sku')->all();
+        $this->assertContains($pvc->sku, $skus);
+        $this->assertNotContains('BC-DC-BC15', $skus);
+        $this->assertNotContains('GCRM', $skus);
+    }
 }
