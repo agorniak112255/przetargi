@@ -378,6 +378,13 @@ final class ProductSizeVariant
             && $this->normalizeSizeToken($m[2]) !== null) {
             $t = $m[1];
         }
+        if (preg_match(
+            '/^(.*?)[\s,\/\-]+('.self::ALPHA.')\s*$/iu',
+            $t,
+            $m
+        ) === 1 && $this->normalizeSizeToken($m[2]) !== null) {
+            $t = $m[1];
+        }
 
         return trim(preg_replace('/\s+/u', ' ', $t) ?? $t);
     }
@@ -428,14 +435,22 @@ final class ProductSizeVariant
         if ($size === null) {
             return null;
         }
+        $letterCore = $this->stripGluedLetterSize($sku);
+        if ($letterCore !== null) {
+            return $letterCore;
+        }
         $code = $this->sizeToSkuSuffix($size);
         if ($code !== null && preg_match('/^(.+)'.$code.'$/i', $sku, $m) === 1 && $this->isUsableCore($m[1])) {
             return rtrim($m[1], "-/_ \t");
         }
         if (preg_match('/^\d+(?:\.\d)?$/', $size) === 1 && preg_match('/[\/\-_]/u', $sku) !== 1) {
-            $two = (string) (int) $size;
-            if (preg_match('/^(.+)'.$two.'$/i', $sku, $m) === 1 && $this->isUsableCore($m[1])) {
-                return rtrim($m[1], "-/_ \t");
+            $n = (int) $size;
+            $suffixes = array_values(array_unique([sprintf('%02d', $n), (string) $n]));
+            foreach ($suffixes as $suffix) {
+                if (preg_match('/^(.+)'.preg_quote($suffix, '/').'$/i', $sku, $m) === 1
+                    && $this->isUsableCore($m[1])) {
+                    return rtrim($m[1], "-/_ \t");
+                }
             }
         }
 
@@ -947,6 +962,9 @@ final class ProductSizeVariant
         ) === 1) {
             return $this->normalizeSizeToken($m[1]);
         }
+        if (preg_match('/(?:^|[\s,\/\-])('.self::ALPHA.')\s*$/iu', $name, $m) === 1) {
+            return $this->normalizeSizeToken($m[1]);
+        }
         if (preg_match('/(?:^|[\s,\/])(\d{1,2}(?:[.,]\d)?)\s*$/u', $name, $m) === 1) {
             return $this->normalizeSizeToken($m[1]);
         }
@@ -966,7 +984,56 @@ final class ProductSizeVariant
             return $this->looksLikeWearSize($m[1]) ? $this->normalizeSizeToken($m[1]) : null;
         }
 
+        return $this->sizeFromGluedSku($sku);
+    }
+
+    /**
+     * SKU bez myślnika: HM5500BS / MODEL09 vs MODEL9.
+     */
+    private function sizeFromGluedSku(string $sku): ?string
+    {
+        if (preg_match('/[\/\-_]/u', $sku) === 1) {
+            return null;
+        }
+        if (preg_match('/s[1-3](?:ps|p)?$/i', $sku) === 1) {
+            return null;
+        }
+        if (preg_match('/^(.*)('.self::ALPHA.')$/iu', $sku, $m) === 1
+            && preg_match('/[A-Za-z]$/u', $m[1]) === 1
+            && mb_strlen(rtrim($m[1], "-/_ \t")) >= 4
+            && $this->isUsableCore($m[1])) {
+            return $this->normalizeSizeToken($m[2]);
+        }
+        if (preg_match('/^(.*)(0[4-9]|1[0-3]|3[2-9]|4[0-9]|5[0-2])$/u', $sku, $m) === 1
+            && mb_strlen($m[1]) >= 4
+            && $this->isUsableCore($m[1])) {
+            return $this->normalizeSizeToken($m[2]);
+        }
+        if (preg_match('/^(.*)([4-9])$/u', $sku, $m) === 1
+            && preg_match('/\d$/u', $m[1]) !== 1
+            && mb_strlen($m[1]) >= 4
+            && $this->isUsableCore($m[1])) {
+            return $this->normalizeSizeToken($m[2]);
+        }
+
         return null;
+    }
+
+    private function stripGluedLetterSize(string $sku): ?string
+    {
+        $size = $this->sizeFromGluedSku($sku);
+        if ($size === null || preg_match('/^(xxxxl|xxxl|xxl|xl|xxs|xs|[2-6]xl|s|m|l)$/', $size) !== 1) {
+            return null;
+        }
+        if (preg_match('/^(.*)('.self::ALPHA.')$/iu', $sku, $m) !== 1) {
+            return null;
+        }
+        $core = rtrim($m[1], "-/_ \t");
+        if (preg_match('/[A-Za-z]$/u', $core) !== 1 || ! $this->isUsableCore($core) || mb_strlen($core) < 4) {
+            return null;
+        }
+
+        return $core;
     }
 
     private function normalizeSizeToken(string $raw): ?string

@@ -46,6 +46,42 @@ final class ProductSizeVariantTest extends TestCase
     }
 
     #[Test]
+    public function groups_letter_size_suffix_on_sku_and_name(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $s = $svc->groupKey('PIP', 'HM5500 BAYONET HALF-MASK ELASTOMERIC S', 'HM5500BS');
+        $m = $svc->groupKey('PIP', 'HM5500 BAYONET HALF-MASK ELASTOMERIC M', 'HM5500BM');
+        $l = $svc->groupKey('PIP', 'HM5500 BAYONET HALF-MASK ELASTOMERIC L', 'HM5500BL');
+
+        $this->assertNotNull($s);
+        $this->assertSame($s, $m);
+        $this->assertSame($s, $l);
+        $this->assertSame('s', $svc->extractSize('HM5500 BAYONET HALF-MASK ELASTOMERIC S', 'HM5500BS'));
+        $this->assertSame('HM5500B', $svc->skuCore('HM5500BS', 'HM5500 BAYONET HALF-MASK ELASTOMERIC S'));
+        $this->assertSame('HM5500 BAYONET HALF-MASK ELASTOMERIC', $svc->stripSizeFromName('HM5500 BAYONET HALF-MASK ELASTOMERIC L'));
+    }
+
+    #[Test]
+    public function groups_padded_and_plain_numeric_sku_suffix(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $padded = $svc->groupKey('PIP', 'Rękawice montażowe 9', 'A501609');
+        $plain = $svc->groupKey('PIP', 'Rękawice montażowe 9', 'A50169');
+        $slashNine = $svc->groupKey('PIP', 'Rękawice montażowe', 'A5016/09');
+        $slashShort = $svc->groupKey('PIP', 'Rękawice montażowe', 'A5016/9');
+
+        $this->assertNotNull($padded);
+        $this->assertSame($padded, $plain);
+        $this->assertSame('A5016', $svc->skuCore('A501609', 'Rękawice montażowe 9'));
+        $this->assertSame('A5016', $svc->skuCore('A50169', 'Rękawice montażowe 9'));
+        $this->assertSame($slashNine, $slashShort);
+        $this->assertSame('A5016', $svc->skuCore('A5016/09'));
+        $this->assertSame('A5016', $svc->skuCore('A5016/9'));
+    }
+
+    #[Test]
     public function does_not_group_different_models(): void
     {
         $svc = new ProductSizeVariant;

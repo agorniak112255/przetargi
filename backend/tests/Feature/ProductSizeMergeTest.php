@@ -140,6 +140,50 @@ final class ProductSizeMergeTest extends TestCase
         $this->assertSame('34704090', $other->fresh()?->sku);
     }
 
+    public function test_merges_letter_size_sku_suffix_same_price(): void
+    {
+        Queue::fake();
+
+        Product::query()->create([
+            'sku' => 'HM5500BS',
+            'name' => 'HM5500 BAYONET HALF-MASK ELASTOMERIC L',
+            'manufacturer' => 'PIP',
+            'catalog_price_net' => 348,
+            'purchase_price' => 292.32,
+            'currency' => 'EUR',
+            'stock' => 1,
+        ]);
+        $mid = Product::query()->create([
+            'sku' => 'HM5500BM',
+            'name' => 'HM5500 BAYONET HALF-MASK ELASTOMERIC M',
+            'manufacturer' => 'PIP',
+            'description' => str_repeat('Półmaska PIP HM5500 Bayonet. ', 3),
+            'catalog_price_net' => 348,
+            'purchase_price' => 292.32,
+            'currency' => 'EUR',
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'HM5500BL',
+            'name' => 'HM5500 BAYONET HALF-MASK ELASTOMERIC S',
+            'manufacturer' => 'PIP',
+            'catalog_price_net' => 348,
+            'purchase_price' => 292.32,
+            'currency' => 'EUR',
+            'stock' => 1,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('PIP', false);
+
+        $this->assertSame(1, $result['groups']);
+        $this->assertSame(2, $result['deleted']);
+        $kept = Product::query()->find($mid->id);
+        $this->assertNotNull($kept);
+        $this->assertSame('HM5500 BAYONET HALF-MASK ELASTOMERIC', $kept->name);
+        $this->assertSame('HM5500B', $kept->sku);
+        $this->assertSame(3, $kept->stock);
+    }
+
     public function test_does_not_merge_when_price_differs(): void
     {
         Product::query()->create([
