@@ -106,9 +106,6 @@ final class CatalogSlangDictionary
             return false;
         }
         foreach ($this->entries() as $entry) {
-            if (! $entry['jargon']) {
-                continue;
-            }
             foreach ($entry['terms'] as $term) {
                 if ($this->fold($term) === $token) {
                     return true;
@@ -182,7 +179,7 @@ final class CatalogSlangDictionary
                 'terms' => $terms,
                 'phrases' => $phrases,
                 'note' => $note,
-                'jargon' => (bool) ($row['jargon'] ?? false),
+                'jargon' => true,
                 'keywords' => self::stringList($row['keywords'] ?? null, self::MAX_KEYWORDS, self::MAX_PHRASE_LEN),
                 'tags' => $tags,
             ];

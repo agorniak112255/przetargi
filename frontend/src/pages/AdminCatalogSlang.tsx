@@ -6,7 +6,6 @@ type CatalogSlangEntry = {
   terms: string[]
   phrases: string[]
   note: string
-  jargon: boolean
   keywords: string[]
   tags: string[]
 }
@@ -40,7 +39,6 @@ function emptyRow(category: string): CatalogSlangEntry {
     terms: [],
     phrases: [],
     note: '',
-    jargon: true,
     keywords: [],
     tags: [],
   }
@@ -133,7 +131,6 @@ export function AdminCatalogSlang() {
           terms: row.terms,
           phrases: row.phrases,
           note: row.note,
-          jargon: Boolean(row.jargon),
           keywords: row.keywords ?? [],
           tags: row.tags ?? [],
         }))
@@ -168,8 +165,9 @@ export function AdminCatalogSlang() {
         <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-700">Wyszukiwarka SIWZ</p>
         <h2 className="mt-1 text-lg font-semibold text-slate-900">Słownik żargonu</h2>
         <p className="mt-1 max-w-3xl text-[12px] text-slate-600">
-          Potoczne nazwy (wampirki, gumiaki) mapują się na frazy z cennika. Frazy działają w ramach
-          kategorii, żeby „pianki” przy rękawicach nie szukały zatyczek do uszu.
+          Potoczne nazwy (wampirki, gumiaki) zawsze dokładają do wyszukiwania i do modelu
+          frazy z cennika. Działa to w ramach kategorii, żeby „pianki” przy rękawicach nie
+          szukały zatyczek do uszu.
         </p>
       </div>
 
@@ -247,7 +245,6 @@ export function AdminCatalogSlang() {
               ))}
               <th className="p-2">Słowa kluczowe</th>
               <th className="p-2">Notatka</th>
-              <th className="p-2 whitespace-nowrap">Żargon</th>
               <th className="p-2" />
             </tr>
           </thead>
@@ -297,14 +294,6 @@ export function AdminCatalogSlang() {
                     value={row.note}
                     onChange={(e) => patch(index, { ...row, note: e.target.value })}
                     placeholder="opcjonalnie"
-                  />
-                </td>
-                <td className="p-2">
-                  <input
-                    type="checkbox"
-                    title="żargon (nie warunek na karcie)"
-                    checked={row.jargon}
-                    onChange={(e) => patch(index, { ...row, jargon: e.target.checked })}
                   />
                 </td>
                 <td className="p-2">

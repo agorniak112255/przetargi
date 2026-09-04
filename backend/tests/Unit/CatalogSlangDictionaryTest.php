@@ -59,6 +59,12 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertStringContainsString('okulary', $eye);
     }
 
+    public function test_every_slang_term_is_a_hint_not_a_hard_card_condition(): void
+    {
+        $this->assertTrue($this->dict()->isJargonNorm('wampirki'));
+        $this->assertTrue($this->dict()->isJargonNorm('tyvek'));
+    }
+
     public function test_defaults_cover_all_categories(): void
     {
         $seen = [];

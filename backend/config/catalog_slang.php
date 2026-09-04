@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 /**
  * Żargon SIWZ → frazy katalogu, per kategoria (pianki/szelki/ESD nie mieszają rodzin).
- * jargon=true: nie traktuj słowa jako twardego warunku na karcie (np. wampirki).
+ * Trafienie w żargon zawsze dokłada frazy z cennika do wyszukiwania i do modelu.
  *
  * @return list<array{category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool}>
  */
