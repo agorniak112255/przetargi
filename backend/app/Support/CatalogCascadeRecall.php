@@ -1,0 +1,337 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Support;
+
+use App\Models\Product;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+
+/**
+ * Rodzaj → cecha → marka (i model, gdy jest). Puste sitko zdejmuje warstwy od końca.
+ */
+final class CatalogCascadeRecall
+{
+    public const LEVEL_FAMILY_FEATURE_BRAND_MODEL = 'family_feature_brand_model';
+
+    public const LEVEL_FAMILY_FEATURE_BRAND = 'family_feature_brand';
+
+    public const LEVEL_FAMILY_FEATURE = 'family_feature';
+
+    public const LEVEL_FAMILY = 'family';
+
+    public function __construct(
+        private readonly PpeAssortment $assortment,
+        private readonly CatalogSlangDictionary $slang,
+        private readonly CatalogManufacturerContext $manufacturers,
+        private readonly ProductModelFuzzy $modelFuzzy,
+        private readonly PpeFilterType $filterType,
+    ) {}
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return array{
+     *     family: ?string,
+     *     family_nouns: list<string>,
+     *     features: list<string>,
+     *     manufacturer: ?string,
+     *     model_needles: list<string>
+     * }
+     */
+    public function layers(string $query, array $intent): array
+    {
+        $needed = trim((string) ($intent['needed'] ?? ''));
+        $scope = trim($needed.' '.$query);
+        $family = $this->assortment->family($query)
+            ?? $this->assortment->family($needed)
+            ?? $this->slang->familyFor($query);
+        $features = $this->featureTokens($query, $intent, $scope, $family);
+        $manufacturer = null;
+        if (empty($intent['manufacturer_absent_in_catalog'])) {
+            $guess = trim((string) ($intent['manufacturer'] ?? ''));
+            if ($guess !== '' && $this->manufacturers->hasProductsForManufacturer($guess)) {
+                $manufacturer = $guess;
+            }
+        }
+        $modelNeedles = [];
+        $modelQuery = trim((string) ($intent['model_name'] ?? '').' '.$query);
+        if ($this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)) {
+            $modelNeedles = $this->modelFuzzy->catalogModelNeedles($modelQuery);
+        }
+
+        return [
+            'family' => $family,
+            'family_nouns' => $this->familyNouns($family),
+            'features' => $features,
+            'manufacturer' => $manufacturer,
+            'model_needles' => $modelNeedles,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return array{products: Collection<int, Product>, level: ?string}
+     */
+    public function retrieve(string $query, array $intent, string $requirement, int $limit): array
+    {
+        $layers = $this->layers($query, $intent);
+        if ($layers['family'] === null && $layers['features'] === [] && $layers['manufacturer'] === null) {
+            return ['products' => collect(), 'level' => null];
+        }
+
+        foreach ($this->attempts($layers) as $attempt) {
+            $rows = $this->query($layers, $attempt, max(8, $limit))
+                ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
+                    || $this->modelFuzzy->matches($requirement, $p))
+                ->values();
+            if ($attempt['feature'] && $this->slang->searchRewrite($query) !== null) {
+                $rows = $rows
+                    ->filter(fn (Product $p): bool => $this->matchesFeatureEvidence($query, $p))
+                    ->values();
+            }
+            if ($rows->isNotEmpty()) {
+                return ['products' => $rows, 'level' => $attempt['name']];
+            }
+        }
+
+        return ['products' => collect(), 'level' => null];
+    }
+
+    /**
+     * @param  array{
+     *     family: ?string,
+     *     family_nouns: list<string>,
+     *     features: list<string>,
+     *     manufacturer: ?string,
+     *     model_needles: list<string>
+     * }  $layers
+     * @return list<array{name: string, feature: bool, brand: bool, model: bool}>
+     */
+    private function attempts(array $layers): array
+    {
+        $hasFeature = $layers['features'] !== [];
+        $hasBrand = $layers['manufacturer'] !== null;
+        $hasModel = $layers['model_needles'] !== [];
+        $out = [];
+        if ($hasFeature && $hasBrand && $hasModel) {
+            $out[] = ['name' => self::LEVEL_FAMILY_FEATURE_BRAND_MODEL, 'feature' => true, 'brand' => true, 'model' => true];
+        }
+        if ($hasFeature && $hasBrand) {
+            $out[] = ['name' => self::LEVEL_FAMILY_FEATURE_BRAND, 'feature' => true, 'brand' => true, 'model' => false];
+        }
+        if ($hasFeature) {
+            $out[] = ['name' => self::LEVEL_FAMILY_FEATURE, 'feature' => true, 'brand' => false, 'model' => false];
+        }
+        if ($layers['family'] !== null || $layers['family_nouns'] !== []) {
+            $out[] = ['name' => self::LEVEL_FAMILY, 'feature' => false, 'brand' => false, 'model' => false];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array{
+     *     family: ?string,
+     *     family_nouns: list<string>,
+     *     features: list<string>,
+     *     manufacturer: ?string,
+     *     model_needles: list<string>
+     * }  $layers
+     * @param  array{name: string, feature: bool, brand: bool, model: bool}  $attempt
+     * @return Collection<int, Product>
+     */
+    private function query(array $layers, array $attempt, int $limit): Collection
+    {
+        $builder = Product::query();
+        $this->applyFamilyScope($builder, $layers);
+        if ($attempt['feature']) {
+            $this->applyTokenScope($builder, $layers['features']);
+        }
+        if ($attempt['brand'] && $layers['manufacturer'] !== null) {
+            $brand = $layers['manufacturer'];
+            $like = '%'.addcslashes($brand, '%_\\').'%';
+            $builder->where(function (Builder $outer) use ($brand, $like): void {
+                $outer->where('manufacturer', $brand)
+                    ->orWhere('manufacturer', 'like', $like);
+            });
+        }
+        if ($attempt['model'] && $layers['model_needles'] !== []) {
+            $this->applyTokenScope($builder, $layers['model_needles']);
+        }
+
+        return $builder
+            ->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
+            ->orderByDesc('enriched_at')
+            ->orderBy('id')
+            ->limit($limit)
+            ->get()
+            ->values();
+    }
+
+    /**
+     * @param  array{family: ?string, family_nouns: list<string>}  $layers
+     */
+    private function applyFamilyScope(Builder $builder, array $layers): void
+    {
+        $family = $layers['family'];
+        $nouns = $layers['family_nouns'];
+        if ($family === null && $nouns === []) {
+            return;
+        }
+        $builder->where(function (Builder $outer) use ($family, $nouns): void {
+            if ($family !== null) {
+                $outer->where('ppe_family', $family);
+            }
+            foreach ($nouns as $noun) {
+                $like = '%'.addcslashes($noun, '%_\\').'%';
+                $outer->orWhere('name', 'like', $like)
+                    ->orWhere('category', 'like', $like);
+            }
+        });
+    }
+
+    /** @param  list<string>  $tokens */
+    private function applyTokenScope(Builder $builder, array $tokens): void
+    {
+        if ($tokens === []) {
+            return;
+        }
+        $builder->where(function (Builder $outer) use ($tokens): void {
+            foreach ($tokens as $token) {
+                $like = '%'.addcslashes($token, '%_\\').'%';
+                $outer->orWhere('name', 'like', $like)
+                    ->orWhere('sku', 'like', $like)
+                    ->orWhere('description', 'like', $like)
+                    ->orWhere('search_blob', 'like', $like);
+            }
+        });
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return list<string>
+     */
+    private function featureTokens(string $query, array $intent, string $scope, ?string $family): array
+    {
+        $out = [];
+        foreach ($this->assortment->catalogNounLikes($scope) as $like) {
+            $out[] = $this->fold($like);
+        }
+        foreach ($this->slang->evidenceNeedles($query) as $needle) {
+            $out[] = $this->fold($needle);
+        }
+        foreach (is_array($intent['search_phrases'] ?? null) ? $intent['search_phrases'] : [] as $phrase) {
+            foreach ($this->tokenize((string) $phrase) as $token) {
+                $out[] = $token;
+            }
+        }
+        foreach (is_array($intent['constraints'] ?? null) ? $intent['constraints'] : [] as $phrase) {
+            foreach ($this->tokenize((string) $phrase) as $token) {
+                $out[] = $token;
+            }
+        }
+        foreach ($this->filterType->compactCodes($query) as $code) {
+            $fold = $this->fold($code);
+            if (mb_strlen($fold) >= 3) {
+                $out[] = $fold;
+            }
+        }
+
+        $brand = $this->fold((string) ($intent['manufacturer'] ?? ''));
+        $requested = $this->fold((string) ($intent['manufacturer_requested'] ?? ''));
+        $familyNouns = $this->familyNouns($family);
+        $clean = [];
+        foreach ($out as $token) {
+            $token = trim($token);
+            if ($token === '' || mb_strlen($token) < 3) {
+                continue;
+            }
+            if ($brand !== '' && str_contains($token, $brand)) {
+                continue;
+            }
+            if ($requested !== '' && str_contains($token, $requested)) {
+                continue;
+            }
+            $skip = false;
+            foreach ($familyNouns as $noun) {
+                if (str_starts_with($token, $noun) || str_starts_with($noun, $token)) {
+                    $skip = true;
+                    break;
+                }
+            }
+            if ($skip) {
+                continue;
+            }
+            $clean[] = $token;
+        }
+
+        return array_values(array_unique($clean));
+    }
+
+    /** @return list<string> */
+    private function tokenize(string $phrase): array
+    {
+        $out = [];
+        foreach (preg_split('/[\s,;\/|+]+/u', $phrase) ?: [] as $raw) {
+            $token = $this->fold($raw);
+            if ($token !== '' && mb_strlen($token) >= 4) {
+                $out[] = $token;
+            }
+        }
+
+        return $out;
+    }
+
+    /** @return list<string> */
+    private function familyNouns(?string $family): array
+    {
+        return match ($family) {
+            PpeAssortment::FAMILY_GLOVES => ['rekawic', 'glove', 'rukavic'],
+            PpeAssortment::FAMILY_FOOTWEAR => ['obuwie', 'buty', 'trzewik', 'kalosz', 'polbut'],
+            PpeAssortment::FAMILY_APPAREL => ['kurtk', 'spodn', 'kombinezon', 'kamizelk', 'bluz'],
+            PpeAssortment::FAMILY_HEAD => ['czapk', 'czepek', 'kominiark', 'helm', 'kask'],
+            PpeAssortment::FAMILY_FACE => ['przylbic', 'oslona'],
+            PpeAssortment::FAMILY_EYES => ['okular', 'gogl'],
+            PpeAssortment::FAMILY_HEARING => ['nausznik', 'ochronnik', 'sluch'],
+            PpeAssortment::FAMILY_RESPIRATORY => ['polmask', 'maska', 'pochlaniacz'],
+            PpeAssortment::FAMILY_FALL => ['szelk', 'lonza'],
+            PpeAssortment::FAMILY_KNEE => ['nakolann'],
+            default => [],
+        };
+    }
+
+    private function matchesFeatureEvidence(string $query, Product $product): bool
+    {
+        $hay = $this->fold(implode(' ', [
+            (string) $product->name,
+            (string) $product->sku,
+            (string) ($product->category ?? ''),
+            (string) ($product->description ?? ''),
+            (string) ($product->search_blob ?? ''),
+        ]));
+        if ($this->slang->rejectsProduct($query, $hay)) {
+            return false;
+        }
+        $needles = $this->slang->evidenceNeedles($query);
+        if ($needles === []) {
+            return true;
+        }
+        foreach ($needles as $needle) {
+            $n = $this->fold($needle);
+            if ($n !== '' && str_contains($hay, $n)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function fold(string $text): string
+    {
+        $t = mb_strtolower($text);
+        $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z'];
+
+        return trim((string) preg_replace('/[^a-z0-9]+/u', '', strtr($t, $map)));
+    }
+}

@@ -7,6 +7,8 @@ namespace Tests\Feature;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Support\CatalogManufacturerContext;
+use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -83,5 +85,66 @@ final class ProductAiSearchStructuredIntentTest extends TestCase
         $this->assertStringContainsString('VM Footwear', (string) $response->json('ai_note'));
         $skus = array_column($response->json('products'), 'sku');
         $this->assertContains('ESD-KAL-CERVA-SUB', $skus);
+    }
+
+    public function test_unknown_manufacturer_returns_nitrile_substitutes(): void
+    {
+        Product::query()->create([
+            'sku' => 'REIS-O2-BOOT',
+            'name' => 'Trzewiki Reis O2',
+            'manufacturer' => 'Reis',
+            'description' => 'Trzewiki skórzane O2.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 40,
+            'stock' => 3,
+            'ppe_family' => PpeAssortment::FAMILY_FOOTWEAR,
+        ]);
+        Product::query()->create([
+            'sku' => '93-843',
+            'name' => 'Niebieskie bezpudrowe rękawice nitrylowe',
+            'manufacturer' => 'Ansell',
+            'description' => 'Jednorazowe rękawice nitrylowe bezpudrowe.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 6,
+            'stock' => 20,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        CatalogManufacturerContext::forgetCache();
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(static function (array $messages): array {
+            $system = (string) ($messages[0]['content'] ?? '');
+            if (str_contains($system, '"manufacturer"')) {
+                return [
+                    'needed' => 'rękawice powlekane nitrylem',
+                    'manufacturer' => 'Reis',
+                    'model_name' => 'RTELA',
+                    'search_phrases' => ['rękawice nitrylowe', 'RTELA Reis'],
+                    'constraints' => [],
+                ];
+            }
+
+            return [
+                'matches' => [],
+            ];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $response = $this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice nitrylowe RTELA',
+            'limit' => 10,
+        ])
+            ->assertOk()
+            ->assertJsonPath('parsed_intent.manufacturer_absent_in_catalog', true)
+            ->assertJsonPath('parsed_intent.manufacturer_requested', 'RTELA');
+
+        $this->assertGreaterThanOrEqual(1, $response->json('total'));
+        $this->assertStringContainsString('RTELA', (string) $response->json('ai_note'));
+        $this->assertStringContainsString('Ansell', (string) $response->json('ai_note'));
+        $skus = array_column($response->json('products'), 'sku');
+        $this->assertContains('93-843', $skus);
+        $this->assertNotContains('REIS-O2-BOOT', $skus);
     }
 }

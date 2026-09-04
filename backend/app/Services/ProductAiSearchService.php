@@ -11,6 +11,7 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Search\ProductTextSearch;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\CatalogCascadeRecall;
 use App\Support\CatalogManufacturerContext;
 use App\Support\CatalogRequirementRecall;
 use App\Support\CatalogSlangDictionary;
@@ -75,6 +76,7 @@ final class ProductAiSearchService
         private readonly AiSettingsService $aiSettings,
         private readonly CatalogManufacturerContext $manufacturerContext,
         private readonly CatalogRequirementRecall $catalogRecall,
+        private readonly CatalogCascadeRecall $cascadeRecall,
         private readonly CatalogSlangDictionary $catalogSlang,
         private readonly NbpExchangeRateService $fx,
     ) {}
@@ -953,7 +955,8 @@ final class ProductAiSearchService
                 'content' => 'Jesteś ekspertem BHP i katalogów. Najpierw ZROZUM wymaganie SIWZ, potem zbuduj frazy sklepowe. '
                     .$manufacturers.' '
                     .$slang
-                    .'manufacturer: dokładnie jedna nazwa z listy katalogu albo null (nie zgaduj spoza listy). '
+                    .'manufacturer: nazwa z wymagania SIWZ. Jeśli jest na liście katalogu — użyj dokładnej nazwy z listy. '
+                    .'Jeśli nie ma jej na liście — wpisz nazwę z SIWZ (nie null i nie podstawiaj innej marki z listy). '
                     .'model_name: nazwa modelu/kolekcji (np. TRONCHETTO, PERSPECTA 010) — nie producent. '
                     .'size_note: rozmiary (np. 35-41) — nie łącz z modelem. '
                     .'Nie tnij SIWZ na pojedyncze przymiotniki do wyszukiwania słów. '
@@ -1167,12 +1170,12 @@ final class ProductAiSearchService
         $intent = $this->normalizeIntent($intent);
         $slang = $this->slangRewriteFor($query);
         if ($slang === null) {
-            return $intent;
+            return $this->reconcileManufacturerIntent($intent, $query);
         }
         $intent['needed'] = $slang['needed'];
         $intent['search_phrases'] = $this->slangSearchPhrases($slang, $query);
 
-        return $intent;
+        return $this->reconcileManufacturerIntent($intent, $query);
     }
 
     /**
@@ -1188,6 +1191,7 @@ final class ProductAiSearchService
                 $norm === ''
                 || $this->isNonTechnicalToken($norm)
                 || $this->isGenericAssortmentToken($norm)
+                || $this->isAbsentManufacturerToken($query, $token)
             ) {
                 continue;
             }
@@ -1273,11 +1277,15 @@ final class ProductAiSearchService
      */
     private function rowsFromGenericCatalog(string $query, Collection $candidates, int $limit, array $intent = []): array
     {
+        $intent = $this->normalizeIntent($intent);
         $catalogQ = $this->catalogSearchQuery($query, $intent);
         if ($this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent)) {
             return $this->rowsFromRequirementCatalog($catalogQ, $limit);
         }
-        if ($this->isSpecificRequirement($query) || $candidates->isEmpty()) {
+        if ($candidates->isEmpty()) {
+            return [];
+        }
+        if (! $intent['manufacturer_absent_in_catalog'] && $this->isSpecificRequirement($query)) {
             return [];
         }
 
@@ -1525,7 +1533,7 @@ final class ProductAiSearchService
         $modelName = trim((string) ($raw['model_name'] ?? $raw['model'] ?? ''));
         $sizeNote = trim((string) ($raw['size_note'] ?? ''));
 
-        return $this->normalizeIntent($this->enrichIntentManufacturers([
+        return $this->normalizeIntent($this->reconcileManufacturerIntent($this->enrichIntentManufacturers([
             'needed' => $needed,
             'search_phrases' => array_values(array_unique($phrases)),
             'constraints' => $this->sanitizeConstraints($constraints),
@@ -1534,7 +1542,7 @@ final class ProductAiSearchService
             'model_name' => $modelName !== '' ? $modelName : null,
             'size_note' => $sizeNote !== '' ? $sizeNote : null,
             'manufacturer_absent_in_catalog' => $manufacturerAbsent,
-        ], $query));
+        ], $query), $query));
     }
 
     /**
@@ -1561,6 +1569,195 @@ final class ProductAiSearchService
         }
 
         return $intent;
+    }
+
+    /**
+     * Marka spoza katalogu (RTELA) albo halucynacja modelu (Reis zamiast RTELA)
+     * nie może wycinać zamienników ani blokować sitka.
+     *
+     * @param  array<string, mixed>  $intent
+     * @return array<string, mixed>
+     */
+    private function reconcileManufacturerIntent(array $intent, string $query): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        if (
+            $intent['manufacturer'] !== null
+            && ! $this->nameAppearsInQuery($query, (string) $intent['manufacturer'])
+            && ! $this->nameAppearsInQuery($query, (string) ($intent['manufacturer_requested'] ?? ''))
+        ) {
+            $intent['manufacturer'] = null;
+            $intent['manufacturer_requested'] = null;
+            $intent['manufacturer_absent_in_catalog'] = false;
+        }
+
+        if ($intent['manufacturer'] === null && ! $intent['manufacturer_absent_in_catalog']) {
+            foreach ($this->manufacturerTokensFromQuery($query) as $token) {
+                $canonical = $this->manufacturerContext->matchManufacturer($token);
+                if ($canonical !== null) {
+                    $intent['manufacturer'] = $canonical;
+                    $intent['manufacturer_requested'] = $token;
+                    break;
+                }
+                if ($this->catalogHasIdentityToken($token)) {
+                    continue;
+                }
+                $intent['manufacturer'] = null;
+                $intent['manufacturer_requested'] = $token;
+                $intent['manufacturer_absent_in_catalog'] = true;
+                break;
+            }
+        }
+
+        return $this->stripAbsentManufacturerNoise($intent);
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return array<string, mixed>
+     */
+    private function stripAbsentManufacturerNoise(array $intent): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        if (! $intent['manufacturer_absent_in_catalog']) {
+            return $intent;
+        }
+        $needles = array_values(array_filter([
+            $this->compactLex((string) ($intent['manufacturer_requested'] ?? '')),
+            $this->compactLex((string) ($intent['model_name'] ?? '')),
+        ], static fn (string $n): bool => mb_strlen($n) >= 3));
+        if ($needles === []) {
+            return $intent;
+        }
+        if (
+            $intent['model_name'] !== null
+            && $this->compactLex((string) $intent['model_name']) === $this->compactLex((string) ($intent['manufacturer_requested'] ?? ''))
+        ) {
+            $intent['model_name'] = null;
+        }
+        $neededCompact = $this->compactLex($intent['needed']);
+        $intent['search_phrases'] = array_values(array_filter(
+            $intent['search_phrases'],
+            fn (string $phrase): bool => ! $this->phraseMentionsNeedles($phrase, $needles)
+                || $this->compactLex($phrase) === $neededCompact
+        ));
+        $intent['constraints'] = array_values(array_filter(
+            $intent['constraints'],
+            fn (string $phrase): bool => ! $this->phraseMentionsNeedles($phrase, $needles)
+        ));
+
+        return $intent;
+    }
+
+    /** @param  list<string>  $needles */
+    private function phraseMentionsNeedles(string $phrase, array $needles): bool
+    {
+        $compact = $this->compactLex($phrase);
+        if ($compact === '') {
+            return false;
+        }
+        foreach ($needles as $needle) {
+            if ($needle !== '' && str_contains($compact, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function nameAppearsInQuery(string $query, string $name): bool
+    {
+        $needle = $this->compactLex($name);
+        $hay = $this->compactLex($query);
+
+        return $needle !== '' && mb_strlen($needle) >= 2 && str_contains($hay, $needle);
+    }
+
+    private function compactLex(string $text): string
+    {
+        return str_replace(' ', '', $this->lexicalNormalize($text));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function manufacturerTokensFromQuery(string $query): array
+    {
+        $out = [];
+        foreach (preg_split('/[\s,;:·•\/|+]+/u', $query) ?: [] as $raw) {
+            $raw = trim((string) $raw);
+            if ($raw === '') {
+                continue;
+            }
+            if (preg_match('/^prod\.?\s*(.+)$/ui', $raw, $m) === 1) {
+                $raw = trim((string) $m[1]);
+            }
+            if (! $this->looksLikeManufacturerToken($raw)) {
+                continue;
+            }
+            $norm = $this->lexicalNormalize($raw);
+            if ($norm === '' || $this->isNonTechnicalToken($norm) || $this->isGenericAssortmentToken($norm)) {
+                continue;
+            }
+            $out[] = $raw;
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    private function looksLikeManufacturerToken(string $token): bool
+    {
+        $letters = (string) preg_replace('/[^\p{L}]/u', '', $token);
+        if (mb_strlen($letters) < 3 || mb_strlen($letters) > 16) {
+            return false;
+        }
+
+        return $letters === mb_strtoupper($letters, 'UTF-8');
+    }
+
+    private function isAbsentManufacturerToken(string $query, string $token): bool
+    {
+        $raw = $this->queryTokenForCompact($query, $token) ?? $token;
+        if (! $this->looksLikeManufacturerToken($raw) && ! $this->looksLikeManufacturerToken(mb_strtoupper($token, 'UTF-8'))) {
+            return false;
+        }
+        if ($this->manufacturerContext->matchManufacturer($raw) !== null) {
+            return false;
+        }
+
+        return ! $this->catalogHasIdentityToken($raw);
+    }
+
+    private function queryTokenForCompact(string $query, string $token): ?string
+    {
+        $want = $this->compactLex($token);
+        if ($want === '') {
+            return null;
+        }
+        foreach (preg_split('/[\s,;:·•\/|+]+/u', $query) ?: [] as $raw) {
+            $raw = trim((string) $raw);
+            if ($raw !== '' && $this->compactLex($raw) === $want) {
+                return $raw;
+            }
+        }
+
+        return null;
+    }
+
+    private function catalogHasIdentityToken(string $token): bool
+    {
+        $token = trim($token);
+        if (mb_strlen($token) < 3) {
+            return false;
+        }
+        $like = '%'.addcslashes($token, '%_\\').'%';
+
+        return Product::query()
+            ->where(function ($q) use ($like): void {
+                $q->where('name', 'like', $like)
+                    ->orWhere('sku', 'like', $like);
+            })
+            ->exists();
     }
 
     /**
@@ -1617,7 +1814,7 @@ final class ProductAiSearchService
         $out = [];
         foreach ($this->fallbackPhrases($query) as $token) {
             $norm = $this->lexicalNormalize($token);
-            if ($norm === '' || $this->isNonTechnicalToken($norm)) {
+            if ($norm === '' || $this->isNonTechnicalToken($norm) || $this->isAbsentManufacturerToken($query, $token)) {
                 continue;
             }
             $out[] = $token;
@@ -1756,6 +1953,13 @@ final class ProductAiSearchService
             if ($namedPriority->isNotEmpty()) {
                 return $namedPriority;
             }
+        }
+
+        $cascaded = $this->clock('retrieve_cascade', function () use ($query, $intent, $requirement, $limit): Collection {
+            return $this->cascadeRecall->retrieve($query, $intent, $requirement, $limit)['products'];
+        });
+        if ($cascaded->isNotEmpty()) {
+            return $this->uniqueProducts($priority->concat($cascaded), $limit)->values();
         }
 
         // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
@@ -2048,7 +2252,7 @@ final class ProductAiSearchService
             ->filter(fn (Product $p): bool => $this->modelFuzzy->matchesCatalogBrand($p, $brands))
             ->values();
 
-        return $matched->isNotEmpty() ? $matched : collect();
+        return $matched->isNotEmpty() ? $matched : $products;
     }
 
     /**
@@ -2656,7 +2860,16 @@ final class ProductAiSearchService
             : '';
         $intent = $this->normalizeIntent($retrieveIntent);
         $intentLine = '';
-        if ($intent['manufacturer'] !== null && $intent['manufacturer'] !== '') {
+        $brandRule = 'Marka z wymagania (MSA, 3M, uvex, Portwest…) jest twardym warunkiem — inna marka → nie zwracaj. ';
+        if ($intent['manufacturer_absent_in_catalog']) {
+            $absentName = trim((string) ($intent['manufacturer_requested'] ?? ''));
+            if ($absentName === '') {
+                $absentName = 'podanej marki';
+            }
+            $intentLine .= "\nMarki {$absentName} nie ma w katalogu — rankuj zamienniki tego samego asortymentu. "
+                ."Marka i model {$absentName} NIE są warunkiem.";
+            $brandRule = "Marki {$absentName} nie ma w katalogu — zwracaj inne marki tego samego produktu. ";
+        } elseif ($intent['manufacturer'] !== null && $intent['manufacturer'] !== '') {
             $intentLine .= "\nMarka z analizy SIWZ: ".$intent['manufacturer'];
         }
         if ($intent['model_name'] !== null && $intent['model_name'] !== '') {
@@ -2695,7 +2908,7 @@ final class ProductAiSearchService
                     .'Przeciwieństwo cechy (kompozyt vs metal, Typ 6 vs Typ 3) → nie zwracaj. '
                     .'Nie zgaduj z nazwy handlowej. '
                     .'Wspólna cecha (siatkowa) albo przypadkowa norma EN NIE wystarczy. '
-                    .'Marka z wymagania (MSA, 3M, uvex, Portwest…) jest twardym warunkiem — inna marka → nie zwracaj. '
+                    .$brandRule
                     .'Marka/model z SIWZ wygrywa przy literówce (TEPM-ICE=TEMP-ICE); nie zmieniaj marki przez EN. '
                     .'Pochłaniacz/filtr EN 14387: A2B2E2K2 ≠ A2B2E2K2NO — bez NO/Hg/CO z wymagania nie zwracaj karty. '
                     .'Literówka w wymaganiu nie dyskwalifikuje karty — nazwę czytaj z linii "Szukany produkt (z analizy)" '

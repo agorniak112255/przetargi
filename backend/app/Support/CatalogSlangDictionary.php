@@ -71,6 +71,12 @@ final class CatalogSlangDictionary
         'pierwsza_pomoc' => 'Pierwsza pomoc',
     ];
 
+    /** @var list<SlangEntry>|null */
+    private ?array $entriesCache = null;
+
+    /** @var array<string, array{needed: string, search_phrases: list<string>, family: string|null}|null> */
+    private array $rewriteCache = [];
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly PpeAssortment $assortment,
@@ -81,7 +87,7 @@ final class CatalogSlangDictionary
      */
     public function entries(): array
     {
-        return $this->settings->catalogSlang();
+        return $this->entriesCache ??= $this->settings->catalogSlang();
     }
 
     /**
@@ -113,9 +119,12 @@ final class CatalogSlangDictionary
      */
     public function searchRewrite(string $query): ?array
     {
+        if (array_key_exists($query, $this->rewriteCache)) {
+            return $this->rewriteCache[$query];
+        }
         $entries = $this->matchingEntries($query);
         if ($entries === []) {
-            return null;
+            return $this->rewriteCache[$query] = null;
         }
         $phrases = [];
         $notes = [];
@@ -145,10 +154,10 @@ final class CatalogSlangDictionary
             }
         }
         if ($needed === '') {
-            return null;
+            return $this->rewriteCache[$query] = null;
         }
 
-        return [
+        return $this->rewriteCache[$query] = [
             'needed' => $needed,
             'search_phrases' => array_values(array_unique($phrases)),
             'family' => $family,
