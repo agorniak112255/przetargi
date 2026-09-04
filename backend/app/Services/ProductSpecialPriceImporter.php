@@ -7,7 +7,9 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\Product;
 use App\Models\ProductSpecialPrice;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use Throwable;
 
 final class ProductSpecialPriceImporter
@@ -15,6 +17,7 @@ final class ProductSpecialPriceImporter
     public function __construct(
         private readonly SpreadsheetColumnMapper $columns,
         private readonly CurrencyDetector $currencyDetector,
+        private readonly SpreadsheetCellReader $cells,
     ) {}
 
     public function importFromPath(string $path, string $manufacturer): int
@@ -33,16 +36,22 @@ final class ProductSpecialPriceImporter
 
         foreach ($spreadsheet->getWorksheetIterator() as $sheet) {
             $name = $sheet->getTitle();
-            $rows = $sheet->toArray(null, true, true, false);
+            $kind = $this->columns->classifySheet($name);
+            if ($kind === 'skip') {
+                continue;
+            }
+            if ($kind !== 'special') {
+                $kind = $this->columns->classifySheet($name, implode(' ', $this->peekHeader($sheet)));
+                if ($kind !== 'special') {
+                    continue;
+                }
+            }
+
+            $rows = $this->cells->toRows($sheet);
             if ($rows === []) {
                 continue;
             }
             $header = array_map(static fn ($v) => trim((string) $v), $rows[0] ?? []);
-            $kind = $this->columns->classifySheet($name, implode(' ', $header));
-            if ($kind !== 'special') {
-                continue;
-            }
-
             $map = $this->columns->mapSpecialLabels($header);
             if (($map['purchase'] ?? null) === null || ($map['client_name'] ?? null) === null) {
                 continue;
@@ -55,6 +64,25 @@ final class ProductSpecialPriceImporter
         $spreadsheet->disconnectWorksheets();
 
         return $imported;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function peekHeader(Worksheet $sheet): array
+    {
+        $maxCol = min(28, Coordinate::columnIndexFromString($sheet->getHighestDataColumn() ?: 'A'));
+        $labels = [];
+        for ($c = 1; $c <= $maxCol; $c++) {
+            $coord = Coordinate::stringFromColumnIndex($c).'1';
+            try {
+                $labels[] = trim((string) $sheet->getCell($coord)->getFormattedValue());
+            } catch (Throwable) {
+                $labels[] = '';
+            }
+        }
+
+        return $labels;
     }
 
     /**

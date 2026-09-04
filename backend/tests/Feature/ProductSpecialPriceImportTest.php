@@ -169,6 +169,68 @@ final class ProductSpecialPriceImportTest extends TestCase
         return $path;
     }
 
+    public function test_skips_catalog_formula_sheets_by_name(): void
+    {
+        $spreadsheet = new Spreadsheet;
+        $trad = $spreadsheet->getActiveSheet();
+        $trad->setTitle('Trad. articles');
+        $trad->fromArray([
+            ['EAN', 'REFERENCE'],
+            ['3353090016794', '35X30SPEEDNET'],
+        ]);
+
+        $view = $spreadsheet->createSheet();
+        $view->setTitle('ROSTAING 2026');
+        $view->setCellValue('A1', 'Reference');
+        $view->setCellValue('B1', 'Base price 2026 in Euro');
+        $view->setCellValue('A2', "='Trad. articles'!B2");
+        $view->setCellValue('B2', 4.944);
+
+        $path = tempnam(sys_get_temp_dir(), 'rost-sp').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+        try {
+            $this->assertSame(
+                0,
+                app(ProductSpecialPriceImporter::class)->importFromPath($path, 'Rostaing')
+            );
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_detects_special_from_header_when_sheet_name_is_generic(): void
+    {
+        Product::query()->create([
+            'sku' => '532100',
+            'name' => 'Speedglas',
+            'manufacturer' => '3M',
+            'catalog_price_net' => 39.85,
+            'purchase_price' => 19.92,
+            'currency' => 'EUR',
+        ]);
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Arkusz1');
+        $sheet->fromArray([
+            ['Nazwa klienta', '3M numer magazynowy', 'Cena kontraktowa'],
+            ['ARCELORMITTAL POLAND S.A.', '532100', '7,67'],
+        ]);
+        $path = tempnam(sys_get_temp_dir(), 'spec-hdr').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+        try {
+            $this->assertSame(
+                1,
+                app(ProductSpecialPriceImporter::class)->importFromPath($path, '3M')
+            );
+            $this->assertTrue(
+                ProductSpecialPrice::query()->where('client_name', 'ARCELORMITTAL POLAND S.A.')->exists()
+            );
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_special_price_importer_ignores_pdf(): void
     {
         $path = tempnam(sys_get_temp_dir(), 'pdf').'.pdf';
