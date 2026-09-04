@@ -209,6 +209,40 @@ final class PrestaExportApiTest extends TestCase
         $this->assertStringContainsString('#fef3c7', $html);
     }
 
+    public function test_export_html_takes_card_highlights_when_export_inherits(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $card = EnrichmentDescriptionLayouts::defaultBlocks('card');
+        foreach ($card as $i => $block) {
+            if ($block['id'] === 'attributes') {
+                $card[$i]['emphasis'] = 'highlight';
+            }
+            if ($block['id'] === 'features') {
+                $card[$i]['emphasis'] = 'accent';
+            }
+        }
+        app(EnrichmentDescriptionTemplateService::class)->update('rekawice', null, [
+            'inherit_card' => false,
+            'inherit_export' => true,
+            'card' => $card,
+        ]);
+        $product = $this->makeProduct([
+            'sku' => '2451',
+            'name' => 'Rękawice teXXor ECO TOUCH',
+            'description' => 'Rękawice z recyklingu.',
+            'enrichment_payload' => [
+                'attributes' => ['kategoria_bhp' => 'rekawice', 'material' => 'nylon'],
+                'features' => ['funkcja touchscreen'],
+            ],
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')->assertOk();
+        $html = (string) $this->presta->created[0]['description'];
+        $this->assertStringContainsString('#fef3c7', $html);
+        $this->assertStringContainsString('#ede9fe', $html);
+        $this->assertStringContainsString('funkcja touchscreen', $html);
+    }
+
     public function test_update_sends_images_when_presta_has_none(): void
     {
         Storage::fake('public');

@@ -30,7 +30,7 @@ final class EnrichmentDescriptionLayoutsTest extends TestCase
         $this->assertNotContains('documents', array_column($layout['export'], 'id'));
     }
 
-    public function test_visual_default_cannot_inherit(): void
+    public function test_visual_default_keeps_export_following_card(): void
     {
         $layout = EnrichmentDescriptionLayouts::normalize([
             'inherit_card' => true,
@@ -38,7 +38,7 @@ final class EnrichmentDescriptionLayoutsTest extends TestCase
         ], true);
 
         $this->assertFalse($layout['inherit_card']);
-        $this->assertFalse($layout['inherit_export']);
+        $this->assertTrue($layout['inherit_export']);
     }
 
     public function test_resolve_uses_fallback_when_inheriting(): void
@@ -50,5 +50,42 @@ final class EnrichmentDescriptionLayoutsTest extends TestCase
 
         $resolved = EnrichmentDescriptionLayouts::resolve($family, $fallback);
         $this->assertSame('accent', $resolved['card'][0]['emphasis']);
+        $this->assertSame('accent', $resolved['export'][0]['emphasis']);
+    }
+
+    public function test_export_follows_custom_card_when_export_inherits(): void
+    {
+        $card = EnrichmentDescriptionLayouts::defaultBlocks('card');
+        $card[1]['emphasis'] = 'highlight';
+        $card[3]['emphasis'] = 'accent';
+        $layout = [
+            'inherit_card' => false,
+            'inherit_export' => true,
+            'card' => $card,
+            'export' => EnrichmentDescriptionLayouts::defaultBlocks('export'),
+        ];
+
+        $resolved = EnrichmentDescriptionLayouts::resolve($layout, EnrichmentDescriptionLayouts::defaultStoredLayout());
+        $attrs = collect($resolved['export'])->firstWhere('id', 'attributes');
+        $features = collect($resolved['export'])->firstWhere('id', 'features');
+        $this->assertSame('highlight', $attrs['emphasis'] ?? null);
+        $this->assertSame('accent', $features['emphasis'] ?? null);
+        $this->assertNotContains('documents', array_column($resolved['export'], 'id'));
+    }
+
+    public function test_stock_export_follows_custom_card_even_without_flag(): void
+    {
+        $card = EnrichmentDescriptionLayouts::defaultBlocks('card');
+        $card[1]['emphasis'] = 'highlight';
+        $layout = [
+            'inherit_card' => false,
+            'inherit_export' => false,
+            'card' => $card,
+            'export' => EnrichmentDescriptionLayouts::defaultBlocks('export'),
+        ];
+
+        $resolved = EnrichmentDescriptionLayouts::resolve($layout, EnrichmentDescriptionLayouts::defaultStoredLayout());
+        $attrs = collect($resolved['export'])->firstWhere('id', 'attributes');
+        $this->assertSame('highlight', $attrs['emphasis'] ?? null);
     }
 }

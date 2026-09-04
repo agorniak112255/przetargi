@@ -117,6 +117,7 @@ final class EnrichmentDescriptionTemplateServiceTest extends TestCase
         $again = $service->resolvedForProduct($product);
         $this->assertSame('norms', $again['card'][0]['id']);
         $this->assertSame('highlight', $again['card'][0]['emphasis']);
-        $this->assertSame('description', $again['export'][0]['id']);
+        $this->assertSame('norms', $again['export'][0]['id']);
+        $this->assertSame('highlight', $again['export'][0]['emphasis']);
     }
 }

@@ -4,6 +4,8 @@ import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
 import {
   BLOCK_LABELS,
   EMPHASIS_LABELS,
+  exportBlocksFromCard,
+  exportFollowsCard,
   samplePreviewProduct,
 } from '../lib/descriptionLayout'
 
@@ -168,10 +170,20 @@ export function AdminDescriptionTemplates() {
 
   const surface = tab === 'export' ? 'export' : 'card'
   const inheritKey = surface === 'export' ? 'inherit_export' : 'inherit_card'
-  const inheriting = layout ? layout[inheritKey] && !current?.is_visual_default : false
+  const inheriting = layout
+    ? surface === 'export'
+      ? exportFollowsCard(layout)
+      : layout.inherit_card && !current?.is_visual_default
+    : false
   const editorBlocks = layout
     ? inheriting
-      ? current?.resolved_layout[surface] ?? layout[surface]
+      ? surface === 'export'
+        ? exportBlocksFromCard(
+            layout.inherit_card && current && !current.is_visual_default
+              ? current.resolved_layout.card
+              : layout.card,
+          )
+        : (current?.resolved_layout.card ?? layout.card)
       : layout[surface]
     : []
 
@@ -183,10 +195,17 @@ export function AdminDescriptionTemplates() {
 
   function customizeSurface() {
     if (!layout || !current) return
+    const card =
+      layout.inherit_card && !current.is_visual_default
+        ? current.resolved_layout.card
+        : layout.card
     setLayout({
       ...layout,
       [inheritKey]: false,
-      [surface]: current.resolved_layout[surface].map((b) => ({ ...b })),
+      [surface]:
+        surface === 'export'
+          ? exportBlocksFromCard(card)
+          : current.resolved_layout.card.map((b) => ({ ...b })),
     })
   }
 
@@ -203,8 +222,8 @@ export function AdminDescriptionTemplates() {
         : layout.card
       : current?.resolved_layout.card
     const exp = layout
-      ? layout.inherit_export && current && !current.is_visual_default
-        ? current.resolved_layout.export
+      ? exportFollowsCard(layout)
+        ? exportBlocksFromCard(card ?? layout.card)
         : layout.export
       : current?.resolved_layout.export
     return {
@@ -224,11 +243,10 @@ export function AdminDescriptionTemplates() {
         <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-700">Pobieranie opisów</p>
         <h2 className="mt-1 text-lg font-semibold text-slate-900">Szablony opisów</h2>
         <p className="mt-1 max-w-3xl text-[12px] text-slate-600">
-          U góry jest <b>domyślny układ</b> — taki, jaki system ma dziś na karcie i w eksporcie do
-          Presty. Rodziny BHP dziedziczą ten układ, dopóki go nie zmienisz. Instrukcje AI nadal
-          mówią modelowi, <i>co zbierać</i> przy ściąganiu; układ mówi, <i>jak to pokazać</i>.
-          Przy pobieraniu rękawic startuje szablon <b>Rękawice</b> (instrukcje + ewentualny własny
-          układ). Gdy rodzina nie wyjdzie — instrukcje „inne” i układ domyślny.
+          U góry jest <b>domyślny układ</b> karty. Eksport do Presty bierze ten sam układ (kolejność,
+          ukrycie, podświetlenie), dopóki nie dostosujesz zakładki eksportu. Rodziny BHP dziedziczą
+          kartę, dopóki jej nie zmienisz. Instrukcje AI mówią modelowi, <i>co zbierać</i> przy
+          ściąganiu. Przy rękawicach startuje szablon <b>Rękawice</b>.
         </p>
       </div>
 
@@ -374,7 +392,7 @@ export function AdminDescriptionTemplates() {
               ) : (
                 <div className="grid gap-4 xl:grid-cols-[minmax(18rem,22rem)_1fr]">
                   <div>
-                    {!current.is_visual_default && (
+                    {(tab === 'export' || !current.is_visual_default) && (
                       <div className="mb-2 flex flex-wrap items-center gap-2">
                         {inheriting ? (
                           <button
@@ -390,11 +408,17 @@ export function AdminDescriptionTemplates() {
                             onClick={inheritSurface}
                             className="rounded-lg border border-slate-300 px-2.5 py-1 text-[11px] hover:bg-slate-50"
                           >
-                            Dziedzicz z domyślnego
+                            {tab === 'export' ? 'Jak układ karty' : 'Dziedzicz z domyślnego'}
                           </button>
                         )}
                         <span className="text-[11px] text-slate-500">
-                          {inheriting ? 'Teraz jak układ systemu' : 'Własny układ tej rodziny'}
+                          {tab === 'export'
+                            ? inheriting
+                              ? 'Presta dostanie ten sam układ co karta'
+                              : 'Własny układ eksportu do Presty'
+                            : inheriting
+                              ? 'Teraz jak układ systemu'
+                              : 'Własny układ tej rodziny'}
                         </span>
                       </div>
                     )}

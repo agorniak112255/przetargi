@@ -1,6 +1,18 @@
 import type { DescriptionLayoutBlock, Product } from './api'
 import { descriptionProse } from './descriptionHighlight'
 
+export const DEFAULT_EXPORT_BLOCKS: DescriptionLayoutBlock[] = [
+  { id: 'description', visible: true, emphasis: 'none' },
+  { id: 'attributes', visible: true, emphasis: 'none' },
+  { id: 'specs', visible: true, emphasis: 'none' },
+  { id: 'features', visible: true, emphasis: 'none' },
+  { id: 'materials', visible: true, emphasis: 'none' },
+  { id: 'norms', visible: true, emphasis: 'none' },
+  { id: 'certificates', visible: true, emphasis: 'none' },
+  { id: 'use_cases', visible: true, emphasis: 'none' },
+  { id: 'sources', visible: true, emphasis: 'muted' },
+]
+
 export const DEFAULT_CARD_BLOCKS: DescriptionLayoutBlock[] = [
   { id: 'description', visible: true, emphasis: 'none' },
   { id: 'attributes', visible: true, emphasis: 'none' },
@@ -62,6 +74,43 @@ export type LayoutSection =
   | { id: string; kind: 'attributes'; title: string; pairs: AttributePair[]; extra: string; emphasis: string }
   | { id: string; kind: 'documents'; title: string; items: DocumentItem[]; emphasis: string }
   | { id: string; kind: 'sources'; title: string; items: string[]; emphasis: string }
+
+function sameBlocks(a: DescriptionLayoutBlock[], b: DescriptionLayoutBlock[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((block, i) => {
+    const other = b[i]
+    return (
+      other != null &&
+      block.id === other.id &&
+      block.visible === other.visible &&
+      block.emphasis === other.emphasis
+    )
+  })
+}
+
+export function exportBlocksFromCard(card: DescriptionLayoutBlock[]): DescriptionLayoutBlock[] {
+  const allowed = new Set(DEFAULT_EXPORT_BLOCKS.map((b) => b.id))
+  const seen = new Set<string>()
+  const out: DescriptionLayoutBlock[] = []
+  for (const block of card) {
+    if (!allowed.has(block.id) || seen.has(block.id)) continue
+    out.push({ ...block })
+    seen.add(block.id)
+  }
+  for (const block of DEFAULT_EXPORT_BLOCKS) {
+    if (!seen.has(block.id)) out.push({ ...block })
+  }
+  return out
+}
+
+export function exportFollowsCard(layout: {
+  inherit_export: boolean
+  card: DescriptionLayoutBlock[]
+  export: DescriptionLayoutBlock[]
+}): boolean {
+  if (layout.inherit_export) return true
+  return sameBlocks(layout.export, DEFAULT_EXPORT_BLOCKS) && !sameBlocks(layout.card, DEFAULT_CARD_BLOCKS)
+}
 
 export function cardBlocksFor(product: Product): DescriptionLayoutBlock[] {
   const blocks = product.description_layout?.card

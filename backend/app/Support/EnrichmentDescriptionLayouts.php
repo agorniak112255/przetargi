@@ -74,7 +74,10 @@ final class EnrichmentDescriptionLayouts
      */
     public static function defaultStoredLayout(): array
     {
-        return self::defaultLayout(false);
+        $layout = self::defaultLayout(false);
+        $layout['inherit_export'] = true;
+
+        return $layout;
     }
 
     /**
@@ -96,7 +99,6 @@ final class EnrichmentDescriptionLayouts
             : $base['inherit_export'];
         if ($isVisualDefault) {
             $inheritCard = false;
-            $inheritExport = false;
         }
 
         return [
@@ -114,10 +116,52 @@ final class EnrichmentDescriptionLayouts
      */
     public static function resolve(array $layout, array $fallback): array
     {
+        $card = $layout['inherit_card'] ? $fallback['card'] : $layout['card'];
+        $export = self::followsCard($layout, $card)
+            ? self::exportFromCard($card)
+            : $layout['export'];
+
         return [
-            'card' => $layout['inherit_card'] ? $fallback['card'] : $layout['card'],
-            'export' => $layout['inherit_export'] ? $fallback['export'] : $layout['export'],
+            'card' => $card,
+            'export' => $export,
         ];
+    }
+
+    /**
+     * @param  list<array{id: string, visible: bool, emphasis: string}>  $card
+     * @return list<array{id: string, visible: bool, emphasis: string}>
+     */
+    public static function exportFromCard(array $card): array
+    {
+        $allowed = [];
+        foreach (self::BLOCKS as $id => $meta) {
+            if (in_array(self::SURFACE_EXPORT, $meta['surfaces'], true)) {
+                $allowed[$id] = true;
+            }
+        }
+        $seen = [];
+        $out = [];
+        foreach ($card as $block) {
+            $id = $block['id'] ?? '';
+            if (! is_string($id) || $id === '' || ! isset($allowed[$id]) || isset($seen[$id])) {
+                continue;
+            }
+            $out[] = [
+                'id' => $id,
+                'visible' => (bool) ($block['visible'] ?? true),
+                'emphasis' => self::isValidEmphasis((string) ($block['emphasis'] ?? 'none'))
+                    ? (string) $block['emphasis']
+                    : 'none',
+            ];
+            $seen[$id] = true;
+        }
+        foreach (self::defaultBlocks(self::SURFACE_EXPORT) as $block) {
+            if (! isset($seen[$block['id']])) {
+                $out[] = $block;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -145,6 +189,42 @@ final class EnrichmentDescriptionLayouts
     public static function isValidEmphasis(string $value): bool
     {
         return in_array($value, self::EMPHASIS, true);
+    }
+
+    /**
+     * @param  array{inherit_export: bool, export: list<array{id: string, visible: bool, emphasis: string}>}  $layout
+     * @param  list<array{id: string, visible: bool, emphasis: string}>  $card
+     */
+    public static function followsCard(array $layout, array $card): bool
+    {
+        if ($layout['inherit_export']) {
+            return true;
+        }
+
+        return self::sameBlocks($layout['export'], self::defaultBlocks(self::SURFACE_EXPORT))
+            && ! self::sameBlocks($card, self::defaultBlocks(self::SURFACE_CARD));
+    }
+
+    /**
+     * @param  list<array{id: string, visible: bool, emphasis: string}>  $a
+     * @param  list<array{id: string, visible: bool, emphasis: string}>  $b
+     */
+    public static function sameBlocks(array $a, array $b): bool
+    {
+        if (count($a) !== count($b)) {
+            return false;
+        }
+        foreach ($a as $i => $block) {
+            $other = $b[$i] ?? null;
+            if (! is_array($other)
+                || ($block['id'] ?? null) !== ($other['id'] ?? null)
+                || (bool) ($block['visible'] ?? true) !== (bool) ($other['visible'] ?? true)
+                || (string) ($block['emphasis'] ?? 'none') !== (string) ($other['emphasis'] ?? 'none')) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
