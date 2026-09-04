@@ -385,7 +385,7 @@ export function ItemBattlecard({
                 ))}
               </ul>
             )}
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[repeat(auto-fit,minmax(13.5rem,1fr))]">
+            <div className="grid grid-cols-2 gap-2 min-[900px]:grid-cols-5">
               <Col
                 title="Propozycja"
                 tone="main"

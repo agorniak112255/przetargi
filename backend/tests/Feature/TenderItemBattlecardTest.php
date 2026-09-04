@@ -399,7 +399,7 @@ final class TenderItemBattlecardTest extends TestCase
         $this->assertNotContains('GCRM', $skus);
     }
 
-    public function test_battlecard_can_return_four_substitutes(): void
+    public function test_battlecard_can_return_eight_substitutes(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
@@ -416,7 +416,7 @@ final class TenderItemBattlecardTest extends TestCase
             'enrichment_payload' => ['materials' => ['nitryl']],
             'enriched_at' => now(),
         ]);
-        foreach (['A', 'B', 'C', 'D'] as $i => $suf) {
+        foreach (['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as $i => $suf) {
             Product::query()->create([
                 'sku' => 'NITRYL-'.$suf,
                 'name' => 'Rękawice nitrylowe zamiennik '.$suf,
@@ -433,9 +433,9 @@ final class TenderItemBattlecardTest extends TestCase
         }
 
         $tender = Tender::query()->create([
-            'number' => 'PRZ/BC/4',
-            'title' => 'Cztery zamienniki',
-            'client_id' => Client::query()->create(['name' => 'Klient 4'])->id,
+            'number' => 'PRZ/BC/8',
+            'title' => 'Osiem zamienników',
+            'client_id' => Client::query()->create(['name' => 'Klient 8'])->id,
             'owner_id' => User::factory()->create()->id,
             'status' => 'wycena',
             'ai_percent' => 80,
@@ -455,6 +455,6 @@ final class TenderItemBattlecardTest extends TestCase
             ->assertOk()
             ->json('battlecard.substitutes');
 
-        $this->assertCount(4, $subs);
+        $this->assertCount(8, $subs);
     }
 }

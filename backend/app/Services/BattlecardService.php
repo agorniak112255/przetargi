@@ -15,12 +15,12 @@ use App\Support\PpeAssortment;
 use Throwable;
 
 /**
- * Snapshot pozycji SIWZ: propozycja główna + do 2 zamienników z katalogu.
+ * Snapshot pozycji SIWZ: propozycja główna + do 8 zamienników z katalogu.
  * (Katalog = oferta ogólnie dostępna wielu marek — bez bloku „konkurencja”.)
  */
 final class BattlecardService
 {
-    private const SUBSTITUTE_LIMIT = 4;
+    private const SUBSTITUTE_LIMIT = 8;
 
     private const CATALOG_ALT_MIN_SCORE = 55;
 
