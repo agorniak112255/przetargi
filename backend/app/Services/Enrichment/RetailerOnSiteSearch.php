@@ -76,6 +76,13 @@ final class RetailerOnSiteSearch
         'template' => 'https://www.misterworker.com/en/search?q={q}',
     ];
 
+    /** @var list<array{host: string, template: string}> */
+    private const CANIS_ENDPOINTS = [
+        ['host' => 'canis.cz', 'template' => 'https://www.canis.cz/pl/vysledek-vyhledavani?search={q}'],
+        ['host' => 'cxs.cz', 'template' => 'https://www.cxs.cz/pl/vysledek-vyhledavani?search={q}'],
+        ['host' => 'cxs.net.pl', 'template' => 'https://cxs.net.pl/catalogsearch/result/?q={q}'],
+    ];
+
     private const MISTERWORKER_CLERK_SEARCH = 'https://api.clerk.io/v2/search/search';
 
     private const MISTERWORKER_ORIGIN = 'https://www.misterworker.com';
@@ -110,7 +117,8 @@ final class RetailerOnSiteSearch
                     $hits = $this->misterworkerHits($query);
                 } else {
                     $page = $this->fetch(str_replace('{q}', rawurlencode($query), $endpoint['template']));
-                    $hits = $this->productLinks($page['html'], $endpoint['host']);
+                    $html = $this->shopSearchResultHtml($page['html'], $endpoint['host']);
+                    $hits = $this->productLinks($html, $endpoint['host']);
                     $redirect = $this->productPageFromRedirect($page['url'], $endpoint['host']);
                     if ($redirect !== null) {
                         array_unshift($hits, $redirect);
@@ -125,9 +133,12 @@ final class RetailerOnSiteSearch
                         continue;
                     }
                     $hay = $hit['url'].' '.$hit['title'];
-                    if (! $this->identity->hayMentionsProduct($hay, $product)
-                        || $this->identity->pageClaimsAnotherCode($hit['url'], $hit['title'], $product)) {
-                        continue;
+                    $officialCard = $this->looksLikeOfficialShopCard($hit['url'], $product);
+                    if (! $officialCard) {
+                        if (! $this->identity->hayMentionsProduct($hay, $product)
+                            || $this->identity->pageClaimsAnotherCode($hit['url'], $hit['title'], $product)) {
+                            continue;
+                        }
                     }
                     if ($endpoint['host'] === 'misterworker.com'
                         && ! $this->identity->hayHasProductCode(mb_strtolower($hay), $product)) {
@@ -208,6 +219,7 @@ final class RetailerOnSiteSearch
             $this->query($product),
             $this->identity->firstStrongShopPhrase($product),
             $this->queryBareModel($product),
+            ...$this->identity->catalogArticleCodes($product),
         ] as $query) {
             $query = trim($query);
             if ($query === '') {
@@ -255,7 +267,7 @@ final class RetailerOnSiteSearch
             }
             $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
             if ($path === '' || $path === '/' || str_ends_with($path, '/index.php')
-                || preg_match('#/(searchquery|search\.php|catalogsearch|wyszukiwanie)(/|$)|/(search|category|kategoria|collections|producent|manufacturer|customer|checkout|cart|login)(/|$)#u', $path) === 1) {
+                || preg_match('#/(searchquery|search\.php|catalogsearch|wyszukiwanie|vysledek-vyhledavani|hledani)(/|$)|/(search|category|kategoria|collections|producent|manufacturer|customer|checkout|cart|login)(/|$)#u', $path) === 1) {
                 continue;
             }
             $url = $this->cleanProductUrl($url);
@@ -305,6 +317,15 @@ final class RetailerOnSiteSearch
             }
         }
         if ($out !== []) {
+            $picked = array_column($out, 'host');
+            if (array_intersect($picked, ['canis.cz', 'cxs.cz', 'cxs.net.pl']) !== []) {
+                usort($out, static function (array $a, array $b): int {
+                    $rank = ['canis.cz' => 0, 'cxs.cz' => 1, 'cxs.net.pl' => 2];
+
+                    return ($rank[$a['host']] ?? 9) <=> ($rank[$b['host']] ?? 9);
+                });
+            }
+
             return $out;
         }
         if ($this->identity->inferredCatalogHosts($product) !== []) {
@@ -331,6 +352,7 @@ final class RetailerOnSiteSearch
     {
         return array_merge(
             [self::MISTERWORKER_ENDPOINT],
+            self::CANIS_ENDPOINTS,
             self::IDOSELL_ENDPOINTS,
             [self::MAPA_ENDPOINT, self::MAREL_ENDPOINT],
             self::ENDPOINTS,
@@ -396,7 +418,50 @@ final class RetailerOnSiteSearch
     {
         return str_contains($path, '/strona-produktu/')
             || preg_match('#/(produkt|products?)/#u', $path) === 1
-            || preg_match('#^/pl/p/#u', $path) === 1;
+            || preg_match('#^/pl/p/#u', $path) === 1
+            || preg_match('/_p\d+/u', $path) === 1;
+    }
+
+    /**
+     * Canis: lista wyników zaczyna się od bloku search_product — nagłówek ma inne karty.
+     */
+    private function shopSearchResultHtml(string $html, string $host): string
+    {
+        if (in_array($host, ['canis.cz', 'cxs.cz'], true)
+            && preg_match('/search_product(.*)/is', $html, $m) === 1
+            && trim((string) $m[1]) !== '') {
+            return (string) $m[1];
+        }
+
+        return $html;
+    }
+
+    private function looksLikeOfficialShopCard(string $url, Product $product): bool
+    {
+        $host = mb_strtolower((string) parse_url($url, PHP_URL_HOST));
+        $host = preg_replace('/^www\./', '', $host) ?? $host;
+        if ($host === '') {
+            return false;
+        }
+        $official = false;
+        foreach ($this->identity->officialCatalogHosts($product) as $known) {
+            $known = preg_replace('/^www\./', '', mb_strtolower(trim($known))) ?? '';
+            if ($known !== '' && ($host === $known || str_ends_with($host, '.'.$known))) {
+                $official = true;
+                break;
+            }
+        }
+        if (! $official) {
+            return false;
+        }
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        if (preg_match('/_p\d+/u', $path) !== 1) {
+            return false;
+        }
+        $slug = basename($path);
+        $slug = preg_replace('/_p\d+$/u', '', $slug) ?? $slug;
+
+        return mb_strlen($slug) >= 8;
     }
 
     private function titleFromProductPath(string $path): string
@@ -410,6 +475,7 @@ final class RetailerOnSiteSearch
         }
         $slug = (string) $parts[array_key_last($parts)];
         $slug = preg_replace('/\.html?$/i', '', $slug) ?? $slug;
+        $slug = preg_replace('/_[pc]\d+$/u', '', $slug) ?? $slug;
         if (preg_match('/^\d+$/', $slug) === 1 && count($parts) >= 2) {
             $slug = (string) $parts[count($parts) - 2];
         }

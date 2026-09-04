@@ -99,12 +99,37 @@ final class RetailerOnSiteSearchTest extends TestCase
         ]);
 
         $this->assertSame('211600170000', $search->query($beagle));
+        $this->assertContains('2116-001-700', $search->shopQueries($beagle));
         $this->assertSame('BEAGLE', $search->queryBareModel($beagle));
         $this->assertSame('ST068GM', $search->query(new Product([
             'sku' => 'WST068GM',
             'name' => 'ALFA Grey Meteorite',
             'manufacturer' => 'Whirlpool',
         ])));
+    }
+
+    public function test_canis_search_keeps_product_card_without_sku_in_slug(): void
+    {
+        $url = 'https://www.canis.cz/pl/akcesoria-ochronne_c1/folia-ochronna-do-przylbicy-spawalniczej_p5845';
+        Http::fake([
+            'https://www.canis.cz/pl/vysledek-vyhledavani*' => Http::response(
+                '<div class="search_product">'
+                .'<a href="'.$url.'">Folia ochronna do przyłbicy spawalniczej</a>'
+                .'</div>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $product = new Product([
+            'sku' => '420000600000',
+            'name' => '-',
+            'manufacturer' => 'CANIS SAFETY',
+        ]);
+        $hits = app(RetailerOnSiteSearch::class)->find($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains($url, $urls);
     }
 
     public function test_mapa_query_uses_catalog_name_without_size(): void

@@ -19,7 +19,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v58';
+    private const SEARCH_CACHE_VERSION = 'v59';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -112,7 +112,11 @@ class HybridWebSearchService
                 'raw_content' => null,
             ];
         }
-        $shopHits = $this->confirmedCatalogHits($this->retailerSearch->find($product), $product);
+        $shopRaw = $this->retailerSearch->find($product);
+        $shopHits = $this->confirmedCatalogHits($shopRaw, $product);
+        if (! $this->hasEnoughPageResults($shopHits, 1) && $shopRaw !== []) {
+            $shopHits = $this->keepHitsMentioningSkuOnPage($shopRaw, $product);
+        }
         if ($this->hasEnoughPageResults($shopHits, 1)) {
             return [
                 'results' => array_slice($shopHits, 0, 8),
@@ -1276,7 +1280,7 @@ class HybridWebSearchService
         foreach ([
             '/manufacturer/', '/producent/', '/brand/', '/marka/',
             '/category/', '/kategoria/', '/kategorie/', '/collection/',
-            '/search', '/szukaj', '/catalog/', '/katalog/', '/blog/',
+            '/search', '/szukaj', '/vysledek-vyhledavani', '/catalog/', '/katalog/', '/blog/',
             // zbiorcze strony producenta wymieniają cały asortyment, w tym nasz kod
             '/deklaracje', '/certyfikat', '/do-pobrania', '/dokumenty', '/downloads',
             '/aktualnosci', '/news',

@@ -2435,6 +2435,7 @@ final class ProductSearchIdentity
     {
         $path = (string) parse_url(mb_strtolower($url), PHP_URL_PATH);
         $path = (string) preg_replace('/\.[a-z]{2,5}$/u', '', $path);
+        $path = (string) preg_replace('/[_-][pc]\d+(?=\/|$)/u', '', $path);
         $hay = mb_strtolower($title).' '.str_replace(['/', '_'], ' ', $path);
 
         $out = [];
@@ -3285,6 +3286,10 @@ final class ProductSearchIdentity
             $ten = mb_substr($digits, 0, 10);
             $out[] = mb_substr($ten, 0, 4).'-'.mb_substr($ten, 4, 3).'-'.mb_substr($ten, 7, 3);
             $out[] = $ten;
+        }
+        if (mb_strlen($digits) >= 12) {
+            $out[] = mb_substr($digits, 0, 4).'-'.mb_substr($digits, 4, 3).'-'
+                .mb_substr($digits, 7, 3).'-'.mb_substr($digits, 10, 2);
         }
         $stripped = rtrim($digits, '0');
         if (mb_strlen($stripped) >= 8) {

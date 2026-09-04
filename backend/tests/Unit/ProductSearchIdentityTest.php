@@ -820,6 +820,32 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_canis_shop_page_id_is_not_another_model(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'manufacturer' => 'CANIS SAFETY',
+            'sku' => '420000600000',
+            'name' => '-',
+        ]);
+        $url = 'https://www.canis.cz/pl/akcesoria-ochronne_c88493506174732/'
+            .'ochrona-oczu_c88493506174866/maski-spawalnicze_c3021273269535846/'
+            .'folia-ochronna-do-przylbicy-spawalniczej_p5845';
+
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            $url,
+            'Folia ochronna do przyłbicy spawalniczej',
+            $product
+        ));
+        $this->assertTrue($id->isConfirmedProductCard(
+            $url,
+            'Folia ochronna do przyłbicy spawalniczej',
+            'Kod: 4200-006-000-00 EAN: 420000600000 CANIS',
+            $product
+        ));
+        $this->assertContains('4200-006-000-00', $id->catalogArticleCodes($product));
+    }
+
     public function test_accessory_card_mentioning_our_model_is_not_our_card(): void
     {
         $id = new ProductSearchIdentity;

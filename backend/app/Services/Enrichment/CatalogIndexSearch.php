@@ -49,6 +49,9 @@ final class CatalogIndexSearch
                 $this->identity->shortBrand((string) $product->manufacturer)
             ),
         ];
+        foreach ($this->identity->catalogArticleCodes($product) as $article) {
+            $raw[] = $article;
+        }
         // „MT-212-2” leży w indeksie pod adresem „maska-mt-212-p-8” — człon
         // z wariantem sklepy zostawiają dopiero w treści karty
         foreach ($this->identity->variantBaseCodes($product) as $base) {
