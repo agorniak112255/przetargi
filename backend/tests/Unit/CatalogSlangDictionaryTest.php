@@ -138,6 +138,25 @@ final class CatalogSlangDictionaryTest extends TestCase
         ));
     }
 
+    public function test_nitrile_material_rejects_knit_palm_coat_but_keeps_disposable(): void
+    {
+        $q = 'Rękawice nitrylowe lekkie';
+        $this->assertTrue($this->dict()->isNitrileMaterialQuery($q));
+        $this->assertTrue($this->dict()->rejectsProduct(
+            $q,
+            'R840 Dziane rękawice przeznaczone do prac lekkich z powlekaną nitrylem dłonią'
+        ));
+        $this->assertFalse($this->dict()->rejectsProduct(
+            $q,
+            '93-843 Niebieskie bezpudrowe rękawice nitrylowe. Jednorazowe rękawice nitrylowe.'
+        ));
+        $this->assertFalse($this->dict()->isNitrileMaterialQuery('Rękawice pianki nitrylowe'));
+        $this->assertFalse($this->dict()->rejectsProduct(
+            'Rękawice wampirki uniwersalne',
+            'OPAKOWANIE 10 PAR RĘKAWIC DZIANYCH Z POLIESTRU, DŁOŃ POWLEKANA NITRYLEM'
+        ));
+    }
+
     public function test_every_slang_term_is_indexed_as_jargon(): void
     {
         $this->assertTrue($this->dict()->isJargonNorm('wampirki'));

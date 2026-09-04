@@ -94,6 +94,18 @@ final class CatalogCascadeRecall
                     ->filter(fn (Product $p): bool => $this->matchesFeatureEvidence($query, $p))
                     ->values();
             }
+            $rows = $rows
+                ->filter(fn (Product $p): bool => ! $this->slang->rejectsProduct(
+                    $query,
+                    implode(' ', [
+                        (string) $p->name,
+                        (string) $p->sku,
+                        (string) ($p->category ?? ''),
+                        (string) ($p->description ?? ''),
+                        (string) ($p->search_blob ?? ''),
+                    ])
+                ))
+                ->values();
             if ($rows->isNotEmpty()) {
                 return ['products' => $rows, 'level' => $attempt['name']];
             }
@@ -233,9 +245,9 @@ final class CatalogCascadeRecall
             }
         }
         $familyNouns = $this->familyNouns($family);
-        $stop = ['ochrona', 'przed', 'ciecza', 'olej', 'plyn', 'proste', 'uniwersaln', 'oraz', 'dla'];
+        $stop = ['ochrona', 'przed', 'ciecza', 'olej', 'plyn', 'proste', 'uniwersaln', 'oraz', 'dla', 'lekki', 'cienki'];
         foreach ($this->tokenize($step) as $token) {
-            if (in_array($token, $stop, true) || preg_match('/^(ciecza|olej|plyn|ochrona|przed)/u', $token) === 1) {
+            if (in_array($token, $stop, true) || preg_match('/^(ciecza|olej|plyn|ochrona|przed|lekki|cienki)/u', $token) === 1) {
                 continue;
             }
             $skip = false;
@@ -416,7 +428,7 @@ final class CatalogCascadeRecall
         $brand = $this->fold((string) ($intent['manufacturer'] ?? ''));
         $requested = $this->fold((string) ($intent['manufacturer_requested'] ?? ''));
         $familyNouns = $this->familyNouns($family);
-        $stop = ['ochrona', 'przed', 'ciecza', 'olej', 'plyn', 'proste', 'uniwersaln'];
+        $stop = ['ochrona', 'przed', 'ciecza', 'olej', 'plyn', 'proste', 'uniwersaln', 'lekki', 'cienki'];
         $clean = [];
         foreach ($out as $token) {
             $token = trim($token);

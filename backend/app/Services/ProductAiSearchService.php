@@ -964,7 +964,10 @@ final class ProductAiSearchService
             .'Nie zgaduj marki spoza wymagania. Nie podstawiaj innej marki z listy. '
             .'Nie dawaj ogólników („ochrona przed cieczą”, „uniwersalne”) jako osobnego kroku. '
             .'wampirki = dzianina + dłoń powlekana / nakrapiane — NIE jednorazowy nitryl, NIE zarękawki, NIE zimowe. '
+            .'nitrylowe / nitrylki = rękawice z nitrylu (jednorazowe, diagnostyczne, bezpudrowe) — NIE dzianina z nitrylem na dłoni. '
+            .'„lekkie” przy nitrylu = cienkie, NIE „do prac lekkich”. '
             .'Przykład: „Rękawice wampirki uniwersalne” → search_steps: ["rękawice","dzianinowe","dłoń powlekana"]. '
+            .'Przykład: „Rękawice nitrylowe lekkie” → search_steps: ["rękawice","nitrylowe","jednorazowe"]. '
             .'Przykład: „Rękawice nitrylowe RTELA” → search_steps: ["rękawice","nitrylowe","RTELA"]. '
             .'manufacturer: nazwa z wymagania. Jeśli jest na liście katalogu — dokładna nazwa z listy. '
             .'Jeśli nie ma jej na liście — wpisz nazwę z SIWZ (nie null). '
@@ -1317,7 +1320,7 @@ final class ProductAiSearchService
             if ($this->catalogSlang->isJargonNorm($token)) {
                 continue;
             }
-            if (preg_match('/^(ochrona|przed|ciecz|olej|plyn|proste|uniwersaln)/u', $token) === 1) {
+            if (preg_match('/^(ochrona|przed|ciecz|olej|plyn|proste|uniwersaln|lekki|cienki)/u', $token) === 1) {
                 continue;
             }
             $meaningful++;
@@ -2116,7 +2119,7 @@ final class ProductAiSearchService
                 ? $cascaded->concat($priority)
                 : $priority->concat($cascaded);
 
-            return $this->uniqueProducts($pool, $limit)->values();
+            return $this->keepCompatible($requirement, $this->uniqueProducts($pool, $limit))->values();
         }
         if ($this->catalogSlang->requiresTightEvidence($query)) {
             return $this->keepCompatible($requirement, $priority)->values();

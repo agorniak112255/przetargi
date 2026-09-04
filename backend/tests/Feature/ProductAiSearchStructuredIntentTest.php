@@ -156,6 +156,7 @@ final class ProductAiSearchStructuredIntentTest extends TestCase
             $user = (string) ($messages[1]['content'] ?? '');
             $this->assertStringContainsString('search_steps', $system);
             $this->assertStringContainsString('NA KOŃCU zawsze producent', $system);
+            $this->assertStringContainsString('NIE dzianina z nitrylem na dłoni', $system);
             $this->assertStringContainsString('Wymaganie:', $user);
             $this->assertStringContainsString('Rękawice wampirki uniwersalne', $user);
             $this->assertStringContainsString('Żargon SIWZ', $user);

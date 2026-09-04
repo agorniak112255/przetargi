@@ -166,12 +166,15 @@ final class CatalogSlangDictionary
 
     public function rejectsProduct(string $query, string $productText): bool
     {
+        $hay = $this->fold($productText);
+        if ($this->isNitrileMaterialQuery($query) && $this->isKnitPalmNitrileCoat($hay)) {
+            return true;
+        }
         $rewrite = $this->searchRewrite($query);
         if ($rewrite === null) {
             return false;
         }
         $note = $this->fold($rewrite['needed']);
-        $hay = $this->fold($productText);
         $wantsLiquid = preg_match('/\b(ciecz|olej|plyn)/u', $note) === 1;
         $vampire = preg_match('/dziani/', $note) === 1
             && preg_match('/(powlek|nakrap|dlon)/', $note) === 1;
@@ -329,6 +332,48 @@ final class CatalogSlangDictionary
         }
 
         return $hasKnit && $hasCoat;
+    }
+
+    /** Nitrylki = materiał z nitrylu, nie dzianina z nitrylem na dłoni. */
+    public function isNitrileMaterialQuery(string $query): bool
+    {
+        $q = $this->fold($query);
+        if (preg_match('/(wampir|piank|nakrap|nakrop|kropk|powlek|dzian|knit)/u', $q) === 1) {
+            return false;
+        }
+        if (preg_match('/\bnitryl/u', $q) === 1) {
+            return true;
+        }
+        $hasNitrile = false;
+        $hasCoatedKnit = false;
+        foreach ($this->matchingEntries($query) as $entry) {
+            foreach ($entry['terms'] as $term) {
+                $n = $this->fold($term);
+                if (preg_match('/^nitryl/u', $n) === 1) {
+                    $hasNitrile = true;
+                }
+                if (preg_match('/^(wampir|piank|nakrap|nakrop|kropk)/u', $n) === 1) {
+                    $hasCoatedKnit = true;
+                }
+            }
+        }
+
+        return $hasNitrile && ! $hasCoatedKnit;
+    }
+
+    /** Dzianina / dłoń powlekana nitrylem — to nie „rękawice nitrylowe”. */
+    private function isKnitPalmNitrileCoat(string $hay): bool
+    {
+        if (preg_match('/(jednorazow|bezpudrow|examinat|diagnost|powder\s*free|unflocked)/u', $hay) === 1) {
+            return false;
+        }
+        if (preg_match('/(nitryl|nitrile)/u', $hay) !== 1) {
+            return false;
+        }
+        $coated = preg_match('/(powlek|coated|coat)/u', $hay) === 1;
+        $palmOrKnit = preg_match('/(dzian|knit|dlon|palm)/u', $hay) === 1;
+
+        return $coated && $palmOrKnit;
     }
 
     public function isJargonNorm(string $normalizedToken): bool

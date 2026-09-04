@@ -50,10 +50,10 @@ final class CatalogCascadeRecallTest extends TestCase
             'ppe_family' => PpeAssortment::FAMILY_GLOVES,
         ]);
         $delta = Product::query()->create([
-            'sku' => 'VE727',
-            'name' => 'Rękawice dziane, dłoń powlekana nitrylem',
+            'sku' => '93-843',
+            'name' => 'Niebieskie bezpudrowe rękawice nitrylowe',
             'manufacturer' => 'Delta Plus',
-            'description' => 'Rękawice nitrylowe powlekane.',
+            'description' => 'Jednorazowe rękawice nitrylowe.',
             'catalog_price_net' => 8,
             'purchase_price' => 4,
             'stock' => 10,
@@ -77,7 +77,7 @@ final class CatalogCascadeRecallTest extends TestCase
 
         $this->assertSame(CatalogCascadeRecall::LEVEL_FAMILY_FEATURE, $hit['level']);
         $skus = $hit['products']->pluck('sku')->all();
-        $this->assertContains('VE727', $skus);
+        $this->assertContains('93-843', $skus);
         $this->assertNotContains('ANS-LEATHER', $skus);
         $this->assertSame($delta->id, $hit['products']->first()?->id);
     }
@@ -139,10 +139,10 @@ final class CatalogCascadeRecallTest extends TestCase
             'ppe_family' => PpeAssortment::FAMILY_GLOVES,
         ]);
         $delta = Product::query()->create([
-            'sku' => 'VE727',
-            'name' => 'Rękawice dziane, dłoń powlekana nitrylem',
+            'sku' => '93-843',
+            'name' => 'Niebieskie bezpudrowe rękawice nitrylowe',
             'manufacturer' => 'Delta Plus',
-            'description' => 'Rękawice nitrylowe powlekane.',
+            'description' => 'Jednorazowe rękawice nitrylowe.',
             'catalog_price_net' => 8,
             'purchase_price' => 4,
             'stock' => 10,
@@ -166,8 +166,54 @@ final class CatalogCascadeRecallTest extends TestCase
         );
 
         $this->assertSame('steps_2', $hit['level']);
-        $this->assertContains('VE727', $hit['products']->pluck('sku')->all());
+        $this->assertContains('93-843', $hit['products']->pluck('sku')->all());
         $this->assertNotContains('ANS-LEATHER', $hit['products']->pluck('sku')->all());
         $this->assertSame($delta->id, $hit['products']->first()?->id);
+    }
+
+    public function test_nitrile_material_drops_knit_palm_coat_even_when_lekkie_matches(): void
+    {
+        Product::query()->create([
+            'sku' => 'R840',
+            'name' => 'Dziane rękawice przeznaczone do prac lekkich z powlekaną nitrylem dłonią',
+            'manufacturer' => 'Ansell',
+            'description' => 'Rękawice do prac lekkich powlekane nitrylem.',
+            'catalog_price_net' => 9.2,
+            'purchase_price' => 7.27,
+            'stock' => 5,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $nitrile = Product::query()->create([
+            'sku' => '93-843',
+            'name' => 'Niebieskie bezpudrowe rękawice nitrylowe',
+            'manufacturer' => 'Ansell',
+            'description' => 'Jednorazowe rękawice nitrylowe.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 6,
+            'stock' => 20,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        CatalogManufacturerContext::forgetCache();
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'Rękawice nitrylowe lekkie',
+            [
+                'needed' => 'rękawice nitrylowe',
+                'search_phrases' => ['rękawice nitrylowe'],
+                'search_steps' => ['rękawice', 'nitrylowe', 'lekkie'],
+                'constraints' => [],
+            ],
+            'Rękawice nitrylowe lekkie',
+            20
+        );
+
+        $skus = $hit['products']->pluck('sku')->all();
+        $this->assertContains('93-843', $skus);
+        $this->assertNotContains('R840', $skus);
+        $this->assertSame($nitrile->id, $hit['products']->first()?->id);
     }
 }

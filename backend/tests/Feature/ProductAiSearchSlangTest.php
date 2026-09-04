@@ -309,4 +309,57 @@ final class ProductAiSearchSlangTest extends TestCase
         $this->assertNotContains('ZPP25T', $skus);
         $this->assertNotContains('STOP-OILT', $skus);
     }
+
+    public function test_nitrile_light_does_not_return_knit_palm_coat(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $coated = Product::query()->create([
+            'sku' => 'R840',
+            'name' => 'Dziane rękawice przeznaczone do prac lekkich z powlekaną nitrylem dłonią',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice do prac lekkich powlekane nitrylem.',
+            'catalog_price_net' => 9.2,
+            'purchase_price' => 7.27,
+            'stock' => 5,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $nitrile = Product::query()->create([
+            'sku' => '93-843',
+            'name' => 'Niebieskie bezpudrowe rękawice nitrylowe',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Jednorazowe rękawice nitrylowe.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 6,
+            'stock' => 20,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturn([
+                'needed' => 'rękawice nitrylowe',
+                'search_steps' => ['rękawice', 'nitrylowe', 'lekkie'],
+                'search_phrases' => ['rękawice nitrylowe'],
+                'matches' => [
+                    ['id' => $coated->id, 'score' => 95, 'reason' => 'nitryl + lekkie'],
+                    ['id' => $nitrile->id, 'score' => 70, 'reason' => 'nitrylowe'],
+                ],
+            ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $skus = array_column($this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice nitrylowe lekkie',
+            'limit' => 5,
+        ])->assertOk()->json('products') ?? [], 'sku');
+
+        $this->assertContains('93-843', $skus);
+        $this->assertNotContains('R840', $skus);
+    }
 }
