@@ -398,4 +398,63 @@ final class TenderItemBattlecardTest extends TestCase
         $this->assertNotContains('BC-DC-BC15', $skus);
         $this->assertNotContains('GCRM', $skus);
     }
+
+    public function test_battlecard_can_return_four_substitutes(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $ours = Product::query()->create([
+            'sku' => 'NITRYL-MAIN',
+            'name' => 'Rękawice nitrylowe główne',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem.',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+        foreach (['A', 'B', 'C', 'D'] as $i => $suf) {
+            Product::query()->create([
+                'sku' => 'NITRYL-'.$suf,
+                'name' => 'Rękawice nitrylowe zamiennik '.$suf,
+                'manufacturer' => 'OTHER',
+                'category' => 'Rękawice',
+                'description' => 'Rękawice robocze nitrylowe ze ściągaczem wariant '.$suf,
+                'catalog_price_net' => 4 + $i,
+                'purchase_price' => 3 + $i,
+                'stock' => 10,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enrichment_payload' => ['materials' => ['nitryl']],
+                'enriched_at' => now(),
+            ]);
+        }
+
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/BC/4',
+            'title' => 'Cztery zamienniki',
+            'client_id' => Client::query()->create(['name' => 'Klient 4'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 80,
+            'last_activity_at' => now(),
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Rękawice robocze nitrylowe ze ściągaczem',
+            'main_product_id' => $ours->id,
+            'ai_match_percent' => 90,
+            'quantity' => 10,
+            'status' => 'ok',
+        ]);
+
+        $subs = $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")
+            ->assertOk()
+            ->json('battlecard.substitutes');
+
+        $this->assertCount(4, $subs);
+    }
 }

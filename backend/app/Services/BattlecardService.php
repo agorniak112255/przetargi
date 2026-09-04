@@ -20,7 +20,7 @@ use Throwable;
  */
 final class BattlecardService
 {
-    private const SUBSTITUTE_LIMIT = 2;
+    private const SUBSTITUTE_LIMIT = 4;
 
     private const CATALOG_ALT_MIN_SCORE = 55;
 

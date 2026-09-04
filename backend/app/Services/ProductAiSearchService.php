@@ -1856,6 +1856,38 @@ final class ProductAiSearchService
             }
             $out[] = $raw;
         }
+        foreach ($this->quotedIdentityTokens($query) as $raw) {
+            $norm = $this->lexicalNormalize($raw);
+            if ($norm === '' || $this->isNonTechnicalToken($norm) || $this->isGenericAssortmentToken($norm)) {
+                continue;
+            }
+            $out[] = $raw;
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Nazwa w cudzysłowie SIWZ („Nortex”) — nie musi być CAPS, żeby uznać ją za markę/model.
+     *
+     * @return list<string>
+     */
+    private function quotedIdentityTokens(string $query): array
+    {
+        $out = [];
+        if (preg_match_all('/[„“«"\']([^„“»”"\']{3,24})[”»“"\']/u', $query, $m)) {
+            foreach ($m[1] as $raw) {
+                $raw = trim((string) $raw);
+                $letters = (string) preg_replace('/[^\p{L}]/u', '', $raw);
+                if ($raw === '' || preg_match('/\d/u', $raw) === 1) {
+                    continue;
+                }
+                if (mb_strlen($letters) < 4 || mb_strlen($letters) > 16) {
+                    continue;
+                }
+                $out[] = $raw;
+            }
+        }
 
         return array_values(array_unique($out));
     }
@@ -2008,7 +2040,7 @@ final class ProductAiSearchService
         return preg_match(
             '/^(czarn|bial|zol|niebies|czerw|zielon|szar|granat|pomaranc|brazow|bezow'
             .'|srebrn|zlot|grafit|khaki|navy|black|white|yellow|blue|red|green|grey|gray|orange'
-            .'|polar(?!yz)|poliestr|baweln|nylon|elastan|lycra|ociepl|kolor|rozmiar'
+            .'|polar(?!yz)|poliestr|baweln|nylon|elastan|lycra|ociepl|pokryt|kolor|rozmiar'
             .'|drelich|drill|twill|denim|kanw|flanel|welur|sztruks|oxford|ripstop|softshell'
             .'|uniwersaln'
             .'|nisk|wysok|sredn|poziom|stopien|tlumien|attenuat|snr)/u',
@@ -3001,6 +3033,22 @@ final class ProductAiSearchService
         return $card;
     }
 
+    private function slangWordProofRule(string $query): string
+    {
+        $slang = $this->slangRewriteFor($query);
+        if ($slang === null) {
+            return '';
+        }
+        $hints = array_slice($slang['search_phrases'], 0, 4);
+        if ($hints === []) {
+            return '';
+        }
+
+        return 'Gdy wymaganie ma żargon/słowo cechy, karta musi mieć to słowo albo synonim ('
+            .implode(', ', $hints)
+            .') w name/description — sama norma EN nie zastępuje tego słowa. ';
+    }
+
     /**
      * @param  Collection<int, Product>  $candidates
      * @param  list<string>  $constraints
@@ -3064,6 +3112,7 @@ final class ProductAiSearchService
                     .'Równoważny dowód = spełnione: synonim katalogowy, norma/klasa, materiał konstrukcyjny '
                     .'(metalowy nosek = podnosek stalowy/steel toe; chemoodporny = EN 374 / Typ 3/4 / Tychem; '
                     .'antystatyczny = EN 1149). Nie wymagaj dosłownego cytatu z SIWZ. '
+                    .$this->slangWordProofRule($query)
                     .'Obuwie: antyelektrostatyczne/ESD z SIWZ to nie to samo co antystatyczna podeszwa '
                     .'ani klasa O1/S1/S1P bez ESD w dowodzie — zwracaj tylko przy ESD/antyelektrostat '
                     .'lub EN 1149/61340 w polach dowodu; przy wymaganiu butów gumowych/kaloszy '

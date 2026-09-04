@@ -60,4 +60,17 @@ final class ProductAiSearchSpecificityTest extends TestCase
 
         $this->assertSame([], $constraints);
     }
+
+    public function test_coated_verb_is_not_a_hard_constraint(): void
+    {
+        $svc = $this->service();
+        $ref = new \ReflectionMethod(ProductAiSearchService::class, 'fallbackConstraints');
+        $constraints = $ref->invoke(
+            $svc,
+            'Rękawice ocieplane pokryte gumą „Nortex”'
+        );
+
+        $this->assertNotContains('pokryte', $constraints);
+        $this->assertNotContains('ocieplane', $constraints);
+    }
 }

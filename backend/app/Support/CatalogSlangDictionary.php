@@ -113,7 +113,7 @@ final class CatalogSlangDictionary
     }
 
     /**
-     * Trafienie w żargon: szukaj po notatce i frazach cennika, nie po dosłownym żargonie.
+     * Trafienie w żargon: szukaj po słowie z wymagania oraz po frazach cennika.
      *
      * @return array{needed: string, search_phrases: list<string>, family: string|null}|null
      */
@@ -127,9 +127,16 @@ final class CatalogSlangDictionary
             return $this->rewriteCache[$query] = null;
         }
         $phrases = [];
+        $literalTerms = [];
         $notes = [];
         $family = null;
         foreach ($entries as $entry) {
+            foreach ($entry['terms'] as $term) {
+                $term = trim((string) $term);
+                if ($term !== '' && $this->queryHasTerm($query, $term)) {
+                    $literalTerms[] = $term;
+                }
+            }
             foreach ([...$entry['phrases'], ...($entry['keywords'] ?? [])] as $phrase) {
                 $phrase = trim((string) $phrase);
                 if ($phrase !== '') {
@@ -159,9 +166,20 @@ final class CatalogSlangDictionary
 
         return $this->rewriteCache[$query] = [
             'needed' => $needed,
-            'search_phrases' => array_values(array_unique($phrases)),
+            'search_phrases' => array_values(array_unique([...$phrases, ...$literalTerms])),
             'family' => $family,
         ];
+    }
+
+    private function queryHasTerm(string $query, string $term): bool
+    {
+        $q = $this->fold($query);
+        $t = $this->fold($term);
+        if ($q === '' || $t === '' || mb_strlen($t) < 4) {
+            return false;
+        }
+
+        return str_contains($q, $t);
     }
 
     public function rejectsProduct(string $query, string $productText): bool
@@ -228,8 +246,20 @@ final class CatalogSlangDictionary
             'proste', 'ochrona', 'przed', 'oraz', 'dla', 'przy', 'bez', 'jak', 'lub',
             'typ', 'rodzaj', 'produkt', 'pracy', 'do', 'na', 'od', 'ze', 'za',
         ];
+        $jargonFolds = [];
+        foreach ($this->matchingEntries($query) as $entry) {
+            foreach ($entry['terms'] as $term) {
+                $fold = $this->fold((string) $term);
+                if ($fold !== '' && $this->queryHasTerm($query, (string) $term)) {
+                    $jargonFolds[] = $fold;
+                }
+            }
+        }
         $out = [];
         foreach ($rewrite['search_phrases'] as $phrase) {
+            if (in_array($this->fold($phrase), $jargonFolds, true)) {
+                continue;
+            }
             foreach (preg_split('/\s+/u', $this->fold($phrase)) ?: [] as $token) {
                 if ($token === '' || mb_strlen($token) < 5 || in_array($token, $stop, true)) {
                     continue;
@@ -463,7 +493,7 @@ final class CatalogSlangDictionary
             return '';
         }
 
-        return 'Żargon SIWZ — szukaj po notatce i frazach cennika, nie po żargonie ani po słowach typu uniwersalne: '
+        return 'Żargon SIWZ — szukaj po słowie z wymagania oraz po frazach cennika, nie po słowach typu uniwersalne: '
             .implode(' | ', $lines).'.';
     }
 

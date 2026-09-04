@@ -385,7 +385,7 @@ export function ItemBattlecard({
                 ))}
               </ul>
             )}
-            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3 xl:grid-cols-5">
               <Col
                 title="Propozycja"
                 tone="main"
@@ -405,50 +405,23 @@ export function ItemBattlecard({
                   if (card.ours) setPending(card.ours)
                 }}
               />
-              <Col
-                title="Zamiennik 1"
-                tone="sub"
-                markupPercent={markupPercent}
-                p={card.substitutes[0] ?? null}
-                cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[0] ?? null)}
-                selected={isSelected(card.substitutes[0] ?? null)}
-                clickable={canPick(card.substitutes[0] ?? null)}
-                onApplyMargin={
-                  isSelected(card.substitutes[0] ?? null) && card.substitutes[0] && onApplySelectedOffer
-                    ? () => onApplySelectedOffer(card.substitutes[0])
-                    : undefined
-                }
-                onPreview={() => {
-                  const s = card.substitutes[0]
-                  if (s) setDescribeId(s.product_id)
-                }}
-                onSelect={() => {
-                  const s = card.substitutes[0]
-                  if (s) setPending(s)
-                }}
-              />
-              <Col
-                title="Zamiennik 2"
-                tone="sub"
-                markupPercent={markupPercent}
-                p={card.substitutes[1] ?? null}
-                cheaperBadge={cheaperSaveBadge(card.ours, card.substitutes[1] ?? null)}
-                selected={isSelected(card.substitutes[1] ?? null)}
-                clickable={canPick(card.substitutes[1] ?? null)}
-                onApplyMargin={
-                  isSelected(card.substitutes[1] ?? null) && card.substitutes[1] && onApplySelectedOffer
-                    ? () => onApplySelectedOffer(card.substitutes[1])
-                    : undefined
-                }
-                onPreview={() => {
-                  const s = card.substitutes[1]
-                  if (s) setDescribeId(s.product_id)
-                }}
-                onSelect={() => {
-                  const s = card.substitutes[1]
-                  if (s) setPending(s)
-                }}
-              />
+              {card.substitutes.map((sub, i) => (
+                <Col
+                  key={sub.product_id}
+                  title={`Zamiennik ${i + 1}`}
+                  tone="sub"
+                  markupPercent={markupPercent}
+                  p={sub}
+                  cheaperBadge={cheaperSaveBadge(card.ours, sub)}
+                  selected={isSelected(sub)}
+                  clickable={canPick(sub)}
+                  onApplyMargin={
+                    isSelected(sub) && onApplySelectedOffer ? () => onApplySelectedOffer(sub) : undefined
+                  }
+                  onPreview={() => setDescribeId(sub.product_id)}
+                  onSelect={() => setPending(sub)}
+                />
+              ))}
             </div>
             {!card.ours && (
               <p className="text-slate-400">Brak danych do porównania — najpierw dopasuj produkt.</p>

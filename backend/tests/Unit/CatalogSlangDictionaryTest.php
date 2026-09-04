@@ -59,6 +59,27 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertStringContainsString('okulary', $eye);
     }
 
+    public function test_kwasoodporne_keeps_word_and_adds_slang(): void
+    {
+        $rewrite = $this->dict()->searchRewrite('Rękawice kwasoodporne');
+        $this->assertNotNull($rewrite);
+        $hay = mb_strtolower(implode(' ', $rewrite['search_phrases']));
+        $this->assertStringContainsString('kwasoodporne', $hay);
+        $this->assertStringContainsString('chemiczne', $hay);
+        $this->assertTrue($this->dict()->matchesEvidence(
+            'Rękawice kwasoodporne',
+            'Rękawica Kwasoodporna z Narękawnikiem'
+        ));
+        $this->assertTrue($this->dict()->matchesEvidence(
+            'Rękawice kwasoodporne',
+            'Rękawice chemiczne do kwasów EN 374'
+        ));
+        $this->assertFalse($this->dict()->matchesEvidence(
+            'Rękawice kwasoodporne',
+            'Rękawice montażowe nitrylowe EN 374 do oleju'
+        ));
+    }
+
     public function test_slang_is_appended_not_replacing_query(): void
     {
         $appendix = $this->dict()->queryAppendix('Rękawice wampirki uniwersalne');
@@ -80,6 +101,7 @@ final class CatalogSlangDictionaryTest extends TestCase
         $needles = $this->dict()->evidenceNeedles('Rękawice wampirki uniwersalne');
         $this->assertNotSame([], $needles);
         $this->assertFalse(in_array('uniwer', $needles, true));
+        $this->assertFalse(in_array('wampi', $needles, true));
         $flat = array_merge(...$this->dict()->evidenceGroups('Rękawice wampirki uniwersalne'));
         $this->assertFalse(in_array('ciecz', $flat, true));
     }

@@ -148,6 +148,51 @@ final class ProductAiSearchStructuredIntentTest extends TestCase
         $this->assertNotContains('REIS-O2-BOOT', $skus);
     }
 
+    public function test_quoted_absent_name_returns_insulated_coated_gloves(): void
+    {
+        Product::query()->create([
+            'sku' => 'TIAGO-LATEX-OCIE',
+            'name' => 'TIAGO – powlekana spienionym lateksem, ocieplana',
+            'manufacturer' => 'MAREL PLUS',
+            'description' => 'Rękawice ocieplane powlekane lateksem.',
+            'catalog_price_net' => 9,
+            'purchase_price' => 4,
+            'stock' => 20,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        CatalogManufacturerContext::forgetCache();
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(static function (array $messages): array {
+            $system = (string) ($messages[0]['content'] ?? '');
+            if (str_contains($system, '"manufacturer"')) {
+                return [
+                    'needed' => 'rękawice ocieplane powlekane gumą',
+                    'manufacturer' => 'Nortex',
+                    'search_phrases' => ['rękawice ocieplane', 'Nortex'],
+                    'constraints' => ['pokryte', 'gumą'],
+                ];
+            }
+
+            return ['matches' => []];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $response = $this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice ocieplane pokryte gumą „Nortex”',
+            'limit' => 10,
+        ])
+            ->assertOk()
+            ->assertJsonPath('parsed_intent.manufacturer_absent_in_catalog', true)
+            ->assertJsonPath('parsed_intent.manufacturer_requested', 'Nortex');
+
+        $this->assertGreaterThanOrEqual(1, $response->json('total'));
+        $skus = array_column($response->json('products') ?? [], 'sku');
+        $this->assertContains('TIAGO-LATEX-OCIE', $skus);
+    }
+
     public function test_understand_prompt_asks_for_search_steps_and_appends_slang(): void
     {
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
