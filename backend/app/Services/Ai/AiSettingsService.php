@@ -549,6 +549,7 @@ final class AiSettingsService
      *     timeout_seconds: int,
      *     temperature: float,
      *     reasoning_effort: string,
+     *     openrouter_provider: ?string,
      *     is_default: bool
      * }
      */
@@ -563,6 +564,7 @@ final class AiSettingsService
             'timeout_seconds' => (int) $cfg['timeout_seconds'],
             'temperature' => (float) $cfg['temperature'],
             'reasoning_effort' => $this->normalizeReasoningEffort($cfg['reasoning_effort'] ?? null),
+            'openrouter_provider' => null,
             'is_default' => true,
         ];
 
@@ -581,7 +583,7 @@ final class AiSettingsService
     /**
      * Konfiguracja główna + wszystkie profile — do wyboru endpointu z pluginem web.
      *
-     * @return list<array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}>
+     * @return list<array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, openrouter_provider: ?string, is_default: bool}>
      */
     public function resolvedProfiles(): array
     {
@@ -598,8 +600,8 @@ final class AiSettingsService
 
     /**
      * @param  array<string, mixed>  $profile
-     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $fallback
-     * @return array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}
+     * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, openrouter_provider: ?string, is_default: bool}  $fallback
+     * @return array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, openrouter_provider: ?string, is_default: bool}
      */
     private function hydrateProfile(array $profile, array $fallback): array
     {
@@ -621,6 +623,7 @@ final class AiSettingsService
                 : $fallback['temperature'],
             'reasoning_effort' => ReasoningEffort::optional($profile['reasoning_effort'] ?? null)
                 ?? $fallback['reasoning_effort'],
+            'openrouter_provider' => $this->nullableString($profile['openrouter_provider'] ?? null),
             'is_default' => false,
         ];
     }

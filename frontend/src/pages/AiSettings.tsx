@@ -28,6 +28,7 @@ function withProfileDefaults(next: AiSettings): AiSettings {
     model_profiles: (next.model_profiles ?? []).map((p) => ({
       ...p,
       reasoning_effort: p.reasoning_effort ?? null,
+      openrouter_provider: p.openrouter_provider ?? null,
     })),
     ai_tasks: next.ai_tasks ?? [],
   }
@@ -63,6 +64,7 @@ type AiModelProfile = {
   name: string
   base_url: string | null
   model: string | null
+  openrouter_provider: string | null
   timeout_seconds: number | null
   temperature: number | null
   reasoning_effort: ReasoningEffort | null
@@ -189,6 +191,7 @@ export function AiSettingsPage() {
         name: `Profil ${cfg.model_profiles.length + 1}`,
         base_url: null,
         model: null,
+        openrouter_provider: null,
         timeout_seconds: null,
         temperature: null,
         reasoning_effort: null,
@@ -244,6 +247,7 @@ export function AiSettingsPage() {
             name: p.name.trim() || 'Profil',
             base_url: p.base_url?.trim() || null,
             model: p.model?.trim() || null,
+            openrouter_provider: p.openrouter_provider?.trim() || null,
             timeout_seconds: p.timeout_seconds,
             temperature: p.temperature,
             reasoning_effort: p.reasoning_effort,
@@ -430,6 +434,12 @@ export function AiSettingsPage() {
             <option value="gpt-4.1-mini" />
             <option value="llama-3.3-70b-versatile" />
           </datalist>
+          <datalist id="openrouter-providers">
+            <option value="google-ai-studio/flex" />
+            <option value="google-ai-studio" />
+            <option value="google-vertex/flex" />
+            <option value="google-vertex" />
+          </datalist>
         </label>
 
         <label className="block text-xs">
@@ -565,6 +575,22 @@ export function AiSettingsPage() {
                   placeholder={cfg.model || 'jak w konfiguracji głównej'}
                   list="ai-models"
                 />
+              </label>
+
+              <label className="block text-[11px]">
+                Dostawca OpenRouter
+                <input
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1 font-mono"
+                  value={profile.openrouter_provider ?? ''}
+                  onChange={(e) =>
+                    patchProfile(profile.id, { openrouter_provider: e.target.value || null })
+                  }
+                  placeholder="puste = automatyczny wybór"
+                  list="openrouter-providers"
+                />
+                <span className="mt-1 block text-[11px] text-slate-500">
+                  Slug z karty modelu, np. google-ai-studio/flex — nie wstawiaj go w pole Model.
+                </span>
               </label>
 
               <label className="block text-[11px]">

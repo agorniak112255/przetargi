@@ -68,6 +68,12 @@ class AiSettingsController extends Controller
             'model_profiles.*.name' => ['nullable', 'string', 'max:120'],
             'model_profiles.*.base_url' => ['nullable', 'string', 'max:255'],
             'model_profiles.*.model' => ['nullable', 'string', 'max:120'],
+            'model_profiles.*.openrouter_provider' => [
+                'nullable',
+                'string',
+                'max:80',
+                'regex:/^[A-Za-z0-9][A-Za-z0-9._-]{0,60}(\/[A-Za-z0-9._-]{1,40})?$/',
+            ],
             'model_profiles.*.api_key' => ['nullable', 'string', 'max:500'],
             'model_profiles.*.timeout_seconds' => ['nullable', 'integer', 'min:10', 'max:600'],
             'model_profiles.*.temperature' => ['nullable', 'numeric', 'min:0', 'max:2'],

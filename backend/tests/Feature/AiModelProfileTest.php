@@ -514,6 +514,77 @@ final class AiModelProfileTest extends TestCase
         }
     }
 
+    public function test_openrouter_provider_is_saved_and_sent_as_only(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedMainConfig();
+
+        $this->putJson('/api/ai-settings', [
+            'model_profiles' => [[
+                'id' => 'fast',
+                'name' => 'Profil 2',
+                'base_url' => 'https://openrouter.ai/api/v1',
+                'model' => 'google/gemini-3.7-flash',
+                'openrouter_provider' => 'google-ai-studio/flex',
+                'api_key' => 'sk-or-profile-123',
+                'tasks' => ['product_search'],
+            ]],
+        ])->assertOk()
+            ->assertJsonPath('model_profiles.0.model', 'google/gemini-3.7-flash')
+            ->assertJsonPath('model_profiles.0.openrouter_provider', 'google-ai-studio/flex');
+
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::ProductSearch
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return $request->url() === 'https://openrouter.ai/api/v1/chat/completions'
+                && ($data['model'] ?? null) === 'google/gemini-3.7-flash'
+                && ($data['provider']['only'] ?? null) === ['google-ai-studio/flex']
+                && ($data['provider']['allow_fallbacks'] ?? null) === false;
+        });
+    }
+
+    public function test_openrouter_provider_is_ignored_on_local_endpoint(): void
+    {
+        $this->seedMainConfig();
+        $this->saveProfiles([[
+            'id' => 'local',
+            'name' => 'Lokalny',
+            'base_url' => 'http://127.0.0.1:26872/v1',
+            'model' => 'qwen38-7b',
+            'openrouter_provider' => 'google-ai-studio/flex',
+            'api_key' => 'local-key-1234567890',
+            'tasks' => [AiTask::ProductSearch->value],
+        ]]);
+
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::ProductSearch
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return $request->url() === 'http://127.0.0.1:26872/v1/chat/completions'
+                && ! array_key_exists('provider', $data);
+        });
+    }
+
     public function test_a_task_cannot_be_claimed_by_two_profiles(): void
     {
         $this->seed(RolesAndPermissionsSeeder::class);

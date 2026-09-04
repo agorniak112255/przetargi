@@ -419,6 +419,30 @@ class OpenAiCompatibleClient
             $payload['response_format'] = ['type' => 'json_object'];
         }
 
+        return $this->applyOpenRouterProvider($payload, $profile);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array{base_url?: string, openrouter_provider?: ?string}  $profile
+     * @return array<string, mixed>
+     */
+    private function applyOpenRouterProvider(array $payload, array $profile): array
+    {
+        $slug = trim((string) ($profile['openrouter_provider'] ?? ''));
+        if ($slug === '') {
+            return $payload;
+        }
+        $base = mb_strtolower((string) ($profile['base_url'] ?? ''));
+        if (! str_contains($base, 'openrouter.ai')) {
+            return $payload;
+        }
+
+        $payload['provider'] = [
+            'only' => [$slug],
+            'allow_fallbacks' => false,
+        ];
+
         return $payload;
     }
 
@@ -471,6 +495,7 @@ class OpenAiCompatibleClient
             $basePayload,
             (string) ($profile['reasoning_effort'] ?? ReasoningEffort::AUTO)
         );
+        $basePayload = $this->applyOpenRouterProvider($basePayload, $profile);
         $timeout = $profile['timeout_seconds'];
 
         try {
@@ -866,6 +891,7 @@ class OpenAiCompatibleClient
             $payload,
             (string) ($profile['reasoning_effort'] ?? ReasoningEffort::AUTO)
         );
+        $payload = $this->applyOpenRouterProvider($payload, $profile);
 
         try {
             $response = $this->aiHttp($profile['api_key'], max(30, $timeoutSeconds))
@@ -937,6 +963,7 @@ class OpenAiCompatibleClient
             // OpenRouter: domyślne 65k tokenów często kończy się HTTP 402 przy niskim saldzie
             'max_output_tokens' => 1500,
         ];
+        $payload = $this->applyOpenRouterProvider($payload, $profile);
 
         try {
             $response = $this->aiHttp($profile['api_key'], max(10, $timeoutSeconds))

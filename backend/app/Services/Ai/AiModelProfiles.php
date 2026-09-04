@@ -15,6 +15,7 @@ use Illuminate\Support\Str;
  *     name: string,
  *     base_url: ?string,
  *     model: ?string,
+ *     openrouter_provider: ?string,
  *     api_key: ?string,
  *     timeout_seconds: ?int,
  *     temperature: ?float,
@@ -57,6 +58,7 @@ final class AiModelProfiles
                 'name' => self::text($item['name'] ?? null) ?? 'Profil '.($index + 1),
                 'base_url' => self::url($item['base_url'] ?? null),
                 'model' => self::text($item['model'] ?? null),
+                'openrouter_provider' => self::providerSlug($item['openrouter_provider'] ?? null),
                 'api_key' => self::secret($item['api_key'] ?? null, $keysById[$id] ?? null),
                 'timeout_seconds' => self::boundedInt($item['timeout_seconds'] ?? null, 10, 600),
                 'temperature' => self::boundedFloat($item['temperature'] ?? null, 0.0, 2.0),
@@ -89,6 +91,7 @@ final class AiModelProfiles
                 'name' => (string) ($profile['name'] ?? ''),
                 'base_url' => $profile['base_url'] ?? null,
                 'model' => $profile['model'] ?? null,
+                'openrouter_provider' => $profile['openrouter_provider'] ?? null,
                 'timeout_seconds' => $profile['timeout_seconds'] ?? null,
                 'temperature' => $profile['temperature'] ?? null,
                 'reasoning_effort' => $profile['reasoning_effort'] ?? null,
@@ -164,6 +167,22 @@ final class AiModelProfiles
         $value = trim($value);
 
         return $value !== '' ? mb_substr($value, 0, 255) : null;
+    }
+
+    /** Slug z karty OpenRouter, np. google-ai-studio/flex — nie nazwa modelu. */
+    private static function providerSlug(mixed $value): ?string
+    {
+        $value = self::text($value);
+        if ($value === null) {
+            return null;
+        }
+
+        $value = mb_strtolower(str_replace(' ', '', $value));
+        if (! preg_match('/^[a-z0-9][a-z0-9._-]{0,60}(\/[a-z0-9._-]{1,40})?$/', $value)) {
+            return null;
+        }
+
+        return $value;
     }
 
     private static function url(mixed $value): ?string
