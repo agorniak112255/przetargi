@@ -178,6 +178,7 @@ type SortKey =
   | 'name'
   | 'manufacturer'
   | 'catalog_price_net'
+  | 'purchase_price_pln'
   | 'currency'
   | 'discount_percent'
   | 'description'
@@ -196,6 +197,10 @@ function sortProductRows(rows: Product[], sort: SortKey, dir: 'asc' | 'desc'): P
     let cmp = 0
     if (sort === 'catalog_price_net') {
       cmp = sortNum(a.price_pln ?? a.catalog_price_net) - sortNum(b.price_pln ?? b.catalog_price_net)
+    } else if (sort === 'purchase_price_pln') {
+      const ap = sortNum(a.purchase_price_pln ?? a.purchase_price)
+      const bp = sortNum(b.purchase_price_pln ?? b.purchase_price)
+      cmp = (ap > 0 ? ap : Number.POSITIVE_INFINITY) - (bp > 0 ? bp : Number.POSITIVE_INFINITY)
     } else if (sort === 'ai_match_percent') {
       cmp = sortNum(a.ai_match_percent) - sortNum(b.ai_match_percent)
     } else if (sort === 'images_count') {
@@ -406,8 +411,8 @@ export function Products() {
       const res = await searchProductsByAiWithTimeout(query, { web })
       const hints = externalHintsFrom(res)
       setAiMode(true)
-      setSort('ai_match_percent')
-      setDir('desc')
+      setSort('purchase_price_pln')
+      setDir('asc')
       setExternalHints(hints)
       setResult({
         data: res.products,
@@ -653,7 +658,7 @@ export function Products() {
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selected[id])
   const batchActive = batch?.status === 'queued' || batch?.status === 'running'
-  const tableCols = 9 + (aiMode ? 1 : 0) + (canEnrich ? 1 : 0) + (canEnrich || canExportPresta ? 1 : 0)
+  const tableCols = 9 + (aiMode ? 2 : 0) + (canEnrich ? 1 : 0) + (canEnrich || canExportPresta ? 1 : 0)
 
   return (
     <div>
@@ -935,7 +940,10 @@ export function Products() {
                 </th>
               )}
               {aiMode && (
-                <SortTh label="Dopasowanie" col="ai_match_percent" sort={sort} dir={dir} onSort={onSort} />
+                <>
+                  <SortTh label="Dopasowanie" col="ai_match_percent" sort={sort} dir={dir} onSort={onSort} />
+                  <SortTh label="Zakup (PLN)" col="purchase_price_pln" sort={sort} dir={dir} onSort={onSort} />
+                </>
               )}
               <SortTh label="Status AI" col="enrichment_status" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Kod" col="sku" sort={sort} dir={dir} onSort={onSort} />
@@ -987,6 +995,15 @@ export function Products() {
                           {p.ai_match_reason}
                         </p>
                       )}
+                    </td>
+                  )}
+                  {aiMode && (
+                    <td className="p-2 tabular-nums">
+                      {p.purchase_price_pln != null
+                        ? `${p.purchase_price_pln.toFixed(2)} zł`
+                        : p.purchase_price != null && p.purchase_price !== ''
+                          ? `${p.purchase_price} ${p.currency ?? 'PLN'}`
+                          : '—'}
                     </td>
                   )}
                   <td className="p-2">

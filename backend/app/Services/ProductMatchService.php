@@ -403,14 +403,20 @@ final class ProductMatchService
         }
 
         $scored = $this->preferCheapestSizeVariants($scored);
-        usort($scored, function (array $a, array $b): int {
-            $byScore = $b['score'] <=> $a['score'];
-            if ($byScore !== 0) {
-                return $byScore;
+        $qualified = array_values(array_filter(
+            $scored,
+            static fn (array $row): bool => $row['score'] >= self::MIN_MATCH_SCORE
+        ));
+        $pool = $qualified !== [] ? $qualified : $scored;
+        usort($pool, function (array $a, array $b): int {
+            $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
+            if ($byPrice !== 0) {
+                return $byPrice;
             }
 
-            return $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
+            return $b['score'] <=> $a['score'];
         });
+        $scored = $pool;
 
         return array_slice($scored, 0, max(1, $limit));
     }
@@ -480,6 +486,7 @@ final class ProductMatchService
         $near = array_values(array_filter(
             $options,
             static fn (array $option): bool => $option['score'] >= $top - 8
+                || $option['score'] >= self::MIN_MATCH_SCORE
         ));
         usort($near, function (array $a, array $b): int {
             $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
@@ -1270,7 +1277,12 @@ final class ProductMatchService
         }
 
         if ($options !== []) {
-            return $this->preferCheapestAmongCloseScores($options);
+            $exact = array_values(array_filter(
+                $options,
+                static fn (array $row): bool => ($row['source'] ?? '') !== 'ai_substitute'
+            ));
+
+            return $this->preferCheapestAmongCloseScores($exact !== [] ? $exact : $options);
         }
 
         if ($heuristic !== null && $heuristic['score'] >= self::APPLY_MATCH_SCORE) {
@@ -1467,10 +1479,37 @@ final class ProductMatchService
                 $byId[$id] = $row;
             }
         }
-        $merged = array_values($byId);
-        usort($merged, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+        $merged = $this->sortCandidatesByPurchase(array_values($byId));
 
         return array_slice($merged, 0, $limit);
+    }
+
+    /**
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $rows
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
+     */
+    private function sortCandidatesByPurchase(array $rows): array
+    {
+        if ($rows === []) {
+            return [];
+        }
+        $byId = Product::query()
+            ->whereIn('id', array_column($rows, 'id'))
+            ->get()
+            ->keyBy('id');
+        usort($rows, function (array $a, array $b) use ($byId): int {
+            $pa = $byId->get($a['id']);
+            $pb = $byId->get($b['id']);
+            $fa = $pa instanceof Product ? $this->purchasePln($pa) : PHP_FLOAT_MAX;
+            $fb = $pb instanceof Product ? $this->purchasePln($pb) : PHP_FLOAT_MAX;
+            if ($fa !== $fb) {
+                return $fa <=> $fb;
+            }
+
+            return $b['score'] <=> $a['score'];
+        });
+
+        return $rows;
     }
 
     /**
@@ -1527,8 +1566,7 @@ final class ProductMatchService
             }
         }
 
-        $list = array_values($byId);
-        usort($list, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+        $list = $this->sortCandidatesByPurchase(array_values($byId));
 
         return array_slice($list, 0, 5);
     }

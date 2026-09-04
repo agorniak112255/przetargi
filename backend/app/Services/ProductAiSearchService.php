@@ -1442,8 +1442,6 @@ final class ProductAiSearchService
                 ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
                     && $this->matchesSlangEvidence($query, $p)
                     && $this->filterType->covers($requirement, $this->filterHaystack($p)))
-                ->sortByDesc(fn (Product $p): int => $this->articleTypeScore($query, $p))
-                ->take(max(1, min(80, $limit)))
                 ->values()
         );
 
@@ -1461,7 +1459,7 @@ final class ProductAiSearchService
             $out[] = $row;
         }
 
-        return $out;
+        return array_slice($this->sortRankedByMatchPercent($out), 0, max(1, min(80, $limit)));
     }
 
     /**
@@ -1483,12 +1481,9 @@ final class ProductAiSearchService
             $row['ai_match_percent'] = $score;
             $row['ai_match_reason'] = $reason;
             $out[] = $row;
-            if (count($out) >= $limit) {
-                break;
-            }
         }
 
-        return $out;
+        return array_slice($this->sortRankedByMatchPercent($out), 0, max(1, min(80, $limit)));
     }
 
     /**
@@ -1527,12 +1522,12 @@ final class ProductAiSearchService
     private function sortRankedByMatchPercent(array $ranked): array
     {
         usort($ranked, function (array $a, array $b): int {
-            $byScore = ($b['ai_match_percent'] ?? 0) <=> ($a['ai_match_percent'] ?? 0);
-            if ($byScore !== 0) {
-                return $byScore;
+            $byPrice = $this->rowPurchasePln($a) <=> $this->rowPurchasePln($b);
+            if ($byPrice !== 0) {
+                return $byPrice;
             }
 
-            return $this->rowPurchasePln($a) <=> $this->rowPurchasePln($b);
+            return ($b['ai_match_percent'] ?? 0) <=> ($a['ai_match_percent'] ?? 0);
         });
 
         return $ranked;
@@ -2681,12 +2676,9 @@ final class ProductAiSearchService
             $row['ai_match_percent'] = min(99, max(80, $this->modelFuzzy->score($query, $product)));
             $row['ai_match_reason'] = 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).';
             $out[] = $row;
-            if (count($out) >= $limit) {
-                break;
-            }
         }
 
-        return $out;
+        return array_slice($this->sortRankedByMatchPercent($out), 0, max(1, min(80, $limit)));
     }
 
     /**
@@ -3140,14 +3132,9 @@ final class ProductAiSearchService
             $row['ai_match_percent'] = min(99, max(0, $score));
             $row['ai_match_reason'] = is_string($m['reason'] ?? null) ? $m['reason'] : null;
             $out[] = $row;
-            if (count($out) >= $limit) {
-                break;
-            }
         }
 
-        usort($out, static fn (array $a, array $b): int => ($b['ai_match_percent'] <=> $a['ai_match_percent']));
-
-        return $out;
+        return array_slice($this->sortRankedByMatchPercent($out), 0, max(1, min(80, $limit)));
     }
 
     private function filterHaystack(Product $product): string
