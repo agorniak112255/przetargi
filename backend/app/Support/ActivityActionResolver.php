@@ -104,6 +104,8 @@ final class ActivityActionResolver
             ['POST', '#^product-enrichment-batches/stop-all$#', 'product.enrichment_cancelled', 'Zatrzymano wszystkie pobierania opisów'],
             ['POST', '#^products/ai-search$#', 'product.ai_search', 'Wyszukiwanie AI produktów'],
             ['PUT', '#^ai-settings$#', 'ai_settings.updated', 'Zmiana ustawień AI'],
+            ['PUT', '#^admin/enrichment-description-templates/[a-z_]+$#', 'enrichment.template_updated', 'Zmiana szablonu opisu produktu'],
+            ['POST', '#^admin/enrichment-description-templates/[a-z_]+/restore$#', 'enrichment.template_restored', 'Przywrócono szablon opisu produktu'],
             ['POST', '#^ai-settings/test$#', 'ai_settings.tested', 'Test połączenia AI'],
             ['POST', '#^ai-settings/test-vector$#', 'ai_settings.vector_tested', 'Test wyszukiwania wektorowego'],
             ['POST', '#^admin/users$#', 'user.created', 'Utworzono użytkownika'],

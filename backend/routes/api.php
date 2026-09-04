@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Http\Controllers\Api\Admin\ActivityLogController as AdminActivityLogController;
 use App\Http\Controllers\Api\Admin\CatalogSearchSiteController as AdminCatalogSearchSiteController;
 use App\Http\Controllers\Api\Admin\CatalogSlangController as AdminCatalogSlangController;
+use App\Http\Controllers\Api\Admin\EnrichmentDescriptionTemplateController as AdminEnrichmentDescriptionTemplateController;
 use App\Http\Controllers\Api\Admin\MailSettingsController as AdminMailSettingsController;
 use App\Http\Controllers\Api\Admin\PrestaCategoryController as AdminPrestaCategoryController;
 use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaShopSettingsController;
@@ -230,6 +231,11 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
         Route::get('/catalog-slang', [AdminCatalogSlangController::class, 'show']);
         Route::put('/catalog-slang', [AdminCatalogSlangController::class, 'update']);
+        Route::get('/enrichment-description-templates', [AdminEnrichmentDescriptionTemplateController::class, 'index']);
+        Route::put('/enrichment-description-templates/{kategoria}', [AdminEnrichmentDescriptionTemplateController::class, 'update'])
+            ->where('kategoria', '[a-z_]+');
+        Route::post('/enrichment-description-templates/{kategoria}/restore', [AdminEnrichmentDescriptionTemplateController::class, 'restore'])
+            ->where('kategoria', '[a-z_]+');
         Route::get('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'index']);
         Route::post('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'store']);
         Route::get('/catalog-search-sites/{host}/pages', [AdminCatalogSearchSiteController::class, 'pages'])

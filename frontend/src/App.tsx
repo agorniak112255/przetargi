@@ -8,6 +8,7 @@ import { AdminRoles } from './pages/AdminRoles'
 import { AdminPresta } from './pages/AdminPresta'
 import { AdminSearchSites } from './pages/AdminSearchSites'
 import { AdminCatalogSlang } from './pages/AdminCatalogSlang'
+import { AdminDescriptionTemplates } from './pages/AdminDescriptionTemplates'
 import { AdminSmtp } from './pages/AdminSmtp'
 import { AdminUsers } from './pages/AdminUsers'
 import { Clients } from './pages/Clients'
@@ -141,6 +142,7 @@ export default function App() {
             <Route path="presta" element={<AdminPresta />} />
             <Route path="strony-wyszukiwarka" element={<AdminSearchSites />} />
             <Route path="zargon" element={<AdminCatalogSlang />} />
+            <Route path="szablony-opisow" element={<AdminDescriptionTemplates />} />
           </Route>
           <Route path="help" element={<Help />} />
           <Route path="*" element={<Navigate to="/" replace />} />

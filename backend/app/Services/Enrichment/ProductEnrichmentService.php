@@ -68,6 +68,11 @@ final class ProductEnrichmentService
         return $this->attemptLog ?? app(EnrichmentAttemptLog::class);
     }
 
+    private function descriptionTemplates(): EnrichmentDescriptionTemplateService
+    {
+        return app(EnrichmentDescriptionTemplateService::class);
+    }
+
     public function enqueueProduct(Product $product, User $user, bool $force = false): ProductEnrichmentBatch
     {
         if (! $force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
@@ -2890,42 +2895,7 @@ SYS,
         return $this->llm->chatJsonEnrichment([
             [
                 'role' => 'system',
-                'content' => <<<'SYS'
-Jesteś ekspertem BHP/PPE. Wejście to OCZYSZCZONE fakty o produkcie (bez chrome sklepu). Zbierz PEŁNĄ specyfikację jak na karcie katalogowej.
-Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"description":
-{
-  "description": "pełny opis PL: 1) przeznaczenie 2) budowa/materiały 3) właściwości użytkowe 4) normy/certyfikaty 5) zastosowania — min. 6–12 zdań",
-  "features": ["cechy i korzyści — min. 5 pozycji, gdy źródła na to pozwalają"],
-  "specs": ["parametr: wartość (nr art./SKU, typ, materiał wkładki, powłoka, opakowanie, rozmiary…)"],
-  "norms": ["EN … z poziomami, jeśli podane w źródłach", "EN ISO …"],
-  "certificates": ["certyfikaty, kat. PPE, CE"],
-  "materials": ["materiały / powłoki"],
-  "use_cases": ["zastosowania / branże / warunki pracy"],
-  "attributes": {
-    "kategoria_bhp": "rekawice|obuwie|odziez|ochrona_glowy|ochrona_twarzy|ochrona_oczu|ochrona_sluchu|drogi_oddechowe|asekuracja|ochrona_kolan|inne",
-    "kod_producenta": "SKU / nr katalogowy producenta",
-    "material": "główny materiał (np. nitryl)",
-    "materialy": ["lista materiałów"],
-    "normy_en": ["EN 388", "EN ISO 20345"],
-    "klasa_ochrony": "S3 / kat. II / …",
-    "rozmiar": "obuwie: tylko EU 36-48 ze źródeł; rękawice: 7-11; odzież: S-XXL; nigdy 1-5XL przy butach; brak w źródłach → null",
-    "poziomy_en388": "np. 4544C albo null"
-  },
-  "image_urls": ["https://… tylko realny URL zdjęcia produktu"],
-  "document_urls": ["https://… tylko realny URL PDF karty/certyfikatu"],
-  "source_urls": ["https://… karty produktu"],
-  "confidence": 0.0
-}
-JĘZYK: cały tekst wyjściowy po polsku, także gdy źródła są francuskie, niemieckie, czeskie czy angielskie.
-Bez zdań w języku oryginału i bez etykiet typu „Produit”, „Matériaux”, „Usage” — tłumacz je na polskie odpowiedniki.
-WYPEŁNIJ tablice features/specs/norms/materials/use_cases oraz attributes, gdy fakty są w tekście — nie zostawiaj ich pustych „dla skrótu”.
-Nie powtarzaj tych samych zdań w description, features i specs — description zostaje pełny (6–12 zdań).
-attributes: używaj wyłącznie wartości ze źródeł; brak danych → null / [].
-Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
-Nie przepisuj nazwy z cennika jako dowodu — opisuj wyłącznie podane strony.
-Pomiń reklamy, nieruchomości, leasing, biura, inwestycje i inny tekst niezwiązany z tym produktem BHP.
-Jeśli źródła opisują substancję chemiczną / CAS, a nazwa produktu to PPE (obuwie, rękawice, odzież…) — description="" i confidence=0.
-SYS,
+                'content' => $this->descriptionTemplates()->systemPrompt($product),
             ],
             [
                 'role' => 'user',

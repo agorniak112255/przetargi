@@ -56,6 +56,11 @@ const tiles: Tile[] = [
     label: 'Żargon SIWZ',
     description: 'Słownik potocznych nazw z przetargów',
   },
+  {
+    to: '/admin/szablony-opisow',
+    label: 'Szablony opisów',
+    description: 'Instrukcje AI wg rodziny BHP',
+  },
 ]
 
 export function AdminNavTiles() {
