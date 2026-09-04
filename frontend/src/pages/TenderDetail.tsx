@@ -2872,7 +2872,7 @@ function ItemRow({
     <>
     <tr
       id={`tender-item-${item.id}`}
-      className={`${showComment ? 'align-top' : 'border-b align-top'} ${
+      className={`${showComment || Boolean(item.main_product_id ?? item.main_product?.id) ? 'align-top' : 'border-b align-top'} ${
         focused
           ? 'bg-violet-100 ring-2 ring-inset ring-violet-600'
           : isExternal
@@ -3146,33 +3146,6 @@ function ItemRow({
                 )}
               </details>
             )}
-            <ItemBattlecard
-              tenderId={tenderId}
-              itemId={item.id}
-              markupPercent={targetMarginPercent}
-              enabled={Boolean(item.main_product_id ?? item.main_product?.id)}
-              canSelectSubstitute
-              selectedProductId={item.main_product_id ?? item.main_product?.id ?? null}
-              onApplySelectedOffer={(p: BattlecardProduct) => {
-                applyTenderMarginToOffer(p.purchase_price)
-              }}
-              onSelectSubstitute={(p: BattlecardProduct) => {
-                applyCatalogPrice(p.purchase_price)
-                return onSave(item.id, {
-                  main_product_id: p.product_id,
-                  quantity: Number(qty) || 1,
-                  ai_match_percent: p.match_percent,
-                  match_source: 'battlecard',
-                  ai_match_reasons: [
-                    {
-                      code: 'battlecard',
-                      label: `Wybrano ${p.sku} z battlecard`,
-                      points: p.match_percent,
-                    },
-                  ],
-                })
-              }}
-            />
           </div>
         ) : (
           <span>
@@ -3228,14 +3201,6 @@ function ItemRow({
                 ))}
               </ul>
             )}
-            <div className="mt-1">
-              <ItemBattlecard
-                tenderId={tenderId}
-                itemId={item.id}
-                markupPercent={targetMarginPercent}
-                enabled={Boolean(item.main_product)}
-              />
-            </div>
             <ProductVerifyModal
               productId={previewId}
               query={item.requirement ?? ''}
@@ -3374,6 +3339,47 @@ function ItemRow({
         </div>
       </td>
     </tr>
+    {(item.main_product_id ?? item.main_product?.id) ? (
+      <tr className={showComment ? 'align-top' : 'border-b align-top'}>
+        <td colSpan={7} className="px-3 pb-2 pt-0">
+          <ItemBattlecard
+            tenderId={tenderId}
+            itemId={item.id}
+            markupPercent={targetMarginPercent}
+            enabled
+            canSelectSubstitute={canEdit}
+            selectedProductId={item.main_product_id ?? item.main_product?.id ?? null}
+            onApplySelectedOffer={
+              canEdit
+                ? (p: BattlecardProduct) => {
+                    applyTenderMarginToOffer(p.purchase_price)
+                  }
+                : undefined
+            }
+            onSelectSubstitute={
+              canEdit
+                ? (p: BattlecardProduct) => {
+                    applyCatalogPrice(p.purchase_price)
+                    return onSave(item.id, {
+                      main_product_id: p.product_id,
+                      quantity: Number(qty) || 1,
+                      ai_match_percent: p.match_percent,
+                      match_source: 'battlecard',
+                      ai_match_reasons: [
+                        {
+                          code: 'battlecard',
+                          label: `Wybrano ${p.sku} z battlecard`,
+                          points: p.match_percent,
+                        },
+                      ],
+                    })
+                  }
+                : undefined
+            }
+          />
+        </td>
+      </tr>
+    ) : null}
     {canComment && showComment && (
       <tr className="border-b bg-slate-50/80">
         <td colSpan={7} className="px-3 py-2 text-[11px]">

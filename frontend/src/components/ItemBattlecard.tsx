@@ -103,10 +103,10 @@ function Col({
   const selectedRing = selected ? 'ring-2 ring-violet-400 ring-offset-1' : ''
 
   return (
-    <div className={`rounded border px-2 py-1.5 ${tones[tone]} ${selectedRing}`}>
-      <div className="flex items-center justify-between gap-1">
+    <div className={`min-w-0 rounded border px-2.5 py-2 ${tones[tone]} ${selectedRing}`}>
+      <div className="flex flex-wrap items-center justify-between gap-1">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">{title}</span>
-        <span className="flex items-center gap-1">
+        <span className="flex shrink-0 items-center gap-1">
           {tone === 'sub' && cheaperBadge ? (
             <span className="rounded bg-amber-500 px-1 py-0.5 text-[9px] font-bold text-white">
               {cheaperBadge}
@@ -115,11 +115,11 @@ function Col({
           <span className="text-[10px] font-bold text-violet-700">{p.match_percent}%</span>
         </span>
       </div>
-      <p className="mt-0.5 truncate text-[11px] font-medium text-slate-900" title={p.sku}>
+      <p className="mt-0.5 break-all text-[11px] font-medium text-slate-900" title={p.sku}>
         {p.sku}
       </p>
-      <p className="truncate text-[10px] text-slate-600" title={p.name}>
-        {productDisplayName(p, 48)}
+      <p className="line-clamp-2 text-[10px] text-slate-600" title={p.name}>
+        {productDisplayName(p)}
       </p>
       <p className="mt-0.5 text-[10px] text-slate-500">{p.manufacturer || '—'}</p>
       <div className="mt-1 space-y-0.5">
@@ -365,7 +365,7 @@ export function ItemBattlecard({
 
   return (
     <details
-      className="max-w-[520px] rounded border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-800"
+      className="w-full rounded border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-800"
       open={open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
     >
@@ -385,7 +385,7 @@ export function ItemBattlecard({
                 ))}
               </ul>
             )}
-            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3 xl:grid-cols-5">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[repeat(auto-fit,minmax(13.5rem,1fr))]">
               <Col
                 title="Propozycja"
                 tone="main"
