@@ -357,6 +357,13 @@ export function Products() {
     return params
   }
 
+  function applyCatalogSearch(next = q) {
+    const value = next.trim()
+    setQ(value)
+    setDebouncedQ(value)
+    setPage(1)
+  }
+
   function onSort(col: SortKey) {
     if (sort === col) {
       setDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -829,15 +836,62 @@ export function Products() {
               </option>
             ))}
           </select>
+        </div>
+      </div>
+      <form
+        className="mb-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          applyCatalogSearch()
+        }}
+      >
+        <label htmlFor="product-catalog-search" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+          Szukaj w katalogu
+        </label>
+        <div
+          className={`flex max-w-2xl items-stretch overflow-hidden rounded-lg border-2 bg-white shadow-sm focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200 ${
+            debouncedQ ? 'border-blue-500' : 'border-slate-400'
+          }`}
+        >
+          <span className="flex items-center pl-3 text-slate-400" aria-hidden>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+              <path
+                fillRule="evenodd"
+                d="M9 3.5a5.5 5.5 0 1 0 3.44 9.8l3.13 3.13a.75.75 0 1 0 1.06-1.06l-3.13-3.13A5.5 5.5 0 0 0 9 3.5ZM5.5 9a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0Z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </span>
           <input
-            className="w-full max-w-md rounded border border-slate-300 px-3 py-2 text-sm"
-            placeholder="Szukaj kod, nazwa, producent…"
+            id="product-catalog-search"
+            className="min-w-0 flex-1 border-0 bg-transparent px-2 py-2.5 text-sm outline-none disabled:text-slate-400"
+            placeholder="Kod, nazwa lub producent…"
             value={q}
             disabled={aiMode}
             onChange={(e) => setQ(e.target.value)}
+            aria-label="Szukaj produktu po kodzie, nazwie lub producencie"
           />
+          {q ? (
+            <button
+              type="button"
+              disabled={aiMode}
+              className="px-2 text-lg leading-none text-slate-400 hover:text-slate-700 disabled:opacity-50"
+              title="Wyczyść"
+              aria-label="Wyczyść wyszukiwanie"
+              onClick={() => applyCatalogSearch('')}
+            >
+              ×
+            </button>
+          ) : null}
+          <button
+            type="submit"
+            disabled={aiMode}
+            className="bg-slate-800 px-4 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            Szukaj
+          </button>
         </div>
-      </div>
+      </form>
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
