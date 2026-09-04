@@ -6,7 +6,7 @@ import {
   type CrossRefAppliedFilter,
   type CrossRefFilterGroup,
 } from './CrossRefFilterModal'
-import { ProductPreviewModal } from './ProductPreviewModal'
+import { ProductVerifyModal } from './ProductVerifyModal'
 
 type CrossRefProduct = {
   product_id: number
@@ -445,7 +445,7 @@ export function CrossRefPanel({
         onSearchMust={(ids) => void run(code, ids)}
         onClose={() => setModalOpen(false)}
       />
-      <ProductPreviewModal
+      <ProductVerifyModal
         productId={previewId}
         query={[result?.seed?.sku, result?.seed?.name, result?.code].filter(Boolean).join(' ')}
         onClose={() => setPreviewId(null)}

@@ -6,7 +6,7 @@ import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductAiSearchModal } from '../components/ProductAiSearchModal'
-import { ProductPreviewModal } from '../components/ProductPreviewModal'
+import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { applyCheckboxRange } from '../lib/checkboxRange'
 import { api, can, parseActiveEnrichment, type EnrichmentBatch, type PrestaExportBatch, type Product } from '../lib/api'
@@ -1132,9 +1132,9 @@ export function Products() {
           )}
         </table>
 
-        <ProductPreviewModal
+        <ProductVerifyModal
           productId={previewId}
-          query={aiMode ? aiQuery : ''}
+          query={aiMode ? aiQuery : debouncedQ}
           onClose={() => setPreviewId(null)}
         />
         <ProductAiSearchModal

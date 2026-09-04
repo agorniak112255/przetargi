@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, appHref, type Product } from '../lib/api'
-import { findAllOffsets, queryHighlightTokens } from '../lib/descriptionHighlight'
+import { countFindHits, findAllOffsets, queryHighlightTokens } from '../lib/descriptionHighlight'
 import { productDisplayName } from '../lib/productLabel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 
@@ -50,6 +50,10 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
   const bodyText = useMemo(() => (product ? descriptionSearchText(product) : ''), [product])
 
   const findHits = useMemo(() => findAllOffsets(bodyText, find), [bodyText, find])
+  const tokenHitCounts = useMemo(
+    () => Object.fromEntries(tokens.map((t) => [t, countFindHits(bodyText, t)])),
+    [bodyText, tokens],
+  )
 
   useEffect(() => {
     setFindIndex(0)
@@ -141,10 +145,10 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
           <span className="text-xs tabular-nums text-slate-500">
             {find.trim().length >= 2
               ? hitCount === 0
-                ? '0 trafień'
-                : `${safeIndex + 1} / ${hitCount}`
+                ? '0 trafień (0)'
+                : `${safeIndex + 1} / ${hitCount} (${hitCount})`
               : tokens.length > 0
-                ? `${tokens.length} fraz z zapytania`
+                ? `${tokens.length} fraz z zapytania (${tokens.reduce((n, t) => n + (tokenHitCounts[t] ?? 0), 0)})`
                 : ''}
           </span>
           <button
@@ -175,7 +179,7 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
                 onClick={() => setFind(t)}
                 className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-950 hover:bg-amber-200"
               >
-                {t}
+                {t} ({tokenHitCounts[t] ?? 0})
               </button>
             ))}
           </div>

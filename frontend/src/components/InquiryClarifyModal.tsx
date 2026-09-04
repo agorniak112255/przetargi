@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ProductPreviewModal } from './ProductPreviewModal'
+import { ProductVerifyModal } from './ProductVerifyModal'
 
 export function useBusySeconds(busy: boolean): number {
   const [sec, setSec] = useState(0)
@@ -356,7 +356,7 @@ export function InquiryClarifyModal({
           </button>
         </div>
       </div>
-      <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
+      <ProductVerifyModal productId={previewId} onClose={() => setPreviewId(null)} />
     </div>
   )
 }
