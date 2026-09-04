@@ -756,12 +756,25 @@ final class PriceListImportService
         $removed = 0;
         foreach ($order as $key) {
             $items = $groups[$key];
-            if (str_starts_with($key, 'sku:')) {
+            if (str_starts_with($key, 'unique:')) {
                 foreach ($items as $item) {
                     $out[] = $this->finalizeProductCode($item['product'], null);
                 }
 
                 continue;
+            }
+            if (str_starts_with($key, 'stem:') && count($items) > 1) {
+                $names = array_map(
+                    static fn (array $item): string => (string) ($item['product']['name'] ?? ''),
+                    $items,
+                );
+                if (! $this->sizes->namesCompatibleForMerge($names)) {
+                    foreach ($items as $item) {
+                        $out[] = $this->finalizeProductCode($item['product'], null);
+                    }
+
+                    continue;
+                }
             }
 
             if (count($items) === 1) {
@@ -853,10 +866,21 @@ final class PriceListImportService
             return 'model:'.mb_strtolower($modelKey).'|'.$nameKey;
         }
 
+        $sku = (string) ($product['sku'] ?? '');
+        $stem = $this->sizes->skuTailStem($sku);
+        if ($stem !== null) {
+            $price = $this->sizes->priceBucket(
+                $product['catalog_price_net'] ?? 0,
+                $product['purchase_price'] ?? 0,
+            );
+
+            return 'stem:'.mb_strtolower((string) ($product['manufacturer'] ?? '')).'|'.mb_strtolower($stem).'|'.$price;
+        }
+
         $sizeKey = $this->sizes->groupKey(
             (string) ($product['manufacturer'] ?? ''),
             $name,
-            (string) ($product['sku'] ?? ''),
+            $sku,
             isset($product['packaging']) ? (string) $product['packaging'] : null,
         );
         if ($sizeKey !== null) {
@@ -868,7 +892,7 @@ final class PriceListImportService
             return 'name:'.$nameKey;
         }
 
-        return 'sku:'.(string) ($product['sku'] ?? uniqid('p', true));
+        return 'unique:'.($sku !== '' ? $sku : uniqid('p', true));
     }
 
     /**
@@ -901,7 +925,8 @@ final class PriceListImportService
             }
         }
 
-        $core = $this->sizes->skuCore((string) ($best['sku'] ?? ''), (string) ($best['name'] ?? ''));
+        $core = $this->sizes->skuCore((string) ($best['sku'] ?? ''), (string) ($best['name'] ?? ''))
+            ?? $this->sizes->skuTailStem((string) ($best['sku'] ?? ''));
         $best['name'] = $this->sizes->stripSizeFromName((string) ($best['name'] ?? '')) ?: (string) ($best['name'] ?? '');
         $best['packaging'] = null;
         if ($core !== null) {

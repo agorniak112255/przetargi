@@ -369,8 +369,9 @@ final class ProductSizeVariant
     public function stripSizeFromName(string $name): string
     {
         $t = trim($name);
+        $t = preg_replace('/\bT\s*0?\d{1,2}\b/iu', '', $t) ?? $t;
         $t = preg_replace(
-            '/[,\s]+(?:size|rozmiar|taille|rozm\.?)\s*:?\s*(?:\d{1,2}(?:[.,]\d)?|[2-6]\s*xl|xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l)\s*$/iu',
+            '/\b(?:size|rozmiar|taille|rozm\.?)\s*:?\s*(?:\d{1,2}(?:[.,]\d)?|[2-6]\s*xl|xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l)\b/iu',
             '',
             $t
         ) ?? $t;
@@ -421,15 +422,74 @@ final class ProductSizeVariant
         return $this->normalizeSizeToken($raw) !== null;
     }
 
+    /**
+     * Rdzeń SKU, gdy rozmiar to ostatnia cyfra albo 2 znaki (07, 11, T06).
+     * Same cyfry (np. 558911) — nie tykać.
+     */
+    public function skuTailStem(string $sku): ?string
+    {
+        $sku = trim($sku);
+        if ($sku === '' || preg_match('/[A-Za-z]/u', $sku) !== 1) {
+            return null;
+        }
+        if (preg_match('/^(.{4,})(\d{2})$/u', $sku, $m) === 1) {
+            $n = (int) $m[2];
+            $stem = rtrim($m[1], "-/_ \t");
+            if ($n >= 4 && $n <= 13 && $this->isUsableCore($stem)) {
+                return $stem;
+            }
+        }
+        if (preg_match('/^(.{4,})(\d)$/u', $sku, $m) === 1 && preg_match('/\d$/u', $m[1]) !== 1) {
+            $n = (int) $m[2];
+            $stem = rtrim($m[1], "-/_ \t");
+            if ($n >= 4 && $n <= 9 && $this->isUsableCore($stem)) {
+                return $stem;
+            }
+        }
+
+        return $this->stripWearSizeSuffix($sku);
+    }
+
+    /**
+     * @param  list<string>  $names
+     */
+    public function namesCompatibleForMerge(array $names): bool
+    {
+        $fingerprints = [];
+        foreach ($names as $name) {
+            $tokens = $this->nameTokensForMerge((string) $name);
+            if ($tokens === []) {
+                return false;
+            }
+            $fingerprints[] = $tokens;
+        }
+        $count = count($fingerprints);
+        if ($count < 2) {
+            return true;
+        }
+        for ($i = 0; $i < $count; $i++) {
+            for ($j = $i + 1; $j < $count; $j++) {
+                if ($this->tokenJaccard($fingerprints[$i], $fingerprints[$j]) < 0.55) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     public function skuCore(?string $sku, ?string $name = null): ?string
     {
         $sku = trim((string) $sku);
         if ($sku === '') {
             return null;
         }
-        $stripped = $this->stripWearSizeSuffix($sku);
-        if ($stripped !== null) {
-            return $stripped;
+        if (preg_match('/^\d+$/u', $sku) === 1 && $this->sizeFromName((string) $name) === null) {
+            return null;
+        }
+        $tail = $this->skuTailStem($sku);
+        if ($tail !== null) {
+            return $tail;
         }
         $size = $this->extractSize($name, $sku);
         if ($size === null) {
@@ -463,6 +523,13 @@ final class ProductSizeVariant
     public function groupKey(string $manufacturer, string $name, string $sku, ?string $packaging = null): ?string
     {
         $size = $this->extractSize($name, $sku, $packaging);
+        if ($size === null) {
+            $stem = $this->skuTailStem($sku);
+            if ($stem === null || preg_match('/(\d{1,2})$/', $sku, $tail) !== 1) {
+                return null;
+            }
+            $size = $this->normalizeSizeToken($tail[1]);
+        }
         if ($size === null) {
             return null;
         }
@@ -953,8 +1020,47 @@ final class ProductSizeVariant
         return fmod($n, 1.0) === 0.0 ? (string) (int) $n : (string) $n;
     }
 
+    /**
+     * @return list<string>
+     */
+    private function nameTokensForMerge(string $name): array
+    {
+        $t = mb_strtolower($this->stripSizeFromName($name));
+        $t = preg_replace('/[^a-z0-9ąćęłńóśźżäöüß]+/u', ' ', $t) ?? $t;
+        $parts = preg_split('/\s+/u', trim($t)) ?: [];
+        $tokens = [];
+        foreach ($parts as $part) {
+            if (mb_strlen((string) $part) < 2) {
+                continue;
+            }
+            $tokens[(string) $part] = true;
+        }
+        $keys = array_keys($tokens);
+        sort($keys);
+
+        return $keys;
+    }
+
+    /**
+     * @param  list<string>  $a
+     * @param  list<string>  $b
+     */
+    private function tokenJaccard(array $a, array $b): float
+    {
+        if ($a === [] || $b === []) {
+            return 0.0;
+        }
+        $inter = count(array_intersect($a, $b));
+        $union = count(array_unique([...$a, ...$b]));
+
+        return $union > 0 ? $inter / $union : 0.0;
+    }
+
     private function sizeFromName(string $name): ?string
     {
+        if (preg_match('/(?:^|[\s,;:\-\/])T\s*0?(\d{1,2})\b/iu', $name, $m) === 1) {
+            return $this->normalizeSizeToken($m[1]);
+        }
         if (preg_match(
             '/(?:size|rozmiar|taille|rozm\.?)\s*:?\s*(\d{1,2}(?:[.,]\d)?|[2-6]\s*xl|xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l)\b/iu',
             $name,

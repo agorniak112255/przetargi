@@ -108,6 +108,52 @@ final class PriceListGroupedRowsImportTest extends TestCase
         }
     }
 
+    public function test_rostaing_tail_size_skus_collapse_by_price(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'rostsz').'.xlsx';
+        $spreadsheet = new Spreadsheet;
+        $spreadsheet->getActiveSheet()->fromArray([
+            ['sku', 'nazwa', 'cena'],
+            ['ALUWELD-DRT07', '1 RIGHT HAND GLOVE T7 WELDER LEATHER BACK ALUMINIUM', 23.51],
+            ['ALUWELD-DRT08', '1 RIGHT HAND GLOVE SIZE 8 WELDER LEATHER BACK ALUMINIUM', 23.51],
+            ['ALUWELD-DRT11', '1 RIGHT HAND GLOVE T11 WELDER LEATHER ALUMINIUM BACK', 23.51],
+            ['ALUWELD-GAT07', '1 LEFT HAND GLOVE T7 WELDER LEATHER ALUMINIUM BACK', 23.51],
+            ['ALUWELD-GAT08', '1 LEFT GLOVE T8 WELDER LEATHER ALUMINIUM BACK', 23.51],
+            ['ATTACK6PEOM-BT09', 'T9 FIREFIGHTING GLOVES - LEATHER - T LONG TEXTILE', 40.0],
+            ['ATTACK6PEOM-BT12', 'T12 FIREFIGHTING GLOVES LEATHER - TEXTILE LONG', 40.0],
+            ['ATTACK6PEOMTEX-BSCT06', 'T06 FIREFIGHTING GLOVES TEXTILE LONG', 33.0],
+            ['ATTACK6PEOMTEX-BSCT12', 'GLOVES T12 FIREFIGHTING TEXTILE LONG', 33.0],
+            ['BLACKSTICK+-SCT06', 'T6 PU CUT RESISTANCE GLOVES WITH LEATHER REINFORCEMENT', 12.0],
+            ['BLACKSTICK+-SCT11', 'T11 GLOVES, F CUT RESISTANCE, PU, LEATHER REINFORCEMENT, SC', 12.0],
+            ['BLACKSTICK+T', 'T6 GLOVES, F CUT, PU, LEATHER REINFORCEMENT', 12.0],
+            ['BLACKTACTIL/0T06', 'T6 GLOVES, CUT RESISTANCE E, BLACK KNITTED', 9.0],
+            ['BLACKTACTIL/0T07', 'T7 GLOVES, CUT RESISTANCE E, BLACK KNITTED', 9.0],
+        ]);
+        (new Xlsx($spreadsheet))->save($path);
+
+        try {
+            $preview = app(PriceListImportService::class)->previewFromMapping(
+                $path,
+                $this->flatMapping($spreadsheet->getActiveSheet()->getTitle()),
+                30,
+            );
+            $skus = array_column($preview['products'], 'sku');
+
+            $this->assertContains('ALUWELD-DRT', $skus);
+            $this->assertContains('ALUWELD-GAT', $skus);
+            $this->assertContains('ATTACK6PEOM-BT', $skus);
+            $this->assertContains('ATTACK6PEOMTEX-BSCT', $skus);
+            $this->assertContains('BLACKSTICK+-SCT', $skus);
+            $this->assertContains('BLACKTACTIL/0T', $skus);
+            $this->assertContains('BLACKSTICK+T', $skus);
+            $this->assertNotContains('ALUWELD-DRT07', $skus);
+            $this->assertNotContains('BLACKSTICK+-SCT06', $skus);
+            $this->assertSame(7, $preview['products_found']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_flat_price_list_still_imports(): void
     {
         $path = tempnam(sys_get_temp_dir(), 'flat').'.xlsx';

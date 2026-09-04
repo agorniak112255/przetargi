@@ -82,6 +82,46 @@ final class ProductSizeVariantTest extends TestCase
     }
 
     #[Test]
+    public function tail_stem_strips_last_two_size_digits(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame('ALUWELD-DRT', $svc->skuTailStem('ALUWELD-DRT07'));
+        $this->assertSame('ALUWELD-DRT', $svc->skuTailStem('ALUWELD-DRT11'));
+        $this->assertSame('ATTACK6PEOM-BT', $svc->skuTailStem('ATTACK6PEOM-BT09'));
+        $this->assertSame('ATTACK6PEOMTEX-BSCT', $svc->skuTailStem('ATTACK6PEOMTEX-BSCT06'));
+        $this->assertSame('BLACKSTICK+-SCT', $svc->skuTailStem('BLACKSTICK+-SCT06'));
+        $this->assertSame('BLACKTACTIL/0T', $svc->skuTailStem('BLACKTACTIL/0T07'));
+        $this->assertNull($svc->skuTailStem('BLACKSTICK+T'));
+        $this->assertNull($svc->skuTailStem('558911'));
+        $this->assertNull($svc->skuTailStem('37695VP070'));
+    }
+
+    #[Test]
+    public function names_compatible_after_t_size_and_word_order(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertTrue($svc->namesCompatibleForMerge([
+            '1 RIGHT HAND GLOVE T7 WELDER LEATHER BACK ALUMINIUM',
+            '1 RIGHT HAND GLOVE SIZE 8 WELDER LEATHER BACK ALUMINIUM',
+            '1 RIGHT HAND GLOVE T11 WELDER LEATHER ALUMINIUM BACK',
+        ]));
+        $this->assertTrue($svc->namesCompatibleForMerge([
+            'T9 FIREFIGHTING GLOVES - LEATHER - T LONG TEXTILE',
+            'T12 FIREFIGHTING GLOVES LEATHER - TEXTILE LONG',
+        ]));
+        $this->assertTrue($svc->namesCompatibleForMerge([
+            'T6 PU CUT RESISTANCE GLOVES WITH LEATHER REINFORCEMENT',
+            'T11 GLOVES, F CUT RESISTANCE, PU, LEATHER REINFORCEMENT, SC',
+        ]));
+        $this->assertFalse($svc->namesCompatibleForMerge([
+            'T6 PU CUT RESISTANCE GLOVES WITH LEATHER REINFORCEMENT',
+            'T6 GLOVES, CUT RESISTANCE E, BLACK KNITTED',
+        ]));
+    }
+
+    #[Test]
     public function does_not_group_different_models(): void
     {
         $svc = new ProductSizeVariant;
