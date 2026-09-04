@@ -92,6 +92,10 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertSame('ATTACK6PEOMTEX-BSCT', $svc->skuTailStem('ATTACK6PEOMTEX-BSCT06'));
         $this->assertSame('BLACKSTICK+-SCT', $svc->skuTailStem('BLACKSTICK+-SCT06'));
         $this->assertSame('BLACKTACTIL/0T', $svc->skuTailStem('BLACKTACTIL/0T07'));
+        $this->assertSame('BLACKTACTIL', $svc->skuTailStem('BLACKTACTILT07'));
+        $this->assertSame('BLACKTACTIL', $svc->skuTailStem('BLACKTACTILT11'));
+        $this->assertSame('BLACKTACTIL', $svc->skuCore('BLACKTACTILT07', 'T7 GLOVES, CUT RESISTANCE LEVEL F, PU, BLACK'));
+        $this->assertSame('BLACKNIT', $svc->skuTailStem('BLACKNITT11'));
         $this->assertNull($svc->skuTailStem('BLACKSTICK+T'));
         $this->assertNull($svc->skuTailStem('558911'));
         $this->assertNull($svc->skuTailStem('37695VP070'));
@@ -107,6 +111,15 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertNull($svc->skuTailStem('CANADA-IT'));
         $this->assertSame('CANADA-IT', $svc->skuTailStem('CANADA-IT08'));
         $this->assertSame('CANADA-IT', $svc->resolveMergeStem('CANADA-IT', ['canada-it' => 'CANADA-IT']));
+        $this->assertSame('CRIOT', $svc->skuTailStem('CRIOT08'));
+        $this->assertSame('CRIOT', $svc->skuTailStem('CRIOT09'));
+        $this->assertSame('PROSOUD/1DRT', $svc->skuTailStem('PROSOUD/1DRT08'));
+        $this->assertSame('PROSOUD/1DRT', $svc->skuTailStem('PROSOUD/1DRT10'));
+        $this->assertSame(['BLACKTACTIL', 'BLACKTACTI'], $svc->skuSearchFallbacks('BLACKTACTILT'));
+        $this->assertSame([], $svc->skuSearchFallbacks('ALUWELD-DRT'));
+        $this->assertSame([], $svc->skuSearchFallbacks('ERGOPRIMA'));
+        $this->assertSame([], $svc->skuSearchFallbacks('37695VP'));
+        $this->assertSame([], $svc->skuSearchFallbacks('BLACKSTICK+T'));
     }
 
     #[Test]

@@ -27,6 +27,7 @@ final class PriceListImportService
         private readonly ProductSpecialPriceImporter $specialPrices,
         private readonly SpreadsheetCellReader $cells,
         private readonly ProductCategorySanitizer $categorySanitizer,
+        private readonly ProductSizeMergeService $sizeMerge,
     ) {}
 
     /**
@@ -331,7 +332,17 @@ final class PriceListImportService
                         $priceChanges[] = $change;
                     }
                     $updatedProducts[] = $this->summarizeUpdate($existing, $payload, $sku, $change !== null);
-                    $existing->update($payload);
+                    $updates = $payload;
+                    if ($sku !== (string) $existing->sku) {
+                        $taken = Product::query()
+                            ->where('sku', $sku)
+                            ->where('id', '!=', $existing->id)
+                            ->exists();
+                        if (! $taken) {
+                            $updates['sku'] = $sku;
+                        }
+                    }
+                    $existing->update($updates);
                     $productIds[] = (int) $existing->id;
                     $updated++;
                 } else {
@@ -398,6 +409,12 @@ final class PriceListImportService
         }
 
         RegisterManufacturerCatalogJob::dispatch($manufacturer, $productIds[0] ?? 0);
+
+        try {
+            $this->sizeMerge->merge($manufacturer, false);
+        } catch (Throwable) {
+            // import już zapisany — scalanie rozmiarów nie cofa cennika
+        }
 
         return [
             'price_list' => $priceList->load('importer:id,name'),
@@ -991,13 +1008,7 @@ final class PriceListImportService
         }
 
         $mfr = trim((string) ($payload['manufacturer'] ?? ''));
-        $key = $this->sizes->groupKey(
-            $mfr,
-            (string) ($payload['name'] ?? ''),
-            $sku,
-            isset($payload['packaging']) ? (string) $payload['packaging'] : null,
-        );
-        if ($key === null || $mfr === '') {
+        if ($mfr === '') {
             return null;
         }
 
@@ -1007,6 +1018,44 @@ final class PriceListImportService
         );
         if (! isset($byManufacturer[$mfr])) {
             $byManufacturer[$mfr] = Product::query()->where('manufacturer', $mfr)->get();
+        }
+
+        $knownStems = [];
+        foreach ($byManufacturer[$mfr] as $product) {
+            $stem = $this->sizes->skuTailStem((string) $product->sku);
+            if ($stem !== null) {
+                $knownStems[mb_strtolower($stem)] = $stem;
+            }
+        }
+        $incomingStem = $this->sizes->resolveMergeStem($sku, $knownStems);
+        if ($incomingStem !== null) {
+            $stemHit = null;
+            foreach ($byManufacturer[$mfr] as $product) {
+                $pStem = $this->sizes->resolveMergeStem((string) $product->sku, $knownStems);
+                if ($pStem === null || mb_strtolower($pStem) !== mb_strtolower($incomingStem)) {
+                    continue;
+                }
+                if ($this->sizes->priceBucket($product->catalog_price_net, $product->purchase_price) !== $price) {
+                    continue;
+                }
+                if (strcasecmp((string) $product->sku, $incomingStem) === 0) {
+                    return $product;
+                }
+                $stemHit ??= $product;
+            }
+            if ($stemHit !== null) {
+                return $stemHit;
+            }
+        }
+
+        $key = $this->sizes->groupKey(
+            $mfr,
+            (string) ($payload['name'] ?? ''),
+            $sku,
+            isset($payload['packaging']) ? (string) $payload['packaging'] : null,
+        );
+        if ($key === null) {
+            return null;
         }
         foreach ($byManufacturer[$mfr] as $product) {
             $pk = $this->sizes->groupKey(

@@ -433,6 +433,10 @@ final class ProductSizeVariant
         if ($sku === '' || preg_match('/[A-Za-z]/u', $sku) !== 1) {
             return null;
         }
+        // „BLACKTACTILT07” — T08–T14 to taille, nie litera modelu (ALUWELD-DRT zostaje).
+        if (preg_match('/^(\p{L}{5,})T(0\d|1[0-4])$/u', $sku, $m) === 1) {
+            return $m[1];
+        }
         if (preg_match('/^(.{4,}[A-Za-z])(\d{2})$/u', $sku, $m) === 1) {
             $n = (int) $m[2];
             $stem = rtrim($m[1], "-/_ \t");
@@ -453,6 +457,30 @@ final class ProductSizeVariant
         }
 
         return $this->stripWearSizeSuffix($sku);
+    }
+
+    /**
+     * Druga próba wyszukiwania: pełny kod nie trafia, sklep ma 1–2 znaki mniej
+     * (resztka taille, np. BLACKTACTILT → BLACKTACTIL).
+     *
+     * @return list<string>
+     */
+    public function skuSearchFallbacks(string $sku): array
+    {
+        $sku = trim($sku);
+        if ($sku === '' || preg_match('/^\p{L}{6,}T$/u', $sku) !== 1) {
+            return [];
+        }
+        $out = [];
+        $len = mb_strlen($sku);
+        foreach ([1, 2] as $cut) {
+            if (($len - $cut) < 6) {
+                continue;
+            }
+            $out[] = mb_substr($sku, 0, $len - $cut);
+        }
+
+        return $out;
     }
 
     /**

@@ -32,6 +32,9 @@ final class MergeProductSizeVariantsCommand extends Command
         foreach ($result['examples'] as $row) {
             $this->line('  '.$row['keep'].' ← '.implode(', ', $row['drop']));
         }
+        foreach ($result['errors'] as $error) {
+            $this->error($error);
+        }
 
         return self::SUCCESS;
     }

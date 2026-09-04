@@ -196,6 +196,41 @@ final class PriceListGroupedRowsImportTest extends TestCase
         }
     }
 
+    public function test_rostaing_glued_and_slash_size_skus_collapse(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'rostglue').'.xlsx';
+        $spreadsheet = new Spreadsheet;
+        $spreadsheet->getActiveSheet()->fromArray([
+            ['sku', 'nazwa', 'cena'],
+            ['CRIOT08', 'CRYOGENIC GLOVES T8 -196°C LEATHER  40CM', 82.99],
+            ['CRIOT09', 'CRYOGENIC GLOVES T9 -196°C LEATHER  40 CM', 82.99],
+            ['CRIOT', 'CRYOGENIC GLOVES T10 -196°C LEATHER RIGHT HAND 40 CM', 82.99],
+            ['PROSOUD/1DRT07', '1 RIGHT HAND GLOVE T7 WELDER 100°C CUT-OFF E', 16.38],
+            ['PROSOUD/1DRT08', '1 RIGHT HAND GLOVE T8 WELDER 100°C CUT OFF', 16.38],
+            ['PROSOUD/1DRT10', '1 RIGHT HAND GLOVE T10 WELDER 100°C CUT PROTECTION', 16.38],
+            ['PROSOUD/1DRT12', '1 RIGHT HAND GLOVE WELDER 100°C CUT PROTECTION E', 16.38],
+            ['PROSOUD/1DRT', '1 RIGHT HAND GLOVE WELDER 100°C CUT RESISTANCE', 16.38],
+        ]);
+        (new Xlsx($spreadsheet))->save($path);
+
+        try {
+            $preview = app(PriceListImportService::class)->previewFromMapping(
+                $path,
+                $this->flatMapping($spreadsheet->getActiveSheet()->getTitle()),
+                20,
+            );
+            $skus = array_column($preview['products'], 'sku');
+
+            $this->assertContains('CRIOT', $skus);
+            $this->assertContains('PROSOUD/1DRT', $skus);
+            $this->assertNotContains('CRIOT08', $skus);
+            $this->assertNotContains('PROSOUD/1DRT08', $skus);
+            $this->assertSame(2, $preview['products_found']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_flat_price_list_still_imports(): void
     {
         $path = tempnam(sys_get_temp_dir(), 'flat').'.xlsx';

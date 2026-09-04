@@ -232,6 +232,7 @@ final class ProductSizeMergeService
             if ($stripped !== '' && $stripped !== (string) $winner->name) {
                 $updates['name'] = $stripped;
             }
+            $newSku = null;
             if ($core !== null && $core !== (string) $winner->sku) {
                 $taken = Product::query()
                     ->where('sku', $core)
@@ -239,12 +240,14 @@ final class ProductSizeMergeService
                     ->whereNotIn('id', $loserIds)
                     ->exists();
                 if (! $taken) {
-                    $updates['sku'] = $core;
+                    $newSku = $core;
                 }
             }
             $winner->update($updates);
-
             Product::query()->whereIn('id', $loserIds)->delete();
+            if ($newSku !== null) {
+                $winner->update(['sku' => $newSku]);
+            }
         });
 
         try {

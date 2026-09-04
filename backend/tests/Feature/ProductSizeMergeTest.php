@@ -9,9 +9,11 @@ use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductImage;
 use App\Models\User;
+use App\Services\PriceListImportService;
 use App\Services\ProductSizeMergeService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -266,6 +268,172 @@ final class ProductSizeMergeTest extends TestCase
         $this->assertNull(Product::query()->where('sku', 'MASTERTSHIRT-B03TS')->first());
         $this->assertNull(Product::query()->where('sku', 'MASTERTSHIRT-BTS')->first());
         $this->assertSame(3, Product::query()->where('manufacturer', 'Rostaing')->count());
+    }
+
+    public function test_merges_glued_criot_and_slash_prosoud_leftovers(): void
+    {
+        Queue::fake();
+
+        Product::query()->create([
+            'sku' => 'CRIOT08',
+            'name' => 'CRYOGENIC GLOVES T8 -196°C LEATHER  40CM',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 82.99,
+            'purchase_price' => 37.51,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'CRIOT09',
+            'name' => 'CRYOGENIC GLOVES T9 -196°C LEATHER  40 CM',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 82.99,
+            'purchase_price' => 37.51,
+            'stock' => 1,
+        ]);
+        $criot = Product::query()->create([
+            'sku' => 'CRIOT',
+            'name' => 'CRYOGENIC GLOVES T10 -196°C LEATHER RIGHT HAND 40 CM',
+            'manufacturer' => 'Rostaing',
+            'description' => str_repeat('Rękawice kriogeniczne Rostaing. ', 3),
+            'catalog_price_net' => 82.99,
+            'purchase_price' => 37.51,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'PROSOUD/1DRT08',
+            'name' => '1 RIGHT HAND GLOVE T8 WELDER 100°C CUT OFF',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 16.38,
+            'purchase_price' => 7.41,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'PROSOUD/1DRT10',
+            'name' => '1 RIGHT HAND GLOVE T10 WELDER 100°C CUT PROTECTION',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 16.38,
+            'purchase_price' => 7.41,
+            'stock' => 1,
+        ]);
+        $prosoud = Product::query()->create([
+            'sku' => 'PROSOUD/1DRT',
+            'name' => '1 RIGHT HAND GLOVE WELDER 100°C CUT RESISTANCE',
+            'manufacturer' => 'Rostaing',
+            'description' => str_repeat('Rękawica spawalnicza Rostaing. ', 3),
+            'catalog_price_net' => 16.38,
+            'purchase_price' => 7.41,
+            'stock' => 1,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('Rostaing', false);
+
+        $this->assertSame(2, $result['groups']);
+        $this->assertSame(4, $result['deleted']);
+        $this->assertNotNull(Product::query()->find($criot->id));
+        $this->assertSame('CRIOT', Product::query()->find($criot->id)?->sku);
+        $this->assertSame(3, Product::query()->find($criot->id)?->stock);
+        $this->assertNotNull(Product::query()->find($prosoud->id));
+        $this->assertSame('PROSOUD/1DRT', Product::query()->find($prosoud->id)?->sku);
+        $this->assertSame(3, Product::query()->find($prosoud->id)?->stock);
+        $this->assertNull(Product::query()->where('sku', 'CRIOT08')->first());
+        $this->assertNull(Product::query()->where('sku', 'PROSOUD/1DRT08')->first());
+        $this->assertSame(2, Product::query()->where('manufacturer', 'Rostaing')->count());
+    }
+
+    public function test_renames_winner_to_base_sku_after_deleting_loser(): void
+    {
+        Queue::fake();
+
+        $base = Product::query()->create([
+            'sku' => 'CRIOT',
+            'name' => 'CRYOGENIC GLOVES T10 -196°C LEATHER RIGHT HAND 40 CM',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 82.99,
+            'purchase_price' => 37.51,
+            'stock' => 1,
+        ]);
+        $sized = Product::query()->create([
+            'sku' => 'CRIOT08',
+            'name' => 'CRYOGENIC GLOVES T8 -196°C LEATHER  40CM',
+            'manufacturer' => 'Rostaing',
+            'description' => str_repeat('Rękawice kriogeniczne Rostaing. ', 3),
+            'catalog_price_net' => 82.99,
+            'purchase_price' => 37.51,
+            'stock' => 1,
+        ]);
+        ProductImage::query()->create([
+            'product_id' => $sized->id,
+            'path' => 'products/criot.jpg',
+            'is_primary' => true,
+            'sort_order' => 0,
+            'checksum' => 'criot123',
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('Rostaing', false);
+
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(1, $result['groups']);
+        $this->assertSame(1, $result['deleted']);
+        $this->assertNull(Product::query()->find($base->id));
+        $kept = Product::query()->find($sized->id);
+        $this->assertNotNull($kept);
+        $this->assertSame('CRIOT', $kept->sku);
+    }
+
+    public function test_import_merges_leftover_size_skus(): void
+    {
+        Queue::fake();
+
+        Product::query()->create([
+            'sku' => 'CRIOT08',
+            'name' => 'CRYOGENIC GLOVES T8 -196°C LEATHER  40CM',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 82.99,
+            'purchase_price' => 37.51,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'CRIOT09',
+            'name' => 'CRYOGENIC GLOVES T9 -196°C LEATHER  40 CM',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 82.99,
+            'purchase_price' => 37.51,
+            'stock' => 1,
+        ]);
+
+        $path = tempnam(sys_get_temp_dir(), 'criotimp').'.pdf';
+        file_put_contents($path, "%PDF-1.4\n");
+        $file = new UploadedFile($path, 'rostaing.pdf', 'application/pdf', null, true);
+
+        try {
+            app(PriceListImportService::class)->importFromProducts(
+                $file,
+                'Rostaing',
+                '2026',
+                User::factory()->create(),
+                [
+                    [
+                        'sku' => 'CRIOT08',
+                        'name' => 'CRYOGENIC GLOVES T8 -196°C LEATHER  40CM',
+                        'catalog_price_net' => 82.99,
+                        'purchase_price' => 37.51,
+                    ],
+                    [
+                        'sku' => 'CRIOT09',
+                        'name' => 'CRYOGENIC GLOVES T9 -196°C LEATHER  40 CM',
+                        'catalog_price_net' => 82.99,
+                        'purchase_price' => 37.51,
+                    ],
+                ],
+            );
+
+            $this->assertSame(1, Product::query()->where('manufacturer', 'Rostaing')->count());
+            $kept = Product::query()->where('sku', 'CRIOT')->first();
+            $this->assertNotNull($kept);
+            $this->assertNull(Product::query()->where('sku', 'CRIOT08')->first());
+        } finally {
+            @unlink($path);
+        }
     }
 
     public function test_does_not_merge_when_price_differs(): void
