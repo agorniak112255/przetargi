@@ -1,12 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, appHref, type Product } from '../lib/api'
-import {
-  descriptionProse,
-  findAllOffsets,
-  queryHighlightTokens,
-} from '../lib/descriptionHighlight'
+import { findAllOffsets, queryHighlightTokens } from '../lib/descriptionHighlight'
 import { productDisplayName } from '../lib/productLabel'
-import { HighlightedDescription } from './HighlightedDescription'
+import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 
 type Props = {
   productId: number | null
@@ -51,25 +47,7 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
     return () => document.removeEventListener('keydown', onKey, true)
   }, [productId, onClose])
 
-  const bodyText = useMemo(() => {
-    if (!product) return ''
-    const extra: string[] = []
-    if (product.norms) extra.push(`Normy: ${product.norms}`)
-    const payload = product.enrichment_payload
-    for (const [title, items] of [
-      ['Specyfikacja', payload?.specs],
-      ['Cechy', payload?.features],
-      ['Materiały', payload?.materials],
-      ['Normy', payload?.norms],
-      ['Certyfikaty', payload?.certificates],
-      ['Zastosowanie', payload?.use_cases],
-    ] as const) {
-      if (Array.isArray(items) && items.length > 0) {
-        extra.push(`${title}:\n${items.map((s) => `• ${s}`).join('\n')}`)
-      }
-    }
-    return [descriptionProse(product.description), extra.join('\n\n')].filter(Boolean).join('\n\n')
-  }, [product])
+  const bodyText = useMemo(() => (product ? descriptionSearchText(product) : ''), [product])
 
   const findHits = useMemo(() => findAllOffsets(bodyText, find), [bodyText, find])
 
@@ -251,9 +229,9 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
           </div>
 
           <div ref={bodyRef} className="min-h-0 overflow-y-auto px-5 py-4">
-            {bodyText ? (
-              <HighlightedDescription
-                text={bodyText}
+            {product ? (
+              <DescriptionLayoutView
+                product={product}
                 queryTokens={tokens}
                 findPhrase={find}
                 activeFindIndex={safeIndex}

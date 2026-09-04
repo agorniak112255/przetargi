@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Product } from '../lib/api'
-import {
-  descriptionProse,
-  findAllOffsets,
-  queryHighlightTokens,
-} from '../lib/descriptionHighlight'
+import { findAllOffsets, queryHighlightTokens } from '../lib/descriptionHighlight'
 import { productDisplayName } from '../lib/productLabel'
-import { HighlightedDescription } from './HighlightedDescription'
+import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 
 type Props = {
   productId: number | null
@@ -16,25 +12,7 @@ type Props = {
 }
 
 function previewBody(product: Product): string {
-  const extra: string[] = []
-  if (product.norms) extra.push(`Normy: ${product.norms}`)
-  const payload = product.enrichment_payload
-  for (const [title, items] of [
-    ['Specyfikacja', payload?.specs],
-    ['Cechy', payload?.features],
-    ['Materiały', payload?.materials],
-    ['Normy', payload?.norms],
-    ['Certyfikaty', payload?.certificates],
-    ['Zastosowanie', payload?.use_cases],
-  ] as const) {
-    if (Array.isArray(items) && items.length > 0) {
-      extra.push(`${title}:\n${items.map((s) => `• ${s}`).join('\n')}`)
-    }
-  }
-  if (product.documents && product.documents.length > 0) {
-    extra.push(`Dokumenty:\n${product.documents.map((d) => `• ${d.title || d.kind || 'PDF'}`).join('\n')}`)
-  }
-  return [descriptionProse(product.description), extra.join('\n\n')].filter(Boolean).join('\n\n')
+  return descriptionSearchText(product)
 }
 
 export function ProductPreviewModal({ productId, query = '', onClose }: Props) {
@@ -232,12 +210,13 @@ export function ProductPreviewModal({ productId, query = '', onClose }: Props) {
           )}
 
           <div ref={bodyRef}>
-            {bodyText ? (
-              <HighlightedDescription
-                text={bodyText}
+            {product ? (
+              <DescriptionLayoutView
+                product={product}
                 queryTokens={tokens}
                 findPhrase={find}
                 activeFindIndex={safeIndex}
+                compact
               />
             ) : (
               !loading && <p className="text-sm text-slate-500">Brak opisu w karcie.</p>

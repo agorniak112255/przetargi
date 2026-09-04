@@ -99,6 +99,90 @@ final class CatalogSlangDictionary
         return array_values(array_unique($out));
     }
 
+    public function familyFor(string $query): ?string
+    {
+        $rewrite = $this->searchRewrite($query);
+
+        return $rewrite['family'] ?? null;
+    }
+
+    /**
+     * Trafienie w żargon: szukaj po notatce i frazach cennika, nie po dosłownym żargonie.
+     *
+     * @return array{needed: string, search_phrases: list<string>, family: string|null}|null
+     */
+    public function searchRewrite(string $query): ?array
+    {
+        $entries = $this->matchingEntries($query);
+        if ($entries === []) {
+            return null;
+        }
+        $phrases = [];
+        $notes = [];
+        $family = null;
+        foreach ($entries as $entry) {
+            foreach ([...$entry['phrases'], ...($entry['keywords'] ?? [])] as $phrase) {
+                $phrase = trim((string) $phrase);
+                if ($phrase !== '') {
+                    $phrases[] = $phrase;
+                }
+            }
+            $note = trim((string) ($entry['note'] ?? ''));
+            if ($note !== '' && ! str_contains($note, '=')) {
+                $notes[] = $note;
+                $phrases[] = $note;
+            }
+            if ($family === null) {
+                $family = self::categoryFamily($entry['category']);
+            }
+        }
+        $phrases = array_values(array_unique($phrases));
+        $needed = $notes[0] ?? ($phrases[0] ?? '');
+        if ($needed === '') {
+            return null;
+        }
+
+        return [
+            'needed' => $needed,
+            'search_phrases' => $phrases,
+            'family' => $family,
+        ];
+    }
+
+    /**
+     * Rdzenie z notatki/fraz — karta bez któregoś z nich nie jest tym żargonem.
+     *
+     * @return list<string>
+     */
+    public function evidenceNeedles(string $query): array
+    {
+        $rewrite = $this->searchRewrite($query);
+        if ($rewrite === null) {
+            return [];
+        }
+        $stop = [
+            'proste', 'ochrona', 'przed', 'oraz', 'dla', 'przy', 'bez', 'jak', 'lub',
+            'typ', 'rodzaj', 'produkt', 'pracy', 'do', 'na', 'od', 'ze', 'za',
+        ];
+        $out = [];
+        foreach ($rewrite['search_phrases'] as $phrase) {
+            foreach (preg_split('/\s+/u', $this->fold($phrase)) ?: [] as $token) {
+                if ($token === '' || mb_strlen($token) < 5 || in_array($token, $stop, true)) {
+                    continue;
+                }
+                if (preg_match(
+                    '/^(rekawic|glove|spodn|kurtk|bluz|czapk|buty|obuwie|ochronn|robocz)/u',
+                    $token
+                ) === 1) {
+                    continue;
+                }
+                $out[] = mb_substr($token, 0, 6);
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
     public function isJargonNorm(string $normalizedToken): bool
     {
         $token = trim($normalizedToken);
@@ -125,7 +209,10 @@ final class CatalogSlangDictionary
             if ($terms === '' || $phrases === '') {
                 continue;
             }
-            $lines[] = $terms.' = '.$phrases;
+            $note = trim((string) ($entry['note'] ?? ''));
+            $lines[] = $note !== ''
+                ? $terms.' → '.$note.' ('.$phrases.')'
+                : $terms.' → '.$phrases;
             if (count($lines) >= 12) {
                 break;
             }
@@ -134,7 +221,7 @@ final class CatalogSlangDictionary
             return '';
         }
 
-        return 'Żargon SIWZ → frazy katalogu (nie szukaj dosłownego żargonu na karcie): '
+        return 'Żargon SIWZ — szukaj po notatce i frazach cennika, nie po żargonie ani po słowach typu uniwersalne: '
             .implode(' | ', $lines).'.';
     }
 
@@ -305,6 +392,23 @@ final class CatalogSlangDictionary
             PpeAssortment::FAMILY_FALL => ['wysokosc', 'ratownictwo'],
             PpeAssortment::FAMILY_KNEE => ['cialo'],
             default => [],
+        };
+    }
+
+    public static function categoryFamily(string $category): ?string
+    {
+        return match ($category) {
+            'rece' => PpeAssortment::FAMILY_GLOVES,
+            'glowa' => PpeAssortment::FAMILY_HEAD,
+            'oczy' => PpeAssortment::FAMILY_EYES,
+            'twarz', 'spawanie' => PpeAssortment::FAMILY_FACE,
+            'sluch' => PpeAssortment::FAMILY_HEARING,
+            'oddech' => PpeAssortment::FAMILY_RESPIRATORY,
+            'odziez', 'chemia', 'higiena', 'ratownictwo' => PpeAssortment::FAMILY_APPAREL,
+            'stopy' => PpeAssortment::FAMILY_FOOTWEAR,
+            'wysokosc' => PpeAssortment::FAMILY_FALL,
+            'cialo' => PpeAssortment::FAMILY_KNEE,
+            default => null,
         };
     }
 

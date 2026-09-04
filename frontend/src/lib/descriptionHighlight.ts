@@ -27,6 +27,10 @@ export function queryHighlightTokens(query: string): string[] {
   return out.sort((a, b) => b.length - a.length)
 }
 
+export function countFindHits(text: string, needle: string): number {
+  return findAllOffsets(text, needle).length
+}
+
 export function findAllOffsets(hay: string, needle: string): Array<[number, number]> {
   const n = needle.trim()
   if (n.length < 2) return []

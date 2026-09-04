@@ -59,7 +59,21 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertStringContainsString('okulary', $eye);
     }
 
-    public function test_every_slang_term_is_a_hint_not_a_hard_card_condition(): void
+    public function test_wampirki_rewrite_uses_note_and_catalog_phrases(): void
+    {
+        $rewrite = $this->dict()->searchRewrite('Rękawice wampirki uniwersalne');
+        $this->assertNotNull($rewrite);
+        $this->assertStringContainsString('dzianinowe powlekane', mb_strtolower($rewrite['needed']));
+        $this->assertStringContainsString('ciecz', mb_strtolower($rewrite['needed']));
+        $hay = mb_strtolower(implode(' ', $rewrite['search_phrases']));
+        $this->assertStringContainsString('rękawice dzianinowe powlekane', $hay);
+        $this->assertSame('gloves', $rewrite['family']);
+        $needles = $this->dict()->evidenceNeedles('Rękawice wampirki uniwersalne');
+        $this->assertNotSame([], $needles);
+        $this->assertFalse(in_array('uniwer', $needles, true));
+    }
+
+    public function test_every_slang_term_is_indexed_as_jargon(): void
     {
         $this->assertTrue($this->dict()->isJargonNorm('wampirki'));
         $this->assertTrue($this->dict()->isJargonNorm('tyvek'));

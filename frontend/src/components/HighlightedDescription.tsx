@@ -41,6 +41,8 @@ type Props = {
   queryTokens: string[]
   findPhrase: string
   activeFindIndex: number
+  findIndexOffset?: number
+  className?: string
 }
 
 export function HighlightedDescription({
@@ -48,20 +50,23 @@ export function HighlightedDescription({
   queryTokens,
   findPhrase,
   activeFindIndex,
+  findIndexOffset = 0,
+  className = 'whitespace-pre-wrap text-[15px] leading-relaxed text-slate-800',
 }: Props) {
   const segs = highlightSegments(text, queryTokens, findPhrase)
 
   return (
-    <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-slate-800">
+    <p className={className}>
       {segs.map((seg, i) => {
         if (seg.kind === 'text') {
           return <span key={i}>{withBoldSpecLabel(seg.text)}</span>
         }
-        const isActive = seg.findIndex === activeFindIndex
+        const findIndex = seg.findIndex == null ? undefined : seg.findIndex + findIndexOffset
+        const isActive = findIndex === activeFindIndex
         return (
           <mark
             key={i}
-            data-find-hit={seg.findIndex}
+            data-find-hit={findIndex}
             className={`${KIND_CLASS[seg.kind]} ${isActive ? 'bg-sky-400 text-sky-950 ring-2 ring-sky-600' : ''}`}
           >
             {seg.text}

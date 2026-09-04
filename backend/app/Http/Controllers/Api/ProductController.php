@@ -11,6 +11,7 @@ use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\NbpExchangeRateService;
 use App\Support\ProductModelFuzzy;
 use Illuminate\Http\JsonResponse;
@@ -21,6 +22,7 @@ class ProductController extends Controller
     public function __construct(
         private readonly NbpExchangeRateService $fx,
         private readonly ProductModelFuzzy $modelFuzzy,
+        private readonly EnrichmentDescriptionTemplateService $descriptionTemplates,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -319,6 +321,7 @@ class ProductController extends Controller
         $payload['price_history_latest_at'] = $latest?->created_at;
         $payload = $this->fx->appendPricePln($payload);
         $payload['presta_export'] = $this->prestaExportPayload($product);
+        $payload['description_layout'] = $this->descriptionTemplates->resolvedForProduct($product);
         $payload['special_prices'] = $product->specialPrices->map(static fn ($row): array => [
             'id' => $row->id,
             'client_id' => $row->client_id,

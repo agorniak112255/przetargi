@@ -5,12 +5,17 @@ declare(strict_types=1);
 namespace App\Services\Presta;
 
 use App\Models\Product;
+use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 
 /**
- * Opis HTML do Presty — ten sam układ co karta produktu w przetargach.
+ * Opis HTML do Presty — układ z szablonu rodziny (albo domyślny systemowy).
  */
 final class PrestaDescriptionHtml
 {
+    public function __construct(
+        private readonly EnrichmentDescriptionTemplateService $templates,
+    ) {}
+
     /** @var array<string, string> */
     private const KATEGORIA_LABELS = [
         'rekawice' => 'rękawice',
@@ -26,14 +31,14 @@ final class PrestaDescriptionHtml
         'inne' => 'inne',
     ];
 
-    /** @var list<array{0: string, 1: string}> */
-    private const LISTS = [
-        ['Specyfikacja', 'specs'],
-        ['Cechy', 'features'],
-        ['Materiały', 'materials'],
-        ['Normy', 'norms'],
-        ['Certyfikaty', 'certificates'],
-        ['Zastosowanie', 'use_cases'],
+    /** @var array<string, string> */
+    private const LIST_KEYS = [
+        'specs' => 'Specyfikacja',
+        'features' => 'Cechy',
+        'materials' => 'Materiały',
+        'norms' => 'Normy',
+        'certificates' => 'Certyfikaty',
+        'use_cases' => 'Zastosowanie',
     ];
 
     public function fromProduct(Product $product): string
@@ -42,31 +47,38 @@ final class PrestaDescriptionHtml
         $rawDescription = (string) ($product->description ?? '');
         $prose = $this->prose($rawDescription);
         $attrPairs = $this->attributePairs(is_array($payload['attributes'] ?? null) ? $payload['attributes'] : []);
-        $sections = [];
-        foreach (self::LISTS as [$title, $key]) {
-            $items = $this->stringList($payload[$key] ?? null);
-            if ($items !== []) {
-                $sections[] = [$title, $items];
+        $sources = $this->stringList($payload['source_urls'] ?? null);
+        $hasLists = false;
+        foreach (array_keys(self::LIST_KEYS) as $key) {
+            if ($this->stringList($payload[$key] ?? null) !== []) {
+                $hasLists = true;
+                break;
             }
         }
-        $sources = $this->stringList($payload['source_urls'] ?? null);
 
-        if ($attrPairs === [] && $sections === [] && $sources === []) {
+        if ($attrPairs === [] && ! $hasLists && $sources === []) {
             return $this->fallbackHtml($rawDescription);
         }
 
         $html = '';
-        if ($prose !== '') {
-            $html .= $this->proseHtml($prose);
-        }
-        if ($attrPairs !== []) {
-            $html .= $this->attributesBox($attrPairs);
-        }
-        foreach ($sections as [$title, $items]) {
-            $html .= $this->listSection($title, $items);
-        }
-        if ($sources !== []) {
-            $html .= $this->sourcesHtml($sources);
+        foreach ($this->exportBlocks($product) as $block) {
+            if (! ($block['visible'] ?? true)) {
+                continue;
+            }
+            $id = (string) ($block['id'] ?? '');
+            $emphasis = (string) ($block['emphasis'] ?? 'none');
+            $chunk = match ($id) {
+                'description' => $prose !== '' ? $this->proseHtml($prose) : '',
+                'attributes' => $attrPairs !== [] ? $this->attributesBox($attrPairs) : '',
+                'sources' => $this->sourcesHtml($sources),
+                default => isset(self::LIST_KEYS[$id])
+                    ? $this->listSection(self::LIST_KEYS[$id], $this->stringList($payload[$id] ?? null))
+                    : '',
+            };
+            if ($chunk === '') {
+                continue;
+            }
+            $html .= $this->emphasize($chunk, $emphasis);
         }
 
         return $html !== '' ? $html : '<p></p>';
@@ -172,10 +184,35 @@ final class PrestaDescriptionHtml
     }
 
     /**
+     * @return list<array{id: string, visible: bool, emphasis: string}>
+     */
+    private function exportBlocks(Product $product): array
+    {
+        return $this->templates->resolvedForProduct($product)['export'];
+    }
+
+    private function emphasize(string $html, string $emphasis): string
+    {
+        return match ($emphasis) {
+            'highlight' => '<div style="background:#fef3c7;border:1px solid #fcd34d;padding:8px 10px;margin:8px 0">'
+                .$html.'</div>',
+            'accent' => '<div style="background:#ede9fe;border:1px solid #c4b5fd;padding:8px 10px;margin:8px 0">'
+                .$html.'</div>',
+            'muted' => '<div style="opacity:.78">'.$html.'</div>',
+            'strong' => '<div style="border-left:4px solid #4f46e5;padding:0 0 0 10px;margin:8px 0">'
+                .$html.'</div>',
+            default => $html,
+        };
+    }
+
+    /**
      * @param  list<string>  $items
      */
     private function listSection(string $title, array $items): string
     {
+        if ($items === []) {
+            return '';
+        }
         $lis = '';
         foreach ($items as $item) {
             $lis .= '<li style="margin:0 0 4px;font-size:13px">'.$this->e($item).'</li>';

@@ -82,6 +82,19 @@ export type ProductImage = {
   sort_order: number
 }
 
+export type DescriptionLayoutBlock = {
+  id: string
+  visible: boolean
+  emphasis: 'none' | 'highlight' | 'accent' | 'muted' | 'strong' | string
+}
+
+export type DescriptionLayoutResolved = {
+  kategoria_bhp: string
+  label: string
+  card: DescriptionLayoutBlock[]
+  export: DescriptionLayoutBlock[]
+}
+
 export type ProductDocument = {
   id: number
   url: string
@@ -144,6 +157,7 @@ export type Product = {
       poziomy_en388?: string | null
     } | null
   } | null
+  description_layout?: DescriptionLayoutResolved | null
   images?: ProductImage[]
   images_count?: number
   documents?: ProductDocument[]

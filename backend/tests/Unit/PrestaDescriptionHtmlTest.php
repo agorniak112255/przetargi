@@ -44,6 +44,10 @@ final class PrestaDescriptionHtmlTest extends TestCase
         $this->assertStringContainsString('href="https://example.com/kcl-camapren"', $html);
         $this->assertStringNotContainsString('ukryte w opisie', $html);
         $this->assertStringContainsString('Camapren 720 z polichloroprenu', $html);
+        $this->assertLessThan(
+            strpos($html, 'Cechy') ?: PHP_INT_MAX,
+            strpos($html, 'Specyfikacja') ?: PHP_INT_MAX
+        );
     }
 
     public function test_plain_description_without_payload_stays_a_paragraph(): void
@@ -99,6 +103,6 @@ final class PrestaDescriptionHtmlTest extends TestCase
 
     private function html(): PrestaDescriptionHtml
     {
-        return new PrestaDescriptionHtml;
+        return $this->app->make(PrestaDescriptionHtml::class);
     }
 }

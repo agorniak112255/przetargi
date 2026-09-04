@@ -359,7 +359,9 @@ final class ProductIndexApiTest extends TestCase
 
         $this->getJson('/api/products/'.$product->id)
             ->assertOk()
-            ->assertJsonPath('shop_source_url', 'https://sklep.example.com/bez-protokolu');
+            ->assertJsonPath('shop_source_url', 'https://sklep.example.com/bez-protokolu')
+            ->assertJsonPath('description_layout.kategoria_bhp', 'rekawice')
+            ->assertJsonPath('description_layout.card.0.id', 'description');
 
         $this->patchJson('/api/products/'.$product->id.'/shop-source', [
             'shop_source_url' => null,

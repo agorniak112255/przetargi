@@ -214,7 +214,7 @@ final class ProductAiSearchService
                 $retrieveIntent,
             );
             $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
-            $ranked = $this->filterRankedCompatible($catalogQ, $ranked);
+            $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $clean[$i]);
             if ($ranked === []) {
                 $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
             } else {
@@ -223,7 +223,7 @@ final class ProductAiSearchService
             $ranked = $this->sortRankedByMatchPercent($ranked);
             $done[$i] = $this->searchResult(
                 $clean[$i],
-                $retrieveIntent,
+                $this->applySlangIntent($clean[$i], $retrieveIntent),
                 $ranked,
                 $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
                 $withExternalHint,
@@ -248,7 +248,7 @@ final class ProductAiSearchService
      */
     private function prepareSearch(string $query, array $intent, int $limit): array
     {
-        $intent = $this->normalizeIntent($intent);
+        $intent = $this->applySlangIntent($query, $this->normalizeIntent($intent));
         $searchIntent = $this->intentForRetrieval($intent);
         $modelQuery = $this->intentModelQuery($query, $searchIntent);
         $candidates = $this->keepCompatible(
@@ -561,7 +561,7 @@ final class ProductAiSearchService
         );
         $rankedIntent = $this->withCatalogAliases($rankedIntent, $query);
         $catalogQ = $this->catalogSearchQuery($query, $intent);
-        $ranked = $this->filterRankedCompatible($catalogQ, $ranked);
+        $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $query);
         $useCatalog = $this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent);
         $deferCatalogMerge = $task === AiTask::TenderMatch;
         if (! $deferCatalogMerge && $useCatalog && count($ranked) < $limit) {
@@ -576,7 +576,7 @@ final class ProductAiSearchService
         $emptyNote = $rankFailed
             ? 'Nie udało się ocenić kart przez model. Spróbuj ponownie albo użyj zwykłego wyszukiwania.'
             : 'Model nie znalazł pasującego produktu w katalogu.';
-        $resultIntent = $this->mergeRetrieveIntent($rankedIntent, $intent);
+        $resultIntent = $this->applySlangIntent($query, $this->mergeRetrieveIntent($rankedIntent, $intent));
         $result = $this->searchResult(
             $query,
             $resultIntent,
@@ -805,7 +805,7 @@ final class ProductAiSearchService
                 $retrieveIntent,
             );
             $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
-            $ranked = $this->filterRankedCompatible($catalogQ, $ranked);
+            $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $clean[$i]);
             if ($ranked === []) {
                 $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
             } else {
@@ -814,7 +814,7 @@ final class ProductAiSearchService
             $ranked = $this->sortRankedByMatchPercent($ranked);
             $done[$i] = $this->searchResult(
                 $clean[$i],
-                $retrieveIntent,
+                $this->applySlangIntent($clean[$i], $retrieveIntent),
                 $ranked,
                 $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
                 $withExternalHint,
@@ -934,13 +934,16 @@ final class ProductAiSearchService
     private function intentForSearch(string $query, AiTask $task): array
     {
         if ($task === AiTask::TenderMatch) {
-            return $this->normalizeIntent($this->localIntent($query));
+            return $this->applySlangIntent($query, $this->normalizeIntent($this->localIntent($query)));
         }
         if (! $this->needsStructuredIntent($query)) {
-            return $this->normalizeIntent($this->localIntent($query));
+            return $this->applySlangIntent($query, $this->normalizeIntent($this->localIntent($query)));
         }
 
-        return $this->normalizeIntent($this->understandRequirement($query, $task));
+        return $this->applySlangIntent(
+            $query,
+            $this->normalizeIntent($this->understandRequirement($query, $task))
+        );
     }
 
     /**
@@ -955,7 +958,7 @@ final class ProductAiSearchService
             if ($task !== AiTask::TenderMatch && $this->needsStructuredIntent($query)) {
                 $need[] = $i;
             } else {
-                $intents[$i] = $this->normalizeIntent($this->localIntent($query));
+                $intents[$i] = $this->applySlangIntent($query, $this->normalizeIntent($this->localIntent($query)));
             }
         }
         if ($need === []) {
@@ -969,9 +972,12 @@ final class ProductAiSearchService
         $raws = $this->llm->chatJsonMany($messages, 900, $task, $maxConcurrent);
         foreach ($need as $pos => $i) {
             $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
-            $intents[$i] = $raw === []
-                ? $this->normalizeIntent($this->localIntent($queries[$i]))
-                : $this->normalizeIntent($this->withCatalogAliases($this->parseIntent($raw, $queries[$i]), $queries[$i]));
+            $intents[$i] = $this->applySlangIntent(
+                $queries[$i],
+                $raw === []
+                    ? $this->normalizeIntent($this->localIntent($queries[$i]))
+                    : $this->normalizeIntent($this->withCatalogAliases($this->parseIntent($raw, $queries[$i]), $queries[$i]))
+            );
         }
 
         return $intents;
@@ -1061,6 +1067,58 @@ final class ProductAiSearchService
     }
 
     /** @param array<string, mixed> $intent */
+    /**
+     * @param  array{needed: string, search_phrases: list<string>, constraints: list<string>}  $intent
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
+     */
+    /** @return array{needed: string, search_phrases: list<string>, family: string|null}|null */
+    private function slangRewriteFor(string $query): ?array
+    {
+        if ($this->assortment->isUnderHelmetLiner($query)) {
+            return null;
+        }
+
+        return $this->catalogSlang->searchRewrite($query);
+    }
+
+    private function applySlangIntent(string $query, array $intent): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        $slang = $this->slangRewriteFor($query);
+        if ($slang === null) {
+            return $intent;
+        }
+        $intent['needed'] = $slang['needed'];
+        $intent['search_phrases'] = $this->slangSearchPhrases($slang, $query);
+
+        return $intent;
+    }
+
+    /**
+     * @param  array{needed: string, search_phrases: list<string>, family: string|null}  $slang
+     * @return list<string>
+     */
+    private function slangSearchPhrases(array $slang, string $query): array
+    {
+        $extra = [];
+        foreach ($this->fallbackPhrases($query) as $token) {
+            $norm = $this->lexicalNormalize($token);
+            if (
+                $norm === ''
+                || $this->isNonTechnicalToken($norm)
+                || $this->isGenericAssortmentToken($norm)
+            ) {
+                continue;
+            }
+            $extra[] = $token;
+        }
+
+        return array_values(array_unique(array_filter([
+            ...$slang['search_phrases'],
+            ...$extra,
+        ])));
+    }
+
     private function catalogSearchQuery(string $query, array $intent): string
     {
         $intent = $this->normalizeIntent($intent);
@@ -1094,7 +1152,7 @@ final class ProductAiSearchService
      * @param  list<array<string, mixed>>  $ranked
      * @return list<array<string, mixed>>
      */
-    private function filterRankedCompatible(string $requirement, array $ranked): array
+    private function filterRankedCompatible(string $requirement, array $ranked, ?string $slangQuery = null): array
     {
         if ($ranked === []) {
             return [];
@@ -1115,6 +1173,9 @@ final class ProductAiSearchService
                 continue;
             }
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
+                continue;
+            }
+            if (! $this->matchesSlangEvidence($slangQuery ?? $requirement, $product)) {
                 continue;
             }
             $out[] = $row;
@@ -1143,6 +1204,7 @@ final class ProductAiSearchService
         $products = $this->withResponseRelations(
             $candidates
                 ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
+                    && $this->matchesSlangEvidence($query, $p)
                     && $this->filterType->covers($requirement, $this->filterHaystack($p)))
                 ->sortByDesc(fn (Product $p): int => $this->articleTypeScore($query, $p))
                 ->take(max(1, min(80, $limit)))
@@ -1156,7 +1218,10 @@ final class ProductAiSearchService
             }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(86, max(55, 48 + $this->articleTypeScore($query, $product)));
-            $row['ai_match_reason'] = 'Ten sam rodzaj w katalogu (np. czapka robocza / z daszkiem).';
+            $slang = $this->slangRewriteFor($query);
+            $row['ai_match_reason'] = $slang !== null
+                ? 'Żargon SIWZ → '.$slang['needed']
+                : 'Ten sam rodzaj w katalogu (np. czapka robocza / z daszkiem).';
             $out[] = $row;
         }
 
@@ -1586,8 +1651,7 @@ final class ProductAiSearchService
      */
     private function retrieveCandidates(string $query, array $intent, int $limit): Collection
     {
-        $intent = $this->normalizeIntent($intent);
-        $intent = $this->intentForRetrieval($intent);
+        $intent = $this->applySlangIntent($query, $this->intentForRetrieval($this->normalizeIntent($intent)));
         $modelQuery = $this->intentModelQuery($query, $intent);
         $searchText = $intent['needed'] !== '' ? $intent['needed'] : $query;
         $requirement = $this->assortmentText($query, $intent['needed']);
@@ -1616,7 +1680,7 @@ final class ProductAiSearchService
         // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
         // bez trafienia we frazę, tylko niżej. Wcześniej wymagał tego skan całego katalogu
         // po stronie PHP; teraz warunek idzie do WHERE.
-        $family = $this->assortment->family($requirement);
+        $family = $this->searchFamily($query, $intent['needed']);
         $rankings = [
             'priority' => $priority->pluck('id')->map(intval(...))->all(),
             'text' => $this->textSearch->search($intent['search_phrases'], $family, self::TEXT_POOL),
@@ -1676,6 +1740,42 @@ final class ProductAiSearchService
         return $needed.' '.$query;
     }
 
+    private function searchFamily(string $query, ?string $needed): ?string
+    {
+        $family = $this->assortment->family($this->assortmentText($query, $needed));
+        if ($family !== null) {
+            return $family;
+        }
+
+        $slang = $this->slangRewriteFor($query);
+
+        return $slang['family'] ?? null;
+    }
+
+    private function matchesSlangEvidence(string $query, Product $product): bool
+    {
+        $needles = $this->slangRewriteFor($query) === null
+            ? []
+            : $this->catalogSlang->evidenceNeedles($query);
+        if ($needles === []) {
+            return true;
+        }
+        $hay = $this->lexicalNormalize(implode(' ', [
+            (string) $product->name,
+            (string) $product->sku,
+            (string) ($product->category ?? ''),
+            (string) ($product->description ?? ''),
+            (string) ($product->search_blob ?? ''),
+        ]));
+        foreach ($needles as $needle) {
+            if ($needle !== '' && str_contains($hay, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * @param  list<int>  $ids
      * @return Collection<int, Product>
@@ -1705,8 +1805,10 @@ final class ProductAiSearchService
     private function keepCompatible(string $query, Collection $products): Collection
     {
         return $products
-            ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($query, $p)
-                || $this->modelFuzzy->matches($query, $p))
+            ->filter(fn (Product $p): bool => (
+                $this->assortment->compatibleProduct($query, $p)
+                || $this->modelFuzzy->matches($query, $p)
+            ) && $this->matchesSlangEvidence($query, $p))
             ->values();
     }
 
@@ -1751,7 +1853,11 @@ final class ProductAiSearchService
             $name.' '.($product->description ?? '').' '.($product->norms ?? '')
         );
         $score = 10;
-        foreach ($this->fallbackPhrases($query) as $token) {
+        $slang = $this->slangRewriteFor($query);
+        $tokens = $slang !== null
+            ? $this->fallbackPhrases(implode(' ', $slang['search_phrases']))
+            : $this->fallbackPhrases($query);
+        foreach ($tokens as $token) {
             $t = $this->lexicalNormalize($token);
             if ($t === '' || mb_strlen($t) < 4) {
                 continue;
@@ -2555,6 +2661,9 @@ final class ProductAiSearchService
                 continue;
             }
             if (! $this->filterType->covers($requirement, $this->filterHaystack($product))) {
+                continue;
+            }
+            if (! $this->matchesSlangEvidence($query, $product)) {
                 continue;
             }
             $row = $this->productToRow($product);

@@ -10,7 +10,9 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\User;
+use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\Presta\PrestaExportGateway;
+use App\Support\EnrichmentDescriptionLayouts;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -171,6 +173,40 @@ final class PrestaExportApiTest extends TestCase
         $this->assertStringContainsString('Specyfikacja', $html);
         $this->assertStringContainsString('wysoka elastyczność', $html);
         $this->assertStringNotContainsString('Specyfikacja', (string) $this->presta->created[0]['description_short']);
+    }
+
+    public function test_export_html_follows_family_export_layout(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $export = EnrichmentDescriptionLayouts::defaultBlocks('export');
+        foreach ($export as $i => $block) {
+            if ($block['id'] === 'specs') {
+                $export[$i]['visible'] = false;
+            }
+            if ($block['id'] === 'features') {
+                $export[$i]['emphasis'] = 'highlight';
+            }
+        }
+        app(EnrichmentDescriptionTemplateService::class)->update('rekawice', null, [
+            'inherit_export' => false,
+            'export' => $export,
+        ]);
+        $product = $this->makeProduct([
+            'sku' => '1024',
+            'name' => 'Rękawice montażowe 1024',
+            'description' => 'Rękawice uniwersalne do montażu.',
+            'enrichment_payload' => [
+                'attributes' => ['kategoria_bhp' => 'rekawice'],
+                'specs' => ['SKU: 1024'],
+                'features' => ['dobry chwyt'],
+            ],
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')->assertOk();
+        $html = (string) $this->presta->created[0]['description'];
+        $this->assertStringNotContainsString('Specyfikacja', $html);
+        $this->assertStringContainsString('dobry chwyt', $html);
+        $this->assertStringContainsString('#fef3c7', $html);
     }
 
     public function test_update_sends_images_when_presta_has_none(): void

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
 import { CrossRefPanel } from '../components/CrossRefPanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import {
@@ -35,16 +36,6 @@ const TRACE_LABEL: Record<string, string> = {
   page: 'strona',
   desc: 'opis',
   fail: 'koniec',
-}
-
-/** Opis tekstowy bez list — listy są osobno z enrichment_payload. */
-function descriptionProse(text: string | null | undefined): string {
-  if (!text) return ''
-  const cut = text.search(/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/)
-  let body = cut >= 0 ? text.slice(0, cut).trim() : text.trim()
-  // LLM często zwraca „1) … 2) …” w jednym akapicie — każdy punkt w osobnej linii
-  body = body.replace(/([^\n])\s+(\d{1,2})\)\s+/g, '$1\n$2) ')
-  return body
 }
 
 export function ProductDetail() {
@@ -261,7 +252,6 @@ export function ProductDetail() {
   if (!p) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
   const status = p.enrichment_status ?? 'none'
-  const prose = descriptionProse(p.description)
   const currency = p.currency?.trim() || 'PLN'
 
   return (
@@ -582,99 +572,7 @@ export function ProductDetail() {
           ) : p.enrichment_status === 'done' ? (
             <p className="mb-3 text-xs text-amber-700">Brak zapisanego zdjęcia — użyj „Pobierz ponownie”.</p>
           ) : null}
-          {prose && (
-            <p className="mb-3 whitespace-pre-wrap text-sm text-slate-700">{prose}</p>
-          )}
-          {p.enrichment_payload?.attributes && (
-            <div className="mb-3 rounded border border-slate-100 bg-slate-50 px-3 py-2">
-              <p className="mb-1 text-xs font-semibold text-slate-700">Atrybuty BHP</p>
-              <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-600 sm:grid-cols-3">
-                {(
-                  [
-                    ['Kategoria', p.enrichment_payload.attributes.kategoria_bhp],
-                    ['Materiał', p.enrichment_payload.attributes.material],
-                    ['Klasa', p.enrichment_payload.attributes.klasa_ochrony],
-                    ['EN 388', p.enrichment_payload.attributes.poziomy_en388],
-                    ['Rozmiar', p.enrichment_payload.attributes.rozmiar],
-                    ['Kod', p.enrichment_payload.attributes.kod_producenta],
-                  ] as const
-                ).map(([label, val]) =>
-                  val ? (
-                    <div key={label}>
-                      <dt className="text-slate-400">{label}</dt>
-                      <dd className="font-medium text-slate-800">{val}</dd>
-                    </div>
-                  ) : null,
-                )}
-              </dl>
-              {(p.enrichment_payload.attributes.normy_en?.length ?? 0) > 0 && (
-                <p className="mt-1 text-[11px] text-slate-600">
-                  Normy: {p.enrichment_payload.attributes.normy_en!.join(', ')}
-                </p>
-              )}
-            </div>
-          )}
-          {[
-            ['Specyfikacja', p.enrichment_payload?.specs],
-            ['Cechy', p.enrichment_payload?.features],
-            ['Materiały', p.enrichment_payload?.materials],
-            ['Normy', p.enrichment_payload?.norms],
-            ['Certyfikaty', p.enrichment_payload?.certificates],
-            ['Zastosowanie', p.enrichment_payload?.use_cases],
-          ].map(([title, items]) =>
-            Array.isArray(items) && items.length > 0 ? (
-              <div key={String(title)} className="mb-3">
-                <p className="mb-1 text-xs font-semibold text-slate-700">{title}</p>
-                <ul className="list-disc pl-5 text-xs text-slate-600">
-                  {items.map((f) => (
-                    <li key={f}>{f}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null,
-          )}
-          {p.documents && p.documents.length > 0 && (
-            <div className="mb-3">
-              <p className="mb-1 text-xs font-semibold text-slate-700">Pliki PDF</p>
-              <ul className="space-y-1 text-xs text-slate-600">
-                {p.documents.map((doc) => (
-                  <li key={doc.id}>
-                    <a
-                      href={doc.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-blue-600 hover:underline"
-                    >
-                      {doc.title || 'Dokument.pdf'}
-                    </a>
-                    <span className="ml-1 text-slate-400">
-                      (
-                      {doc.kind === 'certificate'
-                        ? 'certyfikat'
-                        : doc.kind === 'datasheet'
-                          ? 'karta'
-                          : 'PDF'}
-                      {doc.size_bytes ? ` · ${Math.max(1, Math.round(doc.size_bytes / 1024))} KB` : ''}
-                      )
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {p.enrichment_payload?.source_urls && p.enrichment_payload.source_urls.length > 0 && (
-            <p className="text-[11px] text-slate-400">
-              Źródła:{' '}
-              {p.enrichment_payload.source_urls.slice(0, 3).map((u, i) => (
-                <span key={u}>
-                  {i > 0 ? ' · ' : ''}
-                  <a className="text-blue-600 hover:underline" href={u} target="_blank" rel="noreferrer">
-                    {u.replace(/^https?:\/\//, '').slice(0, 40)}
-                  </a>
-                </span>
-              ))}
-            </p>
-          )}
+          <DescriptionLayoutView product={p} compact />
         </div>
       )}
 

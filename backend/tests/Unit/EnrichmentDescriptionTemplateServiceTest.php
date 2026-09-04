@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use App\Models\Product;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
+use App\Support\EnrichmentDescriptionLayouts;
 use App\Support\EnrichmentDescriptionTemplates;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -86,5 +87,36 @@ final class EnrichmentDescriptionTemplateServiceTest extends TestCase
         ]);
 
         $this->assertSame('drogi_oddechowe', app(EnrichmentDescriptionTemplateService::class)->kategoriaForProduct($product));
+    }
+
+    public function test_glove_product_inherits_default_layout_until_customized(): void
+    {
+        $product = Product::query()->create([
+            'sku' => '1024',
+            'name' => 'Rękawice montażowe',
+            'manufacturer' => 'Urgent',
+            'catalog_price_net' => 1,
+            'purchase_price' => 1,
+            'stock' => 1,
+        ]);
+        $service = app(EnrichmentDescriptionTemplateService::class);
+        $resolved = $service->resolvedForProduct($product);
+        $this->assertSame('rekawice', $resolved['kategoria_bhp']);
+        $this->assertSame('description', $resolved['card'][0]['id']);
+        $this->assertSame('attributes', $resolved['card'][1]['id']);
+
+        $card = EnrichmentDescriptionLayouts::defaultBlocks('card');
+        $card[0] = ['id' => 'norms', 'visible' => true, 'emphasis' => 'highlight'];
+        $card[5] = ['id' => 'description', 'visible' => true, 'emphasis' => 'none'];
+        $service->update('rekawice', null, [
+            'inherit_card' => false,
+            'inherit_export' => true,
+            'card' => $card,
+        ]);
+
+        $again = $service->resolvedForProduct($product);
+        $this->assertSame('norms', $again['card'][0]['id']);
+        $this->assertSame('highlight', $again['card'][0]['emphasis']);
+        $this->assertSame('description', $again['export'][0]['id']);
     }
 }

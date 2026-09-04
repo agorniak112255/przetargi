@@ -6,6 +6,7 @@ namespace App\Services\Enrichment;
 
 use App\Models\EnrichmentDescriptionTemplate;
 use App\Models\Product;
+use App\Support\EnrichmentDescriptionLayouts;
 use App\Support\EnrichmentDescriptionTemplates;
 use App\Support\PpeAssortment;
 use Illuminate\Support\Facades\Schema;
@@ -27,6 +28,10 @@ final class EnrichmentDescriptionTemplateService
      *     default_instructions: string,
      *     is_customized: bool,
      *     is_fallback: bool,
+     *     is_visual_default: bool,
+     *     layout: array<string, mixed>,
+     *     resolved_layout: array{card: list<array<string, mixed>>, export: list<array<string, mixed>>},
+     *     is_layout_customized: bool,
      *     updated_at: ?string
      * }>
      */
@@ -42,19 +47,15 @@ final class EnrichmentDescriptionTemplateService
             ->keyBy('kategoria_bhp');
 
         $out = [];
-        foreach (EnrichmentDescriptionTemplates::keys() as $key) {
-            $default = EnrichmentDescriptionTemplates::defaultInstructions($key);
-            $row = $rows->get($key);
-            $instructions = is_string($row?->instructions) && trim((string) $row->instructions) !== ''
-                ? (string) $row->instructions
-                : $default;
-            $out[] = $this->present($key, $instructions, $default, $row?->updated_at?->toIso8601String());
+        foreach ($this->listKeys() as $key) {
+            $out[] = $this->presentFromRow($key, $rows->get($key), $rows);
         }
 
         return $out;
     }
 
     /**
+     * @param  array<string, mixed>|null  $layout
      * @return array{
      *     kategoria_bhp: string,
      *     label: string,
@@ -62,21 +63,48 @@ final class EnrichmentDescriptionTemplateService
      *     default_instructions: string,
      *     is_customized: bool,
      *     is_fallback: bool,
+     *     is_visual_default: bool,
+     *     layout: array<string, mixed>,
+     *     resolved_layout: array{card: list<array<string, mixed>>, export: list<array<string, mixed>>},
+     *     is_layout_customized: bool,
      *     updated_at: ?string
      * }
      */
-    public function update(string $kategoria, string $instructions): array
+    public function update(string $kategoria, ?string $instructions = null, ?array $layout = null): array
     {
         $key = $this->requireKey($kategoria);
         if (! $this->tableReady()) {
             throw new RuntimeException('Tabela szablonów nie istnieje — uruchom migracje na serwerze.');
         }
         $this->ensureSeeded();
-        $text = trim($instructions);
-        EnrichmentDescriptionTemplate::query()->updateOrCreate(
-            ['kategoria_bhp' => $key],
-            ['instructions' => $text]
-        );
+        $row = EnrichmentDescriptionTemplate::query()->firstOrNew(['kategoria_bhp' => $key]);
+        $isDefault = $key === EnrichmentDescriptionLayouts::DEFAULT_KEY;
+        if ($instructions !== null) {
+            $text = trim($instructions);
+            if (! $isDefault && $text === '') {
+                throw new InvalidArgumentException('Instrukcje szablonu nie mogą być puste.');
+            }
+            if ($text !== '') {
+                $row->instructions = $text;
+            }
+        }
+        if ($row->instructions === null || trim((string) $row->instructions) === '') {
+            $row->instructions = $isDefault
+                ? 'Układ wizualny karty i eksportu — nie jest wysyłany do modelu.'
+                : EnrichmentDescriptionTemplates::defaultInstructions($key);
+        }
+        if ($this->layoutColumnReady()) {
+            if ($layout !== null) {
+                $row->layout = EnrichmentDescriptionLayouts::normalize($layout, $isDefault);
+            } elseif (! is_array($row->layout)) {
+                $row->layout = $isDefault
+                    ? EnrichmentDescriptionLayouts::defaultStoredLayout()
+                    : EnrichmentDescriptionLayouts::defaultLayout(true);
+            }
+        } elseif ($layout !== null) {
+            throw new RuntimeException('Kolumna układu nie istnieje — uruchom migracje na serwerze.');
+        }
+        $row->save();
 
         return $this->one($key);
     }
@@ -94,7 +122,32 @@ final class EnrichmentDescriptionTemplateService
      */
     public function restore(string $kategoria): array
     {
-        return $this->update($kategoria, EnrichmentDescriptionTemplates::defaultInstructions($this->requireKey($kategoria)));
+        $key = $this->requireKey($kategoria);
+        $isDefault = $key === EnrichmentDescriptionLayouts::DEFAULT_KEY;
+        $instructions = $isDefault
+            ? 'Układ wizualny karty i eksportu — nie jest wysyłany do modelu.'
+            : EnrichmentDescriptionTemplates::defaultInstructions($key);
+        $layout = $isDefault
+            ? EnrichmentDescriptionLayouts::defaultStoredLayout()
+            : EnrichmentDescriptionLayouts::defaultLayout(true);
+
+        return $this->update($kategoria, $instructions, $layout);
+    }
+
+    /**
+     * @return array{kategoria_bhp: string, label: string, card: list<array<string, mixed>>, export: list<array<string, mixed>>}
+     */
+    public function resolvedForProduct(Product $product): array
+    {
+        $key = $this->kategoriaForProduct($product);
+        $resolved = $this->resolvedLayout($key);
+
+        return [
+            'kategoria_bhp' => $key,
+            'label' => EnrichmentDescriptionTemplates::label($key),
+            'card' => $resolved['card'],
+            'export' => $resolved['export'],
+        ];
     }
 
     public function kategoriaForProduct(Product $product): string
@@ -135,14 +188,23 @@ final class EnrichmentDescriptionTemplateService
         }
 
         $existing = EnrichmentDescriptionTemplate::query()->pluck('kategoria_bhp')->all();
-        foreach (EnrichmentDescriptionTemplates::keys() as $key) {
+        foreach ($this->listKeys() as $key) {
             if (in_array($key, $existing, true)) {
                 continue;
             }
-            EnrichmentDescriptionTemplate::query()->create([
+            $isDefault = $key === EnrichmentDescriptionLayouts::DEFAULT_KEY;
+            $payload = [
                 'kategoria_bhp' => $key,
-                'instructions' => EnrichmentDescriptionTemplates::defaultInstructions($key),
-            ]);
+                'instructions' => $isDefault
+                    ? 'Układ wizualny karty i eksportu — nie jest wysyłany do modelu.'
+                    : EnrichmentDescriptionTemplates::defaultInstructions($key),
+            ];
+            if ($this->layoutColumnReady()) {
+                $payload['layout'] = $isDefault
+                    ? EnrichmentDescriptionLayouts::defaultStoredLayout()
+                    : EnrichmentDescriptionLayouts::defaultLayout(true);
+            }
+            EnrichmentDescriptionTemplate::query()->create($payload);
         }
     }
 
@@ -168,6 +230,10 @@ final class EnrichmentDescriptionTemplateService
      *     default_instructions: string,
      *     is_customized: bool,
      *     is_fallback: bool,
+     *     is_visual_default: bool,
+     *     layout: array<string, mixed>,
+     *     resolved_layout: array{card: list<array<string, mixed>>, export: list<array<string, mixed>>},
+     *     is_layout_customized: bool,
      *     updated_at: ?string
      * }
      */
@@ -190,21 +256,25 @@ final class EnrichmentDescriptionTemplateService
      *     default_instructions: string,
      *     is_customized: bool,
      *     is_fallback: bool,
+     *     is_visual_default: bool,
+     *     layout: array<string, mixed>,
+     *     resolved_layout: array{card: list<array<string, mixed>>, export: list<array<string, mixed>>},
+     *     is_layout_customized: bool,
      *     updated_at: ?string
      * }>
      */
     private function defaultsAsList(): array
     {
         $out = [];
-        foreach (EnrichmentDescriptionTemplates::keys() as $key) {
-            $default = EnrichmentDescriptionTemplates::defaultInstructions($key);
-            $out[] = $this->present($key, $default, $default, null);
+        foreach ($this->listKeys() as $key) {
+            $out[] = $this->presentFromRow($key, null, collect());
         }
 
         return $out;
     }
 
     /**
+     * @param  \Illuminate\Support\Collection<string, EnrichmentDescriptionTemplate>|mixed  $rows
      * @return array{
      *     kategoria_bhp: string,
      *     label: string,
@@ -212,20 +282,104 @@ final class EnrichmentDescriptionTemplateService
      *     default_instructions: string,
      *     is_customized: bool,
      *     is_fallback: bool,
+     *     is_visual_default: bool,
+     *     layout: array<string, mixed>,
+     *     resolved_layout: array{card: list<array<string, mixed>>, export: list<array<string, mixed>>},
+     *     is_layout_customized: bool,
      *     updated_at: ?string
      * }
      */
-    private function present(string $key, string $instructions, string $default, ?string $updatedAt): array
+    private function presentFromRow(string $key, mixed $row, mixed $rows): array
     {
+        $isDefault = $key === EnrichmentDescriptionLayouts::DEFAULT_KEY;
+        $defaultInstructions = $isDefault
+            ? 'Układ wizualny karty i eksportu — nie jest wysyłany do modelu.'
+            : EnrichmentDescriptionTemplates::defaultInstructions($key);
+        $instructions = is_string($row?->instructions ?? null) && trim((string) $row->instructions) !== ''
+            ? (string) $row->instructions
+            : $defaultInstructions;
+        $stored = EnrichmentDescriptionLayouts::normalize(
+            $this->layoutColumnReady() ? ($row?->layout ?? null) : null,
+            $isDefault
+        );
+        $fallback = $isDefault
+            ? EnrichmentDescriptionLayouts::defaultStoredLayout()
+            : $this->storedDefaultLayout($rows);
+        $resolved = EnrichmentDescriptionLayouts::resolve($stored, $fallback);
+
         return [
             'kategoria_bhp' => $key,
-            'label' => EnrichmentDescriptionTemplates::label($key),
+            'label' => $isDefault ? 'Domyślny układ' : EnrichmentDescriptionTemplates::label($key),
             'instructions' => $instructions,
-            'default_instructions' => $default,
-            'is_customized' => trim($instructions) !== trim($default),
+            'default_instructions' => $defaultInstructions,
+            'is_customized' => ! $isDefault && trim($instructions) !== trim($defaultInstructions),
             'is_fallback' => $key === EnrichmentDescriptionTemplates::FALLBACK,
-            'updated_at' => $updatedAt,
+            'is_visual_default' => $isDefault,
+            'layout' => $stored,
+            'resolved_layout' => $resolved,
+            'is_layout_customized' => $isDefault
+                ? $stored['card'] !== EnrichmentDescriptionLayouts::defaultBlocks('card')
+                    || $stored['export'] !== EnrichmentDescriptionLayouts::defaultBlocks('export')
+                : ! $stored['inherit_card'] || ! $stored['inherit_export'],
+            'updated_at' => $row?->updated_at?->toIso8601String(),
         ];
+    }
+
+    /**
+     * @return array{card: list<array<string, mixed>>, export: list<array<string, mixed>>}
+     */
+    private function resolvedLayout(string $key): array
+    {
+        $fallback = EnrichmentDescriptionLayouts::defaultStoredLayout();
+        if ($this->layoutColumnReady()) {
+            $this->ensureSeeded();
+            $defaultRow = EnrichmentDescriptionTemplate::query()
+                ->where('kategoria_bhp', EnrichmentDescriptionLayouts::DEFAULT_KEY)
+                ->first();
+            $fallback = EnrichmentDescriptionLayouts::normalize($defaultRow?->layout ?? null, true);
+            if ($key === EnrichmentDescriptionLayouts::DEFAULT_KEY) {
+                return [
+                    'card' => $fallback['card'],
+                    'export' => $fallback['export'],
+                ];
+            }
+            $row = EnrichmentDescriptionTemplate::query()->where('kategoria_bhp', $key)->first();
+            $stored = EnrichmentDescriptionLayouts::normalize($row?->layout ?? null, false);
+
+            return EnrichmentDescriptionLayouts::resolve($stored, $fallback);
+        }
+
+        return [
+            'card' => $fallback['card'],
+            'export' => $fallback['export'],
+        ];
+    }
+
+    /**
+     * @param  mixed  $rows
+     * @return array{inherit_card: bool, inherit_export: bool, card: list<array<string, mixed>>, export: list<array<string, mixed>>}
+     */
+    private function storedDefaultLayout(mixed $rows): array
+    {
+        if (! $this->layoutColumnReady()) {
+            return EnrichmentDescriptionLayouts::defaultStoredLayout();
+        }
+        $row = is_object($rows) && method_exists($rows, 'get')
+            ? $rows->get(EnrichmentDescriptionLayouts::DEFAULT_KEY)
+            : null;
+
+        return EnrichmentDescriptionLayouts::normalize($row?->layout ?? null, true);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function listKeys(): array
+    {
+        return array_merge(
+            [EnrichmentDescriptionLayouts::DEFAULT_KEY],
+            EnrichmentDescriptionTemplates::keys()
+        );
     }
 
     private function requireKey(string $kategoria): string
@@ -244,6 +398,9 @@ final class EnrichmentDescriptionTemplateService
             return null;
         }
         $key = trim($value);
+        if ($key === EnrichmentDescriptionLayouts::DEFAULT_KEY) {
+            return $key;
+        }
 
         return EnrichmentDescriptionTemplates::isValidKey($key) ? $key : null;
     }
@@ -252,6 +409,15 @@ final class EnrichmentDescriptionTemplateService
     {
         try {
             return Schema::hasTable('enrichment_description_templates');
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    private function layoutColumnReady(): bool
+    {
+        try {
+            return $this->tableReady() && Schema::hasColumn('enrichment_description_templates', 'layout');
         } catch (Throwable) {
             return false;
         }

@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\RestoreEnrichmentDescriptionTemplateRequest;
 use App\Http\Requests\Admin\UpdateEnrichmentDescriptionTemplateRequest;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
+use App\Support\EnrichmentDescriptionLayouts;
 use App\Support\EnrichmentDescriptionTemplates;
 use Illuminate\Http\JsonResponse;
 use InvalidArgumentException;
@@ -24,15 +25,19 @@ class EnrichmentDescriptionTemplateController extends Controller
         return response()->json([
             'templates' => $this->templates->list(),
             'labels' => EnrichmentDescriptionTemplates::LABELS,
+            'blocks' => EnrichmentDescriptionLayouts::catalog(),
+            'emphasis' => EnrichmentDescriptionLayouts::EMPHASIS,
         ]);
     }
 
     public function update(UpdateEnrichmentDescriptionTemplateRequest $request, string $kategoria): JsonResponse
     {
+        $data = $request->validated();
         try {
             $row = $this->templates->update(
                 $kategoria,
-                (string) $request->validated('instructions')
+                array_key_exists('instructions', $data) ? (string) $data['instructions'] : null,
+                array_key_exists('layout', $data) && is_array($data['layout']) ? $data['layout'] : null
             );
         } catch (InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);

@@ -165,9 +165,9 @@ export function AdminCatalogSlang() {
         <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-700">Wyszukiwarka SIWZ</p>
         <h2 className="mt-1 text-lg font-semibold text-slate-900">Słownik żargonu</h2>
         <p className="mt-1 max-w-3xl text-[12px] text-slate-600">
-          Potoczne nazwy (wampirki, gumiaki) zawsze dokładają do wyszukiwania i do modelu
-          frazy z cennika. Działa to w ramach kategorii, żeby „pianki” przy rękawicach nie
-          szukały zatyczek do uszu.
+          Trafienie w żargon zastępuje zapytanie: szukamy po notatce i frazach z cennika
+          (np. wampirki → „Proste dzianinowe powlekane, ochrona przed cieczą”), w ramach
+          kategorii — żeby „pianki” przy rękawicach nie szukały zatyczek do uszu.
         </p>
       </div>
 
