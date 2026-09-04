@@ -261,6 +261,7 @@ final class PrestaShopExportClient implements PrestaExportGateway
         if ($id <= 0) {
             throw new RuntimeException('Presta nie zwróciła id produktu.');
         }
+        $this->persistDescriptionHtml($id, $data);
 
         return [
             'id_product' => $id,
@@ -292,6 +293,7 @@ final class PrestaShopExportClient implements PrestaExportGateway
         }
         $this->stripReadOnlyProductFields($product);
         $this->putXml('products/'.$prestaId, $this->sanitizeForWrite((string) $existing->asXML()));
+        $this->persistDescriptionHtml($prestaId, $data);
 
         $rewrite = (string) ($data['link_rewrite'] ?? '');
 
@@ -762,6 +764,44 @@ final class PrestaShopExportClient implements PrestaExportGateway
         }
 
         return [1];
+    }
+
+    /**
+     * HTMLPurifier w API Presty wycina style/div — zapisujemy opis w product_lang.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function persistDescriptionHtml(int $prestaId, array $data): void
+    {
+        $description = (string) ($data['description'] ?? '');
+        if ($prestaId <= 0 || $description === '') {
+            return;
+        }
+        $cfg = $this->settings->resolve();
+        if ($cfg['database'] === '' || $cfg['host'] === '') {
+            return;
+        }
+        try {
+            $this->connectDb();
+            $prefix = $this->prefix();
+            $table = $prefix.'product_lang';
+            if (! Schema::connection('prestashop')->hasTable($table)
+                || ! Schema::connection('prestashop')->hasColumn($table, 'description')) {
+                return;
+            }
+            $payload = ['description' => $description];
+            if (Schema::connection('prestashop')->hasColumn($table, 'description_short')) {
+                $payload['description_short'] = (string) ($data['description_short'] ?? '');
+            }
+            DB::connection('prestashop')->table($table)
+                ->where('id_product', $prestaId)
+                ->update($payload);
+        } catch (Throwable $e) {
+            Log::warning('Presta: nie zapisano formatowania opisu w bazie sklepu.', [
+                'presta_id' => $prestaId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     private function connectDb(): void

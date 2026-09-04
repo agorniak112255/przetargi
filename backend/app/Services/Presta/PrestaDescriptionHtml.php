@@ -69,16 +69,18 @@ final class PrestaDescriptionHtml
             $emphasis = (string) ($block['emphasis'] ?? 'none');
             $chunk = match ($id) {
                 'description' => $prose !== '' ? $this->proseHtml($prose) : '',
-                'attributes' => $attrPairs !== [] ? $this->attributesBox($attrPairs) : '',
+                'attributes' => $attrPairs !== [] ? $this->attributesBox($attrPairs, $emphasis) : '',
                 'sources' => $this->sourcesHtml($sources),
                 default => isset(self::LIST_KEYS[$id])
-                    ? $this->listSection(self::LIST_KEYS[$id], $this->stringList($payload[$id] ?? null))
+                    ? $this->listSection(self::LIST_KEYS[$id], $this->stringList($payload[$id] ?? null), $emphasis)
                     : '',
             };
             if ($chunk === '') {
                 continue;
             }
-            $html .= $this->emphasize($chunk, $emphasis);
+            $html .= $id === 'attributes' || isset(self::LIST_KEYS[$id])
+                ? $chunk
+                : $this->emphasize($chunk, $emphasis);
         }
 
         return $html !== '' ? $html : '<p></p>';
@@ -156,8 +158,9 @@ final class PrestaDescriptionHtml
     /**
      * @param  list<array{0: string, 1: string}>  $pairs
      */
-    private function attributesBox(array $pairs): string
+    private function attributesBox(array $pairs, string $emphasis = 'none'): string
     {
+        [$bg, $border] = $this->emphasisColors($emphasis, '#f8fafc', '#e2e8f0');
         $rows = array_chunk($pairs, 3);
         $body = '<tr><td colspan="3" style="font-weight:700;font-size:13px;padding:0 0 8px">Atrybuty BHP</td></tr>';
         foreach ($rows as $row) {
@@ -169,7 +172,7 @@ final class PrestaDescriptionHtml
                     continue;
                 }
                 [$label, $value] = $row[$i];
-                $body .= '<td width="33%" valign="top" style="padding:4px 8px 4px 0">'
+                $body .= '<td width="33%" valign="top" bgcolor="'.$bg.'" style="padding:4px 8px 4px 0;background:'.$bg.'">'
                     .'<span style="color:#94a3b8;font-size:11px">'.$this->e($label).'</span><br>'
                     .'<span style="font-weight:600;font-size:13px;color:#1e293b">'.$this->e($value).'</span>'
                     .'</td>';
@@ -177,8 +180,8 @@ final class PrestaDescriptionHtml
             $body .= '</tr>';
         }
 
-        return '<table width="100%" cellpadding="10" cellspacing="0" bgcolor="#f8fafc" border="0" '
-            .'style="background:#f8fafc;border:1px solid #e2e8f0;margin:16px 0">'
+        return '<table width="100%" cellpadding="10" cellspacing="0" bgcolor="'.$bg.'" border="0" '
+            .'style="background:'.$bg.';border:1px solid '.$border.';margin:16px 0">'
             .$body
             .'</table>';
     }
@@ -193,22 +196,38 @@ final class PrestaDescriptionHtml
 
     private function emphasize(string $html, string $emphasis): string
     {
+        $colors = $this->emphasisColors($emphasis, null, null);
+        if ($colors[0] === null) {
+            return $html;
+        }
+        [$bg, $border] = $colors;
+        $edge = $emphasis === 'strong'
+            ? 'border-left:4px solid '.$border.';'
+            : 'border:1px solid '.$border.';';
+
+        return '<table width="100%" cellpadding="10" cellspacing="0" bgcolor="'.$bg.'" border="0" '
+            .'style="background:'.$bg.';'.$edge.'margin:12px 0">'
+            .'<tr><td bgcolor="'.$bg.'" style="background:'.$bg.'">'.$html.'</td></tr></table>';
+    }
+
+    /**
+     * @return array{0: ?string, 1: ?string}
+     */
+    private function emphasisColors(string $emphasis, ?string $fallbackBg, ?string $fallbackBorder): array
+    {
         return match ($emphasis) {
-            'highlight' => '<div style="background:#fef3c7;border:1px solid #fcd34d;padding:8px 10px;margin:8px 0">'
-                .$html.'</div>',
-            'accent' => '<div style="background:#ede9fe;border:1px solid #c4b5fd;padding:8px 10px;margin:8px 0">'
-                .$html.'</div>',
-            'muted' => '<div style="opacity:.78">'.$html.'</div>',
-            'strong' => '<div style="border-left:4px solid #4f46e5;padding:0 0 0 10px;margin:8px 0">'
-                .$html.'</div>',
-            default => $html,
+            'highlight' => ['#fef3c7', '#fcd34d'],
+            'accent' => ['#ede9fe', '#c4b5fd'],
+            'muted' => ['#f8fafc', '#e2e8f0'],
+            'strong' => ['#eef2ff', '#4f46e5'],
+            default => [$fallbackBg, $fallbackBorder],
         };
     }
 
     /**
      * @param  list<string>  $items
      */
-    private function listSection(string $title, array $items): string
+    private function listSection(string $title, array $items, string $emphasis = 'none'): string
     {
         if ($items === []) {
             return '';
@@ -216,6 +235,13 @@ final class PrestaDescriptionHtml
         $lis = '';
         foreach ($items as $item) {
             $lis .= '<li style="margin:0 0 4px;font-size:13px">'.$this->e($item).'</li>';
+        }
+
+        $inner = '<p style="font-weight:700;font-size:13px;margin:0 0 6px">'.$this->e($title).'</p>'
+            .'<ul style="margin:0 0 0 20px;padding:0">'.$lis.'</ul>';
+        $wrapped = $this->emphasize($inner, $emphasis);
+        if ($wrapped !== $inner) {
+            return $wrapped;
         }
 
         return '<p style="font-weight:700;font-size:13px;margin:16px 0 6px">'.$this->e($title).'</p>'

@@ -47,6 +47,8 @@ final class PrestaProductUpdateXmlTest extends TestCase
     {
         config([
             'prestashop.enabled' => true,
+            'prestashop.host' => '',
+            'prestashop.database' => '',
             'prestashop.shop_url' => 'https://shop.test',
             'prestashop.webservice_key' => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
             'prestashop.prefix' => 'ps_',

@@ -48,6 +48,8 @@ final class PrestaDescriptionHtmlTest extends TestCase
             strpos($html, 'Cechy') ?: PHP_INT_MAX,
             strpos($html, 'Specyfikacja') ?: PHP_INT_MAX
         );
+        $this->assertStringContainsString('bgcolor="#f8fafc"', $html);
+        $this->assertStringNotContainsString('<div style', $html);
     }
 
     public function test_plain_description_without_payload_stays_a_paragraph(): void

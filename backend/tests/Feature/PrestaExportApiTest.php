@@ -206,7 +206,8 @@ final class PrestaExportApiTest extends TestCase
         $html = (string) $this->presta->created[0]['description'];
         $this->assertStringNotContainsString('Specyfikacja', $html);
         $this->assertStringContainsString('dobry chwyt', $html);
-        $this->assertStringContainsString('#fef3c7', $html);
+        $this->assertStringContainsString('bgcolor="#fef3c7"', $html);
+        $this->assertStringNotContainsString('<div style', $html);
     }
 
     public function test_export_html_takes_card_highlights_when_export_inherits(): void
@@ -238,9 +239,10 @@ final class PrestaExportApiTest extends TestCase
 
         $this->postJson('/api/products/'.$product->id.'/presta-export')->assertOk();
         $html = (string) $this->presta->created[0]['description'];
-        $this->assertStringContainsString('#fef3c7', $html);
-        $this->assertStringContainsString('#ede9fe', $html);
+        $this->assertStringContainsString('bgcolor="#fef3c7"', $html);
+        $this->assertStringContainsString('bgcolor="#ede9fe"', $html);
         $this->assertStringContainsString('funkcja touchscreen', $html);
+        $this->assertStringNotContainsString('<div style', $html);
     }
 
     public function test_update_sends_images_when_presta_has_none(): void
