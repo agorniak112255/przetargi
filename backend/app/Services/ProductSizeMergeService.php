@@ -39,28 +39,33 @@ final class ProductSizeMergeService
             $query->where('manufacturer', trim($manufacturer));
         }
 
+        $knownStems = [];
+        foreach ((clone $query)->cursor() as $product) {
+            $stem = $this->sizes->skuTailStem((string) $product->sku);
+            if ($stem !== null) {
+                $knownStems[mb_strtolower($stem)] = $stem;
+            }
+        }
+
         /** @var array<string, list<Product>> $groups */
         $groups = [];
         foreach ($query->cursor() as $product) {
-            $key = $this->sizes->groupKey(
-                (string) $product->manufacturer,
-                (string) $product->name,
-                (string) $product->sku,
-                $product->packaging !== null ? (string) $product->packaging : null,
-            );
+            $key = $this->mergeGroupKey($product, $knownStems);
             if ($key === null) {
                 continue;
             }
-            $bucket = $key.'|'.$this->sizes->priceBucket($product->catalog_price_net, $product->purchase_price);
-            $groups[$bucket][] = $product;
+            $groups[$key][] = $product;
         }
 
         $mergedGroups = 0;
         $deleted = 0;
         $examples = [];
         $errors = [];
-        foreach ($groups as $items) {
+        foreach ($groups as $key => $items) {
             if (count($items) < 2) {
+                continue;
+            }
+            if (str_starts_with((string) $key, 'stem:') && ! $this->stemNamesAllowMerge($items, $knownStems)) {
                 continue;
             }
             $winner = $this->pickWinner($items);
@@ -103,16 +108,68 @@ final class ProductSizeMergeService
     }
 
     /**
+     * @param  Product  $product
+     * @param  array<string, string>  $knownStems
+     */
+    private function mergeGroupKey(Product $product, array $knownStems): ?string
+    {
+        $price = $this->sizes->priceBucket($product->catalog_price_net, $product->purchase_price);
+        $stem = $this->sizes->resolveMergeStem((string) $product->sku, $knownStems);
+        if ($stem !== null) {
+            return 'stem:'.mb_strtolower((string) $product->manufacturer).'|'.mb_strtolower($stem).'|'.$price;
+        }
+
+        $key = $this->sizes->groupKey(
+            (string) $product->manufacturer,
+            (string) $product->name,
+            (string) $product->sku,
+            $product->packaging !== null ? (string) $product->packaging : null,
+        );
+        if ($key === null) {
+            return null;
+        }
+
+        return $key.'|'.$price;
+    }
+
+    /**
+     * @param  list<Product>  $items
+     * @param  array<string, string>  $knownStems
+     */
+    private function stemNamesAllowMerge(array $items, array $knownStems): bool
+    {
+        foreach ($items as $product) {
+            if (isset($knownStems[mb_strtolower((string) $product->sku)])) {
+                return true;
+            }
+        }
+        $names = array_map(static fn (Product $p): string => (string) $p->name, $items);
+
+        return $this->sizes->namesCompatibleForMerge($names);
+    }
+
+    /**
      * @param  list<Product>  $variants
      */
     private function pickWinner(array $variants): Product
     {
+        $knownStems = [];
+        foreach ($variants as $product) {
+            $stem = $this->sizes->skuTailStem((string) $product->sku);
+            if ($stem !== null) {
+                $knownStems[mb_strtolower($stem)] = $stem;
+            }
+        }
+
         $best = $variants[0];
         $bestScore = -1;
         foreach ($variants as $product) {
             $hasImage = ((int) ($product->images_count ?? 0)) > 0;
             $hasDesc = $product->hasUsableDescription();
             $score = 0;
+            if (isset($knownStems[mb_strtolower((string) $product->sku)])) {
+                $score += 80;
+            }
             if ($hasImage && $hasDesc) {
                 $score += 200;
             }

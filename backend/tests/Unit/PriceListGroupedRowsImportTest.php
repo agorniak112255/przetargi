@@ -154,6 +154,48 @@ final class PriceListGroupedRowsImportTest extends TestCase
         }
     }
 
+    public function test_rostaing_base_sku_joins_sized_stem_and_letter_sizes_stay_apart(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'rostbase').'.xlsx';
+        $spreadsheet = new Spreadsheet;
+        $spreadsheet->getActiveSheet()->fromArray([
+            ['sku', 'nazwa', 'cena'],
+            ['CANADA-IT', 'GLOVES CANADA NITRILE', 12.4],
+            ['CANADA-IT08', 'GLOVES CANADA NITRILE T8', 12.4],
+            ['CANADA-IT11', 'GLOVES CANADA NITRILE T11', 12.4],
+            ['DURANIT-DRYT', 'GLOVES DURANIT NITRILE CUT RESISTANCE', 18.9],
+            ['DURANIT-DRYT10', 'GLOVES DURANIT NITRILE CUT RESISTANT T10', 18.9],
+            ['DURANIT-DRYT12', 'GLOVES DURANIT NITRILE CUT RESISTANT T12', 18.9],
+            ['MASTERTSHIRT-B03TS', 'T-SHIRT MASTER BLUE TS', 34.62],
+            ['MASTERTSHIRT-B03TL', 'T-SHIRT MASTER BLUE TL', 34.62],
+            ['MASTERTSHIRT-B03TXXXL', 'T-SHIRT MASTER BLUE TXXXL', 34.62],
+            ['MASTERTSHIRT-BTS', 'T-SHIRT MASTER ORANGE TS', 34.62],
+            ['MASTERTSHIRT-BTL', 'T-SHIRT MASTER ORANGE TL', 34.62],
+            ['MASTERTSHIRT-BTXL', 'T-SHIRT MASTER ORANGE TXL', 34.62],
+        ]);
+        (new Xlsx($spreadsheet))->save($path);
+
+        try {
+            $preview = app(PriceListImportService::class)->previewFromMapping(
+                $path,
+                $this->flatMapping($spreadsheet->getActiveSheet()->getTitle()),
+                30,
+            );
+            $skus = array_column($preview['products'], 'sku');
+
+            $this->assertContains('CANADA-IT', $skus);
+            $this->assertContains('DURANIT-DRYT', $skus);
+            $this->assertContains('MASTERTSHIRT-B03', $skus);
+            $this->assertContains('MASTERTSHIRT-B', $skus);
+            $this->assertNotContains('CANADA-IT08', $skus);
+            $this->assertNotContains('MASTERTSHIRT-B03TS', $skus);
+            $this->assertNotContains('MASTERTSHIRT-BTS', $skus);
+            $this->assertSame(4, $preview['products_found']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_flat_price_list_still_imports(): void
     {
         $path = tempnam(sys_get_temp_dir(), 'flat').'.xlsx';

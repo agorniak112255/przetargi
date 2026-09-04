@@ -741,10 +741,18 @@ final class PriceListImportService
             return ['products' => [], 'removed' => 0];
         }
 
+        $knownStems = [];
+        foreach ($products as $product) {
+            $stem = $this->sizes->skuTailStem((string) ($product['sku'] ?? ''));
+            if ($stem !== null) {
+                $knownStems[mb_strtolower($stem)] = $stem;
+            }
+        }
+
         $groups = [];
         $order = [];
         foreach ($products as $index => $product) {
-            $key = $this->collapseGroupKey($product);
+            $key = $this->collapseGroupKey($product, $knownStems);
             if (! isset($groups[$key])) {
                 $groups[$key] = [];
                 $order[] = $key;
@@ -764,11 +772,19 @@ final class PriceListImportService
                 continue;
             }
             if (str_starts_with($key, 'stem:') && count($items) > 1) {
+                $hasBaseSku = false;
+                foreach ($items as $item) {
+                    $sku = (string) ($item['product']['sku'] ?? '');
+                    if (isset($knownStems[mb_strtolower($sku)])) {
+                        $hasBaseSku = true;
+                        break;
+                    }
+                }
                 $names = array_map(
                     static fn (array $item): string => (string) ($item['product']['name'] ?? ''),
                     $items,
                 );
-                if (! $this->sizes->namesCompatibleForMerge($names)) {
+                if (! $hasBaseSku && ! $this->sizes->namesCompatibleForMerge($names)) {
                     foreach ($items as $item) {
                         $out[] = $this->finalizeProductCode($item['product'], null);
                     }
@@ -856,8 +872,9 @@ final class PriceListImportService
 
     /**
      * @param  array<string, mixed>  $product
+     * @param  array<string, string>  $knownStems
      */
-    private function collapseGroupKey(array $product): string
+    private function collapseGroupKey(array $product, array $knownStems): string
     {
         $modelKey = trim((string) ($product['_model_key'] ?? ''));
         $name = trim((string) ($product['name'] ?? ''));
@@ -867,7 +884,7 @@ final class PriceListImportService
         }
 
         $sku = (string) ($product['sku'] ?? '');
-        $stem = $this->sizes->skuTailStem($sku);
+        $stem = $this->sizes->resolveMergeStem($sku, $knownStems);
         if ($stem !== null) {
             $price = $this->sizes->priceBucket(
                 $product['catalog_price_net'] ?? 0,
@@ -901,10 +918,22 @@ final class PriceListImportService
      */
     private function pickVariantRepresentative(array $variants): array
     {
+        $knownStems = [];
+        foreach ($variants as $variant) {
+            $stem = $this->sizes->skuTailStem((string) ($variant['sku'] ?? ''));
+            if ($stem !== null) {
+                $knownStems[mb_strtolower($stem)] = $stem;
+            }
+        }
+
         $best = $variants[0];
         $bestScore = -1;
         foreach ($variants as $variant) {
             $score = 0;
+            $sku = (string) ($variant['sku'] ?? '');
+            if (isset($knownStems[mb_strtolower($sku)])) {
+                $score += 80;
+            }
             $pack = strtoupper((string) ($variant['packaging'] ?? ''));
             if ($pack === 'M') {
                 $score += 50;
@@ -925,8 +954,9 @@ final class PriceListImportService
             }
         }
 
-        $core = $this->sizes->skuCore((string) ($best['sku'] ?? ''), (string) ($best['name'] ?? ''))
-            ?? $this->sizes->skuTailStem((string) ($best['sku'] ?? ''));
+        $bestSku = (string) ($best['sku'] ?? '');
+        $core = $this->sizes->skuCore($bestSku, (string) ($best['name'] ?? ''))
+            ?? $this->sizes->resolveMergeStem($bestSku, $knownStems);
         $best['name'] = $this->sizes->stripSizeFromName((string) ($best['name'] ?? '')) ?: (string) ($best['name'] ?? '');
         $best['packaging'] = null;
         if ($core !== null) {

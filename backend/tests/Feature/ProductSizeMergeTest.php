@@ -184,6 +184,90 @@ final class ProductSizeMergeTest extends TestCase
         $this->assertSame(3, $kept->stock);
     }
 
+    public function test_merges_rostaing_base_sku_with_sized_and_letter_stems(): void
+    {
+        Queue::fake();
+
+        $base = Product::query()->create([
+            'sku' => 'CANADA-IT',
+            'name' => 'GLOVES CANADA NITRILE',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 12.4,
+            'purchase_price' => 12.4,
+            'stock' => 2,
+        ]);
+        Product::query()->create([
+            'sku' => 'CANADA-IT08',
+            'name' => 'GLOVES CANADA NITRILE T8',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 12.4,
+            'purchase_price' => 12.4,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'CANADA-IT11',
+            'name' => 'GLOVES CANADA NITRILE T11',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 12.4,
+            'purchase_price' => 12.4,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'MASTERTSHIRT-B03TS',
+            'name' => 'T-SHIRT MASTER BLUE TS',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 34.62,
+            'purchase_price' => 34.62,
+            'stock' => 1,
+        ]);
+        $blue = Product::query()->create([
+            'sku' => 'MASTERTSHIRT-B03TXXXL',
+            'name' => 'T-SHIRT MASTER BLUE TXXXL',
+            'manufacturer' => 'Rostaing',
+            'description' => str_repeat('Koszulka Rostaing Master Shirt. ', 3),
+            'catalog_price_net' => 34.62,
+            'purchase_price' => 34.62,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'MASTERTSHIRT-BTS',
+            'name' => 'T-SHIRT MASTER ORANGE TS',
+            'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 34.62,
+            'purchase_price' => 34.62,
+            'stock' => 1,
+        ]);
+        $orange = Product::query()->create([
+            'sku' => 'MASTERTSHIRT-BTXL',
+            'name' => 'T-SHIRT MASTER ORANGE TXL',
+            'manufacturer' => 'Rostaing',
+            'description' => str_repeat('Koszulka Rostaing Master Shirt orange. ', 3),
+            'catalog_price_net' => 34.62,
+            'purchase_price' => 34.62,
+            'stock' => 1,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('Rostaing', false);
+
+        $this->assertSame(3, $result['groups']);
+        $this->assertSame(4, $result['deleted']);
+        $keptCanada = Product::query()->find($base->id);
+        $this->assertNotNull($keptCanada);
+        $this->assertSame('CANADA-IT', $keptCanada->sku);
+        $this->assertSame(4, $keptCanada->stock);
+        $keptBlue = Product::query()->find($blue->id);
+        $this->assertNotNull($keptBlue);
+        $this->assertSame('MASTERTSHIRT-B03', $keptBlue->sku);
+        $this->assertSame(2, $keptBlue->stock);
+        $keptOrange = Product::query()->find($orange->id);
+        $this->assertNotNull($keptOrange);
+        $this->assertSame('MASTERTSHIRT-B', $keptOrange->sku);
+        $this->assertSame(2, $keptOrange->stock);
+        $this->assertNull(Product::query()->where('sku', 'MASTERTSHIRT-B03TS')->first());
+        $this->assertNull(Product::query()->where('sku', 'MASTERTSHIRT-BTS')->first());
+        $this->assertSame(3, Product::query()->where('manufacturer', 'Rostaing')->count());
+    }
+
     public function test_does_not_merge_when_price_differs(): void
     {
         Product::query()->create([

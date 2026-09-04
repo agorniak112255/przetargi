@@ -370,6 +370,7 @@ final class ProductSizeVariant
     {
         $t = trim($name);
         $t = preg_replace('/\bT\s*0?\d{1,2}\b/iu', '', $t) ?? $t;
+        $t = preg_replace('/\bT(?:6XL|5XL|4XL|3XL|XXXL|XXL|XL|XXS|XS|S|M|L)\b/iu', '', $t) ?? $t;
         $t = preg_replace(
             '/\b(?:size|rozmiar|taille|rozm\.?)\s*:?\s*(?:\d{1,2}(?:[.,]\d)?|[2-6]\s*xl|xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l)\b/iu',
             '',
@@ -432,7 +433,7 @@ final class ProductSizeVariant
         if ($sku === '' || preg_match('/[A-Za-z]/u', $sku) !== 1) {
             return null;
         }
-        if (preg_match('/^(.{4,})(\d{2})$/u', $sku, $m) === 1) {
+        if (preg_match('/^(.{4,}[A-Za-z])(\d{2})$/u', $sku, $m) === 1) {
             $n = (int) $m[2];
             $stem = rtrim($m[1], "-/_ \t");
             if ($n >= 4 && $n <= 13 && $this->isUsableCore($stem)) {
@@ -446,8 +447,64 @@ final class ProductSizeVariant
                 return $stem;
             }
         }
+        $letterStem = $this->skuLetterSizeStem($sku);
+        if ($letterStem !== null) {
+            return $letterStem;
+        }
 
         return $this->stripWearSizeSuffix($sku);
+    }
+
+    /**
+     * Koszulki Rostaing: MASTERTSHIRT-B03TXL / MASTERTSHIRT-BTS.
+     * Nie obcina ROOTS, PRODUCTS ani modeli typu SCANFORCE-BRTL.
+     */
+    private function skuLetterSizeStem(string $sku): ?string
+    {
+        $tLong = 'T(?:6XL|5XL|4XL|3XL|XXXL|XXL|XL|XXS|XS)';
+        if (preg_match('/^(.{4,})('.$tLong.')$/iu', $sku, $m) === 1) {
+            $stem = rtrim($m[1], "-/_ \t");
+            if ($this->isUsableCore($stem) && preg_match('/[\/\-_]/u', $stem) === 1) {
+                return $stem;
+            }
+        }
+        if (preg_match('/^(.{4,}\d)(T(?:S|M|L))$/iu', $sku, $m) === 1) {
+            $stem = rtrim($m[1], "-/_ \t");
+            if ($this->isUsableCore($stem)) {
+                return $stem;
+            }
+        }
+        if (preg_match('/^(.{4,}[\/\-_][A-Z])(T(?:6XL|5XL|4XL|3XL|XXXL|XXL|XL|XXS|XS|S|M|L))$/iu', $sku, $m) === 1) {
+            $stem = rtrim($m[1], "-/_ \t");
+            if ($this->isUsableCore($stem)) {
+                return $stem;
+            }
+        }
+        if (preg_match('/^(.{4,})[\/\-_](XXXXL|XXXL|XXL|XXS|XS|XL|[2-6]XL|[SML])$/iu', $sku, $m) === 1) {
+            $stem = rtrim($m[1], "-/_ \t");
+            if ($this->isUsableCore($stem)) {
+                return $stem;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, string>  $knownStems
+     */
+    public function resolveMergeStem(string $sku, array $knownStems = []): ?string
+    {
+        $stem = $this->skuTailStem($sku);
+        if ($stem !== null) {
+            return $stem;
+        }
+        $key = mb_strtolower(trim($sku));
+        if ($key !== '' && isset($knownStems[$key])) {
+            return $knownStems[$key];
+        }
+
+        return null;
     }
 
     /**
@@ -469,7 +526,7 @@ final class ProductSizeVariant
         }
         for ($i = 0; $i < $count; $i++) {
             for ($j = $i + 1; $j < $count; $j++) {
-                if ($this->tokenJaccard($fingerprints[$i], $fingerprints[$j]) < 0.55) {
+                if ($this->tokenJaccard($fingerprints[$i], $fingerprints[$j]) < 0.38) {
                     return false;
                 }
             }

@@ -95,6 +95,18 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertNull($svc->skuTailStem('BLACKSTICK+T'));
         $this->assertNull($svc->skuTailStem('558911'));
         $this->assertNull($svc->skuTailStem('37695VP070'));
+        $this->assertNull($svc->skuTailStem('37695VP110'));
+        $this->assertSame('MASTERTSHIRT-B03', $svc->skuTailStem('MASTERTSHIRT-B03TS'));
+        $this->assertSame('MASTERTSHIRT-B03', $svc->skuTailStem('MASTERTSHIRT-B03TXXXL'));
+        $this->assertSame('MASTERTSHIRT-B03', $svc->skuTailStem('MASTERTSHIRT-B03T6XL'));
+        $this->assertSame('MASTERTSHIRT-B', $svc->skuTailStem('MASTERTSHIRT-BTS'));
+        $this->assertSame('MASTERTSHIRT-B', $svc->skuTailStem('MASTERTSHIRT-BTXL'));
+        $this->assertSame('SCANFORCE-BRTL', $svc->skuTailStem('SCANFORCE-BRTL-XL'));
+        $this->assertNull($svc->skuTailStem('SCANFORCE-BRTL'));
+        $this->assertNull($svc->skuTailStem('ROOTS'));
+        $this->assertNull($svc->skuTailStem('CANADA-IT'));
+        $this->assertSame('CANADA-IT', $svc->skuTailStem('CANADA-IT08'));
+        $this->assertSame('CANADA-IT', $svc->resolveMergeStem('CANADA-IT', ['canada-it' => 'CANADA-IT']));
     }
 
     #[Test]
