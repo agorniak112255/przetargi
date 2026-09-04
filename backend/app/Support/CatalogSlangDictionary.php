@@ -130,23 +130,50 @@ final class CatalogSlangDictionary
             $note = trim((string) ($entry['note'] ?? ''));
             if ($note !== '' && ! str_contains($note, '=')) {
                 $notes[] = $note;
-                $phrases[] = $note;
             }
             if ($family === null) {
                 $family = self::categoryFamily($entry['category']);
             }
         }
         $phrases = array_values(array_unique($phrases));
-        $needed = $notes[0] ?? ($phrases[0] ?? '');
+        $needed = $phrases[0] ?? '';
+        if ($notes !== []) {
+            $needed = $this->neededFromPhraseAndNote($needed, $notes[0]);
+            $tail = $this->noteSearchTail($notes[0], $phrases);
+            if ($tail !== '') {
+                $phrases[] = $tail;
+            }
+        }
         if ($needed === '') {
             return null;
         }
 
         return [
             'needed' => $needed,
-            'search_phrases' => $phrases,
+            'search_phrases' => array_values(array_unique($phrases)),
             'family' => $family,
         ];
+    }
+
+    public function rejectsProduct(string $query, string $productText): bool
+    {
+        $rewrite = $this->searchRewrite($query);
+        if ($rewrite === null) {
+            return false;
+        }
+        $note = $this->fold($rewrite['needed']);
+        $hay = $this->fold($productText);
+        $wantsLiquid = preg_match('/\b(ciecz|olej|plyn)/u', $note) === 1;
+        if (! $wantsLiquid) {
+            return false;
+        }
+        if (preg_match('/\b(esd|antystat|antyelektro|weglow|miedzian|miedzi)\w*/u', $hay) === 1) {
+            return true;
+        }
+        $fingertip = preg_match('/(konce palc|palce powlekan)/u', $hay) === 1
+            && preg_match('/\b(dlon|calkowicie powlek|pelne powlek)/u', $hay) !== 1;
+
+        return $fingertip;
     }
 
     /**
@@ -365,14 +392,67 @@ final class CatalogSlangDictionary
     private function hitTerms(string $paddedHay, array $terms): array
     {
         $hit = [];
+        $tokens = preg_split('/\s+/u', trim($paddedHay)) ?: [];
         foreach ($terms as $term) {
             $n = $this->fold($term);
-            if ($n !== '' && str_contains($paddedHay, ' '.$n.' ')) {
+            if ($n === '') {
+                continue;
+            }
+            if (str_contains($paddedHay, ' '.$n.' ')) {
                 $hit[] = $n;
+                continue;
+            }
+            if (str_contains($n, ' ')) {
+                continue;
+            }
+            foreach ($tokens as $qt) {
+                if (mb_strlen($qt) < 5) {
+                    continue;
+                }
+                if (str_starts_with($n, $qt)) {
+                    $hit[] = $n;
+                    break;
+                }
             }
         }
 
         return $hit;
+    }
+
+    private function neededFromPhraseAndNote(string $phrase, string $note): string
+    {
+        $tail = $this->noteSearchTail($note, $phrase !== '' ? [$phrase] : []);
+        if ($phrase === '') {
+            return $note;
+        }
+        if ($tail === '') {
+            return $phrase;
+        }
+
+        return $phrase.', '.$tail;
+    }
+
+    /**
+     * @param  list<string>  $phrases
+     */
+    private function noteSearchTail(string $note, array $phrases): string
+    {
+        $have = $this->fold(implode(' ', $phrases));
+        $skip = ['proste', 'oraz', 'dla', 'jak', 'lub', 'typ', 'np'];
+        $kept = [];
+        foreach (preg_split('/\s+/u', $note) ?: [] as $word) {
+            $word = trim($word, " \t\n\r.,;:()[]");
+            $n = $this->fold($word);
+            if ($n === '' || in_array($n, $skip, true)) {
+                continue;
+            }
+            if ($have !== '' && str_contains($have, $n)) {
+                continue;
+            }
+            $kept[] = $word;
+        }
+
+        return trim(implode(' ', $kept));
     }
 
     /**

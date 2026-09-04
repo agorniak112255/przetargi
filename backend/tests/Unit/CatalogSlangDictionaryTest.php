@@ -63,14 +63,41 @@ final class CatalogSlangDictionaryTest extends TestCase
     {
         $rewrite = $this->dict()->searchRewrite('Rękawice wampirki uniwersalne');
         $this->assertNotNull($rewrite);
-        $this->assertStringContainsString('dzianinowe powlekane', mb_strtolower($rewrite['needed']));
+        $this->assertStringContainsString('rękawice dzianinowe powlekane', mb_strtolower($rewrite['needed']));
         $this->assertStringContainsString('ciecz', mb_strtolower($rewrite['needed']));
         $hay = mb_strtolower(implode(' ', $rewrite['search_phrases']));
         $this->assertStringContainsString('rękawice dzianinowe powlekane', $hay);
+        $this->assertStringNotContainsString('proste', $hay);
         $this->assertSame('gloves', $rewrite['family']);
         $needles = $this->dict()->evidenceNeedles('Rękawice wampirki uniwersalne');
         $this->assertNotSame([], $needles);
         $this->assertFalse(in_array('uniwer', $needles, true));
+    }
+
+    public function test_wampir_prefix_maps_like_wampirki(): void
+    {
+        $this->assertNotSame([], $this->dict()->phrasesFor('wampir'));
+        $this->assertSame(
+            $this->dict()->searchRewrite('wampirki')['needed'] ?? null,
+            $this->dict()->searchRewrite('wampir')['needed'] ?? null,
+        );
+    }
+
+    public function test_liquid_jargon_rejects_esd_and_fingertip_gloves(): void
+    {
+        $q = 'Rękawice wampirki uniwersalne';
+        $this->assertTrue($this->dict()->rejectsProduct(
+            $q,
+            'RĘKAWICE ANTYSTATYCZNE WĘGLOWE nakrapiane PCV oraz PALCE POWLEKANE POLIURETANEM'
+        ));
+        $this->assertTrue($this->dict()->rejectsProduct(
+            $q,
+            'THEMIS VV792 ESD RĘKAWICE DZIANE Z POLIAMIDU I MIEDZI, KOŃCE PALCÓW POWLEKANE'
+        ));
+        $this->assertFalse($this->dict()->rejectsProduct(
+            $q,
+            '1016 (NOWO) Rękawice dziane powlekane do oleju, ochrona przed cieczą.'
+        ));
     }
 
     public function test_every_slang_term_is_indexed_as_jargon(): void

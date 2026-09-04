@@ -507,7 +507,7 @@ final class ProductAiSearchService
         }
 
         return [
-            'query' => $query,
+            'query' => $this->displayQuery($query, $intent),
             'total' => count($products),
             'products' => $products,
             'needed' => $intent['needed'],
@@ -516,6 +516,17 @@ final class ProductAiSearchService
             'ai_note' => $note,
             'external_hint' => null,
         ];
+    }
+
+    /** @param array{needed: string, search_phrases: list<string>} $intent */
+    private function displayQuery(string $query, array $intent): string
+    {
+        $slang = $this->slangRewriteFor($query);
+        if ($slang === null || $slang['needed'] === '') {
+            return $query;
+        }
+
+        return $slang['needed'];
     }
 
     /**
@@ -1066,11 +1077,6 @@ final class ProductAiSearchService
         return array_values(array_unique($phrases));
     }
 
-    /** @param array<string, mixed> $intent */
-    /**
-     * @param  array{needed: string, search_phrases: list<string>, constraints: list<string>}  $intent
-     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
-     */
     /** @return array{needed: string, search_phrases: list<string>, family: string|null}|null */
     private function slangRewriteFor(string $query): ?array
     {
@@ -1752,23 +1758,33 @@ final class ProductAiSearchService
         return $slang['family'] ?? null;
     }
 
-    private function matchesSlangEvidence(string $query, Product $product): bool
+    private function slangProductHaystack(Product $product): string
     {
-        $needles = $this->slangRewriteFor($query) === null
-            ? []
-            : $this->catalogSlang->evidenceNeedles($query);
-        if ($needles === []) {
-            return true;
-        }
-        $hay = $this->lexicalNormalize(implode(' ', [
+        return implode(' ', [
             (string) $product->name,
             (string) $product->sku,
             (string) ($product->category ?? ''),
             (string) ($product->description ?? ''),
             (string) ($product->search_blob ?? ''),
-        ]));
+        ]);
+    }
+
+    private function matchesSlangEvidence(string $query, Product $product): bool
+    {
+        if ($this->slangRewriteFor($query) === null) {
+            return true;
+        }
+        $hay = $this->slangProductHaystack($product);
+        if ($this->catalogSlang->rejectsProduct($query, $hay)) {
+            return false;
+        }
+        $needles = $this->catalogSlang->evidenceNeedles($query);
+        if ($needles === []) {
+            return true;
+        }
+        $norm = $this->lexicalNormalize($hay);
         foreach ($needles as $needle) {
-            if ($needle !== '' && str_contains($hay, $needle)) {
+            if ($needle !== '' && str_contains($norm, $needle)) {
                 return true;
             }
         }
@@ -2344,7 +2360,7 @@ final class ProductAiSearchService
         }
 
         return [
-            'query' => $query,
+            'query' => $this->displayQuery($query, $intent),
             'total' => 0,
             'products' => [],
             'needed' => $intent['needed'],
