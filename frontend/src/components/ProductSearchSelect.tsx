@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type Product } from '../lib/api'
 import { productDisplayName, productSelectLabel } from '../lib/productLabel'
-import { ProductPreviewModal } from './ProductPreviewModal'
+import { ProductVerifyModal } from './ProductVerifyModal'
 
 type MiniProduct = {
   id: number
@@ -24,6 +24,7 @@ type Props = {
   applyMarginPercent?: number
   onApplyMargin?: () => void
   applyMarginDisabled?: boolean
+  previewQuery?: string
 }
 
 function norm(s: string): string {
@@ -47,6 +48,7 @@ export function ProductSearchSelect({
   applyMarginPercent,
   onApplyMargin,
   applyMarginDisabled,
+  previewQuery = '',
 }: Props) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -206,7 +208,11 @@ export function ProductSearchSelect({
           )}
         </ul>
       )}
-      <ProductPreviewModal productId={previewId} onClose={() => setPreviewId(null)} />
+      <ProductVerifyModal
+        productId={previewId}
+        query={previewQuery}
+        onClose={() => setPreviewId(null)}
+      />
     </div>
   )
 }

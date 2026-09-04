@@ -139,6 +139,72 @@ final class ProductMatchServiceTest extends TestCase
     }
 
     #[Test]
+    public function prefers_cheaper_size_variant_when_requirement_has_no_size(): void
+    {
+        $expensive = $this->fakeProduct([
+            'sku' => '37695VP100',
+            'name' => 'AlphaTec 37695VP Size 10.0',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice nitrylowe AlphaTec chemoodporne do cieczy.',
+            'purchase_price' => 48,
+            'catalog_price_net' => 60,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+        ]);
+        $cheap = $this->fakeProduct([
+            'sku' => '37695VP070',
+            'name' => 'AlphaTec 37695VP Size 7.0',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice nitrylowe AlphaTec chemoodporne do cieczy.',
+            'purchase_price' => 12,
+            'catalog_price_net' => 18,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+        ]);
+
+        $best = $this->matcher->bestMatch(
+            'Rękawice nitrylowe AlphaTec chemoodporne do cieczy',
+            new Collection([$expensive, $cheap])
+        );
+
+        $this->assertNotNull($best);
+        $this->assertSame('37695VP070', $best['product']->sku);
+    }
+
+    #[Test]
+    public function specified_sku_still_wins_over_cheaper_size_variant(): void
+    {
+        $expensive = $this->fakeProduct([
+            'sku' => '37695VP100',
+            'name' => 'AlphaTec 37695VP Size 10.0',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice nitrylowe AlphaTec chemoodporne do cieczy.',
+            'purchase_price' => 48,
+            'catalog_price_net' => 60,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+        ]);
+        $cheap = $this->fakeProduct([
+            'sku' => '37695VP070',
+            'name' => 'AlphaTec 37695VP Size 7.0',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice nitrylowe AlphaTec chemoodporne do cieczy.',
+            'purchase_price' => 12,
+            'catalog_price_net' => 18,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+        ]);
+
+        $best = $this->matcher->bestMatch(
+            'Rękawice AlphaTec art. 37695VP100 rozmiar 10',
+            new Collection([$cheap, $expensive])
+        );
+
+        $this->assertNotNull($best);
+        $this->assertSame('37695VP100', $best['product']->sku);
+    }
+
+    #[Test]
     public function balaclava_does_not_match_gloves_via_norm_number(): void
     {
         $products = new Collection([

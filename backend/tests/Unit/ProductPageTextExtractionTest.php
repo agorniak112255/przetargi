@@ -457,4 +457,47 @@ HTML;
         $this->assertSame([], $result['image_urls']);
         $this->assertSame([], $result['trusted_image_urls']);
     }
+
+    public function test_picks_canis_gallery_image_over_menu_tiles(): void
+    {
+        $pageUrl = 'https://www.canis.cz/pl/maski-spawalnicze/naglowie-do-przylbicy_p13074';
+        $productImage = 'https://www.canis.cz/imgserver/eshop/CANIS/19/2000000326/13074_2216-00.JPG';
+        $html = <<<HTML
+<html><head>
+<meta property="og:image" content="/template/eshop5/special/image/logo-OpenGraph.png">
+</head><body>
+<img src="https://www.canis.cz/imgserver/eshop/CANIS/781/2000000329/88493506174645_PRAC_ODEVY.PNG?w=95" alt="menu">
+<div class="gallery_js">
+<a href="{$productImage}?w=1920" class="gallery_item_js">
+<img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
+ data-src="{$productImage}?w=800"
+ class="js_lazy_img"
+ itemprop="image"
+ content="{$productImage}"
+ alt="13074_6_2216-00">
+</a>
+</div>
+<p>Nagłowie do przyłbicy. Kod 4200-003-000-00. Przeznaczone do przyłbicy 2215-00.</p>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractImageUrls');
+        $method->setAccessible(true);
+
+        /** @var list<string> $images */
+        $images = $method->invoke($fetcher, $html, $pageUrl, '4200-003-000-00');
+
+        $this->assertNotEmpty($images);
+        $this->assertTrue(collect($images)->contains(
+            static fn (string $u): bool => str_contains(mb_strtolower($u), '13074_2216-00.jpg')
+        ));
+        $this->assertFalse(collect($images)->contains(
+            static fn (string $u): bool => str_contains($u, 'PRAC_ODEVY') || str_contains($u, 'w=95')
+        ));
+        $this->assertFalse(collect($images)->contains(
+            static fn (string $u): bool => str_contains($u, 'logo-OpenGraph')
+        ));
+    }
 }

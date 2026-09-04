@@ -1038,7 +1038,7 @@ final class ProductPageFetcher
             }
         }
 
-        /** @var list<string> $trustedUrls og:image / JSON-LD — galeria karty, nie wymaga SKU w nazwie pliku */
+        /** @var list<string> $trustedUrls og:image / JSON-LD / itemprop — galeria karty, nie wymaga SKU w nazwie pliku */
         $trustedUrls = $this->extractStructuredImageUrls($html);
         foreach ($trustedUrls as $u) {
             $rawUrls[] = $u;
@@ -1109,6 +1109,13 @@ final class ProductPageFetcher
                 continue;
             }
             $meta = mb_strtolower($abs);
+            // Canis / imgserver: ?w=95 to kafle menu, nie karta produktu
+            if (preg_match('/[?&]w=(\d+)/i', $abs, $wm) && (int) $wm[1] < 200) {
+                continue;
+            }
+            if (preg_match('/[?&]h=(\d+)/i', $abs, $hm) && (int) $hm[1] < 200) {
+                continue;
+            }
             // WordPress thumbs: -80x80, -150x150…
             if (preg_match('/-(\d{2,4})x(\d{2,4})\.(jpe?g|png|webp)(\?|$)/i', $meta, $wm)
                 && (((int) $wm[1] < 400) || ((int) $wm[2] < 400))) {
@@ -1235,6 +1242,8 @@ final class ProductPageFetcher
         foreach ([
             '#property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i',
             '#content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']#i',
+            '#itemprop=["\']image["\'][^>]*\bcontent=["\']([^"\']+)["\']#i',
+            '#\bcontent=["\']([^"\']+)["\'][^>]*itemprop=["\']image["\']#i',
         ] as $pattern) {
             if (preg_match_all($pattern, $html, $matches)) {
                 foreach ($matches[1] as $url) {
@@ -1479,8 +1488,12 @@ final class ProductPageFetcher
         ));
         $hits = 0;
         foreach ($imgBits as $bit) {
-            if (str_contains($pageBase, $bit)) {
+            if (str_contains($pageBase, $bit) || str_contains($pagePath, $bit)) {
                 $hits++;
+                // Canis: plik 13074_2216-00.jpg przy slugu …_p13074
+                if (preg_match('/^\d{4,}$/', $bit) === 1) {
+                    return true;
+                }
             }
         }
 

@@ -15,6 +15,7 @@ use App\Support\CatalogManufacturerContext;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
 use App\Support\ProductModelFuzzy;
+use App\Support\ProductSizeVariant;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Throwable;
@@ -70,6 +71,8 @@ final class ProductMatchService
         private readonly ProductModelFuzzy $modelFuzzy,
         private readonly PpeAssortment $assortment,
         private readonly CatalogManufacturerContext $manufacturerContext,
+        private readonly ProductSizeVariant $sizes,
+        private readonly NbpExchangeRateService $fx,
     ) {}
 
     /**
@@ -399,9 +402,109 @@ final class ProductMatchService
             $scored[] = ['product' => $product, 'score' => $score];
         }
 
-        usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
+        $scored = $this->preferCheapestSizeVariants($scored);
+        usort($scored, function (array $a, array $b): int {
+            $byScore = $b['score'] <=> $a['score'];
+            if ($byScore !== 0) {
+                return $byScore;
+            }
+
+            return $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
+        });
 
         return array_slice($scored, 0, max(1, $limit));
+    }
+
+    /**
+     * W grupie rozmiarów (ten sam model) zostaw najtańszy, gdy wynik jest zbliżony.
+     *
+     * @param  list<array{product: Product, score: int}>  $scored
+     * @return list<array{product: Product, score: int}>
+     */
+    private function preferCheapestSizeVariants(array $scored): array
+    {
+        $best = [];
+        foreach ($scored as $row) {
+            /** @var Product $product */
+            $product = $row['product'];
+            $key = $this->sizes->groupKey(
+                (string) $product->manufacturer,
+                (string) $product->name,
+                (string) $product->sku,
+                $product->packaging !== null ? (string) $product->packaging : null,
+            ) ?? 'id:'.$product->id;
+            if (! isset($best[$key]) || $this->isPreferredVariant($row, $best[$key])) {
+                $best[$key] = $row;
+            }
+        }
+
+        return array_values($best);
+    }
+
+    /**
+     * @param  array{product: Product, score: int}  $challenger
+     * @param  array{product: Product, score: int}  $incumbent
+     */
+    private function isPreferredVariant(array $challenger, array $incumbent): bool
+    {
+        $cs = $challenger['score'];
+        $is = $incumbent['score'];
+        if ($cs > $is + 8) {
+            return true;
+        }
+        if ($is > $cs + 8) {
+            return false;
+        }
+        $cp = $this->purchasePln($challenger['product']);
+        $ip = $this->purchasePln($incumbent['product']);
+        if ($cp === $ip) {
+            return $cs > $is;
+        }
+
+        return $cp < $ip;
+    }
+
+    /**
+     * @param  list<array{product: Product, score: int, source: string}>  $options
+     * @return array{product: Product, score: int, source: string}|null
+     */
+    private function preferCheapestAmongCloseScores(array $options): ?array
+    {
+        if ($options === []) {
+            return null;
+        }
+        $top = 0;
+        foreach ($options as $option) {
+            $top = max($top, $option['score']);
+        }
+        $near = array_values(array_filter(
+            $options,
+            static fn (array $option): bool => $option['score'] >= $top - 8
+        ));
+        usort($near, function (array $a, array $b): int {
+            $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
+            if ($byPrice !== 0) {
+                return $byPrice;
+            }
+
+            return $b['score'] <=> $a['score'];
+        });
+
+        return $near[0] ?? null;
+    }
+
+    private function purchasePln(Product $product): float
+    {
+        $pln = $this->fx->purchasePln($product);
+        if ($pln !== null && $pln > 0) {
+            return $pln;
+        }
+        $raw = (float) ($product->purchase_price ?? 0);
+        if ($raw > 0) {
+            return $raw;
+        }
+
+        return PHP_FLOAT_MAX;
     }
 
     private function familyFromKategoria(mixed $kategoria): ?string
@@ -1066,7 +1169,7 @@ final class ProductMatchService
             if ($best === null
                 || $candidate['score'] > $best['score']
                 || ($candidate['score'] === $best['score']
-                    && mb_strlen((string) $product->sku) < mb_strlen((string) $best['product']->sku))) {
+                    && $this->purchasePln($product) < $this->purchasePln($best['product']))) {
                 $best = $candidate;
             }
         }
@@ -1135,6 +1238,7 @@ final class ProductMatchService
             ];
         }
 
+        $options = [];
         foreach ($aiCandidates as $topAi) {
             $product = $products->firstWhere('id', $topAi['id'])
                 ?? Product::query()->find($topAi['id']);
@@ -1158,11 +1262,15 @@ final class ProductMatchService
                 continue;
             }
 
-            return [
+            $options[] = [
                 'product' => $product,
                 'score' => $honest,
                 'source' => $exact ? (string) ($topAi['source'] ?? 'ai') : 'ai_substitute',
             ];
+        }
+
+        if ($options !== []) {
+            return $this->preferCheapestAmongCloseScores($options);
         }
 
         if ($heuristic !== null && $heuristic['score'] >= self::APPLY_MATCH_SCORE) {
@@ -1344,14 +1452,6 @@ final class ProductMatchService
      */
     private function mergeCatalogCandidatesForTender(string $requirement, array $mapped, int $limit): array
     {
-        $top = 0;
-        foreach ($mapped as $row) {
-            $top = max($top, (int) ($row['score'] ?? 0));
-        }
-        if ($top >= self::SUBSTITUTE_MATCH_SCORE) {
-            return $mapped;
-        }
-
         $catalogRows = $this->aiSearch->requirementCatalogRows($requirement, $limit);
         if ($catalogRows === []) {
             return $mapped;

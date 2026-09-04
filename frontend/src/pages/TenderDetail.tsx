@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { ItemBattlecard, type BattlecardProduct } from '../components/ItemBattlecard'
 import { ProductAiMatchModal } from '../components/ProductAiMatchModal'
-import { ProductPreviewModal } from '../components/ProductPreviewModal'
+import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
@@ -2713,7 +2713,7 @@ export function TenderDetail() {
           </div>
         </div>
       )}
-      <ProductPreviewModal
+      <ProductVerifyModal
         productId={reportPreviewId}
         query={reportPreviewQuery}
         onClose={() => {
@@ -2922,6 +2922,7 @@ function ItemRow({
                 value={productId}
                 selectedProduct={selectedProduct}
                 disabled={busy}
+                previewQuery={item.requirement ?? ''}
                 applyMarginPercent={targetMarginPercent}
                 applyMarginDisabled={busy || catalogPurchase() == null}
                 onApplyMargin={() => applyTenderMarginToOffer()}
@@ -3234,7 +3235,7 @@ function ItemRow({
                 enabled={Boolean(item.main_product)}
               />
             </div>
-            <ProductPreviewModal
+            <ProductVerifyModal
               productId={previewId}
               query={item.requirement ?? ''}
               onClose={() => setPreviewId(null)}

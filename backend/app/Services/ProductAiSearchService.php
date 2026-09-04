@@ -68,6 +68,7 @@ final class ProductAiSearchService
         private readonly CatalogManufacturerContext $manufacturerContext,
         private readonly CatalogRequirementRecall $catalogRecall,
         private readonly CatalogSlangDictionary $catalogSlang,
+        private readonly NbpExchangeRateService $fx,
     ) {}
 
     /**
@@ -1224,9 +1225,35 @@ final class ProductAiSearchService
      */
     private function sortRankedByMatchPercent(array $ranked): array
     {
-        usort($ranked, static fn (array $a, array $b): int => ($b['ai_match_percent'] ?? 0) <=> ($a['ai_match_percent'] ?? 0));
+        usort($ranked, function (array $a, array $b): int {
+            $byScore = ($b['ai_match_percent'] ?? 0) <=> ($a['ai_match_percent'] ?? 0);
+            if ($byScore !== 0) {
+                return $byScore;
+            }
+
+            return $this->rowPurchasePln($a) <=> $this->rowPurchasePln($b);
+        });
 
         return $ranked;
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function rowPurchasePln(array $row): float
+    {
+        if (isset($row['purchase_price_pln']) && is_numeric($row['purchase_price_pln'])) {
+            $pln = (float) $row['purchase_price_pln'];
+            if ($pln > 0) {
+                return $pln;
+            }
+        }
+        $pln = $this->fx->toPlnOrNull($row['purchase_price'] ?? null, isset($row['currency']) ? (string) $row['currency'] : 'PLN');
+        if ($pln !== null && $pln > 0) {
+            return $pln;
+        }
+
+        return PHP_FLOAT_MAX;
     }
 
     /**

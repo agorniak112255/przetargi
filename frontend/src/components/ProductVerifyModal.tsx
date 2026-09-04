@@ -10,11 +10,11 @@ import { HighlightedDescription } from './HighlightedDescription'
 
 type Props = {
   productId: number | null
-  query: string
+  query?: string
   onClose: () => void
 }
 
-export function ProductVerifyModal({ productId, query, onClose }: Props) {
+export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
   const [product, setProduct] = useState<Product | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -53,14 +53,22 @@ export function ProductVerifyModal({ productId, query, onClose }: Props) {
 
   const bodyText = useMemo(() => {
     if (!product) return ''
-    const extra = [
-      product.norms ? `Normy: ${product.norms}` : '',
-      ...(product.enrichment_payload?.specs ?? []).map((s) => `• ${s}`),
-      ...(product.enrichment_payload?.features ?? []).map((s) => `• ${s}`),
-      ...(product.enrichment_payload?.materials ?? []).map((s) => `• ${s}`),
-      ...(product.enrichment_payload?.use_cases ?? []).map((s) => `• ${s}`),
-    ].filter(Boolean)
-    return [descriptionProse(product.description), extra.join('\n')].filter(Boolean).join('\n\n')
+    const extra: string[] = []
+    if (product.norms) extra.push(`Normy: ${product.norms}`)
+    const payload = product.enrichment_payload
+    for (const [title, items] of [
+      ['Specyfikacja', payload?.specs],
+      ['Cechy', payload?.features],
+      ['Materiały', payload?.materials],
+      ['Normy', payload?.norms],
+      ['Certyfikaty', payload?.certificates],
+      ['Zastosowanie', payload?.use_cases],
+    ] as const) {
+      if (Array.isArray(items) && items.length > 0) {
+        extra.push(`${title}:\n${items.map((s) => `• ${s}`).join('\n')}`)
+      }
+    }
+    return [descriptionProse(product.description), extra.join('\n\n')].filter(Boolean).join('\n\n')
   }, [product])
 
   const findHits = useMemo(() => findAllOffsets(bodyText, find), [bodyText, find])

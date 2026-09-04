@@ -76,8 +76,9 @@ final class ProductImageCandidateVerifier
             if (! $this->isPotentialProductImage($url)) {
                 continue;
             }
-            // og:image kolekcji (GRZMOT) bez typu w URL — Vision, nie ślepe zaufanie
-            if (isset($trusted[mb_strtolower($url)]) && ! $this->identity->nameRequiresArticleType($product)) {
+            // og:image / itemprop — na wskazanej karcie sklepu bez SKU w nazwie pliku
+            if (isset($trusted[mb_strtolower($url)])
+                && (! $this->identity->nameRequiresArticleType($product) || $product->hintedShopUrl() !== null)) {
                 $selected[] = $url;
                 if (count($selected) >= $max) {
                     return array_slice($selected, 0, $max);
@@ -193,7 +194,7 @@ final class ProductImageCandidateVerifier
             if (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url)
                 && ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
                 && ! $this->identity->imageUrlHasForeignType($url, $product)
-                && ! $this->identity->nameRequiresArticleType($product)) {
+                && (! $this->identity->nameRequiresArticleType($product) || $product->hintedShopUrl() !== null)) {
                 return [$url];
             }
         }

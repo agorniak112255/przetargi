@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { api } from '../lib/api'
 
@@ -24,17 +25,6 @@ function withProfileDefaults(next: AiSettings): AiSettings {
     ...next,
     reasoning_effort: next.reasoning_effort ?? 'auto',
     product_search_card_detail: next.product_search_card_detail === 'short' ? 'short' : 'long',
-    catalog_slang: (next.catalog_slang ?? []).map((row) => ({
-      ...row,
-      keywords: row.keywords ?? [],
-      tags: row.tags ?? [],
-    })),
-    catalog_slang_defaults: (next.catalog_slang_defaults ?? []).map((row) => ({
-      ...row,
-      keywords: row.keywords ?? [],
-      tags: row.tags ?? [],
-    })),
-    catalog_slang_categories: next.catalog_slang_categories ?? {},
     model_profiles: (next.model_profiles ?? []).map((p) => ({
       ...p,
       reasoning_effort: p.reasoning_effort ?? null,
@@ -81,16 +71,6 @@ type AiModelProfile = {
   api_key_masked: string | null
 }
 
-type CatalogSlangEntry = {
-  category: string
-  terms: string[]
-  phrases: string[]
-  note: string
-  jargon: boolean
-  keywords: string[]
-  tags: string[]
-}
-
 type AiSettings = {
   enabled: boolean
   provider: string
@@ -118,9 +98,6 @@ type AiSettings = {
   embedding_cloud_model: string | null
   embedding_collection: string
   model_profiles: AiModelProfile[]
-  catalog_slang: CatalogSlangEntry[]
-  catalog_slang_defaults: CatalogSlangEntry[]
-  catalog_slang_categories: Record<string, string>
   ai_tasks: AiTaskInfo[]
   has_api_key: boolean
   has_tavily_api_key: boolean
@@ -137,8 +114,6 @@ type AiSettings = {
 
 export function AiSettingsPage() {
   const [cfg, setCfg] = useState<AiSettings | null>(null)
-  const [slangCat, setSlangCat] = useState('')
-  const [slangQ, setSlangQ] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [tavilyKey, setTavilyKey] = useState('')
   const [qdrantKey, setQdrantKey] = useState('')
@@ -263,17 +238,6 @@ export function AiSettingsPage() {
         embedding_base_url: cfg.embedding_base_url?.trim() || null,
         embedding_provider: cfg.embedding_provider || 'local',
         embedding_cloud_model: cfg.embedding_cloud_model?.trim() || null,
-        catalog_slang: cfg.catalog_slang
-          .filter((row) => row.terms.some((t) => t.trim() !== '') && row.phrases.some((p) => p.trim() !== ''))
-          .map((row) => ({
-          category: row.category,
-          terms: row.terms,
-          phrases: row.phrases,
-          note: row.note,
-          jargon: Boolean(row.jargon),
-          keywords: row.keywords ?? [],
-          tags: row.tags ?? [],
-        })),
         model_profiles: cfg.model_profiles.map((p) => {
           const entry: Record<string, unknown> = {
             id: p.id,
@@ -889,164 +853,13 @@ export function AiSettingsPage() {
                 : 'Model dostaje pełny opis, cechy i zastosowania (wolniej, lepiej łapie szczegóły z opisu).'}
             </span>
           </label>
-          <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
-            <p className="text-xs font-semibold text-slate-700">Słownik żargonu SIWZ</p>
-            <p className="text-[11px] text-slate-500">
-              Potoczne nazwy (wampirki, gumiaki) → frazy z cennika. Frazy działają w ramach kategorii,
-              żeby „pianki” przy rękawicach nie szukały zatyczek do uszu. Zapisz, żeby utrwalić zmiany.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <select
-                className="rounded border border-slate-300 px-2 py-1 text-xs"
-                value={slangCat}
-                onChange={(e) => setSlangCat(e.target.value)}
-              >
-                <option value="">Wszystkie kategorie</option>
-                {Object.entries(cfg.catalog_slang_categories).map(([id, label]) => (
-                  <option key={id} value={id}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="min-w-[10rem] flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
-                placeholder="Filtruj żargon…"
-                value={slangQ}
-                onChange={(e) => setSlangQ(e.target.value)}
-              />
-              <button
-                type="button"
-                className="rounded border border-slate-300 px-2 py-1 text-xs"
-                onClick={() =>
-                  setCfg({
-                    ...cfg,
-                    catalog_slang: [
-                      ...cfg.catalog_slang,
-                      {
-                        category: slangCat || 'rece',
-                        terms: [],
-                        phrases: [],
-                        note: '',
-                        jargon: true,
-                        keywords: [],
-                        tags: [],
-                      },
-                    ],
-                  })
-                }
-              >
-                Dodaj wpis
-              </button>
-              <button
-                type="button"
-                className="rounded border border-slate-300 px-2 py-1 text-xs"
-                onClick={() => setCfg({ ...cfg, catalog_slang: cfg.catalog_slang_defaults })}
-              >
-                Przywróć zestaw startowy
-              </button>
-            </div>
-            <div className="max-h-80 space-y-2 overflow-auto">
-              {cfg.catalog_slang.map((row, idx) => {
-                const hay = `${row.terms.join(' ')} ${row.phrases.join(' ')} ${row.keywords.join(' ')} ${row.tags.join(' ')} ${row.note}`.toLowerCase()
-                if (slangCat && row.category !== slangCat) return null
-                if (slangQ.trim() && !hay.includes(slangQ.trim().toLowerCase())) return null
-                return (
-                  <div key={`${row.category}-${idx}`} className="rounded bg-white p-2 text-xs space-y-1">
-                    <div className="flex flex-wrap gap-1">
-                      <select
-                        className="rounded border border-slate-300 px-1 py-0.5"
-                        value={row.category}
-                        onChange={(e) => {
-                          const next = [...cfg.catalog_slang]
-                          next[idx] = { ...row, category: e.target.value }
-                          setCfg({ ...cfg, catalog_slang: next })
-                        }}
-                      >
-                        {Object.entries(cfg.catalog_slang_categories).map(([id, label]) => (
-                          <option key={id} value={id}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                      <label className="ml-auto flex items-center gap-1 text-[11px] text-slate-600">
-                        <input
-                          type="checkbox"
-                          checked={row.jargon}
-                          onChange={(e) => {
-                            const next = [...cfg.catalog_slang]
-                            next[idx] = { ...row, jargon: e.target.checked }
-                            setCfg({ ...cfg, catalog_slang: next })
-                          }}
-                        />
-                        żargon (nie warunek na karcie)
-                      </label>
-                      <button
-                        type="button"
-                        className="text-red-700 underline"
-                        onClick={() =>
-                          setCfg({
-                            ...cfg,
-                            catalog_slang: cfg.catalog_slang.filter((_, i) => i !== idx),
-                          })
-                        }
-                      >
-                        Usuń
-                      </button>
-                    </div>
-                    <input
-                      className="w-full rounded border border-slate-300 px-2 py-1"
-                      value={row.terms.join(', ')}
-                      onChange={(e) => {
-                        const next = [...cfg.catalog_slang]
-                        next[idx] = {
-                          ...row,
-                          terms: e.target.value.split(/[,;]+/).map((s) => s.trim()).filter(Boolean),
-                        }
-                        setCfg({ ...cfg, catalog_slang: next })
-                      }}
-                      placeholder="Żargon, po przecinku"
-                    />
-                    <input
-                      className="w-full rounded border border-slate-300 px-2 py-1"
-                      value={row.phrases.join(', ')}
-                      onChange={(e) => {
-                        const next = [...cfg.catalog_slang]
-                        next[idx] = {
-                          ...row,
-                          phrases: e.target.value.split(/[,;]+/).map((s) => s.trim()).filter(Boolean),
-                        }
-                        setCfg({ ...cfg, catalog_slang: next })
-                      }}
-                      placeholder="Frazy z cennika, po przecinku"
-                    />
-                    <input
-                      className="w-full rounded border border-slate-300 px-2 py-1"
-                      value={(row.keywords ?? []).join(', ')}
-                      onChange={(e) => {
-                        const next = [...cfg.catalog_slang]
-                        next[idx] = {
-                          ...row,
-                          keywords: e.target.value.split(/[,;]+/).map((s) => s.trim()).filter(Boolean),
-                        }
-                        setCfg({ ...cfg, catalog_slang: next })
-                      }}
-                      placeholder="Słowa kluczowe do wyszukiwania, po przecinku"
-                    />
-                    <input
-                      className="w-full rounded border border-slate-300 px-2 py-1 text-slate-600"
-                      value={row.note}
-                      onChange={(e) => {
-                        const next = [...cfg.catalog_slang]
-                        next[idx] = { ...row, note: e.target.value }
-                        setCfg({ ...cfg, catalog_slang: next })
-                      }}
-                      placeholder="Notatka (opcjonalnie)"
-                    />
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <p className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            Słownik żargonu SIWZ jest w{' '}
+            <Link to="/admin/zargon" className="font-semibold text-blue-700 underline">
+              Administracja → Żargon SIWZ
+            </Link>
+            .
+          </p>
           <label className="flex items-center gap-2 text-xs">
             <input
               type="checkbox"

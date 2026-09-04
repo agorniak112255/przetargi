@@ -51,6 +51,11 @@ const tiles: Tile[] = [
     label: 'Strony wyszukiwarka',
     description: 'Domeny indeksu i liczba linków',
   },
+  {
+    to: '/admin/zargon',
+    label: 'Żargon SIWZ',
+    description: 'Słownik potocznych nazw z przetargów',
+  },
 ]
 
 export function AdminNavTiles() {
