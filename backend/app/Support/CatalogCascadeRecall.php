@@ -225,12 +225,18 @@ final class CatalogCascadeRecall
         if ($token === '') {
             return;
         }
-        $like = '%'.addcslashes($token, '%_\\').'%';
-        $builder->where(function (Builder $outer) use ($like): void {
-            $outer->where('name', 'like', $like)
-                ->orWhere('sku', 'like', $like)
-                ->orWhere('description', 'like', $like)
-                ->orWhere('search_blob', 'like', $like);
+        $needles = $this->slang->searchAliases($token);
+        if ($needles === []) {
+            $needles = [$token];
+        }
+        $builder->where(function (Builder $outer) use ($needles): void {
+            foreach ($needles as $needle) {
+                $like = '%'.addcslashes($needle, '%_\\').'%';
+                $outer->orWhere('name', 'like', $like)
+                    ->orWhere('sku', 'like', $like)
+                    ->orWhere('description', 'like', $like)
+                    ->orWhere('search_blob', 'like', $like);
+            }
         });
     }
 
@@ -463,7 +469,7 @@ final class CatalogCascadeRecall
         $out = [];
         foreach (preg_split('/[\s,;\/|+]+/u', $phrase) ?: [] as $raw) {
             $token = $this->fold($raw);
-            if ($token !== '' && mb_strlen($token) >= 4) {
+            if ($token !== '' && (mb_strlen($token) >= 4 || $this->slang->isIndexedTerm($token))) {
                 $out[] = $token;
             }
         }

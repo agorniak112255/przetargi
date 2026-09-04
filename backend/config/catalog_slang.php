@@ -36,7 +36,7 @@ return [
     $e('rece', ['foliowe', 'foliówki'], ['rękawice foliowe', 'rękawice foliowe jednorazowe'], '', true),
     $e('rece', ['jednorazówki', 'jednorazowe'], ['rękawice jednorazowe'], '', true),
     $e('rece', ['kropki', 'nakrapiane'], ['rękawice nakrapiane PVC', 'rękawice z nakropieniem PVC'], '', true),
-    $e('rece', ['PCV', 'PVC'], ['rękawice powlekane PVC'], '', true),
+    $e('rece', ['PCV', 'PVC'], ['rękawice PVC', 'rękawice PCV'], '', true),
     $e('rece', ['olejówki'], ['rękawice olejoodporne', 'rękawice do oleju'], '', true),
     $e('rece', ['chemiczne'], ['rękawice chemiczne', 'rękawice EN 374'], ''),
     $e('rece', ['kwasówki', 'kwasoodporne'], ['rękawice kwasoodporne', 'rękawice chemiczne'], '', true),

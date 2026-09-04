@@ -138,6 +138,17 @@ final class CatalogSlangDictionaryTest extends TestCase
         ));
     }
 
+    public function test_pcv_maps_to_pvc_material_not_coating(): void
+    {
+        $rewrite = $this->dict()->searchRewrite('Rękawice PCV długie do łokci');
+        $this->assertNotNull($rewrite);
+        $hay = mb_strtolower(implode(' ', $rewrite['search_phrases']));
+        $this->assertTrue(str_contains($hay, 'pvc') || str_contains($hay, 'pcv'));
+        $this->assertStringNotContainsString('powlekan', $hay);
+        $this->assertTrue($this->dict()->isIndexedTerm('pcv'));
+        $this->assertEqualsCanonicalizing(['pcv', 'pvc'], $this->dict()->searchAliases('pcv'));
+    }
+
     public function test_nitrile_material_rejects_knit_palm_coat_but_keeps_disposable(): void
     {
         $q = 'Rękawice nitrylowe lekkie';

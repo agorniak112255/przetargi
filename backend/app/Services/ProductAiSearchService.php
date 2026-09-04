@@ -1314,7 +1314,10 @@ final class ProductAiSearchService
         $meaningful = 0;
         foreach (preg_split('/[\s,;\/|+]+/u', $this->lexicalNormalize($step)) ?: [] as $token) {
             $token = trim($token);
-            if ($token === '' || mb_strlen($token) < 4) {
+            if ($token === '') {
+                continue;
+            }
+            if (mb_strlen($token) < 4 && ! $this->catalogSlang->isIndexedTerm($token)) {
                 continue;
             }
             if ($this->catalogSlang->isJargonNorm($token)) {

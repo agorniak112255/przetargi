@@ -376,6 +376,55 @@ final class CatalogSlangDictionary
         return $coated && $palmOrKnit;
     }
 
+    public function isIndexedTerm(string $folded): bool
+    {
+        $token = trim($folded);
+        if ($token === '' || mb_strlen($token) < 3) {
+            return false;
+        }
+        foreach ($this->entries() as $entry) {
+            foreach ($entry['terms'] as $term) {
+                if ($this->fold($term) === $token) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /** Krótki materiał (pcv/pvc): szukaj wszystkich zapisów z tego wpisu. */
+    public function searchAliases(string $folded): array
+    {
+        $token = trim($folded);
+        if ($token === '') {
+            return [];
+        }
+        if (mb_strlen($token) > 3) {
+            return [$token];
+        }
+        $out = [$token];
+        foreach ($this->entries() as $entry) {
+            $terms = [];
+            foreach ($entry['terms'] as $term) {
+                $n = $this->fold($term);
+                if ($n !== '') {
+                    $terms[] = $n;
+                }
+            }
+            if (! in_array($token, $terms, true)) {
+                continue;
+            }
+            foreach ($terms as $alias) {
+                if (mb_strlen($alias) >= 3 && mb_strlen($alias) <= 3) {
+                    $out[] = $alias;
+                }
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
     public function isJargonNorm(string $normalizedToken): bool
     {
         $token = trim($normalizedToken);

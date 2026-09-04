@@ -363,6 +363,60 @@ final class ProductAiSearchSlangTest extends TestCase
         $this->assertNotContains('R840', $skus);
     }
 
+    public function test_pcv_long_gloves_are_found_in_catalog(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $pvc = Product::query()->create([
+            'sku' => 'A835',
+            'name' => 'Rękawice PCV długie do łokcia',
+            'manufacturer' => 'Portwest',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice z PCV, mankiet do łokcia.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 9.25,
+            'currency' => 'PLN',
+            'stock' => 8,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => '58-270',
+            'name' => 'Całkowicie powlekane rękawice z długim mankietem',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice chemiczne powlekane nitrylem.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 16,
+            'currency' => 'PLN',
+            'stock' => 4,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturn([
+                'needed' => 'rękawice PVC',
+                'search_steps' => ['rękawice', 'PCV', 'długie'],
+                'search_phrases' => ['rękawice PVC'],
+                'matches' => [
+                    ['id' => $pvc->id, 'score' => 88, 'reason' => 'PCV długie'],
+                ],
+            ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $skus = array_column($this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice PCV długie do łokci',
+            'limit' => 5,
+        ])->assertOk()->json('products') ?? [], 'sku');
+
+        $this->assertContains('A835', $skus);
+        $this->assertNotContains('58-270', $skus);
+    }
+
     public function test_qualifying_products_are_ordered_by_purchase_price(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

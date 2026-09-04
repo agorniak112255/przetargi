@@ -171,6 +171,50 @@ final class CatalogCascadeRecallTest extends TestCase
         $this->assertSame($delta->id, $hit['products']->first()?->id);
     }
 
+    public function test_pcv_query_keeps_pvc_token_and_finds_pvc_glove(): void
+    {
+        Product::query()->create([
+            'sku' => 'COAT-NIT',
+            'name' => 'Rękawice dziane, dłoń powlekana nitrylem',
+            'manufacturer' => 'Delta Plus',
+            'description' => 'Powlekane do oleju.',
+            'catalog_price_net' => 8,
+            'purchase_price' => 4,
+            'stock' => 10,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+        ]);
+        $pvc = Product::query()->create([
+            'sku' => 'A835',
+            'name' => 'Rękawice PCV długie do łokcia',
+            'manufacturer' => 'Portwest',
+            'description' => 'Rękawice z PCV, mankiet do łokcia.',
+            'catalog_price_net' => 12,
+            'purchase_price' => 9.25,
+            'stock' => 8,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        CatalogManufacturerContext::forgetCache();
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'Rękawice PCV długie do łokci',
+            [
+                'needed' => 'rękawice PVC',
+                'search_phrases' => ['rękawice PVC', 'rękawice PCV'],
+                'search_steps' => ['rękawice', 'PCV'],
+                'constraints' => [],
+            ],
+            'Rękawice PCV długie do łokci',
+            20
+        );
+
+        $skus = $hit['products']->pluck('sku')->all();
+        $this->assertContains('A835', $skus);
+        $this->assertNotContains('COAT-NIT', $skus);
+        $this->assertSame($pvc->id, $hit['products']->first()?->id);
+    }
+
     public function test_nitrile_material_drops_knit_palm_coat_even_when_lekkie_matches(): void
     {
         Product::query()->create([
