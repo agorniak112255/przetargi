@@ -341,6 +341,134 @@ final class RetailerOnSiteSearchTest extends TestCase
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'id_product=5'));
     }
 
+    public function test_atlas_uses_antar_shoper_searchquery(): void
+    {
+        Http::fake([
+            'https://antar.pl/pl/searchquery/*' => Http::response(
+                '<a class="prodname" href="/pl/p/Sandaly-ATLAS-SL-46-niebieski-S1-ESD/15991">'
+                .'<span class="productname">Sandały ATLAS SL 46 niebieski S1 ESD</span></a>'
+                .'<a href="/pl/p/Sandaly-ATLAS-SL-26-zielony-S1-ESD/15990">Sandały ATLAS SL 26 zielony S1 ESD</a>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $urls = array_column(app(RetailerOnSiteSearch::class)->find($this->atlasSl46()), 'url');
+
+        $this->assertContains('https://antar.pl/pl/p/Sandaly-ATLAS-SL-46-niebieski-S1-ESD/15991', $urls);
+        $this->assertNotContains('https://antar.pl/pl/p/Sandaly-ATLAS-SL-26-zielony-S1-ESD/15990', $urls);
+    }
+
+    public function test_shop_queries_add_hyphen_variant(): void
+    {
+        $queries = app(RetailerOnSiteSearch::class)->shopQueries($this->atlasSl46());
+
+        $this->assertContains('SL 46', $queries);
+        $this->assertContains('SL-46', $queries);
+    }
+
+    public function test_gvs_uses_idsblast_search(): void
+    {
+        Http::fake([
+            'https://idsblast.com/search.php*' => Http::response(
+                '<a aria-label="PX5 Battery Door Assembly" href="https://idsblast.com/03-815/?searchuuid=abc&search_query=03-815">'
+                .'PX5 Battery Door Assembly 03-815</a>'
+                .'<a href="https://idsblast.com/03-818/">RPB 03-818 Hinge</a>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $urls = array_column(app(RetailerOnSiteSearch::class)->find(new Product([
+            'sku' => '03-815',
+            'name' => 'GVS Battery Door Assembly with Battery Door Hinge 03-818 for PX5',
+            'manufacturer' => 'GVS',
+        ])), 'url');
+
+        $this->assertContains('https://idsblast.com/03-815/', $urls);
+        $this->assertNotContains('https://idsblast.com/03-818/', $urls);
+    }
+
+    public function test_sordin_uses_customguns_woo_search(): void
+    {
+        Http::fake([
+            'https://customguns.pl/?s=*' => Http::response(
+                '<a href="https://customguns.pl/produkt/aktywne-ochronniki-sluchu-supreme-pro-x-nakarkowe-zielone-76302-x-g-s/">'
+                .'Aktywne ochronniki słuchu Supreme Pro X Nakarkowe zielone 76302-X-G-S</a>'
+                .'<a href="https://customguns.pl/produkt/pelttor-sporttac-oslona/">Ochronniki Peltor SportTac</a>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $urls = array_column(app(RetailerOnSiteSearch::class)->find(new Product([
+            'sku' => '76302-X-G-S',
+            'name' => 'Aktywne ochronniki słuchu Supreme Pro X Nakarkowe zielone',
+            'manufacturer' => 'Sordin',
+        ])), 'url');
+
+        $this->assertContains(
+            'https://customguns.pl/produkt/aktywne-ochronniki-sluchu-supreme-pro-x-nakarkowe-zielone-76302-x-g-s/',
+            $urls
+        );
+        $this->assertNotContains(
+            'https://customguns.pl/produkt/pelttor-sporttac-oslona/',
+            $urls
+        );
+    }
+
+    public function test_portwest_fallback_uses_sklep_system(): void
+    {
+        Http::fake([
+            'https://sklep-system.pl/?s=*' => Http::response(
+                '<a href="/produkt/ogrodniczki-robocze-portwest-tx39-bremen">Ogrodniczki robocze Portwest TX39 BREMEN</a>'
+                .'<a href="/produkt/softshell-portwest-tx40">Softshell Portwest TX40</a>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $urls = array_column(app(RetailerOnSiteSearch::class)->find(new Product([
+            'sku' => 'TX39',
+            'name' => 'Ogrodniczki Bremen',
+            'manufacturer' => 'Portwest',
+        ])), 'url');
+
+        $this->assertContains('https://sklep-system.pl/produkt/ogrodniczki-robocze-portwest-tx39-bremen', $urls);
+        $this->assertNotContains('https://sklep-system.pl/produkt/softshell-portwest-tx40', $urls);
+    }
+
+    public function test_shopify_title_from_slug_when_anchor_is_empty(): void
+    {
+        Http::fake([
+            'https://novarlo.com/search*' => Http::response(
+                '<a href="/products/rpb-03-815-px5-battery-door-assembly?_pos=1&_sid=abc&_ss=r"></a>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $urls = array_column(app(RetailerOnSiteSearch::class)->find(new Product([
+            'sku' => '03-815',
+            'name' => 'GVS Battery Door Assembly with Battery Door Hinge 03-818 for PX5',
+            'manufacturer' => 'GVS',
+        ])), 'url');
+
+        $this->assertContains(
+            'https://novarlo.com/products/rpb-03-815-px5-battery-door-assembly',
+            $urls
+        );
+    }
+
+    private function atlasSl46(): Product
+    {
+        return new Product([
+            'sku' => 'SL-46',
+            'name' => 'SL 46 S1 ESD',
+            'manufacturer' => 'Atlas',
+        ]);
+    }
+
     private function upowerAlfa(): Product
     {
         return new Product([

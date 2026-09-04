@@ -12,8 +12,8 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Szuka karty w wyszukiwarce sklepu (Magento / Presta) albo katalogu MAPA,
- * gdy Google/DDG dają 429.
+ * Szuka karty w wyszukiwarce sklepu (Magento / Presta / Shoper / Woo / Shopify),
+ * gdy Google/DDG dają 429 albo sitelink nie nosi SKU.
  */
 final class RetailerOnSiteSearch
 {
@@ -31,6 +31,31 @@ final class RetailerOnSiteSearch
         ['host' => 'behapownia.pl', 'template' => 'https://behapownia.pl/?d=szukaj&szukaj={q}'],
         ['host' => 'specto.com.pl', 'template' => 'https://specto.com.pl/?d=szukaj&szukaj={q}'],
         ['host' => 'aitbhp.pl', 'template' => 'https://aitbhp.pl/?d=szukaj&szukaj={q}'],
+        ['host' => 'promocjabhp.pl', 'template' => 'https://www.promocjabhp.pl/?search={q}'],
+    ];
+
+    /** @var list<array{host: string, template: string}> */
+    private const SHOPER_ENDPOINTS = [
+        ['host' => 'antar.pl', 'template' => 'https://antar.pl/pl/searchquery/{q}/1'],
+    ];
+
+    /** @var list<array{host: string, template: string}> */
+    private const WOO_ENDPOINTS = [
+        ['host' => 'roboczystyl.pl', 'template' => 'https://roboczystyl.pl/?s={q}&post_type=product'],
+        ['host' => 'regera.pl', 'template' => 'https://regera.pl/?s={q}&post_type=product'],
+        ['host' => 'customguns.pl', 'template' => 'https://customguns.pl/?s={q}&post_type=product'],
+        ['host' => 'sklep-system.pl', 'template' => 'https://sklep-system.pl/?s={q}&post_type=product'],
+    ];
+
+    /** @var list<array{host: string, template: string}> */
+    private const SHOPIFY_ENDPOINTS = [
+        ['host' => 'novarlo.com', 'template' => 'https://novarlo.com/search?q={q}'],
+        ['host' => 'workweargurus.com', 'template' => 'https://workweargurus.com/search?q={q}'],
+    ];
+
+    /** @var list<array{host: string, template: string}> */
+    private const BIGCOMMERCE_ENDPOINTS = [
+        ['host' => 'idsblast.com', 'template' => 'https://idsblast.com/search.php?search_query={q}'],
     ];
 
     /** @var array{host: string, template: string} */
@@ -72,7 +97,7 @@ final class RetailerOnSiteSearch
         if ($endpoints === []) {
             return [];
         }
-        $queries = array_values(array_filter([$this->query($product), $this->queryBareModel($product)]));
+        $queries = $this->shopQueries($product);
         if ($queries === []) {
             return [];
         }
@@ -172,16 +197,48 @@ final class RetailerOnSiteSearch
     }
 
     /**
+     * Sklepy często indeksują „SL-46”, a cennik ma „SL 46”.
+     *
+     * @return list<string>
+     */
+    public function shopQueries(Product $product): array
+    {
+        $out = [];
+        foreach ([
+            $this->query($product),
+            $this->identity->firstStrongShopPhrase($product),
+            $this->queryBareModel($product),
+        ] as $query) {
+            $query = trim($query);
+            if ($query === '') {
+                continue;
+            }
+            $out[] = $query;
+            $hyphen = trim((string) preg_replace('/\s+/u', '-', $query));
+            if ($hyphen !== '' && $hyphen !== $query) {
+                $out[] = $hyphen;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
      * @return list<array{url: string, title: string, snippet: string}>
      */
     public function productLinks(string $html, string $host): array
     {
         $out = [];
-        if (preg_match_all('/<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $html, $matches, PREG_SET_ORDER) === 0) {
+        if (preg_match_all(
+            '/<a\b([^>]*)href=["\']([^"\']+)["\']([^>]*)>(.*?)<\/a>/is',
+            $html,
+            $matches,
+            PREG_SET_ORDER
+        ) === 0) {
             return [];
         }
         foreach ($matches as $hit) {
-            $url = html_entity_decode(trim($hit[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $url = html_entity_decode(trim($hit[2]), ENT_QUOTES | ENT_HTML5, 'UTF-8');
             if ($url === '' || str_starts_with($url, '#')
                 || str_starts_with($url, 'javascript:') || str_starts_with($url, 'mailto:')) {
                 continue;
@@ -198,17 +255,24 @@ final class RetailerOnSiteSearch
             }
             $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
             if ($path === '' || $path === '/' || str_ends_with($path, '/index.php')
-                || preg_match('#/(search|catalogsearch|wyszukiwanie|category|kategoria|customer|checkout|cart|login)#u', $path) === 1) {
+                || preg_match('#/(searchquery|search\.php|catalogsearch|wyszukiwanie)(/|$)|/(search|category|kategoria|collections|producent|manufacturer|customer|checkout|cart|login)(/|$)#u', $path) === 1) {
                 continue;
             }
-            $title = trim(html_entity_decode(strip_tags($hit[2]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-            if (mb_strlen($title) < 8) {
+            $url = $this->cleanProductUrl($url);
+            $title = trim(html_entity_decode(strip_tags($hit[4]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            if ($title === '' || mb_strlen($title) < 8) {
+                $labeled = $this->ariaLabelFromAttrs($hit[1].' '.$hit[3]);
+                if ($labeled !== '') {
+                    $title = $labeled;
+                }
+            }
+            if ($title === '' || mb_strlen($title) < 8) {
                 $fromSlug = $this->titleFromProductPath($path);
                 if ($fromSlug !== '') {
                     $title = $fromSlug;
                 }
             }
-            if ($title === '' || mb_strlen($title) < 8) {
+            if ($title === '' || (mb_strlen($title) < 8 && preg_match('/\d/u', $title) !== 1)) {
                 continue;
             }
             $out[mb_strtolower($url)] = [
@@ -230,16 +294,14 @@ final class RetailerOnSiteSearch
             return self::ENDPOINTS;
         }
         $hosts = $this->identity->catalogSearchHosts($product);
-        $known = array_merge(
-            [self::MISTERWORKER_ENDPOINT],
-            self::IDOSELL_ENDPOINTS,
-            [self::MAPA_ENDPOINT, self::MAREL_ENDPOINT],
-            self::ENDPOINTS
-        );
+        $byHost = [];
+        foreach ($this->allKnownEndpoints() as $row) {
+            $byHost[$row['host']] = $row;
+        }
         $out = [];
-        foreach ($known as $row) {
-            if (in_array($row['host'], $hosts, true)) {
-                $out[] = $row;
+        foreach ($hosts as $host) {
+            if (isset($byHost[$host])) {
+                $out[] = $byHost[$host];
             }
         }
         if ($out !== []) {
@@ -251,14 +313,53 @@ final class RetailerOnSiteSearch
         if ($this->identity->shopIdentityPhrases($product) !== []
             || $this->identity->hasDistinctiveCatalogSku($product)
             || $this->identity->looksLikeWarehouseArticleSku($product)) {
-            return self::ENDPOINTS;
+            $byHost = [];
+            foreach (array_merge(self::ENDPOINTS, $this->codeIndexEndpoints()) as $row) {
+                $byHost[$row['host']] = $row;
+            }
+
+            return array_values($byHost);
         }
 
         return [];
     }
 
     /**
+     * @return list<array{host: string, template: string}>
+     */
+    private function allKnownEndpoints(): array
+    {
+        return array_merge(
+            [self::MISTERWORKER_ENDPOINT],
+            self::IDOSELL_ENDPOINTS,
+            [self::MAPA_ENDPOINT, self::MAREL_ENDPOINT],
+            self::ENDPOINTS,
+            self::SHOPER_ENDPOINTS,
+            self::WOO_ENDPOINTS,
+            self::SHOPIFY_ENDPOINTS,
+            self::BIGCOMMERCE_ENDPOINTS,
+        );
+    }
+
+    /**
+     * @return list<array{host: string, template: string}>
+     */
+    private function codeIndexEndpoints(): array
+    {
+        $want = $this->identity->codeIndexRetailerHosts();
+        $out = [];
+        foreach ($this->allKnownEndpoints() as $row) {
+            if (in_array($row['host'], $want, true)) {
+                $out[] = $row;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Solr MAPA przy jednym trafieniu robi 303 na /strona-produktu/….
+     * Woo/Shopify przy jednym wyniku często 302 na kartę.
      *
      * @return array{url: string, title: string, snippet: string}|null
      */
@@ -274,11 +375,15 @@ final class RetailerOnSiteSearch
             return null;
         }
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
-        if (! str_contains($path, '/strona-produktu/')) {
+        if (! $this->looksLikeProductPath($path)) {
             return null;
         }
-        $slug = trim((string) basename($path), '/');
-        $title = trim(str_replace('-', ' ', $slug));
+        $url = $this->cleanProductUrl($url);
+        $slug = trim((string) basename((string) (parse_url($url, PHP_URL_PATH) ?? '')), '/');
+        $title = $this->titleFromProductPath($path);
+        if ($title === '') {
+            $title = trim(str_replace('-', ' ', $slug));
+        }
 
         return [
             'url' => $url,
@@ -287,15 +392,63 @@ final class RetailerOnSiteSearch
         ];
     }
 
+    private function looksLikeProductPath(string $path): bool
+    {
+        return str_contains($path, '/strona-produktu/')
+            || preg_match('#/(produkt|products?)/#u', $path) === 1
+            || preg_match('#^/pl/p/#u', $path) === 1;
+    }
+
     private function titleFromProductPath(string $path): string
     {
-        $slug = basename($path);
+        $parts = array_values(array_filter(
+            explode('/', trim($path, '/')),
+            static fn (string $p): bool => $p !== ''
+        ));
+        if ($parts === []) {
+            return '';
+        }
+        $slug = (string) $parts[array_key_last($parts)];
         $slug = preg_replace('/\.html?$/i', '', $slug) ?? $slug;
-        if (preg_match('/^p\d+[,_-](.+)$/u', $slug, $m) !== 1) {
+        if (preg_match('/^\d+$/', $slug) === 1 && count($parts) >= 2) {
+            $slug = (string) $parts[count($parts) - 2];
+        }
+        if (preg_match('/^p\d+[,_-](.+)$/u', $slug, $m) === 1) {
+            return trim((string) preg_replace('/[-_]+/u', ' ', $m[1]));
+        }
+
+        $title = trim((string) preg_replace('/[-_]+/u', ' ', $slug));
+        if ($title === '' || mb_strlen($title) < 3) {
             return '';
         }
 
-        return trim((string) preg_replace('/[-_]+/u', ' ', $m[1]));
+        return $title;
+    }
+
+    private function ariaLabelFromAttrs(string $attrs): string
+    {
+        if (preg_match('/\baria-label=["\']([^"\']+)["\']/i', $attrs, $m) !== 1) {
+            return '';
+        }
+
+        return trim(html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+
+    private function cleanProductUrl(string $url): string
+    {
+        $parts = parse_url($url);
+        if (! is_array($parts) || ! isset($parts['scheme'], $parts['host'], $parts['path'])) {
+            return $url;
+        }
+        $query = [];
+        parse_str((string) ($parts['query'] ?? ''), $query);
+        unset($query['searchuuid'], $query['search_query'], $query['_pos'], $query['_sid'], $query['_ss']);
+        $clean = $parts['scheme'].'://'.$parts['host'].$parts['path'];
+        if ($query !== []) {
+            $clean .= '?'.http_build_query($query);
+        }
+
+        return $clean;
     }
 
     /**
