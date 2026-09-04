@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, type Product } from '../lib/api'
+import { api, appHref, type Product } from '../lib/api'
 import {
   descriptionProse,
   findAllOffsets,
@@ -116,13 +116,23 @@ export function ProductVerifyModal({ productId, query, onClose }: Props) {
             {loading && <p className="text-sm text-violet-100">Ładowanie karty…</p>}
             {error && <p className="text-sm text-red-100">{error}</p>}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-white/30 px-2.5 py-1 text-xs font-medium hover:bg-white/10"
-          >
-            Zamknij
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <a
+              href={appHref(`/products/${productId}`)}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-md border border-white/30 px-2.5 py-1 text-xs font-medium hover:bg-white/10"
+            >
+              Otwórz w nowej karcie
+            </a>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-white/30 px-2.5 py-1 text-xs font-medium hover:bg-white/10"
+            >
+              Zamknij
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50 px-5 py-2.5">
