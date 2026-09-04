@@ -52,6 +52,11 @@ const tiles: Tile[] = [
     description: 'Domeny indeksu i liczba linków',
   },
   {
+    to: '/admin/strojenie-ai',
+    label: 'Strojenie AI',
+    description: 'Limit wyników wyszukiwania w katalogu',
+  },
+  {
     to: '/admin/zargon',
     label: 'Żargon SIWZ',
     description: 'Słownik potocznych nazw z przetargów',

@@ -98,6 +98,22 @@ final class CatalogSlangDictionaryTest extends TestCase
             $q,
             '1016 (NOWO) Rękawice dziane powlekane do oleju, ochrona przed cieczą.'
         ));
+        $this->assertTrue($this->dict()->rejectsProduct(
+            $q,
+            'RĘKAWICE Z GRUBEGO NITRYLU NA WKŁADZIE Z DŻERSEJU, POWLEKANE W CAŁOŚCI'
+        ));
+        $this->assertTrue($this->dict()->rejectsProduct(
+            $q,
+            'Całkowicie powlekane rękawice z długim mankietem'
+        ));
+        $this->assertTrue($this->dict()->rejectsProduct(
+            $q,
+            'RĘKAWICE Z PARA-ARAMIDU, WŁÓKNA SZKLANEGO I MODAKRYLU, POWLEKANE PIANKĄ NEOPRENOWĄ ARC FLASH'
+        ));
+        $this->assertFalse($this->dict()->rejectsProduct(
+            $q,
+            'OPAKOWANIE 10 PAR RĘKAWIC DZIANYCH Z POLIESTRU, DŁOŃ POWLEKANA NITRYLEM'
+        ));
     }
 
     public function test_every_slang_term_is_indexed_as_jargon(): void

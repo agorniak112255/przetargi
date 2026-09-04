@@ -40,6 +40,11 @@ final class ProductAiSearchService
 
     private const MAX_MATCHES = 20;
 
+    /** Limit listy /products „Szukaj w katalogu” — ranking zawsze do tego progu. */
+    public const CATALOG_LIMIT = 40;
+
+    public const WEB_LIMIT = 8;
+
     private const RANK_MAX_TOKENS_LONG = 2500;
 
     private const RANK_MAX_TOKENS_SHORT = 800;
@@ -85,7 +90,7 @@ final class ProductAiSearchService
      */
     public function search(
         string $query,
-        int $limit = 40,
+        int $limit = self::CATALOG_LIMIT,
         bool $withExternalHint = false,
         AiTask $task = AiTask::ProductSearch,
         bool $webOnly = false,
@@ -94,25 +99,30 @@ final class ProductAiSearchService
         if ($query === '') {
             throw new RuntimeException('Podaj treść wymagania dla AI.');
         }
-        $limit = max(1, min(80, $limit));
+        $wanted = max(1, min(80, $limit));
 
         if ($webOnly) {
-            return $this->webOnlyResult($query, $limit);
+            return $this->webOnlyResult($query, $wanted);
         }
 
-        return $this->finishSearch(
-            $query,
-            $this->intentForSearch($query, $task),
-            $limit,
-            $withExternalHint,
-            $task,
+        $wanted = min($wanted, $this->catalogLimit());
+
+        return $this->clipResult(
+            $this->finishSearch(
+                $query,
+                $this->intentForSearch($query, $task),
+                $this->rankLimit($wanted),
+                $withExternalHint,
+                $task,
+            ),
+            $wanted,
         );
     }
 
     /**
-     * To samo wyszukiwanie co fioletowy „Szukaj AI” w modalu / na liście produktów.
+     * To samo wyszukiwanie co „Szukaj w katalogu” na /products.
      */
-    public function searchForTenderMatch(string $query, int $limit = 5): array
+    public function searchForTenderMatch(string $query, int $limit = self::CATALOG_LIMIT): array
     {
         return $this->search($query, $limit, false, AiTask::ProductSearch);
     }
@@ -152,7 +162,7 @@ final class ProductAiSearchService
      */
     public function searchMany(
         array $queries,
-        int $limit = 40,
+        int $limit = self::CATALOG_LIMIT,
         bool $withExternalHint = false,
         AiTask $task = AiTask::ProductSearch,
         int $maxConcurrent = 10,
@@ -167,7 +177,8 @@ final class ProductAiSearchService
         if ($clean === []) {
             return [];
         }
-        $limit = max(1, min(80, $limit));
+        $wanted = min(max(1, min(80, $limit)), $this->catalogLimit());
+        $limit = $this->rankLimit($wanted);
         $maxConcurrent = $this->clampLlmConcurrency($maxConcurrent);
 
         $pending = [];
@@ -234,7 +245,10 @@ final class ProductAiSearchService
         }
         ksort($done);
 
-        return array_values($done);
+        return array_map(
+            fn (array $row): array => $this->clipResult($row, $wanted),
+            array_values($done)
+        );
     }
 
     /**
@@ -516,6 +530,29 @@ final class ProductAiSearchService
             'ai_note' => $note,
             'external_hint' => null,
         ];
+    }
+
+    private function catalogLimit(): int
+    {
+        return $this->aiSettings->catalogSearchLimit();
+    }
+
+    private function rankLimit(int $displayLimit): int
+    {
+        return max($displayLimit, $this->catalogLimit());
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function clipResult(array $result, int $limit): array
+    {
+        $products = is_array($result['products'] ?? null) ? $result['products'] : [];
+        $result['products'] = array_values(array_slice($products, 0, $limit));
+        $result['total'] = count($result['products']);
+
+        return $result;
     }
 
     /** @param array{needed: string, search_phrases: list<string>} $intent */

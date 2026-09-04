@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api, type Product } from '../lib/api'
+import {
+  AI_SEARCH_MIN_CHARS,
+  externalHintsFrom,
+  isAiSearchTimeout,
+  searchProductsByAiWithTimeout,
+} from '../lib/productAiSearch'
 import { ProductVerifyModal } from './ProductVerifyModal'
 
 export type AiMatchPick = {
@@ -105,7 +111,7 @@ export function ProductAiMatchModal({
 
   async function runSearch(web: boolean, text = query) {
     const q = text.trim()
-    if (q.length < 3) {
+    if (q.length < AI_SEARCH_MIN_CHARS) {
       setError('Wpisz co najmniej 3 znaki zapytania.')
       return
     }
@@ -114,16 +120,8 @@ export function ProductAiMatchModal({
     setResults([])
     setExternalHints([])
     try {
-      const res = await api<{
-        products: Product[]
-        ai_note?: string | null
-        external_hint?: ExternalHint | null
-        external_hints?: ExternalHint[]
-      }>('/products/ai-search', {
-        method: 'POST',
-        body: JSON.stringify({ query: q, limit: web ? 8 : 5, web }),
-      })
-      const mapped: AiMatchPick[] = (res.products ?? []).slice(0, 5).map((p) => ({
+      const res = await searchProductsByAiWithTimeout(q, { web })
+      const mapped: AiMatchPick[] = (res.products ?? []).map((p) => ({
         id: p.id,
         sku: p.sku,
         name: p.name,
@@ -136,8 +134,7 @@ export function ProductAiMatchModal({
         reason: p.ai_match_reason ?? null,
         source: 'ai',
       }))
-      const hints =
-        res.external_hints ?? (res.external_hint ? [res.external_hint] : [])
+      const hints = externalHintsFrom(res)
       setResults(mapped)
       setExternalHints(hints)
       if (mapped.length === 0 && hints.length === 0) {
@@ -149,7 +146,13 @@ export function ProductAiMatchModal({
         )
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Błąd wyszukiwania AI')
+      setError(
+        isAiSearchTimeout(e)
+          ? 'Wyszukiwanie AI przekroczyło limit czasu (180 s).'
+          : e instanceof Error
+            ? e.message
+            : 'Błąd wyszukiwania AI',
+      )
     } finally {
       setBusy(false)
     }
@@ -186,7 +189,7 @@ export function ProductAiMatchModal({
           <div>
             <p className="text-sm font-semibold text-slate-900">Wyszukiwanie produktu</p>
             <p className="text-xs text-slate-500">
-              Szukaj — nazwa/SKU jak na liście produktów. AI — katalog (top 5). AI Internet — poza bazą.
+              Szukaj — nazwa/SKU. Szukaj AI — to samo „Szukaj w katalogu” co na Produktach. AI Internet — poza bazą.
             </p>
           </div>
           <button
@@ -226,7 +229,7 @@ export function ProductAiMatchModal({
               onClick={() => void runSearch(false)}
               className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
             >
-              {busy === 'ai' ? 'Szukam…' : 'Szukaj AI (top 5)'}
+              {busy === 'ai' ? 'Szukam…' : 'Szukaj w katalogu'}
             </button>
             <button
               type="button"

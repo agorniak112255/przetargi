@@ -7,6 +7,7 @@ import { AdminLayout } from './pages/AdminLayout'
 import { AdminRoles } from './pages/AdminRoles'
 import { AdminPresta } from './pages/AdminPresta'
 import { AdminSearchSites } from './pages/AdminSearchSites'
+import { AdminAiTuning } from './pages/AdminAiTuning'
 import { AdminCatalogSlang } from './pages/AdminCatalogSlang'
 import { AdminDescriptionTemplates } from './pages/AdminDescriptionTemplates'
 import { AdminSmtp } from './pages/AdminSmtp'
@@ -141,6 +142,7 @@ export default function App() {
             />
             <Route path="presta" element={<AdminPresta />} />
             <Route path="strony-wyszukiwarka" element={<AdminSearchSites />} />
+            <Route path="strojenie-ai" element={<AdminAiTuning />} />
             <Route path="zargon" element={<AdminCatalogSlang />} />
             <Route path="szablony-opisow" element={<AdminDescriptionTemplates />} />
           </Route>

@@ -10,6 +10,12 @@ import { ProductPreviewModal } from '../components/ProductPreviewModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { applyCheckboxRange } from '../lib/checkboxRange'
 import { api, can, parseActiveEnrichment, type EnrichmentBatch, type PrestaExportBatch, type Product } from '../lib/api'
+import {
+  AI_SEARCH_MIN_CHARS,
+  externalHintsFrom,
+  isAiSearchTimeout,
+  searchProductsByAiWithTimeout,
+} from '../lib/productAiSearch'
 
 type Page = {
   data: Product[]
@@ -388,7 +394,7 @@ export function Products() {
 
   async function runAiSearch(web = false, raw = aiQuery) {
     const query = raw.trim()
-    if (query.length < 3) {
+    if (query.length < AI_SEARCH_MIN_CHARS) {
       setErr('Podaj wymaganie (min. 3 znaki), np. rękawice do pracy z amoniakiem')
       return
     }
@@ -396,26 +402,9 @@ export function Products() {
     setAiBusy(web ? 'web' : 'catalog')
     setErr('')
     setMsg(web ? 'Szukam w internecie…' : 'Szukam w katalogu przez AI…')
-    const controller = new AbortController()
-    const timer = window.setTimeout(() => controller.abort(), 180_000)
     try {
-      const res = await api<{
-        query: string
-        total: number
-        products: Product[]
-        ai_note?: string | null
-        external_hint?: { url: string; title: string } | null
-        external_hints?: { url: string; title: string }[]
-      }>(
-        '/products/ai-search',
-        {
-          method: 'POST',
-          body: JSON.stringify({ query, limit: web ? 8 : 40, web }),
-          signal: controller.signal,
-        },
-      )
-      const hints =
-        res.external_hints ?? (res.external_hint ? [res.external_hint] : [])
+      const res = await searchProductsByAiWithTimeout(query, { web })
+      const hints = externalHintsFrom(res)
       setAiMode(true)
       setSort('ai_match_percent')
       setDir('desc')
@@ -438,11 +427,8 @@ export function Products() {
       )
       setAiModalOpen(false)
     } catch (ex) {
-      const aborted =
-        (ex instanceof DOMException && ex.name === 'AbortError') ||
-        (ex instanceof Error && /abort/i.test(ex.message))
       setErr(
-        aborted
+        isAiSearchTimeout(ex)
           ? 'Wyszukiwanie AI przekroczyło limit czasu (180 s). Sprawdź klucz/model w Ustawieniach AI i spróbuj krótszego wymagania.'
           : ex instanceof Error
             ? ex.message
@@ -450,7 +436,6 @@ export function Products() {
       )
       setMsg('')
     } finally {
-      window.clearTimeout(timer)
       setAiBusy(false)
     }
   }

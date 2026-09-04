@@ -31,6 +31,7 @@ class ProductEnrichmentController extends Controller
         return response()->json([
             'enrichment_batch_limit' => $this->aiSettings->enrichmentBatchLimit(),
             'match_concurrency' => $this->aiSettings->matchConcurrency(),
+            'catalog_search_limit' => $this->aiSettings->catalogSearchLimit(),
         ]);
     }
 

@@ -170,8 +170,17 @@ final class CatalogSlangDictionary
         if (preg_match('/\b(esd|antystat|antyelektro|weglow|miedzian|miedzi)\w*/u', $hay) === 1) {
             return true;
         }
+        if (preg_match('/(calkowicie powlek|powlekan\w* w calosc|w calosci powlek|pelne powlec)/u', $hay) === 1) {
+            return true;
+        }
+        if (preg_match('/(dlugim mankiet|dlugi mankiet)/u', $hay) === 1) {
+            return true;
+        }
+        if (preg_match('/(arc flash|para-?aramid|para aramid|wlokna szklan|modakryl|piank\w* neopren)/u', $hay) === 1) {
+            return true;
+        }
         $fingertip = preg_match('/(konce palc|palce powlekan)/u', $hay) === 1
-            && preg_match('/\b(dlon|calkowicie powlek|pelne powlek)/u', $hay) !== 1;
+            && preg_match('/\bdlon\b/u', $hay) !== 1;
 
         return $fingertip;
     }

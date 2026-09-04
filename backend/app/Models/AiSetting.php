@@ -27,6 +27,7 @@ class AiSetting extends Model
         'tavily_search_mode',
         'enrichment_batch_limit',
         'match_concurrency',
+        'catalog_search_limit',
         'product_search_card_detail',
         'vector_enabled',
         'qdrant_url',
@@ -59,6 +60,7 @@ class AiSetting extends Model
             'enrichment_use_large_model' => 'boolean',
             'enrichment_batch_limit' => 'integer',
             'match_concurrency' => 'integer',
+            'catalog_search_limit' => 'integer',
             'vector_enabled' => 'boolean',
         ];
     }

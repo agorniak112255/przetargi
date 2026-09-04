@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Api\Admin\ActivityLogController as AdminActivityLogController;
+use App\Http\Controllers\Api\Admin\AiTuningController as AdminAiTuningController;
 use App\Http\Controllers\Api\Admin\CatalogSearchSiteController as AdminCatalogSearchSiteController;
 use App\Http\Controllers\Api\Admin\CatalogSlangController as AdminCatalogSlangController;
 use App\Http\Controllers\Api\Admin\EnrichmentDescriptionTemplateController as AdminEnrichmentDescriptionTemplateController;
@@ -229,6 +230,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/presta-categories/rewrite', [AdminPrestaCategoryController::class, 'rewrite']);
         Route::put('/presta-categories/maps', [AdminPrestaCategoryController::class, 'updateMaps']);
 
+        Route::get('/ai-tuning', [AdminAiTuningController::class, 'show']);
+        Route::put('/ai-tuning', [AdminAiTuningController::class, 'update']);
         Route::get('/catalog-slang', [AdminCatalogSlangController::class, 'show']);
         Route::put('/catalog-slang', [AdminCatalogSlangController::class, 'update']);
         Route::get('/enrichment-description-templates', [AdminEnrichmentDescriptionTemplateController::class, 'index']);

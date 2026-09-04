@@ -1362,7 +1362,7 @@ final class ProductMatchService
         try {
             $rows = $this->aiSearch->searchMany(
                 $queries,
-                5,
+                $this->aiSettings->catalogSearchLimit(),
                 false,
                 AiTask::ProductSearch,
                 $this->aiSettings->matchConcurrency(),

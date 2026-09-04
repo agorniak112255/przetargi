@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\NbpExchangeRateService;
 use App\Services\ProductAiSearchService;
@@ -18,6 +19,7 @@ class ProductAiSearchController extends Controller
     public function __construct(
         private readonly ProductAiSearchService $search,
         private readonly NbpExchangeRateService $fx,
+        private readonly AiSettingsService $aiSettings,
     ) {}
 
     public function __invoke(Request $request): JsonResponse
@@ -37,7 +39,7 @@ class ProductAiSearchController extends Controller
         try {
             $result = $this->search->search(
                 (string) $data['query'],
-                (int) ($data['limit'] ?? ($webOnly ? 8 : 40)),
+                (int) ($data['limit'] ?? ($webOnly ? ProductAiSearchService::WEB_LIMIT : $this->aiSettings->catalogSearchLimit())),
                 false,
                 AiTask::ProductSearch,
                 $webOnly,

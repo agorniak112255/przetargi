@@ -17,6 +17,10 @@ final class AiSettingsService
 {
     public const CONCURRENCY_MAX = 100;
 
+    public const CATALOG_SEARCH_LIMIT_DEFAULT = 40;
+
+    public const CATALOG_SEARCH_LIMIT_MAX = 80;
+
     public const SEARCH_ENGINE_TAVILY = 'tavily';
 
     public const SEARCH_ENGINE_DUCKDUCKGO = 'duckduckgo';
@@ -83,6 +87,7 @@ final class AiSettingsService
      *     tavily_search_mode: string,
      *     enrichment_batch_limit: int,
      *     match_concurrency: int,
+     *     catalog_search_limit: int,
      *     product_search_card_detail: string,
      *     vector_enabled: bool,
      *     qdrant_url: ?string,
@@ -161,6 +166,11 @@ final class AiSettingsService
                         ? ($row->match_concurrency ?? null)
                         : null
                 ),
+                'catalog_search_limit' => $this->normalizeCatalogSearchLimit(
+                    Schema::hasColumn('ai_settings', 'catalog_search_limit')
+                        ? ($row->catalog_search_limit ?? null)
+                        : null
+                ),
                 'product_search_card_detail' => $this->normalizeProductSearchCardDetail(
                     Schema::hasColumn('ai_settings', 'product_search_card_detail')
                         ? ($row->product_search_card_detail ?? null)
@@ -225,6 +235,7 @@ final class AiSettingsService
             'tavily_search_mode' => $this->normalizeTavilySearchMode(config('ai.tavily_search_mode')),
             'enrichment_batch_limit' => $this->normalizeEnrichmentBatchLimit(config('ai.enrichment_batch_limit')),
             'match_concurrency' => $this->normalizeMatchConcurrency(config('ai.match_concurrency')),
+            'catalog_search_limit' => $this->normalizeCatalogSearchLimit(config('ai.catalog_search_limit')),
             'product_search_card_detail' => $this->normalizeProductSearchCardDetail(
                 config('ai.product_search_card_detail')
             ),
@@ -273,6 +284,7 @@ final class AiSettingsService
             'tavily_search_mode' => $cfg['tavily_search_mode'],
             'enrichment_batch_limit' => $cfg['enrichment_batch_limit'],
             'match_concurrency' => $cfg['match_concurrency'],
+            'catalog_search_limit' => $cfg['catalog_search_limit'],
             'product_search_card_detail' => $cfg['product_search_card_detail'],
             'vector_enabled' => $cfg['vector_enabled'],
             'qdrant_url' => $cfg['qdrant_url'],
@@ -322,6 +334,7 @@ final class AiSettingsService
             'tavily_search_mode' => TavilySearchProfile::MODE_BALANCED,
             'enrichment_batch_limit' => 5,
             'match_concurrency' => 4,
+            'catalog_search_limit' => self::CATALOG_SEARCH_LIMIT_DEFAULT,
             'product_search_card_detail' => self::PRODUCT_SEARCH_CARDS_LONG,
             'vector_enabled' => false,
             'qdrant_url' => 'http://127.0.0.1:6333',
@@ -386,6 +399,11 @@ final class AiSettingsService
         if (array_key_exists('match_concurrency', $data)
             && Schema::hasColumn('ai_settings', 'match_concurrency')) {
             $row->match_concurrency = $this->normalizeMatchConcurrency($data['match_concurrency']);
+        }
+
+        if (array_key_exists('catalog_search_limit', $data)
+            && Schema::hasColumn('ai_settings', 'catalog_search_limit')) {
+            $row->catalog_search_limit = $this->normalizeCatalogSearchLimit($data['catalog_search_limit']);
         }
 
         if (array_key_exists('product_search_card_detail', $data)
@@ -713,6 +731,13 @@ final class AiSettingsService
         return $this->normalizeMatchConcurrency($cfg['match_concurrency'] ?? null);
     }
 
+    public function catalogSearchLimit(): int
+    {
+        $cfg = $this->resolve();
+
+        return $this->normalizeCatalogSearchLimit($cfg['catalog_search_limit'] ?? null);
+    }
+
     /**
      * @return list<array{category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string>}>
      */
@@ -796,6 +821,13 @@ final class AiSettingsService
         $n = is_numeric($value) ? (int) $value : 4;
 
         return max(1, min(self::CONCURRENCY_MAX, $n));
+    }
+
+    private function normalizeCatalogSearchLimit(mixed $value): int
+    {
+        $n = is_numeric($value) ? (int) $value : self::CATALOG_SEARCH_LIMIT_DEFAULT;
+
+        return max(1, min(self::CATALOG_SEARCH_LIMIT_MAX, $n));
     }
 
     private function normalizeProductSearchCardDetail(mixed $value): string

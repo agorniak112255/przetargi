@@ -52,6 +52,7 @@ class AiSettingsController extends Controller
             'tavily_search_mode' => ['sometimes', 'string', 'in:eco,balanced,full'],
             'enrichment_batch_limit' => ['sometimes', 'integer', 'min:1'],
             'match_concurrency' => ['sometimes', 'integer', 'min:1', 'max:'.AiSettingsService::CONCURRENCY_MAX],
+            'catalog_search_limit' => ['sometimes', 'integer', 'min:1', 'max:'.AiSettingsService::CATALOG_SEARCH_LIMIT_MAX],
             'product_search_card_detail' => ['sometimes', 'string', 'in:'.implode(',', AiSettingsService::PRODUCT_SEARCH_CARD_DETAILS)],
             'vector_enabled' => ['sometimes', 'boolean'],
             'qdrant_url' => ['nullable', 'url', 'max:255'],

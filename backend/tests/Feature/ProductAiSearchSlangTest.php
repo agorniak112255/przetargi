@@ -141,4 +141,80 @@ final class ProductAiSearchSlangTest extends TestCase
         $this->assertContains('URGENT-1016', array_column($skus ?? [], 'sku'));
         $this->assertNotContains('PK404', array_column($skus ?? [], 'sku'));
     }
+
+    public function test_wampirki_does_not_return_fully_coated_gloves(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $palm = Product::query()->create([
+            'sku' => 'URGENT-1016',
+            'name' => '1016 (NOWO)',
+            'manufacturer' => 'URGENT',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice dziane powlekane do oleju, dłoń powlekana lateksem.',
+            'catalog_price_net' => 1.11,
+            'purchase_price' => 1.11,
+            'stock' => 20,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $full = Product::query()->create([
+            'sku' => 'NI155',
+            'name' => 'RĘKAWICE Z GRUBEGO NITRYLU NA WKŁADZIE Z DŻERSEJU, POWLEKANE W CAŁOŚCI',
+            'manufacturer' => 'Delta Plus',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice całkowicie powlekane nitrylem, ochrona przed cieczą.',
+            'catalog_price_net' => 9.87,
+            'purchase_price' => 7.6,
+            'stock' => 8,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => '58-270',
+            'name' => 'Całkowicie powlekane rękawice z długim mankietem',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice chemiczne powlekane w całości, długi mankiet.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 16,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturn([
+                'needed' => 'rękawice dzianinowe powlekane, ochrona przed cieczą',
+                'search_phrases' => ['rękawice dzianinowe powlekane'],
+                'matches' => [
+                    ['id' => $full->id, 'score' => 90, 'reason' => 'powlekane'],
+                    ['id' => $palm->id, 'score' => 70, 'reason' => 'dłoń powlekana'],
+                ],
+            ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $five = $this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice wampirki uniwersalne',
+            'limit' => 5,
+        ])->assertOk();
+        $forty = $this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice wampirki uniwersalne',
+            'limit' => 40,
+        ])->assertOk();
+
+        $fiveSkus = array_column($five->json('products') ?? [], 'sku');
+        $fortySkus = array_column($forty->json('products') ?? [], 'sku');
+
+        $this->assertContains('URGENT-1016', $fiveSkus);
+        $this->assertNotContains('NI155', $fiveSkus);
+        $this->assertNotContains('58-270', $fiveSkus);
+        $this->assertSame($fiveSkus[0] ?? null, $fortySkus[0] ?? null);
+        $this->assertLessThanOrEqual(5, count($fiveSkus));
+        $this->assertSame(
+            \App\Services\ProductAiSearchService::CATALOG_LIMIT,
+            40,
+        );
+    }
 }

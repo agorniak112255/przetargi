@@ -29,6 +29,7 @@ return [
     'enrichment_batch_limit' => (int) env('AI_ENRICHMENT_BATCH_LIMIT', 5),
     // Ile zapytań AI naraz (1–100): SIWZ i Pobierz z cennika. Zależy od FPM i modelu.
     'match_concurrency' => (int) env('AI_MATCH_CONCURRENCY', 4),
+    'catalog_search_limit' => (int) env('AI_CATALOG_SEARCH_LIMIT', 40),
     // long | short — ile tekstu z karty idzie do modelu w wyszukiwarce AI
     'product_search_card_detail' => env('AI_PRODUCT_SEARCH_CARD_DETAIL', 'long'),
     // Ile sekund worker czeka na wolny slot enrichmentu, zanim odda produkt kolejce.

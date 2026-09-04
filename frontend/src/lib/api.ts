@@ -1,5 +1,6 @@
-// W dev: proxy Vite (/api → :8000). W prod: pełny URL lub względny /api.
-const API_URL = import.meta.env.VITE_API_URL ?? '/api'
+import { publicDir } from './publicDir'
+
+const API_URL = `${publicDir()}/api`
 
 function token(): string | null {
   return localStorage.getItem('supon_token')
@@ -223,9 +224,8 @@ export type EnrichmentBatch = {
 }
 
 export function appHref(path: string): string {
-  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
   const p = path.startsWith('/') ? path : `/${path}`
-  return `${base}${p}`
+  return `${publicDir()}${p}`
 }
 
 export function enrichmentPriceListHref(batch: EnrichmentBatch): string | null {

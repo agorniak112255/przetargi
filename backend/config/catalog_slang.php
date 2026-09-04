@@ -27,7 +27,7 @@ $e = static function (
 };
 
 return [
-    $e('rece', ['wampirki', 'wampiry'], ['rękawice dzianinowe powlekane', 'rękawice powlekane'], 'Proste dzianinowe powlekane, ochrona przed cieczą.', true),
+    $e('rece', ['wampirki', 'wampiry'], ['rękawice dzianinowe powlekane', 'rękawice powlekane dłoń'], 'Proste dzianinowe, dłoń powlekana, ochrona przed cieczą.', true),
     $e('rece', ['gumówki', 'gumowane'], ['rękawice gumowe', 'rękawice powlekane gumą'], '', true),
     $e('rece', ['pianki'], ['rękawice powlekane pianką', 'rękawice nitryl pianka'], 'Powleczenie pianką, np. nitrylową.', true),
     $e('rece', ['nitryle', 'nitrylki', 'nitrylowe', 'nitryle robocze'], ['rękawice nitrylowe'], '', true),

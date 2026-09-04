@@ -1,5 +1,5 @@
-# Lokalnie (Windows): build produkcyjny frontendu + push na GitHub,
-# potem przywrocenie buildu XAMPP (VITE_BASE=/Przetargi/), zeby lokalnie nie bylo bialej strony.
+# Lokalnie (Windows): jeden build frontendu (sciezki wzgledne) + push na GitHub.
+# Ten sam pakiet dziala na produkcji i na XAMPP /Przetargi/ — bez drugiego Vite.
 # Bazy NIE wysyla. Commit rob wczesniej albo uzyj -Commit.
 param(
     [switch]$Commit,
@@ -11,9 +11,9 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-Write-Host "==> build frontend (produkcja VITE_BASE=/)" -ForegroundColor Cyan
+Write-Host "==> build frontend (vite, bez tsc)" -ForegroundColor Cyan
 Set-Location "$Root\frontend"
-npm run build:prod
+npx --yes vite build --mode production
 
 Set-Location $Root
 
@@ -55,11 +55,6 @@ Write-Host "==> git push" -ForegroundColor Cyan
 git push origin main
 
 if (-not $SkipLocalRestore) {
-    Write-Host "==> przywracanie lokalnego frontendu (build:xampp, VITE_BASE=/Przetargi/)" -ForegroundColor Cyan
-    Set-Location "$Root\frontend"
-    npm run build:xampp
-    Set-Location $Root
-
     $htaccessSrc = Join-Path $Root "deploy\htaccess.xampp"
     $htaccessDst = Join-Path $Root "backend\public\.htaccess"
     if (Test-Path $htaccessSrc) {
@@ -69,7 +64,6 @@ if (-not $SkipLocalRestore) {
 
     Write-Host ""
     Write-Host "Lokalnie: odswiez przegladarke (Ctrl+F5) na http://localhost/Przetargi/" -ForegroundColor Yellow
-    Write-Host "Working tree moze pokazywac zmiany w backend/public (build xampp) - NIE commituj ich na produkcje." -ForegroundColor DarkGray
 }
 
 Write-Host ""

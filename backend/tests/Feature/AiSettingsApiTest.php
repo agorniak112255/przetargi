@@ -58,6 +58,7 @@ final class AiSettingsApiTest extends TestCase
             ->assertJsonPath('qdrant_url', 'http://127.0.0.1:6333')
             ->assertJsonPath('embedding_model', 'text-embedding-3-small')
             ->assertJsonPath('match_concurrency', 6)
+            ->assertJsonPath('catalog_search_limit', 40)
             ->assertJsonPath('product_search_card_detail', 'long')
             ->assertJsonPath('search_engine', 'duckduckgo')
             ->assertJsonPath('reasoning_effort', 'low');
@@ -81,6 +82,13 @@ final class AiSettingsApiTest extends TestCase
             ->assertJsonPath('enrichment_batch_limit', 5000);
 
         $this->putJson('/api/ai-settings', ['enrichment_batch_limit' => 0])
+            ->assertStatus(422);
+
+        $this->putJson('/api/ai-settings', ['catalog_search_limit' => 15])
+            ->assertOk()
+            ->assertJsonPath('catalog_search_limit', 15);
+
+        $this->putJson('/api/ai-settings', ['catalog_search_limit' => 81])
             ->assertStatus(422);
 
         $this->putJson('/api/ai-settings', ['reasoning_effort' => 'high'])
