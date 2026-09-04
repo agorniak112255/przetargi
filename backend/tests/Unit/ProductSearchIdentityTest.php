@@ -1027,4 +1027,84 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertSame([], $id->inferredCatalogHosts($other));
         $this->assertSame('', $id->inferredBrandHint($other));
     }
+
+    public function test_mat_legal_suffix_confirms_art_0100_and_rejects_sibling_art1006(): void
+    {
+        $id = new ProductSearchIdentity;
+        $jacket = new Product([
+            'sku' => '0100',
+            'name' => 'Kurtka Wodoochronna Basic ( gumka w rękawie)',
+            'manufacturer' => 'MAT Sp. z o.o.',
+        ]);
+        $kangurka = new Product([
+            'sku' => '0104',
+            'name' => 'Kurtka Wodoochronna Kangurka',
+            'manufacturer' => 'MAT Sp. z o.o.',
+        ]);
+        $url0100 = 'https://www.mat.konin.pl/en/odziez-wodoochronna-mat-pcv/63-copy-of-.html';
+        $text0100 = 'Rain Jacket Basic PCV art. 0100 This waterproof jacket is made of 350 g/m² '
+            .'polyester knit. Reference 0101. Rain Coat MAT PVC art. 1201';
+        $url1006 = 'https://www.mat.konin.pl/pl/odziez-wodoochronna-mat-pcv/57-ubranie-wodoochronne-sztormowe-art1006.html';
+        $text1006 = 'Ubranie sztormowe wodoochronne art.1006. Kurtka typu kangurka. Indeks 1006. Materiał PVC.';
+
+        $this->assertTrue($id->hayHasBrand($url0100.' '.$text0100, $jacket));
+        $this->assertTrue($id->hayHasProductCode($text0100, $jacket));
+        $this->assertTrue($id->isConfirmedProductCard($url0100, '', $text0100, $jacket));
+        $this->assertFalse($id->isConfirmedProductCard($url1006, '', $text1006, $kangurka));
+        $this->assertFalse($id->hayHasProductCode($text1006, $kangurka));
+    }
+
+    public function test_junk_hosts_do_not_confirm_generic_name_hits(): void
+    {
+        $id = new ProductSearchIdentity;
+        $sedan = new Product([
+            'sku' => 'MB1822',
+            'name' => 'SEDAN shoe E0 (RO) YELLOW 39 - 40',
+            'manufacturer' => 'SiR',
+        ]);
+        $wzor = new Product([
+            'sku' => 'MEDIBUT-WZOR-012L',
+            'name' => 'WZÓR 012L',
+            'manufacturer' => 'MEDIBUT',
+        ]);
+
+        $this->assertTrue(ProductSearchIdentity::isJunkSearchHost('https://www.olx.pl/motoryzacja/samochody/q-sedan/'));
+        $this->assertTrue(ProductSearchIdentity::isJunkSearchHost('https://pl.wiktionary.org/wiki/wz%C3%B3r'));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://www.olx.pl/motoryzacja/samochody/q-sedan/',
+            'Sedan — ogłoszenia',
+            'Sprzedam sedan benzyna 2018. OLX motoryzacja samochody.',
+            $sedan
+        ));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://pl.wiktionary.org/wiki/wzór',
+            'wzór — Wiktionary',
+            'wzór, wzoru, wzorze. Definicja słowa w słowniku.',
+            $wzor
+        ));
+    }
+
+    public function test_warehouse_3m_sku_confirms_shop_model_without_stock_code(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '7100000860',
+            'name' => 'Nakładka ochronna Bumpon™ SJ5202 firmy 3M™, kolor jasno brązowy',
+            'manufacturer' => '3M',
+        ]);
+        $url = 'https://www.3m.com/3M/pl_PL/p/d/v0005202/';
+        $title = '3M Bumpon SJ5202 nakładka ochronna';
+        $text = 'Bumpon SJ5202 protective bumper. 3M adhesive cushion. Nakładka ochronna.';
+
+        $this->assertTrue($id->looksLikeWarehouseArticleSku($product));
+        $this->assertSame('SJ5202', $id->firstStrongShopPhrase($product));
+        $this->assertFalse($id->hayHasProductCode($url.' '.$title, $product));
+        $this->assertTrue($id->urlOrTitleHasShopIdentity($url, $title, $product));
+        $this->assertTrue($id->isConfirmedProductCard($url, $title, $text, $product));
+        $this->assertTrue($id->looksLikeWarehouseArticleSku(new Product([
+            'sku' => 'G62SBCONFIG-182',
+            'name' => 'Gogle',
+            'manufacturer' => '3M',
+        ])));
+    }
 }

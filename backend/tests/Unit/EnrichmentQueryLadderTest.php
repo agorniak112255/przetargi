@@ -1664,4 +1664,39 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertCount(1, $kept);
         $this->assertStringContainsString('misterworker.com', $kept[0]['url'] ?? '');
     }
+
+    public function test_warehouse_3m_hit_counts_without_stock_sku_in_url(): void
+    {
+        $product = new Product([
+            'sku' => '7100000860',
+            'name' => 'Nakładka ochronna Bumpon™ SJ5202 firmy 3M™, kolor jasno brązowy',
+            'manufacturer' => '3M',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $filter = $ref->getMethod('filterResultsByIdentity');
+        $filter->setAccessible(true);
+        $coded = $ref->getMethod('resultsCarryProductCode');
+        $coded->setAccessible(true);
+        $hits = [
+            [
+                'url' => 'https://www.3m.com/3M/pl_PL/p/d/v0005202/',
+                'title' => '3M Bumpon SJ5202 nakładka ochronna',
+                'snippet' => 'Bumpon protective bumper',
+            ],
+            [
+                'url' => 'https://www.olx.pl/motoryzacja/samochody/q-sedan/',
+                'title' => 'Sedan',
+                'snippet' => 'ogłoszenia',
+            ],
+        ];
+
+        $kept = $filter->invoke($service, $hits, $product);
+        $this->assertCount(1, $kept);
+        $this->assertStringContainsString('3m.com', $kept[0]['url'] ?? '');
+
+        $carry = $coded->invoke($service, $hits, $product);
+        $this->assertCount(1, $carry);
+        $this->assertStringContainsString('sj5202', mb_strtolower($carry[0]['title'] ?? ''));
+    }
 }

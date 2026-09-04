@@ -497,7 +497,11 @@ class HybridWebSearchService
             }
             $hay = mb_strtolower($url.' '.$title);
             if ($this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
-                || $this->identity->hayHasProductCode($hay, $product)) {
+                || $this->identity->hayHasProductCode($hay, $product)
+                || ($this->identity->rawSkuIsOfflineNoise($product)
+                    && ($this->identity->urlOrTitleHasShopIdentity($url, $title, $product)
+                        || $this->identity->urlOrTitleHasNamedShopIdentity($url, $title, $product)
+                        || $this->identity->urlOrTitleCarriesShopModelNumber($url, $title, $product)))) {
                 $out[] = $row;
             }
         }
@@ -1055,6 +1059,21 @@ class HybridWebSearchService
             if ($this->isListingWithoutProduct($url, $product)) {
                 continue;
             }
+            if ($this->identity->rawSkuIsOfflineNoise($product)
+                && $this->identity->hayHasRequiredTypeFromName($hay, $product)
+                && ($this->identity->urlOrTitleHasShopIdentity($url, $title.' '.$snippet, $product)
+                    || $this->identity->urlOrTitleHasNamedShopIdentity($url, $title.' '.$snippet, $product)
+                    || $this->identity->urlOrTitleCarriesShopModelNumber($url, $title.' '.$snippet, $product))
+                && ($this->identity->hayHasBrand($hay, $product)
+                    || $this->identity->pageAgreesWithBrandAndName($hay, $url, $product))) {
+                $matched[] = [
+                    'url' => $url,
+                    'title' => $title !== '' ? $title : $url,
+                    'snippet' => $snippet,
+                ];
+
+                continue;
+            }
             $oursInHeadline = $this->identity->urlOrTitleCarriesShopModelNumber($url, $title, $product)
                 || $this->identity->urlOrTitleHasNamedShopIdentity($url, $title, $product);
             $oursInHit = $this->identity->urlOrTitleCarriesShopModelNumber($url, $title.' '.$snippet, $product)
@@ -1282,6 +1301,7 @@ class HybridWebSearchService
             '/manufacturer/', '/producent/', '/brand/', '/marka/',
             '/category/', '/kategoria/', '/kategorie/', '/collection/',
             '/search', '/szukaj', '/vysledek-vyhledavani', '/catalog/', '/katalog/', '/blog/',
+            '/wiki/', '/slowniki/', '/haslo/', '/q-',
             // zbiorcze strony producenta wymieniają cały asortyment, w tym nasz kod
             '/deklaracje', '/certyfikat', '/do-pobrania', '/dokumenty', '/downloads',
             '/aktualnosci', '/news',

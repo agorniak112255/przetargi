@@ -1126,7 +1126,9 @@ final class ProductSearchIdentity
             'reddit.com', 'github.com', 'githubusercontent.com',
             'microsoft.com', 'office.com', 'live.com', 'msn.com',
             'telegram.org', 't.me',
-            'wikipedia.org', 'zhihu.com', 'quora.com',
+            'wikipedia.org', 'wiktionary.org', 'zhihu.com', 'quora.com',
+            'sjp.pwn.pl', 'wsjp.pl', 'synonim.net', 'britannica.com',
+            'olx.pl', 'olx.com',
             'facebook.com', 'instagram.com', 'twitter.com', 'x.com',
             'tiktok.com', 'youtube.com', 'youtu.be',
             'pinterest.com', 'linkedin.com',
@@ -1454,11 +1456,20 @@ final class ProductSearchIdentity
      */
     public function isConfirmedProductCard(string $url, string $title, string $text, Product $product): bool
     {
+        if (self::isJunkSearchHost($url) || $this->looksLikeUnrelatedRetailHost($url, $product)) {
+            return false;
+        }
         $hay = $url.' '.$title.' '.$text;
         if (! $this->hayMentionsProduct($hay, $product)) {
             return false;
         }
         if ($this->pageClaimsAnotherCode($url, $title, $product)) {
+            return false;
+        }
+        // 0100 ≠ art.1006: krótki numer magazynowy musi być na karcie, nie sama „kangurka”.
+        if (preg_match('/^\d{3,4}$/u', trim((string) $product->sku)) === 1
+            && ! $this->hayHasProductCode($hay, $product)
+            && ! $this->urlOrTitleCarriesShopModelNumber($url, $title, $product)) {
             return false;
         }
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($hay)) ?? '';
@@ -3290,6 +3301,9 @@ final class ProductSearchIdentity
         if (preg_match('/^\d{10,12}$/u', $sku) === 1) {
             return true;
         }
+        if (preg_match('/CONFIG/iu', $sku) === 1) {
+            return true;
+        }
         // SOR76332-08 — prefiks Sordin z cennika, na karcie jest 76302 / Supreme Pro-X
         if (preg_match('/^SOR[-]?\d{4,6}(?:-\d{2,3})?$/iu', $sku) === 1) {
             return true;
@@ -3525,8 +3539,12 @@ final class ProductSearchIdentity
         if ($main !== '') {
             $out[] = $main;
         }
-        foreach (preg_split('/[^a-z0-9]+/u', $main) ?: [] as $part) {
-            if ($this->looksLikeBrandToken($part)) {
+        $core = $this->manufacturerLegalCore((string) $product->manufacturer);
+        if ($core !== '' && $core !== $main) {
+            $out[] = $core;
+        }
+        foreach (preg_split('/[^a-z0-9]+/u', $main.' '.$core) ?: [] as $part) {
+            if ($this->looksLikeBrandToken($part) || $this->looksLikeShortManufacturerCore($part)) {
                 $out[] = $part;
             }
         }
@@ -3544,6 +3562,11 @@ final class ProductSearchIdentity
         }
         foreach ($this->brandFamilyOf($this->shortBrand((string) $product->manufacturer)) as $alias) {
             $out[] = $alias;
+        }
+        if ($core !== '') {
+            foreach ($this->brandFamilyOf($core) as $alias) {
+                $out[] = $alias;
+            }
         }
         if ($this->looksLikeUrgentGloveSeries($product)) {
             $out[] = 'urgent';
@@ -3629,7 +3652,9 @@ final class ProductSearchIdentity
             'hellberg' => ['sordin', 'hellberg'],
         ];
         $out = [];
-        if ($compact !== '' && (mb_strlen($compact) >= 4 || in_array($compact, ['3m', 'msa', 'atg', 'kcl', 'gvs', 'pip'], true))) {
+        if ($compact !== '' && (mb_strlen($compact) >= 4
+            || $this->looksLikeShortManufacturerCore($compact)
+            || in_array($compact, ['3m', 'msa', 'atg', 'kcl', 'gvs', 'pip'], true))) {
             $out[] = $compact;
         }
         foreach ($families[$brand] ?? $families[$compact] ?? [] as $alias) {
@@ -3640,6 +3665,30 @@ final class ProductSearchIdentity
     }
 
     /** Słowo z nazwy/producenta, które jest linią produktu, nie typem PPE. */
+    /** „MAT Sp. z o.o.” → „mat” — sklepy piszą MAT, nie formę prawną. */
+    private function manufacturerLegalCore(string $manufacturer): string
+    {
+        $brand = $this->shortBrand($manufacturer);
+        $stripped = preg_replace(
+            '/[\s,]+(?:sp(?:[óo]łka)?\.?\s*z\s*o\.?\s*o\.?|s\.?\s*a\.?|gmbh|ltd\.?|limited|inc\.?|corp\.?|s\.?r\.?o\.?|llc)\.?$/iu',
+            '',
+            $brand
+        ) ?? $brand;
+        $core = mb_strtolower(trim($stripped));
+
+        return $this->looksLikeShortManufacturerCore($core) || mb_strlen($core) >= 4
+            ? $core
+            : '';
+    }
+
+    private function looksLikeShortManufacturerCore(string $word): bool
+    {
+        $word = mb_strtolower(trim($word));
+
+        return preg_match('/^[a-z]{3}$/u', $word) === 1
+            && ! in_array($word, ['the', 'and', 'for', 'new', 'old'], true);
+    }
+
     private function looksLikeBrandToken(string $word): bool
     {
         $word = mb_strtolower(trim($word));
