@@ -220,6 +220,7 @@ final class RetailerOnSiteSearch
             $this->identity->firstStrongShopPhrase($product),
             $this->queryBareModel($product),
             ...$this->identity->catalogArticleCodes($product),
+            ...$this->identity->skuSearchNeedles($product),
         ] as $query) {
             $query = trim($query);
             if ($query === '') {

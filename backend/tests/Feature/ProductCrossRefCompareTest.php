@@ -86,6 +86,35 @@ final class ProductCrossRefCompareTest extends TestCase
             ->assertJsonFragment(['sku' => 'NITRIL-OTHER', 'product_id' => $other->id]);
     }
 
+    public function test_cross_ref_seed_retries_sku_without_leftover_letter(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $seed = Product::query()->create([
+            'sku' => 'BLACKTACTIL',
+            'name' => 'T6 GLOVES, CUT RESISTANCE LEVEL F, PU, BLACK',
+            'manufacturer' => 'Rostaing',
+            'category' => 'Rękawice',
+            'catalog_price_net' => 11.11,
+            'purchase_price' => 5.02,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => [
+                'attributes' => [
+                    'kategoria_bhp' => 'rekawice',
+                    'material' => 'pu',
+                    'kod_producenta' => 'BLACKTACTIL',
+                ],
+            ],
+            'enriched_at' => now(),
+        ]);
+
+        $this->getJson('/api/products/cross-ref?code=BLACKTACTILT')
+            ->assertOk()
+            ->assertJsonPath('seed.sku', 'BLACKTACTIL')
+            ->assertJsonPath('seed.product_id', $seed->id);
+    }
+
     public function test_cross_ref_returns_thumbnail_and_description_flag(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

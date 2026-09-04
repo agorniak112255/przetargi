@@ -814,6 +814,13 @@ final class ProductSearchIdentity
             }
             $queries[] = $this->queryWithManufacturer($this->quoteSearchOperators($sku), $product);
             $queries[] = $this->queryWithManufacturer('"'.$sku.'"', $product);
+            foreach ($this->skuSearchNeedles($product) as $needle) {
+                if (mb_strtolower($needle) === mb_strtolower($sku)
+                    || mb_strtolower($needle) === mb_strtolower($withoutSize)) {
+                    continue;
+                }
+                $queries[] = $this->queryWithManufacturer($this->quoteSearchOperators($needle), $product);
+            }
         }
         foreach ($this->catalogArticleCodes($product) as $article) {
             $queries[] = $this->queryWithManufacturer($article, $product);
@@ -912,6 +919,15 @@ final class ProductSearchIdentity
             $extra = $this->sharedShortSkuQueryExtra($product);
             if ($extra !== '') {
                 $skuQueries = [$this->queryWithManufacturer(trim($sku.' '.$extra), $product)];
+            }
+        }
+        if ($usableSku) {
+            foreach ($this->skuSearchNeedles($product) as $needle) {
+                if (mb_strtolower($needle) === mb_strtolower($sku)
+                    || mb_strtolower($needle) === mb_strtolower($withoutSize)) {
+                    continue;
+                }
+                $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($needle), $product);
             }
         }
 
@@ -1407,6 +1423,20 @@ final class ProductSearchIdentity
 
             return true;
         }
+        foreach ($this->skuSearchNeedles($product) as $needle) {
+            $needle = mb_strtolower($needle);
+            if ($needle === '' || $needle === mb_strtolower(trim((string) $product->sku))) {
+                continue;
+            }
+            if (! $this->tokenInHay($hay, $hayCompact, $needle)) {
+                continue;
+            }
+            if ($brands !== [] && ! $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
+                continue;
+            }
+
+            return true;
+        }
 
         // Gdy kod niesie nazwę modelu („COUPURE-IT11” → COUPURE), jej brak na stronie
         // oznacza inny model tej samej marki — dopasowanie po nazwie wpuściłoby fartuch
@@ -1780,6 +1810,9 @@ final class ProductSearchIdentity
         }
         foreach ($this->skuSizeVariants($product) as $variant) {
             $codes[] = $variant;
+        }
+        foreach ($this->skuSearchNeedles($product) as $needle) {
+            $codes[] = $needle;
         }
         foreach ($this->ansellStyleCodes($product) as $style) {
             $codes[] = $style;
@@ -2244,6 +2277,38 @@ final class ProductSearchIdentity
         }
 
         return $sku;
+    }
+
+    /**
+     * Pełny SKU, potem ten sam kod bez 1 i 2 znaków z końca (resztka taille).
+     *
+     * @return list<string>
+     */
+    public function skuSearchNeedles(Product $product): array
+    {
+        $sizes = new ProductSizeVariant;
+        $seen = [];
+        $out = [];
+        foreach ([$this->catalogSkuWithoutSize($product), trim((string) $product->sku)] as $code) {
+            $code = trim($code);
+            if ($code === '') {
+                continue;
+            }
+            $key = mb_strtolower($code);
+            if (! isset($seen[$key])) {
+                $seen[$key] = true;
+                $out[] = $code;
+            }
+            foreach ($sizes->skuSearchFallbacks($code) as $fallback) {
+                $fallbackKey = mb_strtolower($fallback);
+                if (! isset($seen[$fallbackKey])) {
+                    $seen[$fallbackKey] = true;
+                    $out[] = $fallback;
+                }
+            }
+        }
+
+        return $out;
     }
 
     /**

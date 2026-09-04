@@ -66,6 +66,9 @@ final class CatalogIndexSearch
             }
             $raw[] = $phrase;
         }
+        foreach ($this->identity->skuSearchNeedles($product) as $needle) {
+            $raw[] = $needle;
+        }
 
         $out = [];
         foreach ($raw as $code) {

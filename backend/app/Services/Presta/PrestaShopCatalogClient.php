@@ -174,12 +174,11 @@ final class PrestaShopCatalogClient implements PrestaCatalogGateway
             $ors[] = 'p.ean13 = ?';
             $bindings[] = $ean;
         }
-        $sku = $this->query->sku($product);
-        if ($sku !== '') {
+        foreach ($this->query->skuNeedles($product) as $needle) {
             $ors[] = 'p.reference = ?';
-            $bindings[] = $sku;
+            $bindings[] = $needle;
             $ors[] = 'p.reference LIKE ?';
-            $bindings[] = $this->query->likePrefix($sku);
+            $bindings[] = $this->query->likePrefix($needle);
         }
         if ($ors === []) {
             return [];

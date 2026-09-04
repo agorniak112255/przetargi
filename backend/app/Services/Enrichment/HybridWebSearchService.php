@@ -1115,6 +1115,7 @@ class HybridWebSearchService
             (string) $product->sku,
             $this->identity->catalogSkuWithoutSize($product),
             $this->identity->internalSkuCore($product),
+            ...$this->identity->skuSearchNeedles($product),
         ] as $code) {
             $code = mb_strtolower(trim($code));
             if ($code !== '' && mb_strlen($code) >= 4) {

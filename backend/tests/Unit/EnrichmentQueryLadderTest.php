@@ -174,6 +174,27 @@ final class EnrichmentQueryLadderTest extends TestCase
         ])));
     }
 
+    public function test_leftover_taille_letter_retries_shorter_sku(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'manufacturer' => 'Rostaing',
+            'sku' => 'BLACKTACTILT',
+            'name' => 'T6 GLOVES, CUT RESISTANCE LEVEL F, PU, BLACK',
+        ]);
+
+        $this->assertSame(['BLACKTACTILT', 'BLACKTACTIL', 'BLACKTACTI'], $identity->skuSearchNeedles($product));
+        $this->assertContains('BLACKTACTIL Rostaing', $identity->primaryQueries($product));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://supon.rzeszow.pl/cienkie-rekawice-antyprzecieciowe-f-rostaing-blacktactil Rostaing BLACKTACTIL',
+            $product
+        ));
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://sklep.example/blacktactil rekawice ogrodowe',
+            $product
+        ));
+    }
+
     public function test_size_suffix_gives_searchable_code_variants(): void
     {
         $identity = new ProductSearchIdentity;

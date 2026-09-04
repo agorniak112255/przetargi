@@ -47,6 +47,24 @@ final class PrestaSearchQueryTest extends TestCase
     }
 
     #[Test]
+    public function leftover_taille_letter_matches_shorter_shop_reference(): void
+    {
+        $product = $this->product([
+            'sku' => 'BLACKTACTILT',
+            'name' => 'T6 GLOVES, CUT RESISTANCE LEVEL F, PU, BLACK',
+            'manufacturer' => 'Rostaing',
+        ]);
+
+        $this->assertTrue($this->query->rowMatchesCode($product, [
+            'reference' => 'BLACKTACTIL',
+            'ean13' => '',
+            'name' => 'Cienkie rękawice antyprzecięciowe (F) Rostaing BLACKTACTIL',
+            'manufacturer' => 'Rostaing',
+        ]));
+        $this->assertSame(['BLACKTACTILT', 'BLACKTACTIL', 'BLACKTACTI'], $this->query->skuNeedles($product));
+    }
+
+    #[Test]
     public function code_match_wins_over_name(): void
     {
         $product = $this->product([

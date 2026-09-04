@@ -25,6 +25,23 @@ final class PrestaSearchQuery
         return trim((string) $product->sku);
     }
 
+    /**
+     * @return list<string>
+     */
+    public function skuNeedles(Product $product): array
+    {
+        $sku = $this->sku($product);
+        $out = [];
+        if ($sku !== '') {
+            $out[] = $sku;
+        }
+        foreach ($this->sizes->skuSearchFallbacks($sku) as $fallback) {
+            $out[] = $fallback;
+        }
+
+        return array_values(array_unique($out));
+    }
+
     public function brand(Product $product): string
     {
         return trim((string) $product->manufacturer);
@@ -77,8 +94,19 @@ final class PrestaSearchQuery
             return false;
         }
         $ref = trim((string) ($row['reference'] ?? ''));
+        if ($ref === '') {
+            return false;
+        }
+        foreach ($this->skuNeedles($product) as $needle) {
+            if ($ref === $needle || str_starts_with($ref, $needle)) {
+                return true;
+            }
+            if (mb_strlen($ref) >= 6 && str_starts_with($needle, $ref)) {
+                return true;
+            }
+        }
 
-        return $ref !== '' && ($ref === $sku || str_starts_with($ref, $sku));
+        return false;
     }
 
     /**

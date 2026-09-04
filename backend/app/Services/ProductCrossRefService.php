@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductCrossRefFilters;
+use App\Support\ProductSizeVariant;
 
 /**
  * Cross-reference: kod/SKU → ten sam wyrób u innego producenta.
@@ -44,6 +45,7 @@ final class ProductCrossRefService
     public function __construct(
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly ProductCrossRefFilters $filters,
+        private readonly ProductSizeVariant $sizes,
     ) {}
 
     /**
@@ -401,6 +403,21 @@ final class ProductCrossRefService
 
         if ($like instanceof Product) {
             return $like;
+        }
+
+        foreach ($this->sizes->skuSearchFallbacks($code) as $fallback) {
+            $short = Product::query()->where('sku', $fallback)->first();
+            if ($short instanceof Product) {
+                return $short;
+            }
+            $shortLike = Product::query()
+                ->where('sku', 'like', $fallback.'%')
+                ->orderByRaw('CASE WHEN sku = ? THEN 0 ELSE 1 END', [$fallback])
+                ->orderBy('sku')
+                ->first();
+            if ($shortLike instanceof Product) {
+                return $shortLike;
+            }
         }
 
         return Product::query()
