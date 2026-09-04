@@ -52,4 +52,45 @@ final class SpreadsheetCellReaderTest extends TestCase
         $this->assertSame('3.06', $rows[1][2]);
         $this->assertSame('', $rows[1][3] ?? '');
     }
+
+    public function test_to_rows_calculates_formulas_and_cross_sheet_refs(): void
+    {
+        $spreadsheet = new Spreadsheet;
+        $trad = $spreadsheet->getActiveSheet();
+        $trad->setTitle('Trad. articles');
+        $trad->fromArray([
+            ['EAN', 'REFERENCE', 'NAME'],
+            ['3353090016794', '35X30SPEEDNET', 'RECTANGLE 35X30 CM MICROFIBRE'],
+        ]);
+
+        $view = $spreadsheet->createSheet();
+        $view->setTitle('ROSTAING 2026');
+        $view->setCellValue('A1', 'sku');
+        $view->setCellValue('B1', 'nazwa');
+        $view->setCellValue('C1', 'cena');
+        $view->setCellValue('A2', "='Trad. articles'!B2");
+        $view->setCellValue('B2', "='Trad. articles'!C2");
+        $view->setCellValue('C2', '=1.5*2');
+
+        $reader = new SpreadsheetCellReader;
+        $rows = $reader->toRows($view);
+
+        $this->assertSame('35X30SPEEDNET', $rows[1][0]);
+        $this->assertSame('RECTANGLE 35X30 CM MICROFIBRE', $rows[1][1]);
+        $this->assertEqualsWithDelta(3.0, (float) $rows[1][2], 0.001);
+        $this->assertStringNotContainsString('Trad. articles', $rows[1][0]);
+        $this->assertStringNotContainsString('=', $rows[1][1]);
+    }
+
+    public function test_to_rows_uses_excel_cached_formula_result(): void
+    {
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setCellValue('A1', '=UNKNOWNFUNC()');
+        $sheet->getCell('A1')->setCalculatedValue('FROM-CACHE');
+
+        $rows = (new SpreadsheetCellReader)->toRows($sheet);
+
+        $this->assertSame('FROM-CACHE', $rows[0][0]);
+    }
 }
