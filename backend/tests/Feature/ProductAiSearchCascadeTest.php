@@ -216,6 +216,48 @@ final class ProductAiSearchCascadeTest extends TestCase
         $this->assertNotContains('FR740', array_column($wear, 'sku'));
     }
 
+    public function test_apparel_set_interleaves_jacket_among_cheaper_bibs(): void
+    {
+        for ($i = 0; $i < 6; $i++) {
+            Product::query()->create([
+                'sku' => 'OGROD-'.$i,
+                'name' => 'Spodnie ogrodniczki TARAJ '.$i,
+                'manufacturer' => 'Panther',
+                'norms' => 'EN ISO 11611:2015, EN 1149-5:2018',
+                'description' => 'Ogrodniczki trudnopalne.',
+                'catalog_price_net' => 80,
+                'purchase_price' => 20 + $i,
+                'stock' => 2,
+                'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+        Product::query()->create([
+            'sku' => 'BLUZA-KOLPEO',
+            'name' => 'Bluza KOLPEO BASIC ZIPPER - zamek',
+            'manufacturer' => 'Cerva',
+            'norms' => 'EN ISO 11611:2015, EN 1149-5:2018',
+            'description' => 'Bluza trudnopalna.',
+            'catalog_price_net' => 400,
+            'purchase_price' => 300,
+            'stock' => 3,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $this->app->instance(OpenAiCompatibleClient::class, $this->emptyRankLlm());
+
+        $wear = $this->postJson('/api/products/ai-search', [
+            'query' => 'Ubranie antyelektrostatyczne, trudnopalne (bluza + spodnie do pasa lub ogrodniczki) EN ISO 11611 kl. 2 EN 1149-5',
+            'limit' => 4,
+        ])->assertOk()->json('products');
+        $skus = array_column($wear, 'sku');
+        $this->assertContains('BLUZA-KOLPEO', $skus);
+        $this->assertContains('OGROD-0', $skus);
+    }
+
     private function emptyRankLlm(): OpenAiCompatibleClient
     {
         $llm = Mockery::mock(OpenAiCompatibleClient::class);

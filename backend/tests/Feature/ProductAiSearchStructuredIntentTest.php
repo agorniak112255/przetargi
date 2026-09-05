@@ -200,6 +200,7 @@ final class ProductAiSearchStructuredIntentTest extends TestCase
             $system = (string) ($messages[0]['content'] ?? '');
             $user = (string) ($messages[1]['content'] ?? '');
             $this->assertStringContainsString('search_steps', $system);
+            $this->assertStringContainsString('Wymaganie podwójne', $system);
             $this->assertStringContainsString('NA KOŃCU zawsze producent', $system);
             $this->assertStringContainsString('NIE dzianina z nitrylem na dłoni', $system);
             $this->assertStringContainsString('Wymaganie:', $user);
@@ -220,5 +221,35 @@ final class ProductAiSearchStructuredIntentTest extends TestCase
             ->understandRequirement('Rękawice wampirki uniwersalne');
 
         $this->assertSame(['rękawice', 'dzianinowe', 'dłoń powlekana'], $intent['search_steps']);
+    }
+
+    public function test_rank_prompt_asks_to_interleave_dual_requirements(): void
+    {
+        $card = Product::query()->create([
+            'sku' => 'BLUZA-1',
+            'name' => 'Bluza KOLPEO',
+            'manufacturer' => 'Cerva',
+            'description' => 'Bluza.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 1,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+        $svc = $this->app->make(\App\Services\ProductAiSearchService::class);
+        $ref = new \ReflectionClass($svc);
+        $m = $ref->getMethod('rankMessages');
+        $m->setAccessible(true);
+        $messages = $m->invoke(
+            $svc,
+            'Ubranie (bluza + spodnie)',
+            collect([$card]),
+            10,
+            'ubranie',
+            [],
+            \App\Services\Ai\AiTask::ProductSearch,
+            [],
+        );
+        $this->assertStringContainsString('Wymaganie podwójne', (string) ($messages[0]['content'] ?? ''));
+        $this->assertStringContainsString('oba rodzaje na przemian', (string) ($messages[0]['content'] ?? ''));
     }
 }

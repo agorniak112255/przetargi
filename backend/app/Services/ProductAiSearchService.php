@@ -248,7 +248,7 @@ final class ProductAiSearchService
             } else {
                 $ranked = $this->mergeRequirementCatalogRows($clean[$i], $ranked, $limit, $retrieveIntent);
             }
-            $ranked = $this->sortRankedByMatchPercent($ranked);
+            $ranked = $this->orderApparelSetRows($clean[$i], $ranked, $pending[$i]['candidates']);
             $done[$i] = $this->searchResult(
                 $clean[$i],
                 $this->applySlangIntent($clean[$i], $retrieveIntent),
@@ -313,7 +313,7 @@ final class ProductAiSearchService
         return [
             'products' => [],
             'note' => null,
-            'rank_cards' => $this->cardsForRanking($candidates, $intent['constraints']),
+            'rank_cards' => $this->cardsForRanking($query, $candidates, $intent['constraints']),
             'candidates' => $candidates,
         ];
     }
@@ -662,7 +662,7 @@ final class ProductAiSearchService
                 $ranked = $this->rowsFromGenericCatalog($query, $prepared['candidates'], $limit, $intent);
             }
 
-            return [$rankedIntent, $this->sortRankedByMatchPercent($ranked)];
+            return [$rankedIntent, $this->orderApparelSetRows($query, $ranked, $prepared['candidates'])];
         });
         $emptyNote = $rankFailed
             ? 'Nie udało się ocenić kart przez model. Spróbuj ponownie albo użyj zwykłego wyszukiwania.'
@@ -902,7 +902,7 @@ final class ProductAiSearchService
             } else {
                 $ranked = $this->mergeRequirementCatalogRows($clean[$i], $ranked, $limit, $retrieveIntent);
             }
-            $ranked = $this->sortRankedByMatchPercent($ranked);
+            $ranked = $this->orderApparelSetRows($clean[$i], $ranked, $pending[$i]['candidates']);
             $done[$i] = $this->searchResult(
                 $clean[$i],
                 $this->applySlangIntent($clean[$i], $retrieveIntent),
@@ -975,6 +975,7 @@ final class ProductAiSearchService
             .'model_name: model/kolekcja (np. TRONCHETTO), nie producent. size_note: rozmiary, nie łącz z modelem. '
             .'search_phrases: 3-8 synonimów sklepowych. constraints: 0-6 twardych dowodów (EN 374), puste przy samej nazwie/kolorze. '
             .'Nie zmieniaj rodzaju. Popraw literówki (podnie→spodnie, TEPM-ICE→TEMP-ICE). '
+            .$this->dualRequirementPromptRule()
             .'JSON: {"needed":"...","search_steps":["..."],"manufacturer":null,"model_name":null,"size_note":null,'
             .'"search_phrases":["..."],"constraints":[]}.';
     }
@@ -1474,7 +1475,7 @@ final class ProductAiSearchService
             $out[] = $row;
         }
 
-        return array_slice($this->sortRankedByMatchPercent($out), 0, max(1, min(80, $limit)));
+        return array_slice($this->orderApparelSetRows($query, $out, $candidates), 0, max(1, min(80, $limit)));
     }
 
     /**
@@ -1546,6 +1547,91 @@ final class ProductAiSearchService
         });
 
         return $ranked;
+    }
+
+    /**
+     * Komplet bluza+spodnie: nie zostawiać samej tańszej nogawki na całej liście.
+     *
+     * @param  list<array<string, mixed>>  $ranked
+     * @param  Collection<int, Product>  $candidates
+     * @return list<array<string, mixed>>
+     */
+    private function orderApparelSetRows(string $query, array $ranked, Collection $candidates): array
+    {
+        $ranked = $this->sortRankedByMatchPercent($ranked);
+        if (! $this->assortment->isApparelSet($query)) {
+            return $ranked;
+        }
+        $have = [];
+        foreach ($ranked as $row) {
+            $g = $this->assortment->garment((string) ($row['name'] ?? ''));
+            if ($g === 'jacket' || $g === 'pants') {
+                $have[$g] = true;
+            }
+        }
+        $seen = [];
+        foreach ($ranked as $row) {
+            $seen[(int) ($row['id'] ?? 0)] = true;
+        }
+        foreach (['jacket', 'pants'] as $need) {
+            if (isset($have[$need])) {
+                continue;
+            }
+            foreach ($candidates as $product) {
+                if (! $product instanceof Product || isset($seen[(int) $product->id])) {
+                    continue;
+                }
+                if ($this->assortment->garment((string) $product->name) !== $need) {
+                    continue;
+                }
+                $row = $this->productToRow($product);
+                $row['ai_match_percent'] = 68;
+                $row['ai_match_reason'] = 'Drugi element kompletu z katalogu.';
+                $ranked[] = $row;
+                break;
+            }
+        }
+
+        return $this->interleaveApparelSetRows($ranked);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $ranked
+     * @return list<array<string, mixed>>
+     */
+    private function interleaveApparelSetRows(array $ranked): array
+    {
+        $jacket = [];
+        $pants = [];
+        $other = [];
+        foreach ($ranked as $row) {
+            $g = $this->assortment->garment((string) ($row['name'] ?? ''));
+            if ($g === 'jacket') {
+                $jacket[] = $row;
+            } elseif ($g === 'pants') {
+                $pants[] = $row;
+            } else {
+                $other[] = $row;
+            }
+        }
+        if ($jacket === [] || $pants === []) {
+            return $ranked;
+        }
+        $out = [];
+        $i = $j = $k = 0;
+        while (isset($jacket[$i]) || isset($pants[$j]) || isset($other[$k])) {
+            if (isset($jacket[$i])) {
+                $out[] = $jacket[$i++];
+            }
+            if (isset($pants[$j])) {
+                $out[] = $pants[$j++];
+            }
+            if (isset($other[$k])) {
+                $out[] = $other[$k++];
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -2576,9 +2662,9 @@ final class ProductAiSearchService
      * @param  list<string>  $constraints
      * @return Collection<int, Product>
      */
-    private function cardsForRanking(Collection $candidates, array $constraints): Collection
+    private function cardsForRanking(string $query, Collection $candidates, array $constraints): Collection
     {
-        $candidates = $candidates->values();
+        $candidates = $this->interleaveApparelSetProducts($query, $candidates->values());
         if ($candidates->count() <= self::RANK_CARDS || $constraints === []) {
             return $candidates->take(self::RANK_CARDS)->values();
         }
@@ -2601,7 +2687,53 @@ final class ProductAiSearchService
             }
         }
 
-        return $with->concat($without)->take(self::RANK_CARDS)->values();
+        return $this->interleaveApparelSetProducts($query, $with->concat($without))->take(self::RANK_CARDS)->values();
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return Collection<int, Product>
+     */
+    private function interleaveApparelSetProducts(string $query, Collection $products): Collection
+    {
+        if (! $this->assortment->isApparelSet($query) || $products->count() < 2) {
+            return $products->values();
+        }
+        $jacket = collect();
+        $pants = collect();
+        $other = collect();
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $g = $this->assortment->garment((string) $product->name);
+            if ($g === 'jacket') {
+                $jacket->push($product);
+            } elseif ($g === 'pants') {
+                $pants->push($product);
+            } else {
+                $other->push($product);
+            }
+        }
+        if ($jacket->isEmpty() || $pants->isEmpty()) {
+            return $products->values();
+        }
+        $out = collect();
+        $i = 0;
+        while ($i < $jacket->count() || $i < $pants->count() || $i < $other->count()) {
+            if ($jacket->get($i) instanceof Product) {
+                $out->push($jacket->get($i));
+            }
+            if ($pants->get($i) instanceof Product) {
+                $out->push($pants->get($i));
+            }
+            if ($other->get($i) instanceof Product) {
+                $out->push($other->get($i));
+            }
+            $i++;
+        }
+
+        return $out->values();
     }
 
     /**
@@ -3067,6 +3199,14 @@ final class ProductAiSearchService
         return $card;
     }
 
+    /** Komplet dwóch krojów/produktów — na teraz i na kolejne SIWZ. */
+    private function dualRequirementPromptRule(): string
+    {
+        return 'Wymaganie podwójne (dwa kroje lub dwa produkty w jednym zapytaniu: „A + B”, „A lub B”, komplet): '
+            .'needed i frazy zostaw dla OBU elementów; w matches dawaj oba rodzaje na przemian '
+            .'— nie sam jeden krój i nie same najtańsze. Tak samo przy kolejnych takich SIWZ, nie tylko odzież. ';
+    }
+
     private function slangWordProofRule(string $query): string
     {
         $slang = $this->slangRewriteFor($query);
@@ -3165,6 +3305,7 @@ final class ProductAiSearchService
                     .$reasonHint
                     .'score>=40 tylko przy zgodnej nazwie I spełnionych warunkach. Max '.$maxMatches.'. '
                     .'Zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
+                    .$this->dualRequirementPromptRule()
                     .'Tylko id z listy. Nie wymyślaj.',
             ],
             [
