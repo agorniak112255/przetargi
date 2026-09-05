@@ -83,6 +83,10 @@ final class CatalogSitemapIndexer
         '/index.php?option=com_osmap&view=xml&id=1&format=xml',
     ];
 
+    public function __construct(
+        private readonly CatalogIndexProgress $progress,
+    ) {}
+
     /**
      * @return array{urls: int, saved: int, sitemaps: list<string>, off_host: int, timed_out: bool}
      */
@@ -93,6 +97,7 @@ final class CatalogSitemapIndexer
             throw new RuntimeException('Pusty host.');
         }
 
+        $this->ensureProgress($host);
         $deadline = microtime(true) + max(30, $maxSeconds);
         $sitemaps = $this->discoverSitemaps($host, $deadline);
         $guessed = array_flip($this->candidateUrls($host));
@@ -148,6 +153,9 @@ final class CatalogSitemapIndexer
                     $offHost++;
                 }
                 $seen[$loc] = true;
+                if (count($seen) % 2000 === 0) {
+                    $this->note($host, 'Zebrano '.count($seen).' adresów…');
+                }
                 $rows[] = $this->rowFor($locHost, $loc);
                 if (count($rows) >= 500) {
                     $saved += $this->store($rows);
@@ -160,14 +168,22 @@ final class CatalogSitemapIndexer
             // liczymy tylko mapy, które faktycznie coś dały — inaczej raport
             // pokazuje soft-404 sklepu jako znalezioną sitemapę
             $timeout = isset($guessed[$sitemap]) ? self::CANDIDATE_TIMEOUT : 45;
+            $guessing = isset($guessed[$sitemap]);
+            if (! $guessing) {
+                $this->note($host, 'Czytam '.$this->shortUrl($sitemap));
+            }
             if ($this->streamLocations($sitemap, $consume, $deadline, $timeout) && $found > 0) {
                 $used[] = $sitemap;
+                $this->note($host, 'Mapa dała '.$found.' adresów (łącznie '.count($seen).'): '.$this->shortUrl($sitemap));
+            } elseif (! $guessing) {
+                $this->note($host, 'Mapa pusta albo nieczytelna: '.$this->shortUrl($sitemap));
             }
             if (microtime(true) >= $deadline) {
                 $timedOut = true;
             }
             // robots.txt bywa bez Sitemap albo wskazuje 404 — wtedy zgadujemy typowe ścieżki
             if ($i === count($sitemaps) - 1 && count($seen) === 0 && ! $timedOut) {
+                $this->note($host, 'Nadal 0 kart — dokładam zgadywane ścieżki sitemapy.');
                 foreach ($this->candidateUrls($host) as $extra) {
                     if (count($sitemaps) >= self::MAX_SITEMAP_FILES) {
                         break;
@@ -180,6 +196,7 @@ final class CatalogSitemapIndexer
         }
 
         if (count($seen) < self::SPARSE_SITEMAP_LIMIT && ! $timedOut) {
+            $this->note($host, 'Mało kart z XML — pełzam po stronach sklepu.');
             foreach ($this->crawlShopPages($host, $maxUrls, $deadline) as $row) {
                 $url = (string) $row['url'];
                 if (isset($seen[$url])) {
@@ -194,6 +211,7 @@ final class CatalogSitemapIndexer
             $saved += $this->store($rows);
         }
 
+        $this->note($host, 'Koniec zbierania: '.$saved.' kart, map: '.count($used).($timedOut ? ', limit czasu' : '').'.');
         Log::info('Catalog sitemap indexed', ['host' => $host, 'urls' => count($seen), 'saved' => $saved]);
 
         return [
@@ -219,10 +237,22 @@ final class CatalogSitemapIndexer
             if ($deadline > 0.0 && microtime(true) >= $deadline) {
                 break;
             }
+            $this->note($host, 'Pobieram robots.txt z '.$name);
             $robots = $this->fetch('https://'.$name.'/robots.txt', 12);
+            $before = count($out);
             $this->collectRobotSitemaps($robots, $out, $name);
             if ($out === [] && ! app()->environment('testing')) {
                 $this->collectRobotSitemaps($this->fetchViaCurl('https://'.$name.'/robots.txt', 12), $out, $name);
+            }
+            if ($robots === null) {
+                $this->note($host, 'robots.txt '.$name.': brak odpowiedzi');
+            } elseif ($this->looksLikeHtml($robots)) {
+                $this->note($host, 'robots.txt '.$name.': HTML zamiast tekstu (WAF?)');
+            } elseif (count($out) === $before) {
+                $this->note($host, 'robots.txt '.$name.': bez wpisu Sitemap');
+            } else {
+                $n = count($out) - $before;
+                $this->note($host, 'robots.txt '.$name.': '.$n.' '.($n === 1 ? 'mapa' : 'map'));
             }
             if ($out !== []) {
                 break;
@@ -231,8 +261,12 @@ final class CatalogSitemapIndexer
 
         if ($out === [] && ($deadline <= 0.0 || microtime(true) < $deadline)) {
             $this->collectHtmlSitemaps($host, $out);
+            if ($out !== []) {
+                $this->note($host, 'Znalazłem sitemapę w HTML strony głównej.');
+            }
         }
         if ($out === []) {
+            $this->note($host, 'Brak sitemapy w robots — zgaduję typowe ścieżki.');
             $out = $this->candidateUrls($host);
         }
 
@@ -1012,6 +1046,30 @@ final class CatalogSitemapIndexer
         }
 
         return null;
+    }
+
+    private function ensureProgress(string $host): void
+    {
+        $status = $this->progress->snapshot($host)['status'];
+        if ($status === 'idle') {
+            $this->progress->start($host, 'Start indeksowania.');
+            $this->progress->markRunning($host, 'Szukam sitemapy.');
+
+            return;
+        }
+        if ($status === 'queued') {
+            $this->progress->markRunning($host, 'Worker startuje.');
+        }
+    }
+
+    private function note(string $host, string $message): void
+    {
+        $this->progress->line($host, $message);
+    }
+
+    private function shortUrl(string $url): string
+    {
+        return mb_strlen($url) > 140 ? mb_substr($url, 0, 137).'…' : $url;
     }
 
     private function normalizeHost(string $host): string

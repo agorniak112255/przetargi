@@ -82,6 +82,7 @@ final class CatalogSearchSiteApiTest extends TestCase
         $this->getJson('/api/admin/catalog-search-sites')->assertForbidden();
         $this->postJson('/api/admin/catalog-search-sites', ['url' => 'x.pl'])->assertForbidden();
         $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/pages')->assertForbidden();
+        $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/progress')->assertForbidden();
         $this->postJson('/api/admin/catalog-search-sites/sklepbhp.pl/reindex')->assertForbidden();
         $this->deleteJson('/api/admin/catalog-search-sites/sklepbhp.pl')->assertForbidden();
     }
@@ -162,6 +163,31 @@ final class CatalogSearchSiteApiTest extends TestCase
 
         $this->postJson('/api/admin/catalog-search-sites/nieznana-domena.pl/reindex')
             ->assertStatus(422);
+    }
+
+    public function test_admin_reads_reindex_progress(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        Queue::fake();
+
+        $this->postJson('/api/admin/catalog-search-sites/sklepbhp.pl/reindex')->assertOk();
+
+        $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/progress')
+            ->assertOk()
+            ->assertJsonPath('host', 'sklepbhp.pl')
+            ->assertJsonPath('status', 'queued')
+            ->assertJsonPath('lines.0.text', 'Zlecono sprawdzenie sklepbhp.pl.');
+    }
+
+    public function test_unknown_host_progress_is_idle(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->getJson('/api/admin/catalog-search-sites/nieznana-domena.pl/progress')
+            ->assertOk()
+            ->assertJsonPath('host', 'nieznana-domena.pl')
+            ->assertJsonPath('status', 'idle')
+            ->assertJsonPath('lines', []);
     }
 
     public function test_junk_hosts_are_hidden_after_exclusion_seed(): void

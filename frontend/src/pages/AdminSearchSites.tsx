@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { api } from '../lib/api'
 
 type SearchSite = {
@@ -40,7 +40,17 @@ type PagesResponse = {
   }
 }
 
+type CheckProgress = {
+  host: string
+  status: 'idle' | 'queued' | 'running' | 'done' | 'failed'
+  started_at: string | null
+  finished_at: string | null
+  lines: { at: string; text: string }[]
+}
+
 type SortKey = 'host' | 'links' | 'source_label' | 'last_seen_at'
+
+const WATCH_KEY = 'catalog-check-host'
 
 const SOURCE_BADGE: Record<string, string> = {
   manual: 'bg-emerald-100 text-emerald-800',
@@ -60,6 +70,14 @@ function formatWhen(iso: string | null): string {
   if (!iso) return '—'
   try {
     return new Date(iso).toLocaleString('pl-PL')
+  } catch {
+    return iso
+  }
+}
+
+function formatClock(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString('pl-PL')
   } catch {
     return iso
   }
@@ -86,9 +104,14 @@ export function AdminSearchSites() {
   const [deleteHost, setDeleteHost] = useState('')
   const [skipToggleHost, setSkipToggleHost] = useState('')
   const [pagesHost, setPagesHost] = useState<SearchSite | null>(null)
+  const [watchHost, setWatchHost] = useState(() => sessionStorage.getItem(WATCH_KEY) ?? '')
+  const [watchTick, setWatchTick] = useState(0)
+  const [check, setCheck] = useState<CheckProgress | null>(null)
 
-  async function load() {
-    setBusy(true)
+  async function load(silent = false) {
+    if (!silent) {
+      setBusy(true)
+    }
     setErr('')
     try {
       const data = await api<SitesResponse>('/admin/catalog-search-sites')
@@ -99,13 +122,64 @@ export function AdminSearchSites() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd wczytywania stron')
     } finally {
-      setBusy(false)
+      if (!silent) {
+        setBusy(false)
+      }
     }
   }
 
   useEffect(() => {
     void load()
   }, [])
+
+  function watch(host: string) {
+    setCheck(null)
+    setWatchHost(host)
+    setWatchTick((n) => n + 1)
+    sessionStorage.setItem(WATCH_KEY, host)
+  }
+
+  function stopWatch() {
+    setWatchHost('')
+    setCheck(null)
+    sessionStorage.removeItem(WATCH_KEY)
+  }
+
+  useEffect(() => {
+    if (watchHost === '') {
+      return
+    }
+    let cancelled = false
+    let timer = 0
+    async function pull() {
+      try {
+        const data = await api<CheckProgress>(
+          `/admin/catalog-search-sites/${encodeURIComponent(watchHost)}/progress`,
+        )
+        if (cancelled) {
+          return
+        }
+        setCheck(data)
+        if (data.status === 'queued' || data.status === 'running') {
+          timer = window.setTimeout(() => void pull(), 1500)
+        } else if (data.status === 'done' || data.status === 'failed') {
+          void load(true)
+        }
+      } catch {
+        if (!cancelled) {
+          setCheck(null)
+          timer = window.setTimeout(() => void pull(), 2000)
+        }
+      }
+    }
+    void pull()
+    return () => {
+      cancelled = true
+      if (timer) {
+        window.clearTimeout(timer)
+      }
+    }
+  }, [watchHost, watchTick])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -152,6 +226,7 @@ export function AdminSearchSites() {
         body: JSON.stringify({ url }),
       })
       setUrl('')
+      watch(created.host)
       setMsg(`Dodano ${created.host} — indeksowanie w tle.`)
       await load()
     } catch (ex) {
@@ -195,6 +270,9 @@ export function AdminSearchSites() {
         { method: 'POST' },
       )
       setMsg(res.message)
+      if (action === 'unskip') {
+        watch(host)
+      }
       await load()
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się zmienić blokady')
@@ -213,6 +291,7 @@ export function AdminSearchSites() {
         { method: 'POST' },
       )
       setMsg(res.message)
+      watch(host)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się zlecić sprawdzenia')
     } finally {
@@ -229,6 +308,9 @@ export function AdminSearchSites() {
 
   return (
     <div className="space-y-4">
+      {watchHost !== '' && (
+        <CheckLogPanel host={watchHost} check={check} onClose={stopWatch} />
+      )}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-br from-sky-50 via-white to-emerald-50 p-5 shadow-sm">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-700">Wyszukiwarka katalogu</p>
         <h2 className="mt-1 text-lg font-semibold text-slate-900">Strony w indeksie</h2>
@@ -613,6 +695,80 @@ function CatalogPagesModal({
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function CheckLogPanel({
+  host,
+  check,
+  onClose,
+}: {
+  host: string
+  check: CheckProgress | null
+  onClose: () => void
+}) {
+  const logRef = useRef<HTMLDivElement>(null)
+  const status = check?.status ?? 'queued'
+  const label =
+    status === 'running'
+      ? 'W toku'
+      : status === 'queued'
+        ? 'W kolejce'
+        : status === 'done'
+          ? 'Gotowe'
+          : status === 'failed'
+            ? 'Błąd'
+            : 'Czekam…'
+  const tone =
+    status === 'failed'
+      ? 'border-rose-200 bg-rose-50'
+      : status === 'done'
+        ? 'border-emerald-200 bg-emerald-50'
+        : 'border-sky-200 bg-sky-50'
+
+  useEffect(() => {
+    const box = logRef.current
+    if (box) {
+      box.scrollTop = box.scrollHeight
+    }
+  }, [check?.lines.length])
+
+  return (
+    <div className={`fixed top-3 right-3 left-3 z-30 rounded-2xl border p-4 shadow-lg md:left-64 ${tone}`}>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+            Sprawdzanie domeny
+          </p>
+          <h3 className="text-sm font-semibold text-slate-900">
+            {host}
+            <span className="ml-2 text-[11px] font-medium text-slate-600">{label}</span>
+          </h3>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          Zamknij
+        </button>
+      </div>
+      <div
+        ref={logRef}
+        className="mt-3 max-h-48 overflow-auto rounded-lg border border-white/70 bg-white/80 px-3 py-2 font-mono text-[11px] leading-5 text-slate-800"
+      >
+        {(check?.lines ?? []).length === 0 ? (
+          <p className="text-slate-500">Czekam na pierwsze linie logu…</p>
+        ) : (
+          (check?.lines ?? []).map((line, i) => (
+            <p key={`${line.at}-${i}`}>
+              <span className="mr-2 text-slate-400">{formatClock(line.at)}</span>
+              {line.text}
+            </p>
+          ))
+        )}
       </div>
     </div>
   )

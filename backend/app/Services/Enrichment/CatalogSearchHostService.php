@@ -17,6 +17,10 @@ use Throwable;
 
 final class CatalogSearchHostService
 {
+    public function __construct(
+        private readonly CatalogIndexProgress $indexProgress,
+    ) {}
+
     /**
      * @return list<array{
      *     host: string,
@@ -136,6 +140,7 @@ final class CatalogSearchHostService
             'host' => $host,
             'source' => 'manual',
         ]);
+        $this->indexProgress->start($host, 'Dodano '.$host.' — w kolejce.');
         IndexCatalogHostJob::dispatch($host);
 
         return [
@@ -232,6 +237,7 @@ final class CatalogSearchHostService
     public function reindex(string $host): array
     {
         $row = $this->requireHost($host);
+        $this->indexProgress->start($row['host'], 'Zlecono sprawdzenie '.$row['host'].'.');
         IndexCatalogHostJob::dispatch($row['host']);
 
         return [
@@ -257,6 +263,7 @@ final class CatalogSearchHostService
         }
 
         CatalogSkipOverride::remember($host);
+        $this->indexProgress->start($host, 'Odblokowano '.$host.' — w kolejce.');
         IndexCatalogHostJob::dispatch($host);
 
         return [
@@ -287,6 +294,20 @@ final class CatalogSearchHostService
             'host' => $host,
             'message' => $host.' wraca do pomijanych przy pełnym skanie.',
         ];
+    }
+
+    /**
+     * @return array{
+     *     host: string,
+     *     status: 'idle'|'queued'|'running'|'done'|'failed',
+     *     started_at: string|null,
+     *     finished_at: string|null,
+     *     lines: list<array{at: string, text: string}>
+     * }
+     */
+    public function progress(string $host): array
+    {
+        return $this->indexProgress->snapshot($this->normalizeHost($host));
     }
 
     public function normalizeHost(string $domain): string

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Models\CatalogHost;
+use App\Services\Enrichment\CatalogIndexProgress;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -43,9 +44,10 @@ class IndexCatalogHostJob implements ShouldQueue, ShouldBeUnique
         return mb_strtolower(trim($this->host));
     }
 
-    public function handle(CatalogSitemapIndexer $indexer): void
+    public function handle(CatalogSitemapIndexer $indexer, CatalogIndexProgress $progress): void
     {
         $host = mb_strtolower(trim($this->host));
+        $progress->markRunning($host, 'Worker startuje indeksowanie.');
         try {
             $result = $indexer->index($host, 250000, 600);
             CatalogHost::query()->updateOrCreate(
@@ -57,6 +59,7 @@ class IndexCatalogHostJob implements ShouldQueue, ShouldBeUnique
                     'last_error' => $this->emptyError($result),
                 ]
             );
+            $progress->finish($host, $this->doneMessage($result), true);
         } catch (Throwable $e) {
             CatalogHost::query()->updateOrCreate(
                 ['host' => $host],
@@ -67,6 +70,7 @@ class IndexCatalogHostJob implements ShouldQueue, ShouldBeUnique
                     'last_error' => mb_substr($e->getMessage(), 0, 500),
                 ]
             );
+            $progress->finish($host, $e->getMessage(), false);
             throw $e;
         }
     }
@@ -87,5 +91,21 @@ class IndexCatalogHostJob implements ShouldQueue, ShouldBeUnique
         }
 
         return 'Sitemap bez kart produktu.';
+    }
+
+    /**
+     * @param  array{saved: int, sitemaps: list<string>, off_host: int, timed_out: bool}  $result
+     */
+    private function doneMessage(array $result): string
+    {
+        $parts = [$result['saved'].' kart', count($result['sitemaps']).' map'];
+        if ($result['off_host'] > 0) {
+            $parts[] = $result['off_host'].' z innej domeny';
+        }
+        if ($result['timed_out']) {
+            $parts[] = 'przerwane limitem czasu';
+        }
+
+        return 'Gotowe — '.implode(', ', $parts).'.';
     }
 }

@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\DestroyCatalogSearchSiteRequest;
 use App\Http\Requests\Admin\ShowCatalogSearchSitePagesRequest;
+use App\Http\Requests\Admin\ShowCatalogSearchSiteProgressRequest;
 use App\Http\Requests\Admin\StoreCatalogSearchSiteRequest;
 use App\Services\Enrichment\CatalogSearchHostService;
 use Illuminate\Http\JsonResponse;
@@ -54,6 +55,11 @@ class CatalogSearchSiteController extends Controller
             (int) ($data['page'] ?? 1),
             (int) ($data['per_page'] ?? 40),
         ));
+    }
+
+    public function progress(ShowCatalogSearchSiteProgressRequest $request, string $host): JsonResponse
+    {
+        return response()->json($this->sites->progress($host));
     }
 
     public function reindex(string $host): JsonResponse
