@@ -78,7 +78,10 @@ final class CatalogCascadeRecall
         $layers = $this->layers($query, $intent);
         $steps = $this->intentSteps($intent, $layers);
         if ($steps !== []) {
-            return $this->retrieveBySteps($query, $layers, $steps, $requirement, $limit);
+            $bySteps = $this->retrieveBySteps($query, $layers, $steps, $requirement, $limit);
+            if ($bySteps['products']->isNotEmpty()) {
+                return $bySteps;
+            }
         }
         if ($layers['family'] === null && $layers['features'] === [] && $layers['manufacturer'] === null) {
             return ['products' => collect(), 'level' => null];
@@ -239,7 +242,8 @@ final class CatalogCascadeRecall
                     ->orWhere('sku', 'like', $like);
                 if (! $nameOnly) {
                     $outer->orWhere('description', 'like', $like)
-                        ->orWhere('search_blob', 'like', $like);
+                        ->orWhere('search_blob', 'like', $like)
+                        ->orWhere('norms', 'like', $like);
                 }
             }
         });
@@ -406,7 +410,8 @@ final class CatalogCascadeRecall
                 $outer->orWhere('name', 'like', $like)
                     ->orWhere('sku', 'like', $like)
                     ->orWhere('description', 'like', $like)
-                    ->orWhere('search_blob', 'like', $like);
+                    ->orWhere('search_blob', 'like', $like)
+                    ->orWhere('norms', 'like', $like);
             }
         });
     }

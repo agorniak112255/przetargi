@@ -298,4 +298,45 @@ final class CatalogCascadeRecallTest extends TestCase
         $this->assertContains('SB085290N', $skus);
         $this->assertNotContains('51548', $skus);
     }
+
+    public function test_norm_step_matches_norms_column_not_name(): void
+    {
+        Product::query()->create([
+            'sku' => 'BLUZA-KOLPEO',
+            'name' => 'Bluza KOLPEO BASIC ZIPPER',
+            'manufacturer' => 'Cerva',
+            'norms' => 'EN ISO 11611:2015, EN 1149-5:2018',
+            'description' => 'Bluza trudnopalna.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 3,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+        Product::query()->create([
+            'sku' => 'BLUZA-PLAIN',
+            'name' => 'Bluza robocza bez normy',
+            'manufacturer' => 'Reis',
+            'description' => 'Zwykla bluza.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 20,
+            'stock' => 5,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'Ubranie antyelektrostatyczne trudnopalne (bluza + spodnie) EN ISO 11611 EN 1149-5',
+            [
+                'needed' => 'ubranie trudnopalne',
+                'search_phrases' => ['bluza'],
+                'search_steps' => ['11611', '1149'],
+                'constraints' => [],
+            ],
+            'Ubranie antyelektrostatyczne trudnopalne (bluza + spodnie) EN ISO 11611 EN 1149-5',
+            20
+        );
+
+        $skus = $hit['products']->pluck('sku')->all();
+        $this->assertContains('BLUZA-KOLPEO', $skus);
+        $this->assertNotContains('BLUZA-PLAIN', $skus);
+    }
 }
