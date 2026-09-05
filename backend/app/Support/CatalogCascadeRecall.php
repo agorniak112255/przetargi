@@ -257,6 +257,7 @@ final class CatalogCascadeRecall
         }
         $familyNouns = $this->familyNouns($family);
         $stop = ['ochrona', 'przed', 'ciecza', 'olej', 'plyn', 'proste', 'uniwersaln', 'oraz', 'dla', 'lekki', 'cienki'];
+        $kept = [];
         foreach ($this->tokenize($step) as $token) {
             if (in_array($token, $stop, true) || preg_match('/^(ciecza|olej|plyn|ochrona|przed|lekki|cienki)/u', $token) === 1) {
                 continue;
@@ -271,7 +272,11 @@ final class CatalogCascadeRecall
             if ($skip) {
                 continue;
             }
-            $out[] = mb_strlen($token) > 5 ? mb_substr($token, 0, 5) : $token;
+            $kept[] = $token;
+        }
+        $last = $kept === [] ? null : $kept[array_key_last($kept)];
+        foreach ($kept as $token) {
+            $out[] = ($token === $last || mb_strlen($token) <= 5) ? $token : mb_substr($token, 0, 5);
         }
 
         return array_values(array_unique(array_filter(

@@ -94,6 +94,17 @@ final class ProductAiSearchCascadeTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
+        Product::query()->create([
+            'sku' => '51548',
+            'name' => 'Krążek ścierny 3M Hookit Gold 288U, 150 mm',
+            'manufacturer' => '3M',
+            'description' => 'Krążek ścierny.',
+            'catalog_price_net' => 2,
+            'purchase_price' => 1,
+            'stock' => 50,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
 
         $this->app->instance(OpenAiCompatibleClient::class, $this->emptyRankLlm());
 
@@ -106,6 +117,7 @@ final class ProductAiSearchCascadeTest extends TestCase
 
         $this->assertContains('SB085290N', array_column($skus, 'sku'));
         $this->assertNotContains('PAD-505', array_column($skus, 'sku'));
+        $this->assertNotContains('51548', array_column($skus, 'sku'));
     }
 
     public function test_apparel_set_shows_jacket_and_bibs_not_hood(): void

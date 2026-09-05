@@ -260,4 +260,42 @@ final class CatalogCascadeRecallTest extends TestCase
         $this->assertNotContains('R840', $skus);
         $this->assertSame($nitrile->id, $hit['products']->first()?->id);
     }
+
+    public function test_last_remaining_word_is_not_truncated(): void
+    {
+        Product::query()->create([
+            'sku' => 'SB085290N',
+            'name' => 'Scotch-Brite Scierka z mikrowlokna',
+            'manufacturer' => '3M',
+            'description' => 'Scierka.',
+            'catalog_price_net' => 6,
+            'purchase_price' => 3,
+            'stock' => 10,
+        ]);
+        Product::query()->create([
+            'sku' => '51548',
+            'name' => 'Krazek scierny 3M Hookit Gold 288U',
+            'manufacturer' => '3M',
+            'description' => 'Krazek scierny.',
+            'catalog_price_net' => 2,
+            'purchase_price' => 1,
+            'stock' => 50,
+        ]);
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'ŚCIERKA TETRA 60 x 85 cm',
+            [
+                'needed' => 'ścierka tetra',
+                'search_phrases' => ['ścierka tetra'],
+                'search_steps' => ['ścierka', 'tetra'],
+                'constraints' => [],
+            ],
+            'ŚCIERKA TETRA 60 x 85 cm',
+            20
+        );
+
+        $skus = $hit['products']->pluck('sku')->all();
+        $this->assertContains('SB085290N', $skus);
+        $this->assertNotContains('51548', $skus);
+    }
 }
