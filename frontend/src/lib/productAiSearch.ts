@@ -30,6 +30,23 @@ export function externalHintsFrom(res: ProductAiSearchResult): ProductAiExternal
   return res.external_hints ?? (res.external_hint ? [res.external_hint] : [])
 }
 
+/** Komplet (bluza+spodnie) albo dwa produkty po „+”, nie same normy EN. */
+export function isDualRequirement(text: string): boolean {
+  const t = text.toLowerCase()
+  if (/(bluza|kurtk).{0,32}(spodn|ogrodniczk)|(spodn|ogrodniczk).{0,32}(bluza|kurtk)/.test(t)) {
+    return true
+  }
+  const parts = text.split(/\s\+\s/)
+  if (parts.length < 2) return false
+  const productish = parts.filter((part) => {
+    const s = part.trim()
+    if (s === '') return false
+    if (/^(en|iso|pn)\b/i.test(s)) return false
+    return /[a-ząćęłńóśźż]{4,}/i.test(s)
+  })
+  return productish.length >= 2
+}
+
 /** Jedyna funkcja katalogowego AI — /products i modal przetargu. */
 export async function searchProductsByAi(
   query: string,

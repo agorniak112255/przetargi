@@ -8,6 +8,7 @@ import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
 import { offerMarkupFactor, productDisplayName, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
+import { isDualRequirement } from '../lib/productAiSearch'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -128,10 +129,13 @@ type Item = {
   match_source?: string | null
   quantity: number
   offer_price: string | null
+  companion_offer_price?: string | null
   margin_percent: string | null
   status: string
   main_product: Product | null
   main_product_id?: number | null
+  companion_product?: Product | null
+  companion_product_id?: number | null
   custom_name?: string | null
   custom_url?: string | null
 }
@@ -189,10 +193,45 @@ function itemProductId(item: Item): string {
   return id != null ? String(id) : ''
 }
 
+type PickedProduct = {
+  id: number
+  sku: string
+  name: string
+  description?: string | null
+  purchase_price?: string | number | null
+  purchase_price_pln?: number | null
+  currency?: string | null
+}
+
+function pickedFromProduct(
+  p: {
+    id: number
+    sku: string
+    name: string
+    description?: string | null
+    purchase_price?: string | number | null
+    purchase_price_pln?: number | null
+    currency?: string | null
+  } | null | undefined,
+): PickedProduct | null {
+  if (!p) return null
+  return {
+    id: p.id,
+    sku: p.sku,
+    name: p.name,
+    description: p.description,
+    purchase_price: p.purchase_price,
+    purchase_price_pln: p.purchase_price_pln,
+    currency: p.currency,
+  }
+}
+
 type ItemDraft = {
   main_product_id: number | null
+  companion_product_id: number | null
   quantity: number
   offer_price: number | null
+  companion_offer_price: number | null
   custom_name: string | null
   custom_url: string | null
 }
@@ -415,12 +454,21 @@ function formatActivityMeta(meta: Record<string, unknown> | null | undefined): s
   const after = meta.after as Record<string, unknown> | undefined
   if (before && after) {
     const parts: string[] = []
-    for (const key of ['offer_price', 'quantity', 'main_product_id', 'ai_match_percent'] as const) {
+    for (const key of [
+      'offer_price',
+      'companion_offer_price',
+      'quantity',
+      'main_product_id',
+      'companion_product_id',
+      'ai_match_percent',
+    ] as const) {
       if (!sameVal(before[key], after[key])) {
         const labels: Record<string, string> = {
           offer_price: 'cena',
+          companion_offer_price: 'cena 2',
           quantity: 'ilość',
           main_product_id: 'produkt',
+          companion_product_id: 'produkt 2',
           ai_match_percent: 'AI %',
         }
         parts.push(`${labels[key] ?? key}: ${String(before[key] ?? '—')} → ${String(after[key] ?? '—')}`)
@@ -2758,29 +2806,20 @@ function ItemRow({
   onComment: (itemId: number, body: string) => Promise<void>
 }) {
   const [productId, setProductId] = useState<string>(itemProductId(item))
-  const [picked, setPicked] = useState<{
-    id: number
-    sku: string
-    name: string
-    description?: string | null
-    purchase_price?: string | number | null
-    purchase_price_pln?: number | null
-    currency?: string | null
-  } | null>(
-    item.main_product
-      ? {
-          id: item.main_product.id,
-          sku: item.main_product.sku,
-          name: item.main_product.name,
-          description: item.main_product.description,
-          purchase_price: item.main_product.purchase_price,
-          purchase_price_pln: item.main_product.purchase_price_pln,
-          currency: item.main_product.currency,
-        }
-      : null,
+  const [picked, setPicked] = useState<PickedProduct | null>(pickedFromProduct(item.main_product))
+  const [companionId, setCompanionId] = useState<string>(
+    item.companion_product_id != null
+      ? String(item.companion_product_id)
+      : item.companion_product
+        ? String(item.companion_product.id)
+        : '',
+  )
+  const [companionPicked, setCompanionPicked] = useState<PickedProduct | null>(
+    pickedFromProduct(item.companion_product),
   )
   const [qty, setQty] = useState(String(item.quantity))
   const [price, setPrice] = useState(item.offer_price ?? '')
+  const [companionPrice, setCompanionPrice] = useState(item.companion_offer_price ?? '')
   const [customName, setCustomName] = useState(item.custom_name ?? '')
   const [customUrl, setCustomUrl] = useState(item.custom_url ?? '')
   const [matchHint, setMatchHint] = useState('')
@@ -2796,21 +2835,18 @@ function ItemRow({
 
   useEffect(() => {
     setProductId(itemProductId(item))
-    setPicked(
-      item.main_product
-        ? {
-            id: item.main_product.id,
-            sku: item.main_product.sku,
-            name: item.main_product.name,
-            description: item.main_product.description,
-            purchase_price: item.main_product.purchase_price,
-            purchase_price_pln: item.main_product.purchase_price_pln,
-            currency: item.main_product.currency,
-          }
-        : null,
+    setPicked(pickedFromProduct(item.main_product))
+    setCompanionId(
+      item.companion_product_id != null
+        ? String(item.companion_product_id)
+        : item.companion_product
+          ? String(item.companion_product.id)
+          : '',
     )
+    setCompanionPicked(pickedFromProduct(item.companion_product))
     setQty(String(item.quantity))
     setPrice(item.offer_price ?? '')
+    setCompanionPrice(item.companion_offer_price ?? '')
     setCustomName(item.custom_name ?? '')
     setCustomUrl(item.custom_url ?? '')
     setPendingAiScore(null)
@@ -2819,12 +2855,14 @@ function ItemRow({
   useEffect(() => {
     onDraftChange(item.id, {
       main_product_id: productId ? Number(productId) : null,
+      companion_product_id: companionId ? Number(companionId) : null,
       quantity: Number(qty) || 1,
       offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
+      companion_offer_price: companionPrice === '' ? null : Number(String(companionPrice).replace(',', '.')),
       custom_name: customName.trim() || null,
       custom_url: customUrl.trim() || null,
     })
-  }, [item.id, productId, qty, price, customName, customUrl, onDraftChange])
+  }, [item.id, productId, companionId, qty, price, companionPrice, customName, customUrl, onDraftChange])
 
   const selectedProduct =
     picked && String(picked.id) === productId
@@ -2846,6 +2884,12 @@ function ItemRow({
     return next
   }
 
+  function applyCompanionCatalogPrice(purchase: string | number | null | undefined): number | null {
+    const next = suggestedOfferPrice(purchase == null || purchase === '' ? null : Number(purchase), markup)
+    if (next != null) setCompanionPrice(next.toFixed(2))
+    return next
+  }
+
   function catalogPurchase(): number | null {
     const fromList = products.find((p) => String(p.id) === productId)
 
@@ -2856,8 +2900,25 @@ function ItemRow({
     )
   }
 
+  const allowCompanion = isDualRequirement(item.requirement) || Boolean(companionId)
+  const companionSum =
+    (price === '' ? 0 : Number(String(price).replace(',', '.')) || 0) +
+    (companionPrice === '' ? 0 : Number(String(companionPrice).replace(',', '.')) || 0)
+
+  function companionFields(): Record<string, unknown> {
+    return {
+      companion_product_id: companionId ? Number(companionId) : null,
+      companion_offer_price: companionPrice === '' ? null : Number(String(companionPrice).replace(',', '.')),
+    }
+  }
+
   function applyTenderMarginToOffer(purchase?: string | number | null): void {
     const next = applyCatalogPrice(purchase ?? catalogPurchase())
+    const companionNext = companionPicked
+      ? applyCompanionCatalogPrice(purchaseForOffer(companionPicked))
+      : companionPrice === ''
+        ? null
+        : Number(String(companionPrice).replace(',', '.'))
     if (next == null) return
     void onSave(item.id, {
       main_product_id: productId ? Number(productId) : null,
@@ -2865,6 +2926,8 @@ function ItemRow({
       offer_price: next,
       custom_name: customName.trim() || null,
       custom_url: customUrl.trim() || null,
+      companion_product_id: companionId ? Number(companionId) : null,
+      companion_offer_price: companionNext,
     })
   }
 
@@ -2932,6 +2995,9 @@ function ItemRow({
                   setPicked(product ?? null)
                   setMatchHint('')
                   setPendingAiScore(null)
+                  setCompanionId('')
+                  setCompanionPicked(null)
+                  setCompanionPrice('')
                   if (id) {
                     setCustomName('')
                     setCustomUrl('')
@@ -2987,11 +3053,44 @@ function ItemRow({
                 AI Internet
               </button>
             </div>
+            {companionPicked && (
+              <div className="flex max-w-[280px] items-start justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                <span className="min-w-0 text-[10px] text-slate-700">
+                  Drugi: <b>{companionPicked.sku}</b>
+                  <span className="mt-0.5 block truncate text-slate-500" title={companionPicked.name}>
+                    {companionPicked.name}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setCompanionId('')
+                    setCompanionPicked(null)
+                    setCompanionPrice('')
+                    void onSave(item.id, {
+                      companion_product_id: null,
+                      companion_offer_price: null,
+                    })
+                  }}
+                  className="shrink-0 text-[10px] text-red-700 hover:underline disabled:opacity-50"
+                >
+                  Usuń
+                </button>
+              </div>
+            )}
+            {allowCompanion && !companionPicked && (
+              <p className="max-w-[280px] text-[10px] text-slate-500">
+                Dwa produkty w jednym wierszu — w wyszukiwaniu zaznacz oba i „Dodaj oba”.
+              </p>
+            )}
             <ProductAiMatchModal
               open={aiModalOpen}
               initialQuery={item.requirement}
               initialWeb={aiModalWeb}
               initialMode={aiModalCatalog ? 'catalog' : aiModalWeb ? 'web' : 'ai'}
+              allowCompanion={allowCompanion}
+              hasMainProduct={Boolean(productId)}
               onClose={() => {
                 setAiModalOpen(false)
                 setAiModalWeb(false)
@@ -2999,13 +3098,20 @@ function ItemRow({
               }}
               onSelect={(p) => {
                 const fromCatalog = p.source === 'catalog'
+                const nextPrice = applyCatalogPrice(purchaseForOffer(p))
                 setProductId(String(p.id))
                 setPicked({
                   id: p.id,
                   sku: p.sku,
                   name: p.name,
                   description: p.description,
+                  purchase_price: p.purchase_price,
+                  purchase_price_pln: p.purchase_price_pln,
+                  currency: p.currency,
                 })
+                setCompanionId('')
+                setCompanionPicked(null)
+                setCompanionPrice('')
                 setMatchHint(
                   fromCatalog
                     ? `Katalog: ${p.sku}`
@@ -3016,12 +3122,14 @@ function ItemRow({
                 setCustomUrl('')
                 setAiModalOpen(false)
                 setAiModalCatalog(false)
-                applyCatalogPrice(purchaseForOffer(p))
                 void onSave(item.id, {
                   main_product_id: p.id,
+                  companion_product_id: null,
+                  companion_offer_price: null,
                   custom_name: null,
                   custom_url: null,
                   quantity: Number(qty) || 1,
+                  ...(nextPrice != null ? { offer_price: nextPrice } : {}),
                   ...(fromCatalog
                     ? {
                         ai_match_percent: null,
@@ -3047,16 +3155,111 @@ function ItemRow({
                       }),
                 })
               }}
+              onSelectCompanion={(p) => {
+                if (!productId || Number(productId) === p.id) return
+                const nextCompanion = applyCompanionCatalogPrice(purchaseForOffer(p))
+                setCompanionId(String(p.id))
+                setCompanionPicked({
+                  id: p.id,
+                  sku: p.sku,
+                  name: p.name,
+                  description: p.description,
+                  purchase_price: p.purchase_price,
+                  purchase_price_pln: p.purchase_price_pln,
+                  currency: p.currency,
+                })
+                setAiModalOpen(false)
+                setAiModalCatalog(false)
+                void onSave(item.id, {
+                  main_product_id: Number(productId),
+                  companion_product_id: p.id,
+                  companion_offer_price: nextCompanion,
+                  quantity: Number(qty) || 1,
+                  offer_price: price === '' ? null : Number(String(price).replace(',', '.')),
+                })
+              }}
+              onSelectPair={(main, companion) => {
+                const fromCatalog = main.source === 'catalog' && companion.source === 'catalog'
+                const nextPrice = applyCatalogPrice(purchaseForOffer(main))
+                const nextCompanion = applyCompanionCatalogPrice(purchaseForOffer(companion))
+                setProductId(String(main.id))
+                setPicked({
+                  id: main.id,
+                  sku: main.sku,
+                  name: main.name,
+                  description: main.description,
+                  purchase_price: main.purchase_price,
+                  purchase_price_pln: main.purchase_price_pln,
+                  currency: main.currency,
+                })
+                setCompanionId(String(companion.id))
+                setCompanionPicked({
+                  id: companion.id,
+                  sku: companion.sku,
+                  name: companion.name,
+                  description: companion.description,
+                  purchase_price: companion.purchase_price,
+                  purchase_price_pln: companion.purchase_price_pln,
+                  currency: companion.currency,
+                })
+                setMatchHint(
+                  fromCatalog
+                    ? `Katalog: ${main.sku} + ${companion.sku}`
+                    : `AI: ${main.sku} + ${companion.sku}`,
+                )
+                setPendingAiScore(fromCatalog ? null : Math.round((main.score + companion.score) / 2))
+                setCustomName('')
+                setCustomUrl('')
+                setAiModalOpen(false)
+                setAiModalCatalog(false)
+                void onSave(item.id, {
+                  main_product_id: main.id,
+                  companion_product_id: companion.id,
+                  companion_offer_price: nextCompanion,
+                  custom_name: null,
+                  custom_url: null,
+                  quantity: Number(qty) || 1,
+                  ...(nextPrice != null ? { offer_price: nextPrice } : {}),
+                  ...(fromCatalog
+                    ? {
+                        ai_match_percent: null,
+                        match_source: 'manual',
+                        ai_match_reasons: [
+                          {
+                            code: 'catalog',
+                            label: 'Wybór kompletu z wyszukiwania po nazwie / SKU',
+                            points: 100,
+                          },
+                        ],
+                      }
+                    : {
+                        ai_match_percent: Math.round((main.score + companion.score) / 2),
+                        match_source: 'ai',
+                        ai_match_reasons: [
+                          {
+                            code: 'ai',
+                            label: `Komplet: ${main.sku} + ${companion.sku}`,
+                            points: Math.round((main.score + companion.score) / 2),
+                          },
+                        ],
+                      }),
+                })
+              }}
               onAddExternal={(hint) => {
                 setCustomName(hint.title)
                 setCustomUrl(hint.url)
                 setProductId('')
                 setPicked(null)
+                setCompanionId('')
+                setCompanionPicked(null)
+                setCompanionPrice('')
                 setPendingAiScore(null)
                 setAiModalOpen(false)
                 setAiModalCatalog(false)
                 void onSave(item.id, {
                   main_product_id: null,
+                  companion_product_id: null,
+                  companion_offer_price: null,
                   custom_name: hint.title,
                   custom_url: hint.url,
                   quantity: Number(qty) || 1,
@@ -3083,8 +3286,13 @@ function ItemRow({
                     setCustomUrl(hint.url)
                     setProductId('')
                     setPicked(null)
+                    setCompanionId('')
+                    setCompanionPicked(null)
+                    setCompanionPrice('')
                     void onSave(item.id, {
                       main_product_id: null,
+                      companion_product_id: null,
+                      companion_offer_price: null,
                       custom_name: hint.title,
                       custom_url: hint.url,
                       quantity: Number(qty) || 1,
@@ -3150,6 +3358,7 @@ function ItemRow({
         ) : (
           <span>
             {item.main_product ? (
+              <div className="space-y-1">
               <button
                 type="button"
                 className={`flex w-full max-w-[280px] items-start gap-1.5 rounded-md border px-2 py-1.5 text-left shadow-sm transition ${
@@ -3189,6 +3398,23 @@ function ItemRow({
                   )}
                 </span>
               </button>
+              {item.companion_product && (
+                <button
+                  type="button"
+                  className="flex w-full max-w-[280px] items-start gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left hover:border-slate-400"
+                  onClick={() => setPreviewId(item.companion_product!.id)}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-[11px] font-medium text-slate-800">
+                      {item.companion_product.sku}
+                    </span>
+                    <span className="block truncate text-[10px] text-slate-600" title={item.companion_product.name}>
+                      {productDisplayName(item.companion_product)}
+                    </span>
+                  </span>
+                </button>
+              )}
+              </div>
             ) : item.custom_name ? (
               <ExternalOfferBanner name={item.custom_name} url={item.custom_url} />
             ) : (
@@ -3236,6 +3462,7 @@ function ItemRow({
               <input
                 className="w-16 border-0 bg-transparent p-0 outline-none"
                 value={price}
+                title={companionPicked ? 'Cena pierwszego produktu' : 'Cena oferty'}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => setPrice(e.target.value)}
               />
@@ -3246,6 +3473,23 @@ function ItemRow({
               <span className="ml-auto text-[10px] font-semibold text-amber-700">●</span>
             )}
           </button>
+          {companionPicked && (
+            <div className="flex min-w-[5.5rem] flex-col gap-0.5">
+              {canEdit ? (
+                <input
+                  className="w-16 rounded border border-slate-300 px-1.5 py-1 text-xs"
+                  value={companionPrice}
+                  title="Cena drugiego produktu"
+                  onChange={(e) => setCompanionPrice(e.target.value)}
+                />
+              ) : (
+                <span className="text-xs">{item.companion_offer_price ?? '—'}</span>
+              )}
+              <span className="text-[10px] text-slate-500">
+                Razem: {Number.isFinite(companionSum) ? companionSum.toFixed(2) : '—'}
+              </span>
+            </div>
+          )}
           {showPriceHistory && (
             <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-2 shadow-sm">
               <div className="mb-1 flex items-center justify-between gap-2">
@@ -3308,6 +3552,7 @@ function ItemRow({
                   offer_price: price === '' ? null : Number(price.replace(',', '.')),
                   custom_name: customName.trim() || null,
                   custom_url: customUrl.trim() || null,
+                  ...companionFields(),
                   ...(pendingAiScore != null
                     ? {
                         ai_match_percent: pendingAiScore,

@@ -1791,6 +1791,9 @@ final class ProductMatchService
         }
 
         $item->main_product_id = $product->id;
+        if ($item->companion_product_id !== null && (int) $item->companion_product_id === (int) $product->id) {
+            $item->clearCompanion();
+        }
         $item->custom_name = null;
         $item->custom_url = null;
         $item->ai_match_percent = $honest;
@@ -1848,6 +1851,7 @@ final class ProductMatchService
         }
 
         $item->main_product_id = null;
+        $item->clearCompanion();
         $item->status = 'brak';
         $item->ai_match_percent = null;
         $item->match_source = null;
@@ -1868,6 +1872,7 @@ final class ProductMatchService
     private function applyExternalHintAsOffer(TenderItem $item, array $hint): void
     {
         $item->main_product_id = null;
+        $item->clearCompanion();
         $item->custom_name = mb_substr($hint['title'], 0, 500);
         $item->custom_url = $hint['url'];
         $item->status = 'matched';

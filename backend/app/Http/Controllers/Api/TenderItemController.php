@@ -80,6 +80,9 @@ class TenderItemController extends Controller
             }
 
             $item->main_product_id = $product->id;
+            if ($item->companion_product_id !== null && (int) $item->companion_product_id === (int) $product->id) {
+                $item->clearCompanion();
+            }
             $item->offer_price = $this->pricing->offerFromProduct($tender, $product);
             $item->status = 'matched';
             $item->match_source = 'battlecard';
@@ -145,8 +148,10 @@ class TenderItemController extends Controller
             'items' => ['required', 'array', 'min:1'],
             'items.*.id' => ['required', 'integer'],
             'items.*.main_product_id' => ['nullable', 'integer', 'exists:products,id'],
+            'items.*.companion_product_id' => ['nullable', 'integer', 'exists:products,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
             'items.*.offer_price' => ['nullable', 'numeric', 'min:0'],
+            'items.*.companion_offer_price' => ['nullable', 'numeric', 'min:0'],
             'items.*.custom_name' => ['nullable', 'string', 'max:500'],
             'items.*.custom_url' => ['nullable', 'string', 'max:2048'],
         ]);
@@ -164,13 +169,16 @@ class TenderItemController extends Controller
 
                 $before = [
                     'main_product_id' => $item->main_product_id,
+                    'companion_product_id' => $item->companion_product_id,
                     'quantity' => $item->quantity,
                     'offer_price' => $item->offer_price,
+                    'companion_offer_price' => $item->companion_offer_price,
                 ];
 
                 $item->main_product_id = $row['main_product_id'] ?? null;
                 $item->quantity = (int) $row['quantity'];
                 $item->offer_price = array_key_exists('offer_price', $row) ? $row['offer_price'] : $item->offer_price;
+                $this->applyCompanion($tender, $item, $row, 'items.'.$item->id.'.companion_product_id');
                 if (array_key_exists('custom_name', $row)) {
                     $item->custom_name = $this->nullableTrim($row['custom_name'] ?? null);
                 }
@@ -193,14 +201,16 @@ class TenderItemController extends Controller
                     $item->ai_match_reasons = $this->mergeCustomOfferReason($item);
                 }
                 $item->save();
-                $item->load('mainProduct');
+                $item->load(['mainProduct', 'companionProduct']);
                 $this->pricing->recalculateItemMargin($item);
                 $this->activities->log($tender, 'item_bulk_updated', $request->user(), $item, [
                     'before' => $before,
                     'after' => [
                         'main_product_id' => $item->main_product_id,
+                        'companion_product_id' => $item->companion_product_id,
                         'quantity' => $item->quantity,
                         'offer_price' => $item->offer_price,
+                        'companion_offer_price' => $item->companion_offer_price,
                     ],
                 ]);
                 $updated++;
@@ -231,8 +241,10 @@ class TenderItemController extends Controller
 
         $data = $request->validate([
             'main_product_id' => ['sometimes', 'nullable', 'exists:products,id'],
+            'companion_product_id' => ['sometimes', 'nullable', 'exists:products,id'],
             'quantity' => ['sometimes', 'integer', 'min:1'],
             'offer_price' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'companion_offer_price' => ['sometimes', 'nullable', 'numeric', 'min:0'],
             'requirement' => ['sometimes', 'string', 'max:2000'],
             'status' => ['sometimes', 'string', 'max:32'],
             'ai_match_percent' => ['sometimes', 'nullable', 'integer', 'min:0', 'max:100'],
@@ -252,8 +264,10 @@ class TenderItemController extends Controller
 
         $before = [
             'main_product_id' => $item->main_product_id,
+            'companion_product_id' => $item->companion_product_id,
             'quantity' => $item->quantity,
             'offer_price' => $item->offer_price,
+            'companion_offer_price' => $item->companion_offer_price,
             'ai_match_percent' => $item->ai_match_percent,
             'custom_name' => $item->custom_name,
         ];
@@ -299,6 +313,7 @@ class TenderItemController extends Controller
         if (array_key_exists('offer_price', $data)) {
             $item->offer_price = $data['offer_price'];
         }
+        $this->applyCompanion($tender, $item, $data);
         if (array_key_exists('requirement', $data)) {
             $item->requirement = $data['requirement'];
         }
@@ -330,7 +345,7 @@ class TenderItemController extends Controller
         }
 
         $item->save();
-        $item->load('mainProduct');
+        $item->load(['mainProduct', 'companionProduct']);
         $this->pricing->recalculateItemMargin($item);
         $this->pricing->recalculateTenderTotals($tender->fresh());
 
@@ -338,15 +353,58 @@ class TenderItemController extends Controller
             'before' => $before,
             'after' => [
                 'main_product_id' => $item->main_product_id,
+                'companion_product_id' => $item->companion_product_id,
                 'quantity' => $item->quantity,
                 'offer_price' => $item->offer_price,
+                'companion_offer_price' => $item->companion_offer_price,
                 'ai_match_percent' => $item->ai_match_percent,
                 'match_source' => $item->match_source,
                 'custom_name' => $item->custom_name,
             ],
         ]);
 
-        return response()->json($item->fresh('mainProduct'));
+        return response()->json($item->fresh(['mainProduct', 'companionProduct']));
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function applyCompanion(Tender $tender, TenderItem $item, array $data, string $errorKey = 'companion_product_id'): void
+    {
+        if ($item->main_product_id === null) {
+            $item->clearCompanion();
+
+            return;
+        }
+
+        if (array_key_exists('companion_product_id', $data)) {
+            $item->companion_product_id = $data['companion_product_id'];
+        }
+
+        if ($item->companion_product_id === null) {
+            $item->companion_offer_price = null;
+
+            return;
+        }
+
+        if ((int) $item->companion_product_id === (int) $item->main_product_id) {
+            throw ValidationException::withMessages([
+                $errorKey => ['Drugi produkt musi być inny niż pierwszy.'],
+            ]);
+        }
+
+        if (array_key_exists('companion_offer_price', $data) && $data['companion_offer_price'] !== null) {
+            $item->companion_offer_price = $data['companion_offer_price'];
+
+            return;
+        }
+
+        if (array_key_exists('companion_product_id', $data)) {
+            $companion = Product::query()->find($item->companion_product_id);
+            if ($companion !== null && (float) $companion->purchase_price > 0) {
+                $item->companion_offer_price = $this->pricing->offerFromProduct($tender, $companion);
+            }
+        }
     }
 
     private function nullableTrim(mixed $value): ?string

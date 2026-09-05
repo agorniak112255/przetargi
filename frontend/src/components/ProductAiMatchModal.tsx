@@ -32,9 +32,23 @@ type Props = {
   initialQuery: string
   initialWeb?: boolean
   initialMode?: SearchKind
+  allowCompanion?: boolean
+  hasMainProduct?: boolean
   onClose: () => void
   onSelect: (product: AiMatchPick) => void
+  onSelectCompanion?: (product: AiMatchPick) => void
+  onSelectPair?: (main: AiMatchPick, companion: AiMatchPick) => void
   onAddExternal?: (hint: ExternalHint) => void
+}
+
+function orderSetPicks(picks: AiMatchPick[]): AiMatchPick[] {
+  if (picks.length < 2) return picks
+  const jacket = picks.find((p) => /bluz|kurtk/i.test(p.name))
+  const pants = picks.find((p) => /spodn|ogrodniczk/i.test(p.name))
+  if (jacket && pants && jacket.id !== pants.id) {
+    return [jacket, pants]
+  }
+  return picks.slice(0, 2)
 }
 
 export function ProductAiMatchModal({
@@ -42,8 +56,12 @@ export function ProductAiMatchModal({
   initialQuery,
   initialWeb = false,
   initialMode,
+  allowCompanion = false,
+  hasMainProduct = false,
   onClose,
   onSelect,
+  onSelectCompanion,
+  onSelectPair,
   onAddExternal,
 }: Props) {
   const [query, setQuery] = useState(initialQuery)
@@ -52,6 +70,7 @@ export function ProductAiMatchModal({
   const [results, setResults] = useState<AiMatchPick[]>([])
   const [externalHints, setExternalHints] = useState<ExternalHint[]>([])
   const [describeId, setDescribeId] = useState<number | null>(null)
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
 
   useEffect(() => {
     if (!open) return
@@ -60,6 +79,7 @@ export function ProductAiMatchModal({
     setResults([])
     setExternalHints([])
     setDescribeId(null)
+    setSelectedIds([])
   }, [open, initialQuery, initialWeb, initialMode])
 
   useEffect(() => {
@@ -281,7 +301,28 @@ export function ProductAiMatchModal({
 
           {results.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-slate-600">Wybierz produkt:</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-slate-600">
+                  {allowCompanion ? 'Wybierz produkt albo zaznacz dwa:' : 'Wybierz produkt:'}
+                </p>
+                {allowCompanion && onSelectPair && (
+                  <button
+                    type="button"
+                    disabled={Boolean(busy) || selectedIds.length !== 2}
+                    onClick={() => {
+                      const picks = orderSetPicks(
+                        selectedIds
+                          .map((id) => results.find((row) => row.id === id))
+                          .filter((row): row is AiMatchPick => row != null),
+                      )
+                      if (picks.length === 2) onSelectPair(picks[0], picks[1])
+                    }}
+                    className="rounded bg-violet-800 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-900 disabled:opacity-50"
+                  >
+                    Dodaj oba{selectedIds.length > 0 ? ` (${selectedIds.length}/2)` : ''}
+                  </button>
+                )}
+              </div>
               {results.map((r) => (
                 <div
                   key={r.id}
@@ -292,11 +333,27 @@ export function ProductAiMatchModal({
                   }
                 >
                   <div className="flex items-start justify-between gap-2">
+                    {allowCompanion && (
+                      <label className="mt-0.5 flex shrink-0 items-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(r.id)}
+                          disabled={Boolean(busy)}
+                          onChange={() =>
+                            setSelectedIds((prev) => {
+                              if (prev.includes(r.id)) return prev.filter((id) => id !== r.id)
+                              if (prev.length >= 2) return [prev[0], r.id]
+                              return [...prev, r.id]
+                            })
+                          }
+                        />
+                      </label>
+                    )}
                     <span
                       className={
                         r.source === 'catalog'
-                          ? 'text-sm font-medium text-sky-950'
-                          : 'text-sm font-medium text-violet-950'
+                          ? 'min-w-0 flex-1 text-sm font-medium text-sky-950'
+                          : 'min-w-0 flex-1 text-sm font-medium text-violet-950'
                       }
                     >
                       {r.sku} · {r.name}
@@ -348,6 +405,16 @@ export function ProductAiMatchModal({
                     >
                       Wybierz
                     </button>
+                    {allowCompanion && onSelectCompanion && (
+                      <button
+                        type="button"
+                        disabled={Boolean(busy) || !hasMainProduct}
+                        onClick={() => onSelectCompanion(r)}
+                        className="rounded border border-violet-400 bg-white px-2 py-1 text-[11px] font-medium text-violet-800 hover:bg-violet-100 disabled:opacity-50"
+                      >
+                        Jako drugi
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

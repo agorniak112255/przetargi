@@ -185,6 +185,7 @@ class TenderController extends Controller
             'client',
             'owner:id,name,role',
             'items.mainProduct',
+            'items.companionProduct',
             'conditions',
             'statusHistories.user:id,name,role',
         ]);
@@ -291,6 +292,7 @@ class TenderController extends Controller
                 'client',
                 'owner:id,name,role',
                 'items.mainProduct',
+                'items.companionProduct',
                 'statusHistories.user:id,name,role',
             ]),
             'can_edit' => $this->workflow->canEditOffer($tender),

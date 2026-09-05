@@ -37,7 +37,7 @@ final class TenderPricingService
             return;
         }
 
-        $tender->loadMissing('items.mainProduct');
+        $tender->loadMissing(['items.mainProduct', 'items.companionProduct']);
 
         foreach ($tender->items as $item) {
             if ($item->main_product_id !== null) {
@@ -45,6 +45,13 @@ final class TenderPricingService
                 if ($product !== null && (float) $product->purchase_price > 0) {
                     $item->offer_price = OfferPricing::fromPurchase(
                         $this->fx->purchasePln($product),
+                        $newPercent,
+                    );
+                }
+                $companion = $item->companionProduct;
+                if ($companion !== null && (float) $companion->purchase_price > 0) {
+                    $item->companion_offer_price = OfferPricing::fromPurchase(
+                        $this->fx->purchasePln($companion),
                         $newPercent,
                     );
                 }
@@ -66,25 +73,39 @@ final class TenderPricingService
 
     public function recalculateItemMargin(TenderItem $item): void
     {
-        if ($item->offer_price === null || $item->main_product_id === null) {
+        $offer = $item->lineOfferUnit();
+        if ($offer === null || $offer <= 0 || $item->main_product_id === null) {
             $item->margin_percent = null;
             $item->save();
 
             return;
         }
 
-        /** @var Product|null $product */
-        $product = $item->mainProduct ?? Product::query()->find($item->main_product_id);
-        if ($product === null || (float) $product->purchase_price <= 0) {
-            $item->margin_percent = null;
-            $item->save();
+        $item->loadMissing(['mainProduct', 'companionProduct']);
+        $purchase = 0.0;
+        $hasPurchase = false;
 
-            return;
+        $main = $item->mainProduct ?? Product::query()->find($item->main_product_id);
+        if ($main !== null) {
+            $mainPurchase = $this->fx->purchasePln($main) ?? (float) $main->purchase_price;
+            if ($mainPurchase > 0) {
+                $purchase += $mainPurchase;
+                $hasPurchase = true;
+            }
         }
 
-        $offer = (float) $item->offer_price;
-        $purchase = $this->fx->purchasePln($product) ?? (float) $product->purchase_price;
-        if ($offer <= 0) {
+        if ($item->companion_product_id !== null) {
+            $companion = $item->companionProduct ?? Product::query()->find($item->companion_product_id);
+            if ($companion !== null) {
+                $companionPurchase = $this->fx->purchasePln($companion) ?? (float) $companion->purchase_price;
+                if ($companionPurchase > 0) {
+                    $purchase += $companionPurchase;
+                    $hasPurchase = true;
+                }
+            }
+        }
+
+        if (! $hasPurchase) {
             $item->margin_percent = null;
             $item->save();
 
@@ -104,10 +125,11 @@ final class TenderPricingService
         $weightedMargin = 0.0;
 
         foreach ($tender->items as $item) {
-            if ($item->offer_price === null) {
+            $unit = $item->lineOfferUnit();
+            if ($unit === null) {
                 continue;
             }
-            $line = (float) $item->offer_price * $item->quantity;
+            $line = $unit * $item->quantity;
             $value += $line;
             if ($item->margin_percent !== null) {
                 $weightedMargin += $line * (float) $item->margin_percent;

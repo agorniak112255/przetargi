@@ -30,7 +30,7 @@ final class TenderDocxOfferFiller
     public function fill(Tender $tender, ?string $templateAbsolutePath = null): string
     {
         $template = $templateAbsolutePath ?? $this->resolveTemplatePath($tender);
-        $tender->loadMissing(['items.mainProduct', 'client']);
+        $tender->loadMissing(['items.mainProduct', 'items.companionProduct', 'client']);
 
         $xml = $this->docxTables->documentXml($template);
         $dom = new DOMDocument;
@@ -41,7 +41,7 @@ final class TenderDocxOfferFiller
         $xp = new DOMXPath($dom);
         $xp->registerNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main');
 
-        $items = $tender->items()->orderBy('line_no')->get();
+        $items = $tender->items()->with(['mainProduct', 'companionProduct'])->orderBy('line_no')->get();
         if ($items->isEmpty()) {
             throw new RuntimeException('Brak pozycji w przetargu do wypełnienia oferty.');
         }
@@ -185,7 +185,7 @@ final class TenderDocxOfferFiller
                     $qty = (int) round($qRaw);
                 }
             }
-            $unit = $item->offer_price !== null ? (float) $item->offer_price : null;
+            $unit = $item->lineOfferUnit();
             if ($unit === null) {
                 continue;
             }
@@ -248,8 +248,10 @@ final class TenderDocxOfferFiller
         foreach ($items as $item) {
             $req = mb_strtolower((string) $item->requirement);
             $prod = mb_strtolower((string) ($item->mainProduct?->name ?? ''));
+            $companion = mb_strtolower((string) ($item->companionProduct?->name ?? ''));
             if (($req !== '' && (str_contains($req, $name) || str_contains($name, $req)))
-                || ($prod !== '' && (str_contains($prod, $name) || str_contains($name, $prod)))) {
+                || ($prod !== '' && (str_contains($prod, $name) || str_contains($name, $prod)))
+                || ($companion !== '' && (str_contains($companion, $name) || str_contains($name, $companion)))) {
                 return $item;
             }
         }

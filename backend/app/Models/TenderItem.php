@@ -14,6 +14,7 @@ class TenderItem extends Model
         'line_no',
         'requirement',
         'main_product_id',
+        'companion_product_id',
         'ai_match_percent',
         'ai_match_reasons',
         'match_source',
@@ -21,6 +22,7 @@ class TenderItem extends Model
         'custom_url',
         'quantity',
         'offer_price',
+        'companion_offer_price',
         'margin_percent',
         'status',
     ];
@@ -29,6 +31,7 @@ class TenderItem extends Model
     {
         return [
             'offer_price' => 'decimal:2',
+            'companion_offer_price' => 'decimal:2',
             'margin_percent' => 'decimal:2',
             'ai_match_reasons' => 'array',
         ];
@@ -42,6 +45,26 @@ class TenderItem extends Model
     public function mainProduct(): BelongsTo
     {
         return $this->belongsTo(Product::class, 'main_product_id');
+    }
+
+    public function companionProduct(): BelongsTo
+    {
+        return $this->belongsTo(Product::class, 'companion_product_id');
+    }
+
+    public function lineOfferUnit(): ?float
+    {
+        if ($this->offer_price === null && $this->companion_offer_price === null) {
+            return null;
+        }
+
+        return round((float) ($this->offer_price ?? 0) + (float) ($this->companion_offer_price ?? 0), 2);
+    }
+
+    public function clearCompanion(): void
+    {
+        $this->companion_product_id = null;
+        $this->companion_offer_price = null;
     }
 
     public function hasCustomOffer(): bool
