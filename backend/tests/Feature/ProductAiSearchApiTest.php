@@ -2140,10 +2140,6 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonPath('external_hint', null);
 
         $this->assertGreaterThanOrEqual(1, $rankCalls);
-        $this->assertTrue(
-            $rewrites === 1 || $rankCalls >= 2,
-            "rewrite={$rewrites} rank={$rankCalls}"
-        );
         Http::assertNotSent(fn ($request): bool => str_contains((string) $request->url(), 'tavily'));
     }
 

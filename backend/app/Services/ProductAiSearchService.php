@@ -1188,9 +1188,7 @@ final class ProductAiSearchService
             $intent['search_phrases'] = $this->slangSearchPhrases($slang, $query, $intent['search_phrases']);
         }
         if ($intent['search_steps'] === []) {
-            if ($slang !== null) {
-                $intent['search_steps'] = $this->defaultSearchSteps($query, $intent);
-            }
+            $intent['search_steps'] = $this->defaultSearchSteps($query, $intent);
         } else {
             $intent['search_steps'] = $this->sanitizeSearchSteps($intent['search_steps'], $intent);
         }
@@ -1233,12 +1231,26 @@ final class ProductAiSearchService
     {
         $intent = $this->normalizeIntent($intent);
         $steps = [];
+        if ($this->assortment->isApparelSet($query)) {
+            foreach ($this->queryNormSteps($query) as $norm) {
+                $steps[] = $norm;
+            }
+
+            return $this->sanitizeSearchSteps($steps, $intent);
+        }
         $slang = $this->slangRewriteFor($query);
         if ($slang !== null) {
             foreach ($slang['search_phrases'] as $phrase) {
                 if (! $this->isWeakSearchStep((string) $phrase)) {
                     $steps[] = trim((string) $phrase);
                     break;
+                }
+            }
+        }
+        if ($steps === []) {
+            foreach ($this->fallbackPhrases($query) as $token) {
+                if (! $this->isWeakSearchStep($token)) {
+                    $steps[] = $token;
                 }
             }
         }
@@ -1436,9 +1448,6 @@ final class ProductAiSearchService
         if ($candidates->isEmpty()) {
             return [];
         }
-        if (! $intent['manufacturer_absent_in_catalog'] && $this->isSpecificRequirement($query)) {
-            return [];
-        }
 
         $requirement = $this->assortmentText($query, null);
         $products = $this->withResponseRelations(
@@ -1459,7 +1468,9 @@ final class ProductAiSearchService
             $slang = $this->slangRewriteFor($query);
             $row['ai_match_reason'] = $slang !== null
                 ? 'Żargon SIWZ → '.$slang['needed']
-                : 'Ten sam rodzaj w katalogu (np. czapka robocza / z daszkiem).';
+                : ($this->isSpecificRequirement($query)
+                    ? 'Słabsze dopasowanie z zapytania — sprawdź, czy zostawić.'
+                    : 'Ten sam rodzaj w katalogu (np. czapka robocza / z daszkiem).');
             $out[] = $row;
         }
 
@@ -2046,6 +2057,21 @@ final class ProductAiSearchService
             .'|nisk|wysok|sredn|poziom|stopien|tlumien|attenuat|snr)/u',
             $t
         ) === 1;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function queryNormSteps(string $query): array
+    {
+        $out = [];
+        if (preg_match_all('/\b(?:en(?:\s*iso)?\s*)?(\d{4,5})\b/ui', $query, $m)) {
+            foreach ($m[1] as $n) {
+                $out[] = $n;
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**

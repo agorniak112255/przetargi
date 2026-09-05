@@ -205,8 +205,11 @@ final class CatalogCascadeRecall
 
                 continue;
             }
+            $nameOnly = $step === $steps[0]
+                && $step['kind'] === 'text'
+                && $this->assortment->isCatalogNounStep($step['label']);
             foreach ($step['tokens'] as $token) {
-                $this->applyStepToken($builder, $token);
+                $this->applyStepToken($builder, $token, $nameOnly);
             }
         }
 
@@ -219,7 +222,7 @@ final class CatalogCascadeRecall
             ->values();
     }
 
-    private function applyStepToken(Builder $builder, string $token): void
+    private function applyStepToken(Builder $builder, string $token, bool $nameOnly = false): void
     {
         $token = trim($token);
         if ($token === '') {
@@ -229,13 +232,15 @@ final class CatalogCascadeRecall
         if ($needles === []) {
             $needles = [$token];
         }
-        $builder->where(function (Builder $outer) use ($needles): void {
+        $builder->where(function (Builder $outer) use ($needles, $nameOnly): void {
             foreach ($needles as $needle) {
                 $like = '%'.addcslashes($needle, '%_\\').'%';
                 $outer->orWhere('name', 'like', $like)
-                    ->orWhere('sku', 'like', $like)
-                    ->orWhere('description', 'like', $like)
-                    ->orWhere('search_blob', 'like', $like);
+                    ->orWhere('sku', 'like', $like);
+                if (! $nameOnly) {
+                    $outer->orWhere('description', 'like', $like)
+                        ->orWhere('search_blob', 'like', $like);
+                }
             }
         });
     }

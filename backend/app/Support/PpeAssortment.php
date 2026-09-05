@@ -247,8 +247,7 @@ final class PpeAssortment
         if (preg_match('/\b(kombinezon)\w*/u', $t) === 1) {
             return 'coverall';
         }
-        if (preg_match('/\b(ubranie ochron|komplet|zestaw)\w*/u', $t) === 1
-            && preg_match('/\b(bluza|kurtk).{0,24}spodn|spodn.{0,24}(bluza|kurtk)/u', $t) === 1) {
+        if ($this->isApparelSet($text)) {
             return 'set';
         }
         if (preg_match('/\b(spodn|ogrodniczk)\w*/u', $t) === 1) {
@@ -550,24 +549,59 @@ final class PpeAssortment
 
     public function role(string $text): ?string
     {
+        $roles = $this->roles($text);
+
+        return $roles[0] ?? null;
+    }
+
+    /**
+     * Wszystkie role z tekstu — karta z 11611+1149+20471 w normach nie jest „tylko hivis”.
+     *
+     * @return list<string>
+     */
+    public function roles(string $text): array
+    {
         $t = $this->normalize($text);
+        $out = [];
         if (preg_match('/\b20471\b|odblask|ostrzegawcz|hi.?vis|wysokiej widzial/u', $t) === 1) {
-            return 'hivis';
+            $out[] = 'hivis';
         }
         if (preg_match('/\bspawal|11611|welding|welder/u', $t) === 1) {
-            return 'welding';
+            $out[] = 'welding';
         }
         if (preg_match('/\beletryk|1149|61482|lukiem|antystatyczn/u', $t) === 1) {
-            return 'electric';
+            $out[] = 'electric';
         }
         if (preg_match('/\bzaroodporn|11612\b/u', $t) === 1) {
-            return 'heat';
+            $out[] = 'heat';
         }
         if (preg_match('/\bwodoochron|przeciwdeszcz|\b343\b|deszczow/u', $t) === 1) {
-            return 'rain';
+            $out[] = 'rain';
         }
 
-        return null;
+        return $out;
+    }
+
+    public function isApparelSet(string $text): bool
+    {
+        $t = $this->normalize($text);
+        return preg_match(
+            '/\b(bluza|kurtk).{0,32}(spodn|ogrodniczk)|(spodn|ogrodniczk).{0,32}(bluza|kurtk)/u',
+            $t
+        ) === 1;
+    }
+
+    public function isCatalogNounStep(string $step): bool
+    {
+        if ($this->catalogNounLikes($step) !== []) {
+            return true;
+        }
+        $t = $this->normalize($step);
+
+        return preg_match(
+            '/\b(scierk|scierecz|czyszciw|ubran|bluz|spodn|ogrodniczk|kurtk|rekawic|buty|trzewik)\w*/u',
+            $t
+        ) === 1;
     }
 
     public function compatible(string $requirement, string $productText, ?string $kategoriaBhp = null): bool
@@ -588,7 +622,7 @@ final class PpeAssortment
             $helmetMount = true;
         }
         if ($reqFamily === self::FAMILY_APPAREL) {
-            return $this->apparelCompatible($requirement, $productText);
+            return $this->apparelCompatible($requirement, $productText, $productText);
         }
         if ($reqFamily === self::FAMILY_HEAD) {
             return $helmetMount || $this->headCompatible($requirement, $productText);
@@ -705,7 +739,10 @@ final class PpeAssortment
             $helmetMount = true;
         }
         if ($reqFamily === self::FAMILY_APPAREL) {
-            return $this->apparelCompatible($requirement, $this->productFullText($product));
+            $identity = $this->productIdentityText($product);
+            $roleText = trim($identity.' '.(string) ($product->norms ?? ''));
+
+            return $this->apparelCompatible($requirement, $roleText, $identity);
         }
         if ($reqFamily === self::FAMILY_GLOVES && ! $this->isArmSleeve($requirement)
             && $this->isArmSleeve($this->productIdentityText($product))) {
@@ -995,28 +1032,50 @@ final class PpeAssortment
         ])));
     }
 
-    private function apparelCompatible(string $req, string $prodText): bool
+    private function apparelCompatible(string $req, string $roleText, ?string $identity = null): bool
     {
-        $reqRole = $this->role($req);
-        $prodRole = $this->role($prodText);
-        if ($reqRole !== null && $prodRole !== null && $reqRole !== $prodRole) {
+        $identity ??= $roleText;
+        $reqRoles = $this->roles($req);
+        $prodRoles = $this->roles($roleText);
+        if ($reqRoles !== [] && $prodRoles !== [] && array_intersect($reqRoles, $prodRoles) === []) {
             return false;
         }
 
         $reqGarment = $this->garment($req);
-        $prodGarment = $this->garment($prodText);
+        $prodGarment = $this->garment($identity);
+        if ($this->isApparelAccessory($identity) && in_array($reqGarment, ['set', 'jacket', 'pants'], true)) {
+            return false;
+        }
+        if ($reqGarment === 'set') {
+            if (in_array($prodGarment, ['set', 'jacket', 'pants'], true)) {
+                return true;
+            }
+
+            return $prodGarment === null
+                && preg_match('/\b(bluz|kurtk|spodn|ogrodniczk|ubran)\w*/u', $this->normalize($identity)) === 1;
+        }
         if ($reqGarment !== null && $prodGarment !== null && $reqGarment !== $prodGarment) {
             return false;
         }
 
         $reqNorm = $this->normalize($req);
-        $prodNorm = $this->normalize($prodText);
-        $reqSet = preg_match('/\b(bluza.{0,12}spodn|spodn.{0,12}bluza|ubranie ochron|komplet|zestaw)\w*/u', $reqNorm) === 1;
-        $prodSet = preg_match('/\b(spodn|komplet|zestaw|ubranie)\w*/u', $prodNorm) === 1;
+        $prodNorm = $this->normalize($identity);
+        $reqSet = $this->isApparelSet($req);
+        $prodSet = preg_match('/\b(spodn|komplet|zestaw|ubran)\w*/u', $prodNorm) === 1;
         if ($reqSet && preg_match('/\b(bluz|kurtk)\w*/u', $prodNorm) === 1 && ! $prodSet) {
             return false;
         }
 
         return true;
+    }
+
+    private function isApparelAccessory(string $text): bool
+    {
+        $t = $this->normalize($text);
+        if (preg_match('/\b(kaptur|czapk|czepek|kominiark|balaclava)\w*/u', $t) !== 1) {
+            return false;
+        }
+
+        return preg_match('/\b(kurtk|bluz|spodn|ogrodniczk|kombinezon)\w*/u', $t) !== 1;
     }
 }

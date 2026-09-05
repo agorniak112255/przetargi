@@ -462,4 +462,48 @@ final class PpeAssortmentTest extends TestCase
         $this->assertTrue($this->assortment->compatibleProduct($req, $v5));
         $this->assertTrue($this->assortment->compatibleProduct($req, $face));
     }
+
+    #[Test]
+    public function apparel_set_accepts_jacket_and_bibs_with_shared_norms(): void
+    {
+        $req = 'Ubranie antyelektrostatyczne, trudnopalne (bluza + spodnie do pasa lub ogrodniczki) EN ISO 11611 kl. 2 EN 1149-5';
+        $this->assertTrue($this->assortment->isApparelSet($req));
+        $this->assertSame('set', $this->assortment->garment($req));
+
+        $jacket = new Product;
+        $jacket->forceFill([
+            'name' => 'Bluza KOLPEO BASIC ZIPPER - zamek',
+            'sku' => 'BLUZA-KOLPEO',
+            'norms' => 'EN ISO 11611:2015, EN 1149-5:2018, EN ISO 11612:2015',
+            'description' => 'Odzież wielonormowa, też EN ISO 20471 i kombinezon w zestawie.',
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+        $bibs = new Product;
+        $bibs->forceFill([
+            'name' => 'Spodnie ogrodniczki KOLPEO BASIC',
+            'sku' => 'OGROD-KOLPEO',
+            'norms' => 'EN ISO 11611:2015, EN 1149-5:2018',
+            'description' => 'Ogrodniczki, wzmianka o kamizelce odblaskowej EN 20471.',
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+        $hood = new Product;
+        $hood->forceFill([
+            'name' => 'KAPTUR NIEPALNY I ANTYELEKTROSTATYCZNY',
+            'sku' => 'CAFR1',
+            'norms' => 'EN 1149-5',
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+        $rain = new Product;
+        $rain->forceFill([
+            'name' => '103 - Kurtka wodoochronna zapinana na zamek',
+            'sku' => 'RAIN-103',
+            'norms' => 'EN 343',
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+
+        $this->assertTrue($this->assortment->compatibleProduct($req, $jacket));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $bibs));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $hood));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $rain));
+    }
 }
