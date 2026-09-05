@@ -61,7 +61,8 @@ final class ManufacturerDomainResolver
         }
         $mapped = array_values(array_unique(array_merge(
             $mapped,
-            ManufacturerSite::hostsForBrand($brand)
+            ManufacturerSite::hostsForBrand($brand),
+            $this->identity->inferredCatalogHosts($product)
         )));
         if ($mapped !== []) {
             return $mapped;

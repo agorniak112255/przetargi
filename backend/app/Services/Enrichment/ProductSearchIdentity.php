@@ -1077,7 +1077,8 @@ final class ProductSearchIdentity
             return $query;
         }
         $nameBrand = $this->leadingNameBrand($product);
-        $brand = $this->shortBrand((string) $product->manufacturer);
+        $hint = $this->inferredBrandHint($product);
+        $brand = $hint !== '' ? $hint : $this->shortBrand((string) $product->manufacturer);
         if ($query === '') {
             return $query;
         }
@@ -1287,8 +1288,38 @@ final class ProductSearchIdentity
             return false;
         }
         $shopWords = preg_split('/\s+/u', $shop) ?: [];
+        if (count($shopWords) !== 1 || ! $this->phraseHasToken($name, $shop)) {
+            return false;
+        }
+        foreach (preg_split('/[^\p{L}\p{N}]+/u', $name) ?: [] as $word) {
+            $word = mb_strtolower(trim((string) $word));
+            if ($word === '' || $word === $shop || mb_strlen($word) < 3) {
+                continue;
+            }
+            if ($this->isGenericCatalogNameWord($word) || $this->isPackOrSizeToken($word)
+                || preg_match('/^\d+$/u', $word) === 1) {
+                continue;
+            }
 
-        return count($shopWords) === 1 && $this->phraseHasToken($name, $shop);
+            return true;
+        }
+
+        return false;
+    }
+
+    /** GREY-BLUE / ORANGE — sam kolor nie nadaje się na site: ani model. */
+    private function isColorOnlyShopPhrase(string $phrase): bool
+    {
+        $useful = [];
+        foreach (preg_split('/[\s\-\/]+/u', mb_strtolower(trim($phrase))) ?: [] as $word) {
+            $word = trim((string) $word);
+            if ($word === '' || $this->isPackOrSizeToken($word) || $this->isColorWord($word)) {
+                continue;
+            }
+            $useful[] = $word;
+        }
+
+        return $useful === [];
     }
 
     /** „6000” przy „Tychem 6000 FR ThermoPro” — za ogólne na site:/zapytanie. */
@@ -2110,31 +2141,94 @@ final class ProductSearchIdentity
     }
 
     /**
-     * WST068GM / ST068GM — cennik ma Whirlpool, karta jest u U-Power i na misterworker.
+     * Cennik ma złą markę albo kod magazynowy — karta jest u innej marki.
      *
+     * @return array{brand: string, hosts: list<string>}|null
+     */
+    private function inferredBrandResolution(Product $product): ?array
+    {
+        $sku = strtoupper(trim((string) $product->sku));
+        $name = mb_strtolower((string) $product->name);
+        $mfr = trim((string) preg_replace(
+            '/[^a-z0-9]+/u',
+            '-',
+            mb_strtolower($this->shortBrand((string) $product->manufacturer))
+        ), '-');
+
+        $code = $this->distributorPrefixedCatalogSku($product);
+        if ($code !== '' && preg_match('/^ST\d{3}[A-Z]{2}$/u', $code) === 1) {
+            return [
+                'brand' => 'U-Power',
+                'hosts' => $this->bareHosts(array_merge(
+                    ['misterworker.com'],
+                    (array) config('enrichment.manufacturer_domains.u-power', []),
+                )),
+            ];
+        }
+
+        if (preg_match('/^T51\d+/u', $sku) === 1
+            && ($mfr === '3m' || preg_match('/\b(gondor|astor|raptor)\b/u', $name) === 1)) {
+            return [
+                'brand' => 'Infield',
+                'hosts' => $this->bareHosts(array_merge(
+                    ['infield-safety.com'],
+                    (array) config('enrichment.manufacturer_domains.infield', []),
+                )),
+            ];
+        }
+
+        if (preg_match('/^(FA|FC|FD)\d+/u', $sku) === 1 && str_starts_with($mfr, 'reis')) {
+            return [
+                'brand' => 'Dickies',
+                'hosts' => $this->bareHosts(array_merge(
+                    ['workwearnation.com'],
+                    (array) config('enrichment.manufacturer_domains.dickies', []),
+                )),
+            ];
+        }
+
+        if (str_contains($mfr, 'showa')
+            && preg_match('/basic worker eco|worklife tiger/u', $name) === 1) {
+            return [
+                'brand' => 'Otto Schachner',
+                'hosts' => $this->bareHosts(['os-safetycenter.de']),
+            ];
+        }
+
+        if ($mfr === 'pip' && (preg_match('/^6552\d+/u', $sku) === 1
+            || preg_match('/^10Y1532/u', $sku) === 1
+            || preg_match('/cocoon evo|runner mid|sprinter yellow|glovebox/u', $name) === 1)) {
+            return [
+                'brand' => 'Honeywell',
+                'hosts' => $this->bareHosts(array_merge(
+                    ['automation.honeywell.com'],
+                    (array) config('enrichment.manufacturer_domains.honeywell', []),
+                )),
+            ];
+        }
+
+        if (str_contains($mfr, 'perfect')
+            && preg_match('/sivochem|dermatril|pharmatril/u', $name) === 1) {
+            return [
+                'brand' => 'Honeywell',
+                'hosts' => $this->bareHosts(['automation.honeywell.com']),
+            ];
+        }
+
+        return null;
+    }
+
+    /**
      * @return list<string>
      */
     public function inferredCatalogHosts(Product $product): array
     {
-        $code = $this->distributorPrefixedCatalogSku($product);
-        if ($code === '' || preg_match('/^ST\d{3}[A-Z]{2}$/u', $code) !== 1) {
-            return [];
-        }
-
-        return $this->bareHosts(array_merge(
-            ['misterworker.com'],
-            (array) config('enrichment.manufacturer_domains.u-power', []),
-        ));
+        return $this->inferredBrandResolution($product)['hosts'] ?? [];
     }
 
     public function inferredBrandHint(Product $product): string
     {
-        $code = $this->distributorPrefixedCatalogSku($product);
-        if ($code !== '' && preg_match('/^ST\d{3}[A-Z]{2}$/u', $code) === 1) {
-            return 'U-Power';
-        }
-
-        return '';
+        return $this->inferredBrandResolution($product)['brand'] ?? '';
     }
 
     /**
@@ -2162,6 +2256,9 @@ final class ProductSearchIdentity
             if (! $this->isStrongShopPhrase($phrase) || $this->shopPhraseLosesToCatalogSku($phrase, $product)) {
                 continue;
             }
+            if ($this->isColorOnlyShopPhrase($phrase)) {
+                continue;
+            }
             if ($prefixed !== '' && mb_strtolower($phrase) === $prefixed && $this->looksLikeCompactTradeName($name)) {
                 continue;
             }
@@ -2173,6 +2270,9 @@ final class ProductSearchIdentity
             }
         }
         foreach ($this->shopIdentityPhrases($product) as $phrase) {
+            if ($this->isColorOnlyShopPhrase($phrase)) {
+                continue;
+            }
             if ($prefixed !== '' && mb_strtolower($phrase) === $prefixed && $this->looksLikeCompactTradeName($name)) {
                 continue;
             }
@@ -3333,7 +3433,43 @@ final class ProductSearchIdentity
 
     public function rawSkuIsOfflineNoise(Product $product): bool
     {
-        return $this->looksLikeInternalSku($product) || $this->looksLikeWarehouseArticleSku($product);
+        return $this->looksLikeInternalSku($product)
+            || $this->looksLikeWarehouseArticleSku($product)
+            || $this->skuDiffersFromStrongShopIdentity($product);
+    }
+
+    /**
+     * MA1120 / N15T138 / 35110 — w sklepie jest REUNION / Model 138 / DRAFT.
+     */
+    public function skuDiffersFromStrongShopIdentity(Product $product): bool
+    {
+        $shop = $this->firstStrongShopPhrase($product);
+        if ($shop === '' || $this->isColorOnlyShopPhrase($shop)) {
+            return false;
+        }
+        $sku = trim((string) $product->sku);
+        if ($sku === '') {
+            return false;
+        }
+        $skuCompact = $this->compactCode($sku);
+        $shopCompact = $this->compactCode($shop);
+        if ($skuCompact !== '' && $shopCompact !== '' && (
+            $skuCompact === $shopCompact
+            || str_contains($shopCompact, $skuCompact)
+            || str_contains($skuCompact, $shopCompact)
+        )) {
+            return false;
+        }
+        if (preg_match('/\p{L}{4,}/u', $shop) !== 1) {
+            return false;
+        }
+        $skuLooksLikeCode = $this->looksLikeWarehouseArticleSku($product)
+            || $this->looksLikeInternalSku($product)
+            || preg_match('/^[A-Z]{1,3}\d{3,}/iu', $sku) === 1
+            || preg_match('/^\d{4,}$/u', $skuCompact) === 1
+            || preg_match('/^[A-Z0-9]{2,}\d[A-Z0-9]*$/iu', $sku) === 1;
+
+        return $skuLooksLikeCode && $this->isStrongShopPhrase($shop);
     }
 
     /**
@@ -3650,6 +3786,11 @@ final class ProductSearchIdentity
             'sir-safety' => ['sir', 'sirsafety'],
             'sordin' => ['sordin', 'hellberg'],
             'hellberg' => ['sordin', 'hellberg'],
+            'arelax' => ['arelax', 'artra'],
+            'artra' => ['arelax', 'artra'],
+            'eider' => ['eider', 'cerva'],
+            'cerva' => ['eider', 'cerva'],
+            'infield' => ['infield'],
         ];
         $out = [];
         if ($compact !== '' && (mb_strlen($compact) >= 4
@@ -4443,6 +4584,10 @@ final class ProductSearchIdentity
         }
         if (isset($parts[1])) {
             $out[] = $parts[0].'-'.$parts[1];
+        }
+        $core = $this->manufacturerLegalCore((string) $product->manufacturer);
+        if ($core !== '') {
+            $out[] = trim((string) preg_replace('/[^a-z0-9]+/u', '-', $core), '-');
         }
 
         return array_values(array_unique($out));

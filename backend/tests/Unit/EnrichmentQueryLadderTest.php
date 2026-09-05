@@ -1699,4 +1699,39 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertCount(1, $carry);
         $this->assertStringContainsString('sj5202', mb_strtolower($carry[0]['title'] ?? ''));
     }
+
+    public function test_sir_reunion_hit_counts_without_ma1120_in_url(): void
+    {
+        $product = new Product([
+            'sku' => 'MA1120',
+            'name' => 'REUNION glove BA GREY/BLUE 10',
+            'manufacturer' => 'SiR',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $filter = $ref->getMethod('filterResultsByIdentity');
+        $filter->setAccessible(true);
+        $coded = $ref->getMethod('resultsCarryProductCode');
+        $coded->setAccessible(true);
+        $hits = [
+            [
+                'url' => 'https://www.sirsafety.com/reunion-glove',
+                'title' => 'REUNION glove',
+                'snippet' => 'SIR SAFETY REUNION glove BA',
+            ],
+            [
+                'url' => 'https://www.olx.pl/oferta/rekawice',
+                'title' => 'Rękawice',
+                'snippet' => 'ogłoszenie',
+            ],
+        ];
+
+        $kept = $filter->invoke($service, $hits, $product);
+        $this->assertCount(1, $kept);
+        $this->assertStringContainsString('sirsafety.com', $kept[0]['url'] ?? '');
+
+        $carry = $coded->invoke($service, $hits, $product);
+        $this->assertCount(1, $carry);
+        $this->assertStringContainsString('reunion', mb_strtolower($carry[0]['title'] ?? ''));
+    }
 }

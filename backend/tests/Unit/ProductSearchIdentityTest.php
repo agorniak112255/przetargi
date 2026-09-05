@@ -1107,4 +1107,98 @@ final class ProductSearchIdentityTest extends TestCase
             'manufacturer' => '3M',
         ])));
     }
+
+    public function test_sir_ma1120_confirms_reunion_without_sku_in_url(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'MA1120',
+            'name' => 'REUNION glove BA GREY/BLUE 10',
+            'manufacturer' => 'SiR',
+        ]);
+        $url = 'https://www.sirsafety.com/reunion-glove';
+        $title = 'REUNION glove';
+        $text = 'SIR SAFETY REUNION glove BA GREY/BLUE. Code MA1120.';
+
+        $this->assertNotSame('', $id->firstStrongShopPhrase($product));
+        $this->assertStringContainsString('reunion', mb_strtolower($id->firstStrongShopPhrase($product)));
+        $this->assertTrue($id->skuDiffersFromStrongShopIdentity($product));
+        $this->assertTrue($id->rawSkuIsOfflineNoise($product));
+        $this->assertFalse($id->hayHasProductCode($url.' '.$title, $product));
+        $this->assertTrue($id->isConfirmedProductCard($url, $title, $text, $product));
+    }
+
+    public function test_t51_3m_remaps_to_infield(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'T5100002',
+            'name' => 'Gogle GONDOR PC AF AS UV',
+            'manufacturer' => '3M',
+        ]);
+
+        $this->assertSame('Infield', $id->inferredBrandHint($product));
+        $this->assertContains('infield-safety.com', $id->inferredCatalogHosts($product));
+        $this->assertContains('infield-safety.com', $id->catalogSearchHosts($product));
+        $this->assertStringContainsString('Infield', $id->queryWithManufacturer('GONDOR', $product));
+        $this->assertTrue($id->isConfirmedProductCard(
+            'https://bpbhp.pl/gogle-ochronne-infield-gondor',
+            'Gogle ochronne Infield GONDOR',
+            'Infield GONDOR PC AF AS UV gogle ochronne.',
+            $product
+        ));
+    }
+
+    public function test_reis_fc_sku_remaps_to_dickies_but_plain_reis_stays(): void
+    {
+        $id = new ProductSearchIdentity;
+        $tiber = new Product([
+            'sku' => 'FC23530',
+            'name' => 'SICHERHEITSHALBSCHUH TIBER S3',
+            'manufacturer' => 'Reis',
+        ]);
+        $sandal = new Product([
+            'sku' => '005-031',
+            'name' => 'sandały S1P',
+            'manufacturer' => 'Reis',
+        ]);
+
+        $this->assertSame('Dickies', $id->inferredBrandHint($tiber));
+        $this->assertContains('workwearnation.com', $id->catalogSearchHosts($tiber));
+        $this->assertSame('', $id->inferredBrandHint($sandal));
+        $this->assertContains('reis.pl', $id->catalogSearchHosts($sandal));
+    }
+
+    public function test_showa_worklife_and_pip_6552_remap(): void
+    {
+        $id = new ProductSearchIdentity;
+        $showa = new Product([
+            'sku' => '222080',
+            'name' => 'WorkLife Tiger Plus',
+            'manufacturer' => 'Showa',
+        ]);
+        $pip = new Product([
+            'sku' => '6552004',
+            'name' => 'Cocoon Evo Shell Mid FLS S3H',
+            'manufacturer' => 'PIP',
+        ]);
+
+        $this->assertSame('Otto Schachner', $id->inferredBrandHint($showa));
+        $this->assertContains('os-safetycenter.de', $id->catalogSearchHosts($showa));
+        $this->assertSame('Honeywell', $id->inferredBrandHint($pip));
+        $this->assertContains('automation.honeywell.com', $id->catalogSearchHosts($pip));
+    }
+
+    public function test_mat_legal_suffix_resolves_konin_catalog_host(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '1005OS',
+            'name' => 'Ubranie Wodoochronne Ostrzegawcze',
+            'manufacturer' => 'MAT Sp. z o.o.',
+        ]);
+
+        $this->assertContains('mat.konin.pl', $id->officialCatalogHosts($product));
+        $this->assertContains('mat.konin.pl', $id->catalogSearchHosts($product));
+    }
 }
