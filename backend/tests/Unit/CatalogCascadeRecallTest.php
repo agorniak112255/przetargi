@@ -387,4 +387,45 @@ final class CatalogCascadeRecallTest extends TestCase
         $this->assertContains('BLUZA-KOLPEO', $skus);
         $this->assertNotContains('FR740', $skus);
     }
+
+    public function test_kalesony_step_does_not_require_undershirt_and_skips_blouse(): void
+    {
+        Product::query()->create([
+            'sku' => 'KOLDYPANTS',
+            'name' => 'DŁUGIE KALESONY Z POLIAMIDU',
+            'manufacturer' => 'Delta Plus',
+            'description' => 'Kalesony z poliamidu.',
+            'catalog_price_net' => 96,
+            'purchase_price' => 74,
+            'stock' => 2,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+        Product::query()->create([
+            'sku' => 'H5131',
+            'name' => 'Blůza dámská KLASIK stř.modrá',
+            'manufacturer' => 'ARDON SAFETY',
+            'description' => 'Odzież robocza.',
+            'catalog_price_net' => 8,
+            'purchase_price' => 7,
+            'stock' => 10,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+        ]);
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'KALESONY bawełniane męskie',
+            [
+                'needed' => 'bielizna termiczna',
+                'search_phrases' => ['kalesony', 'bielizna termiczna'],
+                'search_steps' => ['kalesony', 'bielizna termiczna'],
+                'constraints' => [],
+            ],
+            'KALESONY bawełniane męskie',
+            20
+        );
+
+        $skus = $hit['products']->pluck('sku')->all();
+        $this->assertStringStartsWith('steps_', (string) $hit['level']);
+        $this->assertContains('KOLDYPANTS', $skus);
+        $this->assertNotContains('H5131', $skus);
+    }
 }

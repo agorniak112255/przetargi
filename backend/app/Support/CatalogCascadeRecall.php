@@ -282,9 +282,10 @@ final class CatalogCascadeRecall
     private function stepTokens(string $step, ?string $family): array
     {
         $out = [];
+        $stepFold = $this->fold($step);
         foreach ($this->assortment->catalogNounLikes($step) as $like) {
             $fold = $this->fold($like);
-            if ($fold !== '' && mb_strlen($fold) >= 3) {
+            if ($fold !== '' && mb_strlen($fold) >= 3 && str_contains($stepFold, $fold)) {
                 $out[] = $fold;
             }
         }

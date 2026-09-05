@@ -2489,13 +2489,18 @@ final class ProductAiSearchService
             }
         }
 
-        $cascaded = $this->clock('retrieve_cascade', function () use ($query, $intent, $requirement, $limit): Collection {
-            return $this->cascadeRecall->retrieve($query, $intent, $requirement, $limit)['products'];
+        $recalled = $this->clock('retrieve_cascade', function () use ($query, $intent, $requirement, $limit): array {
+            return $this->cascadeRecall->retrieve($query, $intent, $requirement, $limit);
         });
+        $cascaded = $recalled['products'];
+        $cascadeLevel = $recalled['level'] ?? null;
         if ($cascaded->isNotEmpty()) {
-            $pool = $this->slangRewriteFor($query) !== null
-                ? $cascaded->concat($priority)
-                : $priority->concat($cascaded);
+            $fromNameSteps = is_string($cascadeLevel) && str_starts_with($cascadeLevel, 'steps_');
+            $pool = $fromNameSteps
+                ? $cascaded
+                : ($this->slangRewriteFor($query) !== null
+                    ? $cascaded->concat($priority)
+                    : $priority->concat($cascaded));
 
             return $this->keepCompatible($requirement, $this->uniqueProducts($pool, $limit))->values();
         }

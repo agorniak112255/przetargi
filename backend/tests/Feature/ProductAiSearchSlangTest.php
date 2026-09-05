@@ -502,6 +502,19 @@ final class ProductAiSearchSlangTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
+        Product::query()->create([
+            'sku' => 'H5131',
+            'name' => 'Blůza dámská KLASIK stř.modrá',
+            'manufacturer' => 'ARDON SAFETY',
+            'category' => 'Odzież',
+            'description' => 'Odzież robocza.',
+            'catalog_price_net' => 8.51,
+            'purchase_price' => 7.58,
+            'stock' => 20,
+            'ppe_family' => 'apparel',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')
@@ -509,9 +522,7 @@ final class ProductAiSearchSlangTest extends TestCase
                 'needed' => 'bielizna termiczna',
                 'search_steps' => ['bielizna termiczna'],
                 'search_phrases' => ['bielizna termiczna', 'odzież termoaktywna'],
-                'matches' => [
-                    ['id' => $named->id, 'score' => 70, 'reason' => 'kalesony'],
-                ],
+                'matches' => [],
             ]);
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
@@ -527,6 +538,8 @@ final class ProductAiSearchSlangTest extends TestCase
         );
 
         $this->assertContains('KOLDYPANTS', $skus);
+        $this->assertSame('KOLDYPANTS', $skus[0] ?? null);
+        $this->assertNotContains('H5131', $skus);
         $this->assertNotSame([], $steps);
         $this->assertStringContainsString('kaleson', $steps[0] ?? '');
     }
