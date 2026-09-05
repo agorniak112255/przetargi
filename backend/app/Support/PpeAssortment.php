@@ -591,6 +591,30 @@ final class PpeAssortment
         ) === 1;
     }
 
+    public function isEyeWearSet(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match(
+            '/\b(okular|gogl).{0,48}(etui|futeral|case)|(etui|futeral|case).{0,48}(okular|gogl)/u',
+            $t
+        ) === 1;
+    }
+
+    /** @return 'glasses'|'case'|null */
+    public function eyeWearRole(string $text): ?string
+    {
+        if ($this->isEyeWearAccessory($text)) {
+            return 'case';
+        }
+        $type = $this->eyeType($this->normalize($text));
+        if ($type === 'glasses' || $type === 'goggles') {
+            return 'glasses';
+        }
+
+        return null;
+    }
+
     public function isCatalogNounStep(string $step): bool
     {
         if ($this->catalogNounLikes($step) !== []) {
@@ -933,6 +957,10 @@ final class PpeAssortment
     {
         $nameText = $productText;
         $hay = $fullText ?? $productText;
+        if ($this->isEyeWearSet($requirement)) {
+            return $this->eyeWearRole($nameText) !== null
+                || $this->eyeWearRole($hay) !== null;
+        }
         if ($this->isEyeWearAccessory($nameText) && ! $this->isEyeWearAccessory($requirement)) {
             return false;
         }

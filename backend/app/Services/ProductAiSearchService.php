@@ -286,6 +286,7 @@ final class ProductAiSearchService
             $this->assortmentText($query, $intent['needed']),
             $this->retrieveCandidates($query, $searchIntent, self::CANDIDATE_POOL)
         );
+        $candidates = $this->mergeEyeWearSetCandidates($query, $candidates);
         $named = $candidates->filter(
             fn (Product $p): bool => $this->modelFuzzy->matches($modelQuery, $p)
                 && $this->filterType->covers($query, $this->filterHaystack($p))
@@ -294,7 +295,7 @@ final class ProductAiSearchService
             $namedRows = $this->rowsFromNamedModels($modelQuery, $named, $limit);
             if ($namedRows !== []) {
                 return [
-                    'products' => $namedRows,
+                    'products' => $this->orderEyeWearSetRows($query, $namedRows, $candidates),
                     'note' => null,
                     'rank_cards' => null,
                     'candidates' => $candidates,
@@ -1239,6 +1240,9 @@ final class ProductAiSearchService
 
             return $this->sanitizeSearchSteps($steps, $intent);
         }
+        if ($this->assortment->isEyeWearSet($query)) {
+            $steps[] = 'etui';
+        }
         $slang = $this->slangRewriteFor($query);
         if ($slang !== null) {
             foreach ($slang['search_phrases'] as $phrase) {
@@ -1393,6 +1397,9 @@ final class ProductAiSearchService
             $chunks[] = 'damskie';
         }
         $merged = trim(implode(' ', array_unique($chunks)));
+        if ($this->assortment->isEyeWearSet($query) && ! $this->assortment->isEyeWearSet($merged)) {
+            $merged = trim($merged.' etui');
+        }
 
         return $merged !== '' ? $merged : $query;
     }
@@ -1421,10 +1428,15 @@ final class ProductAiSearchService
             if (! $product instanceof Product) {
                 continue;
             }
-            if (! $this->assortment->compatibleProduct($requirement, $product)) {
+            $compat = is_string($slangQuery) && $slangQuery !== '' && $this->assortment->isEyeWearSet($slangQuery)
+                ? $slangQuery
+                : $requirement;
+            if (! $this->assortment->compatibleProduct($compat, $product)) {
                 continue;
             }
-            if (! $this->matchesSlangEvidence($slangQuery ?? $requirement, $product)) {
+            $skipSlang = $this->assortment->isEyeWearSet($slangQuery ?? $requirement)
+                && $this->assortment->eyeWearRole((string) $product->name) === 'case';
+            if (! $skipSlang && ! $this->matchesSlangEvidence($slangQuery ?? $requirement, $product)) {
                 continue;
             }
             $out[] = $row;
@@ -1560,7 +1572,7 @@ final class ProductAiSearchService
     {
         $ranked = $this->sortRankedByMatchPercent($ranked);
         if (! $this->assortment->isApparelSet($query)) {
-            return $ranked;
+            return $this->orderEyeWearSetRows($query, $ranked, $candidates);
         }
         $have = [];
         foreach ($ranked as $row) {
@@ -1592,7 +1604,147 @@ final class ProductAiSearchService
             }
         }
 
-        return $this->interleaveApparelSetRows($ranked);
+        return $this->orderEyeWearSetRows($query, $this->interleaveApparelSetRows($ranked), $candidates);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $ranked
+     * @param  Collection<int, Product>  $candidates
+     * @return list<array<string, mixed>>
+     */
+    private function orderEyeWearSetRows(string $query, array $ranked, Collection $candidates): array
+    {
+        if (! $this->assortment->isEyeWearSet($query)) {
+            return $ranked;
+        }
+        $have = [];
+        foreach ($ranked as $row) {
+            $role = $this->assortment->eyeWearRole((string) ($row['name'] ?? ''));
+            if ($role !== null) {
+                $have[$role] = true;
+            }
+        }
+        $seen = [];
+        foreach ($ranked as $row) {
+            $seen[(int) ($row['id'] ?? 0)] = true;
+        }
+        foreach (['glasses', 'case'] as $need) {
+            if (isset($have[$need])) {
+                continue;
+            }
+            foreach ($candidates as $product) {
+                if (! $product instanceof Product || isset($seen[(int) $product->id])) {
+                    continue;
+                }
+                if ($this->assortment->eyeWearRole((string) $product->name) !== $need) {
+                    continue;
+                }
+                $row = $this->productToRow($product);
+                $row['ai_match_percent'] = 68;
+                $row['ai_match_reason'] = $need === 'case'
+                    ? 'Etui z katalogu do kompletu z okularami.'
+                    : 'Okulary z katalogu do kompletu z etui.';
+                $ranked[] = $row;
+                $seen[(int) $product->id] = true;
+                break;
+            }
+        }
+
+        return $this->interleaveEyeWearSetRows($ranked);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $ranked
+     * @return list<array<string, mixed>>
+     */
+    private function interleaveEyeWearSetRows(array $ranked): array
+    {
+        $glasses = [];
+        $cases = [];
+        $other = [];
+        foreach ($ranked as $row) {
+            $role = $this->assortment->eyeWearRole((string) ($row['name'] ?? ''));
+            if ($role === 'glasses') {
+                $glasses[] = $row;
+            } elseif ($role === 'case') {
+                $cases[] = $row;
+            } else {
+                $other[] = $row;
+            }
+        }
+        if ($glasses === [] || $cases === []) {
+            return $ranked;
+        }
+        $out = [];
+        $i = $j = $k = 0;
+        while (isset($glasses[$i]) || isset($cases[$j]) || isset($other[$k])) {
+            if (isset($glasses[$i])) {
+                $out[] = $glasses[$i++];
+            }
+            if (isset($cases[$j])) {
+                $out[] = $cases[$j++];
+            }
+            if (isset($other[$k])) {
+                $out[] = $other[$k++];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  Collection<int, Product>  $candidates
+     * @return Collection<int, Product>
+     */
+    private function mergeEyeWearSetCandidates(string $query, Collection $candidates): Collection
+    {
+        if (! $this->assortment->isEyeWearSet($query)) {
+            return $candidates;
+        }
+        $haveCase = $candidates->contains(
+            fn ($p): bool => $p instanceof Product && $this->assortment->eyeWearRole((string) $p->name) === 'case'
+        );
+        if ($haveCase) {
+            return $candidates->values();
+        }
+        $extra = $this->retrieveEyeWearCases($query);
+        if ($extra->isEmpty()) {
+            return $candidates->values();
+        }
+        $seen = $candidates->map(fn ($p): int => $p instanceof Product ? (int) $p->id : 0)->flip();
+        foreach ($extra as $product) {
+            if (! $product instanceof Product || $seen->has((int) $product->id)) {
+                continue;
+            }
+            $candidates->push($product);
+            $seen->put((int) $product->id, true);
+        }
+
+        return $candidates->values();
+    }
+
+    /**
+     * @return Collection<int, Product>
+     */
+    private function retrieveEyeWearCases(string $query): Collection
+    {
+        $likes = ['etui', 'futeral', 'futerał'];
+        $q = $this->productBaseQuery();
+        $q->where(function ($outer) use ($likes): void {
+            foreach ($likes as $like) {
+                $esc = '%'.$like.'%';
+                $outer->orWhere('name', 'like', $esc)
+                    ->orWhere('description', 'like', $esc)
+                    ->orWhere('search_blob', 'like', $esc);
+            }
+        });
+
+        return $q->limit(80)
+            ->get()
+            ->filter(fn (Product $p): bool => $this->assortment->eyeWearRole((string) $p->name) === 'case'
+                && $this->assortment->compatibleProduct($query, $p))
+            ->take(24)
+            ->values();
     }
 
     /**
@@ -2696,6 +2848,9 @@ final class ProductAiSearchService
      */
     private function interleaveApparelSetProducts(string $query, Collection $products): Collection
     {
+        if ($this->assortment->isEyeWearSet($query) && $products->count() >= 2) {
+            return $this->interleaveEyeWearSetProducts($products);
+        }
         if (! $this->assortment->isApparelSet($query) || $products->count() < 2) {
             return $products->values();
         }
@@ -2726,6 +2881,49 @@ final class ProductAiSearchService
             }
             if ($pants->get($i) instanceof Product) {
                 $out->push($pants->get($i));
+            }
+            if ($other->get($i) instanceof Product) {
+                $out->push($other->get($i));
+            }
+            $i++;
+        }
+
+        return $out->values();
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return Collection<int, Product>
+     */
+    private function interleaveEyeWearSetProducts(Collection $products): Collection
+    {
+        $glasses = collect();
+        $cases = collect();
+        $other = collect();
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $role = $this->assortment->eyeWearRole((string) $product->name);
+            if ($role === 'glasses') {
+                $glasses->push($product);
+            } elseif ($role === 'case') {
+                $cases->push($product);
+            } else {
+                $other->push($product);
+            }
+        }
+        if ($glasses->isEmpty() || $cases->isEmpty()) {
+            return $products->values();
+        }
+        $out = collect();
+        $i = 0;
+        while ($i < $glasses->count() || $i < $cases->count() || $i < $other->count()) {
+            if ($glasses->get($i) instanceof Product) {
+                $out->push($glasses->get($i));
+            }
+            if ($cases->get($i) instanceof Product) {
+                $out->push($cases->get($i));
             }
             if ($other->get($i) instanceof Product) {
                 $out->push($other->get($i));

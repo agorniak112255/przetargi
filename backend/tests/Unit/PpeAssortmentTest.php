@@ -382,6 +382,32 @@ final class PpeAssortmentTest extends TestCase
     }
 
     #[Test]
+    public function glasses_plus_etui_accepts_both(): void
+    {
+        $req = 'Okulary ochronne HUBIX H049 + etui';
+        $glasses = new Product;
+        $glasses->forceFill([
+            'name' => '3M Virtua AP Okulary ochronne',
+            'sku' => '7100010692',
+            'manufacturer' => '3M',
+            'ppe_family' => PpeAssortment::FAMILY_EYES,
+        ]);
+        $case = new Product;
+        $case->forceFill([
+            'name' => 'Sztywne etui na okulary ochronne',
+            'sku' => 'ETUI-1',
+            'manufacturer' => 'HUBIX',
+            'ppe_family' => PpeAssortment::FAMILY_EYES,
+        ]);
+
+        $this->assertTrue($this->assortment->isEyeWearSet($req));
+        $this->assertSame('glasses', $this->assortment->eyeWearRole((string) $glasses->name));
+        $this->assertSame('case', $this->assortment->eyeWearRole((string) $case->name));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $glasses));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $case));
+    }
+
+    #[Test]
     public function shop_category_gogli_does_not_override_glasses_in_name(): void
     {
         $req = 'OKULARY OCHRONNE MSA PERSPECTA 010';
