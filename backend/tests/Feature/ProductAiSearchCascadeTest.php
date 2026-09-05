@@ -286,6 +286,20 @@ final class ProductAiSearchCascadeTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
+        for ($i = 0; $i < 6; $i++) {
+            Product::query()->create([
+                'sku' => 'POUCH-'.$i,
+                'name' => 'woreczek dla wszystkich modeli okularów '.$i,
+                'manufacturer' => 'uvex',
+                'description' => 'Woreczek na okulary.',
+                'catalog_price_net' => 1,
+                'purchase_price' => 0.3,
+                'stock' => 20,
+                'ppe_family' => PpeAssortment::FAMILY_EYES,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
         Product::query()->create([
             'sku' => 'ETUI-HUBIX',
             'name' => 'Sztywne etui na okulary ochronne HUBIX',
@@ -308,6 +322,10 @@ final class ProductAiSearchCascadeTest extends TestCase
         $skus = array_column($rows, 'sku');
         $this->assertContains('ETUI-HUBIX', $skus);
         $this->assertContains('HUBIX-H049', $skus);
+        $this->assertSame('glasses', (new PpeAssortment)->eyeWearRole((string) ($rows[0]['name'] ?? '')));
+        $etuiAt = array_search('ETUI-HUBIX', $skus, true);
+        $this->assertIsInt($etuiAt);
+        $this->assertGreaterThan(0, $etuiAt);
     }
 
     public function test_glasses_only_query_still_excludes_etui(): void

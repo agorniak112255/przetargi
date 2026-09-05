@@ -403,6 +403,7 @@ final class PpeAssortmentTest extends TestCase
         $this->assertTrue($this->assortment->isEyeWearSet($req));
         $this->assertSame('glasses', $this->assortment->eyeWearRole((string) $glasses->name));
         $this->assertSame('case', $this->assortment->eyeWearRole((string) $case->name));
+        $this->assertSame('case', $this->assortment->eyeWearRole('woreczek dla wszystkich modeli okularów'));
         $this->assertTrue($this->assortment->compatibleProduct($req, $glasses));
         $this->assertTrue($this->assortment->compatibleProduct($req, $case));
     }

@@ -948,7 +948,7 @@ final class PpeAssortment
         $t = $this->normalize($text);
 
         return preg_match(
-            '/\b(etui|futeral|case|pojemnik|pudelko|box|wkladk\w*\s+piank)\w*/u',
+            '/\b(etui|futeral|case|pojemnik|pudelko|box|woreczek|pokrowiec|saszetk|wkladk\w*\s+piank)\w*/u',
             $t
         ) === 1;
     }

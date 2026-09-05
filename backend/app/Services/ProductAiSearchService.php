@@ -1650,14 +1650,16 @@ final class ProductAiSearchService
             }
         }
 
-        return $this->interleaveEyeWearSetRows($ranked);
+        return $this->orderEyeWearSetHead($ranked);
     }
 
     /**
+     * Najpierw 3–5 okularów, potem etui — nie przeplatać tanich futerałów na górę.
+     *
      * @param  list<array<string, mixed>>  $ranked
      * @return list<array<string, mixed>>
      */
-    private function interleaveEyeWearSetRows(array $ranked): array
+    private function orderEyeWearSetHead(array $ranked): array
     {
         $glasses = [];
         $cases = [];
@@ -1675,21 +1677,11 @@ final class ProductAiSearchService
         if ($glasses === [] || $cases === []) {
             return $ranked;
         }
-        $out = [];
-        $i = $j = $k = 0;
-        while (isset($glasses[$i]) || isset($cases[$j]) || isset($other[$k])) {
-            if (isset($glasses[$i])) {
-                $out[] = $glasses[$i++];
-            }
-            if (isset($cases[$j])) {
-                $out[] = $cases[$j++];
-            }
-            if (isset($other[$k])) {
-                $out[] = $other[$k++];
-            }
-        }
+        $head = array_slice($glasses, 0, 5);
+        $moreGlasses = array_slice($glasses, 5);
+        $caseHead = array_slice($cases, 0, 5);
 
-        return $out;
+        return array_values(array_merge($head, $caseHead, $moreGlasses, array_slice($cases, 5), $other));
     }
 
     /**
@@ -1701,6 +1693,7 @@ final class ProductAiSearchService
         if (! $this->assortment->isEyeWearSet($query)) {
             return $candidates;
         }
+        $candidates = $this->capEyeWearSetCases($candidates, 6);
         $haveCase = $candidates->contains(
             fn ($p): bool => $p instanceof Product && $this->assortment->eyeWearRole((string) $p->name) === 'case'
         );
@@ -1720,7 +1713,33 @@ final class ProductAiSearchService
             $seen->put((int) $product->id, true);
         }
 
-        return $candidates->values();
+        return $this->capEyeWearSetCases($candidates, 6);
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return Collection<int, Product>
+     */
+    private function capEyeWearSetCases(Collection $products, int $maxCases): Collection
+    {
+        $glasses = collect();
+        $cases = collect();
+        $other = collect();
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $role = $this->assortment->eyeWearRole((string) $product->name);
+            if ($role === 'glasses') {
+                $glasses->push($product);
+            } elseif ($role === 'case') {
+                $cases->push($product);
+            } else {
+                $other->push($product);
+            }
+        }
+
+        return $glasses->concat($cases->take($maxCases))->concat($other)->values();
     }
 
     /**
@@ -1743,7 +1762,7 @@ final class ProductAiSearchService
             ->get()
             ->filter(fn (Product $p): bool => $this->assortment->eyeWearRole((string) $p->name) === 'case'
                 && $this->assortment->compatibleProduct($query, $p))
-            ->take(24)
+            ->take(6)
             ->values();
     }
 
@@ -2916,22 +2935,8 @@ final class ProductAiSearchService
         if ($glasses->isEmpty() || $cases->isEmpty()) {
             return $products->values();
         }
-        $out = collect();
-        $i = 0;
-        while ($i < $glasses->count() || $i < $cases->count() || $i < $other->count()) {
-            if ($glasses->get($i) instanceof Product) {
-                $out->push($glasses->get($i));
-            }
-            if ($cases->get($i) instanceof Product) {
-                $out->push($cases->get($i));
-            }
-            if ($other->get($i) instanceof Product) {
-                $out->push($other->get($i));
-            }
-            $i++;
-        }
 
-        return $out->values();
+        return $glasses->concat($cases->take(6))->concat($other)->values();
     }
 
     /**
