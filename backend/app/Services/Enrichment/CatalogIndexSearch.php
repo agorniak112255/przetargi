@@ -197,7 +197,7 @@ final class CatalogIndexSearch
         $brand = preg_replace('/[^a-z0-9]+/u', ' ', $brand) ?? $brand;
         $first = trim(explode(' ', trim($brand))[0] ?? '');
 
-        return mb_strlen($first) >= 3 ? $first : '';
+        return mb_strlen($first) >= 3 || $first === '3m' ? $first : '';
     }
 
     /**

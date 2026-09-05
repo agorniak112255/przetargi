@@ -431,11 +431,20 @@ class HybridWebSearchService
             $url = $this->identity->preferredLocaleUrl((string) ($row['url'] ?? ''), $product);
             $title = (string) ($row['title'] ?? '');
             $hay = mb_strtolower($url.' '.$title.' '.($row['snippet'] ?? ''));
+            $threeMShort = $this->identity->manufacturerIsThreeM($product)
+                && preg_match('/^\d{3,5}$/u', trim((string) $product->sku)) === 1;
+            if ($threeMShort
+                && ! $this->identity->hayHasProductCode($hay, $product)
+                && ! $this->identity->urlOrTitleCarriesShopModelNumber($url, $title, $product)) {
+                continue;
+            }
+            $officialThreeM = $this->identity->manufacturerIsThreeM($product)
+                && $this->identity->isOfficialThreeMProductUrl($url);
             if ($this->isListingWithoutProduct($url, $product)
                 || $this->identity->looksLikeUnrelatedRetailHost($url, $product)
                 || $this->identity->pageClaimsAnotherCode($url, $title, $product)
                 || $this->identity->looksLikeChemicalCatalogHit($hay)
-                || ! $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
+                || (! $officialThreeM && ! $this->identity->hayHasRequiredTypeFromName($hay, $product))) {
                 continue;
             }
             // ten sam filtr co w wyszukiwarce: sam kod „104” bez marki to kombinezon PROS,

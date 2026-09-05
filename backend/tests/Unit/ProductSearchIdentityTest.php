@@ -1249,4 +1249,36 @@ final class ProductSearchIdentityTest extends TestCase
             $cup
         ));
     }
+
+    public function test_three_m_three_digit_tape_uses_sku_not_color_words(): void
+    {
+        $id = new ProductSearchIdentity;
+        $tape = new Product([
+            'sku' => '427',
+            'name' => 'Taśma aluminiowa 3M™ 427, srebrna, 610 mm x 55 m, 0.12 mm',
+            'manufacturer' => '3M',
+        ]);
+
+        $this->assertSame('427', $id->firstStrongShopPhrase($tape));
+        $this->assertContains('427', $id->threeMCatalogCodesFromName($tape));
+        $this->assertNotContains('610', $id->threeMCatalogCodesFromName($tape));
+        $this->assertTrue($id->isWeakShopIndexPhrase('srebrna', $tape));
+        $this->assertTrue($id->isWeakShopIndexPhrase('aluminiowa', $tape));
+        $this->assertFalse($id->isWeakShopIndexPhrase('427', $tape));
+        $indexCodes = app(CatalogIndexSearch::class)->codes($tape);
+        $this->assertContains('427', $indexCodes);
+        $this->assertNotContains('srebrna', $indexCodes);
+        $this->assertNotContains('aluminiowa', $indexCodes);
+        $this->assertStringContainsString('site:3m.com 427', implode(' | ', $id->searchQueries($tape, 'manufacturer')));
+        $this->assertTrue($id->hayHasRequiredTypeFromName(
+            'https://www.3m.com/3M/en_US/p/d/v0000427/ 3M Aluminum Foil Tape 427',
+            $tape
+        ));
+        $this->assertTrue($id->isConfirmedProductCard(
+            'https://www.3m.com/3M/en_US/p/d/v0000427/',
+            '3M Aluminum Foil Tape 427',
+            '3M Aluminum Foil Tape 427 silver 610 mm.',
+            $tape
+        ));
+    }
 }

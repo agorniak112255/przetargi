@@ -45,7 +45,7 @@ final class ProductSearchIdentity
         'signage' => ['tablic', 'piktogram', 'oznakowan', 'znak kierunk'],
         'extinguisher' => ['gasnic', 'extinguisher', 'feuerlosch'],
         'firstaid' => ['aptecz', 'first aid', 'firstaid', 'verbandkasten'],
-        'tape' => ['tasma', 'tasmy', 'tasmow', 'adhesive tape', 'warning tape', 'isolierband'],
+        'tape' => ['tasma', 'tasmy', 'tasmow', 'adhesive tape', 'warning tape', 'isolierband', 'tape'],
     ];
 
     /**
@@ -1392,10 +1392,22 @@ final class ProductSearchIdentity
                 }
             }
         }
+        $sku = trim((string) $product->sku);
+        if (preg_match_all('/\b(\d{3})\b/u', $name, $m) !== false) {
+            foreach ($m[1] as $n) {
+                $n = (string) $n;
+                if ($this->threeMNumberLooksLikeMeasure($n, $name)) {
+                    continue;
+                }
+                if ($n === $sku || $n === ltrim($sku, '0')) {
+                    $out[] = $n;
+                }
+            }
+        }
         $uniq = [];
         foreach ($out as $code) {
             $code = trim($code);
-            if ($code === '' || mb_strlen($code) < 4) {
+            if ($code === '' || mb_strlen($code) < 3) {
                 continue;
             }
             $uniq[mb_strtolower($code)] = $code;
@@ -2626,6 +2638,10 @@ final class ProductSearchIdentity
         if ($phrase === '' || $this->isApparelTypeWord($phrase) || $this->isDescriptiveIdentityWord($phrase)) {
             return true;
         }
+        if (preg_match('/^\d{3,6}$/u', trim((string) $product->sku)) === 1
+            && preg_match('/^\p{L}{3,}$/u', $phrase) === 1) {
+            return true;
+        }
         if (! $this->hasDistinctiveCatalogSku($product)) {
             return false;
         }
@@ -3213,6 +3229,13 @@ final class ProductSearchIdentity
 
                 continue;
             }
+            if ($stem === 'tape') {
+                if (preg_match('/\btapes?\b/u', $normalized) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
             if (str_contains($normalized, $stem)) {
                 return true;
             }
@@ -3605,7 +3628,7 @@ final class ProductSearchIdentity
         $shopLooksLikeTrade = preg_match('/\p{L}{4,}/u', $shop) === 1
             || ($this->manufacturerIsThreeM($product) && (
                 preg_match('/^SJ\d{4}/iu', $shop) === 1
-                || preg_match('/^(?:PN)?\d{4,6}[A-Z]{0,2}$/iu', $shop) === 1
+                || preg_match('/^(?:PN)?\d{3,6}[A-Z]{0,2}$/iu', $shop) === 1
             ));
         if (! $shopLooksLikeTrade) {
             return false;
@@ -4534,7 +4557,8 @@ final class ProductSearchIdentity
 
         if (in_array($word, [
             'black', 'white', 'grey', 'gray', 'blue', 'green', 'red', 'yellow',
-            'orange', 'navy', 'brown', 'beige', 'pink',
+            'orange', 'navy', 'brown', 'beige', 'pink', 'silver',
+            'srebrny', 'srebrna', 'srebrne',
             'zielony', 'zielona', 'zielone', 'zolty', 'zolta', 'zolte',
             'czarny', 'czarna', 'czarne', 'bialy', 'biala', 'biale',
             'granatowy', 'granatowa', 'niebieski', 'niebieska',
@@ -4542,7 +4566,7 @@ final class ProductSearchIdentity
         ], true)) {
             return true;
         }
-        foreach (['zielon', 'zolt', 'czarn', 'bial', 'granat', 'niebiesk', 'czerwon', 'czerw'] as $stem) {
+        foreach (['zielon', 'zolt', 'czarn', 'bial', 'granat', 'niebiesk', 'czerwon', 'czerw', 'srebrn'] as $stem) {
             if (str_starts_with($word, $stem)) {
                 return true;
             }

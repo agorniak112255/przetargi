@@ -1728,6 +1728,35 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertStringContainsString('3m.com', $kept[0]['url'] ?? '');
     }
 
+    public function test_three_m_short_sku_rejects_other_silver_tape_in_catalog_index(): void
+    {
+        $product = new Product([
+            'sku' => '427',
+            'name' => 'Taśma aluminiowa 3M™ 427, srebrna, 610 mm x 55 m, 0.12 mm',
+            'manufacturer' => '3M',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $confirm = $ref->getMethod('confirmedCatalogHits');
+        $confirm->setAccessible(true);
+        $kept = $confirm->invoke($service, [
+            [
+                'url' => 'https://icd.pl/tasma-naprawcza-3m-dt8-srebrna-48-mm-55-m.html',
+                'title' => 'Taśma naprawcza 3M DT8 srebrna',
+                'snippet' => '',
+            ],
+            [
+                'url' => 'https://www.3m.com/3M/en_US/p/d/v0000427/',
+                'title' => '3M Aluminum Foil Tape 427',
+                'snippet' => '',
+            ],
+        ], $product);
+
+        $this->assertCount(1, $kept);
+        $this->assertStringContainsString('3m.com', $kept[0]['url'] ?? '');
+        $this->assertStringContainsString('427', $kept[0]['title'] ?? '');
+    }
+
     public function test_sir_reunion_hit_counts_without_ma1120_in_url(): void
     {
         $product = new Product([
