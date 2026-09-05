@@ -757,7 +757,7 @@ final class EnrichmentQueryLadderTest extends TestCase
             .'Obuwie medyczne Medibut Como białe',
             $shoes
         ));
-        $this->assertContains('panther-safety.com', $identity->catalogSearchHosts($cap));
+        $this->assertContains('panther-bhp.pl', $identity->catalogSearchHosts($cap));
         $this->assertContains('medibut.pl', $identity->catalogSearchHosts($shoes));
     }
 

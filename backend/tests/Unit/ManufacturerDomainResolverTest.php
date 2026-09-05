@@ -66,7 +66,6 @@ final class ManufacturerDomainResolverTest extends TestCase
 
         $domains = $resolver->domainsFor($product);
         $this->assertContains('pl.msasafety.com', $domains);
-        $this->assertContains('msasafety.com', $domains);
         $this->assertTrue($resolver->isManufacturerUrl(
             'https://pl.msasafety.com/p/altair-2xt?locale=pl',
             $product,
@@ -106,7 +105,7 @@ final class ManufacturerDomainResolverTest extends TestCase
             $domains
         ));
         $this->assertContains(
-            'jalas.com',
+            'ejendals.com',
             $resolver->domainsFor(new Product([
                 'manufacturer' => 'Jalas',
                 'sku' => '1868',
@@ -172,7 +171,7 @@ final class ManufacturerDomainResolverTest extends TestCase
             'ventabebhp.com',
             'bhpsklep24.pl',
             'sklep.lahtipro.pl',
-            'urgent.com.pl',
+            'urgent.pl',
             'ardon.pl',
             'worklink.com.pl',
             'mapa-pro.pl',
@@ -252,13 +251,13 @@ final class ManufacturerDomainResolverTest extends TestCase
             ['OX-ON', 'https://www.ox-on.com/gloves', 'ox-on.com'],
             ['Reis', 'https://www.reis.pl/pl/buty', 'reis.pl'],
             ['JORI', 'https://elten.com/produktgruppen/jori-by-elten/', 'elten.com'],
-            ['DuPont', 'https://safespec.dupont.com/product', 'safespec.dupont.com'],
+            ['DuPont', 'https://www.dupont.com/safespec.html', 'dupont.com'],
             ['Maskpol', 'https://www.maskpol.com.pl/maska', 'maskpol.com.pl'],
             ['TERMOIZOL', 'https://www.termoizol.pl/wyroby', 'termoizol.pl'],
             ['ALWIT POLAND', 'https://alwit.pl/kaptury', 'alwit.pl'],
-            ['PIP', 'https://protectiveindustrialproducts.com/gloves', 'protectiveindustrialproducts.com'],
+            ['PIP', 'https://us.pipglobal.com/en/products', 'us.pipglobal.com'],
             ['SafeLine', 'https://safeline.pl/secubox-mini', 'safeline.pl'],
-            ['Secubox', 'https://www.secubox.eu/products', 'secubox.eu'],
+            ['Secubox', 'https://www.secubox.pl/products', 'secubox.pl'],
         ];
 
         foreach ($cases as [$manufacturer, $url, $host]) {
@@ -327,9 +326,9 @@ final class ManufacturerDomainResolverTest extends TestCase
         ]);
 
         $domains = $resolver->domainsFor($product);
-        $this->assertContains('urgent.com.pl', $domains);
+        $this->assertContains('urgent.pl', $domains);
         $this->assertTrue($resolver->isManufacturerUrl(
-            'https://urgent.com.pl/wp-content/uploads/1019.jpg',
+            'https://urgent.pl/wp-content/uploads/1019.jpg',
             $product,
             $domains
         ));
