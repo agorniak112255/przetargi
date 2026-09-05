@@ -1137,6 +1137,7 @@ final class ProductSearchIdentity
             'pinterest.com', 'linkedin.com',
             'stackoverflow.com', 'stackexchange.com',
             'medium.com', 'blogspot.com',
+            'imdb.com', 'filmweb.pl', 'rottentomatoes.com', 'letterboxd.com',
             'joyclub.de', 'joyclub.com', 'joy-club.de',
             'spankingtube.com', 'xhamster.com', 'xgaytube.com',
             'pornhub.com', 'xvideos.com', 'xnxx.com',
@@ -2112,6 +2113,15 @@ final class ProductSearchIdentity
             $digits = $nums[0] ?? [];
             // AlphaTec 4000 nie uniewinnia modelu 111. CRACKDOWN (bez cyfr) zostaje.
             if ($digits !== [] && $specific !== [] && ! $this->digitsHitSpecificModel($digits, $specific)) {
+                continue;
+            }
+            $words = preg_split('/[\s\-]+/u', $phrase) ?: [];
+            $hasDigit = preg_match('/\d/u', $phrase) === 1;
+            $digitOnly = preg_match('/^\d+$/u', (string) preg_replace('/[\s\-]+/u', '', $phrase)) === 1;
+            // Samo „Lucky” w tytule filmu ≠ karta Cofra — wymagaj marki albo domeny katalogu.
+            if (! (($hasDigit && ! $digitOnly) || count($words) >= 2
+                || $this->hayHasBrand($hay, $product)
+                || $this->hayHasOfficialHost($hay, $url, $product))) {
                 continue;
             }
 
@@ -3857,11 +3867,12 @@ final class ProductSearchIdentity
                 $out[] = $part;
             }
         }
-        // „Rękawica … TEGERA 104” przy producencie Ejendals — sklepy piszą Tegera, nie Ejendals
+        // „Rękawica … TEGERA 104” przy Ejendals — tylko znana linia katalogowa, nie model LUCKY.
+        $catalogBrands = array_fill_keys($this->catalogBrandTokens(), true);
         foreach (preg_split('/[^\p{L}\p{N}]+/u', (string) $product->name) ?: [] as $raw) {
             $low = mb_strtolower($raw);
             if (preg_match('/^\p{Lu}{4,}$/u', $raw) === 1 && $this->looksLikeBrandToken($low)
-                && ! $this->isColorWord($low)) {
+                && ! $this->isColorWord($low) && isset($catalogBrands[$low])) {
                 $out[] = $low;
             }
         }

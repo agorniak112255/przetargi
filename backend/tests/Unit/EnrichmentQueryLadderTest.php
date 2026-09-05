@@ -1665,6 +1665,33 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertStringContainsString('misterworker.com', $kept[0]['url'] ?? '');
     }
 
+    public function test_cofra_lucky_search_drops_filmweb_keeps_catalog(): void
+    {
+        $product = new Product([
+            'sku' => '0UE20191',
+            'name' => 'LUCKY',
+            'manufacturer' => 'Cofra',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $filter = (new ReflectionClass($service))->getMethod('filterResultsByIdentity');
+        $filter->setAccessible(true);
+        $kept = $filter->invoke($service, [
+            [
+                'url' => 'https://www.filmweb.pl/reviews/recenzja-serialu-Lucky-I-Should-Be-So-Lucky',
+                'title' => 'Recenzja filmu Lucky (2026) - I Should Be So Lucky',
+                'snippet' => 'Realizacja, jak to w produkcjach Apple’a, stoi na wysokim poziomie.',
+            ],
+            [
+                'url' => 'https://www.cofra.it/en/products/lucky',
+                'title' => 'LUCKY Cofra safety shoe',
+                'snippet' => 'Cofra LUCKY S3 safety footwear',
+            ],
+        ], $product);
+
+        $this->assertCount(1, $kept);
+        $this->assertStringContainsString('cofra.it', $kept[0]['url'] ?? '');
+    }
+
     public function test_warehouse_3m_hit_counts_without_stock_sku_in_url(): void
     {
         $product = new Product([

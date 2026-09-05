@@ -1084,6 +1084,27 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_cofra_lucky_rejects_filmweb_and_keeps_catalog_card(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '0UE20191',
+            'name' => 'LUCKY',
+            'manufacturer' => 'Cofra',
+        ]);
+        $filmweb = 'https://www.filmweb.pl/reviews/recenzja-serialu-Lucky-I-Should-Be-So-Lucky';
+        $review = 'Recenzja filmu Lucky (2026) - I Should Be So Lucky. Realizacja, jak to w produkcjach Apple’a, '
+            .'stoi na wysokim poziomie, sceny akcji są kompetentne i czytelne.';
+        $catalog = 'https://www.cofra.it/en/products/lucky';
+        $shoe = 'Cofra LUCKY safety shoe S3. Półbuty ochronne ze skóry, podnosek kompozytowy.';
+
+        $this->assertTrue(ProductSearchIdentity::isJunkSearchHost($filmweb));
+        $this->assertFalse($id->hayMentionsProduct($filmweb.' Recenzja filmu Lucky (2026) '.$review, $product));
+        $this->assertFalse($id->urlOrTitleHasNamedShopIdentity($filmweb, 'Recenzja filmu Lucky (2026)', $product));
+        $this->assertFalse($id->isConfirmedProductCard($filmweb, 'Recenzja filmu Lucky (2026)', $review, $product));
+        $this->assertTrue($id->isConfirmedProductCard($catalog, 'LUCKY Cofra', $shoe, $product));
+    }
+
     public function test_warehouse_3m_sku_confirms_shop_model_without_stock_code(): void
     {
         $id = new ProductSearchIdentity;
