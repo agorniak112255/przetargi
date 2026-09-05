@@ -434,6 +434,59 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://ardon.cz/multimedia/products/A5111_001.jpg']);
     }
 
+    public function test_skips_image_files_listed_as_regular_loc(): void
+    {
+        $this->fakeHttp([
+            'https://bhp-gabi.pl/robots.txt' => Http::response('Sitemap: https://bhp-gabi.pl/sitemap.xml', 200),
+            'https://bhp-gabi.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.bhp-gabi.pl/bluza-ochronna-mmb-reis</loc></url>'
+                .'<url><loc>https://www.bhp-gabi.pl/galerie/61/7/bluza-ochronna-mmb-reis-18576_61788.jpg</loc></url>'
+                .'<url><loc>https://www.bhp-gabi.pl/galerie/61/7/bluza-ochronna-mmb-reis-18576_61788.webp</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('bhp-gabi.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://www.bhp-gabi.pl/bluza-ochronna-mmb-reis']);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.bhp-gabi.pl/galerie/61/7/bluza-ochronna-mmb-reis-18576_61788.jpg',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.bhp-gabi.pl/galerie/61/7/bluza-ochronna-mmb-reis-18576_61788.webp',
+        ]);
+    }
+
+    public function test_reindex_removes_previously_saved_image_urls(): void
+    {
+        $image = 'https://www.bhp-gabi.pl/galerie/61/7/stary.jpg';
+        CatalogPage::query()->create([
+            'host' => 'www.bhp-gabi.pl',
+            'url_hash' => CatalogPage::hashFor($image),
+            'url' => $image,
+            'title' => null,
+            'haystack' => $image,
+            'last_seen_at' => now(),
+        ]);
+        $this->fakeHttp([
+            'https://bhp-gabi.pl/robots.txt' => Http::response('Sitemap: https://bhp-gabi.pl/sitemap.xml', 200),
+            'https://bhp-gabi.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.bhp-gabi.pl/bluza-ochronna-mmb-reis</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('bhp-gabi.pl');
+
+        $this->assertDatabaseMissing('catalog_pages', ['url' => $image]);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://www.bhp-gabi.pl/bluza-ochronna-mmb-reis']);
+    }
+
     public function test_resolves_relative_sitemap_path_from_robots(): void
     {
         $this->fakeHttp([

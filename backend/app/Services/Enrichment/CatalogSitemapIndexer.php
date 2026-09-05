@@ -98,6 +98,10 @@ final class CatalogSitemapIndexer
         }
 
         $this->ensureProgress($host);
+        $removed = $this->purgeSkippablePages($host);
+        if ($removed > 0) {
+            $this->note($host, 'Usunięto '.$removed.' zdjęć/plików z indeksu.');
+        }
         $deadline = microtime(true) + max(30, $maxSeconds);
         $sitemaps = $this->discoverSitemaps($host, $deadline);
         $guessed = array_flip($this->candidateUrls($host));
@@ -133,7 +137,6 @@ final class CatalogSitemapIndexer
 
                     return false;
                 }
-                $found++;
                 if ($this->looksLikeSitemap($loc)) {
                     if (count($sitemaps) < self::MAX_SITEMAP_FILES && ! in_array($loc, $sitemaps, true)) {
                         $sitemaps[] = $loc;
@@ -141,6 +144,10 @@ final class CatalogSitemapIndexer
 
                     return true;
                 }
+                if ($this->isSkippableUrl($loc)) {
+                    return true;
+                }
+                $found++;
                 if (isset($seen[$loc])) {
                     return true;
                 }
@@ -739,8 +746,43 @@ final class CatalogSitemapIndexer
                 return true;
             }
         }
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
 
-        return false;
+        return preg_match('#\.(jpe?g|png|gif|webp|avif|bmp|svg|css|js|woff2?|ico|pdf|xml|gz|mp4|webm|zip)$#i', $path) === 1;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function hostAliases(string $host): array
+    {
+        $host = mb_strtolower(trim($host));
+        $bare = preg_replace('/^www\./', '', $host) ?? $host;
+
+        return array_values(array_unique([$bare, 'www.'.$bare]));
+    }
+
+    private function purgeSkippablePages(string $host): int
+    {
+        $deleted = 0;
+        CatalogPage::query()
+            ->whereIn('host', $this->hostAliases($host))
+            ->orderBy('id')
+            ->chunkById(500, function ($pages) use (&$deleted): void {
+                $ids = [];
+                foreach ($pages as $page) {
+                    if ($this->isSkippableUrl((string) $page->url)) {
+                        $ids[] = (int) $page->id;
+                    }
+                }
+                if ($ids === []) {
+                    return;
+                }
+                DB::table('catalog_page_tokens')->whereIn('catalog_page_id', $ids)->delete();
+                $deleted += CatalogPage::query()->whereIn('id', $ids)->delete();
+            });
+
+        return $deleted;
     }
 
     private function fetchHtml(string $url): ?string
