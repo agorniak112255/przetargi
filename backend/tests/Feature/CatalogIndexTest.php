@@ -535,6 +535,83 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://blocked-shop.pl/produkt-1']);
     }
 
+    public function test_stores_manufacturer_from_official_host(): void
+    {
+        $this->fakeHttp([
+            'https://ansell.com/robots.txt' => Http::response("Sitemap: https://ansell.com/sitemap.xml\n", 200),
+            'https://ansell.com/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://ansell.com/pl/pl/products/alphatec-4000</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('ansell.com');
+
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://ansell.com/pl/pl/products/alphatec-4000',
+            'manufacturer' => 'ansell',
+        ]);
+    }
+
+    public function test_stores_manufacturer_from_shop_slug(): void
+    {
+        $this->fakeHttp([
+            'https://optimumbhp.pl/robots.txt' => Http::response("Sitemap: https://optimumbhp.pl/sitemap.xml\n", 200),
+            'https://optimumbhp.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://optimumbhp.pl/KURTKA-SOFTSHELL-ARDON-p1</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('optimumbhp.pl');
+
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://optimumbhp.pl/KURTKA-SOFTSHELL-ARDON-p1',
+            'manufacturer' => 'ardon',
+        ]);
+    }
+
+    public function test_leaves_manufacturer_empty_on_shared_brand_host(): void
+    {
+        $this->fakeHttp([
+            'https://automation.honeywell.com/robots.txt' => Http::response(
+                "Sitemap: https://automation.honeywell.com/sitemap.xml\n",
+                200
+            ),
+            'https://automation.honeywell.com/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://automation.honeywell.com/shop/p/123</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('automation.honeywell.com');
+
+        $page = CatalogPage::query()
+            ->where('url', 'https://automation.honeywell.com/shop/p/123')
+            ->first();
+        $this->assertNotNull($page);
+        $this->assertNull($page->manufacturer);
+    }
+
+    public function test_does_not_match_sku_on_page_tagged_with_other_manufacturer(): void
+    {
+        $this->seedPage('https://icd.pl/rekawice-tegera-884a-ejendals', 'ejendals');
+
+        $product = new Product([
+            'sku' => '884A',
+            'name' => 'Półbut Jalas 884A',
+            'manufacturer' => 'Jalas',
+        ]);
+
+        $this->assertSame([], app(CatalogIndexSearch::class)->findFor($product));
+    }
+
     public function test_finds_product_page_by_code_in_url(): void
     {
         $this->seedPage('https://optimumbhp.pl/REKAWICE-ROBOCZE-1202-URGENT-p138481');
@@ -899,10 +976,11 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame([], $result['sitemaps']);
     }
 
-    private function seedPage(string $url): void
+    private function seedPage(string $url, ?string $manufacturer = null): void
     {
         $page = CatalogPage::query()->create([
             'host' => (string) parse_url($url, PHP_URL_HOST),
+            'manufacturer' => $manufacturer,
             'url_hash' => CatalogPage::hashFor($url),
             'url' => $url,
             'haystack' => mb_strtolower($url),

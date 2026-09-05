@@ -15,6 +15,7 @@ class CatalogPage extends Model
 {
     protected $fillable = [
         'host',
+        'manufacturer',
         'url_hash',
         'url',
         'title',

@@ -21,7 +21,10 @@ final class CatalogIndexSearch
     /** Ile wierszy bierzemy z bazy przed filtrem tożsamości. */
     private const SQL_LIMIT = 40;
 
-    public function __construct(private readonly ProductSearchIdentity $identity) {}
+    public function __construct(
+        private readonly ProductSearchIdentity $identity,
+        private readonly CatalogPageManufacturer $pageManufacturer,
+    ) {}
 
     /**
      * @return list<array{url: string, title: string, snippet: string}>
@@ -155,7 +158,7 @@ final class CatalogIndexSearch
 
         $pages = CatalogPage::query()
             ->whereIn('id', $ids)
-            ->get(['url', 'title', 'haystack']);
+            ->get(['url', 'title', 'haystack', 'manufacturer']);
 
         $brand = $this->brandToken($product);
         $ambiguous = $this->isAmbiguousNumericSku($product);
@@ -166,14 +169,19 @@ final class CatalogIndexSearch
             if ($url === '') {
                 continue;
             }
+            $pageManufacturer = $page->manufacturer !== null ? (string) $page->manufacturer : null;
+            if ($this->pageManufacturer->conflictsWithProduct($pageManufacturer, $product)) {
+                continue;
+            }
             $row = [
                 'url' => $url,
                 'title' => (string) ($page->title ?? ''),
                 'snippet' => '',
             ];
             $hay = (string) $page->haystack;
-            // strona z marką w adresie jest pewniejsza niż sam zgodny kod
-            if ($this->identity->hayHasBrand($hay, $product)
+            // strona z marką w adresie / zapisanym producentem jest pewniejsza niż sam kod
+            if ($this->pageManufacturer->matchesProduct($pageManufacturer, $product)
+                || $this->identity->hayHasBrand($hay, $product)
                 || ($brand !== '' && str_contains($hay, $brand))) {
                 $withBrand[] = $row;
             } elseif (! $ambiguous) {

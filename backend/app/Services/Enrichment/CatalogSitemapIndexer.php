@@ -85,6 +85,7 @@ final class CatalogSitemapIndexer
 
     public function __construct(
         private readonly CatalogIndexProgress $progress,
+        private readonly CatalogPageManufacturer $pageManufacturer,
     ) {}
 
     /**
@@ -991,13 +992,19 @@ final class CatalogSitemapIndexer
     private function rowFor(string $host, string $url): array
     {
         $now = now();
+        $manufacturer = $this->pageManufacturer->resolve($host, $url);
+        $haystack = $this->haystackFor($url);
+        if ($manufacturer !== null) {
+            $haystack = trim($haystack.' '.$manufacturer);
+        }
 
         return [
             'host' => $host,
+            'manufacturer' => $manufacturer,
             'url_hash' => CatalogPage::hashFor($url),
             'url' => $url,
             'title' => null,
-            'haystack' => mb_substr($this->haystackFor($url), 0, 2000),
+            'haystack' => mb_substr($haystack, 0, 2000),
             'last_seen_at' => $now,
             'created_at' => $now,
             'updated_at' => $now,
@@ -1009,7 +1016,11 @@ final class CatalogSitemapIndexer
      */
     private function store(array $rows): int
     {
-        CatalogPage::query()->upsert($rows, ['url_hash'], ['haystack', 'last_seen_at', 'updated_at']);
+        CatalogPage::query()->upsert(
+            $rows,
+            ['url_hash'],
+            ['manufacturer', 'haystack', 'last_seen_at', 'updated_at']
+        );
         $this->storeTokens(array_column($rows, 'url_hash'));
 
         return count($rows);
