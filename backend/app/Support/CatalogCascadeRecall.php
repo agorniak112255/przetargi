@@ -21,6 +21,9 @@ final class CatalogCascadeRecall
 
     public const LEVEL_FAMILY = 'family';
 
+    /** Sitko po kompatybilności — nie 80 najświeższych SKU bez kroju w nazwie. */
+    private const CANDIDATE_POOL = 500;
+
     public function __construct(
         private readonly PpeAssortment $assortment,
         private readonly CatalogSlangDictionary $slang,
@@ -88,7 +91,7 @@ final class CatalogCascadeRecall
         }
 
         foreach ($this->attempts($layers) as $attempt) {
-            $rows = $this->query($layers, $attempt, max(8, $limit))
+            $rows = $this->query($layers, $attempt, $this->fetchLimit($limit))
                 ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
                     || $this->modelFuzzy->matches($requirement, $p))
                 ->values();
@@ -166,7 +169,7 @@ final class CatalogCascadeRecall
         $minKeep = $firstHasFeature ? 1 : min(2, count($steps));
         for ($n = count($steps); $n >= $minKeep; $n--) {
             $used = array_slice($steps, 0, $n);
-            $rows = $this->querySteps($layers, $used, max(8, $limit))
+            $rows = $this->querySteps($layers, $used, $this->fetchLimit($limit))
                 ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
                     || $this->modelFuzzy->matches($requirement, $p))
                 ->filter(fn (Product $p): bool => ! $this->slang->rejectsProduct(
@@ -216,13 +219,39 @@ final class CatalogCascadeRecall
             }
         }
 
+        $this->applyResultOrder($builder, $layers);
+
         return $builder
-            ->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
-            ->orderByDesc('enriched_at')
-            ->orderBy('id')
             ->limit($limit)
             ->get()
             ->values();
+    }
+
+    private function fetchLimit(int $limit): int
+    {
+        return max(self::CANDIDATE_POOL, $limit);
+    }
+
+    /**
+     * @param  array{family_nouns?: list<string>}  $layers
+     */
+    private function applyResultOrder(Builder $builder, array $layers): void
+    {
+        $parts = [];
+        foreach ($layers['family_nouns'] ?? [] as $noun) {
+            $noun = trim((string) $noun);
+            if ($noun === '') {
+                continue;
+            }
+            $like = addcslashes($noun, '%_\\');
+            $parts[] = "name LIKE '%{$like}%'";
+        }
+        if ($parts !== []) {
+            $builder->orderByRaw('CASE WHEN ('.implode(' OR ', $parts).') THEN 0 ELSE 1 END');
+        }
+        $builder->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
+            ->orderByDesc('enriched_at')
+            ->orderBy('id');
     }
 
     private function applyStepToken(Builder $builder, string $token, bool $nameOnly = false): void
@@ -367,10 +396,9 @@ final class CatalogCascadeRecall
             $this->applyTokenScope($builder, $layers['model_needles']);
         }
 
+        $this->applyResultOrder($builder, $layers);
+
         return $builder
-            ->orderByRaw("CASE WHEN enrichment_status = 'done' THEN 0 ELSE 1 END")
-            ->orderByDesc('enriched_at')
-            ->orderBy('id')
             ->limit($limit)
             ->get()
             ->values();

@@ -339,4 +339,52 @@ final class CatalogCascadeRecallTest extends TestCase
         $this->assertContains('BLUZA-KOLPEO', $skus);
         $this->assertNotContains('BLUZA-PLAIN', $skus);
     }
+
+    public function test_named_garment_beats_recent_sku_only_norm_hits(): void
+    {
+        for ($i = 0; $i < 80; $i++) {
+            Product::query()->create([
+                'sku' => 'FR'.(740 + $i),
+                'name' => 'FR'.(740 + $i),
+                'manufacturer' => 'Portwest',
+                'norms' => 'EN ISO 11611:2015, EN 1149-5:2018',
+                'description' => 'FR',
+                'catalog_price_net' => 10,
+                'purchase_price' => 5,
+                'stock' => 1,
+                'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+        Product::query()->create([
+            'sku' => 'BLUZA-KOLPEO',
+            'name' => 'Bluza KOLPEO BASIC ZIPPER',
+            'manufacturer' => 'Cerva',
+            'norms' => 'EN ISO 11611:2015, EN 1149-5:2018',
+            'description' => 'Bluza trudnopalna.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 3,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now()->subYear(),
+        ]);
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'Ubranie antyelektrostatyczne trudnopalne (bluza + spodnie) EN ISO 11611 EN 1149-5',
+            [
+                'needed' => 'ubranie trudnopalne',
+                'search_phrases' => ['bluza'],
+                'search_steps' => ['11611', '1149'],
+                'constraints' => [],
+            ],
+            'Ubranie antyelektrostatyczne trudnopalne (bluza + spodnie) EN ISO 11611 EN 1149-5',
+            20
+        );
+
+        $skus = $hit['products']->pluck('sku')->all();
+        $this->assertContains('BLUZA-KOLPEO', $skus);
+        $this->assertNotContains('FR740', $skus);
+    }
 }

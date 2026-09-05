@@ -174,6 +174,48 @@ final class ProductAiSearchCascadeTest extends TestCase
         $this->assertNotContains('CAFR1', $skus);
     }
 
+    public function test_live_siwz_pool_keeps_jacket_when_recent_hits_are_sku_only(): void
+    {
+        for ($i = 0; $i < 80; $i++) {
+            Product::query()->create([
+                'sku' => 'FR'.(740 + $i),
+                'name' => 'FR'.(740 + $i),
+                'manufacturer' => 'Portwest',
+                'norms' => 'EN ISO 11611:2015, EN 1149-5:2018',
+                'description' => 'FR',
+                'catalog_price_net' => 10,
+                'purchase_price' => 5,
+                'stock' => 1,
+                'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+        Product::query()->create([
+            'sku' => 'BLUZA-KOLPEO',
+            'name' => 'Bluza KOLPEO BASIC ZIPPER - zamek',
+            'manufacturer' => 'Cerva',
+            'norms' => 'EN ISO 11611:2015, EN 1149-5:2018',
+            'description' => 'Bluza trudnopalna.',
+            'catalog_price_net' => 80,
+            'purchase_price' => 50,
+            'stock' => 3,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now()->subYear(),
+        ]);
+
+        $this->app->instance(OpenAiCompatibleClient::class, $this->emptyRankLlm());
+
+        $wear = $this->postJson('/api/products/ai-search', [
+            'query' => "Ubranie antyelektrostatyczne, trudnopalne (bluza + spodnie do pasa lub ogrodniczki)\n· EN ISO 11611 kl. 2\nEN 1149-5",
+            'limit' => 10,
+        ])->assertOk()->json('products');
+
+        $this->assertContains('BLUZA-KOLPEO', array_column($wear, 'sku'));
+        $this->assertNotContains('FR740', array_column($wear, 'sku'));
+    }
+
     private function emptyRankLlm(): OpenAiCompatibleClient
     {
         $llm = Mockery::mock(OpenAiCompatibleClient::class);

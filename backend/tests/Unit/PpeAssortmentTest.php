@@ -474,6 +474,7 @@ final class PpeAssortmentTest extends TestCase
         $jacket->forceFill([
             'name' => 'Bluza KOLPEO BASIC ZIPPER - zamek',
             'sku' => 'BLUZA-KOLPEO',
+            'category' => 'Sklep / Kombinezony robocze / Akcesoria do kombinezonów',
             'norms' => 'EN ISO 11611:2015, EN 1149-5:2018, EN ISO 11612:2015',
             'description' => 'Odzież wielonormowa, też EN ISO 20471 i kombinezon w zestawie.',
             'ppe_family' => PpeAssortment::FAMILY_APPAREL,
@@ -482,6 +483,7 @@ final class PpeAssortmentTest extends TestCase
         $bibs->forceFill([
             'name' => 'Spodnie ogrodniczki KOLPEO BASIC',
             'sku' => 'OGROD-KOLPEO',
+            'category' => 'Sklep / Kombinezony robocze / Akcesoria do kombinezonów',
             'norms' => 'EN ISO 11611:2015, EN 1149-5:2018',
             'description' => 'Ogrodniczki, wzmianka o kamizelce odblaskowej EN 20471.',
             'ppe_family' => PpeAssortment::FAMILY_APPAREL,

@@ -739,7 +739,7 @@ final class PpeAssortment
             $helmetMount = true;
         }
         if ($reqFamily === self::FAMILY_APPAREL) {
-            $identity = $this->productIdentityText($product);
+            $identity = $this->productNameText($product);
             $roleText = trim($identity.' '.(string) ($product->norms ?? ''));
 
             return $this->apparelCompatible($requirement, $roleText, $identity);
