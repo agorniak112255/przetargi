@@ -223,6 +223,10 @@ return [
     'catalog_search_hosts' => [
         '3m' => [
             '3m.com',
+            // 3m.com/3mpolska.pl blokują boty (Akamai, TLS renegotiation) — te dwa
+            // wąskie sklepy BHP/przemysłowe (nie ogólne markety) mają realne karty 3M.
+            '3market-shop.pl',
+            'shop-sks.com',
         ],
         'ardon' => [
             'ardon.pl',
@@ -315,6 +319,8 @@ return [
     | Sklepy / dystrybutorzy — dobre źródła opisów (nie certyfikatów).
     */
     'retailer_domains' => [
+        '3market-shop.pl',
+        'shop-sks.com',
         'idsblast.com',
         'blastone.com',
         'novarlo.com',

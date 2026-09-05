@@ -187,6 +187,64 @@ final class CatalogSearchSiteApiTest extends TestCase
             ->assertJsonMissing(['host' => 'd3nan4w00fsv2d.cloudfront.net']);
     }
 
+    public function test_admin_unskips_and_reskips_config_blocked_host(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        Queue::fake();
+        config([
+            'enrichment.retailer_domains' => ['sklepbhp.pl', 'blocked-shop.test'],
+            'enrichment.catalog_skip_hosts' => ['blocked-shop.test'],
+        ]);
+
+        $this->getJson('/api/admin/catalog-search-sites')
+            ->assertOk()
+            ->assertJsonFragment([
+                'host' => 'blocked-shop.test',
+                'empty_reason' => 'Pominięta na liście catalog_skip_hosts.',
+                'is_config_skip_listed' => true,
+                'skip_overridden' => false,
+            ]);
+
+        $this->postJson('/api/admin/catalog-search-sites/blocked-shop.test/unskip')
+            ->assertOk()
+            ->assertJsonPath('host', 'blocked-shop.test')
+            ->assertJsonPath('queued', true);
+
+        Queue::assertPushed(IndexCatalogHostJob::class, fn (IndexCatalogHostJob $job): bool => $job->host === 'blocked-shop.test');
+
+        $this->getJson('/api/admin/catalog-search-sites')
+            ->assertOk()
+            ->assertJsonFragment([
+                'host' => 'blocked-shop.test',
+                'skip_overridden' => true,
+            ]);
+
+        $this->postJson('/api/admin/catalog-search-sites/sklepbhp.pl/unskip')
+            ->assertStatus(422)
+            ->assertJsonPath('errors.host.0', 'Domena sklepbhp.pl nie jest na liście pomijanych (catalog_skip_hosts).');
+
+        $this->postJson('/api/admin/catalog-search-sites/blocked-shop.test/reskip')
+            ->assertOk()
+            ->assertJsonPath('host', 'blocked-shop.test');
+
+        $this->getJson('/api/admin/catalog-search-sites')
+            ->assertOk()
+            ->assertJsonFragment([
+                'host' => 'blocked-shop.test',
+                'empty_reason' => 'Pominięta na liście catalog_skip_hosts.',
+                'skip_overridden' => false,
+            ]);
+    }
+
+    public function test_handlowiec_cannot_unskip_or_reskip_hosts(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        config(['enrichment.catalog_skip_hosts' => ['blocked-shop.test']]);
+
+        $this->postJson('/api/admin/catalog-search-sites/blocked-shop.test/unskip')->assertForbidden();
+        $this->postJson('/api/admin/catalog-search-sites/blocked-shop.test/reskip')->assertForbidden();
+    }
+
     public function test_empty_reason_explains_zero_link_hosts(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

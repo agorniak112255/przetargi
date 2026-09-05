@@ -10,6 +10,8 @@ type SearchSite = {
   last_attempt_at: string | null
   empty_reason: string | null
   added_at: string | null
+  is_config_skip_listed: boolean
+  skip_overridden: boolean
 }
 
 type SitesResponse = {
@@ -82,6 +84,7 @@ export function AdminSearchSites() {
   const [busy, setBusy] = useState(false)
   const [reindexHost, setReindexHost] = useState('')
   const [deleteHost, setDeleteHost] = useState('')
+  const [skipToggleHost, setSkipToggleHost] = useState('')
   const [pagesHost, setPagesHost] = useState<SearchSite | null>(null)
 
   async function load() {
@@ -179,6 +182,24 @@ export function AdminSearchSites() {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się usunąć strony')
     } finally {
       setDeleteHost('')
+    }
+  }
+
+  async function onToggleSkip(host: string, action: 'unskip' | 'reskip') {
+    setSkipToggleHost(host)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>(
+        `/admin/catalog-search-sites/${encodeURIComponent(host)}/${action}`,
+        { method: 'POST' },
+      )
+      setMsg(res.message)
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zmienić blokady')
+    } finally {
+      setSkipToggleHost('')
     }
   }
 
@@ -335,6 +356,24 @@ export function AdminSearchSites() {
                       >
                         Karty
                       </button>
+                      {row.is_config_skip_listed && (
+                        <button
+                          type="button"
+                          disabled={skipToggleHost === row.host}
+                          onClick={() => void onToggleSkip(row.host, row.skip_overridden ? 'reskip' : 'unskip')}
+                          className={`rounded-lg px-2 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+                            row.skip_overridden
+                              ? 'border border-amber-300 text-amber-800 hover:bg-amber-50'
+                              : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                          }`}
+                        >
+                          {skipToggleHost === row.host
+                            ? '…'
+                            : row.skip_overridden
+                              ? 'Zablokuj ponownie'
+                              : 'Odblokuj'}
+                        </button>
+                      )}
                       <button
                         type="button"
                         disabled={reindexHost === row.host}

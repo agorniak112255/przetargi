@@ -8,6 +8,7 @@ use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
 use App\Models\CatalogSearchSiteExclusion;
+use App\Models\CatalogSkipOverride;
 use App\Models\ManufacturerSite;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use Illuminate\Console\Command;
@@ -113,9 +114,19 @@ final class CatalogIndexCommand extends Command
         $skip = [];
         foreach (array_merge(
             (array) config('enrichment.catalog_skip_hosts', []),
-            CatalogSearchSiteExclusion::allHosts(),
-            explode(',', (string) $this->option('skip'))
+            CatalogSearchSiteExclusion::allHosts()
         ) as $domain) {
+            $host = $this->normalizeHost((string) $domain);
+            if ($host !== '') {
+                $skip[$host] = true;
+            }
+        }
+        // odblokowane ręcznie w administracji — nadpisują config_skip_hosts/wykluczenia,
+        // ale nie jawne --skip przy tym konkretnym uruchomieniu (patrz niżej)
+        foreach (CatalogSkipOverride::allHosts() as $domain) {
+            unset($skip[$this->normalizeHost($domain)]);
+        }
+        foreach (explode(',', (string) $this->option('skip')) as $domain) {
             $host = $this->normalizeHost((string) $domain);
             if ($host !== '') {
                 $skip[$host] = true;

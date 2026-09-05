@@ -9,6 +9,7 @@ use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
 use App\Models\CatalogSearchSiteExclusion;
+use App\Models\CatalogSkipOverride;
 use App\Models\ManufacturerSite;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -25,7 +26,9 @@ final class CatalogSearchHostService
      *     last_seen_at: string|null,
      *     last_attempt_at: string|null,
      *     empty_reason: string|null,
-     *     added_at: string|null
+     *     added_at: string|null,
+     *     is_config_skip_listed: bool,
+     *     skip_overridden: bool
      * }>
      */
     public function list(): array
@@ -88,6 +91,8 @@ final class CatalogSearchHostService
             $stat = $counts[$host] ?? ['links' => 0, 'last_seen_at' => null];
             $attempt = $attempts[$host] ?? ['last_attempt_at' => null, 'last_error' => null];
             $links = (int) $stat['links'];
+            $configSkipListed = $this->isConfigSkipListed($host);
+            $skipOverridden = $configSkipListed && CatalogSkipOverride::hasHost($host);
             $out[] = [
                 'host' => $host,
                 'links' => $links,
@@ -97,6 +102,8 @@ final class CatalogSearchHostService
                 'last_attempt_at' => $attempt['last_attempt_at'],
                 'empty_reason' => $this->emptyReason($host, $links, $attempt['last_attempt_at'], $attempt['last_error']),
                 'added_at' => $manualDates[$host] ?? null,
+                'is_config_skip_listed' => $configSkipListed,
+                'skip_overridden' => $skipOverridden,
             ];
         }
 
@@ -231,6 +238,54 @@ final class CatalogSearchHostService
             'host' => $row['host'],
             'queued' => true,
             'message' => 'Sprawdzanie '.$row['host'].' w tle.',
+        ];
+    }
+
+    /**
+     * Odblokowuje domenę z config('enrichment.catalog_skip_hosts') bez zmiany kodu —
+     * wpis w bazie nadpisuje pominięcie i od razu zleca indeksowanie.
+     *
+     * @return array{host: string, queued: bool, message: string}
+     */
+    public function unskip(string $host): array
+    {
+        $host = $this->normalizeHost($host);
+        if ($host === '' || ! $this->isConfigSkipListed($host)) {
+            throw ValidationException::withMessages([
+                'host' => 'Domena '.$host.' nie jest na liście pomijanych (catalog_skip_hosts).',
+            ]);
+        }
+
+        CatalogSkipOverride::remember($host);
+        IndexCatalogHostJob::dispatch($host);
+
+        return [
+            'host' => $host,
+            'queued' => true,
+            'message' => 'Odblokowano '.$host.' — indeksowanie w tle.',
+        ];
+    }
+
+    /**
+     * Cofa ręczne odblokowanie — domena wraca do pomijania przy pełnym skanie.
+     * Nie kasuje już zebranych kart, tylko wyłącza ją z przyszłych automatycznych indeksowań.
+     *
+     * @return array{host: string, message: string}
+     */
+    public function reskip(string $host): array
+    {
+        $host = $this->normalizeHost($host);
+        if ($host === '' || ! $this->isConfigSkipListed($host)) {
+            throw ValidationException::withMessages([
+                'host' => 'Domena '.$host.' nie jest na liście pomijanych (catalog_skip_hosts).',
+            ]);
+        }
+
+        CatalogSkipOverride::forget($host);
+
+        return [
+            'host' => $host,
+            'message' => $host.' wraca do pomijanych przy pełnym skanie.',
         ];
     }
 
@@ -447,7 +502,7 @@ final class CatalogSearchHostService
         if ($this->isCdnHost($host)) {
             return 'CDN — przy pełnym skanie pomijany.';
         }
-        if ($this->isSkippedHost($host)) {
+        if ($this->isConfigSkipListed($host) && ! CatalogSkipOverride::hasHost($host)) {
             return 'Pominięta na liście catalog_skip_hosts.';
         }
         if (is_string($lastError) && $lastError !== '') {
@@ -460,7 +515,8 @@ final class CatalogSearchHostService
         return 'Sprawdzona — 0 kart (brak sitemapy, WAF albo nie-sklep).';
     }
 
-    private function isSkippedHost(string $host): bool
+    /** Host figuruje w config('enrichment.catalog_skip_hosts') — niezależnie od odblokowania. */
+    private function isConfigSkipListed(string $host): bool
     {
         foreach ((array) config('enrichment.catalog_skip_hosts', []) as $domain) {
             if (! is_string($domain)) {

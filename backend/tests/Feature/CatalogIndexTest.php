@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\CatalogHost;
 use App\Models\CatalogPage;
+use App\Models\CatalogSkipOverride;
 use App\Models\Product;
 use App\Services\Enrichment\CatalogIndexSearch;
 use App\Services\Enrichment\CatalogSitemapIndexer;
@@ -447,6 +448,38 @@ final class CatalogIndexTest extends TestCase
 
         $this->assertSame(1, $result['saved']);
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://boxmetmedical.pl/produkt/rekawiczki-nitrylowe']);
+    }
+
+    public function test_full_sweep_skips_config_skip_host_unless_overridden(): void
+    {
+        config([
+            'enrichment.retailer_domains' => ['allowed-shop.pl', 'blocked-shop.pl'],
+            'enrichment.manufacturer_domains' => [],
+            'enrichment.catalog_skip_hosts' => ['blocked-shop.pl'],
+        ]);
+        $this->fakeHttp([
+            'https://allowed-shop.pl/robots.txt' => Http::response('Sitemap: https://allowed-shop.pl/sitemap.xml', 200),
+            'https://allowed-shop.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset><url><loc>https://allowed-shop.pl/produkt-1</loc></url></urlset>',
+                200
+            ),
+            'https://blocked-shop.pl/robots.txt' => Http::response('Sitemap: https://blocked-shop.pl/sitemap.xml', 200),
+            'https://blocked-shop.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset><url><loc>https://blocked-shop.pl/produkt-1</loc></url></urlset>',
+                200
+            ),
+        ]);
+
+        $this->artisan('catalog:index')->assertSuccessful();
+
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://allowed-shop.pl/produkt-1']);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://blocked-shop.pl/produkt-1']);
+        $this->assertFalse(CatalogHost::query()->where('host', 'blocked-shop.pl')->exists());
+
+        CatalogSkipOverride::remember('blocked-shop.pl');
+        $this->artisan('catalog:index')->assertSuccessful();
+
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://blocked-shop.pl/produkt-1']);
     }
 
     public function test_finds_product_page_by_code_in_url(): void

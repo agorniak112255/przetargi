@@ -61,6 +61,16 @@ class CatalogSearchSiteController extends Controller
         return response()->json($this->sites->reindex($host));
     }
 
+    public function unskip(string $host): JsonResponse
+    {
+        return response()->json($this->sites->unskip($host));
+    }
+
+    public function reskip(string $host): JsonResponse
+    {
+        return response()->json($this->sites->reskip($host));
+    }
+
     public function destroy(DestroyCatalogSearchSiteRequest $request, string $host): JsonResponse
     {
         return response()->json($this->sites->remove($host));

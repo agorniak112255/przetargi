@@ -245,6 +245,10 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
             ->where('host', '[A-Za-z0-9._-]+');
         Route::post('/catalog-search-sites/{host}/reindex', [AdminCatalogSearchSiteController::class, 'reindex'])
             ->where('host', '[A-Za-z0-9._-]+');
+        Route::post('/catalog-search-sites/{host}/unskip', [AdminCatalogSearchSiteController::class, 'unskip'])
+            ->where('host', '[A-Za-z0-9._-]+');
+        Route::post('/catalog-search-sites/{host}/reskip', [AdminCatalogSearchSiteController::class, 'reskip'])
+            ->where('host', '[A-Za-z0-9._-]+');
         Route::delete('/catalog-search-sites/{host}', [AdminCatalogSearchSiteController::class, 'destroy'])
             ->where('host', '[A-Za-z0-9._-]+');
     });
