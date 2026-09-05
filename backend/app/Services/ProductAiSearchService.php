@@ -1192,7 +1192,7 @@ final class ProductAiSearchService
         if ($intent['search_steps'] === []) {
             $intent['search_steps'] = $this->defaultSearchSteps($query, $intent);
         } else {
-            $intent['search_steps'] = $this->sanitizeSearchSteps($intent['search_steps'], $intent);
+            $intent['search_steps'] = $this->withQueryNameFirst($query, $intent['search_steps'], $intent);
         }
 
         return $this->reconcileManufacturerIntent($intent, $query);
@@ -1220,7 +1220,7 @@ final class ProductAiSearchService
         }
 
         return array_values(array_unique(array_filter(
-            [...$existing, ...$slang['search_phrases'], ...$extra],
+            [...$this->queryNameSearchSteps($query), ...$existing, ...$slang['search_phrases'], ...$extra],
             fn (string $phrase): bool => ! $this->isWeakSearchStep($phrase)
         )));
     }
@@ -1243,13 +1243,21 @@ final class ProductAiSearchService
         if ($this->assortment->isEyeWearSet($query)) {
             $steps[] = 'etui';
         }
+        foreach ($this->queryNameSearchSteps($query) as $nameStep) {
+            $steps[] = $nameStep;
+        }
         $slang = $this->slangRewriteFor($query);
         if ($slang !== null) {
             foreach ($slang['search_phrases'] as $phrase) {
-                if (! $this->isWeakSearchStep((string) $phrase)) {
-                    $steps[] = trim((string) $phrase);
-                    break;
+                $phrase = trim((string) $phrase);
+                if ($phrase === '' || $this->isWeakSearchStep($phrase)) {
+                    continue;
                 }
+                if ($this->stepAlreadyListed($steps, $phrase)) {
+                    continue;
+                }
+                $steps[] = $phrase;
+                break;
             }
         }
         if ($steps === []) {
@@ -1284,7 +1292,10 @@ final class ProductAiSearchService
             if ($this->isWeakSearchStep($step)) {
                 continue;
             }
-            if ($this->catalogSlang->isJargonNorm($this->lexicalNormalize($step))) {
+            if (
+                $this->catalogSlang->isJargonNorm($this->lexicalNormalize($step))
+                && ! $this->assortment->isCatalogNounStep($step)
+            ) {
                 continue;
             }
             if ($brand !== '' && $this->nameAppearsInQuery($step, $brand)) {
@@ -1327,8 +1338,61 @@ final class ProductAiSearchService
         return array_values(array_unique($out));
     }
 
+    /**
+     * @param  list<string>  $steps
+     * @param  array<string, mixed>  $intent
+     * @return list<string>
+     */
+    private function withQueryNameFirst(string $query, array $steps, array $intent): array
+    {
+        $steps = $this->sanitizeSearchSteps($steps, $intent);
+        foreach (array_reverse($this->queryNameSearchSteps($query)) as $nameStep) {
+            if (! $this->stepAlreadyListed($steps, $nameStep)) {
+                array_unshift($steps, $nameStep);
+            }
+        }
+
+        return $this->sanitizeSearchSteps($steps, $intent);
+    }
+
+    /** @return list<string> */
+    private function queryNameSearchSteps(string $query): array
+    {
+        foreach ($this->fallbackPhrases($query) as $token) {
+            if ($this->assortment->isCatalogNounStep($token)) {
+                return [$token];
+            }
+        }
+        $likes = $this->assortment->catalogNounLikes($query);
+        if ($likes !== []) {
+            return [$likes[0]];
+        }
+
+        return [];
+    }
+
+    /** @param  list<string>  $steps */
+    private function stepAlreadyListed(array $steps, string $candidate): bool
+    {
+        $needle = $this->compactLex($candidate);
+        if ($needle === '') {
+            return false;
+        }
+        foreach ($steps as $step) {
+            $hay = $this->compactLex($step);
+            if ($hay !== '' && ($hay === $needle || str_contains($hay, $needle) || str_contains($needle, $hay))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function isWeakSearchStep(string $step): bool
     {
+        if ($this->assortment->isCatalogNounStep($step)) {
+            return false;
+        }
         $meaningful = 0;
         foreach (preg_split('/[\s,;\/|+]+/u', $this->lexicalNormalize($step)) ?: [] as $token) {
             $token = trim($token);

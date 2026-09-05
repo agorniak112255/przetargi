@@ -471,4 +471,63 @@ final class ProductAiSearchSlangTest extends TestCase
             ->assertJsonPath('products.0.sku', 'NIT-LO')
             ->assertJsonPath('products.1.sku', 'NIT-HI');
     }
+
+    public function test_kalesony_siwz_finds_catalog_name_before_thermal_slang(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $named = Product::query()->create([
+            'sku' => 'KOLDYPANTS',
+            'name' => 'DŁUGIE KALESONY Z POLIAMIDU',
+            'manufacturer' => 'Delta Plus',
+            'category' => 'Odzież',
+            'description' => 'Kalesony z poliamidu.',
+            'catalog_price_net' => 96.82,
+            'purchase_price' => 60,
+            'stock' => 5,
+            'ppe_family' => 'apparel',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'JOSEF',
+            'name' => 'Bielizna termiczna JOSEF',
+            'manufacturer' => 'Canis',
+            'category' => 'Odzież',
+            'description' => 'Odzież termoaktywna.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 27,
+            'stock' => 10,
+            'ppe_family' => 'apparel',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturn([
+                'needed' => 'bielizna termiczna',
+                'search_steps' => ['bielizna termiczna'],
+                'search_phrases' => ['bielizna termiczna', 'odzież termoaktywna'],
+                'matches' => [
+                    ['id' => $named->id, 'score' => 70, 'reason' => 'kalesony'],
+                ],
+            ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $response = $this->postJson('/api/products/ai-search', [
+            'query' => 'KALESONY bawełniane (100% bawełny) męskie (niebieskie) rozmiar od S do XXXXL',
+            'limit' => 5,
+        ])->assertOk();
+
+        $skus = array_column($response->json('products') ?? [], 'sku');
+        $steps = array_map(
+            static fn (mixed $step): string => mb_strtolower((string) $step),
+            $response->json('parsed_intent.search_steps') ?? []
+        );
+
+        $this->assertContains('KOLDYPANTS', $skus);
+        $this->assertNotSame([], $steps);
+        $this->assertStringContainsString('kaleson', $steps[0] ?? '');
+    }
 }

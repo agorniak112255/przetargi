@@ -171,7 +171,7 @@ final class CatalogSlangDictionary
 
         return $this->rewriteCache[$query] = [
             'needed' => $needed,
-            'search_phrases' => array_values(array_unique([...$phrases, ...$literalTerms])),
+            'search_phrases' => array_values(array_unique([...$literalTerms, ...$phrases])),
             'family' => $family,
         ];
     }
@@ -266,15 +266,19 @@ final class CatalogSlangDictionary
             'typ', 'rodzaj', 'produkt', 'pracy', 'do', 'na', 'od', 'ze', 'za',
         ];
         $jargonFolds = [];
+        $out = [];
         foreach ($this->matchingEntries($query) as $entry) {
             foreach ($entry['terms'] as $term) {
                 $fold = $this->fold((string) $term);
-                if ($fold !== '' && $this->queryHasTerm($query, (string) $term)) {
-                    $jargonFolds[] = $fold;
+                if ($fold === '' || ! $this->queryHasTerm($query, (string) $term)) {
+                    continue;
+                }
+                $jargonFolds[] = $fold;
+                if ($this->assortment->isCatalogNounStep((string) $term)) {
+                    $out[] = mb_substr($fold, 0, 5);
                 }
             }
         }
-        $out = [];
         foreach ($rewrite['search_phrases'] as $phrase) {
             if (in_array($this->fold($phrase), $jargonFolds, true)) {
                 continue;

@@ -80,6 +80,18 @@ final class CatalogSlangDictionaryTest extends TestCase
         ));
     }
 
+    public function test_literal_catalog_noun_comes_before_slang_and_counts_as_evidence(): void
+    {
+        $rewrite = $this->dict()->searchRewrite('KALESONY bawełniane męskie');
+        $this->assertNotNull($rewrite);
+        $this->assertSame('kalesony', $rewrite['search_phrases'][0] ?? null);
+        $this->assertStringContainsString('bielizna', mb_strtolower(implode(' ', $rewrite['search_phrases'])));
+        $this->assertTrue($this->dict()->matchesEvidence(
+            'KALESONY bawełniane męskie',
+            'DŁUGIE KALESONY Z POLIAMIDU'
+        ));
+    }
+
     public function test_slang_is_appended_not_replacing_query(): void
     {
         $appendix = $this->dict()->queryAppendix('Rękawice wampirki uniwersalne');
