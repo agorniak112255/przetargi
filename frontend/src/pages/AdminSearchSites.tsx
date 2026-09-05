@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { applyCheckboxRange } from '../lib/checkboxRange'
 import { api } from '../lib/api'
 
 type SearchSite = {
@@ -107,6 +108,8 @@ export function AdminSearchSites() {
   const [watchHost, setWatchHost] = useState(() => sessionStorage.getItem(WATCH_KEY) ?? '')
   const [watchTick, setWatchTick] = useState(0)
   const [check, setCheck] = useState<CheckProgress | null>(null)
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
+  const lastSelectIndex = useRef<number | null>(null)
 
   async function load(silent = false) {
     if (!silent) {
@@ -215,6 +218,39 @@ export function AdminSearchSites() {
     return copy
   }, [rows, q, sortKey, sortDir])
 
+  const selectedHosts = useMemo(
+    () => visible.filter((r) => selected[r.host]).map((r) => r.host),
+    [visible, selected],
+  )
+  const allVisibleSelected = visible.length > 0 && visible.every((r) => selected[r.host])
+
+  function toggleSelected(host: string, shiftKey = false) {
+    const hosts = visible.map((r) => r.host)
+    const index = hosts.indexOf(host)
+    if (index < 0) return
+    setSelected((prev) => {
+      const applied = applyCheckboxRange(hosts, prev, lastSelectIndex.current, index, shiftKey)
+      lastSelectIndex.current = applied.anchorIndex
+      return applied.selected
+    })
+  }
+
+  function toggleSelectAllVisible() {
+    const hosts = visible.map((r) => r.host)
+    if (hosts.length === 0) return
+    const allOn = hosts.every((host) => selected[host])
+    setSelected((prev) => {
+      const next = { ...prev }
+      if (allOn) {
+        for (const host of hosts) delete next[host]
+      } else {
+        for (const host of hosts) next[host] = true
+      }
+      return next
+    })
+    lastSelectIndex.current = allOn ? null : hosts.length - 1
+  }
+
   async function onAdd(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
@@ -299,6 +335,42 @@ export function AdminSearchSites() {
     }
   }
 
+  async function onReindexSelected() {
+    if (selectedHosts.length === 0) return
+    setReindexHost('*')
+    setErr('')
+    setMsg('')
+    const ok: string[] = []
+    const fail: string[] = []
+    for (const host of selectedHosts) {
+      try {
+        await api<{ message: string }>(
+          `/admin/catalog-search-sites/${encodeURIComponent(host)}/reindex`,
+          { method: 'POST' },
+        )
+        ok.push(host)
+      } catch {
+        fail.push(host)
+      }
+    }
+    if (ok.length > 0) {
+      watch(ok[0])
+    }
+    if (fail.length > 0 && ok.length === 0) {
+      setErr('Nie udało się zlecić sprawdzenia zaznaczonych stron')
+    } else if (fail.length > 0) {
+      setErr(`Nie udało się zlecić: ${fail.join(', ')}`)
+      setMsg(`Zlecono sprawdzenie ${ok.length} z ${selectedHosts.length} stron.`)
+    } else {
+      setMsg(
+        ok.length === 1
+          ? `Sprawdzanie ${ok[0]} w tle.`
+          : `Zlecono sprawdzenie ${ok.length} stron.`,
+      )
+    }
+    setReindexHost('')
+  }
+
   const headers: { key: SortKey; label: string; className?: string }[] = [
     { key: 'host', label: 'Domena' },
     { key: 'links', label: 'Linki', className: 'text-right' },
@@ -356,9 +428,23 @@ export function AdminSearchSites() {
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
-          <p className="text-[12px] text-slate-500">
-            {visible.length} z {rows.length} stron
-          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-[12px] text-slate-500">
+              {visible.length} z {rows.length} stron
+              {selectedHosts.length > 0 ? ` · zaznaczono ${selectedHosts.length}` : ''}
+              <span className="text-slate-400"> · Shift+klik: zakres</span>
+            </p>
+            <button
+              type="button"
+              disabled={selectedHosts.length === 0 || reindexHost !== ''}
+              onClick={() => void onReindexSelected()}
+              className="rounded-lg bg-sky-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+            >
+              {reindexHost === '*'
+                ? 'Zlecam…'
+                : `Sprawdź zaznaczone${selectedHosts.length > 0 ? ` (${selectedHosts.length})` : ''}`}
+            </button>
+          </div>
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -370,6 +456,15 @@ export function AdminSearchSites() {
           <table className="w-full text-left text-[13px]">
             <thead>
               <tr className="border-b bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                <th className="w-8 p-3">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    title="Zaznacz / odznacz widoczne. Na wierszu: Shift+klik zaznacza zakres."
+                    aria-label="Zaznacz wszystkie widoczne"
+                  />
+                </th>
                 {headers.map((h) => (
                   <th key={h.key} className={`p-3 ${h.className ?? ''}`}>
                     <button
@@ -389,8 +484,31 @@ export function AdminSearchSites() {
               {visible.map((row) => (
                 <tr
                   key={row.host}
-                  className={`border-b last:border-0 ${row.links === 0 ? 'bg-amber-50/40' : 'hover:bg-slate-50'}`}
+                  className={`border-b last:border-0 ${
+                    selected[row.host]
+                      ? 'bg-blue-50/40'
+                      : row.links === 0
+                        ? 'bg-amber-50/40'
+                        : 'hover:bg-slate-50'
+                  }`}
                 >
+                  <td className="p-3 select-none">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selected[row.host])}
+                      title="Shift+klik zaznacza wszystkie od ostatnio klikniętej"
+                      onMouseDown={(e) => {
+                        if (!e.shiftKey) return
+                        e.preventDefault()
+                        toggleSelected(row.host, true)
+                      }}
+                      onChange={(e) => {
+                        if ((e.nativeEvent as MouseEvent).shiftKey) return
+                        toggleSelected(row.host, false)
+                      }}
+                      aria-label={`Zaznacz ${row.host}`}
+                    />
+                  </td>
                   <td className="p-3">
                     <a
                       href={`https://${row.host}`}
@@ -458,7 +576,7 @@ export function AdminSearchSites() {
                       )}
                       <button
                         type="button"
-                        disabled={reindexHost === row.host}
+                        disabled={reindexHost !== ''}
                         onClick={() => void onReindex(row.host)}
                         className="rounded-lg bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
                       >
@@ -478,7 +596,7 @@ export function AdminSearchSites() {
               ))}
               {visible.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-slate-400">
+                  <td colSpan={6} className="p-8 text-center text-slate-400">
                     {busy ? 'Ładowanie…' : 'Brak stron dla tego filtra.'}
                   </td>
                 </tr>
