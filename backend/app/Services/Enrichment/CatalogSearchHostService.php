@@ -157,7 +157,7 @@ final class CatalogSearchHostService
      * @return array{
      *     host: string,
      *     links: int,
-     *     data: list<array{id: int, url: string, title: string|null, last_seen_at: string|null}>,
+     *     data: list<array{id: int, url: string, title: string|null, manufacturer: string|null, last_seen_at: string|null}>,
      *     meta: array{current_page: int, last_page: int, per_page: int, total: int}
      * }
      */
@@ -179,11 +179,12 @@ final class CatalogSearchHostService
             $query->where(function ($builder) use ($like): void {
                 $builder
                     ->where('url', 'like', $like)
-                    ->orWhere('title', 'like', $like);
+                    ->orWhere('title', 'like', $like)
+                    ->orWhere('manufacturer', 'like', $like);
             });
         }
 
-        $paginator = $query->paginate($perPage, ['id', 'url', 'title', 'last_seen_at'], 'page', $page);
+        $paginator = $query->paginate($perPage, ['id', 'url', 'title', 'manufacturer', 'last_seen_at'], 'page', $page);
 
         return [
             'host' => $host,
@@ -193,6 +194,7 @@ final class CatalogSearchHostService
                     'id' => (int) $item->id,
                     'url' => (string) $item->url,
                     'title' => $item->title,
+                    'manufacturer' => $item->manufacturer,
                     'last_seen_at' => $item->last_seen_at?->toIso8601String(),
                 ];
             })->values()->all(),

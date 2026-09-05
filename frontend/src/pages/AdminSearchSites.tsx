@@ -26,6 +26,7 @@ type CatalogPageRow = {
   id: number
   url: string
   title: string | null
+  manufacturer: string | null
   last_seen_at: string | null
 }
 
@@ -778,7 +779,7 @@ function CatalogPagesModal({
       onClick={onClose}
     >
       <div
-        className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-lg"
+        className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
@@ -826,7 +827,7 @@ function CatalogPagesModal({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Szukaj w adresie lub tytule…"
+            placeholder="Szukaj w adresie, tytule lub producencie…"
             className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-sky-400"
           />
           <button
@@ -848,6 +849,7 @@ function CatalogPagesModal({
             <thead>
               <tr className="sticky top-0 border-b bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                 <th className="p-3">Adres</th>
+                <th className="p-3">Producent</th>
                 <th className="p-3">Tytuł</th>
                 <th className="p-3">W indeksie</th>
               </tr>
@@ -865,13 +867,14 @@ function CatalogPagesModal({
                       {row.url}
                     </a>
                   </td>
+                  <td className="whitespace-nowrap p-3 text-slate-700">{row.manufacturer ?? '—'}</td>
                   <td className="p-3 text-slate-600">{row.title ?? '—'}</td>
                   <td className="whitespace-nowrap p-3 text-slate-500">{formatWhen(row.last_seen_at)}</td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="p-8 text-center text-slate-400">
+                  <td colSpan={4} className="p-8 text-center text-slate-400">
                     {busy ? 'Ładowanie…' : 'Brak kart dla tej domeny.'}
                   </td>
                 </tr>

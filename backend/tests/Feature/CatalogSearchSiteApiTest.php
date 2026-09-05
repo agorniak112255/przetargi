@@ -132,16 +132,24 @@ final class CatalogSearchSiteApiTest extends TestCase
     public function test_admin_lists_pages_for_host_including_www(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
-        $this->seedPage('https://www.sklepbhp.pl/buty-s3', 'Buty S3');
+        $this->seedPage('https://www.sklepbhp.pl/buty-s3', 'Buty S3', 'ardon');
         $this->seedPage('https://sklepbhp.pl/kalosze');
 
         $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/pages')
             ->assertOk()
             ->assertJsonPath('host', 'sklepbhp.pl')
             ->assertJsonPath('meta.total', 2)
-            ->assertJsonFragment(['url' => 'https://www.sklepbhp.pl/buty-s3', 'title' => 'Buty S3']);
+            ->assertJsonFragment([
+                'url' => 'https://www.sklepbhp.pl/buty-s3',
+                'title' => 'Buty S3',
+                'manufacturer' => 'ardon',
+            ]);
 
         $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/pages?q=buty')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 1);
+
+        $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/pages?q=ardon')
             ->assertOk()
             ->assertJsonPath('meta.total', 1);
 
@@ -302,13 +310,14 @@ final class CatalogSearchSiteApiTest extends TestCase
             ]);
     }
 
-    private function seedPage(string $url, ?string $title = null): void
+    private function seedPage(string $url, ?string $title = null, ?string $manufacturer = null): void
     {
         CatalogPage::query()->create([
             'host' => (string) parse_url($url, PHP_URL_HOST),
             'url_hash' => CatalogPage::hashFor($url),
             'url' => $url,
             'title' => $title,
+            'manufacturer' => $manufacturer,
             'haystack' => mb_strtolower($url),
             'last_seen_at' => now(),
         ]);
