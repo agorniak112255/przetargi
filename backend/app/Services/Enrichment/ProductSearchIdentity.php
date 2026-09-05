@@ -907,12 +907,14 @@ final class ProductSearchIdentity
             $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($withoutSize), $product);
         }
         if ($usableSku && $shopName === '') {
-            $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($sku), $product);
-            $bare = $this->stripBrandPrefix($sku, $brand);
-            if ($bare !== '' && $bare !== $sku) {
-                $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($bare), $product);
+            if (! $this->rawSkuIsOfflineNoise($product)) {
+                $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($sku), $product);
+                $bare = $this->stripBrandPrefix($sku, $brand);
+                if ($bare !== '' && $bare !== $sku) {
+                    $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($bare), $product);
+                }
             }
-        } elseif ($usableSku) {
+        } elseif ($usableSku && ! $this->rawSkuIsOfflineNoise($product)) {
             $skuQueries[] = $this->queryWithManufacturer($this->quoteSearchOperators($sku), $product);
         }
         if ($usableSku && $this->skuIsSharedShortCode($product)) {
@@ -1322,6 +1324,121 @@ final class ProductSearchIdentity
         return $useful === [];
     }
 
+    public function manufacturerIsThreeM(Product $product): bool
+    {
+        $key = preg_replace(
+            '/[^a-z0-9]+/u',
+            '',
+            mb_strtolower($this->shortBrand((string) $product->manufacturer))
+        ) ?? '';
+
+        return $key === '3m';
+    }
+
+    /** Karta 3M: /3M/pl_PL/p/d/v0005202/ — numer katalogowy nie stoi w adresie. */
+    public function isOfficialThreeMProductUrl(string $url): bool
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $host = preg_replace('/^www\./', '', $host) ?? $host;
+        if ($host !== '3m.com' && ! str_ends_with($host, '.3m.com')) {
+            return false;
+        }
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+
+        return preg_match('#/p/[di]/#i', $path) === 1;
+    }
+
+    /**
+     * SJ5202 / PN60150 / 4959F / 50601 — numer z nazwy 3M, nie „1550 ml”.
+     *
+     * @return list<string>
+     */
+    public function threeMCatalogCodesFromName(Product $product): array
+    {
+        if (! $this->manufacturerIsThreeM($product)) {
+            return [];
+        }
+        $name = trim((string) $product->name);
+        if ($name === '') {
+            return [];
+        }
+        $out = [];
+        if (preg_match_all('/\b(SJ\d{4}[A-Z]?)\b/iu', $name, $m) !== false) {
+            foreach ($m[1] as $code) {
+                $out[] = strtoupper((string) $code);
+            }
+        }
+        if (preg_match_all('/\bPN\s*(\d{4,6})\b/iu', $name, $m) !== false) {
+            foreach ($m[1] as $n) {
+                $out[] = 'PN'.$n;
+                $out[] = (string) $n;
+            }
+        }
+        if (preg_match_all('/\b(\d{4,5}[A-Z]{1,2})\b/u', $name, $m) !== false) {
+            foreach ($m[1] as $code) {
+                $out[] = (string) $code;
+            }
+        }
+        if (preg_match_all('/\b(0?\d{4,5})\b/u', $name, $m) !== false) {
+            foreach ($m[1] as $n) {
+                $n = (string) $n;
+                if ($this->threeMNumberLooksLikeMeasure($n, $name)) {
+                    continue;
+                }
+                $out[] = $n;
+                $stripped = ltrim($n, '0');
+                if ($stripped !== '' && $stripped !== $n) {
+                    $out[] = $stripped;
+                }
+            }
+        }
+        $uniq = [];
+        foreach ($out as $code) {
+            $code = trim($code);
+            if ($code === '' || mb_strlen($code) < 4) {
+                continue;
+            }
+            $uniq[mb_strtolower($code)] = $code;
+        }
+
+        return array_values($uniq);
+    }
+
+    private function threeMNumberLooksLikeMeasure(string $n, string $name): bool
+    {
+        return preg_match(
+            '/\b'.preg_quote($n, '/').'\s*(?:mm|ml|cm|m|l|kg|szt|per\s+case)\b/iu',
+            $name
+        ) === 1;
+    }
+
+    private function preferredThreeMShopPhrase(Product $product): string
+    {
+        $skuCompact = $this->compactCode((string) $product->sku);
+        $preferred = [];
+        $same = [];
+        foreach ($this->threeMCatalogCodesFromName($product) as $code) {
+            if (! $this->isStrongShopPhrase($code) || $this->isColorOnlyShopPhrase($code)) {
+                continue;
+            }
+            $compact = $this->compactCode($code);
+            if ($skuCompact !== '' && $compact !== '' && (
+                $compact === $skuCompact
+                || str_contains($skuCompact, $compact)
+                || str_contains($compact, $skuCompact)
+            )) {
+                $same[] = $code;
+            } else {
+                $preferred[] = $code;
+            }
+        }
+        if ($preferred !== []) {
+            return $preferred[0];
+        }
+
+        return $same[0] ?? '';
+    }
+
     /** „6000” przy „Tychem 6000 FR ThermoPro” — za ogólne na site:/zapytanie. */
     private function shopPhraseIsBareSeriesNumberWeakerThanTradeName(string $phrase, string $name): bool
     {
@@ -1489,6 +1606,15 @@ final class ProductSearchIdentity
     {
         if (self::isJunkSearchHost($url) || $this->looksLikeUnrelatedRetailHost($url, $product)) {
             return false;
+        }
+        if ($this->manufacturerIsThreeM($product) && $this->isOfficialThreeMProductUrl($url)) {
+            $card = $url.' '.$title.' '.$text;
+            if (($this->hayHasProductCode($card, $product)
+                    || $this->urlOrTitleHasShopIdentity($url, $title.' '.$text, $product))
+                && ! $this->pageClaimsAnotherCode($url, $title, $product)
+                && $this->hayHasRequiredTypeFromName($card, $product)) {
+                return true;
+            }
         }
         $hay = $url.' '.$title.' '.$text;
         if (! $this->hayMentionsProduct($hay, $product)) {
@@ -1859,6 +1985,15 @@ final class ProductSearchIdentity
         foreach ($this->ansellStyleCodes($product) as $style) {
             $codes[] = $style;
         }
+        foreach ($this->threeMCatalogCodesFromName($product) as $code) {
+            $codes[] = $code;
+        }
+        if ($this->manufacturerIsThreeM($product) && preg_match('/^\d{4}$/u', $sku) === 1) {
+            $codes[] = '0'.$sku;
+        }
+        if ($this->manufacturerIsThreeM($product) && preg_match('/^0\d{4}$/u', $sku) === 1) {
+            $codes[] = ltrim($sku, '0');
+        }
 
         return array_values(array_unique(array_map('mb_strtolower', $codes)));
     }
@@ -2050,6 +2185,9 @@ final class ProductSearchIdentity
     public function shopIdentityPhrases(Product $product): array
     {
         $out = [];
+        foreach ($this->threeMCatalogCodesFromName($product) as $code) {
+            $out[] = $code;
+        }
         foreach ($this->catalogTradeNames($product) as $trade) {
             $out[] = $trade;
         }
@@ -2129,12 +2267,12 @@ final class ProductSearchIdentity
             (array) config('enrichment.catalog_search_hosts', []),
             $keys
         ));
-        if ($shops !== []) {
-            return $shops;
-        }
         $inferred = $this->inferredCatalogHosts($product);
         if ($inferred !== []) {
-            return $inferred;
+            return array_values(array_unique(array_merge($inferred, $shops)));
+        }
+        if ($shops !== []) {
+            return $shops;
         }
 
         return $this->officialCatalogHosts($product);
@@ -2250,6 +2388,10 @@ final class ProductSearchIdentity
 
     public function firstStrongShopPhrase(Product $product): string
     {
+        $threeM = $this->preferredThreeMShopPhrase($product);
+        if ($threeM !== '') {
+            return $threeM;
+        }
         $name = $this->strippedProductName($product);
         $prefixed = mb_strtolower($this->distributorPrefixedCatalogSku($product));
         foreach ($this->shopIdentityPhrases($product) as $phrase) {
@@ -3460,7 +3602,12 @@ final class ProductSearchIdentity
         )) {
             return false;
         }
-        if (preg_match('/\p{L}{4,}/u', $shop) !== 1) {
+        $shopLooksLikeTrade = preg_match('/\p{L}{4,}/u', $shop) === 1
+            || ($this->manufacturerIsThreeM($product) && (
+                preg_match('/^SJ\d{4}/iu', $shop) === 1
+                || preg_match('/^(?:PN)?\d{4,6}[A-Z]{0,2}$/iu', $shop) === 1
+            ));
+        if (! $shopLooksLikeTrade) {
             return false;
         }
         $skuLooksLikeCode = $this->looksLikeWarehouseArticleSku($product)
@@ -3491,6 +3638,9 @@ final class ProductSearchIdentity
             }
 
             return $out;
+        }
+        if ($this->manufacturerIsThreeM($product) && preg_match('/^7100\d{6,}$/u', $sku) === 1) {
+            return [$sku];
         }
         if (! $this->looksLikeWarehouseArticleSku($product)) {
             return [];

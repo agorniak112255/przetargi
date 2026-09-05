@@ -1700,6 +1700,34 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertStringContainsString('sj5202', mb_strtolower($carry[0]['title'] ?? ''));
     }
 
+    public function test_three_m_official_v_url_counts_with_catalog_code_in_snippet(): void
+    {
+        $product = new Product([
+            'sku' => '50404',
+            'name' => 'Kubek do mieszania 3M™, 1550 ml, 50404',
+            'manufacturer' => '3M',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $filter = $ref->getMethod('filterResultsByIdentity');
+        $filter->setAccessible(true);
+        $kept = $filter->invoke($service, [
+            [
+                'url' => 'https://www.3m.com/3M/pl_PL/p/d/v0123456/',
+                'title' => '3M PPS Mixing Cup',
+                'snippet' => 'Kubek PPS 50404 pojemność 1550 ml',
+            ],
+            [
+                'url' => 'https://www.olx.pl/oferta/kubek',
+                'title' => 'Kubek',
+                'snippet' => 'ogłoszenie',
+            ],
+        ], $product);
+
+        $this->assertCount(1, $kept);
+        $this->assertStringContainsString('3m.com', $kept[0]['url'] ?? '');
+    }
+
     public function test_sir_reunion_hit_counts_without_ma1120_in_url(): void
     {
         $product = new Product([

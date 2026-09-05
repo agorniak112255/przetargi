@@ -1098,7 +1098,8 @@ final class ProductSearchIdentityTest extends TestCase
 
         $this->assertTrue($id->looksLikeWarehouseArticleSku($product));
         $this->assertSame('SJ5202', $id->firstStrongShopPhrase($product));
-        $this->assertFalse($id->hayHasProductCode($url.' '.$title, $product));
+        $this->assertFalse($id->codeInText($url.' '.$title, '7100000860'));
+        $this->assertTrue($id->hayHasProductCode($url.' '.$title, $product));
         $this->assertTrue($id->urlOrTitleHasShopIdentity($url, $title, $product));
         $this->assertTrue($id->isConfirmedProductCard($url, $title, $text, $product));
         $this->assertTrue($id->looksLikeWarehouseArticleSku(new Product([
@@ -1200,5 +1201,52 @@ final class ProductSearchIdentityTest extends TestCase
 
         $this->assertContains('mat.konin.pl', $id->officialCatalogHosts($product));
         $this->assertContains('mat.konin.pl', $id->catalogSearchHosts($product));
+    }
+
+    public function test_three_m_uses_catalog_code_from_name_not_warehouse_sku(): void
+    {
+        $id = new ProductSearchIdentity;
+        $nozzle = new Product([
+            'sku' => '1366874',
+            'name' => 'DMS Dysze 3M™, czerwona, 50601',
+            'manufacturer' => '3M',
+        ]);
+        $zero = new Product([
+            'sku' => '2600',
+            'name' => 'Gąbka szlifierska 3M™ Softback, Microfine, 02600',
+            'manufacturer' => '3M',
+        ]);
+        $pn = new Product([
+            'sku' => 'DC12',
+            'name' => '3M™ mleczko polerskie 1L PN60150',
+            'manufacturer' => '3M',
+        ]);
+        $stock = new Product([
+            'sku' => '7100269255',
+            'name' => '3M™ Pad podłogowy',
+            'manufacturer' => '3M',
+        ]);
+        $cup = new Product([
+            'sku' => '50404',
+            'name' => 'Kubek do mieszania 3M™, 1550 ml, 50404',
+            'manufacturer' => '3M',
+        ]);
+
+        $this->assertSame('50601', $id->firstStrongShopPhrase($nozzle));
+        $this->assertTrue($id->skuDiffersFromStrongShopIdentity($nozzle));
+        $this->assertStringContainsString('site:3m.com 50601', implode(' | ', $id->searchQueries($nozzle, 'manufacturer')));
+        $this->assertTrue($id->hayHasProductCode('softback disc 02600 3m', $zero));
+        $this->assertSame('PN60150', $id->firstStrongShopPhrase($pn));
+        $this->assertTrue($id->skuDiffersFromStrongShopIdentity($pn));
+        $this->assertSame(['7100269255'], $id->catalogArticleCodes($stock));
+        $this->assertSame('50404', $id->firstStrongShopPhrase($cup));
+        $this->assertNotSame('1550', $id->firstStrongShopPhrase($cup));
+        $this->assertTrue($id->isOfficialThreeMProductUrl('https://www.3m.com/3M/pl_PL/p/d/v0005202/'));
+        $this->assertTrue($id->isConfirmedProductCard(
+            'https://www.3m.com/3M/pl_PL/p/d/v0123456/',
+            '3M PPS Mixing Cup',
+            'Kubek do mieszania 50404. Pojemność 1550 ml.',
+            $cup
+        ));
     }
 }

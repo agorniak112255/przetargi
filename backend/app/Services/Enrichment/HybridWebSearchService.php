@@ -501,6 +501,11 @@ class HybridWebSearchService
                 || ($this->identity->rawSkuIsOfflineNoise($product)
                     && ($this->identity->urlOrTitleHasShopIdentity($url, $title, $product)
                         || $this->identity->urlOrTitleHasNamedShopIdentity($url, $title, $product)
+                        || $this->identity->urlOrTitleCarriesShopModelNumber($url, $title, $product)))
+                || ($this->identity->manufacturerIsThreeM($product)
+                    && $this->identity->isOfficialThreeMProductUrl($url)
+                    && ($this->identity->hayHasProductCode($hay, $product)
+                        || $this->identity->urlOrTitleHasShopIdentity($url, $title, $product)
                         || $this->identity->urlOrTitleCarriesShopModelNumber($url, $title, $product)))) {
                 $out[] = $row;
             }
@@ -1059,6 +1064,21 @@ class HybridWebSearchService
             if ($this->isListingWithoutProduct($url, $product)) {
                 continue;
             }
+            if ($this->identity->manufacturerIsThreeM($product)
+                && $this->identity->isOfficialThreeMProductUrl($url)
+                && ($this->identity->hayHasProductCode($hay, $product)
+                    || $this->identity->urlOrTitleHasShopIdentity($url, $title.' '.$snippet, $product)
+                    || $this->identity->urlOrTitleCarriesShopModelNumber($url, $title.' '.$snippet, $product))
+                && $this->identity->hayHasRequiredTypeFromName($hay, $product)
+                && ! $this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+                $matched[] = [
+                    'url' => $url,
+                    'title' => $title !== '' ? $title : $url,
+                    'snippet' => $snippet,
+                ];
+
+                continue;
+            }
             if ($this->identity->rawSkuIsOfflineNoise($product)
                 && $this->identity->hayHasRequiredTypeFromName($hay, $product)
                 && ($this->identity->urlOrTitleHasShopIdentity($url, $title.' '.$snippet, $product)
@@ -1273,6 +1293,13 @@ class HybridWebSearchService
 
         $bodyHay = mb_strtolower($url.' '.$title.' '.$text);
         $bodyCompact = preg_replace('/[^a-z0-9]+/iu', '', $bodyHay) ?? $bodyHay;
+        if ($this->identity->manufacturerIsThreeM($product)
+            && $this->identity->isOfficialThreeMProductUrl($url)
+            && ($this->identity->hayHasProductCode($text, $product)
+                || $this->identity->hayHasShopIdentity($bodyHay, $bodyCompact, $product))
+            && $this->identity->foreignCodeCount($text, $product) < self::LISTING_FOREIGN_CODES) {
+            return true;
+        }
         if ($this->identity->looksLikeWarehouseArticleSku($product)
             && $this->identity->hayHasShopIdentity($bodyHay, $bodyCompact, $product)
             && $this->identity->foreignCodeCount($text, $product) < self::LISTING_FOREIGN_CODES) {

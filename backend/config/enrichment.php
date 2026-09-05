@@ -221,6 +221,9 @@ return [
     | Gdy brak wpisu, bierzemy manufacturer_domains.
     */
     'catalog_search_hosts' => [
+        '3m' => [
+            '3m.com',
+        ],
         'ardon' => [
             'ardon.pl',
             'behapownia.pl',
