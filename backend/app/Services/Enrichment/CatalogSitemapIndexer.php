@@ -768,8 +768,15 @@ final class CatalogSitemapIndexer
      */
     public function extractLocations(string $xml): array
     {
-        // część sklepów używa prefiksu przestrzeni nazw: <sm:loc>, <image:loc>
-        if (preg_match_all('#<(?:[a-z0-9]+:)?loc>\s*(?:<!\[CDATA\[)?\s*(.*?)\s*(?:\]\]>)?\s*</(?:[a-z0-9]+:)?loc>#si', $xml, $m) === 0) {
+        // część sklepów używa prefiksu przestrzeni nazw dla całego dokumentu: <sm:loc>.
+        // Ale <image:loc>/<video:loc>/<news:loc> to rozszerzenia Google Sitemap wskazujące
+        // na sam plik graficzny/wideo powiązany z kartą — nie na stronę produktu, więc je
+        // pomijamy (inaczej indeks zapycha się adresami .jpg, z których nie ma opisu).
+        if (preg_match_all(
+            '#<(?!image:|video:|news:)(?:[a-z0-9]+:)?loc>\s*(?:<!\[CDATA\[)?\s*(.*?)\s*(?:\]\]>)?\s*</(?:[a-z0-9]+:)?loc>#si',
+            $xml,
+            $m
+        ) === 0) {
             return [];
         }
 

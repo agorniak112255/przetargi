@@ -413,6 +413,26 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://pros.pl/produkt/kask-pros-1202']);
     }
 
+    public function test_skips_image_loc_entries_inside_sitemap(): void
+    {
+        $this->fakeHttp([
+            'https://ardon.cz/robots.txt' => Http::response('Sitemap: https://ardon.cz/sitemap.xml', 200),
+            'https://ardon.cz/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">'
+                .'<url><loc>https://ardon.cz/rukavice-a5111</loc>'
+                .'<image:image><image:loc>https://ardon.cz/multimedia/products/A5111_001.jpg</image:loc></image:image>'
+                .'</url></urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('ardon.cz');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://ardon.cz/rukavice-a5111']);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://ardon.cz/multimedia/products/A5111_001.jpg']);
+    }
+
     public function test_finds_product_page_by_code_in_url(): void
     {
         $this->seedPage('https://optimumbhp.pl/REKAWICE-ROBOCZE-1202-URGENT-p138481');
