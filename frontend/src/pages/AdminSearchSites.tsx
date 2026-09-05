@@ -51,7 +51,43 @@ type CheckProgress = {
 
 type SortKey = 'host' | 'links' | 'source_label' | 'last_seen_at'
 
-const WATCH_KEY = 'catalog-check-host'
+const WATCH_KEY = 'catalog-check-hosts'
+const WATCH_KEY_OLD = 'catalog-check-host'
+
+function readWatchHosts(): string[] {
+  const raw = sessionStorage.getItem(WATCH_KEY)
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      if (Array.isArray(parsed)) {
+        return parsed.filter((h): h is string => typeof h === 'string' && h !== '')
+      }
+    } catch {
+      /* stary format: jedna domena */
+    }
+    return raw === '' ? [] : [raw]
+  }
+  const legacy = sessionStorage.getItem(WATCH_KEY_OLD) ?? ''
+  return legacy === '' ? [] : [legacy]
+}
+
+function persistWatchHosts(hosts: string[]) {
+  if (hosts.length === 0) {
+    sessionStorage.removeItem(WATCH_KEY)
+    sessionStorage.removeItem(WATCH_KEY_OLD)
+    return
+  }
+  sessionStorage.setItem(WATCH_KEY, JSON.stringify(hosts))
+  sessionStorage.removeItem(WATCH_KEY_OLD)
+}
+
+function statusLabel(status: CheckProgress['status'] | undefined): string {
+  if (status === 'running') return 'W toku'
+  if (status === 'queued') return 'W kolejce'
+  if (status === 'done') return 'Gotowe'
+  if (status === 'failed') return 'Błąd'
+  return 'Czekam…'
+}
 
 const SOURCE_BADGE: Record<string, string> = {
   manual: 'bg-emerald-100 text-emerald-800',
@@ -105,11 +141,14 @@ export function AdminSearchSites() {
   const [deleteHost, setDeleteHost] = useState('')
   const [skipToggleHost, setSkipToggleHost] = useState('')
   const [pagesHost, setPagesHost] = useState<SearchSite | null>(null)
-  const [watchHost, setWatchHost] = useState(() => sessionStorage.getItem(WATCH_KEY) ?? '')
+  const [watchHosts, setWatchHosts] = useState<string[]>(() => readWatchHosts())
   const [watchTick, setWatchTick] = useState(0)
-  const [check, setCheck] = useState<CheckProgress | null>(null)
+  const [checks, setChecks] = useState<Record<string, CheckProgress>>({})
+  const [focusHost, setFocusHost] = useState(() => readWatchHosts()[0] ?? '')
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const lastSelectIndex = useRef<number | null>(null)
+  const lastChecks = useRef<Record<string, CheckProgress>>({})
+  const userPickedHost = useRef(false)
 
   async function load(silent = false) {
     if (!silent) {
@@ -135,42 +174,87 @@ export function AdminSearchSites() {
     void load()
   }, [])
 
-  function watch(host: string) {
-    setCheck(null)
-    setWatchHost(host)
+  function watch(hosts: string | string[]) {
+    const list = (Array.isArray(hosts) ? hosts : [hosts]).filter((h) => h !== '')
+    userPickedHost.current = false
+    lastChecks.current = {}
+    setChecks({})
+    setWatchHosts(list)
+    setFocusHost(list[0] ?? '')
     setWatchTick((n) => n + 1)
-    sessionStorage.setItem(WATCH_KEY, host)
+    persistWatchHosts(list)
   }
 
   function stopWatch() {
-    setWatchHost('')
-    setCheck(null)
-    sessionStorage.removeItem(WATCH_KEY)
+    userPickedHost.current = false
+    lastChecks.current = {}
+    setWatchHosts([])
+    setChecks({})
+    setFocusHost('')
+    persistWatchHosts([])
+  }
+
+  function pickWatchHost(host: string) {
+    userPickedHost.current = true
+    setFocusHost(host)
   }
 
   useEffect(() => {
-    if (watchHost === '') {
+    if (watchHosts.length === 0) {
       return
     }
     let cancelled = false
     let timer = 0
     async function pull() {
+      const prev = lastChecks.current
+      const toFetch = watchHosts.filter((h) => {
+        const status = prev[h]?.status
+        return status === undefined || status === 'idle' || status === 'queued' || status === 'running'
+      })
+      if (toFetch.length === 0) {
+        void load(true)
+        return
+      }
       try {
-        const data = await api<CheckProgress>(
-          `/admin/catalog-search-sites/${encodeURIComponent(watchHost)}/progress`,
+        const results = await Promise.all(
+          toFetch.map((host) =>
+            api<CheckProgress>(`/admin/catalog-search-sites/${encodeURIComponent(host)}/progress`),
+          ),
         )
         if (cancelled) {
           return
         }
-        setCheck(data)
-        if (data.status === 'queued' || data.status === 'running') {
+        const next = { ...prev }
+        let anyActive = false
+        for (const data of results) {
+          next[data.host] = data
+          if (data.status === 'queued' || data.status === 'running') {
+            anyActive = true
+          }
+        }
+        lastChecks.current = next
+        setChecks(next)
+        setFocusHost((current) => {
+          if (userPickedHost.current && current !== '' && next[current]) {
+            return current
+          }
+          const running = watchHosts.find((h) => next[h]?.status === 'running')
+          if (running) {
+            return running
+          }
+          const queued = watchHosts.find((h) => next[h]?.status === 'queued')
+          if (queued) {
+            return queued
+          }
+          return current !== '' ? current : (watchHosts[0] ?? '')
+        })
+        if (anyActive) {
           timer = window.setTimeout(() => void pull(), 1500)
-        } else if (data.status === 'done' || data.status === 'failed') {
+        } else {
           void load(true)
         }
       } catch {
         if (!cancelled) {
-          setCheck(null)
           timer = window.setTimeout(() => void pull(), 2000)
         }
       }
@@ -182,7 +266,7 @@ export function AdminSearchSites() {
         window.clearTimeout(timer)
       }
     }
-  }, [watchHost, watchTick])
+  }, [watchHosts, watchTick])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -354,7 +438,7 @@ export function AdminSearchSites() {
       }
     }
     if (ok.length > 0) {
-      watch(ok[0])
+      watch(ok)
     }
     if (fail.length > 0 && ok.length === 0) {
       setErr('Nie udało się zlecić sprawdzenia zaznaczonych stron')
@@ -380,8 +464,14 @@ export function AdminSearchSites() {
 
   return (
     <div className="space-y-4">
-      {watchHost !== '' && (
-        <CheckLogPanel host={watchHost} check={check} onClose={stopWatch} />
+      {watchHosts.length > 0 && (
+        <CheckLogPanel
+          hosts={watchHosts}
+          checks={checks}
+          focusHost={focusHost}
+          onFocus={pickWatchHost}
+          onClose={stopWatch}
+        />
       )}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-br from-sky-50 via-white to-emerald-50 p-5 shadow-sm">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-700">Wyszukiwarka katalogu</p>
@@ -819,51 +909,59 @@ function CatalogPagesModal({
 }
 
 function CheckLogPanel({
-  host,
-  check,
+  hosts,
+  checks,
+  focusHost,
+  onFocus,
   onClose,
 }: {
-  host: string
-  check: CheckProgress | null
+  hosts: string[]
+  checks: Record<string, CheckProgress>
+  focusHost: string
+  onFocus: (host: string) => void
   onClose: () => void
 }) {
   const logRef = useRef<HTMLDivElement>(null)
-  const status = check?.status ?? 'queued'
-  const label =
-    status === 'running'
-      ? 'W toku'
-      : status === 'queued'
-        ? 'W kolejce'
-        : status === 'done'
-          ? 'Gotowe'
-          : status === 'failed'
-            ? 'Błąd'
-            : 'Czekam…'
-  const tone =
-    status === 'failed'
-      ? 'border-rose-200 bg-rose-50'
-      : status === 'done'
-        ? 'border-emerald-200 bg-emerald-50'
-        : 'border-sky-200 bg-sky-50'
+  const check = checks[focusHost] ?? null
+  const statuses = hosts.map((h) => checks[h]?.status ?? 'queued')
+  const tone = statuses.some((s) => s === 'failed')
+    ? 'border-rose-200 bg-rose-50'
+    : statuses.length > 0 && statuses.every((s) => s === 'done')
+      ? 'border-emerald-200 bg-emerald-50'
+      : 'border-sky-200 bg-sky-50'
+  const done = statuses.filter((s) => s === 'done').length
+  const running = statuses.filter((s) => s === 'running').length
+  const queued = statuses.filter((s) => s === 'queued' || s === 'idle').length
+  const failed = statuses.filter((s) => s === 'failed').length
 
   useEffect(() => {
     const box = logRef.current
     if (box) {
       box.scrollTop = box.scrollHeight
     }
-  }, [check?.lines.length])
+  }, [focusHost, check?.lines.length])
 
   return (
     <div className={`fixed top-3 right-3 left-3 z-30 rounded-2xl border p-4 shadow-lg md:left-64 ${tone}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-            Sprawdzanie domeny
+            {hosts.length === 1 ? 'Sprawdzanie domeny' : `Sprawdzanie ${hosts.length} domen`}
           </p>
           <h3 className="text-sm font-semibold text-slate-900">
-            {host}
-            <span className="ml-2 text-[11px] font-medium text-slate-600">{label}</span>
+            {focusHost || hosts[0]}
+            <span className="ml-2 text-[11px] font-medium text-slate-600">
+              {statusLabel(check?.status)}
+            </span>
           </h3>
+          {hosts.length > 1 && (
+            <p className="mt-0.5 text-[11px] text-slate-600">
+              {done} gotowe
+              {running > 0 ? ` · ${running} w toku` : ''}
+              {queued > 0 ? ` · ${queued} w kolejce` : ''}
+              {failed > 0 ? ` · ${failed} błędów` : ''}
+            </p>
+          )}
         </div>
         <button
           type="button"
@@ -873,6 +971,32 @@ function CheckLogPanel({
           Zamknij
         </button>
       </div>
+      {hosts.length > 1 && (
+        <div className="mt-2 flex max-h-20 flex-wrap gap-1 overflow-auto">
+          {hosts.map((host) => {
+            const status = checks[host]?.status ?? 'queued'
+            const active = host === focusHost
+            return (
+              <button
+                key={host}
+                type="button"
+                onClick={() => onFocus(host)}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  active
+                    ? 'bg-slate-800 text-white'
+                    : status === 'failed'
+                      ? 'bg-rose-100 text-rose-800'
+                      : status === 'done'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-white text-slate-700'
+                }`}
+              >
+                {host} · {statusLabel(status)}
+              </button>
+            )
+          })}
+        </div>
+      )}
       <div
         ref={logRef}
         className="mt-3 max-h-48 overflow-auto rounded-lg border border-white/70 bg-white/80 px-3 py-2 font-mono text-[11px] leading-5 text-slate-800"
