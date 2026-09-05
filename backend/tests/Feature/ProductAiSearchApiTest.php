@@ -2147,6 +2147,80 @@ final class ProductAiSearchApiTest extends TestCase
         Http::assertNotSent(fn ($request): bool => str_contains((string) $request->url(), 'tavily'));
     }
 
+    public function test_v5_visor_carrier_is_retrieved_from_catalog(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $v5 = Product::query()->create([
+            'sku' => 'V5',
+            'name' => '3M System łączenia osłony z hełmem ochronnym, V5',
+            'manufacturer' => '3M',
+            'category' => 'Osłony twarzy',
+            'description' => 'Nośnik osłony twarzy, system łączenia z hełmem ochronnym.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 22,
+            'stock' => 6,
+            'ppe_family' => 'face',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $this->mockCatalogRank(
+            'system łączenia osłony z hełmem',
+            ['V5', 'nośnik osłony', 'łączenia'],
+            [$v5],
+        );
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'System łączenia osłony z hełmem ochronnym 3M V5 tzw. nośnik osłony',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'V5');
+    }
+
+    public function test_maska_3s_finds_msa_full_face_not_only_half_mask(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $full = Product::query()->create([
+            'sku' => 'D2055000',
+            'name' => 'Maska 3S MSA',
+            'manufacturer' => 'MSA',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Maska pełnotwarzowa 3S do ochrony dróg oddechowych.',
+            'catalog_price_net' => 90,
+            'purchase_price' => 60,
+            'stock' => 3,
+            'ppe_family' => 'respiratory',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => '6503',
+            'name' => 'Półmaska 3M 6503 część twarzowa',
+            'manufacturer' => '3M',
+            'category' => 'Ochrona dróg oddechowych',
+            'description' => 'Półmaska wielorazowa 6503.',
+            'catalog_price_net' => 45,
+            'purchase_price' => 28,
+            'stock' => 8,
+            'ppe_family' => 'respiratory',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $this->mockCatalogRank('maska 3S', ['maska 3S', 'maska pełnotwarzowa'], [$full]);
+
+        $skus = $this->postJson('/api/products/ai-search', [
+            'query' => 'Maska 3S BASIS PLUS MSA',
+        ])
+            ->assertOk()
+            ->json('products');
+
+        $this->assertContains('D2055000', collect($skus)->pluck('sku')->all());
+        $this->assertSame('D2055000', $skus[0]['sku'] ?? null);
+    }
+
     /**
      * @param  list<string>  $phrases
      * @param  list<Product>  $picks

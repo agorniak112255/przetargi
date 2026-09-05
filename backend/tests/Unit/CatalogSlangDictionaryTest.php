@@ -196,6 +196,20 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertTrue($this->dict()->isJargonNorm('tyvek'));
     }
 
+    public function test_maska_3s_rewrites_to_full_face_not_half_mask(): void
+    {
+        $rewrite = $this->dict()->searchRewrite('Maska 3S BASIS PLUS MSA');
+        $this->assertNotNull($rewrite);
+        $this->assertSame('maska 3S', $rewrite['needed']);
+        $hay = mb_strtolower(implode(' ', $rewrite['search_phrases']));
+        $this->assertStringContainsString('3s', $hay);
+        $this->assertStringContainsString('pełnotwarz', $hay);
+        $this->assertTrue($this->dict()->matchesEvidence(
+            'Maska 3S BASIS PLUS MSA',
+            'Maska 3S MSA część twarzowa'
+        ));
+    }
+
     public function test_defaults_cover_all_categories(): void
     {
         $seen = [];

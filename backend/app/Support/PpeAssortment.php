@@ -580,16 +580,18 @@ final class PpeAssortment
         if ($prodFamily === null) {
             return false;
         }
+        $helmetMount = false;
         if ($reqFamily !== $prodFamily) {
             if (! $this->helmetMountAllows($requirement, $reqFamily, $prodFamily)) {
                 return false;
             }
+            $helmetMount = true;
         }
         if ($reqFamily === self::FAMILY_APPAREL) {
             return $this->apparelCompatible($requirement, $productText);
         }
         if ($reqFamily === self::FAMILY_HEAD) {
-            return $this->headCompatible($requirement, $productText);
+            return $helmetMount || $this->headCompatible($requirement, $productText);
         }
         if ($reqFamily === self::FAMILY_HEARING) {
             if ($this->isHearingHygieneKit($productText) && ! $this->isHearingHygieneKit($requirement)) {
@@ -695,10 +697,12 @@ final class PpeAssortment
             : null;
         $prodFamily = $fromName ?? $stored ?? $this->productFamily($product);
 
+        $helmetMount = false;
         if ($prodFamily !== null && $reqFamily !== $prodFamily) {
             if (! $this->helmetMountAllows($requirement, $reqFamily, $prodFamily)) {
                 return false;
             }
+            $helmetMount = true;
         }
         if ($reqFamily === self::FAMILY_APPAREL) {
             return $this->apparelCompatible($requirement, $this->productFullText($product));
@@ -708,7 +712,7 @@ final class PpeAssortment
             return false;
         }
         if ($reqFamily === self::FAMILY_HEAD) {
-            return $this->headCompatible($requirement, $this->productIdentityText($product));
+            return $helmetMount || $this->headCompatible($requirement, $this->productIdentityText($product));
         }
         if ($reqFamily === self::FAMILY_HEARING) {
             return $this->hearingCompatible($requirement, $product);
@@ -948,7 +952,7 @@ final class PpeAssortment
             return false;
         }
         $t = $this->normalize($requirement);
-        if (preg_match('/\b(adapter|przejsc|mocowan)\w*/u', $t) !== 1) {
+        if (preg_match('/\b(adapter|przejsc|mocowan|nosnik|laczen)\w*/u', $t) !== 1) {
             return false;
         }
 

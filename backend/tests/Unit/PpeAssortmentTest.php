@@ -437,4 +437,29 @@ final class PpeAssortmentTest extends TestCase
         $this->assertFalse($this->assortment->compatibleProduct($req, $fireman));
         $this->assertTrue($this->assortment->compatibleProduct($req, $esd));
     }
+
+    #[Test]
+    public function visor_carrier_query_accepts_face_mount_and_v5_sku(): void
+    {
+        $req = 'System łączenia osłony z hełmem ochronnym 3M V5 tzw. nośnik osłony';
+        $this->assertSame(PpeAssortment::FAMILY_HEAD, $this->assortment->family($req));
+
+        $v5 = new Product;
+        $v5->forceFill([
+            'name' => '3M System łączenia osłony z hełmem ochronnym, V5',
+            'sku' => 'V5',
+            'manufacturer' => '3M',
+            'ppe_family' => PpeAssortment::FAMILY_FACE,
+        ]);
+        $face = new Product;
+        $face->forceFill([
+            'name' => '3M Osłona twarzy siatkowa V4B',
+            'sku' => 'V4B',
+            'manufacturer' => '3M',
+            'ppe_family' => PpeAssortment::FAMILY_FACE,
+        ]);
+
+        $this->assertTrue($this->assortment->compatibleProduct($req, $v5));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $face));
+    }
 }

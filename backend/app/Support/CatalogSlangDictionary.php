@@ -163,6 +163,11 @@ final class CatalogSlangDictionary
         if ($needed === '') {
             return $this->rewriteCache[$query] = null;
         }
+        if ($this->wantsFullFaceMask3S($query)) {
+            array_unshift($phrases, 'maska 3S', 'maska pełnotwarzowa');
+            $phrases = array_values(array_unique($phrases));
+            $needed = 'maska 3S';
+        }
 
         return $this->rewriteCache[$query] = [
             'needed' => $needed,
@@ -180,6 +185,20 @@ final class CatalogSlangDictionary
         }
 
         return str_contains($q, $t);
+    }
+
+    /** MSA 3S to maska pełnotwarzowa — samo „maska” nie może zejść do półmaski. */
+    private function wantsFullFaceMask3S(string $query): bool
+    {
+        $q = $this->fold($query);
+        if (preg_match('/\bffp[123]?\b/u', $q) === 1) {
+            return false;
+        }
+        if (preg_match('/\b3s\b/u', $q) !== 1) {
+            return false;
+        }
+
+        return preg_match('/\b(maska|maseczka|polmask)/u', $q) === 1;
     }
 
     public function rejectsProduct(string $query, string $productText): bool

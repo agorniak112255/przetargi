@@ -2741,6 +2741,14 @@ final class ProductAiSearchService
                 $out[] = $c;
             }
         }
+        if (preg_match_all('/\b[a-z]\d\b/u', $norm, $short)) {
+            foreach ($short[0] as $raw) {
+                $c = preg_replace('/[^a-z0-9]/', '', $raw) ?? '';
+                if ($c !== '') {
+                    $out[] = $c;
+                }
+            }
+        }
 
         return array_values(array_unique($out));
     }

@@ -108,6 +108,7 @@ export function InquiryClarifyModal({
   const [answers, setAnswers] = useState<Record<string, InquiryAnswer>>(initialAnswers)
   const [note, setNote] = useState(initialNote)
   const [previewId, setPreviewId] = useState<number | null>(null)
+  const [previewQuery, setPreviewQuery] = useState('')
   const seconds = useBusySeconds(open && busy)
 
   useEffect(() => {
@@ -115,6 +116,7 @@ export function InquiryClarifyModal({
     setAnswers(initialAnswers)
     setNote(initialNote)
     setPreviewId(null)
+    setPreviewQuery('')
     // tylko przy otwarciu — nie nadpisuj kliknięć przy re-renderze rodzica
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -125,6 +127,7 @@ export function InquiryClarifyModal({
       if (e.key !== 'Escape' || busy) return
       if (previewId != null) {
         setPreviewId(null)
+        setPreviewQuery('')
       }
     }
     document.addEventListener('keydown', onKey)
@@ -156,7 +159,7 @@ export function InquiryClarifyModal({
     }))
   }
 
-  function renderFields(card: InquiryCard) {
+  function renderFields(card: InquiryCard, quote?: string | null) {
     return (
       <div>
         <p className="text-sm font-semibold text-slate-800">{card.title}</p>
@@ -183,7 +186,10 @@ export function InquiryClarifyModal({
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => setPreviewId(productId)}
+                    onClick={() => {
+                      setPreviewId(productId)
+                      setPreviewQuery((quote ?? card.quote ?? '').trim())
+                    }}
                     className="rounded-full border border-violet-300 bg-white px-2.5 py-1 text-xs font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
                   >
                     Opis
@@ -301,7 +307,7 @@ export function InquiryClarifyModal({
                           : undefined
                       }
                     >
-                      {renderFields(card)}
+                      {renderFields(card, head.quote)}
                     </div>
                   ))}
                 </div>
@@ -356,7 +362,14 @@ export function InquiryClarifyModal({
           </button>
         </div>
       </div>
-      <ProductVerifyModal productId={previewId} onClose={() => setPreviewId(null)} />
+      <ProductVerifyModal
+        productId={previewId}
+        query={previewQuery}
+        onClose={() => {
+          setPreviewId(null)
+          setPreviewQuery('')
+        }}
+      />
     </div>
   )
 }

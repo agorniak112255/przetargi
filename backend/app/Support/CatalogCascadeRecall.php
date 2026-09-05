@@ -484,7 +484,7 @@ final class CatalogCascadeRecall
             PpeAssortment::FAMILY_GLOVES => ['rekawic', 'glove', 'rukavic'],
             PpeAssortment::FAMILY_FOOTWEAR => ['obuwie', 'buty', 'trzewik', 'kalosz', 'polbut'],
             PpeAssortment::FAMILY_APPAREL => ['kurtk', 'spodn', 'kombinezon', 'kamizelk', 'bluz'],
-            PpeAssortment::FAMILY_HEAD => ['czapk', 'czepek', 'kominiark', 'helm', 'kask'],
+            PpeAssortment::FAMILY_HEAD => ['czapk', 'czepek', 'kominiark', 'helm', 'hełm', 'kask'],
             PpeAssortment::FAMILY_FACE => ['przylbic', 'oslona'],
             PpeAssortment::FAMILY_EYES => ['okular', 'gogl'],
             PpeAssortment::FAMILY_HEARING => ['nausznik', 'ochronnik', 'sluch'],
