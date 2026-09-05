@@ -433,6 +433,22 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://ardon.cz/multimedia/products/A5111_001.jpg']);
     }
 
+    public function test_resolves_relative_sitemap_path_from_robots(): void
+    {
+        $this->fakeHttp([
+            'https://boxmetmedical.pl/robots.txt' => Http::response("User-Agent: *\nSitemap: /data/sitemap/sitemap.xml\n", 200),
+            'https://boxmetmedical.pl/data/sitemap/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset><url><loc>https://boxmetmedical.pl/produkt/rekawiczki-nitrylowe</loc></url></urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('boxmetmedical.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://boxmetmedical.pl/produkt/rekawiczki-nitrylowe']);
+    }
+
     public function test_finds_product_page_by_code_in_url(): void
     {
         $this->seedPage('https://optimumbhp.pl/REKAWICE-ROBOCZE-1202-URGENT-p138481');

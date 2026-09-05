@@ -215,9 +215,9 @@ final class CatalogSitemapIndexer
                 break;
             }
             $robots = $this->fetch('https://'.$name.'/robots.txt', 12);
-            $this->collectRobotSitemaps($robots, $out);
+            $this->collectRobotSitemaps($robots, $out, $name);
             if ($out === [] && ! app()->environment('testing')) {
-                $this->collectRobotSitemaps($this->fetchViaCurl('https://'.$name.'/robots.txt', 12), $out);
+                $this->collectRobotSitemaps($this->fetchViaCurl('https://'.$name.'/robots.txt', 12), $out, $name);
             }
             if ($out !== []) {
                 break;
@@ -429,7 +429,7 @@ final class CatalogSitemapIndexer
     /**
      * @param  list<string>  $out
      */
-    private function collectRobotSitemaps(?string $robots, array &$out): void
+    private function collectRobotSitemaps(?string $robots, array &$out, string $host = ''): void
     {
         if ($robots === null || $this->looksLikeHtml($robots)) {
             return;
@@ -439,7 +439,17 @@ final class CatalogSitemapIndexer
         }
         foreach ($m[1] as $url) {
             $url = trim((string) $url);
-            if ($url !== '') {
+            if ($url === '') {
+                continue;
+            }
+            // specyfikacja wymaga pełnego URL-a, ale część sklepów (np. boxmetmedical.pl)
+            // podaje ścieżkę względną — bez tego taki wpis jest po prostu nie do pobrania
+            if (preg_match('#^https?://#i', $url) !== 1 && $host !== '') {
+                $url = str_starts_with($url, '/')
+                    ? 'https://'.$host.$url
+                    : 'https://'.$host.'/'.$url;
+            }
+            if (preg_match('#^https?://#i', $url) === 1) {
                 $out[] = $url;
             }
         }
