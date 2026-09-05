@@ -38,8 +38,13 @@ final class CatalogSitemapIndexer
     /** Poniżej tylu adresów z sitemapy dokładamy pełzanie po ładnych URL-ach kart. */
     private const SPARSE_SITEMAP_LIMIT = 50;
 
-    /** Sklepy za WAF-em odrzucają nagłówki botów, więc przedstawiamy się jak przeglądarka. */
-    private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+    /**
+     * Sklepy za WAF-em odrzucają nagłówki botów, więc przedstawiamy się jak przeglądarka.
+     * Chrome/124 (w dowolnym formacie: 124.0 albo 124.0.0.0) jest na czarnej liście części
+     * WAF-ów (np. ox-on.com, HTTP 403) — to odcisk masowo kopiowanego UA ze starych
+     * przykładów scraperów. Inny numer wersji (128) przechodzi bez problemu.
+     */
+    private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
     private const MAX_TOKEN_LENGTH = 64;
 
@@ -959,33 +964,54 @@ final class CatalogSitemapIndexer
         }
     }
 
+    /** Ile razy próbujemy jedno zapytanie — część serwerów bywa niestabilna tylko chwilowo. */
+    private const FETCH_ATTEMPTS = 2;
+
     private function fetch(string $url, int $timeout = 30): ?string
     {
-        try {
-            $response = Http::withHeaders([
-                'User-Agent' => self::USER_AGENT,
-                'Accept' => 'application/xml,text/xml,text/plain,*/*',
-            ])->timeout(max(5, $timeout))->connectTimeout(8)->get($url);
-        } catch (Throwable $e) {
-            Log::info('Sitemap fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
+        $lastError = null;
+        for ($attempt = 1; $attempt <= self::FETCH_ATTEMPTS; $attempt++) {
+            try {
+                $response = Http::withHeaders([
+                    'User-Agent' => self::USER_AGENT,
+                    'Accept' => 'application/xml,text/xml,text/plain,*/*',
+                ])->timeout(max(5, $timeout))->connectTimeout(8)->get($url);
+            } catch (Throwable $e) {
+                $lastError = $e->getMessage();
+                if ($attempt < self::FETCH_ATTEMPTS) {
+                    usleep(300000);
+                }
 
-            return null;
+                continue;
+            }
+
+            if (! $response->successful()) {
+                if ($attempt < self::FETCH_ATTEMPTS) {
+                    usleep(300000);
+
+                    continue;
+                }
+
+                return null;
+            }
+
+            $body = (string) $response->body();
+            if ($body === '') {
+                return null;
+            }
+            // .xml.gz bywa serwowane bez nagłówka Content-Encoding
+            if (str_starts_with($body, "\x1f\x8b")) {
+                $body = (string) @gzdecode($body);
+            }
+
+            return $body !== '' ? $body : null;
         }
 
-        if (! $response->successful()) {
-            return null;
+        if ($lastError !== null) {
+            Log::info('Sitemap fetch failed', ['url' => $url, 'error' => $lastError]);
         }
 
-        $body = (string) $response->body();
-        if ($body === '') {
-            return null;
-        }
-        // .xml.gz bywa serwowane bez nagłówka Content-Encoding
-        if (str_starts_with($body, "\x1f\x8b")) {
-            $body = (string) @gzdecode($body);
-        }
-
-        return $body !== '' ? $body : null;
+        return null;
     }
 
     private function normalizeHost(string $host): string

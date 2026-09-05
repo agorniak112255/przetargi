@@ -177,7 +177,7 @@ final class ProductImageDownloader
         $response = Http::timeout(12)
             ->connectTimeout(4)
             ->withHeaders([
-                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
                 // Preferuj JPEG/WebP — część CDN (uvex) i tak zwróci AVIF; obsługujemy też AVIF.
                 'Accept' => 'image/jpeg,image/webp,image/png,image/avif,image/*,*/*;q=0.8',
                 'Referer' => $this->refererFor($url),

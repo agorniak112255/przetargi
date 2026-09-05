@@ -139,7 +139,7 @@ final class ProductDocumentDownloader
         $response = Http::timeout(20)
             ->connectTimeout(5)
             ->withHeaders([
-                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
                 'Accept' => 'application/pdf,*/*;q=0.8',
             ])
             ->withOptions(['allow_redirects' => true])
