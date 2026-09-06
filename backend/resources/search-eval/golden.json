@@ -342,10 +342,16 @@
             "id": "pasek-podbrodkowy-3-punktowy-do-helmu-g3000",
             "query": "Pasek podbródkowy 3 punktowy do hełmu G3000",
             "expected_skus": [
-                "D1229"
+                "GH4",
+                "1085868",
+                "D1229",
+                "GH1",
+                "GH1N",
+                "GH1N-EA",
+                "7100150147"
             ],
             "forbidden_skus": [],
-            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+            "note": "Paski do G3000 — nie hełm G3000 i nie SKU z samym ciągiem 3000 w numerze."
         },
         {
             "id": "trzewiki-araukan-940-6060-s3-en-iso-20345",

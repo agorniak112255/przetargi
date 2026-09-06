@@ -271,6 +271,23 @@ final class ProductModelFuzzyTest extends TestCase
         )));
     }
 
+    #[Test]
+    public function letter_digit_model_does_not_match_digits_inside_other_sku(): void
+    {
+        $req = 'Pasek podbródkowy 3 punktowy do hełmu G3000';
+
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            'D1229',
+            'Podbradní pásek GH1 k přilbě Peltor G3000',
+            'ARDON SAFETY',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            'GA3130000000-RE000',
+            'F2 X-TREM WildLand Rescue, CE, EN12492, wentylacja, pasek podbródkowy, czerwony',
+            'MSA',
+        )));
+    }
+
     private function product(string $sku, string $name, string $manufacturer): Product
     {
         $p = new Product;

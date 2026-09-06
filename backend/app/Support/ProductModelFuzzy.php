@@ -521,8 +521,12 @@ final class ProductModelFuzzy
         if ($needle === '' || $hay === '') {
             return 99;
         }
-        if (preg_match('/^(.*[a-z])(\d{3,5})$/u', $needle, $m) === 1 && ! str_contains($hay, $m[2])) {
-            return 99;
+        if (preg_match('/^(.*[a-z])(\d{3,5})$/u', $needle, $m) === 1) {
+            $digits = $m[2];
+            $bounded = preg_match('/(?<![0-9])'.preg_quote($digits, '/').'(?![0-9])/u', $hay) === 1;
+            if (! $bounded && ! str_contains($hay, $needle)) {
+                return 99;
+            }
         }
         if (preg_match('/[a-z]\d{1,2}$/u', $needle) === 1 && ! str_contains($hay, $needle)) {
             return 99;
