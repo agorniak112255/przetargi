@@ -140,6 +140,17 @@ final class ProductModelFuzzy
                 continue;
             }
             $a = $this->lettersOnly($tokens[$i]);
+            $nextCompact = isset($tokens[$i + 1]) ? $this->compact($tokens[$i + 1]) : '';
+            if (
+                $a !== ''
+                && mb_strlen($a) >= 4
+                && ! $this->isStop($a)
+                && ! $this->isSizeLabelWord($a)
+                && ! $this->isModelPairStop($a)
+                && $this->isShortAlnumModel($nextCompact)
+            ) {
+                $this->pushNeedle($out, $a.$nextCompact);
+            }
             $b = isset($tokens[$i + 1]) ? $this->lettersOnly($tokens[$i + 1]) : '';
             if ($a === '' || $b === '' || $this->isStop($a) || $this->isStop($b)) {
                 continue;
@@ -407,6 +418,26 @@ final class ProductModelFuzzy
         $out[] = $c;
     }
 
+    /** Peltor + X2 — nie „klasa S3” i nie „filtr A2”. */
+    private function isModelPairStop(string $word): bool
+    {
+        return in_array($word, [
+            'klasa', 'filtr', 'typ', 'kategoria', 'poziom', 'wersja', 'norma',
+            'ochrona', 'ochrony', 'przeciwhalasowe', 'naglowne', 'nahelmowe',
+        ], true);
+    }
+
+    /** X2 / X2A / H31 — za krótkie na isMixedModelCode, ale to kod przy nazwie serii. */
+    private function isShortAlnumModel(string $compact): bool
+    {
+        $len = mb_strlen($compact);
+        if ($len < 2 || $len > 6 || $this->isJunkCatalogModelNeedle($compact)) {
+            return false;
+        }
+
+        return preg_match('/^[a-z]{1,3}\d[a-z0-9]{0,3}$/u', $compact) === 1;
+    }
+
     /** P3E / H31P3E / WFU255DG — nie czysty wyraz i nie sama liczba. */
     private function isMixedModelCode(string $compact): bool
     {
@@ -447,6 +478,9 @@ final class ProductModelFuzzy
             return 99;
         }
         if (preg_match('/^(.*[a-z])(\d{3,5})$/u', $needle, $m) === 1 && ! str_contains($hay, $m[2])) {
+            return 99;
+        }
+        if (preg_match('/[a-z]\d{1,2}$/u', $needle) === 1 && ! str_contains($hay, $needle)) {
             return 99;
         }
         if ($hay === $needle || str_contains($hay, $needle) || str_starts_with($hay, $needle)) {

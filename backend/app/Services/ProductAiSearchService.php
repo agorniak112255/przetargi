@@ -2607,15 +2607,17 @@ final class ProductAiSearchService
         if ($cascaded->isNotEmpty()) {
             $fromNameSteps = is_string($cascadeLevel) && str_starts_with($cascadeLevel, 'steps_');
             $pool = $fromNameSteps
-                ? $cascaded
+                ? $codeHits->concat($cascaded)
                 : ($this->slangRewriteFor($query) !== null
-                    ? $cascaded->concat($priority)
+                    ? $codeHits->concat($cascaded)->concat($priority)
                     : $priority->concat($cascaded));
 
             $cascadeKept = $this->keepCompatible($requirement, $this->uniqueProducts($pool, $limit));
             // Pełna pula kończy retrieval — dokładanie czegokolwiek i tak by z niej wypadło.
+            // Trafienie po kodzie modelu zostaje z przodu: kaskada „nauszniki” nie może
+            // zepchnąć X2A-EU poza limit, gdy LIKE już znalazł kartę.
             if ($cascadeKept->count() >= $limit) {
-                return $cascadeKept->values();
+                return $this->withModelCodeHits($requirement, $codeHits, $cascadeKept, $limit);
             }
         }
         if ($this->catalogSlang->requiresTightEvidence($query)) {
@@ -2642,7 +2644,7 @@ final class ProductAiSearchService
         // kominiarkę) albo gdy zeszła do samego rzeczownika rodzaju — wtedy z definicji
         // nie widzi kart bez tego słowa w nazwie („URG-A”).
         if ($cascadeKept->isNotEmpty() && ! $this->cascadeSweptFamilyNoun($cascadeLevel, $intent)) {
-            return $cascadeKept->values();
+            return $this->withModelCodeHits($requirement, $codeHits, $cascadeKept, $limit);
         }
 
         // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
@@ -3242,6 +3244,21 @@ final class ProductAiSearchService
      * @param  Collection<int, Product>  $products
      * @return Collection<int, Product>
      */
+    /**
+     * Kaskada rodzaju nie może wypchnąć karty znalezionej po kodzie modelu.
+     *
+     * @param  Collection<int, Product>  $codeHits
+     * @param  Collection<int, Product>  $pool
+     * @return Collection<int, Product>
+     */
+    private function withModelCodeHits(string $requirement, Collection $codeHits, Collection $pool, int $limit): Collection
+    {
+        return $this->uniqueProducts(
+            $this->keepCompatible($requirement, $codeHits)->concat($pool),
+            $limit
+        )->values();
+    }
+
     private function uniqueProducts(Collection $products, int $limit): Collection
     {
         $seen = [];

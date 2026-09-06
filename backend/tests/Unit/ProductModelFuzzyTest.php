@@ -133,6 +133,30 @@ final class ProductModelFuzzyTest extends TestCase
     }
 
     #[Test]
+    public function peltor_x2_is_a_named_model_and_not_x1(): void
+    {
+        $req = 'Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna';
+
+        $this->assertTrue($this->fuzzy->hasNamedModel($req));
+        $this->assertContains('peltorx2', $this->fuzzy->needles($req));
+        $this->assertContains('peltorx2', $this->fuzzy->catalogModelNeedles($req));
+        $this->assertTrue($this->fuzzy->usesModelAnchoredCatalogSearch($req));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            'X2A-EU',
+            '3M Nauszniki przeciwhałasowe PELTOR X2 - wersja nagłowna (SNR 31 dB)',
+            '3M',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            'X1A-EU',
+            '3M Nauszniki przeciwhałasowe PELTOR X1 - wersja nagłowna (SNR 27 dB)',
+            '3M',
+        )));
+        $this->assertNotContains('klasas3', $this->fuzzy->needles(
+            'Trzewiki robocze w klasie ochrony S3 SRC z podnoskiem'
+        ));
+    }
+
+    #[Test]
     public function disposable_cap_pack_is_not_a_named_model(): void
     {
         $req = 'CZEPEK JEDNORAZOWY -1 OP.-100 szt.';
