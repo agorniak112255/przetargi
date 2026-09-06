@@ -345,6 +345,28 @@ final class PpeAssortmentTest extends TestCase
         $this->assertTrue($this->assortment->compatibleProduct($req, $earmuff));
         $this->assertFalse($this->assortment->compatibleProduct($req, $kit));
         $this->assertFalse($this->assortment->isUnderHelmetLiner($req));
+        $this->assertSame(PpeAssortment::MOUNT_HELMET, $this->assortment->hearingMount($req));
+        $this->assertSame(PpeAssortment::MOUNT_HELMET, $this->assortment->hearingMount(
+            '3M Nauszniki PELTOR X1 - wersja nahełmowa (SNR 27 dB)'
+        ));
+        $this->assertSame(PpeAssortment::MOUNT_HEADBAND, $this->assortment->hearingMount(
+            '3M Nauszniki PELTOR X1 - wersja nagłowna (SNR 27 dB) Nauszniki do hełmu'
+        ));
+        $helmetMuff = new Product;
+        $helmetMuff->forceFill([
+            'name' => '3M Nauszniki PELTOR X1 - wersja nahełmowa (SNR 27 dB)',
+            'sku' => 'X1P3E-EU',
+            'category' => 'Nauszniki do hełmu',
+        ]);
+        $headband = new Product;
+        $headband->forceFill([
+            'name' => '3M Nauszniki PELTOR X1 - wersja nagłowna (SNR 27 dB)',
+            'sku' => 'X1A-EU',
+            'category' => 'Nauszniki przeciwhałasowe',
+        ]);
+        $helmQ = 'Nauszniki przeciwhałasowe montowane na hełm ochronny';
+        $this->assertTrue($this->assortment->compatibleProduct($helmQ, $helmetMuff));
+        $this->assertFalse($this->assortment->compatibleProduct($helmQ, $headband));
 
         $helmet = new Product;
         $helmet->forceFill([

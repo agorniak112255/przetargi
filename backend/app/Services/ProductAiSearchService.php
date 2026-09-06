@@ -2587,7 +2587,8 @@ final class ProductAiSearchService
         $requirement = $this->assortmentText($query, $intent['needed']);
         $codeHits = $this->clock('retrieve_codes', fn (): Collection => $this->retrieveByModelCode($modelQuery.' '.$searchText, $limit));
         $snrHits = $this->clock('retrieve_snr', fn (): Collection => $this->retrieveBySnr($query, $limit));
-        $forcedHits = $this->uniqueProducts($codeHits->concat($snrHits), $limit);
+        $mountHits = $this->clock('retrieve_mount', fn (): Collection => $this->retrieveByHearingMount($query, $limit));
+        $forcedHits = $this->uniqueProducts($codeHits->concat($snrHits)->concat($mountHits), $limit);
         $fuzzyHits = $this->clock('retrieve_fuzzy', fn (): Collection => $this->retrieveByFuzzyModel($modelQuery.' '.$searchText, $limit));
         $filterHits = $this->clock('retrieve_filter', fn (): Collection => $this->retrieveByFilterType($query, $limit));
         $brandHits = $this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)
@@ -2929,6 +2930,47 @@ final class ProductAiSearchService
         }
 
         return $score;
+    }
+
+    /**
+     * Nahełmowe / nagłowne — kaskada po „hełm” nie widzi karty z samym „nahełmowa”.
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByHearingMount(string $query, int $limit): Collection
+    {
+        $want = $this->assortment->hearingMount($query);
+        if ($want === null) {
+            return collect();
+        }
+
+        $q = $this->productBaseQuery();
+        $q->where(function ($outer) use ($want): void {
+            if ($want === PpeAssortment::MOUNT_HELMET) {
+                foreach (['%nahelm%', '%nahełm%', '%do hełm%', '%do helm%', '%na hełm%', '%na helm%', '%p3e%'] as $like) {
+                    $outer->orWhere('name', 'like', $like)
+                        ->orWhere('sku', 'like', $like)
+                        ->orWhere('category', 'like', $like)
+                        ->orWhere('description', 'like', $like)
+                        ->orWhere('search_blob', 'like', $like);
+                }
+
+                return;
+            }
+            foreach (['%naglown%', '%nagłown%', '%pałąk%', '%palak%'] as $like) {
+                $outer->orWhere('name', 'like', $like)
+                    ->orWhere('description', 'like', $like)
+                    ->orWhere('search_blob', 'like', $like);
+            }
+        });
+
+        return $q->limit(400)
+            ->get()
+            ->filter(fn (Product $p): bool => $this->assortment->hearingMount(
+                (string) $p->name.' '.$p->sku.' '.($p->category ?? '')
+            ) === $want)
+            ->take(max(8, $limit))
+            ->values();
     }
 
     private function articleTypeScore(string $query, Product $product): int

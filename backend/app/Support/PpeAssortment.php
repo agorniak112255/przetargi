@@ -25,6 +25,10 @@ final class PpeAssortment
 
     public const FAMILY_HEARING = 'hearing';
 
+    public const MOUNT_HELMET = 'helmet';
+
+    public const MOUNT_HEADBAND = 'headband';
+
     public const FAMILY_RESPIRATORY = 'respiratory';
 
     public const FAMILY_FALL = 'fall';
@@ -1006,8 +1010,39 @@ final class PpeAssortment
         if ($reqType !== null && $prodType !== null && $reqType !== $prodType) {
             return false;
         }
+        $reqMount = $this->hearingMount($requirement);
+        $prodMount = $this->hearingMount($identity);
+        if ($reqMount !== null && $prodMount !== null && $reqMount !== $prodMount) {
+            return false;
+        }
 
         return true;
+    }
+
+    /** Nahełmowe / do hełmu vs nagłowne / na pałąku. */
+    public function hearingMount(string $text): ?string
+    {
+        $t = $this->normalize($text);
+        if ($this->isHearingHygieneKit($t)) {
+            return null;
+        }
+        if (preg_match('/\bnahelmow\w*/u', $t) === 1) {
+            return self::MOUNT_HELMET;
+        }
+        if (preg_match('/\bnaglown\w*/u', $t) === 1) {
+            return self::MOUNT_HEADBAND;
+        }
+        if (preg_match(
+            '/\b(do\s+helm|na\s+helm|montowan\w*\s+(na\s+)?helm|na\s+palak|palak)\w*/u',
+            $t
+        ) === 1) {
+            return str_contains($t, 'palak') ? self::MOUNT_HEADBAND : self::MOUNT_HELMET;
+        }
+        if (preg_match('/p3e/u', $t) === 1 && $this->hearingType($t) === 'earmuff') {
+            return self::MOUNT_HELMET;
+        }
+
+        return null;
     }
 
     /** Adapter / mocowanie „do hełmu” to zwykle osłona twarzy albo nauszniki, nie sam kask. */
