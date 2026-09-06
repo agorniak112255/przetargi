@@ -29,6 +29,12 @@ final class PpeAssortment
 
     public const MOUNT_HEADBAND = 'headband';
 
+    public const HARNESS_FASTRAC = 'fastrac';
+
+    public const HARNESS_PUSHKEY = 'pushkey';
+
+    public const VENT_OPEN = 'vent';
+
     public const FAMILY_RESPIRATORY = 'respiratory';
 
     public const FAMILY_FALL = 'fall';
@@ -478,13 +484,13 @@ final class PpeAssortment
                 || preg_match('/\b(czepek|wkladk|liner|kominiark|balaclava)\w*/u', $pt) === 1;
         }
         if ($reqType === null || $prodType === null) {
-            return true;
+            return $this->helmetSpecAllows($requirement, $productText);
         }
         if ($this->isUnderHelmetType($reqType) && $this->isUnderHelmetType($prodType)) {
             return true;
         }
 
-        return $reqType === $prodType;
+        return $reqType === $prodType && $this->helmetSpecAllows($requirement, $productText);
     }
 
     /** Odrzuca tylko pewną niezgodność rodziny; nieznany tytuł zostaje. */
@@ -1017,6 +1023,48 @@ final class PpeAssortment
         }
 
         return true;
+    }
+
+    /**
+     * Więźba i wentylacja z SIWZ — na nazwie, nie w kategorii.
+     * „Fas-Trac” / „wentylowany” wygrywa z samym modelem V-Gard 500.
+     */
+    public function helmetSpecAllows(string $requirement, string $identity): bool
+    {
+        $wantHarness = $this->helmetHarness($requirement);
+        $haveHarness = $this->helmetHarness($identity);
+        if ($wantHarness !== null && $haveHarness !== null && $wantHarness !== $haveHarness) {
+            return false;
+        }
+        if ($this->helmetVent($requirement) === self::VENT_OPEN
+            && $this->helmetVent($identity) !== self::VENT_OPEN) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public function helmetHarness(string $text): ?string
+    {
+        $t = $this->normalize($text);
+        if (preg_match('/\bfas\s*trac\b/u', $t) === 1) {
+            return self::HARNESS_FASTRAC;
+        }
+        if (preg_match('/\bpush\s*key\b/u', $t) === 1) {
+            return self::HARNESS_PUSHKEY;
+        }
+
+        return null;
+    }
+
+    public function helmetVent(string $text): ?string
+    {
+        $t = $this->normalize($text);
+        if (preg_match('/\bwentylowan\w*/u', $t) === 1) {
+            return self::VENT_OPEN;
+        }
+
+        return null;
     }
 
     /** Nahełmowe / do hełmu vs nagłowne / na pałąku. */

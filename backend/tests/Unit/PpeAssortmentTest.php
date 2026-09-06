@@ -557,4 +557,29 @@ final class PpeAssortmentTest extends TestCase
         $this->assertFalse($this->assortment->compatibleProduct($req, $hood));
         $this->assertFalse($this->assortment->compatibleProduct($req, $rain));
     }
+
+    #[Test]
+    public function helmet_fas_trac_vent_drops_push_key_and_unvented(): void
+    {
+        $req = 'Hełm wentylowany MSA SUPER V - GARD 500 ATEX czasza ABS - różne kolory, więźba Fas-Trac';
+
+        $this->assertSame(PpeAssortment::HARNESS_FASTRAC, $this->assortment->helmetHarness($req));
+        $this->assertSame(PpeAssortment::VENT_OPEN, $this->assortment->helmetVent($req));
+        $this->assertTrue($this->assortment->helmetSpecAllows(
+            $req,
+            'V-Gard 500, biały, wentylowany, więźba Fas-Trac III'
+        ));
+        $this->assertFalse($this->assortment->helmetSpecAllows(
+            $req,
+            'V-Gard 500, biały, wentylowany, więźba Push-Key'
+        ));
+        $this->assertFalse($this->assortment->helmetSpecAllows(
+            $req,
+            'V-Gard 500, biały, więźba Fas-Trac III'
+        ));
+        $this->assertFalse($this->assortment->helmetSpecAllows(
+            $req,
+            'V-Gard, biały, więźba Fas-Trac III'
+        ));
+    }
 }

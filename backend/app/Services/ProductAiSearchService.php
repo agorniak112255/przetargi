@@ -2835,7 +2835,8 @@ final class ProductAiSearchService
                 $this->assortment->compatibleProduct($query, $p)
                 || $this->modelFuzzy->matches($query, $p)
             ) && $this->matchesSlangEvidence($query, $p)
-                && $this->meetsRequiredSnr($query, $p))
+                && $this->meetsRequiredSnr($query, $p)
+                && $this->assortment->helmetSpecAllows($query, (string) $p->name.' '.$p->sku))
             ->values();
     }
 
