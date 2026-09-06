@@ -342,6 +342,15 @@ final class ProductAiSearchService
                 'candidates' => $candidates,
             ];
         }
+        $classRows = $this->rowsFromFootwearClassMatches($query, $candidates, $limit);
+        if ($classRows !== []) {
+            return [
+                'products' => $this->orderEyeWearSetRows($query, $classRows, $candidates),
+                'note' => null,
+                'rank_cards' => null,
+                'candidates' => $candidates,
+            ];
+        }
         if ($candidates->isEmpty()) {
             return [
                 'products' => [],
@@ -2836,6 +2845,7 @@ final class ProductAiSearchService
                 || $this->modelFuzzy->matches($query, $p)
             ) && $this->matchesSlangEvidence($query, $p)
                 && $this->meetsRequiredSnr($query, $p)
+                && $this->meetsRequiredFootwearClass($query, $p)
                 && $this->assortment->helmetSpecAllows($query, (string) $p->name.' '.$p->sku))
             ->values();
     }
@@ -2849,6 +2859,17 @@ final class ProductAiSearchService
         $have = $this->bhpAttributes->snrRating($this->filterHaystack($product));
 
         return $have === null || $have >= $min;
+    }
+
+    private function meetsRequiredFootwearClass(string $query, Product $product): bool
+    {
+        $want = $this->bhpAttributes->footwearClass($query);
+        if ($want === null) {
+            return true;
+        }
+        $have = $this->bhpAttributes->footwearClass($this->filterHaystack($product));
+
+        return $have === null || $this->bhpAttributes->footwearClassMeets($want, $have);
     }
 
     /**
@@ -3230,7 +3251,8 @@ final class ProductAiSearchService
 
         $needles = $this->constraintNeedles($constraints);
         $minSnr = $this->bhpAttributes->requiredSnr($query);
-        if ($needles === [] && $minSnr === null) {
+        $wantClass = $this->bhpAttributes->footwearClass($query);
+        if ($needles === [] && $minSnr === null && $wantClass === null) {
             return $candidates->take(self::RANK_CARDS)->values();
         }
 
@@ -3241,8 +3263,9 @@ final class ProductAiSearchService
                 continue;
             }
             $meetsSnr = $minSnr !== null && $this->productMeetsSnr($product, $minSnr);
+            $meetsClass = $wantClass !== null && $this->productMeetsFootwearClass($product, $wantClass);
             $hasNeedle = $needles !== [] && $this->haystackHasNeedle($this->rankingHaystack($product), $needles);
-            if ($meetsSnr || ($minSnr === null && $hasNeedle)) {
+            if ($meetsSnr || $meetsClass || ($minSnr === null && $wantClass === null && $hasNeedle)) {
                 $with->push($product);
             } else {
                 $without->push($product);
@@ -3553,6 +3576,43 @@ final class ProductAiSearchService
         $have = $this->bhpAttributes->snrRating($this->filterHaystack($product));
 
         return $have !== null && $have >= $min;
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromFootwearClassMatches(string $query, Collection $products, int $limit): array
+    {
+        $want = $this->bhpAttributes->footwearClass($query);
+        if ($want === null) {
+            return [];
+        }
+        $products = $this->withResponseRelations(
+            $products->filter(fn (Product $p): bool => $this->productMeetsFootwearClass($p, $want))->values()
+        );
+        if ($products->isEmpty()) {
+            return [];
+        }
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $row['ai_match_percent'] = 92;
+            $row['ai_match_reason'] = 'Klasa ochrony obuwia na karcie spełnia wymaganie z SIWZ.';
+            $out[] = $row;
+        }
+
+        return array_slice($out, 0, max(1, min(80, $limit)));
+    }
+
+    private function productMeetsFootwearClass(Product $product, string $want): bool
+    {
+        $have = $this->bhpAttributes->footwearClass($this->filterHaystack($product));
+
+        return $have !== null && $this->bhpAttributes->footwearClassMeets($want, $have);
     }
 
     /**

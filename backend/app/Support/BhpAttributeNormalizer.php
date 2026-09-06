@@ -378,6 +378,18 @@ final class BhpAttributeNormalizer
         return $this->extractFootwearClass($text);
     }
 
+    /** S3L spełnia S3; S1P nie spełnia S3. */
+    public function footwearClassMeets(string $required, string $have): bool
+    {
+        $required = mb_strtoupper($required);
+        $have = mb_strtoupper($have);
+        if ($have === $required) {
+            return true;
+        }
+
+        return preg_match('/^'.preg_quote($required, '/').'[A-Z]$/u', $have) === 1;
+    }
+
     /** Próg SNR z wymagania („SNR minimum 30 dB”, „tłumienie min. 31 dB”). */
     public function requiredSnr(string $text): ?int
     {

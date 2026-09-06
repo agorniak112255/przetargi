@@ -193,6 +193,10 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertSame('O2', $n->footwearClass('sztyblety O2'));
         $this->assertSame('S2', $n->footwearClass('półbuty s2 na zam.'));
         $this->assertSame('klasao2', $n->footwearClassToken('O2'));
+        $this->assertTrue($n->footwearClassMeets('S3', 'S3'));
+        $this->assertTrue($n->footwearClassMeets('S3', 'S3L'));
+        $this->assertFalse($n->footwearClassMeets('S3', 'S1P'));
+        $this->assertFalse($n->footwearClassMeets('S3', 'S5'));
 
         $attrs = $n->normalize(
             ['kategoria_bhp' => 'obuwie'],
