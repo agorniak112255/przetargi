@@ -29,6 +29,10 @@ class AiSetting extends Model
         'match_concurrency',
         'catalog_search_limit',
         'product_search_card_detail',
+        'match_apply_score',
+        'match_substitute_score',
+        'match_min_score',
+        'match_allow_catalog_rows',
         'vector_enabled',
         'qdrant_url',
         'qdrant_api_key',
@@ -61,6 +65,10 @@ class AiSetting extends Model
             'enrichment_batch_limit' => 'integer',
             'match_concurrency' => 'integer',
             'catalog_search_limit' => 'integer',
+            'match_apply_score' => 'integer',
+            'match_substitute_score' => 'integer',
+            'match_min_score' => 'integer',
+            'match_allow_catalog_rows' => 'boolean',
             'vector_enabled' => 'boolean',
         ];
     }

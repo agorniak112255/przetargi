@@ -739,7 +739,8 @@ final class ProductAiSearchService
             }
             if (! $deferCatalogMerge && $ranked === [] && $useCatalog) {
                 $ranked = $this->rowsFromRequirementCatalog($catalogQ, $limit);
-            } elseif ($ranked === [] && ! $noGuessing && ! $deferCatalogMerge) {
+            } elseif ($ranked === [] && ! $noGuessing
+                && (! $deferCatalogMerge || $this->aiSettings->matchAllowsCatalogRows())) {
                 // Przy dopasowaniu SIWZ wynik idzie prosto do pozycji oferty, więc
                 // najsłabszy poziom („ten sam rodzaj w katalogu”) tu nie wchodzi —
                 // kalesony nie mogą zostać kombinezonem tylko dlatego, że to odzież.

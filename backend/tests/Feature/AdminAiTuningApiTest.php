@@ -44,6 +44,73 @@ final class AdminAiTuningApiTest extends TestCase
             ->assertJsonPath('catalog_search_limit', 12);
     }
 
+    public function test_admin_can_read_and_save_match_thresholds(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->getJson('/api/admin/ai-tuning')
+            ->assertOk()
+            ->assertJsonPath('match_apply_score', AiSettingsService::MATCH_APPLY_SCORE_DEFAULT)
+            ->assertJsonPath('match_substitute_score', AiSettingsService::MATCH_SUBSTITUTE_SCORE_DEFAULT)
+            ->assertJsonPath('match_min_score', AiSettingsService::MATCH_MIN_SCORE_DEFAULT)
+            ->assertJsonPath('match_allow_catalog_rows', false);
+
+        $this->putJson('/api/admin/ai-tuning', [
+            'catalog_search_limit' => 40,
+            'match_apply_score' => 30,
+            'match_substitute_score' => 45,
+            'match_min_score' => 50,
+            'match_allow_catalog_rows' => true,
+        ])
+            ->assertOk()
+            ->assertJsonPath('match_apply_score', 30)
+            ->assertJsonPath('match_min_score', 50)
+            ->assertJsonPath('match_allow_catalog_rows', true);
+
+        $settings = app(AiSettingsService::class);
+        $this->assertSame(30, $settings->matchApplyScore());
+        $this->assertSame(45, $settings->matchSubstituteScore());
+        $this->assertSame(50, $settings->matchMinScore());
+        $this->assertTrue($settings->matchAllowsCatalogRows());
+    }
+
+    public function test_match_thresholds_reject_out_of_range_and_bad_order(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->putJson('/api/admin/ai-tuning', [
+            'catalog_search_limit' => 40,
+            'match_apply_score' => 0,
+        ])->assertStatus(422);
+
+        $this->putJson('/api/admin/ai-tuning', [
+            'catalog_search_limit' => 40,
+            'match_min_score' => 100,
+        ])->assertStatus(422);
+
+        // Zamiennik nie może być łatwiejszy niż zwykłe dopasowanie.
+        $this->putJson('/api/admin/ai-tuning', [
+            'catalog_search_limit' => 40,
+            'match_apply_score' => 60,
+            'match_substitute_score' => 50,
+        ])->assertStatus(422);
+    }
+
+    public function test_saving_only_the_limit_keeps_tuned_thresholds(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->putJson('/api/admin/ai-tuning', [
+            'catalog_search_limit' => 40,
+            'match_apply_score' => 25,
+        ])->assertOk();
+
+        $this->putJson('/api/admin/ai-tuning', ['catalog_search_limit' => 10])
+            ->assertOk()
+            ->assertJsonPath('catalog_search_limit', 10)
+            ->assertJsonPath('match_apply_score', 25);
+    }
+
     public function test_catalog_search_limit_rejects_out_of_range(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

@@ -30,6 +30,12 @@ return [
     // Ile zapytań AI naraz (1–100): SIWZ i Pobierz z cennika. Zależy od FPM i modelu.
     'match_concurrency' => (int) env('AI_MATCH_CONCURRENCY', 4),
     'catalog_search_limit' => (int) env('AI_CATALOG_SEARCH_LIMIT', 40),
+    // Progi dopasowania SIWZ (1-99). Do przestrojenia w panelu: Strojenie AI.
+    'match_apply_score' => (int) env('AI_MATCH_APPLY_SCORE', 40),
+    'match_substitute_score' => (int) env('AI_MATCH_SUBSTITUTE_SCORE', 55),
+    'match_min_score' => (int) env('AI_MATCH_MIN_SCORE', 65),
+    // true = wolno wstawić do oferty kartę z zapasowej listy katalogowej (bez oceny modelu)
+    'match_allow_catalog_rows' => (bool) env('AI_MATCH_ALLOW_CATALOG_ROWS', false),
     // Telemetria wyszukiwania (tabela search_events) — źródło golden setu i metryk jakości.
     'search_events_enabled' => (bool) env('AI_SEARCH_EVENTS_ENABLED', true),
     // long | short — ile tekstu z karty idzie do modelu w wyszukiwarce AI

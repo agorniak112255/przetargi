@@ -21,6 +21,21 @@ final class AiSettingsService
 
     public const CATALOG_SEARCH_LIMIT_MAX = 80;
 
+    /**
+     * Progi dopasowania SIWZ — te same liczby, co stałe w ProductMatchService, ale
+     * do przestrojenia z panelu. Luźniejszy próg = więcej pozycji wypełnionych
+     * automatycznie i więcej pomyłek; ostrzejszy = więcej pustych pozycji do ręki.
+     */
+    public const MATCH_APPLY_SCORE_DEFAULT = 40;
+
+    public const MATCH_SUBSTITUTE_SCORE_DEFAULT = 55;
+
+    public const MATCH_MIN_SCORE_DEFAULT = 65;
+
+    public const MATCH_SCORE_MIN = 1;
+
+    public const MATCH_SCORE_MAX = 99;
+
     public const SEARCH_ENGINE_TAVILY = 'tavily';
 
     public const SEARCH_ENGINE_DUCKDUCKGO = 'duckduckgo';
@@ -111,7 +126,9 @@ final class AiSettingsService
      */
     public function resolve(): array
     {
-        $row = AiSetting::query()->first();
+        // Świeża instalacja przed migracjami (i testy jednostkowe bez bazy) — wtedy
+        // ustawienia biorą się wprost z konfiguracji, zamiast wywracać zapytanie.
+        $row = Schema::hasTable('ai_settings') ? AiSetting::query()->first() : null;
         if ($row !== null) {
             $key = $this->safeEncrypted($row, 'api_key');
             $tavily = $this->safeEncrypted($row, 'tavily_api_key');
@@ -176,6 +193,23 @@ final class AiSettingsService
                         ? ($row->product_search_card_detail ?? null)
                         : null
                 ),
+                'match_apply_score' => $this->normalizeMatchScore(
+                    Schema::hasColumn('ai_settings', 'match_apply_score') ? ($row->match_apply_score ?? null) : null,
+                    self::MATCH_APPLY_SCORE_DEFAULT
+                ),
+                'match_substitute_score' => $this->normalizeMatchScore(
+                    Schema::hasColumn('ai_settings', 'match_substitute_score')
+                        ? ($row->match_substitute_score ?? null)
+                        : null,
+                    self::MATCH_SUBSTITUTE_SCORE_DEFAULT
+                ),
+                'match_min_score' => $this->normalizeMatchScore(
+                    Schema::hasColumn('ai_settings', 'match_min_score') ? ($row->match_min_score ?? null) : null,
+                    self::MATCH_MIN_SCORE_DEFAULT
+                ),
+                'match_allow_catalog_rows' => Schema::hasColumn('ai_settings', 'match_allow_catalog_rows')
+                    ? (bool) ($row->match_allow_catalog_rows ?? false)
+                    : false,
                 'vector_enabled' => $hasVectorCols ? (bool) ($row->vector_enabled ?? false) : false,
                 'qdrant_url' => $hasVectorCols ? $this->nullableString($row->qdrant_url ?? null) : null,
                 'qdrant_api_key' => $qdrantKey !== null && $qdrantKey !== '' ? (string) $qdrantKey : null,
@@ -239,6 +273,19 @@ final class AiSettingsService
             'product_search_card_detail' => $this->normalizeProductSearchCardDetail(
                 config('ai.product_search_card_detail')
             ),
+            'match_apply_score' => $this->normalizeMatchScore(
+                config('ai.match_apply_score'),
+                self::MATCH_APPLY_SCORE_DEFAULT
+            ),
+            'match_substitute_score' => $this->normalizeMatchScore(
+                config('ai.match_substitute_score'),
+                self::MATCH_SUBSTITUTE_SCORE_DEFAULT
+            ),
+            'match_min_score' => $this->normalizeMatchScore(
+                config('ai.match_min_score'),
+                self::MATCH_MIN_SCORE_DEFAULT
+            ),
+            'match_allow_catalog_rows' => (bool) config('ai.match_allow_catalog_rows', false),
             'vector_enabled' => (bool) config('ai.vector_enabled', false),
             'qdrant_url' => $this->nullableString(config('ai.qdrant_url')),
             'qdrant_api_key' => $qdrantKey,
@@ -404,6 +451,21 @@ final class AiSettingsService
         if (array_key_exists('catalog_search_limit', $data)
             && Schema::hasColumn('ai_settings', 'catalog_search_limit')) {
             $row->catalog_search_limit = $this->normalizeCatalogSearchLimit($data['catalog_search_limit']);
+        }
+
+        foreach ([
+            'match_apply_score' => self::MATCH_APPLY_SCORE_DEFAULT,
+            'match_substitute_score' => self::MATCH_SUBSTITUTE_SCORE_DEFAULT,
+            'match_min_score' => self::MATCH_MIN_SCORE_DEFAULT,
+        ] as $field => $default) {
+            if (array_key_exists($field, $data) && Schema::hasColumn('ai_settings', $field)) {
+                $row->{$field} = $this->normalizeMatchScore($data[$field], $default);
+            }
+        }
+
+        if (array_key_exists('match_allow_catalog_rows', $data)
+            && Schema::hasColumn('ai_settings', 'match_allow_catalog_rows')) {
+            $row->match_allow_catalog_rows = (bool) $data['match_allow_catalog_rows'];
         }
 
         if (array_key_exists('product_search_card_detail', $data)
@@ -736,6 +798,49 @@ final class AiSettingsService
         $cfg = $this->resolve();
 
         return $this->normalizeCatalogSearchLimit($cfg['catalog_search_limit'] ?? null);
+    }
+
+    /** Od tego wyniku zapisujemy trafiony produkt w pozycji oferty. */
+    public function matchApplyScore(): int
+    {
+        return $this->normalizeMatchScore(
+            $this->resolve()['match_apply_score'] ?? null,
+            self::MATCH_APPLY_SCORE_DEFAULT
+        );
+    }
+
+    /** Próg dla zamiennika — innej marki/modelu niż w SIWZ. */
+    public function matchSubstituteScore(): int
+    {
+        return $this->normalizeMatchScore(
+            $this->resolve()['match_substitute_score'] ?? null,
+            self::MATCH_SUBSTITUTE_SCORE_DEFAULT
+        );
+    }
+
+    /** Poniżej tego wyniku w ogóle nie proponujemy produktu. */
+    public function matchMinScore(): int
+    {
+        return $this->normalizeMatchScore(
+            $this->resolve()['match_min_score'] ?? null,
+            self::MATCH_MIN_SCORE_DEFAULT
+        );
+    }
+
+    /**
+     * Czy wiersz z zapasowej listy katalogowej (ten sam rodzaj w katalogu) wolno
+     * wstawić do pozycji oferty. Domyślnie nie — model takiej karty nie wskazał.
+     */
+    public function matchAllowsCatalogRows(): bool
+    {
+        return (bool) ($this->resolve()['match_allow_catalog_rows'] ?? false);
+    }
+
+    private function normalizeMatchScore(mixed $value, int $default): int
+    {
+        $n = is_numeric($value) ? (int) $value : $default;
+
+        return max(self::MATCH_SCORE_MIN, min(self::MATCH_SCORE_MAX, $n));
     }
 
     /**

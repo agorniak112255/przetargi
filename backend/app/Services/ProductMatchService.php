@@ -22,14 +22,24 @@ use Throwable;
 
 final class ProductMatchService
 {
+    /**
+     * Progi są domyślne — panel „Strojenie AI” może je przestroić, więc w kodzie
+     * czytamy je metodami minMatchScore() / applyMatchScore() / substituteMatchScore().
+     * Stałe zostają dla miejsc, które potrzebują wartości bez kontekstu ustawień.
+     */
+
     /** Minimalny wynik dopasowania, poniżej którego nie proponujemy produktu. */
-    public const MIN_MATCH_SCORE = 65;
+    public const MIN_MATCH_SCORE = AiSettingsService::MATCH_MIN_SCORE_DEFAULT;
 
     /** Od tego wyniku zapisujemy pierwszy trafiony produkt AI w ofercie. */
-    public const APPLY_MATCH_SCORE = 40;
+    public const APPLY_MATCH_SCORE = AiSettingsService::MATCH_APPLY_SCORE_DEFAULT;
 
     /** Inna marka/model niż w SIWZ — zapis zamiennika od tego progu (po zgodności rodzaju). */
-    public const SUBSTITUTE_MATCH_SCORE = 55;
+    public const SUBSTITUTE_MATCH_SCORE = AiSettingsService::MATCH_SUBSTITUTE_SCORE_DEFAULT;
+
+    /** Progi z ustawień czytamy raz na żądanie — resolve() chodzi do bazy. */
+    /** @var array<string, int> */
+    private array $matchScores = [];
 
     /** @var array<string, list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>> */
     private array $aiCandidatesCache = [];
@@ -136,7 +146,7 @@ final class ProductMatchService
                         $q->whereNull('main_product_id')
                             ->orWhere(function ($w) {
                                 $w->whereNotNull('ai_match_percent')
-                                    ->where('ai_match_percent', '<', self::MIN_MATCH_SCORE);
+                                    ->where('ai_match_percent', '<', $this->minMatchScore());
                             });
                     });
                 })
@@ -338,6 +348,24 @@ final class ProductMatchService
         ];
     }
 
+    /** Poniżej tego wyniku nie proponujemy produktu (panel: Strojenie AI). */
+    public function minMatchScore(): int
+    {
+        return $this->matchScores['min'] ??= $this->aiSettings->matchMinScore();
+    }
+
+    /** Od tego wyniku zapisujemy trafiony produkt w pozycji oferty. */
+    public function applyMatchScore(): int
+    {
+        return $this->matchScores['apply'] ??= $this->aiSettings->matchApplyScore();
+    }
+
+    /** Próg zapisu zamiennika — innej marki/modelu niż w SIWZ. */
+    public function substituteMatchScore(): int
+    {
+        return $this->matchScores['substitute'] ??= $this->aiSettings->matchSubstituteScore();
+    }
+
     /**
      * @param  Collection<int, Product>  $products
      * @return array{product: Product, score: int}|null
@@ -405,15 +433,16 @@ final class ProductMatchService
             // sztuka to połowa wymagania, więc sama nie może przejść progu dopasowania —
             // od kompletowania jest produkt towarzyszący przy pozycji oferty.
             if ($this->assortment->isApparelSet($requirement) && ! $this->assortment->isApparelSet($hay)) {
-                $score = min($score, self::MIN_MATCH_SCORE - 1);
+                $score = min($score, $this->minMatchScore() - 1);
             }
             $scored[] = ['product' => $product, 'score' => $score];
         }
 
         $scored = $this->preferCheapestSizeVariants($scored);
+        $minScore = $this->minMatchScore();
         $qualified = array_values(array_filter(
             $scored,
-            static fn (array $row): bool => $row['score'] >= self::MIN_MATCH_SCORE
+            static fn (array $row): bool => $row['score'] >= $minScore
         ));
         $pool = $qualified !== [] ? $qualified : $scored;
         usort($pool, function (array $a, array $b): int {
@@ -491,10 +520,11 @@ final class ProductMatchService
         foreach ($options as $option) {
             $top = max($top, $option['score']);
         }
+        $minScore = $this->minMatchScore();
         $near = array_values(array_filter(
             $options,
             static fn (array $option): bool => $option['score'] >= $top - 8
-                || $option['score'] >= self::MIN_MATCH_SCORE
+                || $option['score'] >= $minScore
         ));
         usort($near, function (array $a, array $b): int {
             $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
@@ -1315,7 +1345,7 @@ final class ProductMatchService
             }
             $candidate = [
                 'product' => $product,
-                'score' => max(self::MIN_MATCH_SCORE, $score),
+                'score' => max($this->minMatchScore(), $score),
                 'source' => 'heuristic',
             ];
             if ($best === null
@@ -1380,7 +1410,7 @@ final class ProductMatchService
      */
     private function pickAuto(string $requirement, ?array $heuristic, array $aiCandidates, Collection $products): ?array
     {
-        if ($heuristic !== null && $heuristic['score'] >= self::APPLY_MATCH_SCORE
+        if ($heuristic !== null && $heuristic['score'] >= $this->applyMatchScore()
             && $this->hasStrongSkuInRequirement($requirement, $heuristic['product'])
             && $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']) !== null) {
             return [
@@ -1401,17 +1431,21 @@ final class ProductMatchService
                 continue;
             }
             $exact = $this->honorsSpecificModelCodes($requirement, $product);
-            $minScore = $exact ? self::APPLY_MATCH_SCORE : self::SUBSTITUTE_MATCH_SCORE;
+            $minScore = $exact ? $this->applyMatchScore() : $this->substituteMatchScore();
             if ($topAi['score'] < $minScore) {
                 continue;
             }
-            $trustModel = in_array($topAi['source'] ?? '', ['ai', 'vector'], true);
+            // Wiersz z listy katalogowej nie jest oceną modelu — ufamy mu tylko wtedy,
+            // gdy panel „Strojenie AI” na to pozwala.
+            $trustModel = in_array($topAi['source'] ?? '', ['ai', 'vector'], true)
+                || (($topAi['source'] ?? '') === ProductAiSearchService::MATCH_SOURCE_CATALOG
+                    && $this->aiSettings->matchAllowsCatalogRows());
             $honest = $this->persistableScore($requirement, $product, $topAi['score'], $trustModel);
             if ($honest === null) {
                 continue;
             }
-            if (! $exact && $honest < self::SUBSTITUTE_MATCH_SCORE
-                && $topAi['score'] < self::SUBSTITUTE_MATCH_SCORE) {
+            if (! $exact && $honest < $this->substituteMatchScore()
+                && $topAi['score'] < $this->substituteMatchScore()) {
                 continue;
             }
 
@@ -1431,7 +1465,7 @@ final class ProductMatchService
             return $this->preferCheapestAmongCloseScores($exact !== [] ? $exact : $options);
         }
 
-        if ($heuristic !== null && $heuristic['score'] >= self::APPLY_MATCH_SCORE) {
+        if ($heuristic !== null && $heuristic['score'] >= $this->applyMatchScore()) {
             $honest = $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']);
             if ($honest !== null) {
                 return [
@@ -1745,13 +1779,13 @@ final class ProductMatchService
             $this->modelFuzzy->score($requirement, $product)
         );
         $honest = min(max(0, $proposed), max($explained['score'], $skuish));
-        if ($honest >= self::APPLY_MATCH_SCORE) {
+        if ($honest >= $this->applyMatchScore()) {
             return $honest;
         }
         if ($skuish >= 70) {
-            return max(self::MIN_MATCH_SCORE, $skuish);
+            return max($this->minMatchScore(), $skuish);
         }
-        if ($trustModel && $proposed >= self::APPLY_MATCH_SCORE) {
+        if ($trustModel && $proposed >= $this->applyMatchScore()) {
             return min(96, $proposed);
         }
 
