@@ -374,12 +374,30 @@ final class CatalogSlangDictionary
                     break;
                 }
             }
+            if (! $hit && $this->isCutEvidenceGroup($group)
+                && $this->assortment->showsCutResistance($productText)) {
+                $hit = true;
+            }
             if (! $hit) {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /**
+     * @param  list<string>  $group
+     */
+    private function isCutEvidenceGroup(array $group): bool
+    {
+        foreach ($group as $needle) {
+            if (preg_match('/^(antyp|antycut|przeciec|cut)/u', (string) $needle) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function requiresTightEvidence(string $query): bool

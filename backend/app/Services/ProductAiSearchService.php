@@ -2597,7 +2597,8 @@ final class ProductAiSearchService
         $codeHits = $this->clock('retrieve_codes', fn (): Collection => $this->retrieveByModelCode($modelQuery.' '.$searchText, $limit));
         $snrHits = $this->clock('retrieve_snr', fn (): Collection => $this->retrieveBySnr($query, $limit));
         $mountHits = $this->clock('retrieve_mount', fn (): Collection => $this->retrieveByHearingMount($query, $limit));
-        $forcedHits = $this->uniqueProducts($codeHits->concat($snrHits)->concat($mountHits), $limit);
+        $cutHits = $this->clock('retrieve_cut', fn (): Collection => $this->retrieveByCutResistance($query, $limit));
+        $forcedHits = $this->uniqueProducts($codeHits->concat($snrHits)->concat($mountHits)->concat($cutHits), $limit);
         $fuzzyHits = $this->clock('retrieve_fuzzy', fn (): Collection => $this->retrieveByFuzzyModel($modelQuery.' '.$searchText, $limit));
         $filterHits = $this->clock('retrieve_filter', fn (): Collection => $this->retrieveByFilterType($query, $limit));
         $brandHits = $this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)
@@ -3005,6 +3006,68 @@ final class ProductAiSearchService
             ) === $want)
             ->take(max(8, $limit))
             ->values();
+    }
+
+    /**
+     * Antyprzecięciowe na SIWZ, a na karcie XtremCut / HPPE — bez tego przymiotnika.
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByCutResistance(string $query, int $limit): Collection
+    {
+        if (! $this->assortment->wantsCutResistance($query)) {
+            return collect();
+        }
+
+        $likes = [
+            '%xtremcut%',
+            '%xtrem cut%',
+            '%xtrem-cut%',
+            '%hppe%',
+            '%dyneema%',
+            '%nocut%',
+            '%antyprzeciec%',
+            '%powercut%',
+            '%krytech%',
+            '%unidur%',
+            '%powermask%',
+            '%cut resist%',
+            '%cut-resist%',
+            '%cut protect%',
+            '%cut-protect%',
+            '%cut touch%',
+        ];
+        $q = $this->productBaseQuery();
+        $q->where(function ($outer) use ($likes): void {
+            foreach ($likes as $like) {
+                $outer->orWhere('name', 'like', $like)
+                    ->orWhere('sku', 'like', $like);
+            }
+        });
+
+        return $q->limit(800)
+            ->get()
+            ->filter(fn (Product $p): bool => $this->assortment->showsCutResistance(
+                (string) $p->name.' '.$p->sku
+            ))
+            ->sortByDesc(fn (Product $p): int => $this->cutRetrieveScore($query, $p))
+            ->take(max(8, $limit))
+            ->values();
+    }
+
+    private function cutRetrieveScore(string $query, Product $product): int
+    {
+        $q = $this->lexicalNormalize($query);
+        $name = $this->lexicalNormalize($product->name.' '.$product->sku);
+        $score = 0;
+        if (preg_match('/nitryl|nitrile/u', $q) === 1 && preg_match('/nitryl|nitrile/u', $name) === 1) {
+            $score += 1000;
+        }
+        if (preg_match('/powlek|coated|piank/u', $q) === 1 && preg_match('/powlek|coated|piank/u', $name) === 1) {
+            $score += 500;
+        }
+
+        return $score;
     }
 
     private function articleTypeScore(string $query, Product $product): int

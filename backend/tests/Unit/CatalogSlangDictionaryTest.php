@@ -255,6 +255,20 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertGreaterThan(80, count(CatalogSlangDictionary::defaults()));
     }
 
+    public function test_antyprzecieciowe_evidence_accepts_xtremcut_fiber(): void
+    {
+        $q = 'Rękawice antyprzecięciowe powlekane nitrylem do prac montażowych';
+
+        $this->assertTrue($this->dict()->matchesEvidence(
+            $q,
+            'RĘKAWICE DZIANE Z WŁÓKNA XTREMCUT, DŁON POWLEKANA PIANKĄ NITRYLOWĄ'
+        ));
+        $this->assertFalse($this->dict()->matchesEvidence(
+            $q,
+            'Rękawice dziane, dłoń powlekana pianką nitrylową'
+        ));
+    }
+
     private function dict(): CatalogSlangDictionary
     {
         return $this->app->make(CatalogSlangDictionary::class);

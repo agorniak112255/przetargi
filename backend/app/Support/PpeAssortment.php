@@ -394,6 +394,30 @@ final class PpeAssortment
         return null;
     }
 
+    /** SIWZ na odporność na przecięcie — nie mylić z samą powłoką nitrylową. */
+    public function wantsCutResistance(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match('/\b(antyprzeciec|przecieciow)\w*/u', $t) === 1
+            || preg_match('/\bcut\s*(resist|protect)\w*/u', $t) === 1;
+    }
+
+    /** Przymiotnik albo włókno na nazwie/SKU (XtremCut, HPPE). Opisu nie czytamy. */
+    public function showsCutResistance(string $text): bool
+    {
+        $t = $this->normalize($text);
+        if ($this->wantsCutResistance($t)) {
+            return true;
+        }
+
+        return preg_match(
+            '/\b(xtremcut|xtrem\s+cut|hppe|dyneema|nocut|powercut|krytech|unidur|powermask)\w*/u',
+            $t
+        ) === 1
+            || preg_match('/\bcut\s*(resist|protect|touch)\w*/u', $t) === 1;
+    }
+
     private function eyeType(string $t): ?string
     {
         $gogl = $this->firstWordOffset('/\b(gogl)\w*/u', $t);

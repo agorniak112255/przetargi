@@ -582,4 +582,20 @@ final class PpeAssortmentTest extends TestCase
             'V-Gard, biały, więźba Fas-Trac III'
         ));
     }
+
+    #[Test]
+    public function cut_resistance_accepts_fiber_name_not_only_adjective(): void
+    {
+        $req = 'Rękawice antyprzecięciowe powlekane nitrylem do prac montażowych';
+
+        $this->assertTrue($this->assortment->wantsCutResistance($req));
+        $this->assertFalse($this->assortment->wantsCutResistance('Rękawice powlekane nitrylem do prac montażowych'));
+        $this->assertTrue($this->assortment->showsCutResistance(
+            'RĘKAWICE DZIANE Z WŁÓKNA XTREMCUT, DŁON POWLEKANA PIANKĄ NITRYLOWĄ'
+        ));
+        $this->assertTrue($this->assortment->showsCutResistance('EOS NOCUT VV910 Rękawice antyprzecięciowe'));
+        $this->assertFalse($this->assortment->showsCutResistance(
+            'Rękawice dziane, dłoń powlekana pianką nitrylową'
+        ));
+    }
 }

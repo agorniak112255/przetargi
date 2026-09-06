@@ -360,10 +360,15 @@
             "id": "polbuty-meskie-arosio-730-s3-en-iso-20345-en-6",
             "query": "Półbuty męskie AROSIO 730 S3 · EN ISO 20345 EN 61340",
             "expected_skus": [
-                "AROSIO 730 616560 O2 FO ESD"
+                "AROSIO 730 616560 S3 ESD",
+                "AROSIO 730 618080 S3 ESD"
             ],
-            "forbidden_skus": [],
-            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+            "forbidden_skus": [
+                "AROSIO 730 616560 O2 FO ESD",
+                "AROSIO 730 Air 616560 S1 P ESD",
+                "AROSIO 730 Air 618080 S1 P ESD"
+            ],
+            "note": "SIWZ wymaga S3 i EN 61340 — O2 i Air S1P to inne klasy tego samego modelu."
         },
         {
             "id": "rekawice-kcl-karbo-tect-950-en-388-en-407-en-4",
