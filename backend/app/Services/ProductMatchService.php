@@ -152,6 +152,7 @@ final class ProductMatchService
                     if ($skuPick === null) {
                         return true;
                     }
+
                     return $this->persistableScore(
                         $item->requirement,
                         $skuPick['product'],
@@ -399,6 +400,12 @@ final class ProductMatchService
             $fuzzy = $this->modelFuzzy->score($requirement, $product);
             if ($fuzzy >= 80) {
                 $score = max($score, $fuzzy);
+            }
+            // Komplet z SIWZ („bluza + spodnie”) pokrywa się dwiema kartami. Pojedyncza
+            // sztuka to połowa wymagania, więc sama nie może przejść progu dopasowania —
+            // od kompletowania jest produkt towarzyszący przy pozycji oferty.
+            if ($this->assortment->isApparelSet($requirement) && ! $this->assortment->isApparelSet($hay)) {
+                $score = min($score, self::MIN_MATCH_SCORE - 1);
             }
             $scored[] = ['product' => $product, 'score' => $score];
         }
@@ -1398,7 +1405,8 @@ final class ProductMatchService
             if ($topAi['score'] < $minScore) {
                 continue;
             }
-            $honest = $this->persistableScore($requirement, $product, $topAi['score'], true);
+            $trustModel = in_array($topAi['source'] ?? '', ['ai', 'vector'], true);
+            $honest = $this->persistableScore($requirement, $product, $topAi['score'], $trustModel);
             if ($honest === null) {
                 continue;
             }
@@ -1668,7 +1676,11 @@ final class ProductMatchService
                 'name' => (string) ($row['name'] ?? ''),
                 'score' => (int) ($row['ai_match_percent'] ?? 0),
                 'reason' => is_string($row['ai_match_reason'] ?? null) ? $row['ai_match_reason'] : null,
-                'source' => $source,
+                // Wiersz z zapasowej listy katalogowej zostaje katalogowy nawet w fali AI —
+                // model go nie wskazał, więc nie wolno mu ufać jak ocenie modelu.
+                'source' => ($row['ai_match_source'] ?? null) === ProductAiSearchService::MATCH_SOURCE_CATALOG
+                    ? ProductAiSearchService::MATCH_SOURCE_CATALOG
+                    : $source,
             ];
             if (count($out) >= $limit) {
                 break;

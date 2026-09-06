@@ -41,6 +41,13 @@ final class ProductAiSearchService
 
     private const MAX_MATCHES = 20;
 
+    /**
+     * Wiersz z zapasowej listy katalogowej, a nie z oceny modelu. Dopasowanie SIWZ
+     * nie może traktować go jak werdyktu AI — model tej karty nie widział albo jej
+     * nie wskazał.
+     */
+    public const MATCH_SOURCE_CATALOG = 'catalog';
+
     /** Limit listy /products „Szukaj w katalogu” — ranking zawsze do tego progu. */
     public const CATALOG_LIMIT = 40;
 
@@ -60,8 +67,30 @@ final class ProductAiSearchService
     /** Karta bez opisu mówi o sobie mniej, więc jej trafienie waży mniej. */
     private const RRF_WEIGHT_UNCLASSIFIED = 0.6;
 
+    /**
+     * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
+     * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
+     */
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-06';
+
     /** @var array<string, int> */
     private array $timingMs = [];
+
+    /**
+     * Ślad ostatniego search(): pula z retrievalu, karty pokazane modelowi i jego
+     * surowe trafienia. Zbiera go telemetria (`search_events`) i ewaluacja
+     * (`search:eval`) — inaczej recall etapu 1 jest niemierzalny.
+     *
+     * @var array{candidate_ids: list<int>, rank_card_ids: list<int>, llm_matches: list<array{id: int, score: int}>, passes: int}
+     */
+    private array $trace = self::EMPTY_TRACE;
+
+    private const EMPTY_TRACE = [
+        'candidate_ids' => [],
+        'rank_card_ids' => [],
+        'llm_matches' => [],
+        'passes' => 0,
+    ];
 
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
@@ -105,6 +134,7 @@ final class ProductAiSearchService
             throw new RuntimeException('Podaj treść wymagania dla AI.');
         }
         $wanted = max(1, min(80, $limit));
+        $this->trace = self::EMPTY_TRACE;
 
         if ($webOnly) {
             return $this->webOnlyResult($query, $wanted);
@@ -287,6 +317,7 @@ final class ProductAiSearchService
             $this->retrieveCandidates($query, $searchIntent, self::CANDIDATE_POOL)
         );
         $candidates = $this->mergeEyeWearSetCandidates($query, $candidates);
+        $this->traceProducts('candidate_ids', $candidates);
         $named = $candidates->filter(
             fn (Product $p): bool => $this->modelFuzzy->matches($modelQuery, $p)
                 && $this->filterType->covers($query, $this->filterHaystack($p))
@@ -311,10 +342,13 @@ final class ProductAiSearchService
             ];
         }
 
+        $rankCards = $this->cardsForRanking($query, $candidates, $intent['constraints']);
+        $this->traceProducts('rank_card_ids', $rankCards);
+
         return [
             'products' => [],
             'note' => null,
-            'rank_cards' => $this->cardsForRanking($query, $candidates, $intent['constraints']),
+            'rank_cards' => $rankCards,
             'candidates' => $candidates,
         ];
     }
@@ -580,6 +614,48 @@ final class ProductAiSearchService
         }
     }
 
+    /**
+     * Ślad ostatniego search() — pula kandydatów, karty wysłane do modelu i jego
+     * surowe trafienia (przed bramkami). Sensowny wyłącznie zaraz po search().
+     *
+     * @return array{candidate_ids: list<int>, rank_card_ids: list<int>, llm_matches: list<array{id: int, score: int}>, passes: int, timings_ms: array<string, int>, prompt_version: string}
+     */
+    public function lastTrace(): array
+    {
+        return $this->trace + [
+            'timings_ms' => $this->timingMs,
+            'prompt_version' => self::RANK_PROMPT_VERSION,
+        ];
+    }
+
+    /**
+     * Przebiegów bywa kilka (rewrite po pustym wyniku), a produkt wystarczy, że
+     * pojawił się w którymkolwiek — dlatego suma, nie ostatni przebieg.
+     *
+     * @param  Collection<int, Product>  $products
+     */
+    private function traceProducts(string $key, Collection $products): void
+    {
+        $ids = $products->pluck('id')->map(intval(...))->all();
+        $this->trace[$key] = array_values(array_unique([...$this->trace[$key], ...$ids]));
+    }
+
+    /** @param array<string, mixed> $raw */
+    private function traceLlmMatches(array $raw): void
+    {
+        $this->trace['passes']++;
+        $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
+        foreach ($matches as $match) {
+            if (! is_array($match)) {
+                continue;
+            }
+            $id = (int) ($match['id'] ?? 0);
+            if ($id > 0) {
+                $this->trace['llm_matches'][] = ['id' => $id, 'score' => (int) ($match['score'] ?? 0)];
+            }
+        }
+    }
+
     private function rankLimit(int $displayLimit): int
     {
         return max($displayLimit, $this->catalogLimit());
@@ -648,18 +724,25 @@ final class ProductAiSearchService
                 $intent,
             )
         );
-        [$rankedIntent, $ranked] = $this->clock('post_rank', function () use ($query, $intent, $limit, $task, $prepared, $rankedIntent, $ranked): array {
+        [$rankedIntent, $ranked] = $this->clock('post_rank', function () use ($query, $intent, $limit, $task, $prepared, $rankedIntent, $ranked, $rankFailed): array {
             $rankedIntent = $this->withCatalogAliases($rankedIntent, $query);
             $catalogQ = $this->catalogSearchQuery($query, $intent);
             $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $query);
-            $useCatalog = $this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent);
+            // Model padł, a wymaganie ma warunek (substancja, norma, klasa) — podstawienie
+            // czegokolwiek z katalogu byłoby udawaniem oceny, której nikt nie zrobił.
+            // Użytkownik dostaje pustą listę i informację, że to błąd modelu.
+            $noGuessing = $rankFailed && $this->isSpecificRequirement($query);
+            $useCatalog = ! $noGuessing && $this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent);
             $deferCatalogMerge = $task === AiTask::TenderMatch;
             if (! $deferCatalogMerge && $useCatalog && count($ranked) < $limit) {
                 $ranked = $this->mergeRequirementCatalogRows($query, $ranked, $limit, $intent);
             }
             if (! $deferCatalogMerge && $ranked === [] && $useCatalog) {
                 $ranked = $this->rowsFromRequirementCatalog($catalogQ, $limit);
-            } elseif ($ranked === []) {
+            } elseif ($ranked === [] && ! $noGuessing && ! $deferCatalogMerge) {
+                // Przy dopasowaniu SIWZ wynik idzie prosto do pozycji oferty, więc
+                // najsłabszy poziom („ten sam rodzaj w katalogu”) tu nie wchodzi —
+                // kalesony nie mogą zostać kombinezonem tylko dlatego, że to odzież.
                 $ranked = $this->rowsFromGenericCatalog($query, $prepared['candidates'], $limit, $intent);
             }
 
@@ -1300,6 +1383,7 @@ final class ProductAiSearchService
             }
             if ($brand !== '' && $this->nameAppearsInQuery($step, $brand)) {
                 $brandSteps[] = $step;
+
                 continue;
             }
             $core[] = $step;
@@ -1531,7 +1615,11 @@ final class ProductAiSearchService
             $candidates
                 ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
                     && $this->matchesSlangEvidence($query, $p)
-                    && $this->filterType->covers($requirement, $this->filterHaystack($p)))
+                    && $this->filterType->covers($requirement, $this->filterHaystack($p))
+                    // To najsłabszy poziom odpowiedzi („ten sam rodzaj w katalogu”).
+                    // Karta bez opisu i bez enrichmentu nie mówi o sobie nic poza nazwą,
+                    // więc jako dopasowanie AI byłaby obietnicą bez pokrycia.
+                    && $this->hasSomethingToShow($p))
                 ->values()
         );
 
@@ -1542,6 +1630,7 @@ final class ProductAiSearchService
             }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(86, max(55, 48 + $this->articleTypeScore($query, $product)));
+            $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $slang = $this->slangRewriteFor($query);
             $row['ai_match_reason'] = $slang !== null
                 ? 'Żargon SIWZ → '.$slang['needed']
@@ -1557,21 +1646,37 @@ final class ProductAiSearchService
     /**
      * @return list<array<string, mixed>>
      */
+    /** Karta opisana (albo świadomie oznaczona jako ręczna) — jest czym uzasadnić trafienie. */
+    private function hasSomethingToShow(Product $product): bool
+    {
+        return trim((string) ($product->description ?? '')) !== ''
+            || $product->enrichment_status !== Product::ENRICHMENT_NONE;
+    }
+
     private function rowsFromRequirementCatalog(string $query, int $limit): array
     {
         $products = $this->withResponseRelations(
             $this->retrieveByRequirementCatalog($query, max(40, $limit))
         );
         $reason = $this->catalogRecall->catalogMatchReason($query);
+        // Backfill jest odpowiedzią na wymaganie z warunkiem (norma, materiał, klasa).
+        // Karta bez opisu i bez enrichmentu nie potwierdza niczego poza nazwą, więc
+        // przy takim wymaganiu nie ma czego pokazać. Kart opisanych ręcznie (MANUAL)
+        // to nie dotyczy — tam opis jest świadomą decyzją człowieka.
+        $specific = $this->isSpecificRequirement($query);
         $out = [];
         foreach ($products as $product) {
             if (! $product instanceof Product) {
+                continue;
+            }
+            if ($specific && ! $this->hasSomethingToShow($product)) {
                 continue;
             }
             $row = $this->productToRow($product);
             $score = min(88, max(52, 50 + $this->requirementCatalogScore($query, $product)));
             $row['ai_match_percent'] = $score;
             $row['ai_match_reason'] = $reason;
+            $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $out[] = $row;
         }
 
@@ -2236,8 +2341,11 @@ final class ProductAiSearchService
 
     private function isAbsentManufacturerToken(string $query, string $token): bool
     {
+        // Sygnałem marki są wersaliki w samym wymaganiu („MSA”, „UVEX”). Testowanie
+        // tokenu podniesionego do wersalików przechodziło zawsze i zdejmowało
+        // z warunków każde słowo techniczne spoza katalogu („amoniakiem”).
         $raw = $this->queryTokenForCompact($query, $token) ?? $token;
-        if (! $this->looksLikeManufacturerToken($raw) && ! $this->looksLikeManufacturerToken(mb_strtoupper($token, 'UTF-8'))) {
+        if (! $this->looksLikeManufacturerToken($raw)) {
             return false;
         }
         if ($this->manufacturerContext->matchManufacturer($raw) !== null) {
@@ -2494,6 +2602,7 @@ final class ProductAiSearchService
         });
         $cascaded = $recalled['products'];
         $cascadeLevel = $recalled['level'] ?? null;
+        $cascadeKept = collect();
         if ($cascaded->isNotEmpty()) {
             $fromNameSteps = is_string($cascadeLevel) && str_starts_with($cascadeLevel, 'steps_');
             $pool = $fromNameSteps
@@ -2502,10 +2611,37 @@ final class ProductAiSearchService
                     ? $cascaded->concat($priority)
                     : $priority->concat($cascaded));
 
-            return $this->keepCompatible($requirement, $this->uniqueProducts($pool, $limit))->values();
+            $cascadeKept = $this->keepCompatible($requirement, $this->uniqueProducts($pool, $limit));
+            // Pełna pula kończy retrieval — dokładanie czegokolwiek i tak by z niej wypadło.
+            if ($cascadeKept->count() >= $limit) {
+                return $cascadeKept->values();
+            }
         }
         if ($this->catalogSlang->requiresTightEvidence($query)) {
-            return $this->keepCompatible($requirement, $priority)->values();
+            // Żargon wymaga twardego dowodu na karcie, ale sprawdza go bramka zgodności,
+            // nie kroki kaskady. Dokładamy więc trafienia tekstowe — każde i tak musi
+            // przejść przez ten sam dowód, a bez nich pula bywa jednoelementowa.
+            return $this->keepCompatible(
+                $requirement,
+                $this->uniqueProducts(
+                    $cascadeKept->concat($priority)->concat($this->hydrate($this->clock(
+                        'retrieve_text',
+                        fn (): array => $this->textSearch->search(
+                            $intent['search_phrases'],
+                            $this->searchFamily($query, $intent['needed']),
+                            self::TEXT_POOL
+                        )
+                    ))),
+                    $limit
+                )
+            )->values();
+        }
+        // Kaskada z trafieniem w konkret jest odpowiedzią. Dalej idziemy tylko wtedy, gdy
+        // bramka zgodności zdjęła z niej wszystko (krok po „czapce” przy wymaganiu na
+        // kominiarkę) albo gdy zeszła do samego rzeczownika rodzaju — wtedy z definicji
+        // nie widzi kart bez tego słowa w nazwie („URG-A”).
+        if ($cascadeKept->isNotEmpty() && ! $this->cascadeSweptFamilyNoun($cascadeLevel, $intent)) {
+            return $cascadeKept->values();
         }
 
         // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
@@ -2553,11 +2689,15 @@ final class ProductAiSearchService
                 : collect();
         });
 
-        $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $fused, $recall, $brandHits, $limit): Collection {
+        $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $cascadeKept, $fused, $recall, $brandHits, $limit): Collection {
             return $this->keepCompatible(
                 $requirement,
                 $this->uniqueProducts(
-                    $this->hydrate($fused)->concat($recall)->concat($brandHits),
+                    // Tu docieramy tylko wtedy, gdy kaskada zeszła do samego rzeczownika
+                    // rodzaju: jej karty są równe co do wartości („SPODNIE MACH 1..60”)
+                    // i wypchnęłyby z puli trafienie wektorowe. Fuzja rang wie więcej, więc
+                    // idzie pierwsza, a kaskada uzupełnia resztę puli.
+                    $this->hydrate($fused)->concat($cascadeKept)->concat($recall)->concat($brandHits),
                     $limit * 3
                 )
             );
@@ -2565,6 +2705,34 @@ final class ProductAiSearchService
         $branded = $this->preferCatalogBrands($query, $merged, $intent);
 
         return $this->uniqueProducts($branded, $limit)->values();
+    }
+
+    /**
+     * Czy kaskada skończyła na krokach po samym rzeczowniku rodzaju („spodnie”,
+     * „czapka”). Taki krok bierze wyłącznie karty z tym słowem w nazwie, więc karta
+     * zgodna, ale opisana inaczej („URG-A” w kategorii „Odzież robocza”), do puli
+     * nie wejdzie — i dlatego trzeba ją uzupełnić resztą rodziny. Krok po cesze albo
+     * po żargonie („kalesony”, „bielizna termiczna”) jest już rozstrzygnięciem i
+     * niczego nie dokładamy.
+     *
+     * @param  array{search_steps: list<string>}  $intent
+     */
+    private function cascadeSweptFamilyNoun(?string $level, array $intent): bool
+    {
+        if (! is_string($level) || ! str_starts_with($level, 'steps_')) {
+            return false;
+        }
+        $used = array_slice($intent['search_steps'], 0, max(1, (int) mb_substr($level, 6)));
+        if ($used === []) {
+            return false;
+        }
+        foreach ($used as $step) {
+            if (! $this->isGenericAssortmentToken($this->lexicalNormalize($step))) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -3021,7 +3189,14 @@ final class ProductAiSearchService
                 continue;
             }
             foreach (preg_split('/\s+/u', $norm) ?: [] as $part) {
-                if ($part === '' || mb_strlen($part) < 4 || $this->isNonTechnicalToken($part)) {
+                if ($part === '' || $this->isNonTechnicalToken($part)) {
+                    continue;
+                }
+                // Wartość techniczna bywa krótsza od czterech znaków („250” g/m², „s3”,
+                // „o2”, „a2”) i to właśnie ona decyduje o zgodności. Próg czterech
+                // znaków trzymamy tylko dla samych słów, żeby nie wpuszczać skrótów.
+                $minLength = preg_match('/\d/u', $part) === 1 ? 2 : 4;
+                if (mb_strlen($part) < $minLength) {
                     continue;
                 }
                 $needles[] = $part;
@@ -3602,6 +3777,7 @@ final class ProductAiSearchService
     ): array {
         $intent = $this->normalizeIntent($intent ?? []);
         $requirement = $this->assortmentText($query, $needed);
+        $this->traceLlmMatches($raw);
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
         $candidates = $this->withResponseRelations($candidates);
         $byId = $candidates->keyBy('id');

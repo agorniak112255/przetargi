@@ -11,6 +11,7 @@ use Tests\TestCase;
 final class CatalogSlangDictionaryTest extends TestCase
 {
     use RefreshDatabase;
+
     public function test_wampirki_expand_to_coated_knit_gloves(): void
     {
         $phrases = $this->dict()->phrasesFor('Rękawice wampirki uniwersalne');
@@ -90,6 +91,25 @@ final class CatalogSlangDictionaryTest extends TestCase
             'KALESONY bawełniane męskie',
             'DŁUGIE KALESONY Z POLIAMIDU'
         ));
+    }
+
+    public function test_generic_assortment_noun_is_not_required_on_the_card(): void
+    {
+        // Karta zgodnego asortymentu bywa opisana bez rzeczownika rodzaju — o tym,
+        // że to spodnie, mówi rodzina i kategoria, a nie słowo w nazwie.
+        $this->assertTrue($this->dict()->matchesEvidence(
+            'spodnie robocze do magazynu',
+            'URG-A Urgent Odzież robocza Model z karczkiem i kieszeniami cargo'
+        ));
+    }
+
+    public function test_jargon_noun_stays_an_evidence_needle(): void
+    {
+        // „kalesony” to nazwa konkretnego wyrobu — zostaje dowodem. „spodnie” to
+        // rodzaj, więc z dowodów wypada; inaczej cała rodzina musiałaby mieć to
+        // słowo w tekście karty.
+        $this->assertContains('kales', $this->dict()->evidenceNeedles('KALESONY bawełniane męskie'));
+        $this->assertNotContains('spodn', $this->dict()->evidenceNeedles('spodnie robocze do magazynu'));
     }
 
     public function test_slang_is_appended_not_replacing_query(): void

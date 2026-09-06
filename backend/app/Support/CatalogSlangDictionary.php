@@ -274,7 +274,12 @@ final class CatalogSlangDictionary
                     continue;
                 }
                 $jargonFolds[] = $fold;
-                if ($this->assortment->isCatalogNounStep((string) $term)) {
+                // Sam rzeczownik asortymentu nie jest dowodem: o przynależności
+                // rozstrzyga rodzina i bramka zgodności, a karta bywa opisana bez
+                // niego („URG-A”, kategoria „Odzież robocza”). Wymagamy tylko słów
+                // faktycznie żargonowych — tak samo jak w pętli po frazach niżej.
+                if ($this->assortment->isCatalogNounStep((string) $term)
+                    && ! $this->isGenericAssortmentNeedle($fold)) {
                     $out[] = mb_substr($fold, 0, 5);
                 }
             }
@@ -287,10 +292,7 @@ final class CatalogSlangDictionary
                 if ($token === '' || mb_strlen($token) < 5 || in_array($token, $stop, true)) {
                     continue;
                 }
-                if (preg_match(
-                    '/^(rekawic|glove|spodn|kurtk|bluz|czapk|buty|obuwie|ochronn|robocz)/u',
-                    $token
-                ) === 1) {
+                if ($this->isGenericAssortmentNeedle($token)) {
                     continue;
                 }
                 $out[] = mb_substr($token, 0, 5);
@@ -298,6 +300,15 @@ final class CatalogSlangDictionary
         }
 
         return array_values(array_unique($out));
+    }
+
+    /** Rzeczownik rodzaju („spodnie”, „kurtka”, „rękawice”) — nigdy nie jest dowodem cechy. */
+    private function isGenericAssortmentNeedle(string $fold): bool
+    {
+        return preg_match(
+            '/^(rekawic|glove|spodn|kurtk|bluz|czapk|buty|obuwie|ochronn|robocz)/u',
+            $fold
+        ) === 1;
     }
 
     /**
@@ -317,10 +328,12 @@ final class CatalogSlangDictionary
             }
             if (preg_match('/^(dzian|knit)/u', $needle) === 1) {
                 $knit[] = $needle;
+
                 continue;
             }
             if (preg_match('/^(powle|nakrap|nakrop|kropk)/u', $needle) === 1) {
                 $coat[] = $needle;
+
                 continue;
             }
             $other[] = $needle;
@@ -679,6 +692,7 @@ final class CatalogSlangDictionary
             }
             if (str_contains($paddedHay, ' '.$n.' ')) {
                 $hit[] = $n;
+
                 continue;
             }
             if (str_contains($n, ' ')) {
