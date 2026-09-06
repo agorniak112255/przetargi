@@ -202,20 +202,40 @@
             "query": "Hełm wentylowany MSA SUPER V - GARD 500 ATEX czasza ABS - różne kolory, więźba Fas-Trac",
             "expected_skus": [
                 "GV412-0000000-000",
+                "GV413-0000000-000",
+                "GV419-0000000-000",
                 "GV422-0000000-000",
+                "GV423-0000000-000",
+                "GV429-0000000-000",
                 "GV432-0000000-000",
+                "GV433-0000000-000",
+                "GV439-0000000-000",
                 "GV442-0000000-000",
+                "GV443-0000000-000",
+                "GV449-0000000-000",
                 "GV452-0000000-000",
+                "GV453-0000000-000",
+                "GV459-0000000-000",
                 "GV462-0000000-000",
+                "GV463-0000000-000",
+                "GV469-0000000-000",
                 "GV492-0000000-000",
-                "GV4A2-0000000-000"
+                "GV493-0000000-000",
+                "GV499-0000000-000",
+                "GV4A2-0000000-000",
+                "GV4A3-0000000-000",
+                "GV4A9-0000000-000",
+                "GV469-0017004-000",
+                "GV469-001700B-000",
+                "GV469-0018004-000",
+                "GV469-0018044-000"
             ],
             "forbidden_skus": [
                 "GV112-0000000-000",
                 "GV512-0000000-000",
                 "GV411-0000000-000"
             ],
-            "note": "V-Gard 500 wentylowany + Fas-Trac, różne kolory. GV112 to zwykły V-Gard bez 500 i bez wentylacji; GV512 jest 500, ale niewentylowany; GV411 ma Push-Key."
+            "note": "Wszystkie V-Gard 500 wentylowane + Fas-Trac (warianty *2/*3/*9 to ten sam hełm). GV112 bez 500 i bez wentylacji; GV512 niewentylowany; GV411 Push-Key."
         },
         {
             "id": "koszula-dzianinowa-antyelektrostatyczna-trudnop",
