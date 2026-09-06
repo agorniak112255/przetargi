@@ -18,12 +18,21 @@
             "id": "nauszniki-snr-30",
             "query": "Ochronniki słuchu nagłowne o tłumieniu SNR minimum 30 dB",
             "expected_skus": [
-                "X2A-EU"
+                "SOR22010MEE",
+                "9056,3",
+                "X2A-1",
+                "X2A-EU",
+                "X3A-EU",
+                "X4A-EU",
+                "X5A-EU",
+                "H520A-407-GQ",
+                "A520A-472-GB",
+                "H540A-411-SV"
             ],
             "forbidden_skus": [
                 "X1A-EU"
             ],
-            "note": "Bez marki, warunek liczbowy z karty (SNR 31 dB spełnia, 27 dB nie). Sprawdza, czy model czyta parametr, a nie samą nazwę asortymentu."
+            "note": "Bez marki, warunek liczbowy z karty (SNR ≥ 30 dB spełnia, 27 dB nie). Sprawdza, czy model czyta parametr, a nie samą nazwę asortymentu."
         },
         {
             "id": "peltor-nahelmowe",
