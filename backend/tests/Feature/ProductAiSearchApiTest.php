@@ -1450,8 +1450,8 @@ final class ProductAiSearchApiTest extends TestCase
         ])
             ->assertOk()
             ->assertJsonPath('total', 2)
-            ->assertJsonPath('products.0.sku', 'HEAT-250')
-            ->assertJsonPath('products.1.sku', 'HEAT-350');
+            ->assertJsonPath('products.0.sku', 'HEAT-350')
+            ->assertJsonPath('products.1.sku', 'HEAT-250');
     }
 
     public function test_ai_search_ignores_360_degree_coverage_as_celsius(): void

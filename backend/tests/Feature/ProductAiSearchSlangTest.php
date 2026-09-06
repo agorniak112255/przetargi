@@ -417,7 +417,7 @@ final class ProductAiSearchSlangTest extends TestCase
         $this->assertNotContains('58-270', $skus);
     }
 
-    public function test_qualifying_products_are_ordered_by_purchase_price(): void
+    public function test_qualifying_products_are_ordered_by_match_percent(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
@@ -468,8 +468,8 @@ final class ProductAiSearchSlangTest extends TestCase
             'limit' => 5,
         ])
             ->assertOk()
-            ->assertJsonPath('products.0.sku', 'NIT-LO')
-            ->assertJsonPath('products.1.sku', 'NIT-HI');
+            ->assertJsonPath('products.0.sku', 'NIT-HI')
+            ->assertJsonPath('products.1.sku', 'NIT-LO');
     }
 
     public function test_kalesony_siwz_finds_catalog_name_before_thermal_slang(): void
