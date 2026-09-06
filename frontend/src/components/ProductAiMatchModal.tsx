@@ -4,6 +4,7 @@ import {
   AI_SEARCH_MIN_CHARS,
   externalHintsFrom,
   isAiSearchTimeout,
+  logAiSearchAction,
   searchProductsByAiWithTimeout,
 } from '../lib/productAiSearch'
 import { ProductVerifyModal } from './ProductVerifyModal'
@@ -71,6 +72,15 @@ export function ProductAiMatchModal({
   const [externalHints, setExternalHints] = useState<ExternalHint[]>([])
   const [describeId, setDescribeId] = useState<number | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
+  // Zdarzenie telemetrii ostatniego wyszukiwania AI — do niego wracają sygnały zwrotne.
+  const [aiEventId, setAiEventId] = useState<number | null>(null)
+
+  /** Wybór produktu z listy AI to najmocniejszy sygnał jakości wyniku. */
+  function reportPick(product: AiMatchPick, action: 'pick' | 'add_to_offer' = 'add_to_offer') {
+    if (product.source !== 'ai') return
+    const position = results.findIndex((row) => row.id === product.id)
+    logAiSearchAction(aiEventId, product.id, action, position >= 0 ? position + 1 : undefined)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -78,6 +88,7 @@ export function ProductAiMatchModal({
     setError('')
     setResults([])
     setExternalHints([])
+    setAiEventId(null)
     setDescribeId(null)
     setSelectedIds([])
   }, [open, initialQuery, initialWeb, initialMode])
@@ -118,6 +129,7 @@ export function ProductAiMatchModal({
         reason: 'Trafienie w nazwę / SKU',
         source: 'catalog',
       }))
+      setAiEventId(null)
       setResults(mapped)
       if (mapped.length === 0) {
         setError('Brak produktów w katalogu dla tego zapytania.')
@@ -155,6 +167,7 @@ export function ProductAiMatchModal({
         source: 'ai',
       }))
       const hints = externalHintsFrom(res)
+      setAiEventId(res.search_event_id ?? null)
       setResults(mapped)
       setExternalHints(hints)
       if (mapped.length === 0 && hints.length === 0) {
@@ -315,7 +328,10 @@ export function ProductAiMatchModal({
                           .map((id) => results.find((row) => row.id === id))
                           .filter((row): row is AiMatchPick => row != null),
                       )
-                      if (picks.length === 2) onSelectPair(picks[0], picks[1])
+                      if (picks.length === 2) {
+                        picks.forEach((pick) => reportPick(pick))
+                        onSelectPair(picks[0], picks[1])
+                      }
                     }}
                     className="rounded bg-violet-800 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-900 disabled:opacity-50"
                   >
@@ -392,7 +408,10 @@ export function ProductAiMatchModal({
                     <button
                       type="button"
                       disabled={Boolean(busy)}
-                      onClick={() => setDescribeId(r.id)}
+                      onClick={() => {
+                        reportPick(r, 'pick')
+                        setDescribeId(r.id)
+                      }}
                       className="rounded border border-violet-400 bg-white px-2 py-1 text-[11px] font-medium text-violet-800 hover:bg-violet-100 disabled:opacity-50"
                     >
                       Opis
@@ -400,7 +419,10 @@ export function ProductAiMatchModal({
                     <button
                       type="button"
                       disabled={Boolean(busy)}
-                      onClick={() => onSelect(r)}
+                      onClick={() => {
+                        reportPick(r)
+                        onSelect(r)
+                      }}
                       className="rounded bg-violet-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-700 disabled:opacity-50"
                     >
                       Wybierz
@@ -409,7 +431,10 @@ export function ProductAiMatchModal({
                       <button
                         type="button"
                         disabled={Boolean(busy) || !hasMainProduct}
-                        onClick={() => onSelectCompanion(r)}
+                        onClick={() => {
+                          reportPick(r)
+                          onSelectCompanion(r)
+                        }}
                         className="rounded border border-violet-400 bg-white px-2 py-1 text-[11px] font-medium text-violet-800 hover:bg-violet-100 disabled:opacity-50"
                       >
                         Jako drugi

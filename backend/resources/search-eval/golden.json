@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "note": "Golden set wyszukiwania AI. ZALĄŻEK — przypadki wypisane z katalogu produkcyjnego (39 tys. kart), ale bez akceptacji handlowca. Zanim zaczniesz podejmować decyzje na podstawie metryk, przejrzyj expected_skus/forbidden_skus i dopisz przypadki z prawdziwych SIWZ (patrz README.md).",
+  "cases": [
+    {
+      "id": "peltor-x2-naglowne",
+      "query": "Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna",
+      "expected_skus": ["X2A-EU"],
+      "forbidden_skus": ["X1A-EU", "X1P3E-EU"],
+      "note": "Zakotwiczone w marce i modelu — najprostszy przypadek. Spadek tutaj oznacza regresję w retrievalu po kodzie modelu."
+    },
+    {
+      "id": "nauszniki-snr-30",
+      "query": "Ochronniki słuchu nagłowne o tłumieniu SNR minimum 30 dB",
+      "expected_skus": ["X2A-EU"],
+      "forbidden_skus": ["X1A-EU"],
+      "note": "Bez marki, warunek liczbowy z karty (SNR 31 dB spełnia, 27 dB nie). Sprawdza, czy model czyta parametr, a nie samą nazwę asortymentu."
+    },
+    {
+      "id": "peltor-nahelmowe",
+      "query": "Nauszniki przeciwhałasowe montowane na hełm ochronny",
+      "expected_skus": ["X1P3E-EU"],
+      "forbidden_skus": ["X1A-EU", "X2A-EU"],
+      "note": "Wariant mocowania (nahełmowe vs nagłowne) — częsty powód fałszywych pozytywów."
+    },
+    {
+      "id": "tychem-4000s-bialy",
+      "query": "Kombinezon chemoodporny Tychem 4000 S biały",
+      "expected_skus": ["SL CHZ5 T WH 00", "SL CHZ6 T WH 16"],
+      "forbidden_skus": ["TC CHA5 T YL 00"],
+      "note": "Marka + rodzina modelu; żółty Tychem C to inny produkt."
+    },
+    {
+      "id": "urgent-ogrodniczki-urg-a",
+      "query": "Spodnie ogrodniczki robocze URGENT URG-A",
+      "expected_skus": ["PROS-URG-A-OGROD"],
+      "forbidden_skus": ["PROS-URG-B-OGROD", "PROS-URG-C-OGROD"],
+      "note": "Rozróżnienie wariantów A/B/C/D tej samej rodziny — test fuzzy matchingu modelu."
+    },
+    {
+      "id": "uvex-phynomic-esd",
+      "query": "Rękawice montażowe powlekane uvex phynomic z funkcją ESD",
+      "expected_skus": ["60078", "60084"],
+      "forbidden_skus": ["60080", "60081"],
+      "note": "ESD jest warunkiem twardym — phynomic C3/C5 bez ESD nie może wejść do wyniku."
+    },
+    {
+      "id": "trzewiki-s3",
+      "query": "Trzewiki robocze w klasie ochrony S3 SRC z podnoskiem",
+      "expected_skus": ["MANHATTAN S3 SRC", "SAGA S3 SRC"],
+      "forbidden_skus": ["VIRAGE S1P SRC", "ARONA S1P SRC"],
+      "note": "Klasa ochrony jako warunek: S1P nie spełnia wymagania S3."
+    },
+    {
+      "id": "spodniobuty-s5",
+      "query": "Spodniobuty wodoodporne z kaloszem typ S5",
+      "expected_skus": ["SBM01B", "SBM01 FLUO"],
+      "forbidden_skus": [],
+      "note": "Asortyment niszowy — sprawdza, czy kaskada odzyskiwania go w ogóle znajduje."
+    },
+    {
+      "id": "kombinezon-wodoochronny-wgrzane-kalosze",
+      "query": "Kombinezon wodoochronny z wgrzanymi kaloszami",
+      "expected_skus": ["104/K", "304/K"],
+      "forbidden_skus": [],
+      "note": "Zapytanie dosłownie z nazwy karty — jeśli to nie działa, problem jest w indeksie tekstowym, nie w modelu."
+    },
+    {
+      "id": "rekawice-antyprzeciecowe-nitryl",
+      "query": "Rękawice antyprzecięciowe powlekane nitrylem do prac montażowych",
+      "expected_skus": ["EOS NOCUT VV910", "VENICUTF02 XTREM CUT TOUCH - VECUTF02GR"],
+      "forbidden_skus": [],
+      "note": "Dwie cechy naraz (odporność na przecięcie + powłoka nitrylowa). Oczekiwane SKU to przykłady — rozszerz o pełną listę zgodnych kart."
+    }
+  ]
+}

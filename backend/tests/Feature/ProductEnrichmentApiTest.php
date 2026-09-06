@@ -20,11 +20,11 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
+use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\HybridWebSearchService;
 use App\Services\Enrichment\ManufacturerDomainResolver;
-use App\Services\Enrichment\ProductDocumentDownloader;
-use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\PrefetchSlots;
+use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductDocumentFinder;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\ProductImageCandidateVerifier;
@@ -35,6 +35,7 @@ use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -149,7 +150,6 @@ final class ProductEnrichmentApiTest extends TestCase
 
     public function test_skip_done_product_without_force(): void
     {
-        Queue::fake();
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
         $product = $this->makeProduct([
@@ -157,6 +157,9 @@ final class ProductEnrichmentApiTest extends TestCase
             'description' => 'Już jest',
             'enriched_at' => now(),
         ]);
+        // Fake dopiero po fixture: zapis produktu sam kolejkuje reindeks embeddingu,
+        // a ten test pilnuje tego, czego NIE zrobił endpoint enrichmentu.
+        Queue::fake();
 
         $this->postJson("/api/products/{$product->id}/enrich")
             ->assertStatus(422)
@@ -769,7 +772,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $busy = [];
         for ($i = 0; $i < app(PrefetchSlots::class)->limit(); $i++) {
-            $lock = \Illuminate\Support\Facades\Cache::lock('enrichment_prefetch_gate:'.$i, 180);
+            $lock = Cache::lock('enrichment_prefetch_gate:'.$i, 180);
             $this->assertTrue((bool) $lock->get());
             $busy[] = $lock;
         }
@@ -804,7 +807,7 @@ final class ProductEnrichmentApiTest extends TestCase
             ->andReturn(['results' => [], 'errors' => []]);
         $this->app->instance(HybridWebSearchService::class, $search);
 
-        $held = \Illuminate\Support\Facades\Cache::lock('enrichment_prefetch_gate:0', 180);
+        $held = Cache::lock('enrichment_prefetch_gate:0', 180);
         $this->assertTrue((bool) $held->get());
 
         (new PrefetchProductSourcesJob($product->id, $batch->id))
@@ -1963,7 +1966,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'searxng_url' => 'http://127.0.0.1:8088',
             'web_search_enabled' => false,
         ]);
-        \Illuminate\Support\Facades\Cache::put('searxng_engines_blocked_v1', 1, 600);
+        Cache::put('searxng_engines_blocked_v1', 1, 600);
         Http::fake(['*' => Http::response('should-not-run', 200)]);
 
         try {

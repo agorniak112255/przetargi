@@ -30,6 +30,8 @@ return [
     // Ile zapytań AI naraz (1–100): SIWZ i Pobierz z cennika. Zależy od FPM i modelu.
     'match_concurrency' => (int) env('AI_MATCH_CONCURRENCY', 4),
     'catalog_search_limit' => (int) env('AI_CATALOG_SEARCH_LIMIT', 40),
+    // Telemetria wyszukiwania (tabela search_events) — źródło golden setu i metryk jakości.
+    'search_events_enabled' => (bool) env('AI_SEARCH_EVENTS_ENABLED', true),
     // long | short — ile tekstu z karty idzie do modelu w wyszukiwarce AI
     'product_search_card_detail' => env('AI_PRODUCT_SEARCH_CARD_DETAIL', 'long'),
     // Ile sekund worker czeka na wolny slot enrichmentu, zanim odda produkt kolejce.

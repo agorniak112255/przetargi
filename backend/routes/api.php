@@ -30,6 +30,7 @@ use App\Http\Controllers\Api\ProductCrossRefController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\SearchEventActionController;
 use App\Http\Controllers\Api\TenderActivityController;
 use App\Http\Controllers\Api\TenderBattlecardController;
 use App\Http\Controllers\Api\TenderCommentController;
@@ -126,6 +127,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/products/cross-ref', [ProductCrossRefController::class, 'crossRef'])->middleware('permission:products.view');
     Route::get('/products/compare', [ProductCrossRefController::class, 'compare'])->middleware('permission:products.view');
     Route::post('/products/ai-search', ProductAiSearchController::class)->middleware('permission:products.view');
+    Route::post('/products/ai-search/{searchEvent}/action', [SearchEventActionController::class, 'store'])
+        ->middleware('permission:products.view');
     Route::post('/products/enrich', [ProductEnrichmentController::class, 'enrichProducts'])
         ->middleware('permission:price_lists.import');
     Route::get('/products/{product}', [ProductController::class, 'show'])->middleware('permission:products.view');

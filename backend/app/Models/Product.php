@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Jobs\ReindexProductEmbeddingJob;
 use App\Support\ProductSearchBlob;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -66,6 +67,23 @@ class Product extends Model
             foreach (app(ProductSearchBlob::class)->build($product) as $column => $value) {
                 $product->setAttribute($column, $value);
             }
+        });
+
+        // Wektor w Qdrant powstaje z tych samych kolumn co blob. Bez tego haka
+        // ręczna edycja opisu odświeżała indeks tekstowy, a wektor zostawał stary
+        // — hybryda przestawała mówić o tym samym produkcie.
+        static::created(function (self $product): void {
+            ReindexProductEmbeddingJob::dispatch((int) $product->id);
+        });
+
+        // Sam UPDATE ceny czy stanu magazynowego nie zmienia dokumentu embeddingu —
+        // reindeks byłby czystym kosztem.
+        static::updated(function (self $product): void {
+            if (! $product->wasChanged(ProductSearchBlob::SOURCE_COLUMNS)) {
+                return;
+            }
+
+            ReindexProductEmbeddingJob::dispatch((int) $product->id);
         });
     }
 

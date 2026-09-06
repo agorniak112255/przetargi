@@ -31,7 +31,7 @@ final class ProductEmbeddingIndexer
         }
 
         $text = $this->documentText($product);
-        $hash = hash('sha256', $text);
+        $hash = $this->documentHash($text);
 
         if (! $force && $product->embedding_hash === $hash && $product->embedding_synced_at !== null) {
             return false;
@@ -73,6 +73,27 @@ final class ProductEmbeddingIndexer
                 'product_id' => $productId,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * Hash obejmuje model embeddingów — po jego zmianie wektory z poprzedniego
+     * modelu leżą w innej przestrzeni, więc muszą zostać policzone od nowa,
+     * nawet gdy tekst karty się nie zmienił.
+     */
+    public function documentHash(string $text): string
+    {
+        return hash('sha256', $this->embeddingModelTag().'|'.$text);
+    }
+
+    private function embeddingModelTag(): string
+    {
+        try {
+            $profile = $this->settings->embeddingProfile();
+
+            return trim((string) ($profile['provider'] ?? '')).':'.trim((string) ($profile['model'] ?? ''));
+        } catch (Throwable) {
+            return '';
         }
     }
 

@@ -17,7 +17,12 @@ export type ProductAiSearchResult = {
   ai_note?: string | null
   external_hint?: ProductAiExternalHint | null
   external_hints?: ProductAiExternalHint[]
+  /** Id wpisu telemetrii — do niego wracają sygnały zwrotne (logAiSearchAction). */
+  search_event_id?: number | null
 }
+
+/** open = wejście w kartę, pick = wybór z listy, add_to_offer = wstawienie do oferty. */
+export type AiSearchAction = 'open' | 'pick' | 'add_to_offer'
 
 export function isAiSearchTimeout(ex: unknown): boolean {
   return (
@@ -62,6 +67,30 @@ export async function searchProductsByAi(
       web,
     }),
     signal: options.signal,
+  })
+}
+
+/**
+ * Sygnał zwrotny: co użytkownik zrobił z wynikiem. Bez tego nie da się odróżnić
+ * „model coś zwrócił” od „model trafił” — to jedyne źródło danych do golden setu.
+ * Celowo bez await i bez obsługi błędu: telemetria nie może psuć interakcji.
+ */
+export function logAiSearchAction(
+  eventId: number | null | undefined,
+  productId: number,
+  action: AiSearchAction,
+  position?: number,
+): void {
+  if (!eventId) return
+  void api(`/products/ai-search/${eventId}/action`, {
+    method: 'POST',
+    body: JSON.stringify({
+      product_id: productId,
+      action,
+      ...(position != null ? { position } : {}),
+    }),
+  }).catch(() => {
+    /* telemetria jest opcjonalna */
   })
 }
 

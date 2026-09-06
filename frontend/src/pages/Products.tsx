@@ -14,6 +14,7 @@ import {
   AI_SEARCH_MIN_CHARS,
   externalHintsFrom,
   isAiSearchTimeout,
+  logAiSearchAction,
   searchProductsByAiWithTimeout,
 } from '../lib/productAiSearch'
 
@@ -260,6 +261,8 @@ export function Products() {
   const [manufacturers, setManufacturers] = useState<string[]>([])
   const [aiQuery, setAiQuery] = useState('')
   const [aiMode, setAiMode] = useState(false)
+  // Telemetria: wejście w kartę z listy wyników AI to sygnał, że wynik był trafny.
+  const [aiEventId, setAiEventId] = useState<number | null>(null)
   const [aiBusy, setAiBusy] = useState<'catalog' | 'web' | false>(false)
   const [externalHints, setExternalHints] = useState<{ url: string; title: string }[]>([])
   const [page, setPage] = useState(1)
@@ -411,6 +414,7 @@ export function Products() {
       const res = await searchProductsByAiWithTimeout(query, { web })
       const hints = externalHintsFrom(res)
       setAiMode(true)
+      setAiEventId(res.search_event_id ?? null)
       setSort('purchase_price_pln')
       setDir('asc')
       setExternalHints(hints)
@@ -958,7 +962,7 @@ export function Products() {
             </tr>
           </thead>
           <tbody>
-            {displayRows.map((p) => {
+            {displayRows.map((p, i) => {
               const status = p.enrichment_status ?? 'none'
               const thumb = p.images?.find((img) => img.is_primary) ?? p.images?.[0]
               return (
@@ -1025,7 +1029,13 @@ export function Products() {
                     </span>
                   </td>
                   <td className="p-2">
-                    <Link className="text-blue-600 hover:underline" to={`/products/${p.id}`}>
+                    <Link
+                      className="text-blue-600 hover:underline"
+                      to={`/products/${p.id}`}
+                      onClick={() => {
+                        if (aiMode) logAiSearchAction(aiEventId, p.id, 'open', i + 1)
+                      }}
+                    >
                       {p.sku}
                     </Link>
                   </td>
