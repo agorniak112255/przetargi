@@ -109,6 +109,12 @@ final class ProductModelFuzzy
         if (preg_match_all('/\b[a-z]{2,14}(?:-[a-z0-9]{1,12}){1,4}\b/u', $text, $m, PREG_OFFSET_CAPTURE)) {
             foreach ($m[0] as [$raw, $offset]) {
                 $this->pushNeedle($out, $raw);
+                if ($this->isShortHyphenModel($raw)) {
+                    $compact = $this->compact($raw);
+                    if ($compact !== '' && ! $this->isStop($compact) && ! $this->isJunkCatalogModelNeedle($compact)) {
+                        $out[] = $compact;
+                    }
+                }
                 $after = ltrim(substr($text, $offset + strlen($raw), 16));
                 if (preg_match('/^(\d{3,5})\b/', $after, $nm) === 1) {
                     $this->pushNeedle($out, $this->compact($raw).$nm[1]);
@@ -438,6 +444,14 @@ final class ProductModelFuzzy
         return preg_match('/^[a-z]{1,3}\d[a-z0-9]{0,3}$/u', $compact) === 1;
     }
 
+    /** URG-A / TX-12 — po sklejeniu 4 znaki, za krótkie na zwykły pushNeedle. */
+    private function isShortHyphenModel(string $raw): bool
+    {
+        $fold = mb_strtolower(trim($raw));
+
+        return preg_match('/^[a-z]{2,5}-[a-z0-9]{1,3}$/u', $fold) === 1;
+    }
+
     /** P3E / H31P3E / WFU255DG — nie czysty wyraz i nie sama liczba. */
     private function isMixedModelCode(string $compact): bool
     {
@@ -623,6 +637,9 @@ final class ProductModelFuzzy
         }
         $letters = $this->lettersOnly($trim);
         if (mb_strlen($letters) < 6 || $this->isStop($letters)) {
+            return false;
+        }
+        if (isset($this->knownCatalogBrandTokens()[$letters])) {
             return false;
         }
         $upper = mb_strtoupper($letters, 'UTF-8');

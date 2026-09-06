@@ -3372,6 +3372,15 @@ final class ProductAiSearchService
                 }
             }
         }
+        if (preg_match_all('/\b[a-z]{2,5}-[a-z0-9]{1,3}\b/u', $norm, $hyphen)) {
+            foreach ($hyphen[0] as $raw) {
+                $c = preg_replace('/[^a-z0-9]/', '', $raw) ?? '';
+                if (mb_strlen($c) >= 4) {
+                    $out[] = $raw;
+                    $out[] = $c;
+                }
+            }
+        }
 
         return array_values(array_unique($out));
     }

@@ -133,6 +133,28 @@ final class ProductModelFuzzyTest extends TestCase
     }
 
     #[Test]
+    public function urgent_urg_a_is_a_named_model_and_not_urg_b(): void
+    {
+        $req = 'Spodnie ogrodniczki robocze URGENT URG-A';
+
+        $this->assertTrue($this->fuzzy->hasNamedModel($req));
+        $this->assertContains('urga', $this->fuzzy->needles($req));
+        $this->assertContains('urga', $this->fuzzy->catalogModelNeedles($req));
+        $this->assertNotContains('urgent', $this->fuzzy->catalogModelNeedles($req));
+        $this->assertTrue($this->fuzzy->usesModelAnchoredCatalogSearch($req));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            'PROS-URG-A-OGROD',
+            'URG-A (ogrodniczki)',
+            'URGENT',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            'PROS-URG-B-OGROD',
+            'URG-B (ogrodniczki)',
+            'URGENT',
+        )));
+    }
+
+    #[Test]
     public function peltor_x2_is_a_named_model_and_not_x1(): void
     {
         $req = 'Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna';
