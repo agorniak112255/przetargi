@@ -943,6 +943,11 @@ final class ProductSearchIdentity
         // Jedno słowo z nazwy („Carbon”) nie zastępuje „Carbon ESD PU Top Eider”.
         if ($shopName !== '' && (! $this->shopPhraseIsWeakerThanName($shopName, $fullName)
             || preg_match('/\d|[-\/]/u', $shopName) === 1)) {
+            // Jednowyrazowa fraza wyjęta z dłuższej nazwy („Compo” z „BASIC Compo Low S3”)
+            // zostaje w zapytaniach, ale nie wyprzedza pełnej nazwy — to ona stoi w sklepie.
+            if ($fullName !== '' && $this->shopPhraseIsLoneWordOfName($shopName, $fullName)) {
+                $nameQueries[] = $this->queryWithManufacturer($fullName, $product);
+            }
             $nameQueries[] = $this->queryWithManufacturer($shopName, $product);
         }
         if ($compactName && mb_strtolower($fullName) !== mb_strtolower($sku)
@@ -988,6 +993,11 @@ final class ProductSearchIdentity
             if (mb_strtolower($article) !== mb_strtolower($sku)) {
                 $out[] = $this->queryWithManufacturer($article, $product);
             }
+        }
+        // Numer magazynowy (212804580000) w sklepie stoi rzadko, ale u dystrybutora bywa.
+        // Nie otwiera drabiny — zamyka ją, po nazwie i kodach katalogowych.
+        if ($usableSku && $shopName !== '' && $this->rawSkuIsOfflineNoise($product)) {
+            $out[] = $this->queryWithManufacturer($this->quoteSearchOperators($sku), $product);
         }
         foreach ($this->variantBaseCodes($product) as $base) {
             $out[] = $this->queryWithManufacturer($base, $product);
@@ -1283,6 +1293,27 @@ final class ProductSearchIdentity
     }
 
     /** „Carbon” z „Carbon ESD PU Top” nie może zająć slotu zamiast pełnej nazwy. */
+    /**
+     * Fraza sklepowa to pojedyncze słowo wyjęte z nazwy, a nazwa niesie jeszcze
+     * linię i klasę wyrobu („Compo” wobec „BASIC Compo Low S3”).
+     */
+    private function shopPhraseIsLoneWordOfName(string $shop, string $name): bool
+    {
+        $shop = trim($shop);
+        if ($shop === '' || preg_match('/\s/u', $shop) === 1) {
+            return false;
+        }
+        if (mb_strtolower($shop) === mb_strtolower(trim($name)) || ! $this->phraseHasToken($name, $shop)) {
+            return false;
+        }
+        $words = array_values(array_filter(
+            preg_split('/[^\p{L}\p{N}]+/u', $name) ?: [],
+            static fn (string $w): bool => trim($w) !== ''
+        ));
+
+        return count($words) >= 3;
+    }
+
     private function shopPhraseIsWeakerThanName(string $shop, string $name): bool
     {
         $shop = mb_strtolower(trim($shop));
@@ -1543,7 +1574,13 @@ final class ProductSearchIdentity
                     continue;
                 }
                 if ($this->tokenIsProductCode($token, $product)) {
-                    return $this->pageAgreesWithBrandAndName($hay, '', $product);
+                    if ($this->pageAgreesWithBrandAndName($hay, '', $product)) {
+                        return true;
+                    }
+                    // Sam kod bez marki to za mało (T-31 Ardon ≠ tablica CABINAID), ale
+                    // strona może nieść mocniejszy dowód niżej — tożsamość sklepową albo
+                    // rdzeń cyfrowy. Kończymy przegląd tokenów, nie całe sprawdzanie.
+                    break;
                 }
 
                 return true;
@@ -1651,6 +1688,30 @@ final class ProductSearchIdentity
         return $this->pageAgreesWithBrandAndName($hay, $url, $product);
     }
 
+    /** Czy na stronie stoi któryś z kodów produktu na tyle długi, by nie trafić przypadkiem. */
+    private function hayHasDistinctiveProductCode(string $hay, Product $product): bool
+    {
+        $hay = mb_strtolower($hay);
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+        foreach ($this->productCodes($product) as $code) {
+            if ($this->isDistinctiveProductCode($code) && $this->tokenInHay($hay, $hayCompact, $code)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Kod na tyle długi i mieszany, że przypadkowe trafienie w sieci jest nierealne. */
+    private function isDistinctiveProductCode(string $token): bool
+    {
+        $compact = $this->compactCode($token);
+
+        return mb_strlen($compact) >= 6
+            && preg_match('/\p{L}/u', $compact) === 1
+            && preg_match('/\d/u', $compact) === 1;
+    }
+
     private function tokenIsProductCode(string $token, Product $product): bool
     {
         $token = mb_strtolower(trim($token));
@@ -1681,7 +1742,13 @@ final class ProductSearchIdentity
             return false;
         }
         if (! $this->hayHasBrand($blob, $product) && ! $this->hayHasOfficialHost($blob, $url, $product)) {
-            return false;
+            // Długi kod z literami i cyframi („NV2032CE”) razem ze słowem z nazwy
+            // („Astro Cleat”) identyfikuje kartę sam — hurtownia nie musi wypisywać
+            // marki z cennika. Krótki kod („T-31”) tej ulgi nie dostaje.
+            if (! $this->hayHasDistinctiveProductCode($blob, $product)
+                || ! $this->hayHasSpecificNameToken($blob, $product)) {
+                return false;
+            }
         }
         $nameTokens = $this->distinctiveIdentityNameTokens($product);
         if ($nameTokens === []) {
@@ -2269,10 +2336,13 @@ final class ProductSearchIdentity
         }
 
         $ranked = $this->preferSpecificShopPhrases(array_values($uniq), $product);
+        $ranked = $this->preferNumberFromName($ranked, $product);
 
         return array_values(array_filter(
             $ranked,
             fn (string $phrase): bool => $this->isStrongShopPhrase($phrase)
+                // Sama marka („OX-ON”) nie jest tożsamością modelu — pasuje do całego katalogu.
+                && ! $this->phraseIsBrandOnly($phrase, $product)
         ));
     }
 
@@ -2540,6 +2610,14 @@ final class ProductSearchIdentity
         $prefixed = $this->distributorPrefixedCatalogSku($product);
         if ($prefixed !== '') {
             return $prefixed;
+        }
+        // „ONE4ALL-IT08” — „IT” z cyframi to w całości rozmiar (taille), więc kod bez
+        // rozmiaru kończy się na modelu, a nie na rozciętym markerze „ONE4ALL-IT”.
+        if (preg_match('/^(.+)-IT(?:0\d|1[0-4])$/u', $sku, $it) === 1) {
+            $core = rtrim($it[1], "-/+_. \t");
+            if ($core !== '') {
+                return $core;
+            }
         }
         $sizes = new ProductSizeVariant;
         $stripped = $sizes->stripWearSizeSuffix($sku);
@@ -3178,8 +3256,16 @@ final class ProductSearchIdentity
     /** G3175/40, CADIZ-42 — rozmiar EU w SKU oznacza obuwie, nawet przy nazwie „TRACK”. */
     private function skuImpliesFootwear(Product $product): bool
     {
+        // Numer magazynowy to jeden ciąg cyfr — „33” z 1002933 nie jest rozmiarem buta.
+        if (preg_match('/^\d{5,}$/u', trim((string) $product->sku)) === 1) {
+            return false;
+        }
         $size = (new ProductSizeVariant)->extractSize($product->name, $product->sku);
         if ($size === null || ! is_numeric($size)) {
+            return false;
+        }
+        // „45CM” w nazwie to długość mankietu rękawicy, nie rozmiar obuwia.
+        if (preg_match('/\b'.preg_quote((string) $size, '/').'\s*(?:cm|mm|m\b|")/iu', (string) $product->name) === 1) {
             return false;
         }
         $n = (int) $size;
@@ -3719,9 +3805,9 @@ final class ProductSearchIdentity
         if (preg_match('/^(.+)-IT(0\d|1[0-4])$/u', $sku, $it) === 1) {
             $core = rtrim($it[1], "-/+_. \t");
 
-            return $this->isUsableSizeVariant($core)
-                ? array_values(array_unique(array_merge($fromSizeList, [$core])))
-                : $fromSizeList;
+            // Całe „-IT08” jest rozmiarem, więc wariant obcięty o same cyfry („ONE4ALL-IT”)
+            // rozcinałby marker w połowie — w sklepie taki kod nie istnieje.
+            return $this->isUsableSizeVariant($core) ? [$core] : [];
         }
         if (preg_match('/^(.*?)([A-Za-z0-9]{0,3})T(?:0\d|1[0-4])$/u', $sku, $m) !== 1) {
             return $fromSizeList;
@@ -4289,6 +4375,44 @@ final class ProductSearchIdentity
         return $this->preferBySkuTail($phrases, $product);
     }
 
+    /**
+     * Numer stojący w nazwie („OX-ON Flexible Advanced 1900 CE”) to model ze sklepu.
+     * Numer wyprowadzony z obciętego kodu cennikowego („92066” → „9206”) to domysł,
+     * więc przy dwóch gołych liczbach pierwsza jest ta z nazwy.
+     *
+     * @param  list<string>  $phrases
+     * @return list<string>
+     */
+    private function preferNumberFromName(array $phrases, Product $product): array
+    {
+        $name = (string) $product->name;
+        if (trim($name) === '') {
+            return $phrases;
+        }
+        $fromName = [];
+        $rest = [];
+        foreach ($phrases as $phrase) {
+            if (preg_match('/^\d{3,6}$/u', trim($phrase)) === 1 && ! $this->phraseHasToken($name, $phrase)) {
+                $rest[] = $phrase;
+            } else {
+                $fromName[] = $phrase;
+            }
+        }
+
+        return $rest === [] ? $phrases : array_values(array_merge($fromName, $rest));
+    }
+
+    private function phraseIsBrandOnly(string $phrase, Product $product): bool
+    {
+        $phrase = mb_strtolower(trim($phrase));
+        if ($phrase === '') {
+            return false;
+        }
+        $brand = mb_strtolower(trim((string) $product->manufacturer));
+
+        return $phrase === $brand || $phrase === mb_strtolower($this->shortBrand((string) $product->manufacturer));
+    }
+
     /** Numer magazynowy / prefiks cennika — bez shopIdentityPhrases, żeby nie zapętlać rankingu. */
     private function skuIsWarehousePrefix(Product $product): bool
     {
@@ -4428,6 +4552,7 @@ final class ProductSearchIdentity
                     break;
                 }
                 $number = $segment;
+
                 continue;
             }
             if (preg_match('/^\p{L}{2,}$/u', $segment) !== 1) {
@@ -4441,6 +4566,7 @@ final class ProductSearchIdentity
                 if ($kept !== []) {
                     break;
                 }
+
                 continue;
             }
             if ($this->isHouseSkuPrefix($segment)
@@ -4454,6 +4580,7 @@ final class ProductSearchIdentity
                 if ($this->isApparelTypeWord($segment)) {
                     $skippedType = $segment;
                 }
+
                 continue;
             }
             $kept[] = $segment;

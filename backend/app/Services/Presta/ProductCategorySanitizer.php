@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Presta;
 
+use App\Models\PrestaCategory;
 use App\Support\PpeAssortment;
 
 /**
@@ -46,7 +47,7 @@ final class ProductCategorySanitizer
     }
 
     /**
-     * @param  iterable<int, \App\Models\PrestaCategory>  $tree
+     * @param  iterable<int, PrestaCategory>  $tree
      * @return array<string, true>
      */
     public function officialKeys($tree): array
@@ -117,7 +118,7 @@ final class ProductCategorySanitizer
         if (preg_match('/^(art\.?\s*no|dodatkowe oplat|ceny wyrobow|tabela cen)/iu', $c) === 1) {
             return true;
         }
-        if (mb_strlen($c) > 72 && ! str_contains($c, ' / ')) {
+        if (mb_strlen($c) > 72 && ! str_contains($c, ' / ') && ! $this->looksLikeSectionHeader($c)) {
             return true;
         }
         if (preg_match('/\b(S[1-5]P?|ESD|SRC|GTX|BOA)\b/u', $c) === 1
@@ -129,6 +130,21 @@ final class ProductCategorySanitizer
         }
 
         return false;
+    }
+
+    /**
+     * Nagłówek sekcji cennika bywa długi („ZESTAWY KUCHENNE 3x ŚCIERECZKA…”), ale pisze
+     * się go wersalikami — w odróżnieniu od opisu produktu, który wpadł do kolumny kategorii.
+     */
+    private function looksLikeSectionHeader(string $category): bool
+    {
+        $letters = (string) preg_replace('/[^\p{L}]/u', '', $category);
+        if (mb_strlen($letters) < 8) {
+            return false;
+        }
+        $upper = (string) preg_replace('/[^\p{Lu}]/u', '', $category);
+
+        return mb_strlen($upper) / mb_strlen($letters) >= 0.8;
     }
 
     public function inferFamily(string $name, ?string $category = null): ?string

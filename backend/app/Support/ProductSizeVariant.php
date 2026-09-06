@@ -370,7 +370,15 @@ final class ProductSizeVariant
     {
         $t = trim($name);
         $t = preg_replace('/\bT\s*0?\d{1,2}\b/iu', '', $t) ?? $t;
-        $t = preg_replace('/\bT(?:6XL|5XL|4XL|3XL|XXXL|XXL|XL|XXS|XS|S|M|L)\b/iu', '', $t) ?? $t;
+        // „TS”, „TM”, „TXL” otwierające nazwę to człon kodu wyrobu (DuPont
+        // „TS CHF5 S WH DE”), a nie francuski marker rozmiaru — ten stoi przy nazwie,
+        // nigdy jej nie otwiera. Wariant z cyfrą („T6 GLOVES”) zostaje bez zmian, bo
+        // tam rozmiar faktycznie bywa na początku.
+        $t = preg_replace(
+            '/(?<!^)\bT(?:6XL|5XL|4XL|3XL|XXXL|XXL|XL|XXS|XS|S|M|L)\b/iu',
+            '',
+            $t
+        ) ?? $t;
         $t = preg_replace(
             '/\b(?:size|rozmiar|taille|rozm\.?)\s*:?\s*(?:\d{1,2}(?:[.,]\d)?|[2-6]\s*xl|xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l)\b/iu',
             '',
@@ -979,7 +987,7 @@ final class ProductSizeVariant
             $na = is_numeric($a);
             $nb = is_numeric($b);
             if ($na && $nb) {
-                return ((float) $a <=> (float) $b);
+                return (float) $a <=> (float) $b;
             }
             if ($na !== $nb) {
                 return $na ? -1 : 1;
