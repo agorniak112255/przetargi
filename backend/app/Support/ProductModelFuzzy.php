@@ -134,9 +134,7 @@ final class ProductModelFuzzy
                     && mb_strlen($aWord) >= 3
                     && ! $this->isStop($aWord)
                     && ! $this->isSizeLabelWord($aWord)
-                    && ctype_digit($num)
-                    && mb_strlen($num) >= 3
-                    && mb_strlen($num) <= 5
+                    && $this->isNumberedModelToken($num)
                     && ! $this->isSizeRangeDigits($num, $tokens[$i + 1] ?? '')
                 ) {
                     $this->pushNeedle($out, $aWord.$num);
@@ -173,6 +171,27 @@ final class ProductModelFuzzy
             if ($nextNum !== null && ! $this->isSizeRangeDigits($nextNum, $tokens[$i + 2] ?? '')) {
                 $this->pushNeedle($out, $pair.$nextNum);
             }
+        }
+
+        $knownBrands = $this->knownCatalogBrandTokens();
+        for ($i = 0; $i < $count - 1; $i++) {
+            $brand = $this->compact($tokens[$i]);
+            if ($brand === '' || ! isset($knownBrands[$brand])) {
+                continue;
+            }
+            $line = $this->lettersOnly($tokens[$i + 1]);
+            if ($line === '' || mb_strlen($line) < 5 || $this->isStop($line) || $this->isSizeLabelWord($line)) {
+                continue;
+            }
+            $after = isset($tokens[$i + 2]) ? $this->compact($tokens[$i + 2]) : '';
+            if ($after !== '' && (
+                $this->isNumberedModelToken($after)
+                || $this->isShortAlnumModel($after)
+                || $this->isMixedModelCode($after)
+            )) {
+                continue;
+            }
+            $this->pushNeedle($out, $line);
         }
 
         foreach ($tokens as $token) {
@@ -433,6 +452,17 @@ final class ProductModelFuzzy
         ], true);
     }
 
+    /** 010 / 2047W — numer modelu, także z literą na końcu. */
+    private function isNumberedModelToken(string $compact): bool
+    {
+        $len = mb_strlen($compact);
+        if ($len < 3 || $len > 8) {
+            return false;
+        }
+
+        return preg_match('/^\d{3,5}[a-z]{0,3}$/u', $compact) === 1;
+    }
+
     /** X2 / X2A / H31 — za krótkie na isMixedModelCode, ale to kod przy nazwie serii. */
     private function isShortAlnumModel(string $compact): bool
     {
@@ -621,7 +651,7 @@ final class ProductModelFuzzy
             return false;
         }
         foreach ($needles as $needle) {
-            if (preg_match('/^'.preg_quote($prefix, '/').'\d{3,5}$/u', $needle) === 1) {
+            if (preg_match('/^'.preg_quote($prefix, '/').'\d{3,5}[a-z]{0,3}$/u', $needle) === 1) {
                 return true;
             }
         }

@@ -133,6 +133,45 @@ final class ProductModelFuzzyTest extends TestCase
     }
 
     #[Test]
+    public function perspecta_2047w_does_not_match_9000_or_1070(): void
+    {
+        $req = 'Okulary ochronne MSA PERSPECTA 2047W';
+
+        $this->assertContains('perspecta2047w', $this->fuzzy->needles($req));
+        $this->assertContains('perspecta2047w', $this->fuzzy->catalogModelNeedles($req));
+        $this->assertNotContains('perspecta', $this->fuzzy->needles($req));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            '10064800',
+            'Okulary PERSPECTA 2047W (12szt), bezbarwne',
+            'MSA',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            '10045516',
+            'Okulary PERSPECTA 9000 (12szt), bezbarwne',
+            'MSA',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            '10064797',
+            'Okulary PERSPECTA 1070 (12szt), bezbarwne',
+            'MSA',
+        )));
+    }
+
+    #[Test]
+    public function uvex_phynomic_is_a_line_needle(): void
+    {
+        $req = 'Rękawice montażowe powlekane uvex phynomic z funkcją ESD';
+
+        $this->assertContains('phynomic', $this->fuzzy->needles($req));
+        $this->assertContains('phynomic', $this->fuzzy->catalogModelNeedles($req));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            '60078',
+            'uvex phynomic airLite B ESD 6,7,8,9,10,11,12 10 4',
+            'SUNGBOO',
+        )));
+    }
+
+    #[Test]
     public function urgent_urg_a_is_a_named_model_and_not_urg_b(): void
     {
         $req = 'Spodnie ogrodniczki robocze URGENT URG-A';

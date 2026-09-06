@@ -2846,6 +2846,7 @@ final class ProductAiSearchService
             ) && $this->matchesSlangEvidence($query, $p)
                 && $this->meetsRequiredSnr($query, $p)
                 && $this->meetsRequiredFootwearClass($query, $p)
+                && $this->meetsRequiredAntistatic($query, $p)
                 && $this->assortment->helmetSpecAllows($query, (string) $p->name.' '.$p->sku))
             ->values();
     }
@@ -2870,6 +2871,15 @@ final class ProductAiSearchService
         $have = $this->bhpAttributes->footwearClass($this->filterHaystack($product));
 
         return $have === null || $this->bhpAttributes->footwearClassMeets($want, $have);
+    }
+
+    private function meetsRequiredAntistatic(string $query, Product $product): bool
+    {
+        if (! $this->assortment->requiresAntistatic($query)) {
+            return true;
+        }
+
+        return $this->assortment->productMeetsAntistaticRequirement($query, $product);
     }
 
     /**
