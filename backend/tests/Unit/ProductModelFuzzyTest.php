@@ -272,6 +272,25 @@ final class ProductModelFuzzyTest extends TestCase
     }
 
     #[Test]
+    public function hygiene_kit_code_is_the_model_not_the_earmuff_line(): void
+    {
+        $req = 'Zestaw higieniczny do nauszników 3M OPTIME I HY51';
+
+        $this->assertContains('hy51', $this->fuzzy->needles($req));
+        $this->assertNotContains('optime', $this->fuzzy->needles($req));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            'HY51',
+            '3M Zestaw higieniczny do nauszników Optime I',
+            '3M',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            'HY52',
+            '3M Zestaw higieniczny do nauszników PELTOR Optime II',
+            '3M',
+        )));
+    }
+
+    #[Test]
     public function letter_digit_model_does_not_match_digits_inside_other_sku(): void
     {
         $req = 'Pasek podbródkowy 3 punktowy do hełmu G3000';

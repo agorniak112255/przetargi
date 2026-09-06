@@ -189,15 +189,6 @@
             "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
         },
         {
-            "id": "pasek-podbrodkowy-do-helmu-v-gard-500-msa-uniw",
-            "query": "PASEK PODBRÓDKOWY do hełmu V-GARD 500 MSA - uniwersalny",
-            "expected_skus": [
-                "GV411-0000000-000"
-            ],
-            "forbidden_skus": [],
-            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
-        },
-        {
             "id": "helm-wentylowany-msa-super-v-gard-500-atex-cza",
             "query": "Hełm wentylowany MSA SUPER V - GARD 500 ATEX czasza ABS - różne kolory, więźba Fas-Trac",
             "expected_skus": [

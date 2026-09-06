@@ -212,7 +212,40 @@ final class ProductModelFuzzy
             }
         }
 
-        return array_values(array_unique($out));
+        return $this->preferDigitModelNeedles(array_values(array_unique($out)));
+    }
+
+    /**
+     * HY51 / X2 w SIWZ — nie dokładaj gołej linii (Optime, Peltor), bo zje całe series.
+     *
+     * @param  list<string>  $needles
+     * @return list<string>
+     */
+    private function preferDigitModelNeedles(array $needles): array
+    {
+        $digit = [];
+        $letters = [];
+        foreach ($needles as $needle) {
+            if (preg_match('/\d/u', $needle) === 1) {
+                $digit[] = $needle;
+            } else {
+                $letters[] = $needle;
+            }
+        }
+        if ($digit === []) {
+            return $needles;
+        }
+        $keep = $digit;
+        foreach ($letters as $n) {
+            foreach ($digit as $k) {
+                if (preg_match('/^'.preg_quote($n, '/').'\d{2,5}$/u', $k) === 1) {
+                    $keep[] = $n;
+                    break;
+                }
+            }
+        }
+
+        return array_values(array_unique($keep));
     }
 
     /**
