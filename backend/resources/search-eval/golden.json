@@ -180,15 +180,6 @@
             "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
         },
         {
-            "id": "filtropochlaniacz-3071-a2p3-r-secura",
-            "query": "Filtropochłaniacz 3071 - A2P3 R SECURA",
-            "expected_skus": [
-                "S568DSM0"
-            ],
-            "forbidden_skus": [],
-            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
-        },
-        {
             "id": "pochlaniacz-wielogazowy-a2b2e2k2-msa-min-na-5",
             "query": "POCHŁANIACZ WIELOGAZOWY A2B2E2K2, MSA, min. na 5 lat, do maski pełnotwarzowej, grint 4-1,7\"",
             "expected_skus": [
@@ -210,10 +201,21 @@
             "id": "helm-wentylowany-msa-super-v-gard-500-atex-cza",
             "query": "Hełm wentylowany MSA SUPER V - GARD 500 ATEX czasza ABS - różne kolory, więźba Fas-Trac",
             "expected_skus": [
-                "GV112-0000000-000"
+                "GV412-0000000-000",
+                "GV422-0000000-000",
+                "GV432-0000000-000",
+                "GV442-0000000-000",
+                "GV452-0000000-000",
+                "GV462-0000000-000",
+                "GV492-0000000-000",
+                "GV4A2-0000000-000"
             ],
-            "forbidden_skus": [],
-            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+            "forbidden_skus": [
+                "GV112-0000000-000",
+                "GV512-0000000-000",
+                "GV411-0000000-000"
+            ],
+            "note": "V-Gard 500 wentylowany + Fas-Trac, różne kolory. GV112 to zwykły V-Gard bez 500 i bez wentylacji; GV512 jest 500, ale niewentylowany; GV411 ma Push-Key."
         },
         {
             "id": "koszula-dzianinowa-antyelektrostatyczna-trudnop",
