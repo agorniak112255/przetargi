@@ -472,6 +472,61 @@ final class ProductAiSearchSlangTest extends TestCase
             ->assertJsonPath('products.1.sku', 'NIT-LO');
     }
 
+    public function test_same_match_percent_puts_cheaper_first(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $expensive = Product::query()->create([
+            'sku' => 'NIT-HI',
+            'name' => 'Niebieskie bezpudrowe rękawice nitrylowe Ansell',
+            'manufacturer' => 'Ansell',
+            'category' => 'Rękawice',
+            'description' => 'Jednorazowe rękawice nitrylowe.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 12,
+            'currency' => 'PLN',
+            'stock' => 10,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $cheap = Product::query()->create([
+            'sku' => 'NIT-LO',
+            'name' => 'Niebieskie bezpudrowe rękawice nitrylowe Delta',
+            'manufacturer' => 'Delta Plus',
+            'category' => 'Rękawice',
+            'description' => 'Jednorazowe rękawice nitrylowe.',
+            'catalog_price_net' => 9,
+            'purchase_price' => 4.5,
+            'currency' => 'PLN',
+            'stock' => 20,
+            'ppe_family' => 'gloves',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')
+            ->andReturn([
+                'needed' => 'rękawice nitrylowe',
+                'search_steps' => ['rękawice', 'nitrylowe'],
+                'search_phrases' => ['rękawice nitrylowe'],
+                'matches' => [
+                    ['id' => $expensive->id, 'score' => 80, 'reason' => 'Ansell'],
+                    ['id' => $cheap->id, 'score' => 80, 'reason' => 'nitrylowe'],
+                ],
+            ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice nitrylowe lekkie',
+            'limit' => 5,
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.sku', 'NIT-LO')
+            ->assertJsonPath('products.1.sku', 'NIT-HI');
+    }
+
     public function test_kalesony_siwz_finds_catalog_name_before_thermal_slang(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
