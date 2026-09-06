@@ -333,6 +333,15 @@ final class ProductAiSearchService
                 ];
             }
         }
+        $snrRows = $this->rowsFromSnrMatches($query, $candidates, $limit);
+        if ($snrRows !== []) {
+            return [
+                'products' => $this->orderEyeWearSetRows($query, $snrRows, $candidates),
+                'note' => null,
+                'rank_cards' => null,
+                'candidates' => $candidates,
+            ];
+        }
         if ($candidates->isEmpty()) {
             return [
                 'products' => [],
@@ -3147,7 +3156,8 @@ final class ProductAiSearchService
         }
 
         $needles = $this->constraintNeedles($constraints);
-        if ($needles === []) {
+        $minSnr = $this->bhpAttributes->requiredSnr($query);
+        if ($needles === [] && $minSnr === null) {
             return $candidates->take(self::RANK_CARDS)->values();
         }
 
@@ -3157,7 +3167,9 @@ final class ProductAiSearchService
             if (! $product instanceof Product) {
                 continue;
             }
-            if ($this->haystackHasNeedle($this->rankingHaystack($product), $needles)) {
+            $meetsSnr = $minSnr !== null && $this->productMeetsSnr($product, $minSnr);
+            $hasNeedle = $needles !== [] && $this->haystackHasNeedle($this->rankingHaystack($product), $needles);
+            if ($meetsSnr || ($minSnr === null && $hasNeedle)) {
                 $with->push($product);
             } else {
                 $without->push($product);
@@ -3431,6 +3443,43 @@ final class ProductAiSearchService
         }
 
         return $best;
+    }
+
+    /**
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromSnrMatches(string $query, Collection $products, int $limit): array
+    {
+        $min = $this->bhpAttributes->requiredSnr($query);
+        if ($min === null) {
+            return [];
+        }
+        $products = $this->withResponseRelations(
+            $products->filter(fn (Product $p): bool => $this->productMeetsSnr($p, $min))->values()
+        );
+        if ($products->isEmpty()) {
+            return [];
+        }
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->snrRetrieveScore($query, $product), 20)));
+            $row['ai_match_reason'] = 'Tłumienie SNR na karcie spełnia próg z SIWZ.';
+            $out[] = $row;
+        }
+
+        return array_slice($out, 0, max(1, min(80, $limit)));
+    }
+
+    private function productMeetsSnr(Product $product, int $min): bool
+    {
+        $have = $this->bhpAttributes->snrRating($this->filterHaystack($product));
+
+        return $have !== null && $have >= $min;
     }
 
     /**

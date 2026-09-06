@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\Product;
+use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductAiSearchService;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -46,6 +48,30 @@ final class ProductAiSearchSnrTest extends TestCase
         $this->assertContains('X2A-EU', $skus);
         $this->assertNotContains('X1A-EU', $skus);
         $this->assertContains($hit->id, Product::query()->whereIn('sku', $skus)->pluck('id')->all());
+    }
+
+    public function test_snr_path_returns_x2_in_top_10_without_llm_pick(): void
+    {
+        $this->seedSnrCatalog();
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => self::QUERY,
+            'search_phrases' => ['ochronniki słuchu nagłowne'],
+            'matches' => [],
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $search = $this->app->make(ProductAiSearchService::class);
+        $result = $search->search(self::QUERY, 10);
+        $skus = array_column($result['products'] ?? [], 'sku');
+        $top = array_slice($skus, 0, 10);
+
+        $this->assertContains('X2A-EU', $top);
+        $this->assertNotContains('X1A-EU', $skus);
+        $this->assertContains(
+            (int) Product::query()->where('sku', 'X2A-EU')->value('id'),
+            $search->lastTrace()['candidate_ids'] ?? []
+        );
     }
 
     private function seedSnrCatalog(): Product
