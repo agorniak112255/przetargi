@@ -179,6 +179,33 @@ final class ProductModelFuzzyTest extends TestCase
     }
 
     #[Test]
+    public function tychem_4000_s_is_a_named_model_and_not_tychem_c(): void
+    {
+        $req = 'Kombinezon chemoodporny Tychem 4000 S biały';
+
+        $this->assertTrue($this->fuzzy->hasNamedModel($req));
+        $this->assertContains('tychem4000', $this->fuzzy->needles($req));
+        $this->assertContains('tychem4000', $this->fuzzy->catalogModelNeedles($req));
+        $this->assertContains(['tychem', '4000'], $this->fuzzy->catalogModelWordDigitPairs($req));
+        $this->assertNotContains('tychem', $this->fuzzy->manufacturerHints($req));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            'SL CHZ5 T WH 00',
+            'TYCHEM® 4000 S - white.',
+            'DuPont',
+        )));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            'SL CHZ6 T WH 16',
+            'TYCHEM® 4000 S - white with socks.',
+            'DuPont',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            'TC CHA5 T YL 00',
+            'TYCHEM C - yellow.',
+            'DuPont',
+        )));
+    }
+
+    #[Test]
     public function disposable_cap_pack_is_not_a_named_model(): void
     {
         $req = 'CZEPEK JEDNORAZOWY -1 OP.-100 szt.';

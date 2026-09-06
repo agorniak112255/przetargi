@@ -2606,7 +2606,9 @@ final class ProductAiSearchService
                 $intent
             );
             if ($namedPriority->isNotEmpty()) {
-                return $namedPriority;
+                // Filtr „kombinezon” zapełnia limit zrzutem asortymentu i wypycha
+                // markę+numer z nazwy (Tychem 4000, SKU magazynowy, producent DuPont).
+                return $this->withModelCodeHits($requirement, $forcedHits, $namedPriority, $limit);
             }
         }
 
@@ -3115,21 +3117,49 @@ final class ProductAiSearchService
     private function retrieveByModelCode(string $query, int $limit): Collection
     {
         $codes = $this->modelCodePhrases($query);
-        if ($codes === []) {
+        $pairs = $this->modelFuzzy->catalogModelWordDigitPairs($query);
+        if ($codes === [] && $pairs === []) {
             return collect();
         }
 
-        $q = $this->productBaseQuery();
+        $cap = max(8, $limit);
+        $pairHits = collect();
+        if ($pairs !== []) {
+            $pairHits = $this->productBaseQuery()
+                ->where(function ($outer) use ($pairs): void {
+                    foreach ($pairs as [$word, $num]) {
+                        $w = '%'.addcslashes($word, '%_\\').'%';
+                        $n = '%'.addcslashes($num, '%_\\').'%';
+                        $outer->orWhere(function ($inner) use ($w, $n): void {
+                            $inner->where(function ($col) use ($w, $n): void {
+                                $col->where('name', 'like', $w)->where('name', 'like', $n);
+                            })->orWhere(function ($col) use ($w, $n): void {
+                                $col->where('sku', 'like', $w)->where('sku', 'like', $n);
+                            });
+                        });
+                    }
+                })
+                ->limit($cap)
+                ->get()
+                ->values();
+        }
 
-        $q->where(function ($outer) use ($codes): void {
-            foreach ($codes as $code) {
-                $like = addcslashes($code, '%_\\');
-                $outer->orWhere('name', 'like', '%'.$like.'%');
-                $outer->orWhere('sku', 'like', mb_strlen($code) <= 4 ? '%'.$like.'%' : $like.'%');
-            }
-        });
+        $codeHits = collect();
+        if ($codes !== []) {
+            $codeHits = $this->productBaseQuery()
+                ->where(function ($outer) use ($codes): void {
+                    foreach ($codes as $code) {
+                        $like = addcslashes($code, '%_\\');
+                        $outer->orWhere('name', 'like', '%'.$like.'%');
+                        $outer->orWhere('sku', 'like', mb_strlen($code) <= 4 ? '%'.$like.'%' : $like.'%');
+                    }
+                })
+                ->limit($cap)
+                ->get()
+                ->values();
+        }
 
-        return $q->limit(max(8, $limit))->get()->values();
+        return $this->uniqueProducts($pairHits->concat($codeHits), $cap);
     }
 
     /**
