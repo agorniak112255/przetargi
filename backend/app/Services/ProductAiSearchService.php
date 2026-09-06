@@ -3316,12 +3316,7 @@ final class ProductAiSearchService
      */
     private function rowsFromNamedModels(string $query, Collection $products, int $limit): array
     {
-        $products = $this->withResponseRelations(
-            $products->sortByDesc(
-                fn (Product $p): int => $this->modelFuzzy->score($query, $p) * 100
-                    + $this->articleTypeScore($query, $p)
-            )->values()
-        );
+        $products = $this->withResponseRelations($products->values());
         $out = [];
         foreach ($products as $product) {
             if (! $product instanceof Product) {
@@ -3336,8 +3331,40 @@ final class ProductAiSearchService
             $row['ai_match_reason'] = 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).';
             $out[] = $row;
         }
+        usort($out, function (array $a, array $b) use ($query, $products): int {
+            $pa = $products->firstWhere('id', (int) ($a['id'] ?? 0));
+            $pb = $products->firstWhere('id', (int) ($b['id'] ?? 0));
+            if ($pa instanceof Product && $pb instanceof Product) {
+                $byType = $this->namedModelTypeScore($query, $pb) <=> $this->namedModelTypeScore($query, $pa);
+                if ($byType !== 0) {
+                    return $byType;
+                }
+                $byModel = $this->modelFuzzy->score($query, $pb) <=> $this->modelFuzzy->score($query, $pa);
+                if ($byModel !== 0) {
+                    return $byModel;
+                }
+            }
 
-        return array_slice($this->sortRankedByMatchPercent($out), 0, max(1, min(80, $limit)));
+            return $this->rowPurchasePln($a) <=> $this->rowPurchasePln($b);
+        });
+
+        return array_slice($out, 0, max(1, min(80, $limit)));
+    }
+
+    /** Dłuższy rzeczownik z SIWZ w nazwie („ogrodniczki”) wyżej niż ogólniejsze „spodnie”. */
+    private function namedModelTypeScore(string $query, Product $product): int
+    {
+        $name = $this->lexicalNormalize($product->name.' '.$product->sku);
+        $best = 0;
+        foreach ($this->fallbackPhrases($query) as $token) {
+            $t = $this->lexicalNormalize($token);
+            if ($t === '' || mb_strlen($t) < 4 || ! str_contains($name, $t)) {
+                continue;
+            }
+            $best = max($best, mb_strlen($t));
+        }
+
+        return $best;
     }
 
     /**

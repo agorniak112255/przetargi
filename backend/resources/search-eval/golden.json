@@ -53,7 +53,8 @@
             "id": "urgent-ogrodniczki-urg-a",
             "query": "Spodnie ogrodniczki robocze URGENT URG-A",
             "expected_skus": [
-                "PROS-URG-A-OGROD"
+                "PROS-URG-A-OGROD",
+                "URG-A-OGRODNICZKI"
             ],
             "forbidden_skus": [
                 "PROS-URG-B-OGROD",

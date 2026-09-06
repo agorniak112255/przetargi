@@ -68,6 +68,7 @@ final class ProductAiSearchUrgATest extends TestCase
         $hitId = (int) Product::query()->where('sku', 'PROS-URG-A-OGROD')->value('id');
 
         $this->assertContains('PROS-URG-A-OGROD', $skus);
+        $this->assertSame('PROS-URG-A-OGROD', $skus[0] ?? null);
         $this->assertContains($hitId, $search->lastTrace()['candidate_ids'] ?? []);
     }
 
@@ -85,6 +86,19 @@ final class ProductAiSearchUrgATest extends TestCase
             'ppe_family' => PpeAssortment::FAMILY_APPAREL,
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now()->subYear(),
+        ]);
+        Product::query()->create([
+            'sku' => 'PROS-URG-A-SPODNIE',
+            'name' => 'URG-A (spodnie)',
+            'manufacturer' => 'URGENT',
+            'category' => 'Odzież robocza',
+            'description' => 'Spodnie robocze URG-A.',
+            'catalog_price_net' => 50,
+            'purchase_price' => 10,
+            'stock' => 5,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now()->subMonths(3),
         ]);
         Product::query()->create([
             'sku' => 'PROS-URG-B-OGROD',
