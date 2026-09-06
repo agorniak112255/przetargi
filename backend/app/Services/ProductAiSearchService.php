@@ -2577,13 +2577,15 @@ final class ProductAiSearchService
         $searchText = $intent['needed'] !== '' ? $intent['needed'] : $query;
         $requirement = $this->assortmentText($query, $intent['needed']);
         $codeHits = $this->clock('retrieve_codes', fn (): Collection => $this->retrieveByModelCode($modelQuery.' '.$searchText, $limit));
+        $snrHits = $this->clock('retrieve_snr', fn (): Collection => $this->retrieveBySnr($query, $limit));
+        $forcedHits = $this->uniqueProducts($codeHits->concat($snrHits), $limit);
         $fuzzyHits = $this->clock('retrieve_fuzzy', fn (): Collection => $this->retrieveByFuzzyModel($modelQuery.' '.$searchText, $limit));
         $filterHits = $this->clock('retrieve_filter', fn (): Collection => $this->retrieveByFilterType($query, $limit));
         $brandHits = $this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)
             ? collect()
             : $this->clock('retrieve_brand', fn (): Collection => $this->retrieveByManufacturer($query, $intent, $limit));
         $priority = $this->uniqueProducts(
-            $filterHits->concat($fuzzyHits)->concat($codeHits)->concat($brandHits),
+            $filterHits->concat($fuzzyHits)->concat($forcedHits)->concat($brandHits),
             $limit
         );
 
@@ -2607,17 +2609,17 @@ final class ProductAiSearchService
         if ($cascaded->isNotEmpty()) {
             $fromNameSteps = is_string($cascadeLevel) && str_starts_with($cascadeLevel, 'steps_');
             $pool = $fromNameSteps
-                ? $codeHits->concat($cascaded)
+                ? $forcedHits->concat($cascaded)
                 : ($this->slangRewriteFor($query) !== null
-                    ? $codeHits->concat($cascaded)->concat($priority)
+                    ? $forcedHits->concat($cascaded)->concat($priority)
                     : $priority->concat($cascaded));
 
             $cascadeKept = $this->keepCompatible($requirement, $this->uniqueProducts($pool, $limit));
             // Pełna pula kończy retrieval — dokładanie czegokolwiek i tak by z niej wypadło.
-            // Trafienie po kodzie modelu zostaje z przodu: kaskada „nauszniki” nie może
-            // zepchnąć X2A-EU poza limit, gdy LIKE już znalazł kartę.
+            // Trafienie po kodzie modelu albo progu SNR zostaje z przodu: kaskada
+            // „nauszniki nagłowne” nie może zepchnąć X2A-EU poza limit.
             if ($cascadeKept->count() >= $limit) {
-                return $this->withModelCodeHits($requirement, $codeHits, $cascadeKept, $limit);
+                return $this->withModelCodeHits($requirement, $forcedHits, $cascadeKept, $limit);
             }
         }
         if ($this->catalogSlang->requiresTightEvidence($query)) {
@@ -2644,7 +2646,7 @@ final class ProductAiSearchService
         // kominiarkę) albo gdy zeszła do samego rzeczownika rodzaju — wtedy z definicji
         // nie widzi kart bez tego słowa w nazwie („URG-A”).
         if ($cascadeKept->isNotEmpty() && ! $this->cascadeSweptFamilyNoun($cascadeLevel, $intent)) {
-            return $this->withModelCodeHits($requirement, $codeHits, $cascadeKept, $limit);
+            return $this->withModelCodeHits($requirement, $forcedHits, $cascadeKept, $limit);
         }
 
         // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
@@ -2692,7 +2694,7 @@ final class ProductAiSearchService
                 : collect();
         });
 
-        $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $cascadeKept, $fused, $recall, $brandHits, $limit): Collection {
+        $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $forcedHits, $cascadeKept, $fused, $recall, $brandHits, $limit): Collection {
             return $this->keepCompatible(
                 $requirement,
                 $this->uniqueProducts(
@@ -2700,7 +2702,7 @@ final class ProductAiSearchService
                     // rodzaju: jej karty są równe co do wartości („SPODNIE MACH 1..60”)
                     // i wypchnęłyby z puli trafienie wektorowe. Fuzja rang wie więcej, więc
                     // idzie pierwsza, a kaskada uzupełnia resztę puli.
-                    $this->hydrate($fused)->concat($cascadeKept)->concat($recall)->concat($brandHits),
+                    $this->hydrate($fused)->concat($forcedHits)->concat($cascadeKept)->concat($recall)->concat($brandHits),
                     $limit * 3
                 )
             );
@@ -2820,8 +2822,20 @@ final class ProductAiSearchService
             ->filter(fn (Product $p): bool => (
                 $this->assortment->compatibleProduct($query, $p)
                 || $this->modelFuzzy->matches($query, $p)
-            ) && $this->matchesSlangEvidence($query, $p))
+            ) && $this->matchesSlangEvidence($query, $p)
+                && $this->meetsRequiredSnr($query, $p))
             ->values();
+    }
+
+    private function meetsRequiredSnr(string $query, Product $product): bool
+    {
+        $min = $this->bhpAttributes->requiredSnr($query);
+        if ($min === null) {
+            return true;
+        }
+        $have = $this->bhpAttributes->snrRating($this->filterHaystack($product));
+
+        return $have === null || $have >= $min;
     }
 
     /**
@@ -2854,6 +2868,58 @@ final class ProductAiSearchService
             ->sortByDesc(fn (Product $p): int => $this->filterType->coverageScore($query, $this->filterHaystack($p)))
             ->take(max(8, $limit))
             ->values();
+    }
+
+    /**
+     * Karty z SNR na karcie, które spełniają próg z SIWZ — kaskada rodzaju ich nie widzi.
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveBySnr(string $query, int $limit): Collection
+    {
+        $min = $this->bhpAttributes->requiredSnr($query);
+        if ($min === null) {
+            return collect();
+        }
+
+        $q = $this->productBaseQuery();
+        $q->where(function ($outer): void {
+            $outer->where('name', 'like', '%snr%')
+                ->orWhere('description', 'like', '%snr%')
+                ->orWhere('search_blob', 'like', '%snr%')
+                ->orWhere('norms', 'like', '%snr%');
+        });
+
+        return $q->limit(800)
+            ->get()
+            ->filter(function (Product $p) use ($min): bool {
+                $have = $this->bhpAttributes->snrRating($this->filterHaystack($p));
+
+                return $have !== null && $have >= $min;
+            })
+            ->sortByDesc(fn (Product $p): int => $this->snrRetrieveScore($query, $p))
+            ->take(max(8, $limit))
+            ->values();
+    }
+
+    /** Nauszniki nagłowne przed zatyczkami o wyższym SNR — próg to minimum, nie ranking. */
+    private function snrRetrieveScore(string $query, Product $product): int
+    {
+        $score = 0;
+        $reqType = $this->assortment->articleType($query, PpeAssortment::FAMILY_HEARING);
+        $prodType = $this->assortment->articleType((string) $product->name, PpeAssortment::FAMILY_HEARING);
+        if ($reqType !== null && $prodType === $reqType) {
+            $score += 1000;
+        }
+        $name = $this->lexicalNormalize((string) $product->name);
+        foreach ($this->fallbackPhrases($query) as $token) {
+            $stem = mb_substr($this->lexicalNormalize($token), 0, 7);
+            if (mb_strlen($stem) >= 6 && str_contains($name, $stem)) {
+                $score += 200;
+            }
+        }
+
+        return $score;
     }
 
     private function articleTypeScore(string $query, Product $product): int
@@ -3245,7 +3311,7 @@ final class ProductAiSearchService
      * @return Collection<int, Product>
      */
     /**
-     * Kaskada rodzaju nie może wypchnąć karty znalezionej po kodzie modelu.
+     * Kaskada rodzaju nie może wypchnąć karty znalezionej po kodzie modelu albo progu SNR.
      *
      * @param  Collection<int, Product>  $codeHits
      * @param  Collection<int, Product>  $pool

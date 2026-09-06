@@ -378,6 +378,43 @@ final class BhpAttributeNormalizer
         return $this->extractFootwearClass($text);
     }
 
+    /** Próg SNR z wymagania („SNR minimum 30 dB”, „tłumienie min. 31 dB”). */
+    public function requiredSnr(string $text): ?int
+    {
+        $norm = $this->normalizeText($text);
+        if (preg_match(
+            '/\bsnr\b[^0-9]{0,28}(?:min(?:imum|\.)?|co\s+najmniej|od|≥|>=)?\s*(\d{2,3})\s*(?:db)?/u',
+            $norm,
+            $m
+        ) === 1) {
+            return $this->snrInRange((int) $m[1]);
+        }
+        if (preg_match(
+            '/tlumien\w*[^0-9]{0,32}(?:min(?:imum|\.)?|co\s+najmniej|od|≥|>=)?\s*(\d{2,3})\s*db/u',
+            $norm,
+            $m
+        ) === 1) {
+            return $this->snrInRange((int) $m[1]);
+        }
+
+        return null;
+    }
+
+    /** SNR z nazwy / opisu karty („SNR 31 dB”). */
+    public function snrRating(string $text): ?int
+    {
+        if (preg_match('/\bsnr\b[^0-9]{0,12}(\d{2,3})\s*(?:db)?/iu', $text, $m) === 1) {
+            return $this->snrInRange((int) $m[1]);
+        }
+
+        return null;
+    }
+
+    private function snrInRange(int $n): ?int
+    {
+        return $n >= 15 && $n <= 45 ? $n : null;
+    }
+
     /** Próg °C z wymagania („przy 200 C”, „min. 250°C”). */
     public function requiredCelsius(string $text): ?int
     {

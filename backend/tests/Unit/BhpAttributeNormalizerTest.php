@@ -251,4 +251,18 @@ final class BhpAttributeNormalizerTest extends TestCase
             true
         ));
     }
+
+    public function test_reads_snr_threshold_from_requirement_and_card(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame(30, $n->requiredSnr('Ochronniki słuchu nagłowne o tłumieniu SNR minimum 30 dB'));
+        $this->assertSame(31, $n->requiredSnr('nauszniki SNR ≥ 31'));
+        $this->assertSame(28, $n->requiredSnr('tłumienie min. 28 dB'));
+        $this->assertNull($n->requiredSnr('Ochronniki słuchu na hełm MSA - niski poziom tłumienia'));
+        $this->assertNull($n->requiredSnr('Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna'));
+        $this->assertSame(31, $n->snrRating('3M Nauszniki PELTOR X2 - wersja nagłowna (SNR 31 dB)'));
+        $this->assertSame(27, $n->snrRating('PELTOR X1 (SNR 27 dB)'));
+        $this->assertNull($n->snrRating('Nauszniki przeciwhałasowe bez podanego tłumienia'));
+    }
 }
