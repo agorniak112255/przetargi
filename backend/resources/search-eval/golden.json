@@ -1,76 +1,380 @@
 {
-  "version": 1,
-  "note": "Golden set wyszukiwania AI. ZALĄŻEK — przypadki wypisane z katalogu produkcyjnego (39 tys. kart), ale bez akceptacji handlowca. Zanim zaczniesz podejmować decyzje na podstawie metryk, przejrzyj expected_skus/forbidden_skus i dopisz przypadki z prawdziwych SIWZ (patrz README.md).",
-  "cases": [
-    {
-      "id": "peltor-x2-naglowne",
-      "query": "Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna",
-      "expected_skus": ["X2A-EU"],
-      "forbidden_skus": ["X1A-EU", "X1P3E-EU"],
-      "note": "Zakotwiczone w marce i modelu — najprostszy przypadek. Spadek tutaj oznacza regresję w retrievalu po kodzie modelu."
-    },
-    {
-      "id": "nauszniki-snr-30",
-      "query": "Ochronniki słuchu nagłowne o tłumieniu SNR minimum 30 dB",
-      "expected_skus": ["X2A-EU"],
-      "forbidden_skus": ["X1A-EU"],
-      "note": "Bez marki, warunek liczbowy z karty (SNR 31 dB spełnia, 27 dB nie). Sprawdza, czy model czyta parametr, a nie samą nazwę asortymentu."
-    },
-    {
-      "id": "peltor-nahelmowe",
-      "query": "Nauszniki przeciwhałasowe montowane na hełm ochronny",
-      "expected_skus": ["X1P3E-EU"],
-      "forbidden_skus": ["X1A-EU", "X2A-EU"],
-      "note": "Wariant mocowania (nahełmowe vs nagłowne) — częsty powód fałszywych pozytywów."
-    },
-    {
-      "id": "tychem-4000s-bialy",
-      "query": "Kombinezon chemoodporny Tychem 4000 S biały",
-      "expected_skus": ["SL CHZ5 T WH 00", "SL CHZ6 T WH 16"],
-      "forbidden_skus": ["TC CHA5 T YL 00"],
-      "note": "Marka + rodzina modelu; żółty Tychem C to inny produkt."
-    },
-    {
-      "id": "urgent-ogrodniczki-urg-a",
-      "query": "Spodnie ogrodniczki robocze URGENT URG-A",
-      "expected_skus": ["PROS-URG-A-OGROD"],
-      "forbidden_skus": ["PROS-URG-B-OGROD", "PROS-URG-C-OGROD"],
-      "note": "Rozróżnienie wariantów A/B/C/D tej samej rodziny — test fuzzy matchingu modelu."
-    },
-    {
-      "id": "uvex-phynomic-esd",
-      "query": "Rękawice montażowe powlekane uvex phynomic z funkcją ESD",
-      "expected_skus": ["60078", "60084"],
-      "forbidden_skus": ["60080", "60081"],
-      "note": "ESD jest warunkiem twardym — phynomic C3/C5 bez ESD nie może wejść do wyniku."
-    },
-    {
-      "id": "trzewiki-s3",
-      "query": "Trzewiki robocze w klasie ochrony S3 SRC z podnoskiem",
-      "expected_skus": ["MANHATTAN S3 SRC", "SAGA S3 SRC"],
-      "forbidden_skus": ["VIRAGE S1P SRC", "ARONA S1P SRC"],
-      "note": "Klasa ochrony jako warunek: S1P nie spełnia wymagania S3."
-    },
-    {
-      "id": "spodniobuty-s5",
-      "query": "Spodniobuty wodoodporne z kaloszem typ S5",
-      "expected_skus": ["SBM01B", "SBM01 FLUO"],
-      "forbidden_skus": [],
-      "note": "Asortyment niszowy — sprawdza, czy kaskada odzyskiwania go w ogóle znajduje."
-    },
-    {
-      "id": "kombinezon-wodoochronny-wgrzane-kalosze",
-      "query": "Kombinezon wodoochronny z wgrzanymi kaloszami",
-      "expected_skus": ["104/K", "304/K"],
-      "forbidden_skus": [],
-      "note": "Zapytanie dosłownie z nazwy karty — jeśli to nie działa, problem jest w indeksie tekstowym, nie w modelu."
-    },
-    {
-      "id": "rekawice-antyprzeciecowe-nitryl",
-      "query": "Rękawice antyprzecięciowe powlekane nitrylem do prac montażowych",
-      "expected_skus": ["EOS NOCUT VV910", "VENICUTF02 XTREM CUT TOUCH - VECUTF02GR"],
-      "forbidden_skus": [],
-      "note": "Dwie cechy naraz (odporność na przecięcie + powłoka nitrylowa). Oczekiwane SKU to przykłady — rozszerz o pełną listę zgodnych kart."
-    }
-  ]
+    "version": 1,
+    "note": "Golden set wyszukiwania AI. 10 przypadków zakotwiczonych + linie SIWZ z ofert (SKU faktycznie wstawione, model z wymagania jest na karcie). Telemetria search_events jest jeszcze za cienka. Metryki bezwzględne nadal wymagają przeglądu handlowca.",
+    "cases": [
+        {
+            "id": "peltor-x2-naglowne",
+            "query": "Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna",
+            "expected_skus": [
+                "X2A-EU"
+            ],
+            "forbidden_skus": [
+                "X1A-EU",
+                "X1P3E-EU"
+            ],
+            "note": "Zakotwiczone w marce i modelu — najprostszy przypadek. Spadek tutaj oznacza regresję w retrievalu po kodzie modelu."
+        },
+        {
+            "id": "nauszniki-snr-30",
+            "query": "Ochronniki słuchu nagłowne o tłumieniu SNR minimum 30 dB",
+            "expected_skus": [
+                "X2A-EU"
+            ],
+            "forbidden_skus": [
+                "X1A-EU"
+            ],
+            "note": "Bez marki, warunek liczbowy z karty (SNR 31 dB spełnia, 27 dB nie). Sprawdza, czy model czyta parametr, a nie samą nazwę asortymentu."
+        },
+        {
+            "id": "peltor-nahelmowe",
+            "query": "Nauszniki przeciwhałasowe montowane na hełm ochronny",
+            "expected_skus": [
+                "X1P3E-EU"
+            ],
+            "forbidden_skus": [
+                "X1A-EU",
+                "X2A-EU"
+            ],
+            "note": "Wariant mocowania (nahełmowe vs nagłowne) — częsty powód fałszywych pozytywów."
+        },
+        {
+            "id": "tychem-4000s-bialy",
+            "query": "Kombinezon chemoodporny Tychem 4000 S biały",
+            "expected_skus": [
+                "SL CHZ5 T WH 00",
+                "SL CHZ6 T WH 16"
+            ],
+            "forbidden_skus": [
+                "TC CHA5 T YL 00"
+            ],
+            "note": "Marka + rodzina modelu; żółty Tychem C to inny produkt."
+        },
+        {
+            "id": "urgent-ogrodniczki-urg-a",
+            "query": "Spodnie ogrodniczki robocze URGENT URG-A",
+            "expected_skus": [
+                "PROS-URG-A-OGROD"
+            ],
+            "forbidden_skus": [
+                "PROS-URG-B-OGROD",
+                "PROS-URG-C-OGROD"
+            ],
+            "note": "Rozróżnienie wariantów A/B/C/D tej samej rodziny — test fuzzy matchingu modelu."
+        },
+        {
+            "id": "uvex-phynomic-esd",
+            "query": "Rękawice montażowe powlekane uvex phynomic z funkcją ESD",
+            "expected_skus": [
+                "60078",
+                "60084"
+            ],
+            "forbidden_skus": [
+                "60080",
+                "60081"
+            ],
+            "note": "ESD jest warunkiem twardym — phynomic C3/C5 bez ESD nie może wejść do wyniku."
+        },
+        {
+            "id": "trzewiki-s3",
+            "query": "Trzewiki robocze w klasie ochrony S3 SRC z podnoskiem",
+            "expected_skus": [
+                "MANHATTAN S3 SRC",
+                "SAGA S3 SRC"
+            ],
+            "forbidden_skus": [
+                "VIRAGE S1P SRC",
+                "ARONA S1P SRC"
+            ],
+            "note": "Klasa ochrony jako warunek: S1P nie spełnia wymagania S3."
+        },
+        {
+            "id": "spodniobuty-s5",
+            "query": "Spodniobuty wodoodporne z kaloszem typ S5",
+            "expected_skus": [
+                "SBM01B",
+                "SBM01 FLUO"
+            ],
+            "forbidden_skus": [],
+            "note": "Asortyment niszowy — sprawdza, czy kaskada odzyskiwania go w ogóle znajduje."
+        },
+        {
+            "id": "kombinezon-wodoochronny-wgrzane-kalosze",
+            "query": "Kombinezon wodoochronny z wgrzanymi kaloszami",
+            "expected_skus": [
+                "104/K",
+                "304/K"
+            ],
+            "forbidden_skus": [],
+            "note": "Zapytanie dosłownie z nazwy karty — jeśli to nie działa, problem jest w indeksie tekstowym, nie w modelu."
+        },
+        {
+            "id": "rekawice-antyprzeciecowe-nitryl",
+            "query": "Rękawice antyprzecięciowe powlekane nitrylem do prac montażowych",
+            "expected_skus": [
+                "EOS NOCUT VV910",
+                "VENICUTF02 XTREM CUT TOUCH - VECUTF02GR"
+            ],
+            "forbidden_skus": [],
+            "note": "Dwie cechy naraz (odporność na przecięcie + powłoka nitrylowa). Oczekiwane SKU to przykłady — rozszerz o pełną listę zgodnych kart."
+        },
+        {
+            "id": "okulary-ochronne-msa-perspecta-2047w",
+            "query": "Okulary ochronne MSA PERSPECTA 2047W",
+            "expected_skus": [
+                "10064800"
+            ],
+            "forbidden_skus": [
+                "10045516",
+                "10045641",
+                "10064797"
+            ],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "okulary-ochronne-msa-perspecta-9000",
+            "query": "Okulary ochronne MSA PERSPECTA 9000",
+            "expected_skus": [
+                "10045516"
+            ],
+            "forbidden_skus": [
+                "10064800",
+                "10045641",
+                "10064797"
+            ],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "okulary-ochronne-msa-perspecta-010",
+            "query": "OKULARY OCHRONNE MSA PERSPECTA 010",
+            "expected_skus": [
+                "10045641"
+            ],
+            "forbidden_skus": [
+                "10064800",
+                "10045516",
+                "10064797"
+            ],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "okulary-ochronne-msa-perspecta-1070",
+            "query": "OKULARY OCHRONNE MSA PERSPECTA 1070",
+            "expected_skus": [
+                "10064797"
+            ],
+            "forbidden_skus": [
+                "10064800",
+                "10045516",
+                "10045641"
+            ],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "filtropochlaniacz-3071-a2p3-r-secura",
+            "query": "Filtropochłaniacz 3071 - A2P3 R SECURA",
+            "expected_skus": [
+                "S568DSM0"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "pochlaniacz-wielogazowy-a2b2e2k2-msa-min-na-5",
+            "query": "POCHŁANIACZ WIELOGAZOWY A2B2E2K2, MSA, min. na 5 lat, do maski pełnotwarzowej, grint 4-1,7\"",
+            "expected_skus": [
+                "10098112"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "pasek-podbrodkowy-do-helmu-v-gard-500-msa-uniw",
+            "query": "PASEK PODBRÓDKOWY do hełmu V-GARD 500 MSA - uniwersalny",
+            "expected_skus": [
+                "GV411-0000000-000"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "helm-wentylowany-msa-super-v-gard-500-atex-cza",
+            "query": "Hełm wentylowany MSA SUPER V - GARD 500 ATEX czasza ABS - różne kolory, więźba Fas-Trac",
+            "expected_skus": [
+                "GV112-0000000-000"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "koszula-dzianinowa-antyelektrostatyczna-trudnop",
+            "query": "Koszula dzianinowa antyelektrostatyczna, trudnopalna, zapinana pod szyję , rękaw długi bez mankietów (typ POLO) np. PORTWEST FR10 · EN ISO 13688 EN 1149-5 EN ISO 11612 IEC 61482",
+            "expected_skus": [
+                "FR10"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "kombinezon-jed-antyelktrostyczny-portwest-st80",
+            "query": "KOMBINEZON JED. ANTYELKTROSTYCZNY PORTWEST ST80 z instrukcją w j. polsim · EN 1073-2 EN 13982 EN 14116 EN ISO 1149-5 EN ISO 13034 typ 6",
+            "expected_skus": [
+                "ST80"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-zaroochronne-z-para-aramidu-kevlar-kpg1",
+            "query": "Rękawice żaroochronne z para-aramidu kevlar KPG10 Delta Plus · EN 388 EN 407",
+            "expected_skus": [
+                "KPG10"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-nitrylex-befree-bezpudrowe-jagodowe-m",
+            "query": "Rękawice Nitrylex beFree, bezpudrowe, jagodowe MERCATOR MEDICAL",
+            "expected_skus": [
+                "RP002000"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-kcl-butoject-897-en-374-1-en-374-5-en",
+            "query": "Rękawice KCL Butoject 897 · EN 374-1 EN 374-5 EN 388 EN 21420",
+            "expected_skus": [
+                "089707141X"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-mapa-telsol-351-katiii-rozmiar-od-8-do",
+            "query": "RĘKAWICE MAPA TELSOL 351 kat.III rozmiar od 8 do 10 · EN388 EN 374-1 EN 374-5 EN ISO 21420",
+            "expected_skus": [
+                "34351008"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-dzianinowe-nakrapiane-guma-glove-dots",
+            "query": "RĘKAWICE DZIANINOWE NAKRAPIANE GUMĄ GLOVE DOTS",
+            "expected_skus": [
+                "ROBV/2"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-powlekane-nitrylem-ansell-hycron-27-600",
+            "query": "Rękawice powlekane nitrylem Ansell HYCRON 27-600 · EN ISO 21420 EN 388",
+            "expected_skus": [
+                "27607"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "gasnica-wodna-mglowa-6l-gwm-6x-af-producent",
+            "query": "Gaśnica wodna mgłowa 6l - GWM-6x AF - producent KZWM - wymagane CNBOP",
+            "expected_skus": [
+                "GWM-6x AF"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "okulary-ochronne-3m-solus-s1201sgaf-eu",
+            "query": "Okulary ochronne 3M SOLUS S1201SGAF - EU",
+            "expected_skus": [
+                "S1201SGAF-TSKT"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "zestaw-higieniczny-do-nausznikow-3m-optime-i-hy5",
+            "query": "Zestaw higieniczny do nauszników 3M OPTIME I HY51",
+            "expected_skus": [
+                "7100383166"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "pasek-podbrodkowy-3-punktowy-do-helmu-g3000",
+            "query": "Pasek podbródkowy 3 punktowy do hełmu G3000",
+            "expected_skus": [
+                "D1229"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "trzewiki-araukan-940-6060-s3-en-iso-20345",
+            "query": "Trzewiki Araukan 940 6060 S3 · EN ISO 20345",
+            "expected_skus": [
+                "ARAUKAN 9403 6060 S3L"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "polbuty-meskie-arosio-730-s3-en-iso-20345-en-6",
+            "query": "Półbuty męskie AROSIO 730 S3 · EN ISO 20345 EN 61340",
+            "expected_skus": [
+                "AROSIO 730 616560 O2 FO ESD"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-kcl-karbo-tect-950-en-388-en-407-en-4",
+            "query": "Rękawice KCL KARBO TECT 950 · EN 388 EN 407 EN 420",
+            "expected_skus": [
+                "095007191X"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-kcl-vitoject-890-en-374-1-en-374-5-en",
+            "query": "Rękawice KCL VITOJECT 890 · EN 374-1 EN 374-5 EN 388 EN 420",
+            "expected_skus": [
+                "089008111X"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-elektroizolacyjne-elsec-10kv-kat-iii",
+            "query": "RĘKAWICE ELEKTROIZOLACYJNE-ELSEC 10KV kat. III · PN-EN-60903",
+            "expected_skus": [
+                "S5923000"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "rekawice-mapa-tepm-ice-700-en-388-en-511-en-is",
+            "query": "Rękawice MAPA TEPM-ICE 700 · EN 388 EN 511 EN ISO 21420 (dawniej EN 420)",
+            "expected_skus": [
+                "TEMP-ICE-700-5"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "gogle-ochronne-3m-gear-gg6001sgaf-eu",
+            "query": "Gogle ochronne 3M GEAR GG6001SGAF-EU",
+            "expected_skus": [
+                "GG6001SGAF-RED-EA"
+            ],
+            "forbidden_skus": [],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        }
+    ]
 }
