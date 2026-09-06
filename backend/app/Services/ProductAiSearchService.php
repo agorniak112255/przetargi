@@ -351,6 +351,15 @@ final class ProductAiSearchService
                 'candidates' => $candidates,
             ];
         }
+        $cutRows = $this->rowsFromCutResistanceMatches($query, $candidates, $limit);
+        if ($cutRows !== []) {
+            return [
+                'products' => $this->orderEyeWearSetRows($query, $cutRows, $candidates),
+                'note' => null,
+                'rank_cards' => null,
+                'candidates' => $candidates,
+            ];
+        }
         if ($candidates->isEmpty()) {
             return [
                 'products' => [],
@@ -3675,6 +3684,42 @@ final class ProductAiSearchService
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = 92;
             $row['ai_match_reason'] = 'Klasa ochrony obuwia na karcie spełnia wymaganie z SIWZ.';
+            $out[] = $row;
+        }
+
+        return array_slice($out, 0, max(1, min(80, $limit)));
+    }
+
+    /**
+     * Antyprzecięciowe z SIWZ — kolejność z puli (włókno + nitryl), nie werdykt modelu.
+     *
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromCutResistanceMatches(string $query, Collection $products, int $limit): array
+    {
+        if (! $this->assortment->wantsCutResistance($query)) {
+            return [];
+        }
+        $products = $this->withResponseRelations(
+            $products
+                ->filter(fn (Product $p): bool => $this->assortment->showsCutResistance(
+                    (string) $p->name.' '.$p->sku
+                ))
+                ->sortByDesc(fn (Product $p): int => $this->cutRetrieveScore($query, $p))
+                ->values()
+        );
+        if ($products->isEmpty()) {
+            return [];
+        }
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->cutRetrieveScore($query, $product), 20)));
+            $row['ai_match_reason'] = 'Odporność na przecięcie na nazwie karty spełnia wymaganie z SIWZ.';
             $out[] = $row;
         }
 

@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\Product;
+use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductAiSearchService;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -41,6 +43,27 @@ final class ProductAiSearchCutResistanceTest extends TestCase
         ]);
 
         $skus = $retrieve->invoke($search, self::QUERY, $intent, 80)->pluck('sku')->all();
+
+        $this->assertContains('VENICUTF02 XTREM CUT TOUCH - VECUTF02GR', $skus);
+        $this->assertContains('EOS NOCUT VV910', $skus);
+        $this->assertNotContains('NITRYL-MONT-0', $skus);
+    }
+
+    public function test_search_ranks_xtremcut_and_nocut_without_llm_pick(): void
+    {
+        $this->seedCutCatalog();
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => self::QUERY,
+            'search_phrases' => ['rękawice montażowe'],
+            'matches' => [],
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $skus = array_column(
+            $this->app->make(ProductAiSearchService::class)->search(self::QUERY, 10)['products'] ?? [],
+            'sku'
+        );
 
         $this->assertContains('VENICUTF02 XTREM CUT TOUCH - VECUTF02GR', $skus);
         $this->assertContains('EOS NOCUT VV910', $skus);
@@ -80,6 +103,17 @@ final class ProductAiSearchCutResistanceTest extends TestCase
                 'description' => 'Rękawice montażowe nitrylowe.',
                 'catalog_price_net' => 12,
                 'purchase_price' => 6,
+                'enriched_at' => now(),
+            ]);
+        }
+        for ($i = 0; $i < 12; $i++) {
+            Product::query()->create($base + [
+                'sku' => 'HPPE-PU-'.$i,
+                'name' => 'Rękawice antyprzecięciowe HPPE powlekane PU '.$i,
+                'manufacturer' => 'Generic',
+                'description' => 'HPPE PU.',
+                'catalog_price_net' => 8,
+                'purchase_price' => 3,
                 'enriched_at' => now(),
             ]);
         }
