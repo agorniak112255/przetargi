@@ -7,6 +7,7 @@ namespace App\Services\Presta;
 use App\Models\PrestaProductMatch;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductAccessory;
 use App\Models\ProductImage;
 use App\Services\NbpExchangeRateService;
 use App\Support\ProductSizeVariant;
@@ -46,7 +47,7 @@ final class PrestaProductExportService
             throw new RuntimeException($error);
         }
 
-        $product->loadMissing('images', 'prestaExport');
+        $product->loadMissing('images', 'prestaExport', 'accessories.relatedProduct.prestaExport');
         $existing = $this->resolveExisting($product);
         if ($existing !== null && ! $force && $this->alreadyExported($product, (int) $existing['id_product'])) {
             $saved = $this->gateway->updateProduct((int) $existing['id_product'], $this->payload($product));
@@ -87,6 +88,7 @@ final class PrestaProductExportService
             ];
         }
         $this->gateway->ensureCombinations($prestaId, $combinations);
+        $this->gateway->ensureAccessories($prestaId, $this->accessoryPrestaIds($product));
 
         $images = 0;
         $hasLocalImages = $product->images->isNotEmpty();
@@ -247,6 +249,29 @@ final class PrestaProductExportService
                 'presta_name' => mb_substr((string) $product->name, 0, 255),
             ]
         );
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function accessoryPrestaIds(Product $product): array
+    {
+        $ids = [];
+        foreach ($product->accessories as $row) {
+            if (! $row instanceof ProductAccessory) {
+                continue;
+            }
+            $prestaId = (int) ($row->presta_related_id ?? 0);
+            if ($prestaId <= 0 && $row->relatedProduct instanceof Product) {
+                $match = $row->relatedProduct->prestaExport;
+                $prestaId = $match instanceof PrestaProductMatch ? (int) $match->presta_id : 0;
+            }
+            if ($prestaId > 0) {
+                $ids[$prestaId] = $prestaId;
+            }
+        }
+
+        return array_values($ids);
     }
 
     private function combinationReference(string $sku, string $size): string

@@ -170,6 +170,17 @@ export type Product = {
     url: string
     status: string
   } | null
+  accessories?: Array<{
+    id: number
+    source: string
+    score: number
+    method: string | null
+    related_product_id: number | null
+    sku: string | null
+    name: string | null
+    manufacturer: string | null
+    matched: boolean
+  }>
   special_prices?: Array<{
     id: number
     client_id: number | null

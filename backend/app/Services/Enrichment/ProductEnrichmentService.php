@@ -19,6 +19,7 @@ use App\Models\ProductEnrichmentCache;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
 use App\Support\ProductSizeVariant;
@@ -61,11 +62,17 @@ final class ProductEnrichmentService
         private readonly ProductImageCandidateVerifier $imageVerifier,
         private readonly PpeAssortment $assortment,
         private readonly ?EnrichmentAttemptLog $attemptLog = null,
+        private readonly ?ProductAccessorySyncService $accessories = null,
     ) {}
 
     private function attemptLog(): EnrichmentAttemptLog
     {
         return $this->attemptLog ?? app(EnrichmentAttemptLog::class);
+    }
+
+    private function accessories(): ProductAccessorySyncService
+    {
+        return $this->accessories ?? app(ProductAccessorySyncService::class);
     }
 
     private function descriptionTemplates(): EnrichmentDescriptionTemplateService
@@ -890,6 +897,7 @@ final class ProductEnrichmentService
                 $saved['packaging'] = $packaging;
             }
             $product->update($saved);
+            $this->rememberAccessories($product, $pageSnippets);
 
             ReindexProductEmbeddingJob::dispatch($product->id, true);
 
@@ -1664,6 +1672,9 @@ final class ProductEnrichmentService
             if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
                 $row['option_sizes'] = $page['option_sizes'];
             }
+            if (isset($page['accessories']) && is_array($page['accessories'])) {
+                $row['accessories'] = $page['accessories'];
+            }
             $out[] = $row;
         }
 
@@ -1761,6 +1772,39 @@ final class ProductEnrichmentService
         }
 
         return ['attributes' => $attributes, 'packaging' => $packaging];
+    }
+
+    /**
+     * @param  list<array{url?: string, text?: string, accessories?: list<array<string, mixed>>}>  $pages
+     */
+    private function rememberAccessories(Product $product, array $pages): void
+    {
+        $candidates = [];
+        $seen = [];
+        foreach ($pages as $page) {
+            $rows = $page['accessories'] ?? [];
+            if (! is_array($rows)) {
+                continue;
+            }
+            foreach ($rows as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+                $key = mb_strtolower(trim((string) ($row['sku'] ?? '')).'|'.trim((string) ($row['name'] ?? '')));
+                if ($key === '|' || isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $candidates[] = $row;
+            }
+        }
+        if ($candidates === []) {
+            return;
+        }
+        try {
+            $this->accessories()->matchFromPages($product, $candidates);
+        } catch (Throwable) {
+        }
     }
 
     /**
@@ -2148,6 +2192,9 @@ final class ProductEnrichmentService
                 $row = ['url' => $url, 'text' => $text];
                 if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
                     $row['option_sizes'] = $page['option_sizes'];
+                }
+                if (isset($page['accessories']) && is_array($page['accessories'])) {
+                    $row['accessories'] = $page['accessories'];
                 }
                 $out[] = $row;
             }
@@ -2814,6 +2861,9 @@ SYS,
                 if (isset($orig['option_sizes']) && is_array($orig['option_sizes'])) {
                     $row['option_sizes'] = $orig['option_sizes'];
                 }
+                if (isset($orig['accessories']) && is_array($orig['accessories'])) {
+                    $row['accessories'] = $orig['accessories'];
+                }
                 $cleaned[] = $row;
             }
         }
@@ -2867,6 +2917,9 @@ SYS,
             $row = ['url' => (string) ($page['url'] ?? ''), 'text' => $text];
             if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
                 $row['option_sizes'] = $page['option_sizes'];
+            }
+            if (isset($page['accessories']) && is_array($page['accessories'])) {
+                $row['accessories'] = $page['accessories'];
             }
             $out[] = $row;
         }

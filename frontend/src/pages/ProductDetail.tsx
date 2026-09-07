@@ -478,6 +478,32 @@ export function ProductDetail() {
         </div>
       </div>
 
+      {(p.accessories?.length ?? 0) > 0 && (
+        <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold">Warianty i akcesoria</h2>
+          <ul className="space-y-1 text-xs">
+            {p.accessories!.map((row) => (
+              <li key={row.id} className="flex flex-wrap items-baseline gap-x-2 border-b border-slate-100 py-1 last:border-0">
+                {row.related_product_id ? (
+                  <Link to={`/products/${row.related_product_id}`} className="font-medium text-blue-700 hover:underline">
+                    {row.name || row.sku || 'Produkt'}
+                  </Link>
+                ) : (
+                  <span className="font-medium">{row.name || row.sku || 'Nieznany'}</span>
+                )}
+                <span className="text-slate-500">
+                  {[row.sku, row.manufacturer].filter(Boolean).join(' · ')}
+                </span>
+                <span className="text-slate-400">
+                  {row.source === 'presta' ? 'z Presty' : 'z karty'}
+                  {row.matched ? '' : ' · bez karty w katalogu'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {(p.special_prices?.length ?? 0) > 0 && (
         <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
           <h2 className="mb-2 text-sm font-semibold">Ceny specjalne (kontrakty klientów)</h2>

@@ -276,6 +276,7 @@ class ProductController extends Controller
             'documents',
             'specialPrices.client:id,name',
             'prestaExport',
+            'accessories.relatedProduct:id,sku,name,manufacturer,catalog_price_net',
         ]);
 
         $payload = $product->toArray();
@@ -321,6 +322,21 @@ class ProductController extends Controller
         $payload['price_history_latest_at'] = $latest?->created_at;
         $payload = $this->fx->appendPricePln($payload);
         $payload['presta_export'] = $this->prestaExportPayload($product);
+        $payload['accessories'] = $product->accessories->map(static function ($row): array {
+            $related = $row->relatedProduct;
+
+            return [
+                'id' => $row->id,
+                'source' => $row->source,
+                'score' => $row->score,
+                'method' => $row->method,
+                'related_product_id' => $row->related_product_id,
+                'sku' => $related?->sku ?? $row->related_sku,
+                'name' => $related?->name ?? $row->related_name,
+                'manufacturer' => $related?->manufacturer ?? $row->related_manufacturer,
+                'matched' => $related !== null,
+            ];
+        })->values()->all();
         $payload['description_layout'] = $this->descriptionTemplates->resolvedForProduct($product);
         $payload['special_prices'] = $product->specialPrices->map(static fn ($row): array => [
             'id' => $row->id,

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use App\Support\ProductAccessoryExtractor;
 use App\Support\ProductSizeVariant;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Psr7\Response as Psr7Response;
@@ -285,6 +286,10 @@ final class ProductPageFetcher
             if ($optionSizes !== []) {
                 $page['option_sizes'] = $optionSizes;
             }
+            $accessories = (new ProductAccessoryExtractor)->fromText($text);
+            if ($accessories !== []) {
+                $page['accessories'] = $accessories;
+            }
             $goodPages[] = $page;
             $used = true;
         }
@@ -381,6 +386,10 @@ final class ProductPageFetcher
             $page = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
             if ($optionSizes !== []) {
                 $page['option_sizes'] = $optionSizes;
+            }
+            $accessories = (new ProductAccessoryExtractor)->fromHtml($html);
+            if ($accessories !== []) {
+                $page['accessories'] = $accessories;
             }
             $goodPages[] = $page;
         }

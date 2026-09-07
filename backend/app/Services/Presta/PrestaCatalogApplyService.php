@@ -9,6 +9,7 @@ use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Services\Enrichment\ProductImageDownloader;
+use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -147,6 +148,10 @@ final class PrestaCatalogApplyService
         );
 
         ReindexProductEmbeddingJob::dispatch($product->id);
+        try {
+            app(ProductAccessorySyncService::class)->syncFromPrestaParent($prestaId, $product);
+        } catch (Throwable) {
+        }
 
         return [
             'product' => $product->fresh(['images']),

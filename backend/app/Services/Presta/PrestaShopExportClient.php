@@ -343,6 +343,71 @@ final class PrestaShopExportClient implements PrestaExportGateway
         }
     }
 
+    public function ensureAccessories(int $prestaId, array $relatedPrestaIds): void
+    {
+        $ids = [];
+        foreach ($relatedPrestaIds as $id) {
+            $id = (int) $id;
+            if ($id > 0 && $id !== $prestaId) {
+                $ids[$id] = $id;
+            }
+        }
+        if ($ids === []) {
+            return;
+        }
+        try {
+            $this->connectDb();
+            $prefix = $this->prefix();
+            if (Schema::connection('prestashop')->hasTable($prefix.'accessory')) {
+                $existing = DB::connection('prestashop')->table($prefix.'accessory')
+                    ->where('id_product_1', $prestaId)
+                    ->pluck('id_product_2')
+                    ->all();
+                $have = [];
+                foreach ($existing as $id) {
+                    $have[(int) $id] = true;
+                }
+                foreach ($ids as $relatedId) {
+                    if (isset($have[$relatedId])) {
+                        continue;
+                    }
+                    DB::connection('prestashop')->table($prefix.'accessory')->insert([
+                        'id_product_1' => $prestaId,
+                        'id_product_2' => $relatedId,
+                    ]);
+                }
+
+                return;
+            }
+        } catch (Throwable) {
+        }
+
+        try {
+            $existing = $this->getXml('products/'.$prestaId);
+            $product = $existing->product ?? null;
+            if (! $product instanceof SimpleXMLElement) {
+                return;
+            }
+            $associations = $product->associations ?? null;
+            if (! $associations instanceof SimpleXMLElement) {
+                $associations = $product->addChild('associations');
+            }
+            unset($associations->accessories);
+            $accessories = $associations->addChild('accessories');
+            foreach ($ids as $relatedId) {
+                $node = $accessories->addChild('accessory');
+                $node->addChild('id', (string) $relatedId);
+            }
+            $this->stripReadOnlyProductFields($product);
+            $this->putXml('products/'.$prestaId, $this->sanitizeForWrite((string) $existing->asXML()));
+        } catch (Throwable $e) {
+            Log::warning('Presta: nie zapisano akcesoriów.', [
+                'presta_id' => $prestaId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     public function uploadImage(int $prestaId, string $binary, string $filename): void
     {
         if ($binary === '' || $prestaId <= 0) {

@@ -141,6 +141,11 @@ class Product extends Model
         return $this->hasMany(ProductSpecialPrice::class)->orderBy('client_name');
     }
 
+    public function accessories(): HasMany
+    {
+        return $this->hasMany(ProductAccessory::class);
+    }
+
     public function prestaMatches(): HasMany
     {
         return $this->hasMany(PrestaProductMatch::class);

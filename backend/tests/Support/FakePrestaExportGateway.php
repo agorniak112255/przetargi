@@ -38,6 +38,9 @@ final class FakePrestaExportGateway implements PrestaExportGateway
     /** @var list<array<string, mixed>> */
     public array $combinations = [];
 
+    /** @var list<array{presta_id: int, items: list<int>}> */
+    public array $accessories = [];
+
     /** @var list<array{presta_id: int, filename: string}> */
     public array $images = [];
 
@@ -132,6 +135,11 @@ final class FakePrestaExportGateway implements PrestaExportGateway
     public function ensureCombinations(int $prestaId, array $combinations): void
     {
         $this->combinations[] = ['presta_id' => $prestaId, 'items' => $combinations];
+    }
+
+    public function ensureAccessories(int $prestaId, array $relatedPrestaIds): void
+    {
+        $this->accessories[] = ['presta_id' => $prestaId, 'items' => array_values($relatedPrestaIds)];
     }
 
     public function uploadImage(int $prestaId, string $binary, string $filename): void

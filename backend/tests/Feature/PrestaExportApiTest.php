@@ -8,6 +8,7 @@ use App\Jobs\ExportProductToPrestaJob;
 use App\Models\PrestaProductMatch;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductAccessory;
 use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
@@ -275,6 +276,36 @@ final class PrestaExportApiTest extends TestCase
         $this->assertCount(1, $this->presta->images);
         $this->assertSame($prestaId, $this->presta->images[0]['presta_id']);
         $this->assertStringContainsString('Pełny opis', $this->presta->updated[0]['description']);
+    }
+
+    public function test_export_sends_matched_accessories(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct(['sku' => 'SEC-3000', 'name' => 'Półmaska Secura 3000']);
+        $related = $this->makeProduct(['sku' => '3025', 'name' => 'Pochłaniacz 3025']);
+        PrestaProductMatch::query()->create([
+            'product_id' => $related->id,
+            'presta_id' => 289,
+            'method' => 'export',
+            'score' => 100,
+            'status' => PrestaProductMatch::STATUS_EXPORTED,
+        ]);
+        ProductAccessory::query()->create([
+            'product_id' => $product->id,
+            'related_product_id' => $related->id,
+            'source' => ProductAccessory::SOURCE_PRESTA,
+            'link_key' => 'p:289',
+            'presta_related_id' => 289,
+            'related_sku' => '3025',
+            'score' => 96,
+            'method' => 'sku',
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created');
+
+        $this->assertSame([289], $this->presta->accessories[0]['items']);
     }
 
     public function test_export_converts_eur_price_to_pln(): void
