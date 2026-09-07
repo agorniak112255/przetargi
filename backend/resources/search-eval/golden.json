@@ -348,10 +348,16 @@
             "id": "trzewiki-araukan-940-6060-s3-en-iso-20345",
             "query": "Trzewiki Araukan 940 6060 S3 · EN ISO 20345",
             "expected_skus": [
-                "ARAUKAN 9403 6060 S3L"
+                "ARAUKAN 940 6060 S3",
+                "ARAUKAN 940 6060 S3 CI"
             ],
-            "forbidden_skus": [],
-            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+            "forbidden_skus": [
+                "ARAUKAN 940 6060 S2",
+                "ARAUKAN 940 6060 S2 CI",
+                "ARAUKAN 940 6060 O2 FO",
+                "ARAUKAN 940 6060 O2 CI FO"
+            ],
+            "note": "SIWZ to 940 6060 S3. 9403 S3L to inny indeks. S2/O2 tej linii nie spełniają S3."
         },
         {
             "id": "polbuty-meskie-arosio-730-s3-en-iso-20345-en-6",
