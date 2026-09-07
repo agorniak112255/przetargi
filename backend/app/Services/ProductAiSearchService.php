@@ -360,6 +360,15 @@ final class ProductAiSearchService
                 'candidates' => $candidates,
             ];
         }
+        $bootRows = $this->rowsFromWeldedBootsCoverallMatches($query, $candidates, $limit);
+        if ($bootRows !== []) {
+            return [
+                'products' => $this->orderEyeWearSetRows($query, $bootRows, $candidates),
+                'note' => null,
+                'rank_cards' => null,
+                'candidates' => $candidates,
+            ];
+        }
         if ($candidates->isEmpty()) {
             return [
                 'products' => [],
@@ -2607,7 +2616,11 @@ final class ProductAiSearchService
         $snrHits = $this->clock('retrieve_snr', fn (): Collection => $this->retrieveBySnr($query, $limit));
         $mountHits = $this->clock('retrieve_mount', fn (): Collection => $this->retrieveByHearingMount($query, $limit));
         $cutHits = $this->clock('retrieve_cut', fn (): Collection => $this->retrieveByCutResistance($query, $limit));
-        $forcedHits = $this->uniqueProducts($codeHits->concat($snrHits)->concat($mountHits)->concat($cutHits), $limit);
+        $bootHits = $this->clock('retrieve_welded_boots', fn (): Collection => $this->retrieveByWeldedBootsCoverall($query, $limit));
+        $forcedHits = $this->uniqueProducts(
+            $codeHits->concat($snrHits)->concat($mountHits)->concat($cutHits)->concat($bootHits),
+            $limit
+        );
         $fuzzyHits = $this->clock('retrieve_fuzzy', fn (): Collection => $this->retrieveByFuzzyModel($modelQuery.' '.$searchText, $limit));
         $filterHits = $this->clock('retrieve_filter', fn (): Collection => $this->retrieveByFilterType($query, $limit));
         $brandHits = $this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)
@@ -2857,6 +2870,7 @@ final class ProductAiSearchService
                 && $this->meetsRequiredSnr($query, $p)
                 && $this->meetsRequiredFootwearClass($query, $p)
                 && $this->meetsRequiredAntistatic($query, $p)
+                && $this->meetsRequiredWeldedBootsCoverall($query, $p)
                 && $this->assortment->helmetSpecAllows($query, (string) $p->name.' '.$p->sku))
             ->values();
     }
@@ -2881,6 +2895,15 @@ final class ProductAiSearchService
         $have = $this->bhpAttributes->footwearClass($this->filterHaystack($product));
 
         return $have === null || $this->bhpAttributes->footwearClassMeets($want, $have);
+    }
+
+    private function meetsRequiredWeldedBootsCoverall(string $query, Product $product): bool
+    {
+        if (! $this->assortment->wantsWeldedBootsCoverall($query)) {
+            return true;
+        }
+
+        return $this->assortment->showsAttachedBootsCoverall((string) $product->name.' '.$product->sku);
     }
 
     private function meetsRequiredAntistatic(string $query, Product $product): bool
@@ -3062,6 +3085,53 @@ final class ProductAiSearchService
             ->sortByDesc(fn (Product $p): int => $this->cutRetrieveScore($query, $p))
             ->take(max(8, $limit))
             ->values();
+    }
+
+    /**
+     * Kombinezon z wgrzanymi kaloszami — kaskada po samym „kombinezon” nie widzi karty z „kaloszami”.
+     *
+     * @return Collection<int, Product>
+     */
+    private function retrieveByWeldedBootsCoverall(string $query, int $limit): Collection
+    {
+        if (! $this->assortment->wantsWeldedBootsCoverall($query)) {
+            return collect();
+        }
+
+        $likes = ['%wgrzan%', '%zintegrowan%', '%kombinezon%'];
+        $q = $this->productBaseQuery();
+        $q->where(function ($outer) use ($likes): void {
+            foreach ($likes as $like) {
+                $outer->orWhere('name', 'like', $like)
+                    ->orWhere('sku', 'like', $like);
+            }
+        });
+        $q->where(function ($w): void {
+            $w->where('name', 'like', '%kalosz%')
+                ->orWhere('sku', 'like', '%kalosz%');
+        });
+
+        return $q->limit(400)
+            ->get()
+            ->filter(fn (Product $p): bool => $this->assortment->showsAttachedBootsCoverall(
+                (string) $p->name.' '.$p->sku
+            ))
+            ->sortByDesc(fn (Product $p): int => $this->weldedBootsCoverallScore($p))
+            ->take(max(8, $limit))
+            ->values();
+    }
+
+    private function weldedBootsCoverallScore(Product $product): int
+    {
+        $name = (string) $product->name.' '.$product->sku;
+        if ($this->assortment->showsWeldedBootsCoverall($name)) {
+            return 200;
+        }
+        if ($this->assortment->showsAttachedBootsCoverall($name)) {
+            return 50;
+        }
+
+        return 0;
     }
 
     private function cutRetrieveScore(string $query, Product $product): int
@@ -3724,6 +3794,42 @@ final class ProductAiSearchService
         }
 
         return array_slice($out, 0, max(1, min(80, $limit)));
+    }
+
+    /**
+     * Kombinezon z wgrzanymi kaloszami — kolejność z karty (wgrzane > z kaloszami), nie werdykt modelu.
+     *
+     * @param  Collection<int, Product>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rowsFromWeldedBootsCoverallMatches(string $query, Collection $products, int $limit): array
+    {
+        if (! $this->assortment->wantsWeldedBootsCoverall($query)) {
+            return [];
+        }
+        $products = $this->withResponseRelations(
+            $products
+                ->filter(fn (Product $p): bool => $this->assortment->showsAttachedBootsCoverall(
+                    (string) $p->name.' '.$p->sku
+                ))
+                ->sortByDesc(fn (Product $p): int => $this->weldedBootsCoverallScore($p))
+                ->values()
+        );
+        if ($products->isEmpty()) {
+            return [];
+        }
+        $out = [];
+        foreach ($products as $product) {
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $row = $this->productToRow($product);
+            $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->weldedBootsCoverallScore($product), 20)));
+            $row['ai_match_reason'] = 'Kombinezon z kaloszami na nazwie karty spełnia wymaganie z SIWZ.';
+            $out[] = $row;
+        }
+
+        return array_slice($this->sortRankedByMatchPercent($out), 0, max(1, min(80, $limit)));
     }
 
     private function productMeetsFootwearClass(Product $product, string $want): bool

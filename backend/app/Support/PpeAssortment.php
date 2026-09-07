@@ -418,6 +418,45 @@ final class PpeAssortment
             || preg_match('/\bcut\s*(resist|protect|touch)\w*/u', $t) === 1;
     }
 
+    /** SIWZ: kombinezon z wgrzanymi / zintegrowanymi kaloszami — nie sama kurtka ani spodniobuty. */
+    public function wantsWeldedBootsCoverall(string $text): bool
+    {
+        $t = $this->normalize($text);
+        if ($this->garment($t) !== 'coverall') {
+            return false;
+        }
+        if (preg_match('/\b(kalosz)\w*/u', $t) !== 1) {
+            return false;
+        }
+
+        return $this->hasWeldedBootWording($t);
+    }
+
+    /** Nazwa/SKU: kombinezon + kalosz. Opisu nie czytamy. */
+    public function showsAttachedBootsCoverall(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return $this->garment($t) === 'coverall'
+            && preg_match('/\b(kalosz)\w*/u', $t) === 1;
+    }
+
+    /** Wgrzane / zintegrowane — mocniejszy ślad konstrukcji niż samo „z kaloszami”. */
+    public function showsWeldedBootsCoverall(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return $this->showsAttachedBootsCoverall($t) && $this->hasWeldedBootWording($t);
+    }
+
+    private function hasWeldedBootWording(string $normalized): bool
+    {
+        return preg_match(
+            '/\b(wgrzan|zintegrowan|przyspawan|na\s+stale|welded|integrated)\w*/u',
+            $normalized
+        ) === 1;
+    }
+
     private function eyeType(string $t): ?string
     {
         $gogl = $this->firstWordOffset('/\b(gogl)\w*/u', $t);

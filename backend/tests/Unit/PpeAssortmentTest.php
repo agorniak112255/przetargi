@@ -598,4 +598,30 @@ final class PpeAssortmentTest extends TestCase
             'Rękawice dziane, dłoń powlekana pianką nitrylową'
         ));
     }
+
+    #[Test]
+    public function welded_boots_coverall_is_not_jacket_or_waders(): void
+    {
+        $req = 'Kombinezon wodoochronny z wgrzanymi kaloszami';
+
+        $this->assertTrue($this->assortment->wantsWeldedBootsCoverall($req));
+        $this->assertFalse($this->assortment->wantsWeldedBootsCoverall('Kombinezon wodoochronny'));
+        $this->assertFalse($this->assortment->wantsWeldedBootsCoverall(
+            'Spodniobuty wodoodporne z kaloszem typ S5'
+        ));
+        $this->assertTrue($this->assortment->showsWeldedBootsCoverall(
+            'Kombinezon wodoochronny z wgrzanymi kaloszami 104/K'
+        ));
+        $this->assertTrue($this->assortment->showsAttachedBootsCoverall(
+            'Kombinezon Wodoochronny z Kaloszami 0404'
+        ));
+        $this->assertFalse($this->assortment->showsWeldedBootsCoverall(
+            'Kombinezon Wodoochronny z Kaloszami 0404'
+        ));
+        $this->assertFalse($this->assortment->showsAttachedBootsCoverall('Kombinezon Wodoochronny 0403'));
+        $this->assertFalse($this->assortment->showsAttachedBootsCoverall('Spodniobuty Standard SB01'));
+        $this->assertFalse($this->assortment->showsAttachedBootsCoverall(
+            '103 - Kurtka wodoochronna zapinana na zamek'
+        ));
+    }
 }
