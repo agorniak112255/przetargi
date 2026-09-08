@@ -9,6 +9,7 @@ import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
 import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
 import { offerMarkupFactor, productDisplayName, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
 import { isDualRequirement } from '../lib/productAiSearch'
+import { SiwzRequirementBlock, splitSiwzRequirement } from '../components/SiwzRequirementBlock'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -2233,10 +2234,12 @@ export function TenderDetail() {
                                   {it.sku ?? '—'}
                                 </td>
                                 <td className="p-1.5 max-w-[360px]">
-                                  <span className="block">{it.name || it.requirement}</span>
-                                  {it.description ? (
-                                    <span className="mt-0.5 block text-[11px] text-slate-500">{it.description}</span>
-                                  ) : null}
+                                  <SiwzRequirementBlock
+                                    name={it.name || splitSiwzRequirement(it.requirement).name}
+                                    description={
+                                      it.description || splitSiwzRequirement(it.requirement).description
+                                    }
+                                  />
                                 </td>
                                 <td className="p-1.5 max-w-[200px] text-[11px] text-slate-700">
                                   {it.norms ?? '—'}
@@ -2900,6 +2903,7 @@ function ItemRow({
     )
   }
 
+  const siwz = splitSiwzRequirement(item.requirement)
   const allowCompanion = isDualRequirement(item.requirement) || Boolean(companionId)
   const companionSum =
     (price === '' ? 0 : Number(String(price).replace(',', '.')) || 0) +
@@ -2976,7 +2980,9 @@ function ItemRow({
           )}
         </span>
       </td>
-      <td className="p-2 max-w-[200px] text-[11px]">{item.requirement}</td>
+      <td className="p-2 max-w-[320px] text-[11px]">
+        <SiwzRequirementBlock name={siwz.name} description={siwz.description} />
+      </td>
       <td className="p-2">
         {canEdit ? (
           <div className="flex flex-col gap-1">

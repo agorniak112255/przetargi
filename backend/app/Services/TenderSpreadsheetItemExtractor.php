@@ -192,7 +192,7 @@ final class TenderSpreadsheetItemExtractor
                 'product name', 'article name', 'nazwa', 'name', 'produkt',
             ], exclude: ['project', 'client', 'klient', 'cena', 'price', 'podwykonawc', 'norm']),
             'description' => $this->findCol($labels, [
-                'opis techniczny', 'szczegółowy opis', 'szczegolowy opis', 'specyfikacja',
+                'opis wyrobu', 'opis techniczny', 'szczegółowy opis', 'szczegolowy opis', 'specyfikacja',
                 'opis produktu', 'description', 'opis',
             ], exclude: ['nazwa']),
             'norms' => $this->findCol($labels, [
