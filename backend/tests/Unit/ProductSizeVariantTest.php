@@ -408,4 +408,23 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertNull($svc->stripWearSizeSuffix('BALTIK-BLACK-CZARNY-NYLON-PO-70'));
         $this->assertNull($svc->skuCore('BALTIK-BLACK-CZARNY-NYLON-PO-70'));
     }
+
+    #[Test]
+    public function all_digit_3m_sku_is_not_a_shoe_size(): void
+    {
+        $svc = new ProductSizeVariant;
+        $name = 'Elastyczna linka z amortyzatorem 3M Protecta, 1,50 m, 1260348';
+
+        $this->assertNull($svc->extractSize($name, '1260348'));
+        $this->assertNull($svc->extractSize(null, '1260348'));
+        $this->assertNull($svc->extractSize(null, '7100336246'));
+
+        $product = new \App\Models\Product([
+            'sku' => '1260348',
+            'name' => $name,
+            'packaging' => null,
+            'description' => 'Podwójna lonża z amortyzatorem.',
+        ]);
+        $this->assertSame([], $svc->sizesForProduct($product));
+    }
 }

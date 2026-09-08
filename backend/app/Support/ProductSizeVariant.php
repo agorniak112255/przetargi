@@ -1194,6 +1194,10 @@ final class ProductSizeVariant
         if (preg_match('/[\/\-_]/u', $sku) === 1) {
             return null;
         }
+        // 1260348 to kod 3M, nie „model 12603 + but 48”.
+        if (preg_match('/^\d+$/', $sku) === 1) {
+            return null;
+        }
         if (preg_match('/s[1-3](?:ps|p)?$/i', $sku) === 1) {
             return null;
         }
