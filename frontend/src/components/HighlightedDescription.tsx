@@ -1,4 +1,4 @@
-import { highlightSegments, type HighlightKind } from '../lib/descriptionHighlight'
+import { findBrandOffsets, highlightSegments, type HighlightKind } from '../lib/descriptionHighlight'
 import type { ReactNode } from 'react'
 
 const KIND_CLASS: Record<HighlightKind, string> = {
@@ -12,7 +12,7 @@ const SPEC_LABEL = /^((?:•\s*)?[^:\n]{2,48}:)(\s*)([\s\S]*)$/u
 
 function boldOne(text: string): ReactNode {
   const m = text.match(SPEC_LABEL)
-  if (!m || m[3] === '') {
+  if (!m) {
     return text
   }
   return (
@@ -43,6 +43,31 @@ type Props = {
   activeFindIndex: number
   findIndexOffset?: number
   className?: string
+  brand?: string | null
+}
+
+function withBrandMarks(text: string, brand?: string | null): ReactNode {
+  const ranges = brand ? findBrandOffsets(text, brand) : []
+  if (ranges.length === 0) {
+    return withBoldSpecLabel(text)
+  }
+  const nodes: ReactNode[] = []
+  let last = 0
+  ranges.forEach(([start, end], i) => {
+    if (start > last) {
+      nodes.push(<span key={`t-${i}`}>{withBoldSpecLabel(text.slice(last, start))}</span>)
+    }
+    nodes.push(
+      <span key={`b-${i}`} className="rounded-sm bg-teal-100 px-0.5 font-bold text-teal-900">
+        {text.slice(start, end)}
+      </span>,
+    )
+    last = end
+  })
+  if (last < text.length) {
+    nodes.push(<span key="t-end">{withBoldSpecLabel(text.slice(last))}</span>)
+  }
+  return nodes
 }
 
 export function HighlightedDescription({
@@ -52,6 +77,7 @@ export function HighlightedDescription({
   activeFindIndex,
   findIndexOffset = 0,
   className = 'whitespace-pre-wrap text-[15px] leading-relaxed text-slate-800',
+  brand = null,
 }: Props) {
   const segs = highlightSegments(text, queryTokens, findPhrase)
 
@@ -59,7 +85,7 @@ export function HighlightedDescription({
     <p className={className}>
       {segs.map((seg, i) => {
         if (seg.kind === 'text') {
-          return <span key={i}>{withBoldSpecLabel(seg.text)}</span>
+          return <span key={i}>{withBrandMarks(seg.text, brand)}</span>
         }
         const findIndex = seg.findIndex == null ? undefined : seg.findIndex + findIndexOffset
         const isActive = findIndex === activeFindIndex

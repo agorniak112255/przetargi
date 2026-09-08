@@ -97,9 +97,14 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
                 <h2 id="verify-title" className="mt-0.5 truncate text-lg font-semibold">
                   {productDisplayName(product, 160)}
                 </h2>
-                <p className="truncate text-xs text-violet-100">
-                  {product.sku} · {product.manufacturer}
-                  {product.category ? ` · ${product.category}` : ''}
+                <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-violet-100">
+                  <span className="truncate">{product.sku}</span>
+                  {product.manufacturer?.trim() ? (
+                    <span className="rounded-md bg-amber-300 px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-950">
+                      {product.manufacturer.trim()}
+                    </span>
+                  ) : null}
+                  {product.category ? <span className="truncate">{product.category}</span> : null}
                 </p>
               </>
             )}

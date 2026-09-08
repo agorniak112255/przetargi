@@ -262,8 +262,14 @@ export function ProductDetail() {
       <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{p.name}</h1>
-          <p className="mb-2 text-sm text-slate-500">
-            {p.sku} · {p.manufacturer} · {p.norms ?? 'bez normy'}
+          <p className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
+            <span>{p.sku}</span>
+            {p.manufacturer?.trim() ? (
+              <span className="rounded-md bg-teal-600 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-white">
+                {p.manufacturer.trim()}
+              </span>
+            ) : null}
+            <span>{p.norms ?? 'bez normy'}</span>
           </p>
           <div className="mb-2 flex max-w-xl flex-wrap items-center gap-2">
             <label htmlFor="product-group" className="shrink-0 text-xs font-semibold text-slate-600">

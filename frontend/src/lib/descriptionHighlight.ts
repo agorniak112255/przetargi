@@ -47,6 +47,31 @@ export function findAllOffsets(hay: string, needle: string): Array<[number, numb
   return out
 }
 
+function isWordChar(ch: string): boolean {
+  return /\p{L}|\p{N}/u.test(ch)
+}
+
+/** Trafienia marki/producenta z granicą słowa (PIP nie wejdzie w PIPE). */
+export function findBrandOffsets(hay: string, brand: string): Array<[number, number]> {
+  const b = brand.trim()
+  if (b.length < 2) return []
+  const h = hay.toLocaleLowerCase('pl')
+  const q = b.toLocaleLowerCase('pl')
+  const out: Array<[number, number]> = []
+  let i = 0
+  while (i <= h.length - q.length) {
+    const p = h.indexOf(q, i)
+    if (p < 0) break
+    const before = p === 0 ? '' : h[p - 1]
+    const after = p + q.length >= h.length ? '' : h[p + q.length]
+    if ((before === '' || !isWordChar(before)) && (after === '' || !isWordChar(after))) {
+      out.push([p, p + q.length])
+    }
+    i = p + q.length
+  }
+  return out
+}
+
 export function highlightSegments(
   text: string,
   queryTokens: string[],

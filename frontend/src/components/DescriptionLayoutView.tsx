@@ -48,6 +48,7 @@ export function DescriptionLayoutView({
           <SectionView
             key={section.id}
             section={section}
+            brand={product.manufacturer}
             queryTokens={queryTokens}
             findPhrase={findPhrase}
             activeFindIndex={activeFindIndex}
@@ -77,8 +78,13 @@ function sectionHitCount(section: LayoutSection, findPhrase: string): number {
   return 0
 }
 
+function isBrandSpec(item: string): boolean {
+  return /^(producent|marka|manufacturer|brand)\s*:/i.test(item.trim())
+}
+
 function SectionView({
   section,
+  brand,
   queryTokens,
   findPhrase,
   activeFindIndex,
@@ -86,6 +92,7 @@ function SectionView({
   compact,
 }: {
   section: LayoutSection
+  brand?: string | null
   queryTokens: string[]
   findPhrase: string
   activeFindIndex: number
@@ -98,6 +105,7 @@ function SectionView({
     findPhrase,
     activeFindIndex,
     findIndexOffset,
+    brand,
   }
 
   if (section.kind === 'prose') {
@@ -180,7 +188,10 @@ function SectionView({
             findIndexOffset +
             section.items.slice(0, i).reduce((sum, prev) => sum + countFindHits(prev, findPhrase), 0)
           return (
-            <li key={`${section.id}-${i}`}>
+            <li
+              key={`${section.id}-${i}`}
+              className={isBrandSpec(item) ? 'rounded bg-teal-50 px-1 py-0.5' : undefined}
+            >
               <HighlightedDescription
                 text={item}
                 className="whitespace-pre-wrap text-xs leading-relaxed text-slate-600"
@@ -188,6 +199,7 @@ function SectionView({
                 findPhrase={findPhrase}
                 activeFindIndex={activeFindIndex}
                 findIndexOffset={itemOffset}
+                brand={brand}
               />
             </li>
           )
