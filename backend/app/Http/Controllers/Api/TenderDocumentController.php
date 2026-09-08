@@ -11,8 +11,10 @@ use App\Services\TenderDocumentImportService;
 use App\Services\TenderWorkflowService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class TenderDocumentController extends Controller
 {
@@ -200,6 +202,31 @@ class TenderDocumentController extends Controller
         $this->import->deleteDocument($document);
 
         return response()->json(['ok' => true]);
+    }
+
+    public function download(Tender $tender, TenderDocument $document): BinaryFileResponse
+    {
+        $this->assertOwns($tender, $document);
+        $diskPath = (string) ($document->disk_path ?? '');
+        if ($diskPath === '' || ! Storage::disk('local')->exists($diskPath)) {
+            throw ValidationException::withMessages([
+                'document' => ['Brak pliku do pobrania.'],
+            ]);
+        }
+
+        $name = basename((string) $document->original_name);
+        if ($name === '' || $name === '.' || $name === '..') {
+            $ext = trim((string) $document->extension);
+            $name = $ext !== '' ? 'dokument.'.$ext : 'dokument';
+        }
+
+        $headers = [];
+        $mime = trim((string) ($document->mime ?? ''));
+        if ($mime !== '') {
+            $headers['Content-Type'] = $mime;
+        }
+
+        return response()->download(Storage::disk('local')->path($diskPath), $name, $headers);
     }
 
     public function show(Tender $tender, TenderDocument $document): JsonResponse

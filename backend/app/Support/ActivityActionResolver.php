@@ -83,6 +83,7 @@ final class ActivityActionResolver
             ['POST', '#^tenders/\d+/items/bulk$#', 'tender.items_bulk_updated', 'Masowa aktualizacja pozycji'],
             ['POST', '#^tenders/\d+/items/apply-cheaper-substitutes$#', 'tender.cheaper_substitutes_applied', 'Zastosowano tańsze zamienniki'],
             ['GET', '#^tenders/\d+/export/(excel|pdf|docx)$#', 'tender.exported', 'Eksport oferty'],
+            ['GET', '#^tenders/\d+/documents/\d+/download$#', 'tender.document_downloaded', 'Pobrano dokument SIWZ'],
             ['POST', '#^clients$#', 'client.created', 'Utworzono klienta'],
             ['PATCH', '#^clients/\d+$#', 'client.updated', 'Zaktualizowano klienta'],
             ['POST', '#^substitutes$#', 'substitute.created', 'Utworzono zamiennik'],

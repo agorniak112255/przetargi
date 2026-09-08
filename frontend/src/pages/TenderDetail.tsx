@@ -988,6 +988,20 @@ export function TenderDetail() {
     }
   }
 
+  async function downloadDoc(doc: DocMeta) {
+    if (!doc.has_file) return
+    setErr('')
+    setBusy(true)
+    try {
+      await downloadFile(`/tenders/${id}/documents/${doc.id}/download`, doc.original_name)
+      setMsg(`Pobrano ${doc.original_name}.`)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd pobierania pliku')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function addCondition() {
     const content = newCondition.trim()
     if (!content) return
@@ -2316,35 +2330,46 @@ export function TenderDetail() {
                     </td>
                     <td className="p-2">{d.mode}</td>
                     <td className="p-2">{new Date(d.created_at).toLocaleString('pl-PL')}</td>
-                    <td className="p-2 space-x-2">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        className="text-[10px] text-emerald-700"
-                        onClick={() => void openDocumentPreview(d.id)}
-                      >
-                        Podgląd
-                      </button>
-                      {can_edit && (
-                        <>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            className="text-[10px] text-blue-600"
-                            onClick={() => void reanalyzeDoc(d.id)}
-                          >
-                            Analizuj ponownie
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            className="text-[10px] text-red-600"
-                            onClick={() => void deleteDoc(d.id)}
-                          >
-                            Usuń
-                          </button>
-                        </>
-                      )}
+                    <td className="p-2">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="rounded bg-emerald-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                          onClick={() => void openDocumentPreview(d.id)}
+                        >
+                          Podgląd
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || !d.has_file}
+                          title={d.has_file ? 'Pobierz plik na komputer' : 'Brak zapisanego pliku'}
+                          className="rounded bg-sky-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+                          onClick={() => void downloadDoc(d)}
+                        >
+                          Pobierz
+                        </button>
+                        {can_edit && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              className="rounded bg-blue-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                              onClick={() => void reanalyzeDoc(d.id)}
+                            >
+                              Analizuj ponownie
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              className="rounded bg-red-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                              onClick={() => void deleteDoc(d.id)}
+                            >
+                              Usuń
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

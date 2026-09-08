@@ -79,6 +79,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/tenders/{tender}/documents/analyze', [TenderDocumentController::class, 'analyze'])->middleware('permission:tenders.import');
         Route::post('/tenders/{tender}/documents/commit', [TenderDocumentController::class, 'commit'])->middleware('permission:tenders.import');
         Route::get('/tenders/{tender}/documents/{document}', [TenderDocumentController::class, 'show']);
+        Route::get('/tenders/{tender}/documents/{document}/download', [TenderDocumentController::class, 'download']);
         Route::post('/tenders/{tender}/documents/{document}/reanalyze', [TenderDocumentController::class, 'reanalyze'])->middleware('permission:tenders.import');
         Route::delete('/tenders/{tender}/documents/{document}', [TenderDocumentController::class, 'destroy'])->middleware('permission:tenders.import');
         Route::get('/tenders/{tender}/conditions', [TenderConditionController::class, 'index']);

@@ -76,6 +76,9 @@ final class LogApiActivity
         }
 
         // Eksporty oferty (GET) też są istotnymi akcjami biznesowymi.
-        return $method === 'GET' && preg_match('#^tenders/\d+/export/(excel|pdf|docx)$#', $path) === 1;
+        return $method === 'GET' && (
+            preg_match('#^tenders/\d+/export/(excel|pdf|docx)$#', $path) === 1
+            || preg_match('#^tenders/\d+/documents/\d+/download$#', $path) === 1
+        );
     }
 }
