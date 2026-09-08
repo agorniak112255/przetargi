@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type Product } from '../lib/api'
-import { productDisplayName, productSelectLabel } from '../lib/productLabel'
+import { productDisplayName, productSelectLabel, productThumbUrl } from '../lib/productLabel'
 import { ProductVerifyModal } from './ProductVerifyModal'
 
 type MiniProduct = {
@@ -12,6 +12,7 @@ type MiniProduct = {
   purchase_price?: string | number | null
   purchase_price_pln?: number | null
   currency?: string | null
+  images?: Product['images']
 }
 
 type Props = {
@@ -58,10 +59,22 @@ export function ProductSearchSelect({
   const wrapRef = useRef<HTMLDivElement>(null)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const selected: MiniProduct | undefined =
-    products.find((p) => String(p.id) === value) ??
-    remote.find((p) => String(p.id) === value) ??
-    (selectedProduct && String(selectedProduct.id) === value ? selectedProduct : undefined)
+  const selected: MiniProduct | undefined = (() => {
+    const found =
+      products.find((p) => String(p.id) === value) ??
+      remote.find((p) => String(p.id) === value) ??
+      (selectedProduct && String(selectedProduct.id) === value ? selectedProduct : undefined)
+    if (!found) {
+      return undefined
+    }
+    if ((found.images?.length ?? 0) > 0) {
+      return found
+    }
+    if (selectedProduct && selectedProduct.id === found.id && (selectedProduct.images?.length ?? 0) > 0) {
+      return { ...found, images: selectedProduct.images }
+    }
+    return found
+  })()
 
   useEffect(() => {
     if (!open) {
@@ -140,11 +153,19 @@ export function ProductSearchSelect({
         <div className="mt-1 w-full max-w-full rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 shadow-sm">
           <button
             type="button"
-            className="flex w-full items-start gap-1.5 text-left transition hover:opacity-90"
+            className="flex w-full items-start gap-2 text-left transition hover:opacity-90"
             title="Kliknij, aby zobaczyć szczegóły produktu"
             onClick={() => setPreviewId(selected.id)}
           >
-            <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
+            {productThumbUrl(selected) ? (
+              <img
+                src={productThumbUrl(selected) ?? ''}
+                alt=""
+                className="h-14 w-14 shrink-0 rounded border border-slate-200 bg-white object-contain"
+              />
+            ) : (
+              <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
+            )}
             <span className="min-w-0">
               <span className="block truncate text-[11px] font-medium text-sky-900">{selected.sku}</span>
               <span className="block truncate text-[10px] text-slate-600" title={selected.name}>

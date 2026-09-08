@@ -7,7 +7,7 @@ import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
 import { api, can, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
-import { offerMarkupFactor, productDisplayName, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
+import { offerMarkupFactor, productDisplayName, productThumbUrl, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
 import { isDualRequirement } from '../lib/productAiSearch'
 import { SiwzItemTile, SiwzRequirementBlock, splitSiwzRequirement } from '../components/SiwzRequirementBlock'
 
@@ -203,6 +203,7 @@ type PickedProduct = {
   purchase_price?: string | number | null
   purchase_price_pln?: number | null
   currency?: string | null
+  images?: Product['images']
 }
 
 function pickedFromProduct(
@@ -214,6 +215,7 @@ function pickedFromProduct(
     purchase_price?: string | number | null
     purchase_price_pln?: number | null
     currency?: string | null
+    images?: Product['images']
   } | null | undefined,
 ): PickedProduct | null {
   if (!p) return null
@@ -225,6 +227,7 @@ function pickedFromProduct(
     purchase_price: p.purchase_price,
     purchase_price_pln: p.purchase_price_pln,
     currency: p.currency,
+    images: p.images,
   }
 }
 
@@ -3425,18 +3428,26 @@ function ItemRow({
               <div className="space-y-1">
               <button
                 type="button"
-                className={`flex w-full max-w-[280px] items-start gap-1.5 rounded-md border px-2 py-1.5 text-left shadow-sm transition ${
+                className={`flex w-full max-w-[280px] items-start gap-2 rounded-md border px-2 py-1.5 text-left shadow-sm transition ${
                   isSubstitute
                     ? 'border-teal-300 bg-teal-50 hover:border-teal-500 hover:bg-teal-100'
                     : 'border-sky-200 bg-sky-50 hover:border-sky-400 hover:bg-sky-100'
                 }`}
                 onClick={() => setPreviewId(item.main_product!.id)}
               >
-                <span
-                  className={`mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-                    isSubstitute ? 'bg-teal-600' : 'bg-sky-500'
-                  }`}
-                />
+                {productThumbUrl(item.main_product) ? (
+                  <img
+                    src={productThumbUrl(item.main_product) ?? ''}
+                    alt=""
+                    className="h-14 w-14 shrink-0 rounded border border-slate-200 bg-white object-contain"
+                  />
+                ) : (
+                  <span
+                    className={`mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                      isSubstitute ? 'bg-teal-600' : 'bg-sky-500'
+                    }`}
+                  />
+                )}
                 <span className="min-w-0">
                   <span
                     className={`block truncate text-[11px] font-medium ${
@@ -3465,9 +3476,16 @@ function ItemRow({
               {item.companion_product && (
                 <button
                   type="button"
-                  className="flex w-full max-w-[280px] items-start gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left hover:border-slate-400"
+                  className="flex w-full max-w-[280px] items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left hover:border-slate-400"
                   onClick={() => setPreviewId(item.companion_product!.id)}
                 >
+                  {productThumbUrl(item.companion_product) ? (
+                    <img
+                      src={productThumbUrl(item.companion_product) ?? ''}
+                      alt=""
+                      className="h-14 w-14 shrink-0 rounded border border-slate-200 bg-white object-contain"
+                    />
+                  ) : null}
                   <span className="min-w-0">
                     <span className="block truncate text-[11px] font-medium text-slate-800">
                       {item.companion_product.sku}

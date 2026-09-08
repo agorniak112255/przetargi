@@ -198,8 +198,8 @@ class TenderController extends Controller
         $tender->load([
             'client',
             'owner:id,name,role',
-            'items.mainProduct',
-            'items.companionProduct',
+            'items.mainProduct.images',
+            'items.companionProduct.images',
             'conditions',
             'statusHistories.user:id,name,role',
         ]);
@@ -305,8 +305,8 @@ class TenderController extends Controller
             'tender' => $tender->load([
                 'client',
                 'owner:id,name,role',
-                'items.mainProduct',
-                'items.companionProduct',
+                'items.mainProduct.images',
+                'items.companionProduct.images',
                 'statusHistories.user:id,name,role',
             ]),
             'can_edit' => $this->workflow->canEditOffer($tender),

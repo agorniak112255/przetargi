@@ -366,7 +366,7 @@ class TenderItemController extends Controller
             ],
         ]);
 
-        return response()->json($item->fresh(['mainProduct', 'companionProduct']));
+        return response()->json($item->fresh(['mainProduct.images', 'companionProduct.images']));
     }
 
     public function destroy(Request $request, Tender $tender, TenderItem $item): JsonResponse

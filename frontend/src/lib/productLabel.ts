@@ -108,3 +108,13 @@ export function suggestedOfferPrice(
   const factor = markup == null || Number.isNaN(Number(markup)) || Number(markup) <= 0 ? 1.18 : Number(markup)
   return Math.round(Number(purchase) * factor * 100) / 100
 }
+
+export function productThumbUrl(
+  p: { images?: { url: string; is_primary?: boolean }[] } | null | undefined,
+): string | null {
+  const images = p?.images
+  if (!images?.length) {
+    return null
+  }
+  return (images.find((img) => img.is_primary) ?? images[0]).url || null
+}

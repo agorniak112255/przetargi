@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\Client;
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
@@ -106,6 +107,39 @@ final class TenderItemCurrencyTest extends TestCase
             ->assertOk()
             ->assertJsonPath('tender.items.0.main_product.sku', 'EY212GF')
             ->assertJsonPath('tender.items.0.main_product.purchase_price_pln', 309.36);
+    }
+
+    public function test_tender_show_includes_main_product_image_url(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->eurHoodie();
+        ProductImage::query()->create([
+            'product_id' => $product->id,
+            'path' => 'products/ey212gf.jpg',
+            'is_primary' => true,
+            'sort_order' => 0,
+            'checksum' => 'ey212gf-thumb',
+        ]);
+        $tender = $this->tender(18);
+        TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Bluza damska',
+            'quantity' => 1,
+            'main_product_id' => $product->id,
+            'offer_price' => 91.26,
+            'ai_match_percent' => 90,
+            'ai_match_reasons' => [['code' => 'test', 'label' => 'test', 'points' => 90]],
+            'status' => 'ok',
+        ]);
+
+        $this->getJson("/api/tenders/{$tender->id}")
+            ->assertOk()
+            ->assertJsonPath('tender.items.0.main_product.images.0.is_primary', true)
+            ->assertJsonPath(
+                'tender.items.0.main_product.images.0.url',
+                $product->fresh()->images->first()?->url()
+            );
     }
 
     private function eurHoodie(): Product
