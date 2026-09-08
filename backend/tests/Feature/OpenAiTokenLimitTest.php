@@ -246,7 +246,7 @@ final class OpenAiTokenLimitTest extends TestCase
             foreach ($messages as $message) {
                 $chars += mb_strlen((string) ($message['content'] ?? ''));
             }
-            $est = (int) ceil($chars / 2.2) + 64;
+            $est = (int) ceil($chars / 1.8) + 256;
             $maxTokens = (int) ($request->data()['max_tokens'] ?? 0);
             $sent = (string) ($messages[0]['content'] ?? '');
 

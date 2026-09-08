@@ -32,10 +32,15 @@ class OpenAiCompatibleClient
 
     private const MIN_OUTPUT_TOKENS = 512;
 
-    private const SLOT_RESERVE = 512;
+    private const SLOT_RESERVE = 768;
 
-    /** Polski + JSON: tokenizer Qwen zjada ~2.2 znaku/token, nie 4. */
-    private const PROMPT_CHARS_PER_TOKEN = 2.2;
+    /** Zostaw zapas na chat template Qwen — inaczej pierwszy request dostaje 400. */
+    private const LOCAL_FIT_RATIO = 0.82;
+
+    /** Polski + JSON + szablon: Qwen zjada ~1.8 znaku/token, nie 4. */
+    private const PROMPT_CHARS_PER_TOKEN = 1.8;
+
+    private const TOKEN_ESTIMATE_PADDING = 256;
 
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -340,7 +345,7 @@ class OpenAiCompatibleClient
         }
 
         $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies);
-        $responses = $this->retryChatManyOverflow($url, $apiKey, $timeout, $profile, $bodies, $responses);
+        $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses);
 
         $out = [];
         foreach ($messageSets as $i => $_) {
@@ -390,7 +395,7 @@ class OpenAiCompatibleClient
      * @param  array<int, mixed>  $responses
      * @return array<int, mixed>
      */
-    private function retryChatManyOverflow(
+    private function retryChatManyRejected(
         string $url,
         string $apiKey,
         int $timeout,
@@ -401,32 +406,36 @@ class OpenAiCompatibleClient
         $retryBodies = [];
         foreach ($bodies as $i => $body) {
             $response = $responses[$i] ?? null;
-            if (! $response instanceof Response || ! $this->isContextOverflow($response)) {
+            if (! $response instanceof Response || ! in_array($response->status(), [400, 413, 422], true)) {
                 continue;
             }
-            $messages = is_array($body['messages'] ?? null) ? $body['messages'] : [];
-            $compacted = $this->shrinkMessagesToFit(
-                $this->compactMessages($messages, 0.65),
-                self::MIN_OUTPUT_TOKENS,
-                $profile
-            );
+            $overflow = $this->isContextOverflow($response);
             $retry = $body;
-            $retry['messages'] = $compacted;
-            $retry['max_tokens'] = $this->fitMaxTokens(
-                max(self::MIN_OUTPUT_TOKENS, (int) floor(((int) ($body['max_tokens'] ?? self::MIN_OUTPUT_TOKENS)) * 0.7)),
-                $compacted,
-                $profile
-            );
+            if ($overflow) {
+                $messages = is_array($body['messages'] ?? null) ? $body['messages'] : [];
+                $compacted = $this->shrinkMessagesToFit(
+                    $this->compactMessages($messages, 0.65),
+                    self::MIN_OUTPUT_TOKENS,
+                    $profile
+                );
+                $retry['messages'] = $compacted;
+                $retry['max_tokens'] = $this->fitMaxTokens(
+                    max(self::MIN_OUTPUT_TOKENS, (int) floor(((int) ($body['max_tokens'] ?? self::MIN_OUTPUT_TOKENS)) * 0.7)),
+                    $compacted,
+                    $profile
+                );
+            }
+            unset($retry['response_format'], $retry['chat_template_kwargs'], $retry['reasoning_effort'], $retry['reasoning']);
             $retryBodies[$i] = $retry;
+            Log::warning('AI chatMany HTTP '.$response->status().' — ponawiam', [
+                'overflow' => $overflow,
+                'error' => (string) (data_get($response->json(), 'error.message') ?? $response->body()),
+                'profile' => $profile['label'] ?? '',
+            ]);
         }
         if ($retryBodies === []) {
             return $responses;
         }
-
-        Log::info('AI chatMany: przepełniony kontekst — ponawiam skrócone requesty', [
-            'count' => count($retryBodies),
-            'profile' => $profile['label'] ?? '',
-        ]);
 
         foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
             $responses[$i] = $response;
@@ -1440,7 +1449,7 @@ class OpenAiCompatibleClient
             return self::CLOUD_MAX_MODEL_LEN;
         }
 
-        return self::LOCAL_MAX_MODEL_LEN;
+        return (int) floor(self::LOCAL_MAX_MODEL_LEN * self::LOCAL_FIT_RATIO);
     }
 
     private function isCloudEndpoint(string $baseUrl): bool
@@ -1463,7 +1472,7 @@ class OpenAiCompatibleClient
             $chars += $this->estimateContentChars($message['content'] ?? '');
         }
 
-        return max(1, (int) ceil($chars / self::PROMPT_CHARS_PER_TOKEN) + 64);
+        return max(1, (int) ceil($chars / self::PROMPT_CHARS_PER_TOKEN) + self::TOKEN_ESTIMATE_PADDING);
     }
 
     private function estimateContentChars(mixed $content): int
