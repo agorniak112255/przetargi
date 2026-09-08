@@ -30,11 +30,14 @@ final class ProductAccessoryExtractor
     public function fromText(string $text): array
     {
         $text = trim($text);
-        if ($text === '' || ! $this->looksLikeAccessoryHeading($text)) {
+        $offset = $this->accessoryHeadingOffset($text);
+        if ($text === '' || $offset === null) {
             return [];
         }
+        $tail = mb_substr($text, $offset, 4000);
+        $cut = preg_split('/\R{2,}/u', $tail, 2) ?: [$tail];
 
-        return $this->unique($this->fromPlainList($text));
+        return $this->unique($this->fromPlainList((string) $cut[0]));
     }
 
     /**
@@ -87,7 +90,10 @@ final class ProductAccessoryExtractor
             $rows = $this->isList($items) ? $items : [$items];
             foreach ($rows as $item) {
                 if (is_string($item) && trim($item) !== '') {
-                    $out[] = $this->candidate('', '', trim($item), '');
+                    $mapped = $this->candidate('', '', trim($item), '');
+                    if ($mapped !== null) {
+                        $out[] = $mapped;
+                    }
                 }
                 if (is_array($item)) {
                     $mapped = $this->fromJsonProduct($item);
@@ -197,10 +203,10 @@ final class ProductAccessoryExtractor
                 || preg_match('#class=["\'][^"\']*product-manufacturer[^"\']*["\'][^>]*>([^<]+)#i', $part, $m)) {
                 $brand = trim(html_entity_decode((string) $m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
             }
-            if ($sku === '' && $name === '') {
-                continue;
+            $row = $this->candidate($sku, $ean, $name, $brand);
+            if ($row !== null) {
+                $out[] = $row;
             }
-            $out[] = $this->candidate($sku, $ean, $name, $brand);
         }
 
         return $out;
@@ -221,17 +227,14 @@ final class ProductAccessoryExtractor
                 continue;
             }
             $sku = '';
-            if (preg_match('/\b(?:ref|sku|kod|art\.?)\s*[:.]?\s*([A-Z0-9][A-Z0-9._\/-]{2,32})\b/iu', $line, $m)) {
+            if (preg_match('/\b(?:ref|sku|kod|art\.?)\s*[:.]?\s*([A-Z0-9]*\d[A-Z0-9._\/-]{1,32})\b/iu', $line, $m)) {
                 $sku = (string) $m[1];
             }
             $name = $this->cleanName($line);
-            if ($sku === '' && ! preg_match('/[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]{4,}/u', $name)) {
-                continue;
+            $row = $this->candidate($sku, '', $name, '');
+            if ($row !== null) {
+                $out[] = $row;
             }
-            if ($sku === '' && $name === '') {
-                continue;
-            }
-            $out[] = $this->candidate($sku, '', $name, '');
         }
 
         return $out;
@@ -246,7 +249,6 @@ final class ProductAccessoryExtractor
             'product accessories',
             'compatible accessories',
             'compatible products',
-            'pasuje do',
         ] as $needle) {
             $pos = mb_strpos($low, $needle);
             if ($pos !== false) {
@@ -261,10 +263,11 @@ final class ProductAccessoryExtractor
     {
         $low = mb_strtolower($text);
 
-        return str_contains($low, 'akcesor')
+        return str_contains($low, 'akcesoria do produktu')
+            || str_contains($low, 'warianty produktu i akcesoria')
             || str_contains($low, 'warianty produktu')
             || str_contains($low, 'compatible accessor')
-            || str_contains($low, 'pasuje do')
+            || str_contains($low, 'compatible products')
             || str_contains($low, 'product accessor');
     }
 
@@ -284,16 +287,89 @@ final class ProductAccessoryExtractor
     }
 
     /**
-     * @return array{sku: string, ean: string, name: string, manufacturer: string}
+     * @return array{sku: string, ean: string, name: string, manufacturer: string}|null
      */
-    private function candidate(string $sku, string $ean, string $name, string $manufacturer): array
+    private function candidate(string $sku, string $ean, string $name, string $manufacturer): ?array
     {
+        $sku = mb_substr(trim($sku), 0, 128);
+        $ean = mb_substr(preg_replace('/\D+/', '', $ean) ?? '', 0, 32);
+        $name = mb_substr($this->cleanName($name), 0, 255);
+        $manufacturer = mb_substr(trim($manufacturer), 0, 128);
+        if (! $this->isUsable($sku, $ean, $name)) {
+            return null;
+        }
+
         return [
-            'sku' => mb_substr(trim($sku), 0, 128),
-            'ean' => mb_substr(preg_replace('/\D+/', '', $ean) ?? '', 0, 32),
-            'name' => mb_substr($this->cleanName($name), 0, 255),
-            'manufacturer' => mb_substr(trim($manufacturer), 0, 128),
+            'sku' => $sku,
+            'ean' => $ean,
+            'name' => $name,
+            'manufacturer' => $manufacturer,
         ];
+    }
+
+    private function isUsable(string $sku, string $ean, string $name): bool
+    {
+        if (strlen($ean) >= 8) {
+            return true;
+        }
+        if ($this->isConcreteSku($sku)) {
+            return true;
+        }
+        if ($this->isJunkName($name)) {
+            return false;
+        }
+
+        return $this->isProductLikeName($name);
+    }
+
+    private function isConcreteSku(string $sku): bool
+    {
+        $sku = trim($sku);
+
+        return $sku !== '' && mb_strlen($sku) >= 3 && preg_match('/\d/', $sku) === 1;
+    }
+
+    private function isJunkName(string $name): bool
+    {
+        $name = trim($name);
+        if ($name === '') {
+            return true;
+        }
+        $low = mb_strtolower($name);
+        if (str_ends_with($name, '?')
+            || str_starts_with($low, 'czy ')
+            || str_starts_with($low, 'tak,')
+            || str_starts_with($low, 'tak ')
+            || str_starts_with($low, 'nie,')
+            || str_starts_with($low, 'nie ')) {
+            return true;
+        }
+
+        return $this->isColorName($low);
+    }
+
+    private function isColorName(string $low): bool
+    {
+        $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z'];
+        $compact = preg_replace('/[^a-z]/', '', strtr($low, $map)) ?? '';
+
+        return in_array($compact, [
+            'bezowy', 'bialy', 'brazowy', 'czerwony', 'czarny', 'granatowy', 'niebieski',
+            'pomaranczowy', 'zielony', 'szary', 'stalowy', 'limonkowy', 'seledynowy', 'moro',
+            'jasnoniebieski', 'jasnoszary', 'ciemnoszary', 'ciemnoczerwony', 'zolty',
+            'szarystalowy',
+        ], true);
+    }
+
+    private function isProductLikeName(string $name): bool
+    {
+        if (preg_match('/\d/', $name) === 1) {
+            return true;
+        }
+        $words = preg_split('/\s+/u', trim($name)) ?: [];
+        $words = array_values(array_filter($words, static fn (string $w): bool => mb_strlen($w) >= 3));
+
+        return count($words) >= 3;
     }
 
     private function cleanName(string $name): string

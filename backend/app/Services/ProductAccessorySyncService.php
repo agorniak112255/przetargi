@@ -90,7 +90,7 @@ final class ProductAccessorySyncService
                 continue;
             }
             $hit = $this->matcher->match($candidate, $product);
-            if ($hit === null && $sku === '' && $ean === '') {
+            if ($hit === null && ! $this->matcher->isConcreteSku($sku) && strlen($ean) < 8) {
                 continue;
             }
             $payload = $candidate;

@@ -87,6 +87,22 @@ final class ProductAccessorySyncTest extends TestCase
         $this->assertSame('3041', $mask->accessories()->first()?->related_sku);
     }
 
+    public function test_skips_color_and_brand_chrome_from_pages(): void
+    {
+        $parent = $this->product(['sku' => '99-3052', 'name' => 'Nadruk na ubraniu, czerwony', 'manufacturer' => 'Weldas']);
+        $this->product(['sku' => '212500180000', 'name' => 'SAFETY STEEL JOGGER S1', 'manufacturer' => 'Safety Jogger']);
+        $this->product(['sku' => '93-833', 'name' => 'Jasnoniebieskie bezpudrowe ergonomiczne rękawice nitrylowe', 'manufacturer' => 'X']);
+
+        $count = app(ProductAccessorySyncService::class)->matchFromPages($parent, [
+            ['sku' => '', 'name' => 'SAFETY JOGGER', 'ean' => '', 'manufacturer' => ''],
+            ['sku' => '', 'name' => 'JASNONIEBIESKI', 'ean' => '', 'manufacturer' => ''],
+            ['sku' => 'BHP', 'name' => 'ART. BHP', 'ean' => '', 'manufacturer' => ''],
+        ]);
+
+        $this->assertSame(0, $count);
+        $this->assertSame(0, $parent->accessories()->count());
+    }
+
     public function test_product_show_returns_accessories(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

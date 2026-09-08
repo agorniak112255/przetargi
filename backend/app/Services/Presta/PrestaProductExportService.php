@@ -282,6 +282,9 @@ final class PrestaProductExportService
             if (! $row instanceof ProductAccessory) {
                 continue;
             }
+            if (! $this->shouldExportAccessory($row)) {
+                continue;
+            }
             $prestaId = $this->resolveAccessoryPrestaId($row);
             if ($prestaId > 0) {
                 $ids[$prestaId] = $prestaId;
@@ -295,9 +298,34 @@ final class PrestaProductExportService
         return array_values($ids);
     }
 
+    private function shouldExportAccessory(ProductAccessory $row): bool
+    {
+        $method = (string) $row->method;
+        if ($method === 'fuzzy_model') {
+            return false;
+        }
+        if (in_array($method, ['sku', 'ean', 'presta_id'], true)) {
+            return true;
+        }
+        if ($row->source === ProductAccessory::SOURCE_PRESTA && (int) ($row->presta_related_id ?? 0) > 0) {
+            return true;
+        }
+        $sku = trim((string) (($row->relatedProduct?->sku) ?: $row->related_sku));
+
+        return $method === 'pending' && $this->isConcreteSku($sku);
+    }
+
+    private function isConcreteSku(string $sku): bool
+    {
+        return $sku !== '' && mb_strlen($sku) >= 3 && preg_match('/\d/', $sku) === 1;
+    }
+
     private function resolveAccessoryPrestaId(ProductAccessory $row): int
     {
         $prestaId = (int) ($row->presta_related_id ?? 0);
+        if ($row->method === 'fuzzy_model') {
+            return 0;
+        }
         $related = $row->relatedProduct;
         if ($prestaId <= 0 && $related instanceof Product) {
             $prestaId = $this->relatedPrestaIds[$related->id] ?? 0;
@@ -306,7 +334,8 @@ final class PrestaProductExportService
                 $prestaId = $match instanceof PrestaProductMatch ? (int) $match->presta_id : 0;
             }
         }
-        if ($prestaId <= 0 && $related instanceof Product) {
+        if ($prestaId <= 0 && $related instanceof Product
+            && in_array((string) $row->method, ['sku', 'ean', 'presta_id'], true)) {
             $prestaId = $this->exportRelatedProduct($related);
         }
         if ($prestaId <= 0) {

@@ -346,8 +346,8 @@ final class PrestaExportApiTest extends TestCase
             'source' => ProductAccessory::SOURCE_ENRICHMENT,
             'link_key' => 's:1971040',
             'related_sku' => '1971040',
-            'score' => 90,
-            'method' => 'fuzzy_model',
+            'score' => 96,
+            'method' => 'sku',
         ]);
 
         $this->postJson('/api/products/'.$product->id.'/presta-export')
@@ -367,6 +367,38 @@ final class PrestaExportApiTest extends TestCase
             'related_product_id' => $related->id,
             'presta_related_id' => $relatedId,
         ]);
+    }
+
+    public function test_export_skips_fuzzy_and_nameless_accessories(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct(['sku' => '99-3052', 'name' => 'Nadruk na ubraniu, czerwony']);
+        $related = $this->makeProduct(['sku' => '212500180000', 'name' => 'SAFETY STEEL JOGGER S1']);
+        ProductAccessory::query()->create([
+            'product_id' => $product->id,
+            'related_product_id' => $related->id,
+            'source' => ProductAccessory::SOURCE_ENRICHMENT,
+            'link_key' => 'n:jogger',
+            'related_name' => 'SAFETY JOGGER',
+            'score' => 94,
+            'method' => 'fuzzy_model',
+        ]);
+        ProductAccessory::query()->create([
+            'product_id' => $product->id,
+            'source' => ProductAccessory::SOURCE_ENRICHMENT,
+            'link_key' => 's:bhp',
+            'related_sku' => 'BHP',
+            'related_name' => 'ART. BHP',
+            'score' => 0,
+            'method' => 'pending',
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created');
+
+        $this->assertCount(1, $this->presta->created);
+        $this->assertSame([], $this->presta->accessories[0]['items'] ?? []);
     }
 
     public function test_export_links_accessory_found_in_presta_by_sku(): void

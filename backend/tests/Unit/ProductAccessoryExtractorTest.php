@@ -53,4 +53,22 @@ final class ProductAccessoryExtractorTest extends TestCase
         $this->assertSame('3025', $rows[0]['sku']);
         $this->assertSame('Pochłaniacz 3025', $rows[0]['name']);
     }
+
+    #[Test]
+    public function ignores_faq_colors_and_shop_chrome(): void
+    {
+        $html = <<<'HTML'
+        <h2>Czy polar HONEY pasuje do innych elementów odzieży roboczej?</h2>
+        <p>Tak, łatwo łączy się z inną odzieżą roboczą.</p>
+        <select><option>JASNONIEBIESKI</option><option>Czerwony</option></select>
+        <p>ART. BHP</p>
+        <p>SAFETY JOGGER</p>
+        <p>SEMPERGUARD</p>
+        <p>Odzież Art.Mas</p>
+        <p>PRINTER RED</p>
+        HTML;
+
+        $this->assertSame([], (new ProductAccessoryExtractor)->fromHtml($html));
+        $this->assertSame([], (new ProductAccessoryExtractor)->fromText(strip_tags($html)));
+    }
 }
