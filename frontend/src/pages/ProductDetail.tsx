@@ -4,12 +4,15 @@ import { useAuth } from '../auth'
 import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
 import { CrossRefPanel } from '../components/CrossRefPanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
+import { ProductKitModal } from '../components/ProductKitModal'
 import {
   api,
   can,
   type EnrichmentBatch,
   type PrestaExportResult,
   type Product,
+  type ProductAccessory,
+  type ProductKitSuggestions,
   type Substitute,
 } from '../lib/api'
 
@@ -70,6 +73,12 @@ export function ProductDetail() {
   const [shopUrlDraft, setShopUrlDraft] = useState('')
   const [shopUrlBusy, setShopUrlBusy] = useState(false)
   const [shopUrlMsg, setShopUrlMsg] = useState('')
+  const [kitOpen, setKitOpen] = useState(false)
+  const [kitBusy, setKitBusy] = useState(false)
+  const [kitErr, setKitErr] = useState('')
+  const [kitData, setKitData] = useState<ProductKitSuggestions | null>(null)
+  const [kitSelected, setKitSelected] = useState<Record<number, boolean>>({})
+  const [kitActionBusy, setKitActionBusy] = useState(false)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -249,6 +258,61 @@ export function ProductDetail() {
     }
   }
 
+  async function openKitSuggest() {
+    if (!id) return
+    setKitOpen(true)
+    setKitBusy(true)
+    setKitErr('')
+    setKitData(null)
+    try {
+      setKitData(await api<ProductKitSuggestions>(`/products/${id}/kit-suggestions`, { method: 'POST', body: '{}' }))
+    } catch (ex) {
+      setKitErr(ex instanceof Error ? ex.message : 'Nie udało się dobrać zestawu')
+    } finally {
+      setKitBusy(false)
+    }
+  }
+
+  async function addToKit(ids: number[]) {
+    if (!id || !p || ids.length === 0) return
+    setKitActionBusy(true)
+    setErr('')
+    try {
+      const res = await api<{ accessories: ProductAccessory[] }>(`/products/${id}/kit`, {
+        method: 'POST',
+        body: JSON.stringify({ related_product_ids: ids }),
+      })
+      setP({ ...p, accessories: res.accessories })
+      setKitOpen(false)
+    } catch (ex) {
+      setKitErr(ex instanceof Error ? ex.message : 'Nie udało się dodać do zestawu')
+    } finally {
+      setKitActionBusy(false)
+    }
+  }
+
+  async function removeFromKit(all: boolean) {
+    if (!id || !p) return
+    const ids = Object.entries(kitSelected)
+      .filter(([, on]) => on)
+      .map(([rowId]) => Number(rowId))
+    if (!all && ids.length === 0) return
+    setKitActionBusy(true)
+    setErr('')
+    try {
+      const res = await api<{ accessories: ProductAccessory[] }>(`/products/${id}/kit`, {
+        method: 'DELETE',
+        body: JSON.stringify(all ? { all: true } : { accessory_ids: ids }),
+      })
+      setP({ ...p, accessories: res.accessories })
+      setKitSelected({})
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się usunąć z zestawu')
+    } finally {
+      setKitActionBusy(false)
+    }
+  }
+
   if (!p) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
   const status = p.enrichment_status ?? 'none'
@@ -398,6 +462,15 @@ export function ProductDetail() {
                   : 'Wyślij do Presty'}
             </button>
           )}
+          <button
+            type="button"
+            disabled={kitBusy}
+            onClick={() => void openKitSuggest()}
+            className="rounded bg-teal-700 px-3 py-2 text-xs text-white disabled:opacity-50"
+            title="AI dobiera filtry, mocowania i inne pozycje do zestawu"
+          >
+            Dopasuj warianty
+          </button>
         </div>
       </div>
 
@@ -484,31 +557,67 @@ export function ProductDetail() {
         </div>
       </div>
 
-      {(p.accessories?.length ?? 0) > 0 && (
-        <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
-          <h2 className="mb-2 text-sm font-semibold">Warianty i akcesoria</h2>
-          <ul className="space-y-1 text-xs">
+      <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">Warianty i akcesoria</h2>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
+              disabled={kitActionBusy || Object.values(kitSelected).every((on) => !on)}
+              onClick={() => void removeFromKit(false)}
+            >
+              Usuń zaznaczone
+            </button>
+            <button
+              type="button"
+              className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+              disabled={kitActionBusy || (p.accessories?.length ?? 0) === 0}
+              onClick={() => void removeFromKit(true)}
+            >
+              Usuń wszystkie
+            </button>
+          </div>
+        </div>
+        {(p.accessories?.length ?? 0) === 0 ? (
+          <p className="text-xs text-slate-500">Brak pozycji w zestawie. Kliknij „Dopasuj warianty”, żeby dobrać je z katalogu.</p>
+        ) : (
+          <ul className="space-y-2 text-xs">
             {p.accessories!.map((row) => (
-              <li key={row.id} className="flex flex-wrap items-baseline gap-x-2 border-b border-slate-100 py-1 last:border-0">
-                {row.related_product_id ? (
-                  <Link to={`/products/${row.related_product_id}`} className="font-medium text-blue-700 hover:underline">
-                    {row.name || row.sku || 'Produkt'}
-                  </Link>
+              <li key={row.id} className="flex items-start gap-3 border-b border-slate-100 py-2 last:border-0">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={Boolean(kitSelected[row.id])}
+                  onChange={() => setKitSelected((cur) => ({ ...cur, [row.id]: !cur[row.id] }))}
+                  aria-label={`Zaznacz ${row.name ?? row.sku ?? 'pozycję'}`}
+                />
+                {row.image_url ? (
+                  <img src={row.image_url} alt="" className="h-12 w-12 rounded object-contain bg-slate-50" />
                 ) : (
-                  <span className="font-medium">{row.name || row.sku || 'Nieznany'}</span>
+                  <div className="h-12 w-12 rounded bg-slate-100" />
                 )}
-                <span className="text-slate-500">
-                  {[row.sku, row.manufacturer].filter(Boolean).join(' · ')}
-                </span>
-                <span className="text-slate-400">
-                  {row.source === 'presta' ? 'z Presty' : 'z karty'}
-                  {row.matched ? '' : ' · bez karty w katalogu'}
-                </span>
+                <div className="min-w-0 flex-1">
+                  {row.related_product_id ? (
+                    <Link to={`/products/${row.related_product_id}`} className="font-medium text-blue-700 hover:underline">
+                      {row.name || row.sku || 'Produkt'}
+                    </Link>
+                  ) : (
+                    <span className="font-medium">{row.name || row.sku || 'Nieznany'}</span>
+                  )}
+                  <p className="text-slate-600">
+                    {row.short_description || [row.sku, row.manufacturer].filter(Boolean).join(' · ') || '—'}
+                  </p>
+                  <p className="text-slate-400">
+                    {row.source === 'presta' ? 'z Presty' : row.source === 'manual' ? 'ręcznie' : 'z karty'}
+                    {row.matched ? '' : ' · bez karty w katalogu'}
+                  </p>
+                </div>
               </li>
             ))}
           </ul>
-        </div>
-      )}
+        )}
+      </div>
 
       {(p.special_prices?.length ?? 0) > 0 && (
         <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
@@ -686,6 +795,14 @@ export function ProductDetail() {
         onApplied={() => {
           void load()
         }}
+      />
+      <ProductKitModal
+        open={kitOpen}
+        busy={kitBusy || kitActionBusy}
+        error={kitErr}
+        data={kitData}
+        onClose={() => setKitOpen(false)}
+        onAdd={(ids) => void addToKit(ids)}
       />
     </div>
   )

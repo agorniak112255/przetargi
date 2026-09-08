@@ -170,17 +170,7 @@ export type Product = {
     url: string
     status: string
   } | null
-  accessories?: Array<{
-    id: number
-    source: string
-    score: number
-    method: string | null
-    related_product_id: number | null
-    sku: string | null
-    name: string | null
-    manufacturer: string | null
-    matched: boolean
-  }>
+  accessories?: ProductAccessory[]
   special_prices?: Array<{
     id: number
     client_id: number | null
@@ -190,6 +180,39 @@ export type Product = {
     valid_from: string | null
     contract_ref: string | null
   }>
+}
+
+export type ProductAccessory = {
+  id: number
+  source: string
+  score: number
+  method: string | null
+  related_product_id: number | null
+  sku: string | null
+  name: string | null
+  manufacturer: string | null
+  short_description?: string | null
+  image_url?: string | null
+  matched: boolean
+}
+
+export type ProductKitSuggestion = {
+  id: number
+  sku: string | null
+  name: string | null
+  manufacturer: string | null
+  short_description?: string | null
+  image_url?: string | null
+  role?: string
+  reason?: string
+}
+
+export type ProductKitSuggestions = {
+  family: string | null
+  family_label: string
+  article_type: string | null
+  prompt_version: string
+  suggestions: ProductKitSuggestion[]
 }
 
 export type PrestaExportResult = {

@@ -28,6 +28,7 @@ use App\Http\Controllers\Api\ProductCatalogHealthController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductCrossRefController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
+use App\Http\Controllers\Api\ProductKitController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\SearchEventActionController;
@@ -135,6 +136,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::post('/products/enrich', [ProductEnrichmentController::class, 'enrichProducts'])
         ->middleware('permission:price_lists.import');
     Route::get('/products/{product}', [ProductController::class, 'show'])->middleware('permission:products.view');
+    Route::post('/products/{product}/kit-suggestions', [ProductKitController::class, 'suggest'])->middleware('permission:products.view');
+    Route::post('/products/{product}/kit', [ProductKitController::class, 'attach'])->middleware('permission:products.view');
+    Route::delete('/products/{product}/kit', [ProductKitController::class, 'destroy'])->middleware('permission:products.view');
     Route::get('/products/{product}/price-history', [ProductController::class, 'priceHistory'])->middleware('permission:products.view');
     Route::post('/products/{product}/enrich', [ProductEnrichmentController::class, 'enrichProduct'])
         ->middleware('permission:price_lists.import');

@@ -13,6 +13,8 @@ class ProductAccessory extends Model
 
     public const SOURCE_ENRICHMENT = 'enrichment';
 
+    public const SOURCE_MANUAL = 'manual';
+
     protected $fillable = [
         'product_id',
         'related_product_id',

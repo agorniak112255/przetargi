@@ -13,6 +13,7 @@ use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\NbpExchangeRateService;
+use App\Services\ProductKitService;
 use App\Support\ProductModelFuzzy;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,6 +24,7 @@ class ProductController extends Controller
         private readonly NbpExchangeRateService $fx,
         private readonly ProductModelFuzzy $modelFuzzy,
         private readonly EnrichmentDescriptionTemplateService $descriptionTemplates,
+        private readonly ProductKitService $kit,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -139,6 +141,10 @@ class ProductController extends Controller
         ];
         if ($status !== '' && in_array($status, $allowedStatus, true)) {
             $query->where('enrichment_status', $status);
+        }
+
+        if ($request->boolean('has_accessories')) {
+            $query->whereHas('accessories');
         }
 
         $allowedSort = [
@@ -276,7 +282,7 @@ class ProductController extends Controller
             'documents',
             'specialPrices.client:id,name',
             'prestaExport',
-            'accessories.relatedProduct:id,sku,name,manufacturer,catalog_price_net',
+            'accessories.relatedProduct.images',
         ]);
 
         $payload = $product->toArray();
@@ -322,21 +328,7 @@ class ProductController extends Controller
         $payload['price_history_latest_at'] = $latest?->created_at;
         $payload = $this->fx->appendPricePln($payload);
         $payload['presta_export'] = $this->prestaExportPayload($product);
-        $payload['accessories'] = $product->accessories->map(static function ($row): array {
-            $related = $row->relatedProduct;
-
-            return [
-                'id' => $row->id,
-                'source' => $row->source,
-                'score' => $row->score,
-                'method' => $row->method,
-                'related_product_id' => $row->related_product_id,
-                'sku' => $related?->sku ?? $row->related_sku,
-                'name' => $related?->name ?? $row->related_name,
-                'manufacturer' => $related?->manufacturer ?? $row->related_manufacturer,
-                'matched' => $related !== null,
-            ];
-        })->values()->all();
+        $payload['accessories'] = $this->kit->present($product);
         $payload['description_layout'] = $this->descriptionTemplates->resolvedForProduct($product);
         $payload['special_prices'] = $product->specialPrices->map(static fn ($row): array => [
             'id' => $row->id,

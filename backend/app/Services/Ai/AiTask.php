@@ -28,6 +28,8 @@ enum AiTask: string
 
     case ClientInquiry = 'client_inquiry';
 
+    case KitSuggest = 'kit_suggest';
+
     public function label(): string
     {
         return match ($this) {
@@ -40,6 +42,7 @@ enum AiTask: string
             self::TenderDocument => 'Analiza dokumentów przetargu',
             self::SpreadsheetExtract => 'Ekstrakcja pozycji z arkusza',
             self::ClientInquiry => 'Odpowiedzi na zapytania mailowe',
+            self::KitSuggest => 'Dobór zestawu / wariantów',
         };
     }
 
@@ -56,6 +59,7 @@ enum AiTask: string
             self::TenderDocument => 'Długie dokumenty — liczy się duży kontekst.',
             self::SpreadsheetExtract => 'Długie arkusze — liczy się duży kontekst.',
             self::ClientInquiry => 'Krótki list handlowy + karty niuansów. Zyskuje na sprawnym modelu z JSON.',
+            self::KitSuggest => 'Wybór akcesoriów do zestawu z krótkiej puli katalogu. Wystarczy sprawny model z JSON.',
         };
     }
 
