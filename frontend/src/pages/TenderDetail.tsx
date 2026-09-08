@@ -139,6 +139,7 @@ type Item = {
   companion_product_id?: number | null
   custom_name?: string | null
   custom_url?: string | null
+  updated_at?: string | null
 }
 
 type Coverage = {
@@ -3667,6 +3668,7 @@ function ItemRow({
           <ItemBattlecard
             tenderId={tenderId}
             itemId={item.id}
+            refreshKey={item.updated_at ?? ''}
             markupPercent={targetMarginPercent}
             enabled
             canSelectSubstitute={canEdit}

@@ -18,6 +18,7 @@ class TenderItem extends Model
         'ai_match_percent',
         'ai_match_reasons',
         'match_source',
+        'battlecard_substitutes',
         'custom_name',
         'custom_url',
         'quantity',
@@ -27,6 +28,10 @@ class TenderItem extends Model
         'status',
     ];
 
+    protected $hidden = [
+        'battlecard_substitutes',
+    ];
+
     protected function casts(): array
     {
         return [
@@ -34,6 +39,7 @@ class TenderItem extends Model
             'companion_offer_price' => 'decimal:2',
             'margin_percent' => 'decimal:2',
             'ai_match_reasons' => 'array',
+            'battlecard_substitutes' => 'array',
         ];
     }
 

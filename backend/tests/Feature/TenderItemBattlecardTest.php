@@ -457,4 +457,158 @@ final class TenderItemBattlecardTest extends TestCase
 
         $this->assertCount(8, $subs);
     }
+
+    public function test_battlecard_reuses_saved_substitutes_when_catalog_grows(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $ours = Product::query()->create([
+            'sku' => 'CACHE-MAIN',
+            'name' => 'Rękawice nitrylowe główne',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem.',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'CACHE-OLD',
+            'name' => 'Rękawice nitrylowe stary zamiennik',
+            'manufacturer' => 'OTHER',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem stary.',
+            'catalog_price_net' => 4,
+            'purchase_price' => 3,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/BC/CACHE',
+            'title' => 'Cache',
+            'client_id' => Client::query()->create(['name' => 'Klient CACHE'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 80,
+            'last_activity_at' => now(),
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Rękawice robocze nitrylowe ze ściągaczem',
+            'main_product_id' => $ours->id,
+            'ai_match_percent' => 90,
+            'quantity' => 10,
+            'status' => 'ok',
+        ]);
+
+        $first = $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")
+            ->assertOk()
+            ->json('battlecard.substitutes');
+        $this->assertContains('CACHE-OLD', collect($first)->pluck('sku')->all());
+
+        Product::query()->create([
+            'sku' => 'CACHE-NEW',
+            'name' => 'Rękawice nitrylowe nowy zamiennik',
+            'manufacturer' => 'OTHER',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem nowy.',
+            'catalog_price_net' => 3,
+            'purchase_price' => 2,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+
+        $second = $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")
+            ->assertOk()
+            ->json('battlecard.substitutes');
+        $this->assertContains('CACHE-OLD', collect($second)->pluck('sku')->all());
+        $this->assertNotContains('CACHE-NEW', collect($second)->pluck('sku')->all());
+    }
+
+    public function test_battlecard_refreshes_after_item_ai_match(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $ours = Product::query()->create([
+            'sku' => 'REF-MAIN',
+            'name' => 'Rękawice nitrylowe główne',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem.',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'REF-OLD',
+            'name' => 'Rękawice nitrylowe stary zamiennik',
+            'manufacturer' => 'OTHER',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem stary.',
+            'catalog_price_net' => 4,
+            'purchase_price' => 3,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/BC/REF',
+            'title' => 'Refresh',
+            'client_id' => Client::query()->create(['name' => 'Klient REF'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 80,
+            'last_activity_at' => now(),
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Rękawice robocze nitrylowe ze ściągaczem',
+            'main_product_id' => $ours->id,
+            'ai_match_percent' => 90,
+            'quantity' => 10,
+            'status' => 'ok',
+        ]);
+
+        $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")->assertOk();
+
+        Product::query()->create([
+            'sku' => 'REF-NEW',
+            'name' => 'Rękawice nitrylowe nowy zamiennik',
+            'manufacturer' => 'OTHER',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem nowy.',
+            'catalog_price_net' => 3,
+            'purchase_price' => 2,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/items/{$item->id}/match", ['force' => true])
+            ->assertOk();
+
+        $after = $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")
+            ->assertOk()
+            ->json('battlecard');
+        $skus = collect($after['substitutes'] ?? [])->pluck('sku')->all();
+        $this->assertTrue(
+            ($after['ours']['sku'] ?? null) === 'REF-NEW' || in_array('REF-NEW', $skus, true)
+        );
+    }
 }

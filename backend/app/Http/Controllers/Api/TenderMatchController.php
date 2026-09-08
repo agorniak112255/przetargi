@@ -52,6 +52,19 @@ class TenderMatchController extends Controller
             $request->has('progress_total') ? (int) $request->input('progress_total') : null
         );
 
+        $refreshIds = $result['processed_item_ids'] ?? [];
+        unset($result['processed_item_ids']);
+        if (is_array($refreshIds) && $refreshIds !== []) {
+            $items = TenderItem::query()
+                ->with(['mainProduct', 'tender'])
+                ->where('tender_id', $tender->id)
+                ->whereIn('id', $refreshIds)
+                ->get();
+            foreach ($items as $item) {
+                $this->battlecards->forItem($item, true);
+            }
+        }
+
         return response()->json([
             ...$result,
             'tender_id' => $tender->id,
@@ -77,7 +90,8 @@ class TenderMatchController extends Controller
 
         $force = $request->boolean('force', false);
         $result = $this->matcher->matchItem($item, $force);
-        $result['battlecard'] = $this->battlecards->forItem($item->fresh(['mainProduct']));
+        $refresh = empty($result['skipped_existing']);
+        $result['battlecard'] = $this->battlecards->forItem($item->fresh(['mainProduct', 'tender']), $refresh);
 
         return response()->json($result);
     }

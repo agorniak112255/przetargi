@@ -269,6 +269,13 @@ final class ProductMatchService
             static fn (array $row): bool => in_array($row['action'], ['changed', 'cleared'], true)
         ));
 
+        $processedIds = $items
+            ->filter(static fn (TenderItem $item): bool => ! $item->isManualCustomOffer())
+            ->pluck('id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->values()
+            ->all();
+
         return [
             'matched' => $matched,
             'skipped' => $skipped,
@@ -280,6 +287,7 @@ final class ProductMatchService
             'skipped_custom' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'skipped_custom')),
             'no_match' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'no_match')),
             'changes' => $changedRows,
+            'processed_item_ids' => $processedIds,
         ];
     }
 

@@ -345,9 +345,12 @@ class TenderItemController extends Controller
         }
 
         $item->save();
-        $item->load(['mainProduct', 'companionProduct']);
+        $item->load(['mainProduct', 'companionProduct', 'tender']);
         $this->pricing->recalculateItemMargin($item);
         $this->pricing->recalculateTenderTotals($tender->fresh());
+        if (($data['match_source'] ?? null) === 'ai') {
+            $this->battlecards->forItem($item, true);
+        }
 
         $this->activities->log($tender, 'item_updated', $request->user(), $item, [
             'before' => $before,

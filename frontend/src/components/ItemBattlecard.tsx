@@ -277,6 +277,7 @@ function ConfirmSubstituteModal({
 export function ItemBattlecard({
   tenderId,
   itemId,
+  refreshKey = '',
   markupPercent = 18,
   enabled,
   canSelectSubstitute = false,
@@ -286,6 +287,7 @@ export function ItemBattlecard({
 }: {
   tenderId: number
   itemId: number
+  refreshKey?: string
   markupPercent?: number
   enabled: boolean
   canSelectSubstitute?: boolean
@@ -339,7 +341,7 @@ export function ItemBattlecard({
     return () => {
       cancelled = true
     }
-  }, [open, enabled, tenderId, itemId])
+  }, [open, enabled, tenderId, itemId, refreshKey])
 
   useEffect(() => {
     if (pending == null) return

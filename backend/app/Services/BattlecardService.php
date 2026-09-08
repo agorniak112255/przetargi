@@ -42,9 +42,30 @@ final class BattlecardService
      *     highlights: list<string>
      * }
      */
-    public function forItem(TenderItem $item): array
+    public function forItem(TenderItem $item, bool $refresh = false): array
     {
         $item->loadMissing(['mainProduct', 'tender']);
+        if (! $refresh && is_array($item->battlecard_substitutes)) {
+            return $this->cardFromStored($item);
+        }
+
+        $card = $this->buildCard($item, $refresh);
+        $this->persistSubstitutes($item, $card['substitutes']);
+
+        return $card;
+    }
+
+    /**
+     * @return array{
+     *     requirement: array{line_no: int, text: string},
+     *     ours: ?array<string, mixed>,
+     *     substitutes: list<array<string, mixed>>,
+     *     competitors: list<array<string, mixed>>,
+     *     highlights: list<string>
+     * }
+     */
+    private function buildCard(TenderItem $item, bool $allowAi): array
+    {
         $ours = $item->mainProduct;
         $markupPercent = $item->tender?->targetMarkupPercent();
         $excludeIds = [];
@@ -58,9 +79,83 @@ final class BattlecardService
             $substitutes,
             $excludeIds,
             $markupPercent,
+            $allowAi,
         );
         $substitutes = $this->sortSubstitutesCheapestFirst($substitutes);
 
+        return $this->assembleCard($item, array_slice($substitutes, 0, self::SUBSTITUTE_LIMIT), $markupPercent);
+    }
+
+    /**
+     * @return array{
+     *     requirement: array{line_no: int, text: string},
+     *     ours: ?array<string, mixed>,
+     *     substitutes: list<array<string, mixed>>,
+     *     competitors: list<array<string, mixed>>,
+     *     highlights: list<string>
+     * }
+     */
+    private function cardFromStored(TenderItem $item): array
+    {
+        $markupPercent = $item->tender?->targetMarkupPercent();
+        $oursId = $item->mainProduct?->id;
+        $rows = is_array($item->battlecard_substitutes) ? $item->battlecard_substitutes : [];
+        $ids = [];
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $id = (int) ($row['product_id'] ?? 0);
+            if ($id > 0 && ($oursId === null || $id !== (int) $oursId)) {
+                $ids[] = $id;
+            }
+        }
+        $products = $ids === []
+            ? collect()
+            : Product::query()->whereIn('id', array_values(array_unique($ids)))->get()->keyBy('id');
+
+        $substitutes = [];
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $id = (int) ($row['product_id'] ?? 0);
+            $product = $products->get($id);
+            if (! $product instanceof Product) {
+                continue;
+            }
+            $snap = $this->productSnapshot(
+                $product,
+                (int) ($row['match_percent'] ?? 0),
+                null,
+                [],
+                null,
+                'substitute',
+                $markupPercent,
+            );
+            $snap['substitute_type'] = $row['substitute_type'] ?? null;
+            $snap['approval_status'] = $row['approval_status'] ?? null;
+            $snap['reason'] = $row['reason'] ?? null;
+            $snap['source'] = $row['source'] ?? 'catalog';
+            $substitutes[] = $snap;
+        }
+
+        return $this->assembleCard($item, $substitutes, $markupPercent);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $substitutes
+     * @return array{
+     *     requirement: array{line_no: int, text: string},
+     *     ours: ?array<string, mixed>,
+     *     substitutes: list<array<string, mixed>>,
+     *     competitors: list<array<string, mixed>>,
+     *     highlights: list<string>
+     * }
+     */
+    private function assembleCard(TenderItem $item, array $substitutes, ?float $markupPercent): array
+    {
+        $ours = $item->mainProduct;
         $card = [
             'requirement' => [
                 'line_no' => (int) $item->line_no,
@@ -75,14 +170,37 @@ final class BattlecardService
                 'ours',
                 $markupPercent,
             ),
-            'substitutes' => array_slice($substitutes, 0, self::SUBSTITUTE_LIMIT),
+            'substitutes' => $substitutes,
             'competitors' => [],
             'highlights' => [],
         ];
-
         $card['highlights'] = $this->buildHighlights($card);
 
         return $card;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $substitutes
+     */
+    private function persistSubstitutes(TenderItem $item, array $substitutes): void
+    {
+        $stored = [];
+        foreach ($substitutes as $snap) {
+            $id = (int) ($snap['product_id'] ?? 0);
+            if ($id <= 0) {
+                continue;
+            }
+            $stored[] = [
+                'product_id' => $id,
+                'match_percent' => (int) ($snap['match_percent'] ?? 0),
+                'source' => $snap['source'] ?? null,
+                'substitute_type' => $snap['substitute_type'] ?? null,
+                'approval_status' => $snap['approval_status'] ?? null,
+                'reason' => $snap['reason'] ?? null,
+            ];
+        }
+        $item->battlecard_substitutes = $stored;
+        $item->save();
     }
 
     /**
@@ -138,14 +256,19 @@ final class BattlecardService
      * @param  list<int>  $excludeIds
      * @return list<array<string, mixed>>
      */
-    private function fillFromCatalog(string $requirement, array $existing, array $excludeIds, ?float $markupPercent): array
-    {
+    private function fillFromCatalog(
+        string $requirement,
+        array $existing,
+        array $excludeIds,
+        ?float $markupPercent,
+        bool $allowAi = false,
+    ): array {
         $need = self::SUBSTITUTE_LIMIT - count($existing);
         if ($need <= 0 || trim($requirement) === '') {
             return $existing;
         }
 
-        $scored = $this->scoreCatalogAlternates($requirement, $excludeIds, $need + 8);
+        $scored = $this->scoreCatalogAlternates($requirement, $excludeIds, $need + 8, $allowAi);
         if ($scored === []) {
             return $existing;
         }
@@ -173,11 +296,11 @@ final class BattlecardService
      * @param  list<int>  $excludeIds
      * @return list<array{product: Product, score: int}>
      */
-    private function scoreCatalogAlternates(string $requirement, array $excludeIds, int $limit): array
+    private function scoreCatalogAlternates(string $requirement, array $excludeIds, int $limit, bool $allowAi = false): array
     {
         $rows = [];
         $fromLlm = false;
-        if ($this->aiSettings->isReady()) {
+        if ($allowAi && $this->aiSettings->isReady()) {
             try {
                 $result = $this->aiSearch->search($requirement, max(8, $limit), false, AiTask::ProductSearch);
                 $rows = is_array($result['products'] ?? null) ? $result['products'] : [];
