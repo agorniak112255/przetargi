@@ -304,7 +304,10 @@ final class PrestaProductExportService
         if ($method === 'fuzzy_model') {
             return false;
         }
-        if (in_array($method, ['sku', 'ean', 'presta_id'], true)) {
+        if (in_array($method, ['sku', 'ean', 'presta_id', 'manual'], true)) {
+            return true;
+        }
+        if ($row->source === ProductAccessory::SOURCE_MANUAL && (int) ($row->related_product_id ?? 0) > 0) {
             return true;
         }
         if ($row->source === ProductAccessory::SOURCE_PRESTA && (int) ($row->presta_related_id ?? 0) > 0) {
@@ -335,7 +338,10 @@ final class PrestaProductExportService
             }
         }
         if ($prestaId <= 0 && $related instanceof Product
-            && in_array((string) $row->method, ['sku', 'ean', 'presta_id'], true)) {
+            && (
+                in_array((string) $row->method, ['sku', 'ean', 'presta_id', 'manual'], true)
+                || $row->source === ProductAccessory::SOURCE_MANUAL
+            )) {
             $prestaId = $this->exportRelatedProduct($related);
         }
         if ($prestaId <= 0) {

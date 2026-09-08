@@ -335,6 +335,33 @@ final class PrestaExportApiTest extends TestCase
         $this->assertSame([289], $this->presta->accessories[0]['items']);
     }
 
+    public function test_export_sends_manual_kit_accessories(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct(['sku' => '1150064', 'name' => 'ExoFit Comfort Seat Sling']);
+        $related = $this->makeProduct(['sku' => '1260348', 'name' => 'Linka Protecta 1,50 m']);
+        ProductAccessory::query()->create([
+            'product_id' => $product->id,
+            'related_product_id' => $related->id,
+            'source' => ProductAccessory::SOURCE_MANUAL,
+            'link_key' => 'm:'.$related->id,
+            'related_sku' => '1260348',
+            'related_name' => 'Linka Protecta 1,50 m',
+            'score' => 100,
+            'method' => 'manual',
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created');
+
+        $this->assertCount(2, $this->presta->created);
+        $parentId = (int) $this->presta->created[0]['id_product'];
+        $relatedId = (int) $this->presta->created[1]['id_product'];
+        $parentLinks = collect($this->presta->accessories)->firstWhere('presta_id', $parentId);
+        $this->assertSame([$relatedId], $parentLinks['items'] ?? null);
+    }
+
     public function test_export_creates_related_catalog_product_then_links_accessory(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
