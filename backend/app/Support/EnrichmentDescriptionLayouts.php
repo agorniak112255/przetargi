@@ -32,7 +32,7 @@ final class EnrichmentDescriptionLayouts
         'certificates' => ['label' => 'Certyfikaty', 'surfaces' => ['card', 'export']],
         'use_cases' => ['label' => 'Zastosowanie', 'surfaces' => ['card', 'export']],
         'documents' => ['label' => 'Pliki PDF', 'surfaces' => ['card']],
-        'sources' => ['label' => 'Źródła', 'surfaces' => ['card', 'export']],
+        'sources' => ['label' => 'Źródła', 'surfaces' => ['card']],
     ];
 
     /**
@@ -41,7 +41,7 @@ final class EnrichmentDescriptionLayouts
     public static function defaultBlocks(string $surface): array
     {
         $ids = $surface === self::SURFACE_EXPORT
-            ? ['description', 'attributes', 'specs', 'features', 'materials', 'norms', 'certificates', 'use_cases', 'sources']
+            ? ['description', 'attributes', 'specs', 'features', 'materials', 'norms', 'certificates', 'use_cases']
             : ['description', 'attributes', 'specs', 'features', 'materials', 'norms', 'certificates', 'use_cases', 'documents', 'sources'];
 
         $out = [];

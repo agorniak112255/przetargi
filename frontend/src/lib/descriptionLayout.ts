@@ -10,7 +10,6 @@ export const DEFAULT_EXPORT_BLOCKS: DescriptionLayoutBlock[] = [
   { id: 'norms', visible: true, emphasis: 'none' },
   { id: 'certificates', visible: true, emphasis: 'none' },
   { id: 'use_cases', visible: true, emphasis: 'none' },
-  { id: 'sources', visible: true, emphasis: 'muted' },
 ]
 
 export const DEFAULT_CARD_BLOCKS: DescriptionLayoutBlock[] = [

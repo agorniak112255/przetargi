@@ -47,7 +47,6 @@ final class PrestaDescriptionHtml
         $rawDescription = (string) ($product->description ?? '');
         $prose = $this->prose($rawDescription);
         $attrPairs = $this->attributePairs(is_array($payload['attributes'] ?? null) ? $payload['attributes'] : []);
-        $sources = $this->stringList($payload['source_urls'] ?? null);
         $hasLists = false;
         foreach (array_keys(self::LIST_KEYS) as $key) {
             if ($this->stringList($payload[$key] ?? null) !== []) {
@@ -56,7 +55,7 @@ final class PrestaDescriptionHtml
             }
         }
 
-        if ($attrPairs === [] && ! $hasLists && $sources === []) {
+        if ($attrPairs === [] && ! $hasLists) {
             return $this->fallbackHtml($rawDescription);
         }
 
@@ -70,7 +69,7 @@ final class PrestaDescriptionHtml
             $chunk = match ($id) {
                 'description' => $prose !== '' ? $this->proseHtml($prose) : '',
                 'attributes' => $attrPairs !== [] ? $this->attributesBox($attrPairs, $emphasis) : '',
-                'sources' => $this->sourcesHtml($sources),
+                'sources' => '',
                 default => isset(self::LIST_KEYS[$id])
                     ? $this->listSection(self::LIST_KEYS[$id], $this->stringList($payload[$id] ?? null), $emphasis)
                     : '',
@@ -246,27 +245,6 @@ final class PrestaDescriptionHtml
 
         return '<p style="font-weight:700;font-size:13px;margin:16px 0 6px">'.$this->e($title).'</p>'
             .'<ul style="margin:0 0 12px 20px;padding:0">'.$lis.'</ul>';
-    }
-
-    /**
-     * @param  list<string>  $urls
-     */
-    private function sourcesHtml(array $urls): string
-    {
-        $links = [];
-        foreach (array_slice($urls, 0, 3) as $url) {
-            if (! preg_match('#^https?://#i', $url)) {
-                continue;
-            }
-            $href = $this->e($url);
-            $label = $this->e(mb_substr(preg_replace('#^https?://#i', '', $url) ?? $url, 0, 40));
-            $links[] = '<a href="'.$href.'" target="_blank" rel="noreferrer">'.$label.'</a>';
-        }
-        if ($links === []) {
-            return '';
-        }
-
-        return '<p style="font-size:11px;color:#94a3b8;margin:12px 0 0">Źródła: '.implode(' · ', $links).'</p>';
     }
 
     private function kategoriaLabel(mixed $value): ?string

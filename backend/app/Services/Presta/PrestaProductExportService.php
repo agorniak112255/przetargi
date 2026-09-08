@@ -19,6 +19,11 @@ use Throwable;
 
 final class PrestaProductExportService
 {
+    private bool $syncingRelations = false;
+
+    /** @var array<int, int> */
+    private array $relatedPrestaIds = [];
+
     public function __construct(
         private readonly PrestaExportGateway $gateway,
         private readonly PrestaSettingsService $settings,
@@ -52,6 +57,7 @@ final class PrestaProductExportService
         if ($existing !== null && ! $force && $this->alreadyExported($product, (int) $existing['id_product'])) {
             $saved = $this->gateway->updateProduct((int) $existing['id_product'], $this->payload($product));
             $this->rememberMatch($product, (int) $saved['id_product'], (string) $saved['url']);
+            $links = $this->syncShopLinks($product, (int) $saved['id_product']);
 
             return [
                 'product_id' => (int) $product->id,
@@ -59,8 +65,8 @@ final class PrestaProductExportService
                 'action' => 'updated',
                 'presta_id' => (int) $saved['id_product'],
                 'url' => (string) $saved['url'],
-                'sizes' => $this->sizes->sizesForProduct($product),
-                'sizes_missing' => [],
+                'sizes' => $links['sizes'],
+                'sizes_missing' => $links['sizes_missing'],
                 'images' => 0,
             ];
         }
@@ -75,20 +81,7 @@ final class PrestaProductExportService
         }
 
         $prestaId = (int) $saved['id_product'];
-        $sizeNames = $this->sizes->sizesForProduct($product);
-        $hint = trim((string) $product->category.' '.$product->name);
-        $resolved = $this->gateway->resolveSizeAttributes($sizeNames, $hint);
-        $combinations = [];
-        foreach ($resolved['mapped'] as $size => $attributeId) {
-            $sizeLabel = (string) $size;
-            $combinations[] = [
-                'size' => $sizeLabel,
-                'attribute_id' => $attributeId,
-                'reference' => $this->combinationReference((string) $product->sku, $sizeLabel),
-            ];
-        }
-        $this->gateway->ensureCombinations($prestaId, $combinations);
-        $this->gateway->ensureAccessories($prestaId, $this->accessoryPrestaIds($product));
+        $links = $this->syncShopLinks($product, $prestaId);
 
         $images = 0;
         $hasLocalImages = $product->images->isNotEmpty();
@@ -107,8 +100,8 @@ final class PrestaProductExportService
             'action' => $action,
             'presta_id' => $prestaId,
             'url' => (string) $match->presta_url,
-            'sizes' => array_map('strval', array_keys($resolved['mapped'])),
-            'sizes_missing' => $resolved['missing'],
+            'sizes' => $links['sizes'],
+            'sizes_missing' => $links['sizes_missing'],
             'images' => $images,
         ];
     }
@@ -252,6 +245,34 @@ final class PrestaProductExportService
     }
 
     /**
+     * @return array{sizes: list<string>, sizes_missing: list<string>}
+     */
+    private function syncShopLinks(Product $product, int $prestaId): array
+    {
+        $sizeNames = $this->sizes->sizesForProduct($product);
+        $hint = trim((string) $product->category.' '.$product->name);
+        $resolved = $this->gateway->resolveSizeAttributes($sizeNames, $hint);
+        $combinations = [];
+        foreach ($resolved['mapped'] as $size => $attributeId) {
+            $sizeLabel = (string) $size;
+            $combinations[] = [
+                'size' => $sizeLabel,
+                'attribute_id' => $attributeId,
+                'reference' => $this->combinationReference((string) $product->sku, $sizeLabel),
+            ];
+        }
+        $this->gateway->ensureCombinations($prestaId, $combinations);
+        if (! $this->syncingRelations) {
+            $this->gateway->ensureAccessories($prestaId, $this->accessoryPrestaIds($product));
+        }
+
+        return [
+            'sizes' => array_map('strval', array_keys($resolved['mapped'])),
+            'sizes_missing' => $resolved['missing'],
+        ];
+    }
+
+    /**
      * @return list<int>
      */
     private function accessoryPrestaIds(Product $product): array
@@ -261,17 +282,69 @@ final class PrestaProductExportService
             if (! $row instanceof ProductAccessory) {
                 continue;
             }
-            $prestaId = (int) ($row->presta_related_id ?? 0);
-            if ($prestaId <= 0 && $row->relatedProduct instanceof Product) {
-                $match = $row->relatedProduct->prestaExport;
-                $prestaId = $match instanceof PrestaProductMatch ? (int) $match->presta_id : 0;
-            }
+            $prestaId = $this->resolveAccessoryPrestaId($row);
             if ($prestaId > 0) {
                 $ids[$prestaId] = $prestaId;
+                if ((int) ($row->presta_related_id ?? 0) !== $prestaId) {
+                    $row->presta_related_id = $prestaId;
+                    $row->save();
+                }
             }
         }
 
         return array_values($ids);
+    }
+
+    private function resolveAccessoryPrestaId(ProductAccessory $row): int
+    {
+        $prestaId = (int) ($row->presta_related_id ?? 0);
+        $related = $row->relatedProduct;
+        if ($prestaId <= 0 && $related instanceof Product) {
+            $prestaId = $this->relatedPrestaIds[$related->id] ?? 0;
+            if ($prestaId <= 0) {
+                $match = $related->prestaExport;
+                $prestaId = $match instanceof PrestaProductMatch ? (int) $match->presta_id : 0;
+            }
+        }
+        if ($prestaId <= 0 && $related instanceof Product) {
+            $prestaId = $this->exportRelatedProduct($related);
+        }
+        if ($prestaId <= 0) {
+            $sku = trim((string) ($related?->sku ?: $row->related_sku));
+            $ean = trim((string) ($related?->ean ?: $row->related_ean));
+            $found = $this->gateway->findExisting($sku, $ean);
+            $prestaId = $found !== null ? (int) $found['id_product'] : 0;
+        }
+
+        return $prestaId;
+    }
+
+    private function exportRelatedProduct(Product $related): int
+    {
+        if (isset($this->relatedPrestaIds[$related->id])) {
+            return $this->relatedPrestaIds[$related->id];
+        }
+        $previous = $this->syncingRelations;
+        $this->syncingRelations = true;
+        try {
+            $exported = $this->export($related, false);
+            $prestaId = (int) ($exported['presta_id'] ?? 0);
+        } catch (Throwable $e) {
+            Log::warning('Presta: nie wyeksportowano wariantu/akcesorium.', [
+                'product_id' => $related->id,
+                'sku' => $related->sku,
+                'error' => $e->getMessage(),
+            ]);
+
+            return 0;
+        } finally {
+            $this->syncingRelations = $previous;
+        }
+        if ($prestaId > 0) {
+            $this->relatedPrestaIds[$related->id] = $prestaId;
+        }
+
+        return $prestaId;
     }
 
     private function combinationReference(string $sku, string $size): string

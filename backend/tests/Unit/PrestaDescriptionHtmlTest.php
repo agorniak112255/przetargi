@@ -41,7 +41,8 @@ final class PrestaDescriptionHtmlTest extends TestCase
         $this->assertStringContainsString('<ul', $html);
         $this->assertStringContainsString('odporność chemiczna', $html);
         $this->assertStringContainsString('przemysł chemiczny', $html);
-        $this->assertStringContainsString('href="https://example.com/kcl-camapren"', $html);
+        $this->assertStringNotContainsString('Źródła', $html);
+        $this->assertStringNotContainsString('example.com/kcl-camapren', $html);
         $this->assertStringNotContainsString('ukryte w opisie', $html);
         $this->assertStringContainsString('Camapren 720 z polichloroprenu', $html);
         $this->assertLessThan(

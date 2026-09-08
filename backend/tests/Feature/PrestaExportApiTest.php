@@ -176,6 +176,33 @@ final class PrestaExportApiTest extends TestCase
         $this->assertStringNotContainsString('Specyfikacja', (string) $this->presta->created[0]['description_short']);
     }
 
+    public function test_export_omits_source_urls_from_description(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct([
+            'sku' => 'T5161000',
+            'name' => 'Okulary Raptor rozjasniające',
+            'description' => 'Okulary rozjaśniające z żółtą soczewką.',
+            'enrichment_payload' => [
+                'features' => ['kontrast w słabym świetle'],
+                'source_urls' => [
+                    'https://icd.pl/okulary-rozjasniajace-3m-serii-60',
+                    'https://www.supon.rzeszow.pl/kolorowe-soczewki/3',
+                ],
+            ],
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created');
+
+        $html = (string) $this->presta->created[0]['description'];
+        $this->assertStringContainsString('kontrast w słabym świetle', $html);
+        $this->assertStringNotContainsString('Źródła', $html);
+        $this->assertStringNotContainsString('icd.pl', $html);
+        $this->assertStringNotContainsString('supon.rzeszow.pl/kolorowe', $html);
+    }
+
     public function test_export_html_follows_family_export_layout(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
@@ -304,6 +331,93 @@ final class PrestaExportApiTest extends TestCase
         $this->postJson('/api/products/'.$product->id.'/presta-export')
             ->assertOk()
             ->assertJsonPath('action', 'created');
+
+        $this->assertSame([289], $this->presta->accessories[0]['items']);
+    }
+
+    public function test_export_creates_related_catalog_product_then_links_accessory(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct(['sku' => 'T5161000', 'name' => 'Okulary Raptor rozjasniające']);
+        $related = $this->makeProduct(['sku' => '1971040', 'name' => '3M SecureFit 200']);
+        ProductAccessory::query()->create([
+            'product_id' => $product->id,
+            'related_product_id' => $related->id,
+            'source' => ProductAccessory::SOURCE_ENRICHMENT,
+            'link_key' => 's:1971040',
+            'related_sku' => '1971040',
+            'score' => 90,
+            'method' => 'fuzzy_model',
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created');
+
+        $this->assertCount(2, $this->presta->created);
+        $parentId = (int) $this->presta->created[0]['id_product'];
+        $relatedId = (int) $this->presta->created[1]['id_product'];
+        $this->assertSame('T5161000', $this->presta->created[0]['reference']);
+        $this->assertSame('1971040', $this->presta->created[1]['reference']);
+        $this->assertNotEmpty($this->presta->accessories);
+        $parentLinks = collect($this->presta->accessories)->firstWhere('presta_id', $parentId);
+        $this->assertSame([$relatedId], $parentLinks['items'] ?? null);
+        $this->assertDatabaseHas('product_accessories', [
+            'product_id' => $product->id,
+            'related_product_id' => $related->id,
+            'presta_related_id' => $relatedId,
+        ]);
+    }
+
+    public function test_export_links_accessory_found_in_presta_by_sku(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->presta->existing['SOKSF201'] = [
+            'id_product' => 321,
+            'reference' => 'SOKSF201',
+            'url' => 'https://supon.rzeszow.pl/321-sf201.html',
+        ];
+        $product = $this->makeProduct(['sku' => 'T5161000', 'name' => 'Okulary Raptor']);
+        ProductAccessory::query()->create([
+            'product_id' => $product->id,
+            'related_product_id' => null,
+            'source' => ProductAccessory::SOURCE_ENRICHMENT,
+            'link_key' => 's:soksf201',
+            'related_sku' => 'SOKSF201',
+            'score' => 0,
+            'method' => 'pending',
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created');
+
+        $this->assertCount(1, $this->presta->created);
+        $this->assertSame([321], $this->presta->accessories[0]['items']);
+        $this->assertDatabaseHas('product_accessories', [
+            'product_id' => $product->id,
+            'related_sku' => 'SOKSF201',
+            'presta_related_id' => 321,
+        ]);
+    }
+
+    public function test_second_export_without_force_sends_accessories(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct(['sku' => 'SEC-3000', 'name' => 'Półmaska Secura 3000']);
+        ProductAccessory::query()->create([
+            'product_id' => $product->id,
+            'source' => ProductAccessory::SOURCE_PRESTA,
+            'link_key' => 'p:289',
+            'presta_related_id' => 289,
+            'related_sku' => '3025',
+            'score' => 96,
+            'method' => 'sku',
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')->assertOk()->assertJsonPath('action', 'created');
+        $this->presta->accessories = [];
+        $this->postJson('/api/products/'.$product->id.'/presta-export')->assertOk()->assertJsonPath('action', 'updated');
 
         $this->assertSame([289], $this->presta->accessories[0]['items']);
     }

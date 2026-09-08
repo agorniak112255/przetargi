@@ -27,7 +27,9 @@ final class EnrichmentDescriptionLayoutsTest extends TestCase
         $this->assertFalse($layout['card'][1]['visible']);
         $this->assertSame('none', $layout['card'][1]['emphasis']);
         $this->assertContains('documents', array_column($layout['card'], 'id'));
+        $this->assertContains('sources', array_column($layout['card'], 'id'));
         $this->assertNotContains('documents', array_column($layout['export'], 'id'));
+        $this->assertNotContains('sources', array_column($layout['export'], 'id'));
     }
 
     public function test_visual_default_keeps_export_following_card(): void
