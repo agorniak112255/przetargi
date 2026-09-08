@@ -3043,8 +3043,6 @@ function ItemRow({
         />
         <section className="flex min-h-full min-w-0 flex-col rounded-lg border border-sky-200 bg-sky-50/80 p-2">
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-sky-900">Oferta</div>
-          <div className="flex flex-col gap-2 min-[1100px]:flex-row">
-            <div className="min-w-0 flex-1">
         {canEdit ? (
           <div className="flex flex-col gap-1">
             <div className="flex items-start gap-1">
@@ -3053,6 +3051,8 @@ function ItemRow({
                 value={productId}
                 selectedProduct={selectedProduct}
                 disabled={busy}
+                showSelectedCard={false}
+                className="min-w-0 flex-1"
                 previewQuery={item.requirement ?? ''}
                 applyMarginPercent={targetMarginPercent}
                 applyMarginDisabled={busy || catalogPurchase() == null}
@@ -3370,7 +3370,230 @@ function ItemRow({
                   }}
                 />
               )}
-            <details className="max-w-[280px] rounded border border-amber-200 bg-amber-50/70 px-2 py-1">
+          </div>
+        ) : isExternal && !item.main_product ? (
+          <ExternalOfferBanner name={item.custom_name || customName || ''} url={item.custom_url || customUrl} />
+        ) : !item.main_product ? (
+          <ExternalHints reasons={item.ai_match_reasons} />
+        ) : null}
+
+        {(canEdit || selectedProduct || item.main_product || isExternal) && (
+          <div className="mt-2 flex min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <button
+              type="button"
+              className="shrink-0 self-stretch bg-slate-50 p-2"
+              title={selectedProduct || item.main_product ? 'Szczegóły produktu' : undefined}
+              onClick={() => {
+                const id = selectedProduct?.id ?? item.main_product?.id
+                if (id) setPreviewId(id)
+              }}
+            >
+              {productThumbUrl(selectedProduct ?? item.main_product) ? (
+                <img
+                  src={productThumbUrl(selectedProduct ?? item.main_product) ?? ''}
+                  alt=""
+                  className="h-28 w-28 rounded border border-slate-200 bg-white object-contain"
+                />
+              ) : (
+                <div className="flex h-28 w-28 items-center justify-center rounded border border-dashed border-slate-200 text-[10px] text-slate-400">
+                  Brak zdjęcia
+                </div>
+              )}
+            </button>
+            <div className="min-w-0 flex-1 px-3 py-2">
+              <p className="text-sm font-semibold leading-snug text-slate-900">
+                {selectedProduct
+                  ? `${selectedProduct.sku} ${productDisplayName(selectedProduct)}`
+                  : item.main_product
+                    ? `${item.main_product.sku} ${productDisplayName(item.main_product)}`
+                    : customName || item.custom_name || 'Własna propozycja'}
+              </p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {hasSavedProduct && !isExternal && (
+                  <span className="rounded bg-emerald-700 px-1.5 py-0.5 text-[9px] font-semibold text-white">
+                    Wybrane w ofercie
+                  </span>
+                )}
+                {canEdit && catalogPurchase() != null && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="rounded border border-emerald-600 bg-white px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-40"
+                    title={`Ustaw cenę oferty = zakup × (1 + ${targetMarginPercent}% z przetargu)`}
+                    onClick={() => applyTenderMarginToOffer()}
+                  >
+                    Przelicz +{targetMarginPercent}%
+                  </button>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap items-end gap-3">
+                <label className="text-[10px] text-slate-500">
+                  Ilość
+                  {canEdit ? (
+                    <input
+                      className="mt-0.5 block w-14 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs"
+                      value={qty}
+                      onChange={(e) => setQty(e.target.value)}
+                    />
+                  ) : (
+                    <span className="mt-0.5 block text-xs text-slate-800">{item.quantity}</span>
+                  )}
+                </label>
+                <div>
+                  <div className="text-[10px] text-slate-500">Cena netto (PLN)</div>
+                  <button
+                    type="button"
+                    title={hasChanges ? 'Kliknij — historia zmian ceny' : 'Cena netto'}
+                    onClick={() => setShowPriceHistory((v) => !v)}
+                    className={`mt-0.5 flex min-w-[5.5rem] items-center gap-1 rounded border px-1.5 py-1 text-left text-xs ${
+                      hasChanges
+                        ? 'border-amber-400 bg-amber-50 text-amber-950 hover:bg-amber-100'
+                        : 'border-slate-300 bg-white'
+                    }`}
+                  >
+                    {canEdit ? (
+                      <input
+                        className="w-20 border-0 bg-transparent p-0 outline-none"
+                        value={price}
+                        title={companionPicked ? 'Cena pierwszego produktu' : 'Cena netto'}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setPrice(e.target.value)}
+                      />
+                    ) : (
+                      <span>{item.offer_price ?? '—'}</span>
+                    )}
+                    {hasChanges && (
+                      <span className="ml-auto text-[10px] font-semibold text-amber-700">●</span>
+                    )}
+                  </button>
+                </div>
+                <div
+                  className={`${
+                    item.margin_percent != null && Number(item.margin_percent) < 0
+                      ? 'font-semibold text-red-700'
+                      : ''
+                  }`}
+                  title={
+                    item.margin_percent != null && Number(item.margin_percent) < 0
+                      ? `Ujemna marża — cena oferty poniżej zakupu (po upuście). Narzut przetargu: +${targetMarginPercent}%.`
+                      : 'Marża zreal. = (oferta − zakup) / oferta'
+                  }
+                >
+                  <div className="text-[10px] font-normal text-slate-500">Marża</div>
+                  <div className="mt-0.5 text-xs text-slate-800">
+                    {item.margin_percent ?? '—'}%
+                    {item.margin_percent != null && Number(item.margin_percent) < 0 ? (
+                      <span className="ml-1 text-[9px] font-normal">ujemna!</span>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+              {companionPicked && (
+                <div className="mt-1 text-[10px] text-slate-500">
+                  Drugi: {canEdit ? (
+                    <input
+                      className="ml-1 w-16 rounded border border-slate-300 px-1 py-0.5 text-xs"
+                      value={companionPrice}
+                      title="Cena drugiego produktu"
+                      onChange={(e) => setCompanionPrice(e.target.value)}
+                    />
+                  ) : (
+                    <span className="ml-1 text-xs">{item.companion_offer_price ?? '—'}</span>
+                  )}
+                  <span className="ml-2">
+                    Razem: {Number.isFinite(companionSum) ? companionSum.toFixed(2) : '—'}
+                  </span>
+                </div>
+              )}
+              {showPriceHistory && (
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/90 p-2 shadow-sm">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <strong className="text-[11px]">Historia ceny</strong>
+                    <button
+                      type="button"
+                      className="text-[10px] text-slate-500 hover:underline"
+                      onClick={() => setShowPriceHistory(false)}
+                    >
+                      zamknij
+                    </button>
+                  </div>
+                  {itemActivities.length === 0 ? (
+                    <p className="text-[11px] text-slate-400">Brak zapisanych zmian.</p>
+                  ) : (
+                    <ul className="max-h-40 space-y-1 overflow-y-auto text-[11px]">
+                      {itemActivities.map((a) => (
+                        <li key={a.id} className="rounded border border-amber-100 bg-white px-2 py-1">
+                          <div className="text-slate-500">
+                            {new Date(a.created_at).toLocaleString('pl-PL')}
+                            {a.user?.name ? ` · ${a.user.name}` : ''}
+                          </div>
+                          <div>{formatActivityMeta(a.meta)}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-col justify-center gap-1.5 border-l border-slate-200 px-2 py-2">
+              {canEdit && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  className="rounded bg-blue-600 px-3 py-1.5 text-[10px] text-white disabled:opacity-50"
+                  onClick={() =>
+                    void onSave(item.id, {
+                      main_product_id: productId ? Number(productId) : null,
+                      quantity: Number(qty) || 1,
+                      offer_price: price === '' ? null : Number(price.replace(',', '.')),
+                      custom_name: customName.trim() || null,
+                      custom_url: customUrl.trim() || null,
+                      ...companionFields(),
+                      ...(pendingAiScore != null
+                        ? {
+                            ai_match_percent: pendingAiScore,
+                            match_source: 'ai',
+                            ai_match_reasons: [
+                              {
+                                code: 'ai',
+                                label: 'Wybór z wyszukiwania AI',
+                                points: pendingAiScore,
+                              },
+                            ],
+                          }
+                        : {}),
+                    })
+                  }
+                >
+                  Zapisz
+                </button>
+              )}
+              {canComment && (
+                <button
+                  type="button"
+                  className="rounded border border-slate-300 px-3 py-1.5 text-[10px] text-slate-700 hover:bg-slate-50"
+                  onClick={() => setShowComment((v) => !v)}
+                >
+                  Komentarz{comments.length > 0 ? ` (${comments.length})` : ''}
+                </button>
+              )}
+              {canDelete && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  className="rounded bg-red-700 px-3 py-1.5 text-[10px] font-semibold text-white hover:bg-red-800 disabled:opacity-50"
+                  onClick={() => void onDelete(item)}
+                >
+                  Usuń
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {canEdit && (
+          <>
+            <details className="mt-2 rounded border border-amber-200 bg-amber-50/70 px-2 py-1">
               <summary className="cursor-pointer text-[10px] font-semibold text-amber-950">
                 Własna propozycja{customName ? `: ${customName}` : ''}
               </summary>
@@ -3389,17 +3612,13 @@ function ItemRow({
                   value={customUrl}
                   onChange={(e) => setCustomUrl(e.target.value)}
                 />
-                <p className="text-[10px] text-amber-900">Cenę wpisz w polu Cena oferty i zapisz.</p>
+                <p className="text-[10px] text-amber-900">Cenę wpisz w polu Cena netto (PLN) i zapisz.</p>
               </div>
             </details>
             {hasSavedProduct && !isExternal && (
-              <details
-                open
-                className="max-w-[280px] rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] text-violet-900"
-              >
+              <details className="mt-1 rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] text-violet-900">
                 <summary className="cursor-pointer font-semibold">
-                  Uzasadnienie dopasowania
-                  {item.ai_match_percent != null ? ` (${item.ai_match_percent}%)` : ''}
+                  Uzasadnienie{item.ai_match_percent != null ? ` ${item.ai_match_percent}%` : ''}
                 </summary>
                 {(item.ai_match_reasons?.length ?? 0) > 0 ? (
                   <ul className="mt-1 list-disc pl-4">
@@ -3421,264 +3640,13 @@ function ItemRow({
                 )}
               </details>
             )}
-          </div>
-        ) : (
-          <span>
-            {item.main_product ? (
-              <div className="space-y-1">
-              <button
-                type="button"
-                className={`flex w-full max-w-[280px] items-start gap-2 rounded-md border px-2 py-1.5 text-left shadow-sm transition ${
-                  isSubstitute
-                    ? 'border-teal-300 bg-teal-50 hover:border-teal-500 hover:bg-teal-100'
-                    : 'border-sky-200 bg-sky-50 hover:border-sky-400 hover:bg-sky-100'
-                }`}
-                onClick={() => setPreviewId(item.main_product!.id)}
-              >
-                {productThumbUrl(item.main_product) ? (
-                  <img
-                    src={productThumbUrl(item.main_product) ?? ''}
-                    alt=""
-                    className="h-14 w-14 shrink-0 rounded border border-slate-200 bg-white object-contain"
-                  />
-                ) : (
-                  <span
-                    className={`mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-                      isSubstitute ? 'bg-teal-600' : 'bg-sky-500'
-                    }`}
-                  />
-                )}
-                <span className="min-w-0">
-                  <span
-                    className={`block truncate text-[11px] font-medium ${
-                      isSubstitute ? 'text-teal-950' : 'text-sky-900'
-                    }`}
-                  >
-                    {item.main_product.sku}
-                  </span>
-                  <span
-                    className="block truncate text-[10px] text-slate-600"
-                    title={item.main_product.name}
-                  >
-                    {productDisplayName(item.main_product)}
-                  </span>
-                  {item.ai_match_percent != null && (
-                    <span
-                      className={`mt-0.5 block text-[10px] ${
-                        isSubstitute ? 'text-teal-800' : 'text-violet-700'
-                      }`}
-                    >
-                      Dopasowanie AI: {item.ai_match_percent}%
-                    </span>
-                  )}
-                </span>
-              </button>
-              {item.companion_product && (
-                <button
-                  type="button"
-                  className="flex w-full max-w-[280px] items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left hover:border-slate-400"
-                  onClick={() => setPreviewId(item.companion_product!.id)}
-                >
-                  {productThumbUrl(item.companion_product) ? (
-                    <img
-                      src={productThumbUrl(item.companion_product) ?? ''}
-                      alt=""
-                      className="h-14 w-14 shrink-0 rounded border border-slate-200 bg-white object-contain"
-                    />
-                  ) : null}
-                  <span className="min-w-0">
-                    <span className="block truncate text-[11px] font-medium text-slate-800">
-                      {item.companion_product.sku}
-                    </span>
-                    <span className="block truncate text-[10px] text-slate-600" title={item.companion_product.name}>
-                      {productDisplayName(item.companion_product)}
-                    </span>
-                  </span>
-                </button>
-              )}
-              </div>
-            ) : item.custom_name ? (
-              <ExternalOfferBanner name={item.custom_name} url={item.custom_url} />
-            ) : (
-              <ExternalHints reasons={item.ai_match_reasons} />
-            )}
-            {(item.ai_match_reasons?.length ?? 0) > 0 && item.main_product && (
-              <ul className="mt-1 max-w-[280px] list-disc pl-4 text-[10px] text-slate-600">
-                {item.ai_match_reasons!.slice(0, 4).map((r, i) => (
-                  <li key={`${r.code}-${i}`}>{r.label}</li>
-                ))}
-              </ul>
-            )}
-            <ProductVerifyModal
-              productId={previewId}
-              query={item.requirement ?? ''}
-              onClose={() => setPreviewId(null)}
-            />
-          </span>
+          </>
         )}
-            </div>
-            <div className="flex shrink-0 flex-row flex-wrap items-start gap-2 min-[1100px]:flex-col">
-              <label className="text-[10px] text-slate-500">
-                Ilość
-                {canEdit ? (
-                  <input
-                    className="mt-0.5 block w-16 rounded border border-slate-300 bg-white px-1 py-1 text-xs"
-                    value={qty}
-                    onChange={(e) => setQty(e.target.value)}
-                  />
-                ) : (
-                  <span className="mt-0.5 block text-xs text-slate-800">{item.quantity}</span>
-                )}
-              </label>
-      <div>
-        <div className="text-[10px] text-slate-500">Cena oferty</div>
-        <div className="flex w-max max-w-[16rem] flex-col gap-1">
-          <button
-            type="button"
-            title={hasChanges ? 'Kliknij — historia zmian ceny' : 'Brak zmian ceny'}
-            onClick={() => setShowPriceHistory((v) => !v)}
-            className={`flex min-w-[5.5rem] items-center gap-1 rounded border px-1.5 py-1 text-left text-xs ${
-              hasChanges
-                ? 'border-amber-400 bg-amber-50 text-amber-950 hover:bg-amber-100'
-                : 'border-transparent hover:border-slate-200 hover:bg-slate-50'
-            }`}
-          >
-            {canEdit ? (
-              <input
-                className="w-16 border-0 bg-transparent p-0 outline-none"
-                value={price}
-                title={companionPicked ? 'Cena pierwszego produktu' : 'Cena oferty'}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => setPrice(e.target.value)}
-              />
-            ) : (
-              <span>{item.offer_price ?? '—'}</span>
-            )}
-            {hasChanges && (
-              <span className="ml-auto text-[10px] font-semibold text-amber-700">●</span>
-            )}
-          </button>
-          {companionPicked && (
-            <div className="flex min-w-[5.5rem] flex-col gap-0.5">
-              {canEdit ? (
-                <input
-                  className="w-16 rounded border border-slate-300 px-1.5 py-1 text-xs"
-                  value={companionPrice}
-                  title="Cena drugiego produktu"
-                  onChange={(e) => setCompanionPrice(e.target.value)}
-                />
-              ) : (
-                <span className="text-xs">{item.companion_offer_price ?? '—'}</span>
-              )}
-              <span className="text-[10px] text-slate-500">
-                Razem: {Number.isFinite(companionSum) ? companionSum.toFixed(2) : '—'}
-              </span>
-            </div>
-          )}
-          {showPriceHistory && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-2 shadow-sm">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <strong className="text-[11px]">Historia ceny</strong>
-                <button
-                  type="button"
-                  className="text-[10px] text-slate-500 hover:underline"
-                  onClick={() => setShowPriceHistory(false)}
-                >
-                  zamknij
-                </button>
-              </div>
-              {itemActivities.length === 0 ? (
-                <p className="text-[11px] text-slate-400">Brak zapisanych zmian.</p>
-              ) : (
-                <ul className="max-h-40 space-y-1 overflow-y-auto text-[11px]">
-                  {itemActivities.map((a) => (
-                    <li key={a.id} className="rounded border border-amber-100 bg-white px-2 py-1">
-                      <div className="text-slate-500">
-                        {new Date(a.created_at).toLocaleString('pl-PL')}
-                        {a.user?.name ? ` · ${a.user.name}` : ''}
-                      </div>
-                      <div>{formatActivityMeta(a.meta)}</div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-      <div
-        className={`${
-          item.margin_percent != null && Number(item.margin_percent) < 0
-            ? 'font-semibold text-red-700'
-            : ''
-        }`}
-        title={
-          item.margin_percent != null && Number(item.margin_percent) < 0
-            ? `Ujemna marża — cena oferty poniżej zakupu (po upuście). Narzut przetargu: +${targetMarginPercent}%.`
-            : 'Marża zreal. = (oferta − zakup) / oferta'
-        }
-      >
-        <div className="text-[10px] font-normal text-slate-500">Marża</div>
-        {item.margin_percent ?? '—'}%
-        {item.margin_percent != null && Number(item.margin_percent) < 0 ? (
-          <span className="mt-0.5 block text-[9px] font-normal">ujemna!</span>
-        ) : null}
-      </div>
-        <div className="flex flex-col gap-1">
-          {canEdit && (
-            <button
-              type="button"
-              disabled={busy}
-              className="rounded bg-blue-600 px-2 py-1 text-[10px] text-white disabled:opacity-50"
-              onClick={() =>
-                void onSave(item.id, {
-                  main_product_id: productId ? Number(productId) : null,
-                  quantity: Number(qty) || 1,
-                  offer_price: price === '' ? null : Number(price.replace(',', '.')),
-                  custom_name: customName.trim() || null,
-                  custom_url: customUrl.trim() || null,
-                  ...companionFields(),
-                  ...(pendingAiScore != null
-                    ? {
-                        ai_match_percent: pendingAiScore,
-                        match_source: 'ai',
-                        ai_match_reasons: [
-                          {
-                            code: 'ai',
-                            label: 'Wybór z wyszukiwania AI',
-                            points: pendingAiScore,
-                          },
-                        ],
-                      }
-                    : {}),
-                })
-              }
-            >
-              Zapisz
-            </button>
-          )}
-          {canComment && (
-            <button
-              type="button"
-              className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-700 hover:bg-slate-50"
-              onClick={() => setShowComment((v) => !v)}
-            >
-              Komentarz{comments.length > 0 ? ` (${comments.length})` : ''}
-            </button>
-          )}
-          {canDelete && (
-            <button
-              type="button"
-              disabled={busy}
-              className="rounded bg-red-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
-              onClick={() => void onDelete(item)}
-            >
-              Usuń
-            </button>
-          )}
-        </div>
-            </div>
-          </div>
+        <ProductVerifyModal
+          productId={previewId}
+          query={item.requirement ?? ''}
+          onClose={() => setPreviewId(null)}
+        />
         </section>
       </div>
     {(item.main_product_id ?? item.main_product?.id) ? (

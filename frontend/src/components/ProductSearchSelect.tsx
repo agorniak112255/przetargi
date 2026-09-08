@@ -26,6 +26,8 @@ type Props = {
   onApplyMargin?: () => void
   applyMarginDisabled?: boolean
   previewQuery?: string
+  showSelectedCard?: boolean
+  className?: string
 }
 
 function norm(s: string): string {
@@ -50,6 +52,8 @@ export function ProductSearchSelect({
   onApplyMargin,
   applyMarginDisabled,
   previewQuery = '',
+  showSelectedCard = true,
+  className,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -136,7 +140,7 @@ export function ProductSearchSelect({
   }, [products, remote, q, selected])
 
   return (
-    <div ref={wrapRef} className="relative min-w-[220px] max-w-[280px]">
+    <div ref={wrapRef} className={`relative min-w-[180px] ${className ?? 'max-w-[280px]'}`}>
       <input
         type="text"
         disabled={disabled}
@@ -149,7 +153,7 @@ export function ProductSearchSelect({
           setOpen(true)
         }}
       />
-      {selected && !open && (
+      {showSelectedCard && selected && !open && (
         <div className="mt-1 w-full max-w-full rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 shadow-sm">
           <button
             type="button"
