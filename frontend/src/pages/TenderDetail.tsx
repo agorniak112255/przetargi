@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { ItemBattlecard, type BattlecardProduct } from '../components/ItemBattlecard'
 import { ProductAiMatchModal } from '../components/ProductAiMatchModal'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
-import { api, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
+import { api, can, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
 import { offerMarkupFactor, productDisplayName, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
 import { isDualRequirement } from '../lib/productAiSearch'
 import { SiwzRequirementBlock, splitSiwzRequirement } from '../components/SiwzRequirementBlock'
@@ -506,6 +506,7 @@ function activityHasRealChange(a: ActivityRow): boolean {
 
 export function TenderDetail() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const { user } = useAuth()
   const [data, setData] = useState<Detail | null>(null)
   const [tab, setTab] = useState<(typeof tabs)[number]>('pozycje')
@@ -671,6 +672,37 @@ export function TenderDetail() {
   const registerItemDraft = useCallback((itemId: number, draft: ItemDraft) => {
     itemDraftsRef.current.set(itemId, draft)
   }, [])
+
+  async function deleteItem(item: Item) {
+    if (!window.confirm(`Usunąć pozycję ${item.line_no}?`)) return
+    setErr('')
+    setMsg('')
+    setBusy(true)
+    try {
+      await api(`/tenders/${id}/items/${item.id}`, { method: 'DELETE' })
+      await load()
+      await loadMeta()
+      setMsg(`Usunięto pozycję ${item.line_no}.`)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd usuwania pozycji')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function deleteTender() {
+    if (!data) return
+    if (!window.confirm(`Usunąć przetarg ${data.tender.number}? Tej operacji nie można cofnąć.`)) return
+    setErr('')
+    setBusy(true)
+    try {
+      await api(`/tenders/${id}`, { method: 'DELETE' })
+      navigate('/tenders')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Błąd usuwania przetargu')
+      setBusy(false)
+    }
+  }
 
   async function saveItem(itemId: number, patch: Record<string, unknown>) {
     setErr('')
@@ -1368,6 +1400,8 @@ export function TenderDetail() {
   const canApproveSub = Boolean(user?.permissions?.includes('substitutes.approve'))
   const canComment = Boolean(user?.permissions?.includes('tenders.comment'))
   const canInvite = Boolean(user?.permissions?.includes('tenders.invite'))
+  const canDeleteItems = can(user, 'tenders.delete_items')
+  const canDeleteTender = can(user, 'tenders.delete')
   const aiChangedIds = new Set((matchReport?.changes ?? []).map((c) => c.id))
   const filteredItems = tender.items.filter((it) => {
     if (coverageFilter && coverage && !coverage.item_ids[coverageFilter].includes(it.id)) {
@@ -1511,6 +1545,17 @@ export function TenderDetail() {
           >
             DOCX
           </button>
+          {canDeleteTender && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void deleteTender()}
+              title="Usuń cały przetarg"
+              className="rounded bg-red-600 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              Usuń przetarg
+            </button>
+          )}
         </div>
       </div>
 
@@ -1887,6 +1932,7 @@ export function TenderDetail() {
                     products={products}
                     canEdit={can_edit}
                     canComment={canComment}
+                    canDelete={canDeleteItems}
                     busy={busy}
                     focused={focusItemId === item.id}
                     changedByAi={aiChangedIds.has(item.id)}
@@ -1895,6 +1941,7 @@ export function TenderDetail() {
                       (a) => a.item?.id === item.id && activityHasRealChange(a),
                     )}
                     onSave={saveItem}
+                    onDelete={deleteItem}
                     onDraftChange={registerItemDraft}
                     onComment={async (itemId, body) => {
                       setBusy(true)
@@ -2809,12 +2856,14 @@ function ItemRow({
   products,
   canEdit,
   canComment,
+  canDelete,
   busy,
   focused,
   changedByAi,
   comments,
   itemActivities,
   onSave,
+  onDelete,
   onDraftChange,
   onComment,
 }: {
@@ -2824,12 +2873,14 @@ function ItemRow({
   products: Product[]
   canEdit: boolean
   canComment: boolean
+  canDelete: boolean
   busy: boolean
   focused?: boolean
   changedByAi?: boolean
   comments: CommentRow[]
   itemActivities: ActivityRow[]
   onSave: (id: number, patch: Record<string, unknown>) => Promise<void>
+  onDelete: (item: Item) => Promise<void>
   onDraftChange: (itemId: number, draft: ItemDraft) => void
   onComment: (itemId: number, body: string) => Promise<void>
 }) {
@@ -3610,6 +3661,16 @@ function ItemRow({
               onClick={() => setShowComment((v) => !v)}
             >
               Komentarz{comments.length > 0 ? ` (${comments.length})` : ''}
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded bg-red-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              onClick={() => void onDelete(item)}
+            >
+              Usuń
             </button>
           )}
         </div>

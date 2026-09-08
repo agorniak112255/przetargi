@@ -68,6 +68,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::middleware(['permission:tenders.view_own|tenders.view_all', 'tender.access'])->group(function (): void {
         Route::get('/tenders/{tender}', [TenderController::class, 'show']);
         Route::patch('/tenders/{tender}', [TenderController::class, 'update'])->middleware('permission:tenders.create|tenders.edit_offer');
+        Route::delete('/tenders/{tender}', [TenderController::class, 'destroy'])->middleware('permission:tenders.delete');
         Route::post('/tenders/{tender}/transition', [TenderController::class, 'transition']);
         Route::get('/tenders/{tender}/coverage', TenderCoverageController::class);
         Route::get('/tenders/{tender}/activities', [TenderActivityController::class, 'index']);
@@ -97,6 +98,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/tenders/{tender}/items/apply-cheaper-substitutes', [TenderItemController::class, 'applyCheaperSubstitutes'])
             ->middleware('permission:tenders.edit_offer');
         Route::patch('/tenders/{tender}/items/{item}', [TenderItemController::class, 'update'])->middleware('permission:tenders.edit_offer');
+        Route::delete('/tenders/{tender}/items/{item}', [TenderItemController::class, 'destroy'])->middleware('permission:tenders.delete_items');
 
         Route::get('/tenders/{tender}/invitations', [TenderInvitationController::class, 'index']);
         Route::post('/tenders/{tender}/invitations', [TenderInvitationController::class, 'store'])

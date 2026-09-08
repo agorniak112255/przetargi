@@ -366,6 +366,25 @@ class TenderItemController extends Controller
         return response()->json($item->fresh(['mainProduct', 'companionProduct']));
     }
 
+    public function destroy(Request $request, Tender $tender, TenderItem $item): JsonResponse
+    {
+        if ((int) $item->tender_id !== (int) $tender->id) {
+            abort(404);
+        }
+
+        $meta = [
+            'line_no' => $item->line_no,
+            'requirement' => mb_substr((string) $item->requirement, 0, 200),
+        ];
+        $item->delete();
+        $this->pricing->recalculateTenderTotals($tender->fresh());
+        $tender->last_activity_at = now();
+        $tender->save();
+        $this->activities->log($tender, 'item_deleted', $request->user(), null, $meta);
+
+        return response()->json(['ok' => true]);
+    }
+
     /**
      * @param  array<string, mixed>  $data
      */

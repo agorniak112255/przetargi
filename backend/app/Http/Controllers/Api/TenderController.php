@@ -17,6 +17,7 @@ use App\Services\TenderWorkflowService;
 use App\Support\OfferPricing;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 
 class TenderController extends Controller
@@ -177,6 +178,19 @@ class TenderController extends Controller
         return response()->json(
             $tender->fresh()->load(['client:id,name', 'owner:id,name'])->loadCount('items')
         );
+    }
+
+    public function destroy(Tender $tender): JsonResponse
+    {
+        foreach ($tender->documents()->get(['id', 'disk_path']) as $document) {
+            $path = (string) ($document->disk_path ?? '');
+            if ($path !== '' && Storage::disk('local')->exists($path)) {
+                Storage::disk('local')->delete($path);
+            }
+        }
+        $tender->delete();
+
+        return response()->json(['ok' => true]);
     }
 
     public function show(Request $request, Tender $tender): JsonResponse

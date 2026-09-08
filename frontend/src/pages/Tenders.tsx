@@ -20,6 +20,7 @@ export function Tenders() {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const seeAll = can(user, 'tenders.view_all')
+  const canDeleteTender = can(user, 'tenders.delete')
 
   async function load() {
     const qs = filter ? `?filter=${encodeURIComponent(filter)}` : ''
@@ -56,6 +57,20 @@ export function Tenders() {
       navigate(`/tenders/${t.id}`)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd tworzenia')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function deleteTender(t: Tender) {
+    if (!window.confirm(`Usunąć przetarg ${t.number}? Tej operacji nie można cofnąć.`)) return
+    setBusy(true)
+    setErr('')
+    try {
+      await api(`/tenders/${t.id}`, { method: 'DELETE' })
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd usuwania')
     } finally {
       setBusy(false)
     }
@@ -156,6 +171,8 @@ export function Tenders() {
         </form>
       )}
 
+      {err && !open ? <p className="mb-2 text-xs text-red-600">{err}</p> : null}
+
       <div className="rounded-xl bg-white p-4 shadow-sm">
         <table className="w-full text-left text-xs">
           <thead>
@@ -168,6 +185,7 @@ export function Tenders() {
               <th className="p-2">Status</th>
               <th className="p-2">AI %</th>
               <th className="p-2">Opiekun</th>
+              {canDeleteTender ? <th className="p-2"></th> : null}
             </tr>
           </thead>
           <tbody>
@@ -198,6 +216,18 @@ export function Tenders() {
                 <td className="p-2">{t.status}</td>
                 <td className="p-2">{t.ai_percent}%</td>
                 <td className="p-2">{t.owner?.name}</td>
+                {canDeleteTender ? (
+                  <td className="p-2 text-right">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="rounded bg-red-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                      onClick={() => void deleteTender(t)}
+                    >
+                      Usuń
+                    </button>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>

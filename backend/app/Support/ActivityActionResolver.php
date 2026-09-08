@@ -66,6 +66,8 @@ final class ActivityActionResolver
             ['POST', '#^logout$#', 'logout', 'Wylogowanie'],
             ['POST', '#^tenders$#', 'tender.created', 'Utworzono przetarg'],
             ['PATCH', '#^tenders/\d+$#', 'tender.updated', 'Zaktualizowano przetarg'],
+            ['DELETE', '#^tenders/\d+/items/\d+$#', 'tender.item_deleted', 'Usunięto pozycję przetargu'],
+            ['DELETE', '#^tenders/\d+$#', 'tender.deleted', 'Usunięto przetarg'],
             ['POST', '#^tenders/\d+/transition$#', 'tender.status_changed', 'Zmiana statusu przetargu'],
             ['POST', '#^tenders/\d+/comments$#', 'tender.comment_added', 'Dodano komentarz'],
             ['DELETE', '#^tenders/\d+/comments/\d+$#', 'tender.comment_deleted', 'Usunięto komentarz'],
