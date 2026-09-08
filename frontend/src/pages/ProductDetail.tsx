@@ -4,7 +4,7 @@ import { useAuth } from '../auth'
 import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
 import { CrossRefPanel } from '../components/CrossRefPanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
-import { ProductKitModal } from '../components/ProductKitModal'
+import { PrestaKitBadge, ProductKitModal } from '../components/ProductKitModal'
 import {
   api,
   can,
@@ -559,7 +559,12 @@ export function ProductDetail() {
 
       <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold">Warianty i akcesoria</h2>
+          <div>
+            <h2 className="text-sm font-semibold">Warianty i akcesoria</h2>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Zielony kafelek = już w Preście. Czerwony = brak — przy eksporcie tego produktu wariant też pójdzie do sklepu.
+            </p>
+          </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -605,6 +610,9 @@ export function ProductDetail() {
                   ) : (
                     <span className="font-medium">{row.name || row.sku || 'Nieznany'}</span>
                   )}
+                  <span className="ml-2 align-middle">
+                    <PrestaKitBadge inPresta={Boolean(row.in_presta)} url={row.presta_url} prestaId={row.presta_id} />
+                  </span>
                   <p className="text-slate-600">
                     {row.short_description || [row.sku, row.manufacturer].filter(Boolean).join(' · ') || '—'}
                   </p>

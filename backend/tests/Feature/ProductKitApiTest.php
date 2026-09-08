@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductAccessory;
 use App\Models\ProductImage;
@@ -85,7 +86,9 @@ final class ProductKitApiTest extends TestCase
         $this->getJson('/api/products/'.$mask->id)
             ->assertOk()
             ->assertJsonCount(2, 'accessories')
-            ->assertJsonPath('accessories.0.short_description', 'SECURA — Pochłaniacz A2 do półmasek Secura 3000.');
+            ->assertJsonPath('accessories.0.short_description', 'SECURA — Pochłaniacz A2 do półmasek Secura 3000.')
+            ->assertJsonPath('accessories.0.in_presta', false)
+            ->assertJsonPath('accessories.1.in_presta', false);
 
         $firstId = (int) $mask->accessories()->orderBy('id')->value('id');
         $this->deleteJson('/api/products/'.$mask->id.'/kit', [
@@ -97,6 +100,36 @@ final class ProductKitApiTest extends TestCase
         $this->deleteJson('/api/products/'.$mask->id.'/kit', ['all' => true])
             ->assertOk()
             ->assertJsonCount(0, 'accessories');
+    }
+
+    public function test_kit_marks_accessories_already_in_presta(): void
+    {
+        $mask = $this->product(['sku' => 'SEC-3000', 'name' => 'Półmaska Secura 3000', 'manufacturer' => 'SECURA']);
+        $filter = $this->product(['sku' => '3025', 'name' => 'Pochłaniacz Secura 3025', 'manufacturer' => 'SECURA']);
+        PrestaProductMatch::query()->create([
+            'product_id' => $filter->id,
+            'presta_id' => 289,
+            'method' => 'export',
+            'score' => 100,
+            'status' => PrestaProductMatch::STATUS_EXPORTED,
+            'presta_url' => 'https://shop.test/289',
+        ]);
+        ProductAccessory::query()->create([
+            'product_id' => $mask->id,
+            'related_product_id' => $filter->id,
+            'source' => ProductAccessory::SOURCE_MANUAL,
+            'link_key' => 'm:'.$filter->id,
+            'related_sku' => $filter->sku,
+            'related_name' => $filter->name,
+            'score' => 100,
+            'method' => 'manual',
+        ]);
+
+        $this->getJson('/api/products/'.$mask->id)
+            ->assertOk()
+            ->assertJsonPath('accessories.0.in_presta', true)
+            ->assertJsonPath('accessories.0.presta_id', 289)
+            ->assertJsonPath('accessories.0.presta_url', 'https://shop.test/289');
     }
 
     public function test_suggest_returns_ai_picks_with_photo_and_description(): void

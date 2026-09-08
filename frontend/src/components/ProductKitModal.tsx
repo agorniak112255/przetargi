@@ -125,6 +125,42 @@ export function ProductKitModal({ open, busy, error, data, onClose, onAdd }: Pro
   )
 }
 
+export function PrestaKitBadge({
+  inPresta,
+  url,
+  prestaId,
+}: {
+  inPresta: boolean
+  url?: string | null
+  prestaId?: number | null
+}) {
+  const label = inPresta ? 'Presta' : 'brak w Presta'
+  const title = inPresta
+    ? `Jest w Preście${prestaId ? ` #${prestaId}` : ''} — przy eksporcie zostanie podpięty`
+    : 'Brak w Preście — przy eksporcie tego produktu wariant też zostanie wysłany'
+  const cls = inPresta
+    ? 'bg-emerald-100 text-emerald-800'
+    : 'bg-red-100 text-red-800'
+  if (inPresta && url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        title={title}
+        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`}
+      >
+        {label}
+      </a>
+    )
+  }
+  return (
+    <span title={title} className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`}>
+      {label}
+    </span>
+  )
+}
+
 function KitRow({
   row,
   checked,
@@ -174,6 +210,7 @@ function KitRow({
               {row.role}
             </span>
           ) : null}
+          <PrestaKitBadge inPresta={Boolean(row.in_presta)} url={row.presta_url} prestaId={row.presta_id} />
         </div>
         <p className="mt-0.5 text-xs text-slate-600">
           {row.short_description || [row.manufacturer, row.sku].filter(Boolean).join(' · ') || '—'}

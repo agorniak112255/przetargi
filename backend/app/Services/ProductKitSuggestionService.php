@@ -108,7 +108,10 @@ final class ProductKitSuggestionService
         }
 
         $query = Product::query()
-            ->with(['images' => static fn ($q) => $q->orderByDesc('is_primary')->orderBy('sort_order')->orderBy('id')])
+            ->with([
+                'prestaExport',
+                'images' => static fn ($q) => $q->orderByDesc('is_primary')->orderBy('sort_order')->orderBy('id'),
+            ])
             ->whereNotIn('id', array_values(array_unique($exclude)))
             ->where(function ($builder) use ($needles): void {
                 foreach ($needles as $needle) {
@@ -171,9 +174,35 @@ final class ProductKitSuggestionService
             'manufacturer' => $product->manufacturer,
             'short_description' => $this->shortDescription($product),
             'image_url' => $image?->url(),
+            'in_presta' => $this->inPresta($product),
+            'presta_id' => $this->prestaId($product),
+            'presta_url' => $this->prestaUrl($product),
             'role' => $role,
             'reason' => $reason,
         ];
+    }
+
+    public function inPresta(?Product $product, ?int $prestaRelatedId = null): bool
+    {
+        return $this->prestaId($product, $prestaRelatedId) > 0;
+    }
+
+    public function prestaId(?Product $product, ?int $prestaRelatedId = null): ?int
+    {
+        $match = $product?->prestaExport;
+        if ($match && (int) $match->presta_id > 0) {
+            return (int) $match->presta_id;
+        }
+        $fallback = (int) ($prestaRelatedId ?? 0);
+
+        return $fallback > 0 ? $fallback : null;
+    }
+
+    public function prestaUrl(?Product $product): ?string
+    {
+        $url = trim((string) ($product?->prestaExport?->presta_url ?? ''));
+
+        return $url !== '' ? $url : null;
     }
 
     public function shortDescription(Product $product): string

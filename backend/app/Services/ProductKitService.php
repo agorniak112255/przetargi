@@ -87,6 +87,7 @@ final class ProductKitService
         $product->unsetRelation('accessories');
         $product->load([
             'accessories.relatedProduct.images',
+            'accessories.relatedProduct.prestaExport',
         ]);
 
         return $product->accessories->map(function (ProductAccessory $row): array {
@@ -115,6 +116,9 @@ final class ProductKitService
                 'manufacturer' => $card['manufacturer'],
                 'short_description' => $card['short_description'],
                 'image_url' => $card['image_url'],
+                'in_presta' => $this->suggestions->inPresta($related, $row->presta_related_id),
+                'presta_id' => $this->suggestions->prestaId($related, $row->presta_related_id),
+                'presta_url' => $this->suggestions->prestaUrl($related),
                 'matched' => $related instanceof Product,
             ];
         })->values()->all();

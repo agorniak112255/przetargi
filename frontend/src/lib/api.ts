@@ -193,6 +193,9 @@ export type ProductAccessory = {
   manufacturer: string | null
   short_description?: string | null
   image_url?: string | null
+  in_presta?: boolean
+  presta_id?: number | null
+  presta_url?: string | null
   matched: boolean
 }
 
@@ -203,6 +206,9 @@ export type ProductKitSuggestion = {
   manufacturer: string | null
   short_description?: string | null
   image_url?: string | null
+  in_presta?: boolean
+  presta_id?: number | null
+  presta_url?: string | null
   role?: string
   reason?: string
 }
