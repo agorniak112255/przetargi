@@ -862,6 +862,8 @@ final class PriceListAiAnalyzer
 Wypisz produkty z tekstu. Tylko JSON:
 {"c":"PLN","p":[["SKU","nazwa",12.5,"grupa"]]}
 p = [kod, nazwa, cena, grupa z nagłówka sekcji]. Bez markdown.
+Nazwa = tylko prawdziwy opis produktu. U/D/M, w/p, √, rozmiar, materiały — to nie nazwa.
+Gdy nie ma opisu — w nazwie wpisz ponownie ten sam kod (np. ["146a","146a",155,"PU Skóra"]).
 PROMPT;
     }
 
