@@ -212,4 +212,114 @@ final class OpenAiTokenLimitTest extends TestCase
             return (int) ($request->data()['max_tokens'] ?? 0) === 1500;
         });
     }
+
+    public function test_local_vllm_fits_long_prompt_under_max_model_len(): void
+    {
+        AiSetting::query()->delete();
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8000/v1',
+            'api_key' => 'local-key',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+        ]);
+
+        Http::fake([
+            '127.0.0.1:8000/v1/chat/completions' => Http::response([
+                'choices' => [[
+                    'message' => ['content' => '{"ok":true}'],
+                    'finish_reason' => 'stop',
+                ]],
+            ], 200),
+        ]);
+
+        $long = str_repeat('Karta katalogowa rękawic nitrylowych z mankietem. ', 900);
+        app(OpenAiCompatibleClient::class)->chatJson([
+            ['role' => 'user', 'content' => $long],
+        ], 0.0, 6000);
+
+        Http::assertSent(function (Request $request) use ($long): bool {
+            $messages = $request->data()['messages'] ?? [];
+            $chars = 0;
+            foreach ($messages as $message) {
+                $chars += mb_strlen((string) ($message['content'] ?? ''));
+            }
+            $est = (int) ceil($chars / 2.2) + 64;
+            $maxTokens = (int) ($request->data()['max_tokens'] ?? 0);
+            $sent = (string) ($messages[0]['content'] ?? '');
+
+            return $est + $maxTokens <= 16128
+                && ($sent !== $long || $maxTokens < 6000);
+        });
+    }
+
+    public function test_cloud_endpoint_keeps_long_prompt_and_requested_tokens(): void
+    {
+        $long = str_repeat('Karta katalogowa. ', 900);
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response([
+                'choices' => [[
+                    'message' => ['content' => '{"ok":true}'],
+                    'finish_reason' => 'stop',
+                ]],
+            ], 200),
+        ]);
+
+        app(OpenAiCompatibleClient::class)->chatJson([
+            ['role' => 'user', 'content' => $long],
+        ], 0.0, 6000);
+
+        Http::assertSent(function (Request $request) use ($long): bool {
+            return ($request->data()['messages'][0]['content'] ?? '') === $long
+                && (int) ($request->data()['max_tokens'] ?? 0) === 6000;
+        });
+    }
+
+    public function test_chat_json_many_retries_context_overflow(): void
+    {
+        $calls = 0;
+        Http::fake(function () use (&$calls) {
+            $calls++;
+            if ($calls <= 2) {
+                return Http::response(
+                    ['error' => ['message' => "This model's maximum context length is 16128 tokens"]],
+                    400
+                );
+            }
+
+            return Http::response([
+                'choices' => [[
+                    'message' => ['content' => '{"ok":true}'],
+                    'finish_reason' => 'stop',
+                ]],
+            ], 200);
+        });
+
+        $out = app(OpenAiCompatibleClient::class)->chatJsonMany([
+            [['role' => 'user', 'content' => 'ranking A']],
+            [['role' => 'user', 'content' => 'ranking B']],
+        ], 800);
+
+        $this->assertCount(2, $out);
+        $this->assertTrue($out[0]['ok'] ?? false);
+        $this->assertTrue($out[1]['ok'] ?? false);
+        $this->assertSame(4, $calls);
+    }
+
+    public function test_chat_json_many_returns_empty_when_overflow_persists(): void
+    {
+        Http::fake(fn () => Http::response(
+            ['error' => ['message' => "This model's maximum context length is 16128 tokens"]],
+            400
+        ));
+
+        $out = app(OpenAiCompatibleClient::class)->chatJsonMany([
+            [['role' => 'user', 'content' => 'ranking A']],
+            [['role' => 'user', 'content' => 'ranking B']],
+        ], 800);
+
+        $this->assertSame([[], []], $out);
+    }
 }

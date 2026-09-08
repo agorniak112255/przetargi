@@ -21,13 +21,21 @@ class OpenAiCompatibleClient
 
     private const OVERLOAD_RETRIES = 5;
 
-    /** vLLM odrzuca prompt + max_tokens > --max-model-len (16128). 6000 + prompt ~4.7k mieści się w limicie. */
+    /** Domyślny budżet odpowiedzi. vLLM odrzuca prompt + max_tokens > --max-model-len. */
     private const DEFAULT_MAX_TOKENS = 6000;
 
-    /** Konserwatywny budżet slota (llama.cpp -np 12 / vLLM 16k). */
-    private const SLOT_TOKEN_BUDGET = 12000;
+    /** Lokalny vLLM (Qwen) — --max-model-len. */
+    private const LOCAL_MAX_MODEL_LEN = 16128;
 
-    private const SLOT_RESERVE = 256;
+    /** Sufit dla OpenRouter / OpenAI, gdy brak AI_MAX_MODEL_LEN. */
+    private const CLOUD_MAX_MODEL_LEN = 128000;
+
+    private const MIN_OUTPUT_TOKENS = 512;
+
+    private const SLOT_RESERVE = 512;
+
+    /** Polski + JSON: tokenizer Qwen zjada ~2.2 znaku/token, nie 4. */
+    private const PROMPT_CHARS_PER_TOKEN = 2.2;
 
     public function __construct(
         private readonly AiSettingsService $settings,
@@ -191,6 +199,10 @@ class OpenAiCompatibleClient
         foreach (array_chunk($messageSets, $maxConcurrent) as $chunk) {
             foreach ($this->chatMany($chunk, true, $extra !== [] ? $extra : null, $task) as $row) {
                 if (! ($row['ok'] ?? false)) {
+                    Log::warning('AI chatJsonMany failed', [
+                        'task' => $task?->value,
+                        'error' => $row['error'] ?? 'unknown',
+                    ]);
                     $parsed[] = [];
 
                     continue;
@@ -327,6 +339,23 @@ class OpenAiCompatibleClient
             $bodies[] = $this->buildChatPayload($profile, $messages, null, $extra, $jsonMode);
         }
 
+        $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies);
+        $responses = $this->retryChatManyOverflow($url, $apiKey, $timeout, $profile, $bodies, $responses);
+
+        $out = [];
+        foreach ($messageSets as $i => $_) {
+            $out[] = $this->chatManyItemFromResponse($responses[$i] ?? null, $profile);
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $bodies
+     * @return array<int, mixed>
+     */
+    private function postChatPool(string $url, string $apiKey, int $timeout, array $bodies): array
+    {
         $responses = Http::pool(function (Pool $pool) use ($bodies, $url, $apiKey, $timeout) {
             foreach ($bodies as $i => $body) {
                 $req = $pool->as((string) $i)
@@ -348,35 +377,89 @@ class OpenAiCompatibleClient
         });
 
         $out = [];
-        foreach ($messageSets as $i => $_) {
-            $response = $responses[(string) $i] ?? $responses[$i] ?? null;
-            if ($response instanceof \Throwable) {
-                $out[] = ['ok' => false, 'error' => $response->getMessage()];
-
-                continue;
-            }
-            if (! $response instanceof Response || ! $response->successful()) {
-                $out[] = ['ok' => false, 'error' => $response instanceof Response
-                    ? $this->formatHttpError($response, $profile)
-                    : 'Brak odpowiedzi AI'];
-
-                continue;
-            }
-            $payload = $response->json();
-            $content = $this->contentReader->fromPayload(is_array($payload) ? $payload : []);
-            if ($content === '') {
-                $out[] = ['ok' => false, 'error' => 'API AI zwróciło pustą odpowiedź.'];
-
-                continue;
-            }
-            $out[] = [
-                'ok' => true,
-                'content' => $content,
-                'model' => (string) data_get($payload, 'model', $profile['model']),
-            ];
+        foreach ($bodies as $i => $_) {
+            $out[$i] = $responses[(string) $i] ?? $responses[$i] ?? null;
         }
 
         return $out;
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     * @param  array<int, array<string, mixed>>  $bodies
+     * @param  array<int, mixed>  $responses
+     * @return array<int, mixed>
+     */
+    private function retryChatManyOverflow(
+        string $url,
+        string $apiKey,
+        int $timeout,
+        array $profile,
+        array $bodies,
+        array $responses
+    ): array {
+        $retryBodies = [];
+        foreach ($bodies as $i => $body) {
+            $response = $responses[$i] ?? null;
+            if (! $response instanceof Response || ! $this->isContextOverflow($response)) {
+                continue;
+            }
+            $messages = is_array($body['messages'] ?? null) ? $body['messages'] : [];
+            $compacted = $this->shrinkMessagesToFit(
+                $this->compactMessages($messages, 0.65),
+                self::MIN_OUTPUT_TOKENS,
+                $profile
+            );
+            $retry = $body;
+            $retry['messages'] = $compacted;
+            $retry['max_tokens'] = $this->fitMaxTokens(
+                max(self::MIN_OUTPUT_TOKENS, (int) floor(((int) ($body['max_tokens'] ?? self::MIN_OUTPUT_TOKENS)) * 0.7)),
+                $compacted,
+                $profile
+            );
+            $retryBodies[$i] = $retry;
+        }
+        if ($retryBodies === []) {
+            return $responses;
+        }
+
+        Log::info('AI chatMany: przepełniony kontekst — ponawiam skrócone requesty', [
+            'count' => count($retryBodies),
+            'profile' => $profile['label'] ?? '',
+        ]);
+
+        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
+            $responses[$i] = $response;
+        }
+
+        return $responses;
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     * @return array{ok: bool, content?: string, model?: string, error?: string}
+     */
+    private function chatManyItemFromResponse(mixed $response, array $profile): array
+    {
+        if ($response instanceof Throwable) {
+            return ['ok' => false, 'error' => $response->getMessage()];
+        }
+        if (! $response instanceof Response || ! $response->successful()) {
+            return ['ok' => false, 'error' => $response instanceof Response
+                ? $this->formatHttpError($response, $profile)
+                : 'Brak odpowiedzi AI'];
+        }
+        $payload = $response->json();
+        $content = $this->contentReader->fromPayload(is_array($payload) ? $payload : []);
+        if ($content === '') {
+            return ['ok' => false, 'error' => 'API AI zwróciło pustą odpowiedź.'];
+        }
+
+        return [
+            'ok' => true,
+            'content' => $content,
+            'model' => (string) data_get($payload, 'model', $profile['model'] ?? ''),
+        ];
     }
 
     /**
@@ -400,7 +483,7 @@ class OpenAiCompatibleClient
         if ($reasoning) {
             $maxTokens = max($maxTokens, self::DEFAULT_MAX_TOKENS);
         }
-        $maxTokens = $this->fitMaxTokens($maxTokens, $messages);
+        [$messages, $maxTokens] = $this->fitChatRequest($messages, $maxTokens, $profile);
         $payload = [
             'model' => $model,
             'messages' => $messages,
@@ -479,7 +562,7 @@ class OpenAiCompatibleClient
         if ($reasoning) {
             $maxTokens = max($maxTokens, self::DEFAULT_MAX_TOKENS);
         }
-        $maxTokens = $this->fitMaxTokens($maxTokens, $messages);
+        [$messages, $maxTokens] = $this->fitChatRequest($messages, $maxTokens, $profile);
 
         $basePayload = [
             'model' => $model,
@@ -505,8 +588,16 @@ class OpenAiCompatibleClient
         }
 
         if (! $response->successful() && $this->isContextOverflow($response)) {
-            $compacted = $this->compactMessages($messages, 0.65);
-            $maxTokens = $this->fitMaxTokens(max(512, (int) floor($maxTokens * 0.7)), $compacted);
+            $compacted = $this->shrinkMessagesToFit(
+                $this->compactMessages($messages, 0.65),
+                self::MIN_OUTPUT_TOKENS,
+                $profile
+            );
+            $maxTokens = $this->fitMaxTokens(
+                max(self::MIN_OUTPUT_TOKENS, (int) floor($maxTokens * 0.7)),
+                $compacted,
+                $profile
+            );
             $basePayload['messages'] = $compacted;
             $basePayload['max_tokens'] = $maxTokens;
             Log::info('AI przepełniony kontekst slota — ponawiam ze skróconymi źródłami', [
@@ -529,7 +620,11 @@ class OpenAiCompatibleClient
 
         // reasoning zjadł budżet tokenów — powtórz z większym limitem, o ile slot jeszcze ma miejsce
         if ($content === '' && $this->contentReader->finishReason($payload) === 'length' && $maxTokens < self::DEFAULT_MAX_TOKENS) {
-            $bumped = $this->fitMaxTokens(self::DEFAULT_MAX_TOKENS, $basePayload['messages'] ?? $messages);
+            $bumped = $this->fitMaxTokens(
+                self::DEFAULT_MAX_TOKENS,
+                $basePayload['messages'] ?? $messages,
+                $profile
+            );
             if ($bumped > $maxTokens) {
                 $basePayload['max_tokens'] = $bumped;
                 try {
@@ -1227,7 +1322,7 @@ class OpenAiCompatibleClient
         foreach ($messages as $message) {
             $copy = $message;
             $content = $copy['content'] ?? null;
-            if (is_string($content) && mb_strlen($content) > 1800) {
+            if (is_string($content) && mb_strlen($content) > 400) {
                 $copy['content'] = $this->shrinkPromptText($content, $keep);
             }
             $out[] = $copy;
@@ -1238,7 +1333,7 @@ class OpenAiCompatibleClient
 
     private function shrinkPromptText(string $text, float $keep): string
     {
-        $limit = max(1200, (int) floor(mb_strlen($text) * $keep));
+        $limit = max(400, (int) floor(mb_strlen($text) * $keep));
         if (mb_strlen($text) <= $limit) {
             return $text;
         }
@@ -1248,12 +1343,114 @@ class OpenAiCompatibleClient
 
     /**
      * @param  list<array{role: string, content: mixed}>  $messages
+     * @param  array<string, mixed>  $profile
+     * @return array{0: list<array{role: string, content: mixed}>, 1: int}
      */
-    private function fitMaxTokens(int $requested, array $messages): int
+    private function fitChatRequest(array $messages, int $requestedMaxTokens, array $profile): array
     {
-        $room = self::SLOT_TOKEN_BUDGET - $this->estimatePromptTokens($messages) - self::SLOT_RESERVE;
+        $messages = $this->shrinkMessagesToFit($messages, self::MIN_OUTPUT_TOKENS, $profile);
 
-        return max(512, min($requested, $room));
+        return [$messages, $this->fitMaxTokens($requestedMaxTokens, $messages, $profile)];
+    }
+
+    /**
+     * @param  list<array{role: string, content: mixed}>  $messages
+     * @param  array<string, mixed>  $profile
+     * @return list<array{role: string, content: mixed}>
+     */
+    private function shrinkMessagesToFit(array $messages, int $minOutputTokens, array $profile): array
+    {
+        $limit = $this->hardContextLimit($profile);
+        $keep = 0.82;
+        for ($i = 0; $i < 8; $i++) {
+            if ($this->estimatePromptTokens($messages) + $minOutputTokens + self::SLOT_RESERVE <= $limit) {
+                return $messages;
+            }
+            $messages = $this->compactMessages($messages, $keep);
+            $keep = max(0.40, $keep - 0.10);
+        }
+
+        return $this->forceTrimMessages(
+            $messages,
+            max(400, $limit - $minOutputTokens - self::SLOT_RESERVE)
+        );
+    }
+
+    /**
+     * @param  list<array{role: string, content: mixed}>  $messages
+     * @return list<array{role: string, content: mixed}>
+     */
+    private function forceTrimMessages(array $messages, int $maxPromptTokens): array
+    {
+        $budgetChars = max(400, (int) floor($maxPromptTokens * self::PROMPT_CHARS_PER_TOKEN));
+        $used = 0;
+        foreach ($messages as $message) {
+            $used += $this->estimateContentChars($message['content'] ?? '');
+        }
+        if ($used <= $budgetChars) {
+            return $messages;
+        }
+
+        $longestIdx = null;
+        $longestLen = 0;
+        foreach ($messages as $i => $message) {
+            $content = $message['content'] ?? null;
+            if (! is_string($content)) {
+                continue;
+            }
+            $len = mb_strlen($content);
+            if ($len > $longestLen) {
+                $longestIdx = $i;
+                $longestLen = $len;
+            }
+        }
+        if ($longestIdx === null) {
+            return $messages;
+        }
+
+        $allow = max(400, $budgetChars - ($used - $longestLen));
+        $messages[$longestIdx]['content'] = mb_substr((string) $messages[$longestIdx]['content'], 0, $allow)
+            ."\n[… skrócono źródła — zachowaj pełny opis produktu …]";
+
+        return $messages;
+    }
+
+    /**
+     * @param  list<array{role: string, content: mixed}>  $messages
+     * @param  array<string, mixed>  $profile
+     */
+    private function fitMaxTokens(int $requested, array $messages, array $profile = []): int
+    {
+        $room = $this->hardContextLimit($profile) - $this->estimatePromptTokens($messages) - self::SLOT_RESERVE;
+
+        return max(self::MIN_OUTPUT_TOKENS, min($requested, $room));
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     */
+    private function hardContextLimit(array $profile = []): int
+    {
+        $configured = (int) config('ai.max_model_len', 0);
+        if ($configured >= 1024) {
+            return $configured;
+        }
+        $base = (string) ($profile['base_url'] ?? '');
+        if ($base !== '' && $this->isCloudEndpoint($base)) {
+            return self::CLOUD_MAX_MODEL_LEN;
+        }
+
+        return self::LOCAL_MAX_MODEL_LEN;
+    }
+
+    private function isCloudEndpoint(string $baseUrl): bool
+    {
+        $base = mb_strtolower($baseUrl);
+
+        return str_contains($base, 'openrouter.ai')
+            || str_contains($base, 'api.openai.com')
+            || str_contains($base, 'googleapis.com')
+            || str_contains($base, 'anthropic.com');
     }
 
     /**
@@ -1266,7 +1463,7 @@ class OpenAiCompatibleClient
             $chars += $this->estimateContentChars($message['content'] ?? '');
         }
 
-        return max(1, (int) ceil($chars / 4) + 48);
+        return max(1, (int) ceil($chars / self::PROMPT_CHARS_PER_TOKEN) + 64);
     }
 
     private function estimateContentChars(mixed $content): int
@@ -1312,7 +1509,10 @@ class OpenAiCompatibleClient
         }
         $detail = strtolower((string) (data_get($response->json(), 'error.message') ?? $response->body()));
 
-        return preg_match('/context|max_model_len|n_ctx|too many tokens|maximum context|requested .+ tokens/i', $detail) === 1;
+        return preg_match(
+            '/context|max_model_len|n_ctx|too many tokens|maximum context|requested .+ tokens|decoder prompt/i',
+            $detail
+        ) === 1;
     }
 
     /**

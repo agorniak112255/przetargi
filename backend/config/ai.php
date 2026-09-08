@@ -13,6 +13,8 @@ return [
     // true = wyszukiwanie i opis tylko modelem głównym (AI web search, bez Tavily)
     'enrichment_use_large_model' => (bool) env('AI_ENRICHMENT_USE_LARGE_MODEL', false),
     'timeout_seconds' => (int) env('AI_TIMEOUT', 240),
+    // 0 = auto: 16128 dla vLLM, 128000 dla OpenRouter/OpenAI. Ustaw gdy zmienisz --max-model-len.
+    'max_model_len' => (int) env('AI_MAX_MODEL_LEN', 0),
     'temperature' => (float) env('AI_TEMPERATURE', 0.1),
     // auto | off | none | low | medium | xhigh — auto = low tylko dla Qwen 3.8
     'reasoning_effort' => env('AI_REASONING_EFFORT', 'auto'),
