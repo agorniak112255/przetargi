@@ -331,7 +331,7 @@ export function ItemBattlecard({
         if (!cancelled) setCard(res.battlecard)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setErr(e instanceof Error ? e.message : 'Błąd battlecard')
+        if (!cancelled) setErr(e instanceof Error ? e.message : 'Błąd porównania zamienników')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -370,8 +370,8 @@ export function ItemBattlecard({
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
     >
       <summary className="cursor-pointer font-semibold text-slate-800">
-        Battlecard
-        {card?.substitutes?.length ? ` · zamienniki: ${card.substitutes.length}` : ''}
+        Zamienniki
+        {card?.substitutes?.length ? ` · ${card.substitutes.length}` : ''}
       </summary>
       <div className="mt-2 space-y-2">
         {loading && <p className="text-slate-400">Ładowanie…</p>}

@@ -9,7 +9,7 @@ import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
 import { api, can, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
 import { offerMarkupFactor, productDisplayName, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
 import { isDualRequirement } from '../lib/productAiSearch'
-import { SiwzRequirementBlock, splitSiwzRequirement } from '../components/SiwzRequirementBlock'
+import { SiwzItemTile, SiwzRequirementBlock, splitSiwzRequirement } from '../components/SiwzRequirementBlock'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -1512,7 +1512,7 @@ export function TenderDetail() {
                 type="button"
                 disabled={busy}
                 onClick={() => void previewCheaperSubstitutes()}
-                title="Podgląd i zastosowanie najtańszych zamienników z battlecard (≥3% taniej po upuście)"
+                title="Podgląd i zastosowanie najtańszych zamienników (≥3% taniej po upuście)"
                 className="rounded bg-amber-500 px-2 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
               >
                 Zastosuj tańsze zamienniki
@@ -1910,19 +1910,7 @@ export function TenderDetail() {
                   : `${tender.items.length} pozycji`}
               </span>
             </div>
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b bg-slate-50">
-                  <th className="p-2">Lp</th>
-                  <th className="p-2">SIWZ</th>
-                  <th className="p-2">Produkt główny</th>
-                  <th className="p-2">Ilość</th>
-                  <th className="p-2">Cena oferty</th>
-                  <th className="p-2">Marża</th>
-                  <th className="p-2"></th>
-                </tr>
-              </thead>
-              <tbody>
+            <div className="space-y-3 text-xs">
                 {filteredItems.map((item) => (
                   <ItemRow
                     key={item.id}
@@ -1962,14 +1950,9 @@ export function TenderDetail() {
                   />
                 ))}
                 {filteredItems.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="p-3 text-slate-400">
-                      Brak pozycji dla wybranego filtra.
-                    </td>
-                  </tr>
+                  <p className="p-3 text-slate-400">Brak pozycji dla wybranego filtra.</p>
                 )}
-              </tbody>
-            </table>
+            </div>
           </div>
           {can_edit && (
             <div className="flex flex-wrap items-center justify-end gap-2">
@@ -3012,54 +2995,52 @@ function ItemRow({
   }
 
   return (
-    <>
-    <tr
+    <article
       id={`tender-item-${item.id}`}
-      className={`${showComment || Boolean(item.main_product_id ?? item.main_product?.id) ? 'align-top' : 'border-b align-top'} ${
+      className={`rounded-xl border p-2 ${
         focused
-          ? 'bg-violet-100 ring-2 ring-inset ring-violet-600'
+          ? 'border-violet-600 bg-violet-50 ring-2 ring-violet-600'
           : isExternal
-            ? 'bg-orange-50 ring-1 ring-inset ring-orange-400'
+            ? 'border-orange-400 bg-orange-50/70'
             : isSubstitute
-              ? 'bg-teal-50 ring-1 ring-inset ring-teal-300'
+              ? 'border-teal-300 bg-teal-50/70'
               : changedByAi
-                ? 'bg-violet-50 ring-1 ring-inset ring-violet-200'
-                : ''
+                ? 'border-violet-200 bg-violet-50/60'
+                : 'border-slate-200 bg-slate-50'
       }`}
     >
-      <td className="p-2">
-        <span className="inline-flex items-center gap-1">
-          {item.line_no}
-          {isExternal && (
-            <span className="rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase text-white">
-              Zewn.
-            </span>
-          )}
-          {changedByAi && !isExternal && !isSubstitute && (
-            <span className="rounded bg-violet-700 px-1 py-px text-[9px] font-bold uppercase text-white">
-              AI
-            </span>
-          )}
-          {isSubstitute && !isExternal && (
-            <span
-              title="Inna marka/model niż w SIWZ — zamiennik spełniający wymaganie"
-              className="rounded bg-teal-700 px-1 py-px text-[9px] font-bold uppercase text-white"
-            >
-              Zam.
-            </span>
-          )}
-          {hasChanges && (
-            <span
-              title={`${itemActivities.length} zmian — kliknij cenę / hist.`}
-              className="inline-block h-2 w-2 rounded-full bg-amber-500"
-            />
-          )}
-        </span>
-      </td>
-      <td className="p-2 max-w-[320px] text-[11px]">
-        <SiwzRequirementBlock name={siwz.name} description={siwz.description} />
-      </td>
-      <td className="p-2">
+      <div className="grid items-stretch gap-2 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <SiwzItemTile
+          lineNo={item.line_no}
+          name={siwz.name}
+          description={siwz.description}
+          badges={
+            <>
+              {isExternal && (
+                <span className="rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase text-white">
+                  Zewn.
+                </span>
+              )}
+              {changedByAi && !isExternal && !isSubstitute && (
+                <span className="rounded bg-violet-700 px-1 py-px text-[9px] font-bold uppercase text-white">
+                  AI
+                </span>
+              )}
+              {isSubstitute && !isExternal && (
+                <span
+                  title="Inna marka/model niż w SIWZ — zamiennik spełniający wymaganie"
+                  className="rounded bg-teal-700 px-1 py-px text-[9px] font-bold uppercase text-white"
+                >
+                  Zam.
+                </span>
+              )}
+            </>
+          }
+        />
+        <section className="flex min-h-full min-w-0 flex-col rounded-lg border border-sky-200 bg-sky-50/80 p-2">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-sky-900">Oferta</div>
+          <div className="flex flex-col gap-2 min-[1100px]:flex-row">
+            <div className="min-w-0 flex-1">
         {canEdit ? (
           <div className="flex flex-col gap-1">
             <div className="flex items-start gap-1">
@@ -3404,7 +3385,7 @@ function ItemRow({
                   value={customUrl}
                   onChange={(e) => setCustomUrl(e.target.value)}
                 />
-                <p className="text-[10px] text-amber-900">Cenę wpisz w kolumnie Cena i zapisz.</p>
+                <p className="text-[10px] text-amber-900">Cenę wpisz w polu Cena oferty i zapisz.</p>
               </div>
             </details>
             {hasSavedProduct && !isExternal && (
@@ -3516,19 +3497,22 @@ function ItemRow({
             />
           </span>
         )}
-      </td>
-      <td className="p-2">
-        {canEdit ? (
-          <input
-            className="w-16 rounded border border-slate-300 px-1 py-1"
-            value={qty}
-            onChange={(e) => setQty(e.target.value)}
-          />
-        ) : (
-          item.quantity
-        )}
-      </td>
-      <td className="p-2 align-top">
+            </div>
+            <div className="flex shrink-0 flex-row flex-wrap items-start gap-2 min-[1100px]:flex-col">
+              <label className="text-[10px] text-slate-500">
+                Ilość
+                {canEdit ? (
+                  <input
+                    className="mt-0.5 block w-16 rounded border border-slate-300 bg-white px-1 py-1 text-xs"
+                    value={qty}
+                    onChange={(e) => setQty(e.target.value)}
+                  />
+                ) : (
+                  <span className="mt-0.5 block text-xs text-slate-800">{item.quantity}</span>
+                )}
+              </label>
+      <div>
+        <div className="text-[10px] text-slate-500">Cena oferty</div>
         <div className="flex w-max max-w-[16rem] flex-col gap-1">
           <button
             type="button"
@@ -3602,9 +3586,9 @@ function ItemRow({
             </div>
           )}
         </div>
-      </td>
-      <td
-        className={`p-2 ${
+      </div>
+      <div
+        className={`${
           item.margin_percent != null && Number(item.margin_percent) < 0
             ? 'font-semibold text-red-700'
             : ''
@@ -3615,12 +3599,12 @@ function ItemRow({
             : 'Marża zreal. = (oferta − zakup) / oferta'
         }
       >
+        <div className="text-[10px] font-normal text-slate-500">Marża</div>
         {item.margin_percent ?? '—'}%
         {item.margin_percent != null && Number(item.margin_percent) < 0 ? (
           <span className="mt-0.5 block text-[9px] font-normal">ujemna!</span>
         ) : null}
-      </td>
-      <td className="p-2">
+      </div>
         <div className="flex flex-col gap-1">
           {canEdit && (
             <button
@@ -3674,11 +3658,12 @@ function ItemRow({
             </button>
           )}
         </div>
-      </td>
-    </tr>
+            </div>
+          </div>
+        </section>
+      </div>
     {(item.main_product_id ?? item.main_product?.id) ? (
-      <tr className={showComment ? 'align-top' : 'border-b align-top'}>
-        <td colSpan={7} className="px-3 pb-2 pt-0">
+      <div className="mt-2">
           <ItemBattlecard
             tenderId={tenderId}
             itemId={item.id}
@@ -3705,7 +3690,7 @@ function ItemRow({
                       ai_match_reasons: [
                         {
                           code: 'battlecard',
-                          label: `Wybrano ${p.sku} z battlecard`,
+                          label: `Wybrano ${p.sku} z porównania zamienników`,
                           points: p.match_percent,
                         },
                       ],
@@ -3714,12 +3699,10 @@ function ItemRow({
                 : undefined
             }
           />
-        </td>
-      </tr>
+      </div>
     ) : null}
     {canComment && showComment && (
-      <tr className="border-b bg-slate-50/80">
-        <td colSpan={7} className="px-3 py-2 text-[11px]">
+      <div className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
           {comments.length > 0 && (
             <ul className="mb-2 space-y-1">
               {comments.slice(0, 5).map((c) => (
@@ -3756,9 +3739,8 @@ function ItemRow({
               Dodaj komentarz
             </button>
           </div>
-        </td>
-      </tr>
+      </div>
     )}
-    </>
+    </article>
   )
 }

@@ -56,7 +56,7 @@ class TenderExportController extends Controller
                 'Źródło match',
                 'Uzasadnienie',
                 'Zamienniki SKU',
-                'Battlecard',
+                'Porównanie zamienników',
                 'Link',
             ],
         ], null, 'A1');
@@ -86,7 +86,7 @@ class TenderExportController extends Controller
         }
 
         $bc = $sheet->createSheet();
-        $bc->setTitle('Battlecard');
+        $bc->setTitle('Zamienniki');
         $bc->fromArray([
             ['Lp', 'SKU oferty', 'Match %', 'Zamienniki', 'Highlighty'],
         ], null, 'A1');
