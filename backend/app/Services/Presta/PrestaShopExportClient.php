@@ -305,28 +305,31 @@ final class PrestaShopExportClient implements PrestaExportGateway
 
     public function ensureCombinations(int $prestaId, array $combinations): void
     {
-        if ($combinations === []) {
-            return;
+        $wanted = [];
+        foreach ($combinations as $row) {
+            $attrId = (int) ($row['attribute_id'] ?? 0);
+            if ($attrId > 0) {
+                $wanted[$attrId] = true;
+            }
         }
-        $existing = [];
-        try {
-            $this->connectDb();
-            $prefix = $this->prefix();
-            if (Schema::connection('prestashop')->hasTable($prefix.'product_attribute_combination')) {
-                $rows = DB::connection('prestashop')->table($prefix.'product_attribute as pa')
-                    ->join($prefix.'product_attribute_combination as pac', 'pac.id_product_attribute', '=', 'pa.id_product_attribute')
-                    ->where('pa.id_product', $prestaId)
-                    ->get(['pac.id_attribute']);
-                foreach ($rows as $row) {
-                    $existing[(int) $row->id_attribute] = true;
+
+        $keptAttrs = [];
+        foreach ($this->existingCombinations($prestaId) as $comboId => $attrIds) {
+            $keep = false;
+            foreach ($attrIds as $attrId) {
+                if (isset($wanted[$attrId])) {
+                    $keep = true;
+                    $keptAttrs[$attrId] = true;
                 }
             }
-        } catch (Throwable) {
+            if (! $keep) {
+                $this->deleteCombination($comboId);
+            }
         }
 
         foreach ($combinations as $row) {
             $attrId = (int) ($row['attribute_id'] ?? 0);
-            if ($attrId <= 0 || isset($existing[$attrId])) {
+            if ($attrId <= 0 || isset($keptAttrs[$attrId])) {
                 continue;
             }
             $xml = $this->xmlRoot('combination', [
@@ -340,6 +343,112 @@ final class PrestaShopExportClient implements PrestaExportGateway
                 ],
             ]);
             $this->postXml('combinations', $xml);
+        }
+    }
+
+    /**
+     * @return array<int, list<int>>
+     */
+    private function existingCombinations(int $prestaId): array
+    {
+        try {
+            $this->connectDb();
+            $prefix = $this->prefix();
+            if (Schema::connection('prestashop')->hasTable($prefix.'product_attribute')) {
+                $query = DB::connection('prestashop')->table($prefix.'product_attribute as pa')
+                    ->where('pa.id_product', $prestaId);
+                $rows = Schema::connection('prestashop')->hasTable($prefix.'product_attribute_combination')
+                    ? $query->leftJoin(
+                        $prefix.'product_attribute_combination as pac',
+                        'pac.id_product_attribute',
+                        '=',
+                        'pa.id_product_attribute'
+                    )->get(['pa.id_product_attribute', 'pac.id_attribute'])
+                    : $query->get(['pa.id_product_attribute']);
+                $out = [];
+                foreach ($rows as $row) {
+                    $comboId = (int) $row->id_product_attribute;
+                    if ($comboId <= 0) {
+                        continue;
+                    }
+                    $out[$comboId] ??= [];
+                    $attrId = (int) ($row->id_attribute ?? 0);
+                    if ($attrId > 0) {
+                        $out[$comboId][] = $attrId;
+                    }
+                }
+
+                return $out;
+            }
+        } catch (Throwable) {
+        }
+
+        return $this->existingCombinationsFromApi($prestaId);
+    }
+
+    /**
+     * @return array<int, list<int>>
+     */
+    private function existingCombinationsFromApi(int $prestaId): array
+    {
+        try {
+            $xml = $this->getXml('products/'.$prestaId);
+            $nodes = $xml->product->associations->combinations->combination ?? null;
+            if ($nodes === null) {
+                return [];
+            }
+            $out = [];
+            foreach ($nodes as $node) {
+                $comboId = (int) ($node->id ?? 0);
+                if ($comboId <= 0) {
+                    continue;
+                }
+                $out[$comboId] = $this->combinationAttributeIds($comboId);
+            }
+
+            return $out;
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function combinationAttributeIds(int $comboId): array
+    {
+        try {
+            $xml = $this->getXml('combinations/'.$comboId);
+            $nodes = $xml->combination->associations->product_option_values->product_option_value ?? null;
+            if ($nodes === null) {
+                return [];
+            }
+            $ids = [];
+            foreach ($nodes as $node) {
+                $id = (int) ($node->id ?? 0);
+                if ($id > 0) {
+                    $ids[] = $id;
+                }
+            }
+
+            return $ids;
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    private function deleteCombination(int $comboId): void
+    {
+        if ($comboId <= 0) {
+            return;
+        }
+        try {
+            $this->request('DELETE', 'combinations/'.$comboId, null);
+        } catch (RuntimeException $e) {
+            if (str_contains($e->getMessage(), 'HTTP 404')) {
+                return;
+            }
+            throw $e;
         }
     }
 
@@ -668,6 +777,7 @@ final class PrestaShopExportClient implements PrestaExportGateway
         $response = match ($method) {
             'POST' => $pending->withBody((string) $xml, 'application/xml')->post($url),
             'PUT' => $pending->withBody((string) $xml, 'application/xml')->put($url),
+            'DELETE' => $pending->delete($url),
             default => $pending->get($url),
         };
         if ($response->failed()) {
@@ -696,7 +806,7 @@ final class PrestaShopExportClient implements PrestaExportGateway
         $body = $response->body();
         if (str_contains($body, 'is not allowed')) {
             return 'Klucz Webservice nie ma uprawnienia do „'.$resource.'”. '
-                .'W Preście: Parametry zaawansowane → Webservice → ten klucz → zaznacz zasób i GET/POST/PUT.';
+                .'W Preście: Parametry zaawansowane → Webservice → ten klucz → zaznacz zasób i GET/POST/PUT/DELETE.';
         }
         $xml = @simplexml_load_string($body);
         $prestaMsg = '';

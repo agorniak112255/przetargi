@@ -362,6 +362,28 @@ final class PrestaExportApiTest extends TestCase
         $this->assertSame([$relatedId], $parentLinks['items'] ?? null);
     }
 
+    public function test_update_sends_empty_combinations_for_all_digit_lanyard_sku(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct([
+            'sku' => '1260348',
+            'name' => 'Elastyczna linka z amortyzatorem 3M Protecta, 1,50 m, 1260348',
+            'packaging' => null,
+            'description' => 'Podwójna lonża z amortyzatorem.',
+        ]);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'created')
+            ->assertJsonPath('sizes', []);
+        $this->assertSame([], $this->presta->combinations[0]['items']);
+
+        $this->postJson('/api/products/'.$product->id.'/presta-export')
+            ->assertOk()
+            ->assertJsonPath('action', 'updated');
+        $this->assertSame([], $this->presta->combinations[1]['items']);
+    }
+
     public function test_export_creates_related_catalog_product_then_links_accessory(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
