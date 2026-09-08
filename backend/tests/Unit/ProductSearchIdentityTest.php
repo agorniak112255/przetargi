@@ -1263,9 +1263,18 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertSame('50404', $id->firstStrongShopPhrase($cup));
         $this->assertNotSame('1550', $id->firstStrongShopPhrase($cup));
         $this->assertTrue($id->isOfficialThreeMProductUrl('https://www.3m.com/3M/pl_PL/p/d/v0005202/'));
+        $this->assertTrue($id->isOfficialThreeMProductUrl('https://www.3mpolska.pl/3M/pl_PL/p/d/b40069952/'));
+        $this->assertFalse($id->isOfficialThreeMProductUrl('https://www.3mpolska.pl/3M/pl_PL/'));
+        $this->assertContains('3mpolska.pl', $id->catalogSearchHosts($cup));
         $this->assertTrue($id->isConfirmedProductCard(
             'https://www.3m.com/3M/pl_PL/p/d/v0123456/',
             '3M PPS Mixing Cup',
+            'Kubek do mieszania 50404. Pojemność 1550 ml.',
+            $cup
+        ));
+        $this->assertTrue($id->isConfirmedProductCard(
+            'https://www.3mpolska.pl/3M/pl_PL/p/d/b40069952/',
+            'Kubek do mieszania 3M PPS 50404',
             'Kubek do mieszania 50404. Pojemność 1550 ml.',
             $cup
         ));

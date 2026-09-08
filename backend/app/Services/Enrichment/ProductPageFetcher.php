@@ -245,9 +245,16 @@ final class ProductPageFetcher
         return $status !== null && in_array($status, [401, 403, 405, 429, 451, 503], true);
     }
 
+    /** 3M/3mpolska: timeout (status null) — Akamai zrywa TLS, nie oddaje 403. */
+    private function officialThreeMFetchNeedsReader(string $url, ?int $status): bool
+    {
+        return $status === null && $this->identity->isOfficialThreeMProductUrl($url);
+    }
+
     /**
      * @param  list<array{url: string, text: string}>  $goodPages
      * @param  list<string>  $images
+     * @param  list<string>  $trustedImages
      * @param  list<string>  $documents
      */
     private function ingestViaReader(
@@ -255,6 +262,7 @@ final class ProductPageFetcher
         array &$goodPages,
         array &$images,
         array &$documents,
+        array &$trustedImages,
     ): bool {
         $viaReader = null;
         if (! $this->bypassCache) {
@@ -294,7 +302,14 @@ final class ProductPageFetcher
             $used = true;
         }
         foreach ($viaReader['image_urls'] as $img) {
+            if (! is_string($img) || $img === '' || ! $this->imageAllowedForProduct($img)) {
+                continue;
+            }
             $images[] = $img;
+            if ($this->matchingProduct !== null
+                && $this->identity->isTrustedPageImageUrl($img, $this->matchingProduct)) {
+                $trustedImages[] = $img;
+            }
             $used = true;
         }
         foreach ($viaReader['document_urls'] as $doc) {
@@ -331,8 +346,9 @@ final class ProductPageFetcher
             $status = $response instanceof Response ? $response->status() : null;
             // WAF sklepu (gloves.co.uk, rs-online) odrzuca IP serwerowni jeszcze przed treścią,
             // więc kartę czytamy przez zewnętrzny reader zamiast odpuszczać stronę.
-            if ($this->isBlockedStatus($status)
-                && $this->ingestViaReader($url, $goodPages, $images, $documents)) {
+            // 3mpolska.pl / 3m.com przy timeout (Akamai) też nie oddają statusu 403.
+            if (($this->isBlockedStatus($status) || $this->officialThreeMFetchNeedsReader($url, $status))
+                && $this->ingestViaReader($url, $goodPages, $images, $documents, $trustedImages)) {
                 return;
             }
             Log::info('Product page fetch skipped', ['url' => $url, 'status' => $status]);
@@ -357,7 +373,7 @@ final class ProductPageFetcher
             return;
         }
         if ($this->looksLikeBotWall($html)) {
-            if (! $this->ingestViaReader($url, $goodPages, $images, $documents)) {
+            if (! $this->ingestViaReader($url, $goodPages, $images, $documents, $trustedImages)) {
                 $snippet = trim((string) ($row['snippet'] ?? ''));
                 if ($snippet !== '') {
                     $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
@@ -1251,6 +1267,8 @@ final class ProductPageFetcher
         foreach ([
             '#property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i',
             '#content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']#i',
+            '#name=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i',
+            '#content=["\']([^"\']+)["\'][^>]*name=["\']og:image["\']#i',
             '#itemprop=["\']image["\'][^>]*\bcontent=["\']([^"\']+)["\']#i',
             '#\bcontent=["\']([^"\']+)["\'][^>]*itemprop=["\']image["\']#i',
         ] as $pattern) {

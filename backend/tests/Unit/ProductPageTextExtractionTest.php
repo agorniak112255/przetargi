@@ -366,6 +366,65 @@ HTML;
         $this->assertFalse(ProductPageFetcher::looksLikeBinaryMedia('Obuwie ochronne Jalas 7168 Zenit Evo S3'));
     }
 
+    public function test_trusts_3mpolska_og_image_from_name_attribute(): void
+    {
+        $pageUrl = 'https://www.3mpolska.pl/3M/pl_PL/p/d/b40069952/';
+        $og = 'https://multimedia.3m.com/mws/media/1421372J/3m-pps-kit.jpg';
+        $html = '<html><head><meta name="og:image" content="'.$og.'"></head><body>'
+            .'<h1>Kubek wewnętrzny rPPS 3M PPS 16743</h1>'
+            .'<p>'.str_repeat('Kubek wewnętrzny 3M PPS 16743 do natrysku farby. ', 40)
+            .'</p></body></html>';
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+
+        $product = new Product([
+            'sku' => '16743-KT',
+            'name' => 'Kubek wewnętrzny rPPS 3M™ PPS™, 650 ml, 200 µm, 16743',
+            'manufacturer' => '3M',
+        ]);
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Kubek wewnętrzny rPPS 3M PPS 16743',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertContains($og, $result['trusted_image_urls']);
+        $this->assertContains($og, $result['image_urls']);
+    }
+
+    public function test_reads_3mpolska_images_through_reader_on_timeout(): void
+    {
+        $pageUrl = 'https://www.3mpolska.pl/3M/pl_PL/p/d/b40069952/';
+        $imageUrl = 'https://multimedia.3m.com/mws/media/1421372J/3m-pps-kit.jpg?width=506';
+        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($imageUrl) {
+            if (str_contains($request->url(), 'r.jina.ai')) {
+                return Http::response(
+                    "Title: Kubek wewnętrzny rPPS 3M PPS 16743\n\nMarkdown Content:\n"
+                    .'[![kit]('.$imageUrl.')]('.$imageUrl.")\n\n"
+                    .str_repeat('Kubek wewnętrzny 3M PPS 16743 do natrysku farby. ', 20),
+                    200
+                );
+            }
+            throw new \Illuminate\Http\Client\ConnectionException('cURL error 28');
+        });
+
+        $product = new Product([
+            'sku' => '16743-KT',
+            'name' => 'Kubek wewnętrzny rPPS 3M™ PPS™, 650 ml, 200 µm, 16743',
+            'manufacturer' => '3M',
+        ]);
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Kubek wewnętrzny rPPS 3M PPS 16743',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertCount(1, $result['pages']);
+        $this->assertContains($imageUrl, $result['image_urls']);
+        $this->assertContains($imageUrl, $result['trusted_image_urls']);
+    }
+
     public function test_trusts_og_image_when_page_has_model_not_warehouse_sku(): void
     {
         $pageUrl = 'https://www.professionalbhp.com/pl/p/Kurtka-meska-odblaskowa-HSV-3-W-1-URG/1136';

@@ -200,8 +200,9 @@ return [
     'catalog_search_hosts' => [
         '3m' => [
             '3m.com',
-            // 3m.com/3mpolska.pl blokują boty (Akamai, TLS renegotiation) — te dwa
-            // wąskie sklepy BHP/przemysłowe (nie ogólne markety) mają realne karty 3M.
+            '3mpolska.pl',
+            // 3m.com/3mpolska.pl blokują bezpośredni GET (Akamai) — kartę czyta reader;
+            // te dwa wąskie sklepy BHP/przemysłowe mają realne karty 3M jako zapas.
             '3market-shop.pl',
             'shop-sks.com',
         ],

@@ -271,6 +271,12 @@ final class ProductSearchIdentity
                 || str_contains($u, 'product')
                 || preg_match('/(?<![0-9])\d{3,4}(?![0-9])/u', $u) === 1;
         }
+        // 3M Media Web Server — id bez SKU w nazwie (3m-pps-kit.jpg)
+        if ($this->manufacturerIsThreeM($product)
+            && ($host === 'multimedia.3m.com' || str_ends_with($host, '.multimedia.3m.com'))
+            && str_contains($u, '/mws/media/')) {
+            return true;
+        }
         // Magento / Presta typowe galerie
         if (str_contains($u, 'media/catalog/product') || str_contains($u, 'large_default') || str_contains($u, 'pim/products')) {
             return true;
@@ -1372,7 +1378,10 @@ final class ProductSearchIdentity
     {
         $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
         $host = preg_replace('/^www\./', '', $host) ?? $host;
-        if ($host !== '3m.com' && ! str_ends_with($host, '.3m.com')) {
+        $official = $host === '3m.com'
+            || str_ends_with($host, '.3m.com')
+            || $host === '3mpolska.pl';
+        if (! $official) {
             return false;
         }
         $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');

@@ -38,6 +38,22 @@ final class ProductImageRelevanceTest extends TestCase
         ));
     }
 
+    public function test_accepts_3m_multimedia_cdn_without_sku_in_filename(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '16743-KT',
+            'name' => 'Kubek wewnętrzny rPPS 3M™ PPS™, 650 ml, 200 µm, 16743',
+            'manufacturer' => '3M',
+        ]);
+        $url = 'https://multimedia.3m.com/mws/media/1421372J/3m-pps-kit.jpg';
+
+        $this->assertTrue(ProductImageDownloader::looksLikeImageUrl($url));
+        $this->assertTrue($identity->looksLikeManufacturerGalleryUrl($url, $product));
+        $this->assertTrue($identity->isTrustedPageImageUrl($url, $product));
+        $this->assertFalse($identity->imageUrlMentionsProduct($url, $product));
+    }
+
     public function test_accepts_uvex_shop_media_and_sku_variant(): void
     {
         $identity = new ProductSearchIdentity;
