@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Vector;
 
+use App\Exceptions\EmbeddingRequestException;
 use App\Services\Ai\AiSettingsService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Pool;
@@ -57,7 +58,11 @@ final class EmbeddingClient
                     'input' => $text,
                 ]);
         } catch (ConnectionException $e) {
-            throw new RuntimeException('Nie można połączyć z API embeddings: '.$e->getMessage(), 0, $e);
+            throw new EmbeddingRequestException(
+                'Nie można połączyć z API embeddings: '.$e->getMessage(),
+                0,
+                $e
+            );
         }
 
         if (! $response->successful()) {
@@ -65,7 +70,10 @@ final class EmbeddingClient
             $detail = is_array($body)
                 ? (string) data_get($body, 'error.message', $response->body())
                 : $response->body();
-            throw new RuntimeException('Embeddings HTTP '.$response->status().': '.$detail);
+            throw new EmbeddingRequestException(
+                'Embeddings HTTP '.$response->status().': '.$detail,
+                $response->status()
+            );
         }
 
         $vector = data_get($response->json(), 'data.0.embedding');

@@ -56,7 +56,7 @@ final class ProductEmbeddingIndexer
                 'error' => $e->getMessage(),
             ]);
 
-            return false;
+            throw $e;
         }
     }
 

@@ -28,6 +28,8 @@ class ReindexProductEmbeddingsCommand extends Command
             return self::SUCCESS;
         }
 
+        ReindexProductEmbeddingJob::clearHalt();
+
         $force = (bool) $this->option('force') || (bool) $this->option('fresh');
 
         if ($this->option('fresh')) {
