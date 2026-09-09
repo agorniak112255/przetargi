@@ -32,8 +32,14 @@ final class CatalogSitemapIndexer
     /** Zgadywane ścieżki nie mogą zjeść całego --seconds na jednym 404. */
     private const CANDIDATE_TIMEOUT = 15;
 
-    /** Sklepy bez XML (IAI) — ile stron HTML zbieramy z menu. */
-    private const HTML_CRAWL_PAGES = 35;
+    /** Sklepy bez XML (IAI) — ile stron HTML zbieramy z menu i listingów. */
+    private const HTML_CRAWL_PAGES = 180;
+
+    /** Ile adresów kategorii/list trzymamy w kolejce pełzania. */
+    private const HTML_CRAWL_QUEUE = 250;
+
+    /** Karty bez kodu w adresie — ile stron produktu czytamy pod SKU/nazwę. */
+    private const HTML_PRODUCT_FETCH_MAX = 400;
 
     /** Poniżej tylu adresów z sitemapy dokładamy pełzanie po ładnych URL-ach kart. */
     private const SPARSE_SITEMAP_LIMIT = 50;
@@ -542,6 +548,7 @@ final class CatalogSitemapIndexer
     private function crawlShopPages(string $host, int $maxUrls, float $deadline): array
     {
         $queue = ['https://'.$host.'/', 'https://www.'.$host.'/'];
+        $queued = array_fill_keys($queue, true);
         $fetched = [];
         $seen = [];
         $rows = [];
@@ -585,19 +592,113 @@ final class CatalogSitemapIndexer
                     if (count($rows) >= $maxUrls) {
                         break 2;
                     }
-                    if (count($queue) < 80 && $this->looksLikeListingPath($href)) {
+                    if (! isset($queued[$href]) && count($queue) < self::HTML_CRAWL_QUEUE && $this->looksLikeListingPath($href)) {
                         $queue[] = $href;
+                        $queued[$href] = true;
                     }
 
                     continue;
                 }
-                if (count($queue) < 80 && $this->looksLikeCategoryUrl($href)) {
+                if (! isset($queued[$href]) && count($queue) < self::HTML_CRAWL_QUEUE && $this->looksLikeCategoryUrl($href)) {
                     $queue[] = $href;
+                    $queued[$href] = true;
                 }
             }
         }
 
+        if ($rows !== []) {
+            $this->note($host, 'Z pełzania '.$pages.' stron mam '.count($rows).' kart — czytam te bez kodu w adresie.');
+            $rows = $this->enrichCrawledProductRows($rows, $host, $deadline);
+        }
+
         return $rows;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     */
+    private function enrichCrawledProductRows(array $rows, string $host, float $deadline): array
+    {
+        $fetched = 0;
+        foreach ($rows as $i => $row) {
+            if ($fetched >= self::HTML_PRODUCT_FETCH_MAX || microtime(true) >= $deadline) {
+                break;
+            }
+            $url = (string) ($row['url'] ?? '');
+            if ($url === '' || $this->urlHasIdentityToken($url)) {
+                continue;
+            }
+            $html = $this->fetchHtml($url);
+            $fetched++;
+            if ($html === null) {
+                continue;
+            }
+            $identity = $this->identityFromHtml($html);
+            if ($identity['title'] === '' && $identity['extra'] === '') {
+                continue;
+            }
+            $rows[$i] = $this->rowForHref($url, $host, $identity['title'], $identity['extra']);
+        }
+
+        return $rows;
+    }
+
+    /** Adres już niesie SKU (litery+cyfry) — nie ma po co czytać karty pod kod. */
+    private function urlHasIdentityToken(string $url): bool
+    {
+        foreach ($this->tokensFor($url) as $token) {
+            if (preg_match('/^(?=.*[a-z])(?=.*[0-9])[a-z0-9]{5,}$/u', $token) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array{title: string, extra: string}
+     */
+    private function identityFromHtml(string $html): array
+    {
+        $title = '';
+        if (preg_match('/<h1\b[^>]*>(.*?)<\/h1>/is', $html, $m) === 1) {
+            $title = $this->plainText((string) $m[1]);
+        } elseif (preg_match('/<title\b[^>]*>(.*?)<\/title>/is', $html, $m) === 1) {
+            $title = $this->plainText((string) $m[1]);
+        }
+        $title = mb_substr($title, 0, 500);
+
+        $text = $this->plainText(mb_substr($html, 0, 120000));
+        $bits = [];
+        foreach ([
+            '/\bCODE\s*:?\s*([A-Z0-9][A-Z0-9\/\-]{2,24})/i',
+            '/\bSKU\s*:?\s*([A-Z0-9][A-Z0-9\/\-]{2,24})/i',
+            '/\b(?:Kod(?:\s+(?:produktu|towaru))?|Art(?:icle|\.)?\s*(?:nr\.?|no\.?|number)?)\s*:?\s*([A-Z0-9][A-Z0-9\/\-]{2,24})/i',
+            '/\bBRAND\s*:?\s*(.+?)(?=\s+(?:CODE|SKU|SIZES|COLOURS|PRICE|Kod|Producent|Marka)\s*:|$)/i',
+            '/\b(?:Producent|Marka)\s*:?\s*(.+?)(?=\s+(?:CODE|SKU|Kod|BRAND|Art)\s*:|$)/i',
+        ] as $re) {
+            if (preg_match($re, $text, $m) === 1) {
+                $bit = trim((string) $m[1]);
+                if ($bit !== '' && mb_strlen($bit) <= 80) {
+                    $bits[] = $bit;
+                }
+            }
+        }
+
+        $extra = trim($title.' '.implode(' ', $bits));
+
+        return [
+            'title' => $title,
+            'extra' => mb_substr($extra, 0, 500),
+        ];
+    }
+
+    private function plainText(string $html): string
+    {
+        $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+        return trim((string) preg_replace('/\s+/u', ' ', $text));
     }
 
     /**
@@ -640,7 +741,35 @@ final class CatalogSitemapIndexer
             return null;
         }
 
-        return $href;
+        return $this->normalizeCrawlUrl($href);
+    }
+
+    /** Zostawiamy paginację, odrzucamy kombinacje filtrów — inaczej kolejka puchnie. */
+    private function normalizeCrawlUrl(string $url): string
+    {
+        $parts = parse_url($url);
+        if ($parts === false || ! isset($parts['host'])) {
+            return $url;
+        }
+        $path = (string) ($parts['path'] ?? '/');
+        $query = (string) ($parts['query'] ?? '');
+        $kept = [];
+        if ($query !== '') {
+            parse_str($query, $params);
+            foreach ($params as $key => $value) {
+                $name = mb_strtolower((string) $key);
+                if (in_array($name, ['page', 'p', 'pgc', 'pagenumber', 'strona', 'paged'], true)) {
+                    $kept[(string) $key] = $value;
+                }
+            }
+        }
+        $scheme = (string) ($parts['scheme'] ?? 'https');
+        $out = $scheme.'://'.$parts['host'].($path !== '' ? $path : '/');
+        if ($kept !== []) {
+            $out .= '?'.http_build_query($kept);
+        }
+
+        return $out;
     }
 
     private function looksLikeProductUrl(string $url): bool
@@ -659,6 +788,7 @@ final class CatalogSitemapIndexer
         return preg_match('#/p\d+,#', $path) === 1
             || preg_match('#-p\d{2,}(\.html)?$#', $path) === 1
             || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
+            || preg_match('#/productpage(/|$)#', $path) === 1
             || preg_match('#/p/[^/]+/\d+#', $path) === 1;
     }
 
@@ -694,11 +824,11 @@ final class CatalogSitemapIndexer
     /**
      * @return array<string, mixed>
      */
-    private function rowForHref(string $href, string $host): array
+    private function rowForHref(string $href, string $host, string $title = '', string $extra = ''): array
     {
         $locHost = $this->normalizeHost((string) (parse_url($href, PHP_URL_HOST) ?? $host));
 
-        return $this->rowFor($locHost !== '' ? $locHost : $host, $href);
+        return $this->rowFor($locHost !== '' ? $locHost : $host, $href, $title, $extra);
     }
 
     private function isInformationalSlug(string $slug): bool
@@ -889,11 +1019,11 @@ final class CatalogSitemapIndexer
      *
      * @return list<string>
      */
-    public function tokensFor(string $url): array
+    public function tokensFor(string $url, string $extra = ''): array
     {
-        $path = mb_strtolower(Str::ascii(urldecode(
-            (string) (parse_url($url, PHP_URL_PATH) ?? '').' '.(string) (parse_url($url, PHP_URL_QUERY) ?? '')
-        )));
+        $path = mb_strtolower(Str::ascii(urldecode(trim(
+            $extra.' '.(string) (parse_url($url, PHP_URL_PATH) ?? '').' '.(string) (parse_url($url, PHP_URL_QUERY) ?? '')
+        ))));
         $parts = preg_split('/[^a-z0-9]+/u', $path) ?: [];
         $parts = array_values(array_filter($parts, static fn (string $p): bool => $p !== ''));
 
@@ -920,14 +1050,15 @@ final class CatalogSitemapIndexer
         $unique = [];
         foreach ($out as $token) {
             if (mb_strlen($token) >= 2 && mb_strlen($token) <= self::MAX_TOKEN_LENGTH) {
-                $unique[$token] = true;
+                // klucz numeryczny PHP zrzuca do int — wartość zostaje stringiem
+                $unique[$token] = $token;
             }
             if (count($unique) >= self::MAX_TOKENS_PER_PAGE) {
                 break;
             }
         }
 
-        return array_keys($unique);
+        return array_values($unique);
     }
 
     /** „…/produkt/rekawice-urgent-1202” → „…/produkt/rekawice urgent 1202” do wyszukiwania. */
@@ -989,11 +1120,12 @@ final class CatalogSitemapIndexer
     /**
      * @return array<string, mixed>
      */
-    private function rowFor(string $host, string $url): array
+    private function rowFor(string $host, string $url, string $title = '', string $extra = ''): array
     {
         $now = now();
         $manufacturer = $this->pageManufacturer->resolve($host, $url);
-        $haystack = $this->haystackFor($url);
+        $label = trim($title.' '.$extra);
+        $haystack = $this->haystackFor($url, $label);
         if ($manufacturer !== null) {
             $haystack = trim($haystack.' '.$manufacturer);
         }
@@ -1003,7 +1135,7 @@ final class CatalogSitemapIndexer
             'manufacturer' => $manufacturer,
             'url_hash' => CatalogPage::hashFor($url),
             'url' => $url,
-            'title' => null,
+            'title' => $label !== '' ? mb_substr($label, 0, 500) : null,
             'haystack' => mb_substr($haystack, 0, 2000),
             'last_seen_at' => $now,
             'created_at' => $now,
@@ -1021,6 +1153,19 @@ final class CatalogSitemapIndexer
             ['url_hash'],
             ['manufacturer', 'haystack', 'last_seen_at', 'updated_at']
         );
+        $titled = [];
+        foreach ($rows as $row) {
+            if (($row['title'] ?? '') !== '' && $row['title'] !== null) {
+                $titled[] = $row;
+            }
+        }
+        if ($titled !== []) {
+            CatalogPage::query()->upsert(
+                $titled,
+                ['url_hash'],
+                ['title', 'haystack', 'updated_at']
+            );
+        }
         $this->storeTokens(array_column($rows, 'url_hash'));
 
         return count($rows);
@@ -1037,11 +1182,11 @@ final class CatalogSitemapIndexer
 
         $pages = CatalogPage::query()
             ->whereIn('url_hash', $hashes)
-            ->get(['id', 'url']);
+            ->get(['id', 'url', 'title']);
 
         $tokens = [];
         foreach ($pages as $page) {
-            foreach ($this->tokensFor((string) $page->url) as $token) {
+            foreach ($this->tokensFor((string) $page->url, (string) ($page->title ?? '')) as $token) {
                 $tokens[] = ['catalog_page_id' => $page->id, 'token' => $token];
             }
         }

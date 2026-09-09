@@ -976,6 +976,75 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame([], $result['sitemaps']);
     }
 
+    public function test_crawls_productpage_urls_and_indexes_code_from_html(): void
+    {
+        $this->fakeHttp([
+            'https://treadsafe.test/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://treadsafe.test/' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/products/productcategory/Footwear">Footwear</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://treadsafe.test/products/productcategory/Footwear' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/brandpage/productpage/763/Tungsten_Boot">Tungsten</a>'
+                .'<a href="/products/productcategory/Footwear?color=black&amp;pgc=2">page 2</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://treadsafe.test/products/productcategory/Footwear?pgc=2' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/brandpage/productpage/734/Flex_Defend">Flex Defend</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://treadsafe.test/brandpage/productpage/763/Tungsten_Boot' => Http::response(
+                '<!DOCTYPE html><html><head><title>Tungsten Boot</title></head><body>'
+                .'<h1>Tungsten Boot</h1>'
+                .'<p>CODE: JN3002 BRAND: Jonsson Footwear SIZES: 3-13</p>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://treadsafe.test/brandpage/productpage/734/Flex_Defend' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<h1>Flex Defend</h1>'
+                .'<p>CODE: JAS1003 BRAND: Jonsson Footwear</p>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('treadsafe.test');
+
+        $this->assertGreaterThanOrEqual(2, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://treadsafe.test/brandpage/productpage/763/Tungsten_Boot',
+        ]);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://treadsafe.test/brandpage/productpage/734/Flex_Defend',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://treadsafe.test/products/productcategory/Footwear?color=black&pgc=2',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor(new Product([
+            'sku' => 'JN3002',
+            'name' => 'Tungsten Boot',
+            'manufacturer' => 'Jonsson',
+        ]));
+
+        $this->assertSame(
+            'https://treadsafe.test/brandpage/productpage/763/Tungsten_Boot',
+            $hits[0]['url'] ?? null
+        );
+    }
+
     private function seedPage(string $url, ?string $manufacturer = null): void
     {
         $page = CatalogPage::query()->create([
