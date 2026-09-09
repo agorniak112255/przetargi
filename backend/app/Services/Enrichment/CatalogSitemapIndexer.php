@@ -103,6 +103,7 @@ final class CatalogSitemapIndexer
     public function __construct(
         private readonly CatalogIndexProgress $progress,
         private readonly CatalogPageManufacturer $pageManufacturer,
+        private readonly ShopHtmlCrawler $shopCrawler,
     ) {}
 
     /**
@@ -584,82 +585,18 @@ final class CatalogSitemapIndexer
     }
 
     /**
-     * IAI/IdoSell i podobne nie publikują XML — zbieramy karty z menu i listingów.
+     * IAI/IdoSell i sklepy bez XML — crawler jak skrypt Python (seedy, BFS, CODE).
      *
      * @return list<array<string, mixed>>
      */
     private function crawlShopPages(string $host, int $maxUrls, float $deadline): array
     {
-        $queue = $this->crawlSeeds($host);
-        $queued = array_fill_keys($queue, true);
-        $fetched = [];
-        $seen = [];
+        $found = $this->shopCrawler->crawl($host, $maxUrls, $deadline, function (string $text) use ($host): void {
+            $this->note($host, $text);
+        });
         $rows = [];
-        $pages = 0;
-        $htmlOk = 0;
-        $homeFails = 0;
-
-        while ($queue !== [] && $pages < self::HTML_CRAWL_PAGES && count($rows) < $maxUrls) {
-            if (microtime(true) >= $deadline) {
-                break;
-            }
-            $page = array_shift($queue);
-            $key = mb_strtolower(rtrim($page, '/'));
-            if (isset($fetched[$key])) {
-                continue;
-            }
-            $fetched[$key] = true;
-            $timeout = $htmlOk === 0 ? self::HTML_PROBE_TIMEOUT : self::HTML_FETCH_TIMEOUT;
-            $html = $this->fetchHtml($page, $timeout);
-            $pages++;
-            if ($html === null) {
-                if ($this->isHomepageUrl($page)) {
-                    $homeFails++;
-                }
-                if ($pages <= 4) {
-                    $this->note($host, 'Brak HTML: '.$this->shortUrl($page));
-                }
-                if ($htmlOk === 0 && $homeFails >= 2) {
-                    $this->note($host, 'Serwer nie pobiera HTML z tej witryny — przerywam.');
-                    break;
-                }
-
-                continue;
-            }
-            $htmlOk++;
-            if ($htmlOk === 1) {
-                $this->note($host, 'Czytam HTML '.$this->shortUrl($page));
-            }
-            foreach ($this->extractHtmlHrefs($html, $host, $page) as $href) {
-                if ($this->isSkippableUrl($href)) {
-                    continue;
-                }
-                $classic = $this->looksLikeClassicProductUrl($href);
-                $pretty = ! $classic && $this->looksLikePrettyProductUrl($href);
-                if ($classic || $pretty) {
-                    if (! isset($seen[$href])) {
-                        $seen[$href] = true;
-                        $rows[] = $this->rowForHref($href, $host);
-                    }
-                    if (count($rows) >= $maxUrls) {
-                        break 2;
-                    }
-                }
-                if ($classic) {
-                    continue;
-                }
-                if (! isset($queued[$href]) && count($queue) < self::HTML_CRAWL_QUEUE) {
-                    $queue[] = $href;
-                    $queued[$href] = true;
-                }
-            }
-        }
-
-        if ($rows !== []) {
-            $this->note($host, 'Z pełzania '.$pages.' stron mam '.count($rows).' kart — czytam te bez kodu w adresie.');
-            $rows = $this->enrichCrawledProductRows($rows, $host, $deadline);
-        } else {
-            $this->note($host, 'Pełzanie: '.$pages.' stron, HTML OK: '.$htmlOk.', 0 kart.');
+        foreach ($found as $item) {
+            $rows[] = $this->rowForHref($item['url'], $host, $item['title'], $item['extra']);
         }
 
         return $rows;

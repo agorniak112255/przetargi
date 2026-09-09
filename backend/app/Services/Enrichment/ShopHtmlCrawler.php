@@ -1,0 +1,444 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services\Enrichment;
+
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Throwable;
+
+/**
+ * Crawler sklepu bez sitemapy — ten sam schemat co skrypt Python
+ * (seedy kategorii, BFS, /productpage/, CODE/BRAND).
+ */
+final class ShopHtmlCrawler
+{
+    private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+
+    private const PROBE_TIMEOUT = 6;
+
+    private const FETCH_TIMEOUT = 30;
+
+    private const MAX_PAGES = 180;
+
+    private const MAX_QUEUE = 250;
+
+    private const MAX_PRODUCT_FETCH = 400;
+
+    /**
+     * @var list<string>
+     */
+    private const SEED_PATHS = [
+        '/',
+        '/products/productcategory/Footwear',
+        '/products/productcategory/Workwear',
+        '/products/productcategory/PPE',
+        '/brands',
+        '/resources',
+        '/products',
+        '/produkty',
+    ];
+
+    public function __construct(
+        private readonly BlockedPageReader $reader,
+    ) {}
+
+    /**
+     * @return list<array{url: string, title: string, extra: string}>
+     */
+    public function crawl(string $host, int $maxUrls, float $deadline, callable $note): array
+    {
+        $queue = $this->seeds($host);
+        $queued = array_fill_keys($queue, true);
+        $fetched = [];
+        $products = [];
+        $pages = 0;
+        $htmlOk = 0;
+        $homeFails = 0;
+
+        while ($queue !== [] && $pages < self::MAX_PAGES && count($products) < $maxUrls) {
+            if (microtime(true) >= $deadline) {
+                break;
+            }
+            $page = array_shift($queue);
+            $key = mb_strtolower(rtrim($page, '/'));
+            if (isset($fetched[$key])) {
+                continue;
+            }
+            $fetched[$key] = true;
+            $timeout = $htmlOk === 0 ? self::PROBE_TIMEOUT : self::FETCH_TIMEOUT;
+            $body = $this->fetchPage($page, $timeout);
+            $pages++;
+            if ($body === null) {
+                if ($this->isHomepage($page)) {
+                    $homeFails++;
+                }
+                if ($pages <= 4) {
+                    $note('Brak HTML: '.$this->shortUrl($page));
+                }
+                if ($htmlOk === 0 && $homeFails >= 2) {
+                    $note('Serwer nie pobiera HTML z tej witryny — przerywam.');
+                    break;
+                }
+
+                continue;
+            }
+            $htmlOk++;
+            if ($htmlOk === 1) {
+                $note('Czytam HTML '.$this->shortUrl($page));
+            }
+
+            if ($this->isClassicProduct($page)) {
+                $identity = $this->identityFrom($body);
+                $products[$page] = [
+                    'url' => $page,
+                    'title' => $identity['title'],
+                    'extra' => $identity['extra'],
+                ];
+            }
+
+            foreach ($this->extractLinks($body, $host, $page) as $href) {
+                if ($this->isSkippable($href)) {
+                    continue;
+                }
+                $classic = $this->isClassicProduct($href);
+                $pretty = ! $classic && $this->isPrettyProduct($href);
+                if ($classic || $pretty) {
+                    if (! isset($products[$href])) {
+                        $products[$href] = ['url' => $href, 'title' => '', 'extra' => ''];
+                    }
+                    if (count($products) >= $maxUrls) {
+                        break 2;
+                    }
+                }
+                if ($classic) {
+                    continue;
+                }
+                if (! isset($queued[$href]) && count($queue) < self::MAX_QUEUE) {
+                    $queue[] = $href;
+                    $queued[$href] = true;
+                }
+            }
+        }
+
+        $rows = array_values($products);
+        if ($rows !== []) {
+            $note('Z pełzania '.$pages.' stron mam '.count($rows).' kart — czytam te bez kodu w adresie.');
+            $rows = $this->enrich($rows, $deadline);
+        } else {
+            $note('Pełzanie: '.$pages.' stron, HTML OK: '.$htmlOk.', 0 kart.');
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function seeds(string $host): array
+    {
+        $out = ['https://www.'.$host.'/', 'https://'.$host.'/'];
+        foreach (self::SEED_PATHS as $path) {
+            if ($path === '/') {
+                continue;
+            }
+            $out[] = 'https://www.'.$host.$path;
+            $out[] = 'https://'.$host.$path;
+        }
+
+        return $out;
+    }
+
+    private function fetchPage(string $url, int $timeout): ?string
+    {
+        $direct = $this->fetchDirect($url, $timeout);
+        if ($direct !== null) {
+            return $direct;
+        }
+        return $this->reader->fetchForCrawl($url);
+    }
+
+    private function fetchDirect(string $url, int $timeout): ?string
+    {
+        $timeout = max(5, $timeout);
+        try {
+            $response = Http::withHeaders([
+                'User-Agent' => self::USER_AGENT,
+                'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+                'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
+            ])->timeout($timeout)->connectTimeout(min(5, $timeout))
+                ->get($url);
+        } catch (Throwable $e) {
+            Log::info('Shop HTML fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
+
+            return null;
+        }
+        if (! $response->successful()) {
+            return null;
+        }
+        $type = mb_strtolower((string) $response->header('Content-Type'));
+        if (str_contains($type, 'image/') || str_contains($type, 'xml')) {
+            return null;
+        }
+        $body = (string) $response->body();
+        if ($body === '' || mb_strlen($body) < 40) {
+            return null;
+        }
+
+        return mb_substr($body, 0, 400000);
+    }
+
+    /**
+     * @param  list<array{url: string, title: string, extra: string}>  $rows
+     * @return list<array{url: string, title: string, extra: string}>
+     */
+    private function enrich(array $rows, float $deadline): array
+    {
+        $n = 0;
+        foreach ($rows as $i => $row) {
+            if ($n >= self::MAX_PRODUCT_FETCH || microtime(true) >= $deadline) {
+                break;
+            }
+            if ($row['extra'] !== '' || $this->urlHasCode($row['url'])) {
+                continue;
+            }
+            $body = $this->fetchPage($row['url'], self::FETCH_TIMEOUT);
+            $n++;
+            if ($body === null) {
+                continue;
+            }
+            $identity = $this->identityFrom($body);
+            if ($identity['title'] === '' && $identity['extra'] === '') {
+                continue;
+            }
+            $rows[$i] = [
+                'url' => $row['url'],
+                'title' => $identity['title'],
+                'extra' => $identity['extra'],
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @return array{title: string, extra: string}
+     */
+    private function identityFrom(string $body): array
+    {
+        $title = '';
+        if (preg_match('/<h1\b[^>]*>(.*?)<\/h1>/is', $body, $m) === 1) {
+            $title = $this->plain($m[1]);
+        } elseif (preg_match('/^#\s+(.+)$/m', $body, $m) === 1) {
+            $title = $this->plain($m[1]);
+        } elseif (preg_match('/<title\b[^>]*>(.*?)<\/title>/is', $body, $m) === 1) {
+            $title = $this->plain($m[1]);
+        }
+        $title = mb_substr($title, 0, 500);
+        $text = $this->plain(mb_substr($body, 0, 120000));
+        $bits = [];
+        foreach ([
+            '/\bCODE\s*:?\s*([A-Z0-9][A-Z0-9\/\-]{2,24})/i',
+            '/\bSKU\s*:?\s*([A-Z0-9][A-Z0-9\/\-]{2,24})/i',
+            '/\b(?:Kod(?:\s+(?:produktu|towaru))?|Art(?:icle|\.)?\s*(?:nr\.?|no\.?|number)?)\s*:?\s*([A-Z0-9][A-Z0-9\/\-]{2,24})/i',
+            '/\bBRAND\s*:?\s*(.+?)(?=\s+(?:CODE|SKU|SIZES|COLOURS|PRICE|Kod|Producent|Marka)\s*:|$)/i',
+        ] as $re) {
+            if (preg_match($re, $text, $m) === 1) {
+                $bit = trim((string) $m[1]);
+                if ($bit !== '' && mb_strlen($bit) <= 80) {
+                    $bits[] = $bit;
+                }
+            }
+        }
+
+        return [
+            'title' => $title,
+            'extra' => mb_substr(trim($title.' '.implode(' ', $bits)), 0, 500),
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractLinks(string $body, string $host, string $page): array
+    {
+        $hrefs = [];
+        if (preg_match_all('/href\s*=\s*["\']([^"\']+)["\']/i', $body, $m) > 0) {
+            $hrefs = $m[1];
+        }
+        if (preg_match_all('/\]\((https?:[^)\s]+|\/[^)\s]+)\)/i', $body, $m) > 0) {
+            $hrefs = array_merge($hrefs, $m[1]);
+        }
+        $out = [];
+        foreach ($hrefs as $href) {
+            $resolved = $this->resolveHref((string) $href, $host, $page);
+            if ($resolved !== null) {
+                $out[] = $resolved;
+            }
+        }
+
+        return $out;
+    }
+
+    private function resolveHref(string $href, string $host, string $page): ?string
+    {
+        $href = trim(html_entity_decode($href, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($href === '' || str_starts_with($href, '#')
+            || str_starts_with($href, 'mailto:')
+            || str_starts_with($href, 'tel:')
+            || str_starts_with($href, 'javascript:')) {
+            return null;
+        }
+        if (str_starts_with($href, '//')) {
+            $href = 'https:'.$href;
+        } elseif (str_starts_with($href, '/')) {
+            $pageHost = (string) (parse_url($page, PHP_URL_HOST) ?: $host);
+            $href = 'https://'.$pageHost.$href;
+        } elseif (preg_match('#^https?://#i', $href) !== 1) {
+            $href = $this->urlJoin($page !== '' ? $page : 'https://'.$host.'/', $href);
+        }
+        $href = explode('#', $href, 2)[0];
+        $urlHost = mb_strtolower((string) (parse_url($href, PHP_URL_HOST) ?? ''));
+        $urlHost = preg_replace('/^www\./', '', $urlHost) ?? $urlHost;
+        if ($urlHost !== $host && ! str_ends_with($urlHost, '.'.$host)) {
+            return null;
+        }
+
+        return $this->normalizeUrl($href);
+    }
+
+    private function urlJoin(string $base, string $rel): string
+    {
+        $parts = parse_url($base);
+        $scheme = (string) ($parts['scheme'] ?? 'https');
+        $name = (string) ($parts['host'] ?? '');
+        $path = (string) ($parts['path'] ?? '/');
+        if (str_starts_with($rel, '?')) {
+            return $scheme.'://'.$name.$path.$rel;
+        }
+        $dir = preg_replace('#/[^/]*$#', '/', $path !== '' ? $path : '/') ?? '/';
+        if ($dir === '') {
+            $dir = '/';
+        }
+        $joined = $dir.$rel;
+        $segments = [];
+        foreach (explode('/', $joined) as $seg) {
+            if ($seg === '' || $seg === '.') {
+                continue;
+            }
+            if ($seg === '..') {
+                array_pop($segments);
+
+                continue;
+            }
+            $segments[] = $seg;
+        }
+
+        return $scheme.'://'.$name.'/'.implode('/', $segments);
+    }
+
+    private function normalizeUrl(string $url): string
+    {
+        $parts = parse_url($url);
+        if ($parts === false || ! isset($parts['host'])) {
+            return $url;
+        }
+        $path = (string) ($parts['path'] ?? '/');
+        $query = (string) ($parts['query'] ?? '');
+        $kept = [];
+        if ($query !== '') {
+            parse_str($query, $params);
+            foreach ($params as $key => $value) {
+                $name = mb_strtolower((string) $key);
+                if (in_array($name, ['page', 'p', 'pgc', 'pagenumber', 'strona', 'paged'], true)) {
+                    $kept[(string) $key] = $value;
+                }
+            }
+        }
+        $out = ((string) ($parts['scheme'] ?? 'https')).'://'.$parts['host'].($path !== '' ? $path : '/');
+        if ($kept !== []) {
+            $out .= '?'.http_build_query($kept);
+        }
+
+        return $out;
+    }
+
+    private function isClassicProduct(string $url): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        $query = mb_strtolower((string) (parse_url($url, PHP_URL_QUERY) ?? ''));
+        if (str_contains($query, 'id_product=')) {
+            return true;
+        }
+
+        return preg_match('#/p\d+,#', $path) === 1
+            || preg_match('#-p\d{2,}(\.html)?$#', $path) === 1
+            || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
+            || preg_match('#/productpage(/|$)#', $path) === 1
+            || preg_match('#/p/[^/]+/\d+#', $path) === 1;
+    }
+
+    private function isPrettyProduct(string $url): bool
+    {
+        $path = mb_strtolower(trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/'));
+        if ($path === '') {
+            return false;
+        }
+        $slug = preg_replace('/\.(html?|php)$/i', '', (string) basename($path)) ?? '';
+        if ($slug === '' || ! str_contains($slug, '-') || mb_strlen($slug) < 8) {
+            return false;
+        }
+        if (preg_match('/\p{L}/u', $slug) !== 1) {
+            return false;
+        }
+        foreach (['o-nas', 'about-us', 'kontakt', 'contact', 'regulamin', 'privacy', 'cookies', 'login'] as $bad) {
+            if ($slug === $bad) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isSkippable(string $url): bool
+    {
+        $hay = mb_strtolower($url);
+        foreach (['/login', '/account', '/admin', '/checkout', '/cart', '/koszyk', '/konto'] as $bad) {
+            if (str_contains($hay, $bad)) {
+                return true;
+            }
+        }
+
+        return preg_match('#\.(jpe?g|png|gif|webp|css|js|pdf|svg|zip)$#i', (string) (parse_url($url, PHP_URL_PATH) ?? '')) === 1;
+    }
+
+    private function isHomepage(string $url): bool
+    {
+        return trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/') === '';
+    }
+
+    private function urlHasCode(string $url): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        foreach (preg_split('/[^a-z0-9]+/u', $path) ?: [] as $token) {
+            if (preg_match('/^(?=.*[a-z])(?=.*[0-9])[a-z0-9]{5,}$/u', $token) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function plain(string $html): string
+    {
+        $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+        return trim((string) preg_replace('/\s+/u', ' ', $text));
+    }
+
+    private function shortUrl(string $url): string
+    {
+        return mb_strlen($url) > 90 ? mb_substr($url, 0, 87).'…' : $url;
+    }
+}

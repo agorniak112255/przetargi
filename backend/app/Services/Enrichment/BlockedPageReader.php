@@ -108,6 +108,40 @@ final class BlockedPageReader
         ];
     }
 
+    /** Surowy HTML albo markdown z linkami — do crawla sklepu bez sitemapy. */
+    public function fetchForCrawl(string $url): ?string
+    {
+        $url = trim($url);
+        if ($url === '' || (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://'))) {
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(35)
+                ->connectTimeout(8)
+                ->withHeaders([
+                    'Accept' => 'text/html,text/markdown,text/plain,*/*',
+                    'X-Return-Format' => 'html',
+                    'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
+                ])
+                ->get('https://r.jina.ai/'.$url);
+        } catch (Throwable $e) {
+            Log::info('Blocked page crawl fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
+
+            return null;
+        }
+
+        if (! $response->successful()) {
+            return null;
+        }
+        $body = trim($response->body());
+        if ($body === '' || mb_strlen($body) < 40) {
+            return null;
+        }
+
+        return mb_substr($body, 0, 400000);
+    }
+
     private function stripReaderChrome(string $markdown): string
     {
         $markdown = preg_replace('/^Title:.*$/mi', '', $markdown) ?? $markdown;

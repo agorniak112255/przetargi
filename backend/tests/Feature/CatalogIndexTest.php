@@ -1046,6 +1046,41 @@ final class CatalogIndexTest extends TestCase
         );
     }
 
+    public function test_html_crawl_uses_reader_when_shop_is_unreachable(): void
+    {
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            $url = $request->url();
+            if (str_starts_with($url, 'https://r.jina.ai/')) {
+                $target = mb_substr($url, mb_strlen('https://r.jina.ai/'));
+                if (preg_match('#^https://www\.readershop\.test/?$#', $target) === 1) {
+                    return Http::response(
+                        '<html><body><a href="/brandpage/productpage/1/Boot">Boot</a></body></html>',
+                        200,
+                        ['Content-Type' => 'text/html']
+                    );
+                }
+                if (str_contains($target, '/brandpage/productpage/1/Boot')) {
+                    return Http::response(
+                        '<html><body><h1>Boot</h1><p>CODE: JN1001 BRAND: Jonsson</p></body></html>',
+                        200,
+                        ['Content-Type' => 'text/html']
+                    );
+                }
+
+                return Http::response('no', 404);
+            }
+
+            return Http::response('no', 404);
+        });
+
+        $result = app(CatalogSitemapIndexer::class)->index('readershop.test');
+
+        $this->assertGreaterThanOrEqual(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.readershop.test/brandpage/productpage/1/Boot',
+        ]);
+    }
+
     public function test_html_crawl_stops_when_both_homepages_fail(): void
     {
         $hit = [];
