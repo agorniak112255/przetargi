@@ -818,6 +818,67 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
+    public function test_iai_403_card_retries_gvarant_twin(): void
+    {
+        $card = '/p117,sandaly-urgent-302-s1-gray.html';
+        $forbidden = '<html><head><title>403 Forbidden</title></head><body><center><h1>403 Forbidden</h1></center></body></html>';
+        $ok = '<html><body><h1 class="fn">SANDAŁY URGENT 302 S1 GRAY</h1></body></html>';
+        $this->fakeHttp([
+            'https://robocze-buty.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://www.robocze-buty.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://robocze-buty.pl/' => Http::response(
+                '<html><body><a href="'.$card.'">Sandały</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://www.robocze-buty.pl/' => Http::response(
+                '<html><body><a href="'.$card.'">Sandały</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://robocze-buty.pl'.$card => Http::response($forbidden, 403, ['Content-Type' => 'text/html']),
+            'https://www.robocze-buty.pl'.$card => Http::response($forbidden, 403, ['Content-Type' => 'text/html']),
+            'https://gvarant.pl'.$card => Http::response($ok, 200, ['Content-Type' => 'text/html']),
+            'https://www.gvarant.pl'.$card => Http::response($ok, 200, ['Content-Type' => 'text/html']),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('robocze-buty.pl');
+
+        $page = CatalogPage::query()->where('url', 'like', '%'.$card)->first();
+        $this->assertNotNull($page);
+        $this->assertStringContainsString('SANDAŁY URGENT 302', (string) $page->title);
+        $this->assertStringNotContainsString('403', (string) $page->title);
+    }
+
+    public function test_reindex_removes_403_forbidden_titles(): void
+    {
+        $broken = 'https://www.robocze-buty.pl/p117,sandaly-urgent-302-s1-gray.html';
+        CatalogPage::query()->create([
+            'host' => 'www.robocze-buty.pl',
+            'url_hash' => CatalogPage::hashFor($broken),
+            'url' => $broken,
+            'title' => '403 Forbidden 403 Forbidden',
+            'haystack' => $broken,
+            'last_seen_at' => now(),
+        ]);
+        $this->fakeHttp([
+            'https://robocze-buty.pl/robots.txt' => Http::response(
+                "User-agent: *\nSitemap: https://www.robocze-buty.pl/sitemap.xml\n",
+                200
+            ),
+            'https://www.robocze-buty.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.robocze-buty.pl/p28932,polbuty-lemaitre-ales-s3.html</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('robocze-buty.pl');
+
+        $this->assertDatabaseMissing('catalog_pages', ['url' => $broken]);
+    }
+
     public function test_skips_iai_category_filter_urls_from_sitemap(): void
     {
         $this->fakeHttp([

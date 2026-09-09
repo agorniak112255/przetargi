@@ -681,6 +681,9 @@ final class CatalogSitemapIndexer
      */
     private function identityFromHtml(string $html): array
     {
+        if ($this->isErrorPageHtml($html)) {
+            return ['title' => '', 'extra' => ''];
+        }
         $title = '';
         if (preg_match('/<h1\b[^>]*>(.*?)<\/h1>/is', $html, $m) === 1) {
             $title = $this->plainText((string) $m[1]);
@@ -942,6 +945,56 @@ final class CatalogSitemapIndexer
         return preg_match('#\.(jpe?g|png|gif|webp|avif|bmp|svg|css|js|woff2?|ico|pdf|xml|gz|mp4|webm|zip)$#i', $path) === 1;
     }
 
+    /**
+     * @return list<string>
+     */
+    private function fetchCandidates(string $url): array
+    {
+        $out = [$url];
+        $twin = $this->iaiTwinUrl($url);
+        if ($twin !== null) {
+            $out[] = $twin;
+        }
+
+        return $out;
+    }
+
+    private function iaiTwinUrl(string $url): ?string
+    {
+        $parts = parse_url($url);
+        $host = mb_strtolower((string) ($parts['host'] ?? ''));
+        if ($host === '') {
+            return null;
+        }
+        $www = str_starts_with($host, 'www.');
+        $bare = preg_replace('/^www\./', '', $host) ?? $host;
+        $map = ['robocze-buty.pl' => 'gvarant.pl', 'gvarant.pl' => 'robocze-buty.pl'];
+        $twinBare = $map[$bare] ?? null;
+        if ($twinBare === null) {
+            return null;
+        }
+        $twinHost = $www ? 'www.'.$twinBare : $twinBare;
+        $path = (string) ($parts['path'] ?? '/');
+        $query = isset($parts['query']) && $parts['query'] !== '' ? '?'.$parts['query'] : '';
+
+        return ((string) ($parts['scheme'] ?? 'https')).'://'.$twinHost.$path.$query;
+    }
+
+    private function isErrorPageHtml(string $html): bool
+    {
+        $head = mb_strtolower(mb_substr($html, 0, 2500));
+
+        return str_contains($head, '403 forbidden')
+            || (bool) preg_match('#<title>\s*403\b#', $head);
+    }
+
+    private function isErrorPageTitle(string $title): bool
+    {
+        $title = mb_strtolower(trim($title));
+
+        return $title !== '' && (str_contains($title, '403 forbidden') || preg_match('/^403\b/', $title) === 1);
+    }
+
     private function isIaiShopUrl(string $url): bool
     {
         $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
@@ -988,7 +1041,8 @@ final class CatalogSitemapIndexer
             ->chunkById(500, function ($pages) use (&$deleted): void {
                 $ids = [];
                 foreach ($pages as $page) {
-                    if ($this->isSkippableUrl((string) $page->url)) {
+                    if ($this->isSkippableUrl((string) $page->url)
+                        || $this->isErrorPageTitle((string) ($page->title ?? ''))) {
                         $ids[] = (int) $page->id;
                     }
                 }
@@ -1006,13 +1060,15 @@ final class CatalogSitemapIndexer
     {
         $timeout = max(5, $timeout);
         if (! app()->environment('testing')) {
-            $viaCurl = $this->fetchViaCurl(
-                $url,
-                $timeout,
-                'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'
-            );
-            if ($viaCurl !== null && $this->looksLikeHtml($viaCurl)) {
-                return mb_substr($viaCurl, 0, 400000);
+            foreach ($this->fetchCandidates($url) as $candidate) {
+                $viaCurl = $this->fetchViaCurl(
+                    $candidate,
+                    $timeout,
+                    'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'
+                );
+                if ($viaCurl !== null && $this->looksLikeHtml($viaCurl) && ! $this->isErrorPageHtml($viaCurl)) {
+                    return mb_substr($viaCurl, 0, 400000);
+                }
             }
 
             return null;
@@ -1235,6 +1291,10 @@ final class CatalogSitemapIndexer
     {
         $now = now();
         $manufacturer = $this->pageManufacturer->resolve($host, $url);
+        if ($this->isErrorPageTitle($title) || $this->isErrorPageTitle($extra)) {
+            $title = '';
+            $extra = '';
+        }
         $label = trim($title.' '.$extra);
         $haystack = $this->haystackFor($url, $label);
         if ($manufacturer !== null) {

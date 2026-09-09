@@ -140,6 +140,10 @@ final class ShopHtmlCrawler
         if ($rows !== []) {
             $note('Z pełzania '.$pages.' stron mam '.count($rows).' kart — czytam te bez kodu w adresie.');
             $rows = $this->enrich($rows, $deadline, $note);
+            $rows = array_values(array_filter(
+                $rows,
+                fn (array $row): bool => ! $this->isErrorPageTitle((string) ($row['title'] ?? ''))
+            ));
         } else {
             $note('Pełzanie: '.$pages.' stron, HTML OK: '.$htmlOk.', 0 kart.');
         }
@@ -166,18 +170,81 @@ final class ShopHtmlCrawler
 
     private function fetchPage(string $url, int $timeout): ?string
     {
-        if (! $this->preferReader) {
-            $direct = $this->fetchDirect($url, $timeout);
-            if ($direct !== null) {
-                return $direct;
+        foreach ($this->fetchCandidates($url) as $candidate) {
+            if (! $this->preferReader) {
+                $direct = $this->usableHtml($this->fetchDirect($candidate, $timeout));
+                if ($direct !== null) {
+                    return $direct;
+                }
+            }
+            $via = $this->usableHtml($this->reader->fetchForCrawl($candidate));
+            if ($via !== null) {
+                $this->preferReader = true;
+
+                return $via;
             }
         }
-        $via = $this->reader->fetchForCrawl($url);
-        if ($via !== null) {
-            $this->preferReader = true;
+
+        return null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function fetchCandidates(string $url): array
+    {
+        $out = [$url];
+        $twin = $this->iaiTwinUrl($url);
+        if ($twin !== null) {
+            $out[] = $twin;
         }
 
-        return $via;
+        return $out;
+    }
+
+    private function usableHtml(?string $html): ?string
+    {
+        if ($html === null || $this->isErrorPageHtml($html)) {
+            return null;
+        }
+
+        return $html;
+    }
+
+    private function isErrorPageHtml(string $html): bool
+    {
+        $head = mb_strtolower(mb_substr($html, 0, 2500));
+
+        return str_contains($head, '403 forbidden')
+            || (bool) preg_match('#<title>\s*403\b#', $head);
+    }
+
+    private function isErrorPageTitle(string $title): bool
+    {
+        $title = mb_strtolower(trim($title));
+
+        return $title !== '' && (str_contains($title, '403 forbidden') || preg_match('/^403\b/', $title) === 1);
+    }
+
+    private function iaiTwinUrl(string $url): ?string
+    {
+        $parts = parse_url($url);
+        $host = mb_strtolower((string) ($parts['host'] ?? ''));
+        if ($host === '') {
+            return null;
+        }
+        $www = str_starts_with($host, 'www.');
+        $bare = preg_replace('/^www\./', '', $host) ?? $host;
+        $map = ['robocze-buty.pl' => 'gvarant.pl', 'gvarant.pl' => 'robocze-buty.pl'];
+        $twinBare = $map[$bare] ?? null;
+        if ($twinBare === null) {
+            return null;
+        }
+        $twinHost = $www ? 'www.'.$twinBare : $twinBare;
+        $path = (string) ($parts['path'] ?? '/');
+        $query = isset($parts['query']) && $parts['query'] !== '' ? '?'.$parts['query'] : '';
+
+        return ((string) ($parts['scheme'] ?? 'https')).'://'.$twinHost.$path.$query;
     }
 
     private function fetchDirect(string $url, int $timeout): ?string
@@ -249,6 +316,9 @@ final class ShopHtmlCrawler
      */
     private function identityFrom(string $body): array
     {
+        if ($this->isErrorPageHtml($body)) {
+            return ['title' => '', 'extra' => ''];
+        }
         $title = '';
         if (preg_match('/<h1\b[^>]*>(.*?)<\/h1>/is', $body, $m) === 1) {
             $title = $this->plain($m[1]);
