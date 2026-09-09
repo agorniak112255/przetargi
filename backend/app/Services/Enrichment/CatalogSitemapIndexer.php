@@ -47,6 +47,11 @@ final class CatalogSitemapIndexer
     /** Karty bez kodu w adresie — ile stron produktu czytamy pod SKU/nazwę. */
     private const HTML_PRODUCT_FETCH_MAX = 400;
 
+    /** Krótki probe zanim wydłużymy timeout — serwer często w ogóle nie widzi hosta. */
+    private const HTML_PROBE_TIMEOUT = 6;
+
+    private const HTML_FETCH_TIMEOUT = 30;
+
     /** Poniżej tylu adresów z sitemapy dokładamy pełzanie po ładnych URL-ach kart. */
     private const SPARSE_SITEMAP_LIMIT = 50;
 
@@ -488,7 +493,7 @@ final class CatalogSitemapIndexer
             '-sL',
             '--ipv4',
             '--max-time', (string) $timeout,
-            '--connect-timeout', '8',
+            '--connect-timeout', (string) max(2, min(5, $timeout)),
             '--compressed',
             '-A', self::USER_AGENT,
             '-H', $accept,
@@ -592,6 +597,7 @@ final class CatalogSitemapIndexer
         $rows = [];
         $pages = 0;
         $htmlOk = 0;
+        $homeFails = 0;
 
         while ($queue !== [] && $pages < self::HTML_CRAWL_PAGES && count($rows) < $maxUrls) {
             if (microtime(true) >= $deadline) {
@@ -603,11 +609,19 @@ final class CatalogSitemapIndexer
                 continue;
             }
             $fetched[$key] = true;
-            $html = $this->fetchHtml($page);
+            $timeout = $htmlOk === 0 ? self::HTML_PROBE_TIMEOUT : self::HTML_FETCH_TIMEOUT;
+            $html = $this->fetchHtml($page, $timeout);
             $pages++;
             if ($html === null) {
+                if ($this->isHomepageUrl($page)) {
+                    $homeFails++;
+                }
                 if ($pages <= 4) {
                     $this->note($host, 'Brak HTML: '.$this->shortUrl($page));
+                }
+                if ($htmlOk === 0 && $homeFails >= 2) {
+                    $this->note($host, 'Serwer nie pobiera HTML z tej witryny — przerywam.');
+                    break;
                 }
 
                 continue;
@@ -656,8 +670,11 @@ final class CatalogSitemapIndexer
      */
     private function crawlSeeds(string $host): array
     {
-        $paths = [
-            '/',
+        $out = [
+            'https://www.'.$host.'/',
+            'https://'.$host.'/',
+        ];
+        foreach ([
             '/products/productcategory/Footwear',
             '/products/productcategory/Workwear',
             '/products/productcategory/PPE',
@@ -665,15 +682,19 @@ final class CatalogSitemapIndexer
             '/resources',
             '/products',
             '/produkty',
-        ];
-        $out = [];
-        foreach (['www.'.$host, $host] as $name) {
-            foreach ($paths as $path) {
-                $out[] = 'https://'.$name.$path;
-            }
+        ] as $path) {
+            $out[] = 'https://www.'.$host.$path;
+            $out[] = 'https://'.$host.$path;
         }
 
         return $out;
+    }
+
+    private function isHomepageUrl(string $url): bool
+    {
+        $path = trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/');
+
+        return $path === '';
     }
 
     /**
@@ -1009,24 +1030,27 @@ final class CatalogSitemapIndexer
         return $deleted;
     }
 
-    private function fetchHtml(string $url): ?string
+    private function fetchHtml(string $url, int $timeout = self::HTML_FETCH_TIMEOUT): ?string
     {
+        $timeout = max(5, $timeout);
         if (! app()->environment('testing')) {
             $viaCurl = $this->fetchViaCurl(
                 $url,
-                30,
+                $timeout,
                 'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'
             );
             if ($viaCurl !== null && $this->looksLikeHtml($viaCurl)) {
                 return mb_substr($viaCurl, 0, 400000);
             }
+
+            return null;
         }
         try {
             $response = Http::withHeaders([
                 'User-Agent' => self::USER_AGENT,
                 'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
                 'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
-            ])->timeout(30)->connectTimeout(10)
+            ])->timeout($timeout)->connectTimeout(min(5, $timeout))
                 ->withOptions(['curl' => $this->curlResolveV4()])
                 ->get($url);
         } catch (Throwable $e) {

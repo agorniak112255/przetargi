@@ -1046,6 +1046,23 @@ final class CatalogIndexTest extends TestCase
         );
     }
 
+    public function test_html_crawl_stops_when_both_homepages_fail(): void
+    {
+        $hit = [];
+        Http::fake(function (\Illuminate\Http\Client\Request $request) use (&$hit) {
+            $hit[] = $request->url();
+
+            return Http::response('no', 404);
+        });
+
+        $result = app(CatalogSitemapIndexer::class)->index('deadshop.test');
+
+        $this->assertSame(0, $result['saved']);
+        foreach ($hit as $url) {
+            $this->assertStringNotContainsString('productcategory', (string) $url);
+        }
+    }
+
     public function test_html_crawl_resolves_relative_productpage_href(): void
     {
         $this->fakeHttp([
