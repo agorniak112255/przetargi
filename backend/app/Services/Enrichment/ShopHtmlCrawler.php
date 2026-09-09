@@ -44,11 +44,14 @@ final class ShopHtmlCrawler
         private readonly BlockedPageReader $reader,
     ) {}
 
+    private bool $preferReader = false;
+
     /**
      * @return list<array{url: string, title: string, extra: string}>
      */
     public function crawl(string $host, int $maxUrls, float $deadline, callable $note): array
     {
+        $this->preferReader = false;
         $queue = $this->seeds($host);
         $queued = array_fill_keys($queue, true);
         $fetched = [];
@@ -67,16 +70,14 @@ final class ShopHtmlCrawler
                 continue;
             }
             $fetched[$key] = true;
-            $timeout = $htmlOk === 0 ? self::PROBE_TIMEOUT : self::FETCH_TIMEOUT;
+            $timeout = $this->preferReader ? self::FETCH_TIMEOUT : self::PROBE_TIMEOUT;
             $body = $this->fetchPage($page, $timeout);
             $pages++;
             if ($body === null) {
                 if ($this->isHomepage($page)) {
                     $homeFails++;
                 }
-                if ($pages <= 4) {
-                    $note('Brak HTML: '.$this->shortUrl($page));
-                }
+                $note(sprintf('[BRAK %d] kolejka=%d kart=%d %s', $pages, count($queue), count($products), $this->shortUrl($page)));
                 if ($htmlOk === 0 && $homeFails >= 2) {
                     $note('Serwer nie pobiera HTML z tej witryny — przerywam.');
                     break;
@@ -85,9 +86,10 @@ final class ShopHtmlCrawler
                 continue;
             }
             $htmlOk++;
-            if ($htmlOk === 1) {
-                $note('Czytam HTML '.$this->shortUrl($page));
+            if ($htmlOk === 1 && $this->preferReader) {
+                $note('Dalej przez reader (sklep nie odpowiada bezpośrednio).');
             }
+            $note(sprintf('[OK %d] kolejka=%d kart=%d %s', $pages, count($queue), count($products), $this->shortUrl($page)));
 
             if ($this->isClassicProduct($page)) {
                 $identity = $this->identityFrom($body);
@@ -99,7 +101,7 @@ final class ShopHtmlCrawler
             }
 
             foreach ($this->extractLinks($body, $host, $page) as $href) {
-                if ($this->isSkippable($href)) {
+                if ($this->isSkippable($href) || $this->isFilterPath($href)) {
                     continue;
                 }
                 $classic = $this->isClassicProduct($href);
@@ -125,7 +127,7 @@ final class ShopHtmlCrawler
         $rows = array_values($products);
         if ($rows !== []) {
             $note('Z pełzania '.$pages.' stron mam '.count($rows).' kart — czytam te bez kodu w adresie.');
-            $rows = $this->enrich($rows, $deadline);
+            $rows = $this->enrich($rows, $deadline, $note);
         } else {
             $note('Pełzanie: '.$pages.' stron, HTML OK: '.$htmlOk.', 0 kart.');
         }
@@ -152,11 +154,18 @@ final class ShopHtmlCrawler
 
     private function fetchPage(string $url, int $timeout): ?string
     {
-        $direct = $this->fetchDirect($url, $timeout);
-        if ($direct !== null) {
-            return $direct;
+        if (! $this->preferReader) {
+            $direct = $this->fetchDirect($url, $timeout);
+            if ($direct !== null) {
+                return $direct;
+            }
         }
-        return $this->reader->fetchForCrawl($url);
+        $via = $this->reader->fetchForCrawl($url);
+        if ($via !== null) {
+            $this->preferReader = true;
+        }
+
+        return $via;
     }
 
     private function fetchDirect(string $url, int $timeout): ?string
@@ -193,7 +202,7 @@ final class ShopHtmlCrawler
      * @param  list<array{url: string, title: string, extra: string}>  $rows
      * @return list<array{url: string, title: string, extra: string}>
      */
-    private function enrich(array $rows, float $deadline): array
+    private function enrich(array $rows, float $deadline, callable $note): array
     {
         $n = 0;
         foreach ($rows as $i => $row) {
@@ -205,6 +214,7 @@ final class ShopHtmlCrawler
             }
             $body = $this->fetchPage($row['url'], self::FETCH_TIMEOUT);
             $n++;
+            $note(sprintf('[KARTA %d] %s', $n, $this->shortUrl($row['url'])));
             if ($body === null) {
                 continue;
             }
@@ -401,10 +411,22 @@ final class ShopHtmlCrawler
         return true;
     }
 
+    private function isFilterPath(string $url): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        foreach (['/status/', '/producttype/', '/productstyle/', '/pricerange/', '/recommend/', '/colour/', '/color/'] as $bad) {
+            if (str_contains($path, $bad)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function isSkippable(string $url): bool
     {
         $hay = mb_strtolower($url);
-        foreach (['/login', '/account', '/admin', '/checkout', '/cart', '/koszyk', '/konto'] as $bad) {
+        foreach (['/login', '/account', '/admin', '/checkout', '/cart', '/koszyk', '/konto', '/logoimages/', '/fieldimages/'] as $bad) {
             if (str_contains($hay, $bad)) {
                 return true;
             }
