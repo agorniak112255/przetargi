@@ -42,6 +42,7 @@ final class ShopHtmlCrawler
 
     public function __construct(
         private readonly BlockedPageReader $reader,
+        private readonly ShopCatalogUrl $catalogUrl,
     ) {}
 
     private bool $preferReader = false;
@@ -102,7 +103,7 @@ final class ShopHtmlCrawler
             }
             $note(sprintf('[OK %d] kolejka=%d kart=%d %s', $pages, count($queue), count($products), $this->shortUrl($page)));
 
-            if ($this->isClassicProduct($page)) {
+            if ($this->catalogUrl->isClassicProduct($page)) {
                 $identity = $this->identityFrom($body);
                 $products[$page] = [
                     'url' => $page,
@@ -116,8 +117,8 @@ final class ShopHtmlCrawler
                 if ($this->isSkippable($href) || $this->isFilterPath($href) || $this->isJunkPath($href)) {
                     continue;
                 }
-                $classic = $this->isClassicProduct($href);
-                $pretty = ! $classic && $this->isPrettyProduct($href);
+                $classic = $this->catalogUrl->isClassicProduct($href);
+                $pretty = ! $classic && $this->catalogUrl->isPrettyProduct($href);
                 if ($classic || $pretty) {
                     if (! isset($products[$href])) {
                         $products[$href] = ['url' => $href, 'title' => '', 'extra' => ''];
@@ -157,7 +158,7 @@ final class ShopHtmlCrawler
     private function seeds(string $host): array
     {
         $out = ['https://www.'.$host.'/', 'https://'.$host.'/'];
-        $extra = $this->isIaiShop($host)
+        $extra = $this->catalogUrl->isIaiShop($host)
             ? ['/polbuty/', '/sandaly/', '/trzewiki/', '/rekawice-robocze/', '/odziez-robocza/']
             : array_values(array_filter(self::SEED_PATHS, static fn (string $path): bool => $path !== '/'));
         foreach ($extra as $path) {
@@ -410,13 +411,6 @@ final class ShopHtmlCrawler
         return $this->iaiTwinBare($crawlHost) === $urlHost;
     }
 
-    private function isIaiShop(string $host): bool
-    {
-        $host = preg_replace('/^www\./', '', mb_strtolower($host)) ?? $host;
-
-        return in_array($host, ['gvarant.pl', 'robocze-buty.pl'], true);
-    }
-
     private function iaiTwinBare(string $host): ?string
     {
         $host = preg_replace('/^www\./', '', mb_strtolower($host)) ?? $host;
@@ -480,47 +474,6 @@ final class ShopHtmlCrawler
         return $out;
     }
 
-    private function isClassicProduct(string $url): bool
-    {
-        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
-        $query = mb_strtolower((string) (parse_url($url, PHP_URL_QUERY) ?? ''));
-        if (str_contains($query, 'id_product=')) {
-            return true;
-        }
-
-        return $this->isIaiProductCard($path)
-            || preg_match('#-p\d{2,}(\.html)?$#', $path) === 1
-            || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
-            || preg_match('#/productpage(/|$)#', $path) === 1
-            || preg_match('#/p/[^/]+/\d+#', $path) === 1;
-    }
-
-    private function isPrettyProduct(string $url): bool
-    {
-        $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
-        if (in_array($host, ['gvarant.pl', 'robocze-buty.pl'], true)) {
-            return false;
-        }
-        $path = mb_strtolower(trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/'));
-        if ($path === '') {
-            return false;
-        }
-        $slug = preg_replace('/\.(html?|php)$/i', '', (string) basename($path)) ?? '';
-        if ($slug === '' || str_contains($slug, ',') || ! str_contains($slug, '-') || mb_strlen($slug) < 8) {
-            return false;
-        }
-        if (preg_match('/\p{L}/u', $slug) !== 1) {
-            return false;
-        }
-        foreach (['o-nas', 'about-us', 'kontakt', 'contact', 'regulamin', 'privacy', 'cookies', 'login'] as $bad) {
-            if ($slug === $bad) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     private function lockUrl(string $url): string
     {
         if ($this->lockHost === null || $this->lockHost === '') {
@@ -534,7 +487,7 @@ final class ShopHtmlCrawler
             return $url;
         }
         $path = (string) ($parts['path'] ?? '/');
-        if ($this->isIaiProductCard($path)) {
+        if ($this->catalogUrl->isIaiProductCard($path)) {
             $from = preg_replace('/^www\./', '', mb_strtolower((string) $parts['host'])) ?? '';
             $to = preg_replace('/^www\./', '', $this->lockHost) ?? '';
             if ($this->iaiTwinBare($from) === $to) {
@@ -567,18 +520,11 @@ final class ShopHtmlCrawler
                 return true;
             }
         }
-        if ($this->isIaiProductCard($path)) {
+        if ($this->catalogUrl->isIaiProductCard($path)) {
             return false;
         }
 
         return str_contains((string) basename(rtrim($path, '/')), ',');
-    }
-
-    private function isIaiProductCard(string $path): bool
-    {
-        $path = mb_strtolower(rtrim($path, '/'));
-
-        return str_ends_with($path, '.html') && preg_match('#/p\d+,[^/]+$#', $path) === 1;
     }
 
     private function isSkippable(string $url): bool

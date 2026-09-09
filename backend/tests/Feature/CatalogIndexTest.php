@@ -50,7 +50,7 @@ final class CatalogIndexTest extends TestCase
             'https://optimumbhp.pl/sitemap-products.xml' => Http::response(
                 '<?xml version="1.0"?><urlset>'
                 .'<url><loc>https://optimumbhp.pl/REKAWICE-1202-URGENT-p138481</loc></url>'
-                .'<url><loc>https://inny-sklep.pl/cos-obcego</loc></url>'
+                .'<url><loc>https://inny-sklep.pl/cos-obcego-123</loc></url>'
                 .'</urlset>',
                 200
             ),
@@ -262,7 +262,7 @@ final class CatalogIndexTest extends TestCase
             ),
             'https://www.brand.pl/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><urlset>'
-                .'<url><loc>https://www.brand.pl/rekawice-ox-on</loc></url>'
+                .'<url><loc>https://www.brand.pl/rekawice-ox-on-4500</loc></url>'
                 .'</urlset>',
                 200
             ),
@@ -271,7 +271,7 @@ final class CatalogIndexTest extends TestCase
         $result = app(CatalogSitemapIndexer::class)->index('brand.pl');
 
         $this->assertSame(1, $result['saved']);
-        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://www.brand.pl/rekawice-ox-on']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://www.brand.pl/rekawice-ox-on-4500']);
     }
 
     public function test_missing_only_retry_empty_reindexes_zero_hosts(): void
@@ -1015,14 +1015,79 @@ final class CatalogIndexTest extends TestCase
 
         $result = app(CatalogSitemapIndexer::class)->index('marelplus.pl');
 
-        $this->assertSame(3, $result['saved']);
+        $this->assertSame(2, $result['saved']);
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://marelplus.pl/polbuty-cadiz-s1ps-fo-sr']);
-        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://marelplus.pl/kurtka-argo']);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://marelplus.pl/kurtka-argo']);
         $this->assertDatabaseHas('catalog_pages', [
             'url' => 'https://marelplus.pl/produkty/pozostale/filtry/filtr-3m-5935-p3',
         ]);
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://marelplus.pl/o-nas']);
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://marelplus.pl/kontakt']);
+    }
+
+    public function test_skips_shop_listings_from_sitemap_for_common_platforms(): void
+    {
+        $this->fakeHttp([
+            'https://shop.pl/robots.txt' => Http::response("Sitemap: https://shop.pl/sitemap.xml\n", 200),
+            'https://shop.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://shop.pl/buty-hoka-speedgoat-7-zielone</loc></url>'
+                .'<url><loc>https://shop.pl/123-buty-robocze-s3.html</loc></url>'
+                .'<url><loc>https://shop.pl/produkt/kurtka-softshell-damska</loc></url>'
+                .'<url><loc>https://shop.pl/namioty-kemping</loc></url>'
+                .'<url><loc>https://shop.pl/namioty-kemping:dla_1_osoby</loc></url>'
+                .'<url><loc>https://shop.pl/on-running</loc></url>'
+                .'<url><loc>https://shop.pl/kategoria/buty-robocze</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('shop.pl');
+
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://shop.pl/buty-hoka-speedgoat-7-zielone']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://shop.pl/123-buty-robocze-s3.html']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://shop.pl/produkt/kurtka-softshell-damska']);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://shop.pl/namioty-kemping']);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://shop.pl/namioty-kemping:dla_1_osoby']);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://shop.pl/on-running']);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://shop.pl/kategoria/buty-robocze']);
+        $this->assertSame(3, $result['saved']);
+    }
+
+    public function test_crawls_pretty_cards_but_not_shop_listings(): void
+    {
+        $home = '<!DOCTYPE html><html><body>'
+            .'<a href="/buty-do-biegania-new-balance-fuelcell-rebel-v5-zielony">Rebel</a>'
+            .'<a href="/namioty-kemping">Namioty</a>'
+            .'<a href="/namioty-kemping:dla_2_osob">2 os.</a>'
+            .'<a href="/on-running">On</a>'
+            .'<a href="/la-sportiva">La Sportiva</a>'
+            .'</body></html>';
+        $this->fakeHttp([
+            'https://deporvillage.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://www.deporvillage.pl/' => Http::response($home, 200, ['Content-Type' => 'text/html']),
+            'https://deporvillage.pl/' => Http::response($home, 200, ['Content-Type' => 'text/html']),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('deporvillage.pl');
+
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.deporvillage.pl/buty-do-biegania-new-balance-fuelcell-rebel-v5-zielony',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.deporvillage.pl/namioty-kemping',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.deporvillage.pl/namioty-kemping:dla_2_osob',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.deporvillage.pl/on-running',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.deporvillage.pl/la-sportiva',
+        ]);
     }
 
     public function test_html_crawl_fills_sparse_sitemap(): void

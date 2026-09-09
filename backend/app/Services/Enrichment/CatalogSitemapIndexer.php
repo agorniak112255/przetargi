@@ -104,6 +104,7 @@ final class CatalogSitemapIndexer
         private readonly CatalogIndexProgress $progress,
         private readonly CatalogPageManufacturer $pageManufacturer,
         private readonly ShopHtmlCrawler $shopCrawler,
+        private readonly ShopCatalogUrl $catalogUrl,
     ) {}
 
     /**
@@ -828,43 +829,17 @@ final class CatalogSitemapIndexer
 
     private function looksLikeProductUrl(string $url): bool
     {
-        return $this->looksLikeClassicProductUrl($url) || $this->looksLikePrettyProductUrl($url);
+        return $this->catalogUrl->isProductCard($url);
     }
 
     private function looksLikeClassicProductUrl(string $url): bool
     {
-        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
-        $query = mb_strtolower((string) (parse_url($url, PHP_URL_QUERY) ?? ''));
-        if (str_contains($query, 'id_product=')) {
-            return true;
-        }
-
-        return $this->isIaiProductCard($path)
-            || preg_match('#-p\d{2,}(\.html)?$#', $path) === 1
-            || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
-            || preg_match('#/productpage(/|$)#', $path) === 1
-            || preg_match('#/p/[^/]+/\d+#', $path) === 1;
+        return $this->catalogUrl->isClassicProduct($url);
     }
 
     private function looksLikePrettyProductUrl(string $url): bool
     {
-        if ($this->isIaiShopUrl($url)) {
-            return false;
-        }
-        $path = mb_strtolower(trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/'));
-        if ($path === '') {
-            return false;
-        }
-        $segments = explode('/', $path);
-        $slug = preg_replace('/\.(html?|php)$/i', '', (string) end($segments)) ?? '';
-        if ($slug === '' || str_contains($slug, ',') || ! str_contains($slug, '-') || mb_strlen($slug) < 8) {
-            return false;
-        }
-        if (preg_match('/\p{L}/u', $slug) !== 1) {
-            return false;
-        }
-
-        return ! $this->isInformationalSlug($slug);
+        return $this->catalogUrl->isPrettyProduct($url);
     }
 
     private function looksLikeListingPath(string $url): bool
@@ -886,23 +861,6 @@ final class CatalogSitemapIndexer
         $locHost = $this->normalizeHost((string) (parse_url($href, PHP_URL_HOST) ?? $host));
 
         return $this->rowFor($locHost !== '' ? $locHost : $host, $href, $title, $extra);
-    }
-
-    private function isInformationalSlug(string $slug): bool
-    {
-        foreach ([
-            'o-nas', 'o-firmie', 'about-us', 'about', 'kontakt', 'contact-us', 'contact',
-            'regulamin', 'terms', 'polityka-prywatnosci', 'privacy-policy', 'privacy',
-            'polityka-cookies', 'cookies', 'dostawa-i-platnosc', 'dostawa-i-platnosci',
-            'shipping', 'returns', 'reklamacje', 'rodo', 'faq', 'pomoc',
-            'logowanie', 'rejestracja', 'moje-konto', 'objasnienia-kodow', 'objasnienia-kodow',
-        ] as $bad) {
-            if ($slug === $bad) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private function looksLikeCategoryUrl(string $url): bool
@@ -935,10 +893,10 @@ final class CatalogSitemapIndexer
             }
         }
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
-        if ($this->isFacetListingPath($path)) {
+        if ($this->catalogUrl->isIndexListing($url)) {
             return true;
         }
-        if ($this->isIaiShopUrl($url) && ! $this->isIaiProductCard($path)) {
+        if ($this->catalogUrl->isIaiShop($url) && ! $this->catalogUrl->isIaiProductCard($path)) {
             return trim($path, '/') !== '';
         }
 
@@ -997,28 +955,13 @@ final class CatalogSitemapIndexer
 
     private function isIaiShopUrl(string $url): bool
     {
-        $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
-
-        return in_array($host, ['gvarant.pl', 'robocze-buty.pl'], true);
+        return $this->catalogUrl->isIaiShop($url);
     }
 
     /** Karta IAI: /p117,sandaly-urgent-302-s1-gray.html — bez .html to grupa/filtr. */
     private function isIaiProductCard(string $path): bool
     {
-        $path = mb_strtolower(rtrim($path, '/'));
-
-        return str_ends_with($path, '.html') && preg_match('#/p\d+,[^/]+$#', $path) === 1;
-    }
-
-    /** IAI/Presta: /p123,slug.html to karta; /kategoria,44-/ to pusta lista z filtrem. */
-    private function isFacetListingPath(string $path): bool
-    {
-        if ($this->isIaiProductCard($path)) {
-            return false;
-        }
-        $slug = (string) basename(rtrim($path, '/'));
-
-        return str_contains($slug, ',');
+        return $this->catalogUrl->isIaiProductCard($path);
     }
 
     /**
