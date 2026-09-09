@@ -792,6 +792,7 @@ final class CatalogIndexTest extends TestCase
             'https://gvarant.pl/rekawice-robocze/' => Http::response(
                 '<!DOCTYPE html><html><body>'
                 .'<a href="/p494,rekawice-reis-rlevel5.html">Rękawice Reis</a>'
+                .'<a href="/drewniaki-klapki,44-/">Rozmiar 44</a>'
                 .'</body></html>',
                 200,
                 ['Content-Type' => 'text/html']
@@ -804,6 +805,72 @@ final class CatalogIndexTest extends TestCase
         $this->assertGreaterThanOrEqual(1, $result['saved']);
         $this->assertDatabaseHas('catalog_pages', [
             'url' => 'https://gvarant.pl/p494,rekawice-reis-rlevel5.html',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://gvarant.pl/drewniaki-klapki,44-/',
+        ]);
+    }
+
+    public function test_skips_iai_category_filter_urls_from_sitemap(): void
+    {
+        $this->fakeHttp([
+            'https://robocze-buty.pl/robots.txt' => Http::response(
+                "User-agent: *\nSitemap: https://www.robocze-buty.pl/sitemap.xml\n",
+                200
+            ),
+            'https://www.robocze-buty.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.robocze-buty.pl/p28932,polbuty-lemaitre-securite-ales-s3-ci.html</loc></url>'
+                .'<url><loc>https://www.robocze-buty.pl/drewniaki-klapki,44-/</loc></url>'
+                .'<url><loc>https://www.robocze-buty.pl/drewniaki-klapki,41-42-/</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('robocze-buty.pl');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.robocze-buty.pl/p28932,polbuty-lemaitre-securite-ales-s3-ci.html',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.robocze-buty.pl/drewniaki-klapki,44-/',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.robocze-buty.pl/drewniaki-klapki,41-42-/',
+        ]);
+    }
+
+    public function test_reindex_removes_iai_category_filter_urls(): void
+    {
+        $listing = 'https://www.robocze-buty.pl/drewniaki-klapki,44-/';
+        CatalogPage::query()->create([
+            'host' => 'www.robocze-buty.pl',
+            'url_hash' => CatalogPage::hashFor($listing),
+            'url' => $listing,
+            'title' => null,
+            'haystack' => $listing,
+            'last_seen_at' => now(),
+        ]);
+        $this->fakeHttp([
+            'https://robocze-buty.pl/robots.txt' => Http::response(
+                "User-agent: *\nSitemap: https://www.robocze-buty.pl/sitemap.xml\n",
+                200
+            ),
+            'https://www.robocze-buty.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.robocze-buty.pl/p28932,polbuty-lemaitre-ales-s3.html</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('robocze-buty.pl');
+
+        $this->assertDatabaseMissing('catalog_pages', ['url' => $listing]);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.robocze-buty.pl/p28932,polbuty-lemaitre-ales-s3.html',
         ]);
     }
 

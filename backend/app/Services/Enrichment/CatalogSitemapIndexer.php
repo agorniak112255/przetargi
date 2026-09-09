@@ -836,7 +836,7 @@ final class CatalogSitemapIndexer
             return true;
         }
 
-        return preg_match('#/p\d+,#', $path) === 1
+        return preg_match('#/p\d+,[^/]+\.html$#', $path) === 1
             || preg_match('#-p\d{2,}(\.html)?$#', $path) === 1
             || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
             || preg_match('#/productpage(/|$)#', $path) === 1
@@ -851,7 +851,7 @@ final class CatalogSitemapIndexer
         }
         $segments = explode('/', $path);
         $slug = preg_replace('/\.(html?|php)$/i', '', (string) end($segments)) ?? '';
-        if ($slug === '' || ! str_contains($slug, '-') || mb_strlen($slug) < 8) {
+        if ($slug === '' || str_contains($slug, ',') || ! str_contains($slug, '-') || mb_strlen($slug) < 8) {
             return false;
         }
         if (preg_match('/\p{L}/u', $slug) !== 1) {
@@ -929,8 +929,22 @@ final class CatalogSitemapIndexer
             }
         }
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        if ($this->isFacetListingPath($path)) {
+            return true;
+        }
 
         return preg_match('#\.(jpe?g|png|gif|webp|avif|bmp|svg|css|js|woff2?|ico|pdf|xml|gz|mp4|webm|zip)$#i', $path) === 1;
+    }
+
+    /** IAI/Presta: /p123,slug.html to karta; /kategoria,44-/ to pusta lista z filtrem. */
+    private function isFacetListingPath(string $path): bool
+    {
+        if (preg_match('#/p\d+,[^/]+\.html$#', $path) === 1) {
+            return false;
+        }
+        $slug = (string) basename(rtrim($path, '/'));
+
+        return str_contains($slug, ',');
     }
 
     /**

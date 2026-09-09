@@ -394,7 +394,7 @@ final class ShopHtmlCrawler
             return true;
         }
 
-        return preg_match('#/p\d+,#', $path) === 1
+        return preg_match('#/p\d+,[^/]+\.html$#', $path) === 1
             || preg_match('#-p\d{2,}(\.html)?$#', $path) === 1
             || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
             || preg_match('#/productpage(/|$)#', $path) === 1
@@ -408,7 +408,7 @@ final class ShopHtmlCrawler
             return false;
         }
         $slug = preg_replace('/\.(html?|php)$/i', '', (string) basename($path)) ?? '';
-        if ($slug === '' || ! str_contains($slug, '-') || mb_strlen($slug) < 8) {
+        if ($slug === '' || str_contains($slug, ',') || ! str_contains($slug, '-') || mb_strlen($slug) < 8) {
             return false;
         }
         if (preg_match('/\p{L}/u', $slug) !== 1) {
@@ -462,8 +462,11 @@ final class ShopHtmlCrawler
                 return true;
             }
         }
+        if (preg_match('#/p\d+,[^/]+\.html$#', $path) === 1) {
+            return false;
+        }
 
-        return false;
+        return str_contains((string) basename(rtrim($path, '/')), ',');
     }
 
     private function isSkippable(string $url): bool
