@@ -1046,6 +1046,32 @@ final class CatalogIndexTest extends TestCase
         );
     }
 
+    public function test_html_crawl_resolves_relative_productpage_href(): void
+    {
+        $this->fakeHttp([
+            'https://relshop.test/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://www.relshop.test/' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="brandpage/productpage/9/Steel_Boot">Steel</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://www.relshop.test/brandpage/productpage/9/Steel_Boot' => Http::response(
+                '<!DOCTYPE html><html><body><h1>Steel Boot</h1><p>CODE: JN9001 BRAND: Jonsson</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('relshop.test');
+
+        $this->assertGreaterThanOrEqual(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.relshop.test/brandpage/productpage/9/Steel_Boot',
+        ]);
+    }
+
     public function test_html_crawl_runs_when_robots_and_sitemaps_time_out(): void
     {
         Http::fake(function (\Illuminate\Http\Client\Request $request) {

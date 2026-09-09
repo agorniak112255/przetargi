@@ -121,7 +121,7 @@ final class CatalogSitemapIndexer
         $sitemaps = $this->discoverSitemaps($host, $sitemapDeadline);
         $guessed = array_flip($this->candidateUrls($host));
         if ($sitemaps === []) {
-            throw new RuntimeException('Nie znalazłem sitemapy dla '.$host.'.');
+            $this->note($host, 'Brak sitemapy — pełzam po HTML jak skrypt sklepu.');
         }
 
         $seen = [];
@@ -269,6 +269,7 @@ final class CatalogSitemapIndexer
     public function discoverSitemaps(string $host, float $deadline = 0.0): array
     {
         $out = [];
+        $reachedHost = false;
         $hosts = [$host];
         if (! str_starts_with($host, 'www.')) {
             $hosts[] = 'www.'.$host;
@@ -278,14 +279,23 @@ final class CatalogSitemapIndexer
                 break;
             }
             $this->note($host, 'Pobieram robots.txt z '.$name);
-            $robots = $this->fetch('https://'.$name.'/robots.txt', 12);
+            $robots = $this->fetch('https://'.$name.'/robots.txt', 8, 1);
+            if ($robots !== null) {
+                $reachedHost = true;
+            }
             $before = count($out);
             $this->collectRobotSitemaps($robots, $out, $name);
             if ($out === [] && ! app()->environment('testing')) {
-                $this->collectRobotSitemaps($this->fetchViaCurl('https://'.$name.'/robots.txt', 12), $out, $name);
+                $viaCurl = $this->fetchViaCurl('https://'.$name.'/robots.txt', 12);
+                if ($viaCurl !== null) {
+                    $reachedHost = true;
+                    $this->collectRobotSitemaps($viaCurl, $out, $name);
+                }
             }
             if ($robots === null) {
                 $this->note($host, 'robots.txt '.$name.': brak odpowiedzi');
+            } elseif ($robots === '') {
+                $this->note($host, 'robots.txt '.$name.': błąd HTTP');
             } elseif ($this->looksLikeHtml($robots)) {
                 $this->note($host, 'robots.txt '.$name.': HTML zamiast tekstu (WAF?)');
             } elseif (count($out) === $before) {
@@ -298,16 +308,17 @@ final class CatalogSitemapIndexer
                 break;
             }
         }
-
-        if ($out === [] && ($deadline <= 0.0 || microtime(true) < $deadline)) {
+        if ($out === [] && $reachedHost && ($deadline <= 0.0 || microtime(true) < $deadline)) {
             $this->collectHtmlSitemaps($host, $out);
             if ($out !== []) {
                 $this->note($host, 'Znalazłem sitemapę w HTML strony głównej.');
             }
         }
-        if ($out === []) {
+        if ($out === [] && $reachedHost) {
             $this->note($host, 'Brak sitemapy w robots — zgaduję typowe ścieżki.');
             $out = $this->candidateUrls($host);
+        } elseif ($out === []) {
+            $this->note($host, 'Host nie odpowiada na robots — pomijam zgadywanie sitemap, pełzam po HTML.');
         }
 
         return array_values(array_unique($out));
@@ -511,7 +522,7 @@ final class CatalogSitemapIndexer
      */
     private function collectRobotSitemaps(?string $robots, array &$out, string $host = ''): void
     {
-        if ($robots === null || $this->looksLikeHtml($robots)) {
+        if ($robots === null || $robots === '' || $this->looksLikeHtml($robots)) {
             return;
         }
         if (preg_match_all('/^\s*sitemap:\s*(\S+)/mi', $robots, $m) === 0) {
@@ -574,12 +585,13 @@ final class CatalogSitemapIndexer
      */
     private function crawlShopPages(string $host, int $maxUrls, float $deadline): array
     {
-        $queue = ['https://'.$host.'/', 'https://www.'.$host.'/'];
+        $queue = $this->crawlSeeds($host);
         $queued = array_fill_keys($queue, true);
         $fetched = [];
         $seen = [];
         $rows = [];
         $pages = 0;
+        $htmlOk = 0;
 
         while ($queue !== [] && $pages < self::HTML_CRAWL_PAGES && count($rows) < $maxUrls) {
             if (microtime(true) >= $deadline) {
@@ -594,13 +606,23 @@ final class CatalogSitemapIndexer
             $html = $this->fetchHtml($page);
             $pages++;
             if ($html === null) {
+                if ($pages <= 4) {
+                    $this->note($host, 'Brak HTML: '.$this->shortUrl($page));
+                }
+
                 continue;
             }
-            foreach ($this->extractHtmlHrefs($html, $host) as $href) {
+            $htmlOk++;
+            if ($htmlOk === 1) {
+                $this->note($host, 'Czytam HTML '.$this->shortUrl($page));
+            }
+            foreach ($this->extractHtmlHrefs($html, $host, $page) as $href) {
                 if ($this->isSkippableUrl($href)) {
                     continue;
                 }
-                if ($this->looksLikeClassicProductUrl($href)) {
+                $classic = $this->looksLikeClassicProductUrl($href);
+                $pretty = ! $classic && $this->looksLikePrettyProductUrl($href);
+                if ($classic || $pretty) {
                     if (! isset($seen[$href])) {
                         $seen[$href] = true;
                         $rows[] = $this->rowForHref($href, $host);
@@ -608,25 +630,11 @@ final class CatalogSitemapIndexer
                     if (count($rows) >= $maxUrls) {
                         break 2;
                     }
-
+                }
+                if ($classic) {
                     continue;
                 }
-                if ($this->looksLikePrettyProductUrl($href)) {
-                    if (! isset($seen[$href])) {
-                        $seen[$href] = true;
-                        $rows[] = $this->rowForHref($href, $host);
-                    }
-                    if (count($rows) >= $maxUrls) {
-                        break 2;
-                    }
-                    if (! isset($queued[$href]) && count($queue) < self::HTML_CRAWL_QUEUE && $this->looksLikeListingPath($href)) {
-                        $queue[] = $href;
-                        $queued[$href] = true;
-                    }
-
-                    continue;
-                }
-                if (! isset($queued[$href]) && count($queue) < self::HTML_CRAWL_QUEUE && $this->looksLikeCategoryUrl($href)) {
+                if (! isset($queued[$href]) && count($queue) < self::HTML_CRAWL_QUEUE) {
                     $queue[] = $href;
                     $queued[$href] = true;
                 }
@@ -636,9 +644,36 @@ final class CatalogSitemapIndexer
         if ($rows !== []) {
             $this->note($host, 'Z pełzania '.$pages.' stron mam '.count($rows).' kart — czytam te bez kodu w adresie.');
             $rows = $this->enrichCrawledProductRows($rows, $host, $deadline);
+        } else {
+            $this->note($host, 'Pełzanie: '.$pages.' stron, HTML OK: '.$htmlOk.', 0 kart.');
         }
 
         return $rows;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function crawlSeeds(string $host): array
+    {
+        $paths = [
+            '/',
+            '/products/productcategory/Footwear',
+            '/products/productcategory/Workwear',
+            '/products/productcategory/PPE',
+            '/brands',
+            '/resources',
+            '/products',
+            '/produkty',
+        ];
+        $out = [];
+        foreach (['www.'.$host, $host] as $name) {
+            foreach ($paths as $path) {
+                $out[] = 'https://'.$name.$path;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -731,14 +766,14 @@ final class CatalogSitemapIndexer
     /**
      * @return list<string>
      */
-    private function extractHtmlHrefs(string $html, string $host): array
+    private function extractHtmlHrefs(string $html, string $host, string $page = ''): array
     {
         if (preg_match_all('/href\s*=\s*["\']([^"\']+)["\']/i', $html, $m) === 0) {
             return [];
         }
         $out = [];
         foreach ($m[1] as $href) {
-            $resolved = $this->resolveHref((string) $href, $host);
+            $resolved = $this->resolveHref((string) $href, $host, $page);
             if ($resolved !== null) {
                 $out[] = $resolved;
             }
@@ -747,7 +782,7 @@ final class CatalogSitemapIndexer
         return $out;
     }
 
-    private function resolveHref(string $href, string $host): ?string
+    private function resolveHref(string $href, string $host, string $page = ''): ?string
     {
         $href = trim(html_entity_decode($href, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         if ($href === '' || str_starts_with($href, '#')
@@ -759,9 +794,10 @@ final class CatalogSitemapIndexer
         if (str_starts_with($href, '//')) {
             $href = 'https:'.$href;
         } elseif (str_starts_with($href, '/')) {
-            $href = 'https://'.$host.$href;
+            $pageHost = (string) (parse_url($page, PHP_URL_HOST) ?: $host);
+            $href = 'https://'.$pageHost.$href;
         } elseif (preg_match('#^https?://#i', $href) !== 1) {
-            return null;
+            $href = $this->urlJoin($page !== '' ? $page : 'https://'.$host.'/', $href);
         }
         $href = explode('#', $href, 2)[0];
         if (! $this->belongsToHost($href, $host)) {
@@ -769,6 +805,36 @@ final class CatalogSitemapIndexer
         }
 
         return $this->normalizeCrawlUrl($href);
+    }
+
+    private function urlJoin(string $base, string $rel): string
+    {
+        $parts = parse_url($base);
+        $scheme = (string) ($parts['scheme'] ?? 'https');
+        $name = (string) ($parts['host'] ?? '');
+        $path = (string) ($parts['path'] ?? '/');
+        if (str_starts_with($rel, '?')) {
+            return $scheme.'://'.$name.$path.$rel;
+        }
+        $dir = preg_replace('#/[^/]*$#', '/', $path !== '' ? $path : '/') ?? '/';
+        if ($dir === '') {
+            $dir = '/';
+        }
+        $joined = $dir.$rel;
+        $segments = [];
+        foreach (explode('/', $joined) as $seg) {
+            if ($seg === '' || $seg === '.') {
+                continue;
+            }
+            if ($seg === '..') {
+                array_pop($segments);
+
+                continue;
+            }
+            $segments[] = $seg;
+        }
+
+        return $scheme.'://'.$name.'/'.implode('/', $segments);
     }
 
     /** Zostawiamy paginację, odrzucamy kombinacje filtrów — inaczej kolejka puchnie. */
@@ -945,40 +1011,42 @@ final class CatalogSitemapIndexer
 
     private function fetchHtml(string $url): ?string
     {
+        if (! app()->environment('testing')) {
+            $viaCurl = $this->fetchViaCurl(
+                $url,
+                30,
+                'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'
+            );
+            if ($viaCurl !== null && $this->looksLikeHtml($viaCurl)) {
+                return mb_substr($viaCurl, 0, 400000);
+            }
+        }
         try {
             $response = Http::withHeaders([
                 'User-Agent' => self::USER_AGENT,
                 'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
                 'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
-            ])->timeout(12)->connectTimeout(6)
+            ])->timeout(30)->connectTimeout(10)
                 ->withOptions(['curl' => $this->curlResolveV4()])
                 ->get($url);
         } catch (Throwable $e) {
             Log::info('Catalog HTML fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
-            $response = null;
-        }
-        if ($response !== null && $response->successful()) {
-            $contentType = mb_strtolower((string) $response->header('Content-Type'));
-            if (! str_contains($contentType, 'image/') && ! str_contains($contentType, 'xml')) {
-                $body = (string) $response->body();
-                if ($body !== '' && $this->looksLikeHtml($body)) {
-                    return mb_substr($body, 0, 400000);
-                }
-            }
-        }
-        if (app()->environment('testing')) {
+
             return null;
         }
-        $viaCurl = $this->fetchViaCurl(
-            $url,
-            15,
-            'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'
-        );
-        if ($viaCurl === null || ! $this->looksLikeHtml($viaCurl)) {
+        if (! $response->successful()) {
+            return null;
+        }
+        $contentType = mb_strtolower((string) $response->header('Content-Type'));
+        if (str_contains($contentType, 'image/') || str_contains($contentType, 'xml')) {
+            return null;
+        }
+        $body = (string) $response->body();
+        if ($body === '' || ! $this->looksLikeHtml($body)) {
             return null;
         }
 
-        return mb_substr($viaCurl, 0, 400000);
+        return mb_substr($body, 0, 400000);
     }
 
     /**
@@ -1246,10 +1314,11 @@ final class CatalogSitemapIndexer
     /** Ile razy próbujemy jedno zapytanie — część serwerów bywa niestabilna tylko chwilowo. */
     private const FETCH_ATTEMPTS = 2;
 
-    private function fetch(string $url, int $timeout = 30): ?string
+    private function fetch(string $url, int $timeout = 30, int $attempts = self::FETCH_ATTEMPTS): ?string
     {
         $lastError = null;
-        for ($attempt = 1; $attempt <= self::FETCH_ATTEMPTS; $attempt++) {
+        $tries = max(1, $attempts);
+        for ($attempt = 1; $attempt <= $tries; $attempt++) {
             try {
                 $response = Http::withHeaders([
                     'User-Agent' => self::USER_AGENT,
@@ -1259,7 +1328,7 @@ final class CatalogSitemapIndexer
                     ->get($url);
             } catch (Throwable $e) {
                 $lastError = $e->getMessage();
-                if ($attempt < self::FETCH_ATTEMPTS) {
+                if ($attempt < $tries) {
                     usleep(300000);
                 }
 
@@ -1267,25 +1336,19 @@ final class CatalogSitemapIndexer
             }
 
             if (! $response->successful()) {
-                if ($attempt < self::FETCH_ATTEMPTS) {
-                    usleep(300000);
-
-                    continue;
-                }
-
-                return null;
+                return '';
             }
 
             $body = (string) $response->body();
             if ($body === '') {
-                return null;
+                return '';
             }
             // .xml.gz bywa serwowane bez nagłówka Content-Encoding
             if (str_starts_with($body, "\x1f\x8b")) {
                 $body = (string) @gzdecode($body);
             }
 
-            return $body !== '' ? $body : null;
+            return $body !== '' ? $body : '';
         }
 
         if ($lastError !== null) {
