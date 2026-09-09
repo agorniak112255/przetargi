@@ -47,6 +47,8 @@ return [
 
     // RAG / Qdrant
     'vector_enabled' => (bool) env('AI_VECTOR_ENABLED', false),
+    // Tylko proces search:eval --no-vector — nie zapisuje ustawień AI.
+    'vector_eval_disabled' => false,
     'qdrant_url' => env('AI_QDRANT_URL', 'http://127.0.0.1:6333'),
     'qdrant_api_key' => env('AI_QDRANT_API_KEY'),
     'qdrant_collection' => env('AI_QDRANT_COLLECTION', 'products'),

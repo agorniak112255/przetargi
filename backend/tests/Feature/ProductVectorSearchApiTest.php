@@ -8,6 +8,7 @@ use App\Models\AiSetting;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Vector\QdrantClient;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -349,5 +350,28 @@ final class ProductVectorSearchApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('ok', true)
             ->assertJsonPath('embedding_ok', true);
+    }
+
+    public function test_eval_flag_disables_qdrant_without_touching_settings(): void
+    {
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'vector_enabled' => true,
+            'qdrant_url' => 'http://qdrant.test:6333',
+        ]);
+
+        $qdrant = $this->app->make(QdrantClient::class);
+        $this->assertTrue($qdrant->isConfigured());
+
+        config(['ai.vector_eval_disabled' => true]);
+
+        $this->assertFalse($qdrant->isConfigured());
+        $this->assertTrue((bool) AiSetting::query()->value('vector_enabled'));
     }
 }

@@ -26,7 +26,8 @@ class SearchEvalCommand extends Command
         {--filter= : Uruchom tylko przypadki, których id lub zapytanie zawiera ten tekst}
         {--worst=10 : Ile najgorszych przypadków wypisać}
         {--save : Zapisz raport JSON w storage/app/search-eval/reports}
-        {--baseline= : Raport do porównania (ścieżka JSON z poprzedniego przebiegu)}';
+        {--baseline= : Raport do porównania (ścieżka JSON z poprzedniego przebiegu)}
+        {--no-vector : Ablacja — wyłącz Qdrant tylko w tym procesie, bez zapisu Ustawień AI}';
 
     protected $description = 'Mierzy jakość wyszukiwania AI: recall retrievalu i ranking (recall@k, nDCG@k, MRR)';
 
@@ -35,6 +36,10 @@ class SearchEvalCommand extends Command
         $file = (string) ($this->option('file') ?: base_path('resources/search-eval/golden.json'));
         $k = max(1, (int) $this->option('k'));
         $limit = (int) ($this->option('limit') ?: ProductAiSearchService::CATALOG_LIMIT);
+        $noVector = (bool) $this->option('no-vector');
+        if ($noVector) {
+            config(['ai.vector_eval_disabled' => true]);
+        }
 
         try {
             $cases = $runner->loadCases($file);
@@ -58,12 +63,13 @@ class SearchEvalCommand extends Command
         }
 
         $this->info(sprintf(
-            'Golden set: %s · przypadków: %d · k=%d · limit=%d · prompt=%s',
+            'Golden set: %s · przypadków: %d · k=%d · limit=%d · prompt=%s · wektor=%s',
             $file,
             count($cases),
             $k,
             $limit,
             ProductAiSearchService::RANK_PROMPT_VERSION,
+            $noVector ? 'wyłączony (ablacja)' : 'włączony',
         ));
 
         $rows = [];
@@ -88,6 +94,7 @@ class SearchEvalCommand extends Command
             'k' => $k,
             'limit' => $limit,
             'prompt_version' => ProductAiSearchService::RANK_PROMPT_VERSION,
+            'vector_disabled' => $noVector,
             'summary' => $summary,
             'cases' => $rows,
         ];

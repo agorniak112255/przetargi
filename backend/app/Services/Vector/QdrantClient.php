@@ -20,7 +20,8 @@ final class QdrantClient
     {
         $cfg = $this->settings->resolve();
 
-        return (bool) $cfg['vector_enabled']
+        return ! (bool) config('ai.vector_eval_disabled', false)
+            && (bool) $cfg['vector_enabled']
             && is_string($cfg['qdrant_url'] ?? null)
             && trim((string) $cfg['qdrant_url']) !== '';
     }

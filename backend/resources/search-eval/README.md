@@ -14,6 +14,9 @@ php artisan search:eval --filter=trzewiki
 
 # porównanie po zmianie promptu / wag RRF / retrievalu
 php artisan search:eval --save --baseline=storage/app/search-eval/reports/20260906_101500.json
+
+# ablacja: ten sam golden bez Qdranta (nie rusza Ustawień AI)
+php artisan search:eval --no-vector --save --baseline=storage/app/search-eval/reports/OSTATNI.json
 ```
 
 ## Metryki
