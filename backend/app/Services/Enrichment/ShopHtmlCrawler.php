@@ -46,12 +46,15 @@ final class ShopHtmlCrawler
 
     private bool $preferReader = false;
 
+    private ?string $lockHost = null;
+
     /**
      * @return list<array{url: string, title: string, extra: string}>
      */
     public function crawl(string $host, int $maxUrls, float $deadline, callable $note): array
     {
         $this->preferReader = false;
+        $this->lockHost = null;
         $queue = $this->seeds($host);
         $queued = array_fill_keys($queue, true);
         $fetched = [];
@@ -64,9 +67,11 @@ final class ShopHtmlCrawler
             if (microtime(true) >= $deadline) {
                 break;
             }
-            $page = array_shift($queue);
+            $page = $this->lockUrl((string) array_shift($queue));
             $key = mb_strtolower(rtrim($page, '/'));
-            if (isset($fetched[$key])) {
+            if (isset($fetched[$key]) || $this->isJunkPath($page) || $this->isSkippable($page)) {
+                $fetched[$key] = true;
+
                 continue;
             }
             $fetched[$key] = true;
@@ -86,6 +91,12 @@ final class ShopHtmlCrawler
                 continue;
             }
             $htmlOk++;
+            if ($this->lockHost === null) {
+                $this->lockHost = mb_strtolower((string) (parse_url($page, PHP_URL_HOST) ?? ''));
+                if ($this->lockHost !== '') {
+                    $note('Zostaję przy '.$this->lockHost.' — pomijam duplikaty www/apex i strony-śmieci.');
+                }
+            }
             if ($htmlOk === 1 && $this->preferReader) {
                 $note('Dalej przez reader (sklep nie odpowiada bezpośrednio).');
             }
@@ -101,7 +112,8 @@ final class ShopHtmlCrawler
             }
 
             foreach ($this->extractLinks($body, $host, $page) as $href) {
-                if ($this->isSkippable($href) || $this->isFilterPath($href)) {
+                $href = $this->lockUrl($href);
+                if ($this->isSkippable($href) || $this->isFilterPath($href) || $this->isJunkPath($href)) {
                     continue;
                 }
                 $classic = $this->isClassicProduct($href);
@@ -409,6 +421,37 @@ final class ShopHtmlCrawler
         }
 
         return true;
+    }
+
+    private function lockUrl(string $url): string
+    {
+        if ($this->lockHost === null || $this->lockHost === '') {
+            return $url;
+        }
+        $parts = parse_url($url);
+        if ($parts === false || ! isset($parts['host'])) {
+            return $url;
+        }
+        if (mb_strtolower((string) $parts['host']) === $this->lockHost) {
+            return $url;
+        }
+        $path = (string) ($parts['path'] ?? '/');
+        $out = ((string) ($parts['scheme'] ?? 'https')).'://'.$this->lockHost.($path !== '' ? $path : '/');
+        if (isset($parts['query']) && $parts['query'] !== '') {
+            $out .= '?'.$parts['query'];
+        }
+
+        return $out;
+    }
+
+    private function isJunkPath(string $url): bool
+    {
+        $path = mb_strtolower(trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/'));
+        $path = preg_replace('/\.(php|html?)$/i', '', $path) ?? $path;
+        return in_array($path, [
+            'index', 'privacypolicy', 'privacy-policy', 'privacy', 'company', 'contact',
+            'about', 'about-us', 'terms', 'cookies', 'productpage',
+        ], true);
     }
 
     private function isFilterPath(string $url): bool
