@@ -818,6 +818,47 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
+    public function test_iai_listing_keeps_gvarant_product_links(): void
+    {
+        $card = 'https://www.gvarant.pl/p117,sandaly-urgent-302-s1-gray.html';
+        $this->fakeHttp([
+            'https://robocze-buty.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://www.robocze-buty.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://robocze-buty.pl/' => Http::response(
+                '<html><body><a href="/sandaly/">Sandały</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://www.robocze-buty.pl/' => Http::response(
+                '<html><body><a href="/sandaly/">Sandały</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://robocze-buty.pl/sandaly/' => Http::response(
+                '<html><body><a href="'.$card.'">Sandały Urgent</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://www.robocze-buty.pl/sandaly/' => Http::response(
+                '<html><body><a href="'.$card.'">Sandały Urgent</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            $card => Http::response(
+                '<html><body><h1 class="fn">SANDAŁY URGENT 302 S1 GRAY</h1></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('robocze-buty.pl');
+
+        $this->assertDatabaseHas('catalog_pages', ['url' => $card]);
+        $page = CatalogPage::query()->where('url', $card)->first();
+        $this->assertNotNull($page);
+        $this->assertStringContainsString('SANDAŁY URGENT 302', (string) $page->title);
+    }
+
     public function test_iai_403_card_retries_gvarant_twin(): void
     {
         $card = '/p117,sandaly-urgent-302-s1-gray.html';

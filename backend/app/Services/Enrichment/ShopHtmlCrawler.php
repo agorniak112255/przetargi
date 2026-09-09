@@ -157,10 +157,10 @@ final class ShopHtmlCrawler
     private function seeds(string $host): array
     {
         $out = ['https://www.'.$host.'/', 'https://'.$host.'/'];
-        foreach (self::SEED_PATHS as $path) {
-            if ($path === '/') {
-                continue;
-            }
+        $extra = $this->isIaiShop($host)
+            ? ['/polbuty/', '/sandaly/', '/trzewiki/', '/rekawice-robocze/', '/odziez-robocza/']
+            : array_values(array_filter(self::SEED_PATHS, static fn (string $path): bool => $path !== '/'));
+        foreach ($extra as $path) {
             $out[] = 'https://www.'.$host.$path;
             $out[] = 'https://'.$host.$path;
         }
@@ -393,11 +393,35 @@ final class ShopHtmlCrawler
         $href = explode('#', $href, 2)[0];
         $urlHost = mb_strtolower((string) (parse_url($href, PHP_URL_HOST) ?? ''));
         $urlHost = preg_replace('/^www\./', '', $urlHost) ?? $urlHost;
-        if ($urlHost !== $host && ! str_ends_with($urlHost, '.'.$host)) {
+        if (! $this->hostAllowed($urlHost, $host)) {
             return null;
         }
 
         return $this->normalizeUrl($href);
+    }
+
+    private function hostAllowed(string $urlHost, string $crawlHost): bool
+    {
+        $crawlHost = preg_replace('/^www\./', '', mb_strtolower($crawlHost)) ?? $crawlHost;
+        if ($urlHost === $crawlHost || str_ends_with($urlHost, '.'.$crawlHost)) {
+            return true;
+        }
+
+        return $this->iaiTwinBare($crawlHost) === $urlHost;
+    }
+
+    private function isIaiShop(string $host): bool
+    {
+        $host = preg_replace('/^www\./', '', mb_strtolower($host)) ?? $host;
+
+        return in_array($host, ['gvarant.pl', 'robocze-buty.pl'], true);
+    }
+
+    private function iaiTwinBare(string $host): ?string
+    {
+        $host = preg_replace('/^www\./', '', mb_strtolower($host)) ?? $host;
+
+        return ['robocze-buty.pl' => 'gvarant.pl', 'gvarant.pl' => 'robocze-buty.pl'][$host] ?? null;
     }
 
     private function urlJoin(string $base, string $rel): string
@@ -510,6 +534,13 @@ final class ShopHtmlCrawler
             return $url;
         }
         $path = (string) ($parts['path'] ?? '/');
+        if ($this->isIaiProductCard($path)) {
+            $from = preg_replace('/^www\./', '', mb_strtolower((string) $parts['host'])) ?? '';
+            $to = preg_replace('/^www\./', '', $this->lockHost) ?? '';
+            if ($this->iaiTwinBare($from) === $to) {
+                return $url;
+            }
+        }
         $out = ((string) ($parts['scheme'] ?? 'https')).'://'.$this->lockHost.($path !== '' ? $path : '/');
         if (isset($parts['query']) && $parts['query'] !== '') {
             $out .= '?'.$parts['query'];
