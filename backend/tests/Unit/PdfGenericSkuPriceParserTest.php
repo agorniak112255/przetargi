@@ -43,4 +43,20 @@ TXT;
         $this->assertCount(5000, $rows);
         $this->assertSame('HW05000', $rows[4999]['sku']);
     }
+
+    public function test_parses_excl_incl_vat_with_rand_suffix(): void
+    {
+        $text = <<<'TXT'
+LEMAITRE safety footwear Price list End User
+805001 LEMAITRE 8050 Apollo Shoe Black & Green 446.00R 508.44R 2-12 Yes PU/PU 69
+800701 LEMAITRE 8007 Clog Slip-on Black NSTC S 443.00R 505.02R 2-12 No PU/PU
+TXT;
+        $rows = (new PdfGenericSkuPriceParser)->parse($text);
+        $this->assertCount(2, $rows);
+        $this->assertSame('805001', $rows[0]['sku']);
+        $this->assertSame(446.0, $rows[0]['catalog_price']);
+        $this->assertSame('ZAR', $rows[0]['currency']);
+        $this->assertSame('800701', $rows[1]['sku']);
+        $this->assertSame(443.0, $rows[1]['catalog_price']);
+    }
 }

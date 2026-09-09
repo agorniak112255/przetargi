@@ -166,7 +166,7 @@ final class PriceListPdfTextExtractor
      */
     public function looksLikePricelist(string $text): bool
     {
-        $prices = preg_match_all('/\b\d+[.,]\d{2}\b/u', $text);
+        $prices = preg_match_all('/\d+[.,]\d{2}(?!\d)/u', $text);
         $articles = preg_match_all('/\bD\d{6,}\b/u', $text);
         $skuish = preg_match_all('/\b[A-Z]{2}\s?\d{3,}[A-Z0-9 -]{0,12}\b/u', $text);
         $ceCodes = preg_match_all('/\bCE-[A-Z0-9][A-Z0-9.-]{2,}\b/u', $text);
@@ -298,6 +298,8 @@ final class PriceListPdfTextExtractor
     {
         $text = preg_replace("/[ \t]+/u", ' ', $text) ?? $text;
         $text = preg_replace("/\n{3,}/u", "\n\n", $text) ?? $text;
+        // 446.00R / 12.00zł — waluta sklejona z kwotą gubi \b przy detekcji cen
+        $text = preg_replace('/(\d+[.,]\d{2})(\p{L}|€)/u', '$1 $2', $text) ?? $text;
 
         return trim($text);
     }

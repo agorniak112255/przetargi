@@ -57,6 +57,7 @@ final class NbpExchangeRateServiceTest extends TestCase
 
         $this->assertSame('fallback', $snap['source']);
         $this->assertArrayHasKey('EUR', $snap['rates']);
+        $this->assertArrayHasKey('ZAR', $snap['rates']);
         $this->assertGreaterThan(1, $fx->toPln(1, 'EUR'));
     }
 }

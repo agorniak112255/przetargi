@@ -9,7 +9,7 @@ namespace App\Services;
  */
 final class CurrencyDetector
 {
-    private const SUPPORTED = ['PLN', 'EUR', 'USD', 'GBP', 'CHF', 'CZK', 'SEK', 'NOK', 'DKK'];
+    private const SUPPORTED = ['PLN', 'EUR', 'USD', 'GBP', 'CHF', 'CZK', 'SEK', 'NOK', 'DKK', 'ZAR'];
 
     public function detect(?string $text): ?string
     {
@@ -23,7 +23,16 @@ final class CurrencyDetector
 
         $upper = mb_strtoupper($raw);
 
-        if (preg_match('/\bEUR\b|EURO\b|€/u', $upper) === 1 || str_contains($raw, '€')) {
+        // 446.00R = rand (ZAR). „EURO” bywa marką obuwia, nie walutą.
+        if (preg_match('/\bZAR\b/u', $upper) === 1
+            || preg_match_all('/\d+[.,]\d{2}\s*R\b/u', $upper) >= 2) {
+            return 'ZAR';
+        }
+
+        if (preg_match('/\bEUR\b|€/u', $upper) === 1 || str_contains($raw, '€')) {
+            return 'EUR';
+        }
+        if (preg_match('/\bEURO\b/u', $upper) === 1) {
             return 'EUR';
         }
         if (preg_match('/\bPLN\b|\bZL\b|\bZLOTY|\bZŁOT/u', $upper) === 1

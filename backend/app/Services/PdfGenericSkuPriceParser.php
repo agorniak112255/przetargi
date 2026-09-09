@@ -41,14 +41,15 @@ final class PdfGenericSkuPriceParser
 
                 continue;
             }
-            if (preg_match('/(?P<price>\d+[.,]\d{2})\s*(?:zł|pln|eur|€)?\s*$/ui', $line, $pm) !== 1) {
+            $split = $this->takeCatalogPrice($line);
+            if ($split === null) {
                 continue;
             }
-            $price = (float) str_replace(',', '.', $pm['price']);
+            [$priceRaw, $head] = $split;
+            $price = (float) str_replace(',', '.', $priceRaw);
             if ($price <= 0 || $price > 100000) {
                 continue;
             }
-            $head = trim(mb_substr($line, 0, mb_strlen($line) - mb_strlen($pm[0])));
             $sku = $this->extractSku($head);
             if ($sku === null || isset($seen[$sku])) {
                 continue;
@@ -94,7 +95,25 @@ final class PdfGenericSkuPriceParser
     private function looksLikeHeader(string $line): bool
     {
         return preg_match('/^(lp|nazwa|kod|sku|cena|cennik|price|index|ilość|ilosc)\b/ui', $line) === 1
-            && preg_match('/\d+[.,]\d{2}\s*(?:zł|pln|eur|€)?\s*$/ui', $line) !== 1;
+            && preg_match('/\d+[.,]\d{2}\s*(?:zł|pln|eur|€|r|zar)?\s*$/ui', $line) !== 1;
+    }
+
+    /**
+     * Cena na końcu wiersza albo pierwsza z pary excl/incl VAT (np. 446.00R 508.44R).
+     *
+     * @return array{0: string, 1: string}|null
+     */
+    private function takeCatalogPrice(string $line): ?array
+    {
+        if (preg_match_all('/\d+[.,]\d{2}(?!\d)/u', $line) >= 2
+            && preg_match('/^(?P<head>.+?)\s+(?P<price>\d+[.,]\d{2})(?!\d)/u', $line, $m) === 1) {
+            return [$m['price'], trim($m['head'])];
+        }
+        if (preg_match('/(?P<price>\d+[.,]\d{2})\s*(?:zł|pln|eur|€|r|zar)?\s*$/ui', $line, $pm) === 1) {
+            return [$pm['price'], trim(mb_substr($line, 0, mb_strlen($line) - mb_strlen($pm[0])))];
+        }
+
+        return null;
     }
 
     private function looksLikeCategory(string $line): bool

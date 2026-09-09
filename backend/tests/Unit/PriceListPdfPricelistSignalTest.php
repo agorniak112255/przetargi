@@ -64,6 +64,23 @@ TXT;
         $this->assertTrue((new PriceListPdfTextExtractor)->looksLikePricelist($text));
     }
 
+    public function test_rand_glued_to_price_looks_like_pricelist(): void
+    {
+        $text = <<<'TXT'
+LEMAITRE safety footwear Price list End User
+Pastel Brand Codes Description ExcL VAT Incl VAT
+805001 LEMAITRE 8050 Apollo Shoe 446.00R 508.44R
+803301 LEMAITRE 8033 Chainsaw Boot 398.00R 453.72R
+800701 LEMAITRE 8007 Clog Slip-on 443.00R 505.02R
+800801 LEMAITRE 8008 Clog Slip-on 443.00R 505.02R
+802301 LEMAITRE 8023 Cyclone Shoe 462.00R 526.68R
+804702 LEMAITRE 8047 Condor Sandal 518.00R 590.52R
+802501 LEMAITRE 8025 Eagle Boot 601.00R 685.14R
+803501 LEMAITRE 8035 Eagle Boot SMS 713.00R 812.82R
+TXT;
+        $this->assertTrue((new PriceListPdfTextExtractor)->looksLikePricelist($text));
+    }
+
     public function test_chunks_whole_list_by_price_budget(): void
     {
         $lines = [];

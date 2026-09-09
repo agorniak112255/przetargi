@@ -133,7 +133,7 @@ type AssortmentGroupsSummary = {
   global_discount_percent: number
 }
 
-const CURRENCIES = ['PLN', 'EUR', 'USD', 'GBP', 'CHF', 'CZK', 'SEK', 'NOK', 'DKK'] as const
+const CURRENCIES = ['PLN', 'EUR', 'USD', 'GBP', 'CHF', 'CZK', 'SEK', 'NOK', 'DKK', 'ZAR'] as const
 
 type Analysis = {
   source?: string

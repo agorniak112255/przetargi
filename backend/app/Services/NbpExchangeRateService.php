@@ -26,6 +26,7 @@ final class NbpExchangeRateService
         'SEK' => 0.40,
         'NOK' => 0.38,
         'DKK' => 0.57,
+        'ZAR' => 0.21,
     ];
 
     /** @var array{rates: array<string, float>, as_of: string|null, source: string}|null */
