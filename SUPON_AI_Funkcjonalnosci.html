@@ -127,10 +127,31 @@ li:before{content:"";position:absolute;left:0;top:14px;width:6px;height:6px;bord
 </section>
 
 <section class="card wide">
-<h2><span class="dot b9">11</span> Ustawienia i administracja</h2>
+<h2><span class="dot b9">11</span> Ustawienia AI — modele i wektory</h2>
 <ul class="c9">
-<li>Pracownicy, uprawnienia, poczta, sklep</li>
-<li>Wybór AI i test połączenia</li>
+<li>Włączenie AI, adres serwera, klucz API, model główny i osobny model do opisów</li>
+<li>Profile modeli — inny model do każdego zadania: szukanie produktów, dopasowanie SIWZ, opisy, internet, cennik PDF, zdjęcia, dokumenty przetargu, arkusze, maile, zestawy</li>
+<li>Dla profilu: adres, nazwa modelu, klucz, czas oczekiwania, temperatura, siła myślenia (auto / wyłączone / low / medium / xhigh)</li>
+<li>Limit ile produktów naraz idzie do opisu i ile pozycji przetargu liczy się równolegle</li>
+<li>Szukanie w internecie: Tavily, DuckDuckGo albo SearXNG; tryb Tavily eco / balanced / full; zapasowe źródło</li>
+<li>Wektory (Qdrant): adres, kolekcja, klucz, test połączenia</li>
+<li>Embeddingi (zamiana tekstu na wektor): lokalne, OpenAI albo OpenRouter — osobny model, adres i klucz</li>
+<li>Modele embeddingów m.in. BGE-M3, Qwen, E5, text-embedding-3, Gemini Embedding</li>
+<li>Test połączenia czatu i wektorów</li>
+<li>Strojenie: ile wyników z katalogu wraca do rankingu; progi zapisu produktu, zamiennika i minimum propozycji</li>
+<li>Opcja: gdy AI nic nie wskaże, wstawienie produktu z zapasowej listy katalogowej</li>
+<li>Indeks stron producentów i sklepów: domeny, linki, ponowne indeksowanie</li>
+<li>Słownik żargonu SIWZ i szablony opisów BHP</li>
+</ul>
+</section>
+
+<section class="card wide">
+<h2><span class="dot b1">12</span> Administracja</h2>
+<ul class="c1">
+<li>Pracownicy, role i uprawnienia</li>
+<li>Logi działań i logi AI (pobieranie opisów)</li>
+<li>Poczta SMTP i test wysyłki</li>
+<li>Sklep Presta: połączenie, kategorie, mapowania, eksport</li>
 <li>Krótka pomoc do każdego działu</li>
 </ul>
 </section>
