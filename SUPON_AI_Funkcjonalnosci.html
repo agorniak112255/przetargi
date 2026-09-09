@@ -5,199 +5,148 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SUPON AI — Co jest zrobione</title>
 <style>
-:root{--navy:#1f2937;--accent:#2563eb;--bg:#edf1f5}
+:root{--navy:#0f172a;--ink:#334155;--line:#e2e8f0}
 *{box-sizing:border-box}
-body{margin:0;font-family:"Segoe UI",system-ui,Arial,sans-serif;background:var(--bg);color:#1e293b;line-height:1.45}
-.wrap{max-width:880px;margin:0 auto;padding:28px 20px 48px}
-h1{margin:0 0 6px;font-size:26px;color:var(--navy)}
-.lead{margin:0 0 22px;color:#64748b;font-size:14px}
-h2{margin:22px 0 8px;font-size:16px;color:var(--navy);border-bottom:1px solid #dbe3ec;padding-bottom:6px}
-ul{margin:0 0 4px;padding-left:1.2rem}
-li{margin:4px 0;font-size:14px}
-.card{background:#fff;border-radius:10px;padding:18px 22px 20px;box-shadow:0 2px 8px rgba(0,0,0,.07)}
+body{margin:0;font-family:"Segoe UI",system-ui,sans-serif;background:#e8eef5;color:var(--navy)}
+.hero{background:linear-gradient(135deg,#0f172a,#1e3a5f 55%,#2563eb);color:#fff;padding:40px 24px 48px}
+.hero-inner{max-width:1100px;margin:0 auto}
+.hero h1{margin:0 0 8px;font-size:32px;letter-spacing:-.03em}
+.hero p{margin:0;opacity:.82;font-size:16px}
+.wrap{max-width:1100px;margin:-28px auto 48px;padding:0 20px;display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+@media(max-width:760px){.wrap{grid-template-columns:1fr}}
+.card{background:#fff;border-radius:16px;padding:20px 22px 18px;box-shadow:0 10px 28px rgba(15,23,42,.08);border:1px solid #fff}
+.card.wide{grid-column:1/-1}
+.card h2{margin:0 0 12px;font-size:15px;display:flex;align-items:center;gap:10px}
+.dot{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;font-size:14px;flex-shrink:0}
+ul{margin:0;padding:0;list-style:none}
+li{position:relative;padding:6px 0 6px 16px;font-size:14px;color:var(--ink);border-bottom:1px solid #f1f5f9}
+li:last-child{border-bottom:0}
+li:before{content:"";position:absolute;left:0;top:14px;width:6px;height:6px;border-radius:50%;background:var(--c,#2563eb)}
+.c1{--c:#2563eb}.c2{--c:#0d9488}.c3{--c:#7c3aed}.c4{--c:#ea580c}.c5{--c:#db2777}.c6{--c:#0284c7}.c7{--c:#16a34a}.c8{--c:#ca8a04}.c9{--c:#475569}
+.b1{background:#dbeafe}.b2{background:#ccfbf1}.b3{background:#ede9fe}.b4{background:#ffedd5}.b5{background:#fce7f3}.b6{background:#e0f2fe}.b7{background:#dcfce7}.b8{background:#fef9c3}.b9{background:#e2e8f0}
+.note{background:linear-gradient(180deg,#eff6ff,#fff);border:1px solid #bfdbfe}
 </style>
 </head>
 <body>
-<div class="wrap">
-<h1>SUPON AI — Przetargi</h1>
-<p class="lead">Wykaz zrobionych funkcji i możliwości aplikacji.</p>
-<div class="card">
-
-<h2>Logowanie i uprawnienia</h2>
-<ul>
-<li>Logowanie i wylogowanie (token Sanctum)</li>
-<li>Role: handlowiec, przetargi, kierownik, dyrektor, admin</li>
-<li>Uprawnienia per moduł (widoczność menu i akcji)</li>
-<li>Powiadomienia (dzwonek, nieprzeczytane, oznaczanie przeczytanych)</li>
-<li>Dziennik aktywności użytkowników</li>
-</ul>
-
-<h2>Dashboard</h2>
-<ul>
-<li>KPI: aktywne przetargi, wartość ofert, średnia marża, liczba produktów</li>
-<li>Zamienniki oczekujące na akceptację</li>
-<li>Przetargi czekające na Twoją akceptację</li>
-<li>Terminy w ciągu 7 dni</li>
-<li>Ostatnie przetargi (klient, opiekun)</li>
-</ul>
-
-<h2>Przetargi</h2>
-<ul>
-<li>Lista z filtrami: moje, zaproszone, nieprzypisane, zbliżający się termin</li>
-<li>Nowy przetarg (tytuł, klient, termin, docelowa marża)</li>
-<li>Numer przetargu, opiekun, zaproszenia współpracowników</li>
-<li>Usuwanie przetargu (admin)</li>
-<li>Komentarze do przetargu</li>
-<li>Historia zmian statusu</li>
-<li>Warunki przetargu</li>
-</ul>
-
-<h2>Pozycje oferty</h2>
-<ul>
-<li>Wymagania SIWZ, ilość, produkt główny, komplet (produkt towarzyszący)</li>
-<li>Ceny ofertowe, marża, oferta niestandardowa</li>
-<li>Filtry pokrycia: brak produktu, słabe dopasowanie, niska marża itd.</li>
-<li>Wyszukiwanie pozycji po nazwie / SKU i przez AI</li>
-<li>Battlecard pozycji (propozycja główna + zamienniki)</li>
-<li>Porównanie zamienników</li>
-<li>Powody dopasowania AI</li>
-<li>Import pozycji z XLSX / XLS / CSV</li>
-</ul>
-
-<h2>Dokumenty SIWZ</h2>
-<ul>
-<li>Upload PDF / Excel / Word</li>
-<li>Analiza AI dokumentów (pozycje i warunki)</li>
-<li>Zatwierdzenie wyników do oferty</li>
-<li>Pobieranie, ponowna analiza, usuwanie pliku</li>
-</ul>
-
-<h2>Workflow oferty</h2>
-<ul>
-<li>Szkic → wycena → akceptacja kierownika → akceptacja dyrektora → zatwierdzona</li>
-<li>Statusy: wyeksportowana, archiwum, odrzucony (z notatką)</li>
-<li>Edycja oferty tylko w szkicu i wycenie</li>
-<li>Eksport oferty: Excel, PDF, DOCX</li>
-</ul>
-
-<h2>Dopasowanie AI do przetargu</h2>
-<ul>
-<li>Dopasowanie całego przetargu, wybranych lub pojedynczej pozycji</li>
-<li>Scoring tekstowy SIWZ ↔ katalog (normy, materiały, SKU, atrybuty BHP)</li>
-<li>Reguły + AI, konfigurowalne progi</li>
-<li>Słownik żargonu SIWZ (np. potoczne nazwy → frazy katalogu)</li>
-<li>Masowa zamiana na tańszy zatwierdzony zamiennik</li>
-<li>Sugestia kompletu (kit)</li>
-</ul>
-
-<h2>Produkty</h2>
-<ul>
-<li>Katalog: SKU, nazwa, producent, kategoria, ceny, waluta, opakowanie, stan, opis</li>
-<li>Zdjęcia i dokumenty produktu</li>
-<li>Atrybuty BHP, rozmiary i warianty</li>
-<li>Ceny specjalne per klient, historia cen</li>
-<li>Wyszukiwanie (SKU, nazwa, producent, modele), filtry i sortowanie (w tym kursy NBP)</li>
-<li>Porównanie produktów</li>
-<li>Weryfikacja produktu</li>
-<li>Wyszukiwarka AI w katalogu</li>
-<li>Wyszukiwanie w PrestaShop i nakładanie dopasowań</li>
-<li>Komplet (kit / akcesoria)</li>
-<li>Panel zdrowia katalogu (braki opisów, enrichment, wektory)</li>
-<li>Eksport do PrestaShop (pojedynczy, wsadowy, cały cennik)</li>
-</ul>
-
-<h2>Ściąganie danych i tłumaczenie</h2>
-<ul>
-<li>Źródła produktów są w różnych językach (m.in. francuski, niemiecki, czeski, angielski)</li>
-<li>Fakty ze stron sklepów i producentów są zawsze tłumaczone na polski</li>
-<li>Nazwy modeli i oznaczenia norm pozostają bez zmian</li>
-<li>Wzbogacanie: opisy, atrybuty, zdjęcia, dokumenty</li>
-<li>Kolejka wzbogacania: pojedynczy produkt, wiele, cały cennik; anulowanie, postęp</li>
-<li>Prefetch stron producentów i sklepów, indeks hostów / sitemap</li>
-<li>Wyszukiwanie źródeł w internecie (Tavily, SearXNG, DuckDuckGo)</li>
-<li>Weryfikacja zdjęć (vision)</li>
-<li>Szablony opisów per kategoria BHP</li>
-</ul>
-
-<h2>Cenniki</h2>
-<ul>
-<li>Import XLSX, XLS, CSV, PDF</li>
-<li>Import z mapowaniem kolumn oraz analiza AI</li>
-<li>PDF: ekstrakcja, chunki, parsery (m.in. Renex, Ansell, JS Gloves, Sungboo)</li>
-<li>Grupy asortymentowe i rabaty</li>
-<li>Ceny specjalne przy imporcie</li>
-<li>Raport zmian cen i pominiętych wierszy</li>
-<li>Wzbogacanie produktów z cennika</li>
-<li>Eksport cennika do PrestaShop</li>
-</ul>
-
-<h2>Zamienniki</h2>
-<ul>
-<li>Relacja produkt główny → zamiennik</li>
-<li>Typy: preferowany, tańszy, premium, awaryjny</li>
-<li>Status: oczekuje / zatwierdzony / odrzucony</li>
-<li>Akceptacja przez kierownika / dyrektora</li>
-</ul>
-
-<h2>Klienci i zapytania</h2>
-<ul>
-<li>Lista, dodawanie i edycja klientów</li>
-<li>Wklejenie maila klienta, analiza AI (pozycje, pytania, dopasowania)</li>
-<li>Generowanie treści odpowiedzi (osobne okno)</li>
-</ul>
-
-<h2>Raporty</h2>
-<ul>
-<li>Pipeline wg statusu i opiekuna (wartość, marża)</li>
-<li>Eksport CSV listy przetargów</li>
-</ul>
-
-<h2>Wyszukiwarka AI</h2>
-<ul>
-<li>Intent → wyszukiwanie tekstowe + wektorowe (Qdrant) → ranking LLM</li>
-<li>Karty produktów, podpowiedzi z katalogów zewnętrznych</li>
-<li>Przepisanie zapytania przy pustych wynikach</li>
-<li>Strojenie limitów i progów w administracji</li>
-</ul>
-
-<h2>Ustawienia AI</h2>
-<ul>
-<li>Provider LLM, modele per zadanie</li>
-<li>Embeddingi i Qdrant</li>
-<li>Tavily / SearXNG / DuckDuckGo</li>
-<li>Limity równoległości</li>
-<li>Test połączenia czatu i wektorów</li>
-</ul>
-
-<h2>Administracja</h2>
-<ul>
-<li>Pracownicy (CRUD, role)</li>
-<li>Role i uprawnienia</li>
-<li>Logi aktywności</li>
-<li>Logi AI (wzbogacanie)</li>
-<li>SMTP i test wysyłki</li>
-<li>Sklep PrestaShop: połączenie, kategorie, mapowania, opisy kategorii</li>
-<li>Strony wyszukiwarki (hosty, indeks, reindex)</li>
-<li>Strojenie AI (progi dopasowania, limity wyników)</li>
-<li>Żargon SIWZ</li>
-<li>Szablony opisów</li>
-</ul>
-
-<h2>Integracje</h2>
-<ul>
-<li>LLM (OpenAI-compatible / OpenRouter)</li>
-<li>Qdrant (wyszukiwanie wektorowe)</li>
-<li>NBP (kursy walut)</li>
-<li>PrestaShop (wyszukiwanie i eksport)</li>
-<li>Indeks katalogów producentów i sklepów</li>
-</ul>
-
-<h2>Pomoc</h2>
-<ul>
-<li>Przewodnik po modułach ze slajdami „co kliknąć”</li>
-</ul>
-
+<div class="hero">
+  <div class="hero-inner">
+    <h1>SUPON AI — Przetargi</h1>
+    <p>Co już działa w aplikacji</p>
+  </div>
 </div>
+<div class="wrap">
+
+<section class="card">
+<h2><span class="dot b1">1</span> Logowanie</h2>
+<ul class="c1">
+<li>Logowanie i wylogowanie</li>
+<li>Role: handlowiec, przetargi, kierownik, dyrektor, admin</li>
+<li>Każdy widzi tylko to, do czego ma dostęp</li>
+<li>Dzwonek z powiadomieniami i historia działań</li>
+</ul>
+</section>
+
+<section class="card">
+<h2><span class="dot b2">2</span> Pulpit</h2>
+<ul class="c2">
+<li>Liczba przetargów, wartość ofert, średnia marża</li>
+<li>Zamienniki i oferty czekające na Twoją zgodę</li>
+<li>Terminy w ciągu 7 dni i ostatnie przetargi</li>
+</ul>
+</section>
+
+<section class="card wide">
+<h2><span class="dot b3">3</span> Przetargi i oferta</h2>
+<ul class="c3">
+<li>Lista z filtrami: moje, zaproszone, bez opiekuna, bliski termin</li>
+<li>Nowy przetarg: klient, termin, docelowa marża; numer, opiekun, zaproszenia</li>
+<li>Pozycje: wymaganie, ilość, produkt, komplet, cena, marża</li>
+<li>Filtry braków, słabego dopasowania i niskiej marży</li>
+<li>Karta porównania (główny produkt + zamienniki) i powody wyboru AI</li>
+<li>Wgranie SIWZ (PDF, Excel, Word) — AI wyciąga pozycje i warunki</li>
+<li>Ścieżka: szkic → wycena → kierownik → dyrektor → zatwierdzona</li>
+<li>Eksport oferty do Excel, PDF i Word; komentarze i historia statusów</li>
+</ul>
+</section>
+
+<section class="card">
+<h2><span class="dot b4">4</span> Dopasowanie AI</h2>
+<ul class="c4">
+<li>Dobiera produkty do całego przetargu albo do jednej pozycji</li>
+<li>Porównuje wymagania z katalogiem: normy, materiały, kody, BHP</li>
+<li>Rozumie potoczne nazwy z SIWZ</li>
+<li>Podpowiada tańszy zamiennik i komplet</li>
+</ul>
+</section>
+
+<section class="card">
+<h2><span class="dot b5">5</span> Produkty</h2>
+<ul class="c5">
+<li>Katalog: kod, nazwa, producent, cena, zdjęcia, dokumenty</li>
+<li>Rozmiary, cechy BHP, ceny specjalne dla klienta</li>
+<li>Szukanie, filtry, sortowanie (także po kursie NBP)</li>
+<li>Porównanie produktów, weryfikacja, komplet / akcesoria</li>
+<li>Wysyłka do sklepu Presta — jeden produkt, wiele albo cały cennik</li>
+</ul>
+</section>
+
+<section class="card wide note">
+<h2><span class="dot b6">6</span> Ściąganie danych i tłumaczenie</h2>
+<ul class="c6">
+<li>Dane produktów schodzą ze stron w różnych językach (francuski, niemiecki, czeski, angielski i inne)</li>
+<li>Aplikacja zawsze tłumaczy je na polski; nazwy modeli i normy zostają bez zmian</li>
+<li>Uzupełnia opisy, cechy, zdjęcia i dokumenty — jeden produkt, wiele albo cały cennik</li>
+<li>Szuka stron producentów i sklepów w internecie; sprawdza zdjęcia; gotowe wzory opisów BHP</li>
+</ul>
+</section>
+
+<section class="card">
+<h2><span class="dot b7">7</span> Cenniki</h2>
+<ul class="c7">
+<li>Wczytanie Excel, CSV i PDF (także przez AI)</li>
+<li>Grupy rabatowe, ceny specjalne, historia zmian</li>
+<li>Uzupełnianie produktów z cennika i wysyłka do sklepu</li>
+</ul>
+</section>
+
+<section class="card">
+<h2><span class="dot b8">8</span> Zamienniki</h2>
+<ul class="c8">
+<li>Produkt główny i jego zamiennik</li>
+<li>Typ: preferowany, tańszy, droższy, awaryjny</li>
+<li>Oczekuje / zatwierdzony / odrzucony — zgoda kierownika lub dyrektora</li>
+</ul>
+</section>
+
+<section class="card">
+<h2><span class="dot b2">9</span> Klienci i maile</h2>
+<ul class="c2">
+<li>Lista klientów — dodawanie i edycja</li>
+<li>Wklejasz maila — AI wyciąga pozycje i dobiera produkty</li>
+<li>Gotowa treść odpowiedzi w osobnym oknie</li>
+</ul>
+</section>
+
+<section class="card">
+<h2><span class="dot b1">10</span> Raporty i szukanie</h2>
+<ul class="c1">
+<li>Wartość i marża wg statusu i opiekuna; eksport CSV</li>
+<li>Wyszukiwarka AI w katalogu — karty produktów</li>
+<li>Gdy nic nie znajdzie, próbuje inaczej sformułować pytanie</li>
+</ul>
+</section>
+
+<section class="card wide">
+<h2><span class="dot b9">11</span> Ustawienia i administracja</h2>
+<ul class="c9">
+<li>Wybór modelu AI do konkretnego zadania i test połączenia</li>
+<li>Pracownicy, role, logi, poczta, sklep Presta, strony do indeksowania</li>
+<li>Słownik żargonu SIWZ i wzory opisów</li>
+<li>Połączenia: AI, baza podobieństwa, kursy NBP, sklep, katalogi producentów</li>
+<li>Pomoc: krótki przewodnik „co kliknąć”</li>
+</ul>
+</section>
+
 </div>
 </body>
 </html>
