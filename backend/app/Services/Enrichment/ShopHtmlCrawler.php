@@ -394,7 +394,7 @@ final class ShopHtmlCrawler
             return true;
         }
 
-        return preg_match('#/p\d+,[^/]+\.html$#', $path) === 1
+        return $this->isIaiProductCard($path)
             || preg_match('#-p\d{2,}(\.html)?$#', $path) === 1
             || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
             || preg_match('#/productpage(/|$)#', $path) === 1
@@ -403,6 +403,10 @@ final class ShopHtmlCrawler
 
     private function isPrettyProduct(string $url): bool
     {
+        $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
+        if (in_array($host, ['gvarant.pl', 'robocze-buty.pl'], true)) {
+            return false;
+        }
         $path = mb_strtolower(trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/'));
         if ($path === '') {
             return false;
@@ -462,11 +466,18 @@ final class ShopHtmlCrawler
                 return true;
             }
         }
-        if (preg_match('#/p\d+,[^/]+\.html$#', $path) === 1) {
+        if ($this->isIaiProductCard($path)) {
             return false;
         }
 
         return str_contains((string) basename(rtrim($path, '/')), ',');
+    }
+
+    private function isIaiProductCard(string $path): bool
+    {
+        $path = mb_strtolower(rtrim($path, '/'));
+
+        return str_ends_with($path, '.html') && preg_match('#/p\d+,[^/]+$#', $path) === 1;
     }
 
     private function isSkippable(string $url): bool

@@ -280,7 +280,7 @@ final class CatalogIndexTest extends TestCase
             'https://gvarant.pl/robots.txt' => Http::response('Sitemap: https://gvarant.pl/sitemap.xml', 200),
             'https://gvarant.pl/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><urlset>'
-                .'<url><loc>https://gvarant.pl/kask-pros</loc></url>'
+                .'<url><loc>https://gvarant.pl/p100,kask-pros.html</loc></url>'
                 .'</urlset>',
                 200
             ),
@@ -298,7 +298,7 @@ final class CatalogIndexTest extends TestCase
             '--retry-empty' => true,
         ])->expectsOutputToContain('ponawiam')->assertSuccessful();
 
-        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://gvarant.pl/kask-pros']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://gvarant.pl/p100,kask-pros.html']);
     }
 
     public function test_missing_only_skips_host_already_checked_without_pages(): void
@@ -792,6 +792,7 @@ final class CatalogIndexTest extends TestCase
             'https://gvarant.pl/rekawice-robocze/' => Http::response(
                 '<!DOCTYPE html><html><body>'
                 .'<a href="/p494,rekawice-reis-rlevel5.html">Rękawice Reis</a>'
+                .'<a href="/puma-safety/">Puma Safety</a>'
                 .'<a href="/drewniaki-klapki,44-/">Rozmiar 44</a>'
                 .'</body></html>',
                 200,
@@ -809,6 +810,12 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseMissing('catalog_pages', [
             'url' => 'https://gvarant.pl/drewniaki-klapki,44-/',
         ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://gvarant.pl/puma-safety/',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://gvarant.pl/rekawice-robocze/',
+        ]);
     }
 
     public function test_skips_iai_category_filter_urls_from_sitemap(): void
@@ -820,7 +827,9 @@ final class CatalogIndexTest extends TestCase
             ),
             'https://www.robocze-buty.pl/sitemap.xml' => Http::response(
                 '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.gvarant.pl/p117,sandaly-urgent-302-s1-gray.html</loc></url>'
                 .'<url><loc>https://www.robocze-buty.pl/p28932,polbuty-lemaitre-securite-ales-s3-ci.html</loc></url>'
+                .'<url><loc>https://www.robocze-buty.pl/puma-safety/</loc></url>'
                 .'<url><loc>https://www.robocze-buty.pl/drewniaki-klapki,44-/</loc></url>'
                 .'<url><loc>https://www.robocze-buty.pl/drewniaki-klapki,41-42-/</loc></url>'
                 .'</urlset>',
@@ -830,9 +839,15 @@ final class CatalogIndexTest extends TestCase
 
         $result = app(CatalogSitemapIndexer::class)->index('robocze-buty.pl');
 
-        $this->assertSame(1, $result['saved']);
+        $this->assertSame(2, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.gvarant.pl/p117,sandaly-urgent-302-s1-gray.html',
+        ]);
         $this->assertDatabaseHas('catalog_pages', [
             'url' => 'https://www.robocze-buty.pl/p28932,polbuty-lemaitre-securite-ales-s3-ci.html',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.robocze-buty.pl/puma-safety/',
         ]);
         $this->assertDatabaseMissing('catalog_pages', [
             'url' => 'https://www.robocze-buty.pl/drewniaki-klapki,44-/',

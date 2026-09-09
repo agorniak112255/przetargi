@@ -836,7 +836,7 @@ final class CatalogSitemapIndexer
             return true;
         }
 
-        return preg_match('#/p\d+,[^/]+\.html$#', $path) === 1
+        return $this->isIaiProductCard($path)
             || preg_match('#-p\d{2,}(\.html)?$#', $path) === 1
             || preg_match('#/(product|produkt)/[^/]+#', $path) === 1
             || preg_match('#/productpage(/|$)#', $path) === 1
@@ -845,6 +845,9 @@ final class CatalogSitemapIndexer
 
     private function looksLikePrettyProductUrl(string $url): bool
     {
+        if ($this->isIaiShopUrl($url)) {
+            return false;
+        }
         $path = mb_strtolower(trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/'));
         if ($path === '') {
             return false;
@@ -932,14 +935,32 @@ final class CatalogSitemapIndexer
         if ($this->isFacetListingPath($path)) {
             return true;
         }
+        if ($this->isIaiShopUrl($url) && ! $this->isIaiProductCard($path)) {
+            return trim($path, '/') !== '';
+        }
 
         return preg_match('#\.(jpe?g|png|gif|webp|avif|bmp|svg|css|js|woff2?|ico|pdf|xml|gz|mp4|webm|zip)$#i', $path) === 1;
+    }
+
+    private function isIaiShopUrl(string $url): bool
+    {
+        $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
+
+        return in_array($host, ['gvarant.pl', 'robocze-buty.pl'], true);
+    }
+
+    /** Karta IAI: /p117,sandaly-urgent-302-s1-gray.html — bez .html to grupa/filtr. */
+    private function isIaiProductCard(string $path): bool
+    {
+        $path = mb_strtolower(rtrim($path, '/'));
+
+        return str_ends_with($path, '.html') && preg_match('#/p\d+,[^/]+$#', $path) === 1;
     }
 
     /** IAI/Presta: /p123,slug.html to karta; /kategoria,44-/ to pusta lista z filtrem. */
     private function isFacetListingPath(string $path): bool
     {
-        if (preg_match('#/p\d+,[^/]+\.html$#', $path) === 1) {
+        if ($this->isIaiProductCard($path)) {
             return false;
         }
         $slug = (string) basename(rtrim($path, '/'));
