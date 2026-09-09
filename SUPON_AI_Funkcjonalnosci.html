@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SUPON AI — Co jest zrobione</title>
+<style>
+:root{--navy:#1f2937;--accent:#2563eb;--bg:#edf1f5}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Segoe UI",system-ui,Arial,sans-serif;background:var(--bg);color:#1e293b;line-height:1.45}
+.wrap{max-width:880px;margin:0 auto;padding:28px 20px 48px}
+h1{margin:0 0 6px;font-size:26px;color:var(--navy)}
+.lead{margin:0 0 22px;color:#64748b;font-size:14px}
+h2{margin:22px 0 8px;font-size:16px;color:var(--navy);border-bottom:1px solid #dbe3ec;padding-bottom:6px}
+ul{margin:0 0 4px;padding-left:1.2rem}
+li{margin:4px 0;font-size:14px}
+.card{background:#fff;border-radius:10px;padding:18px 22px 20px;box-shadow:0 2px 8px rgba(0,0,0,.07)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>SUPON AI — Przetargi</h1>
+<p class="lead">Wykaz zrobionych funkcji i możliwości aplikacji.</p>
+<div class="card">
+
+<h2>Logowanie i uprawnienia</h2>
+<ul>
+<li>Logowanie i wylogowanie (token Sanctum)</li>
+<li>Role: handlowiec, przetargi, kierownik, dyrektor, admin</li>
+<li>Uprawnienia per moduł (widoczność menu i akcji)</li>
+<li>Powiadomienia (dzwonek, nieprzeczytane, oznaczanie przeczytanych)</li>
+<li>Dziennik aktywności użytkowników</li>
+</ul>
+
+<h2>Dashboard</h2>
+<ul>
+<li>KPI: aktywne przetargi, wartość ofert, średnia marża, liczba produktów</li>
+<li>Zamienniki oczekujące na akceptację</li>
+<li>Przetargi czekające na Twoją akceptację</li>
+<li>Terminy w ciągu 7 dni</li>
+<li>Ostatnie przetargi (klient, opiekun)</li>
+</ul>
+
+<h2>Przetargi</h2>
+<ul>
+<li>Lista z filtrami: moje, zaproszone, nieprzypisane, zbliżający się termin</li>
+<li>Nowy przetarg (tytuł, klient, termin, docelowa marża)</li>
+<li>Numer przetargu, opiekun, zaproszenia współpracowników</li>
+<li>Usuwanie przetargu (admin)</li>
+<li>Komentarze do przetargu</li>
+<li>Historia zmian statusu</li>
+<li>Warunki przetargu</li>
+</ul>
+
+<h2>Pozycje oferty</h2>
+<ul>
+<li>Wymagania SIWZ, ilość, produkt główny, komplet (produkt towarzyszący)</li>
+<li>Ceny ofertowe, marża, oferta niestandardowa</li>
+<li>Filtry pokrycia: brak produktu, słabe dopasowanie, niska marża itd.</li>
+<li>Wyszukiwanie pozycji po nazwie / SKU i przez AI</li>
+<li>Battlecard pozycji (propozycja główna + zamienniki)</li>
+<li>Porównanie zamienników</li>
+<li>Powody dopasowania AI</li>
+<li>Import pozycji z XLSX / XLS / CSV</li>
+</ul>
+
+<h2>Dokumenty SIWZ</h2>
+<ul>
+<li>Upload PDF / Excel / Word</li>
+<li>Analiza AI dokumentów (pozycje i warunki)</li>
+<li>Zatwierdzenie wyników do oferty</li>
+<li>Pobieranie, ponowna analiza, usuwanie pliku</li>
+</ul>
+
+<h2>Workflow oferty</h2>
+<ul>
+<li>Szkic → wycena → akceptacja kierownika → akceptacja dyrektora → zatwierdzona</li>
+<li>Statusy: wyeksportowana, archiwum, odrzucony (z notatką)</li>
+<li>Edycja oferty tylko w szkicu i wycenie</li>
+<li>Eksport oferty: Excel, PDF, DOCX</li>
+</ul>
+
+<h2>Dopasowanie AI do przetargu</h2>
+<ul>
+<li>Dopasowanie całego przetargu, wybranych lub pojedynczej pozycji</li>
+<li>Scoring tekstowy SIWZ ↔ katalog (normy, materiały, SKU, atrybuty BHP)</li>
+<li>Reguły + AI, konfigurowalne progi</li>
+<li>Słownik żargonu SIWZ (np. potoczne nazwy → frazy katalogu)</li>
+<li>Masowa zamiana na tańszy zatwierdzony zamiennik</li>
+<li>Sugestia kompletu (kit)</li>
+</ul>
+
+<h2>Produkty</h2>
+<ul>
+<li>Katalog: SKU, nazwa, producent, kategoria, ceny, waluta, opakowanie, stan, opis</li>
+<li>Zdjęcia i dokumenty produktu</li>
+<li>Atrybuty BHP, rozmiary i warianty</li>
+<li>Ceny specjalne per klient, historia cen</li>
+<li>Wyszukiwanie (SKU, nazwa, producent, modele), filtry i sortowanie (w tym kursy NBP)</li>
+<li>Porównanie produktów</li>
+<li>Weryfikacja produktu</li>
+<li>Wyszukiwarka AI w katalogu</li>
+<li>Wyszukiwanie w PrestaShop i nakładanie dopasowań</li>
+<li>Komplet (kit / akcesoria)</li>
+<li>Panel zdrowia katalogu (braki opisów, enrichment, wektory)</li>
+<li>Eksport do PrestaShop (pojedynczy, wsadowy, cały cennik)</li>
+</ul>
+
+<h2>Ściąganie danych i tłumaczenie</h2>
+<ul>
+<li>Źródła produktów są w różnych językach (m.in. francuski, niemiecki, czeski, angielski)</li>
+<li>Fakty ze stron sklepów i producentów są zawsze tłumaczone na polski</li>
+<li>Nazwy modeli i oznaczenia norm pozostają bez zmian</li>
+<li>Wzbogacanie: opisy, atrybuty, zdjęcia, dokumenty</li>
+<li>Kolejka wzbogacania: pojedynczy produkt, wiele, cały cennik; anulowanie, postęp</li>
+<li>Prefetch stron producentów i sklepów, indeks hostów / sitemap</li>
+<li>Wyszukiwanie źródeł w internecie (Tavily, SearXNG, DuckDuckGo)</li>
+<li>Weryfikacja zdjęć (vision)</li>
+<li>Szablony opisów per kategoria BHP</li>
+</ul>
+
+<h2>Cenniki</h2>
+<ul>
+<li>Import XLSX, XLS, CSV, PDF</li>
+<li>Import z mapowaniem kolumn oraz analiza AI</li>
+<li>PDF: ekstrakcja, chunki, parsery (m.in. Renex, Ansell, JS Gloves, Sungboo)</li>
+<li>Grupy asortymentowe i rabaty</li>
+<li>Ceny specjalne przy imporcie</li>
+<li>Raport zmian cen i pominiętych wierszy</li>
+<li>Wzbogacanie produktów z cennika</li>
+<li>Eksport cennika do PrestaShop</li>
+</ul>
+
+<h2>Zamienniki</h2>
+<ul>
+<li>Relacja produkt główny → zamiennik</li>
+<li>Typy: preferowany, tańszy, premium, awaryjny</li>
+<li>Status: oczekuje / zatwierdzony / odrzucony</li>
+<li>Akceptacja przez kierownika / dyrektora</li>
+</ul>
+
+<h2>Klienci i zapytania</h2>
+<ul>
+<li>Lista, dodawanie i edycja klientów</li>
+<li>Wklejenie maila klienta, analiza AI (pozycje, pytania, dopasowania)</li>
+<li>Generowanie treści odpowiedzi (osobne okno)</li>
+</ul>
+
+<h2>Raporty</h2>
+<ul>
+<li>Pipeline wg statusu i opiekuna (wartość, marża)</li>
+<li>Eksport CSV listy przetargów</li>
+</ul>
+
+<h2>Wyszukiwarka AI</h2>
+<ul>
+<li>Intent → wyszukiwanie tekstowe + wektorowe (Qdrant) → ranking LLM</li>
+<li>Karty produktów, podpowiedzi z katalogów zewnętrznych</li>
+<li>Przepisanie zapytania przy pustych wynikach</li>
+<li>Strojenie limitów i progów w administracji</li>
+</ul>
+
+<h2>Ustawienia AI</h2>
+<ul>
+<li>Provider LLM, modele per zadanie</li>
+<li>Embeddingi i Qdrant</li>
+<li>Tavily / SearXNG / DuckDuckGo</li>
+<li>Limity równoległości</li>
+<li>Test połączenia czatu i wektorów</li>
+</ul>
+
+<h2>Administracja</h2>
+<ul>
+<li>Pracownicy (CRUD, role)</li>
+<li>Role i uprawnienia</li>
+<li>Logi aktywności</li>
+<li>Logi AI (wzbogacanie)</li>
+<li>SMTP i test wysyłki</li>
+<li>Sklep PrestaShop: połączenie, kategorie, mapowania, opisy kategorii</li>
+<li>Strony wyszukiwarki (hosty, indeks, reindex)</li>
+<li>Strojenie AI (progi dopasowania, limity wyników)</li>
+<li>Żargon SIWZ</li>
+<li>Szablony opisów</li>
+</ul>
+
+<h2>Integracje</h2>
+<ul>
+<li>LLM (OpenAI-compatible / OpenRouter)</li>
+<li>Qdrant (wyszukiwanie wektorowe)</li>
+<li>NBP (kursy walut)</li>
+<li>PrestaShop (wyszukiwanie i eksport)</li>
+<li>Indeks katalogów producentów i sklepów</li>
+</ul>
+
+<h2>Pomoc</h2>
+<ul>
+<li>Przewodnik po modułach ze slajdami „co kliknąć”</li>
+</ul>
+
+</div>
+</div>
+</body>
+</html>
