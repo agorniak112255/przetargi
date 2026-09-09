@@ -30,7 +30,13 @@ final class CatalogSitemapIndexer
     private const CURL_MAX_BYTES = 20971520;
 
     /** Zgadywane ścieżki nie mogą zjeść całego --seconds na jednym 404. */
-    private const CANDIDATE_TIMEOUT = 15;
+    private const CANDIDATE_TIMEOUT = 8;
+
+    /** Łączny czas na zgadywane sitemap.xml — potem pełzamy po HTML. */
+    private const CANDIDATE_GUESS_BUDGET = 40;
+
+    /** Ile sekund zostawiamy na crawl, gdy XML nic nie dał. */
+    private const HTML_CRAWL_RESERVE = 180;
 
     /** Sklepy bez XML (IAI) — ile stron HTML zbieramy z menu i listingów. */
     private const HTML_CRAWL_PAGES = 180;
@@ -109,8 +115,10 @@ final class CatalogSitemapIndexer
         if ($removed > 0) {
             $this->note($host, 'Usunięto '.$removed.' zdjęć/plików z indeksu.');
         }
-        $deadline = microtime(true) + max(30, $maxSeconds);
-        $sitemaps = $this->discoverSitemaps($host, $deadline);
+        $budget = max(30, $maxSeconds);
+        $deadline = microtime(true) + $budget;
+        $sitemapDeadline = $deadline - min(self::HTML_CRAWL_RESERVE, (int) floor($budget * 0.4));
+        $sitemaps = $this->discoverSitemaps($host, $sitemapDeadline);
         $guessed = array_flip($this->candidateUrls($host));
         if ($sitemaps === []) {
             throw new RuntimeException('Nie znalazłem sitemapy dla '.$host.'.');
@@ -122,6 +130,7 @@ final class CatalogSitemapIndexer
         $used = [];
         $offHost = 0;
         $timedOut = microtime(true) >= $deadline;
+        $guessStartedAt = null;
 
         // indeks sitemap dokłada kolejne pliki w trakcie — foreach nie zobaczyłby dopisanych
         for ($i = 0; $i < count($sitemaps) && $i < self::MAX_SITEMAP_FILES; $i++) {
@@ -131,6 +140,21 @@ final class CatalogSitemapIndexer
             }
             if (microtime(true) >= $deadline) {
                 $timedOut = true;
+                break;
+            }
+
+            $guessing = isset($guessed[$sitemap]);
+            if ($guessing) {
+                if ($guessStartedAt === null) {
+                    $guessStartedAt = microtime(true);
+                }
+                if ((microtime(true) - $guessStartedAt) >= self::CANDIDATE_GUESS_BUDGET
+                    || microtime(true) >= $sitemapDeadline) {
+                    $this->note($host, 'Zgadywanie sitemap nic nie dało — pełzam po HTML.');
+                    break;
+                }
+            } elseif (count($seen) === 0 && microtime(true) >= $sitemapDeadline) {
+                $this->note($host, 'Zostawiam czas na pełzanie HTML.');
                 break;
             }
 
@@ -181,12 +205,12 @@ final class CatalogSitemapIndexer
 
             // liczymy tylko mapy, które faktycznie coś dały — inaczej raport
             // pokazuje soft-404 sklepu jako znalezioną sitemapę
-            $timeout = isset($guessed[$sitemap]) ? self::CANDIDATE_TIMEOUT : 45;
-            $guessing = isset($guessed[$sitemap]);
+            $timeout = $guessing ? self::CANDIDATE_TIMEOUT : 45;
             if (! $guessing) {
                 $this->note($host, 'Czytam '.$this->shortUrl($sitemap));
             }
-            if ($this->streamLocations($sitemap, $consume, $deadline, $timeout) && $found > 0) {
+            $streamDeadline = $guessing ? min($deadline, $guessStartedAt + self::CANDIDATE_GUESS_BUDGET) : $deadline;
+            if ($this->streamLocations($sitemap, $consume, $streamDeadline, $timeout, ! $guessing) && $found > 0) {
                 $used[] = $sitemap;
                 $this->note($host, 'Mapa dała '.$found.' adresów (łącznie '.count($seen).'): '.$this->shortUrl($sitemap));
             } elseif (! $guessing) {
@@ -209,8 +233,10 @@ final class CatalogSitemapIndexer
             }
         }
 
-        if (count($seen) < self::SPARSE_SITEMAP_LIMIT && ! $timedOut) {
-            $this->note($host, 'Mało kart z XML — pełzam po stronach sklepu.');
+        if (count($seen) < self::SPARSE_SITEMAP_LIMIT) {
+            $this->note($host, $timedOut
+                ? 'Limit czasu na XML — pełzam po stronach sklepu.'
+                : 'Mało kart z XML — pełzam po stronach sklepu.');
             foreach ($this->crawlShopPages($host, $maxUrls, $deadline) as $row) {
                 $url = (string) $row['url'];
                 if (isset($seen[$url])) {
@@ -319,7 +345,7 @@ final class CatalogSitemapIndexer
      *
      * @param  callable(string): bool  $onLocation  false przerywa czytanie
      */
-    private function streamLocations(string $url, callable $onLocation, float $deadline = 0.0, int $timeout = 90): bool
+    private function streamLocations(string $url, callable $onLocation, float $deadline = 0.0, int $timeout = 90, bool $allowCurl = true): bool
     {
         $timeout = max(5, $timeout);
         if ($deadline > 0.0) {
@@ -336,7 +362,7 @@ final class CatalogSitemapIndexer
                 ->withOptions([
                     'stream' => true,
                     'read_timeout' => min(20, $timeout),
-                    'curl' => [
+                    'curl' => $this->curlResolveV4() + [
                         CURLOPT_LOW_SPEED_LIMIT => 1024,
                         CURLOPT_LOW_SPEED_TIME => min(20, $timeout),
                     ],
@@ -345,11 +371,11 @@ final class CatalogSitemapIndexer
         } catch (Throwable $e) {
             Log::info('Sitemap stream failed', ['url' => $url, 'error' => $e->getMessage()]);
 
-            return $this->streamFromCurl($url, $onLocation, $timeout);
+            return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
         }
 
         if (! $response->successful()) {
-            return $this->streamFromCurl($url, $onLocation, $timeout);
+            return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
         }
         // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
         // bez tego pobralibyśmy 130 kB HTML-a dla każdej zgadywanej ścieżki
@@ -394,7 +420,7 @@ final class CatalogSitemapIndexer
                 $chunk = (string) inflate_add($inflate, $chunk);
             }
             if ($buffer === '' && $this->looksLikeHtml($chunk)) {
-                return $this->streamFromCurl($url, $onLocation, $timeout);
+                return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
             }
 
             $buffer .= $chunk;
@@ -435,7 +461,7 @@ final class CatalogSitemapIndexer
         return true;
     }
 
-    private function fetchViaCurl(string $url, int $timeout = 90): ?string
+    private function fetchViaCurl(string $url, int $timeout = 90, string $accept = 'Accept: application/xml,text/xml,text/plain,*/*'): ?string
     {
         if (preg_match('#^https?://#i', $url) !== 1) {
             return null;
@@ -449,11 +475,12 @@ final class CatalogSitemapIndexer
         $process = new Process([
             $binary,
             '-sL',
+            '--ipv4',
             '--max-time', (string) $timeout,
             '--connect-timeout', '8',
             '--compressed',
             '-A', self::USER_AGENT,
-            '-H', 'Accept: application/xml,text/xml,text/plain,*/*',
+            '-H', $accept,
             '-H', 'Accept-Language: pl-PL,pl;q=0.9,en;q=0.8',
             $url,
         ]);
@@ -923,25 +950,45 @@ final class CatalogSitemapIndexer
                 'User-Agent' => self::USER_AGENT,
                 'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
                 'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
-            ])->timeout(12)->connectTimeout(6)->get($url);
+            ])->timeout(12)->connectTimeout(6)
+                ->withOptions(['curl' => $this->curlResolveV4()])
+                ->get($url);
         } catch (Throwable $e) {
             Log::info('Catalog HTML fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
+            $response = null;
+        }
+        if ($response !== null && $response->successful()) {
+            $contentType = mb_strtolower((string) $response->header('Content-Type'));
+            if (! str_contains($contentType, 'image/') && ! str_contains($contentType, 'xml')) {
+                $body = (string) $response->body();
+                if ($body !== '' && $this->looksLikeHtml($body)) {
+                    return mb_substr($body, 0, 400000);
+                }
+            }
+        }
+        if (app()->environment('testing')) {
+            return null;
+        }
+        $viaCurl = $this->fetchViaCurl(
+            $url,
+            15,
+            'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'
+        );
+        if ($viaCurl === null || ! $this->looksLikeHtml($viaCurl)) {
+            return null;
+        }
 
-            return null;
-        }
-        if (! $response->successful()) {
-            return null;
-        }
-        $contentType = mb_strtolower((string) $response->header('Content-Type'));
-        if (str_contains($contentType, 'image/') || str_contains($contentType, 'xml')) {
-            return null;
-        }
-        $body = (string) $response->body();
-        if ($body === '' || ! $this->looksLikeHtml($body)) {
-            return null;
-        }
+        return mb_substr($viaCurl, 0, 400000);
+    }
 
-        return mb_substr($body, 0, 400000);
+    /**
+     * @return array<int, int>
+     */
+    private function curlResolveV4(): array
+    {
+        return defined('CURL_IPRESOLVE_V4')
+            ? [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]
+            : [];
     }
 
     private function curlBinary(): ?string
@@ -1207,7 +1254,9 @@ final class CatalogSitemapIndexer
                 $response = Http::withHeaders([
                     'User-Agent' => self::USER_AGENT,
                     'Accept' => 'application/xml,text/xml,text/plain,*/*',
-                ])->timeout(max(5, $timeout))->connectTimeout(8)->get($url);
+                ])->timeout(max(5, $timeout))->connectTimeout(8)
+                    ->withOptions(['curl' => $this->curlResolveV4()])
+                    ->get($url);
             } catch (Throwable $e) {
                 $lastError = $e->getMessage();
                 if ($attempt < self::FETCH_ATTEMPTS) {

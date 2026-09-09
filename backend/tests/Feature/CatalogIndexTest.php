@@ -12,6 +12,7 @@ use App\Services\Enrichment\CatalogIndexSearch;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use App\Services\Enrichment\HybridWebSearchService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -1043,6 +1044,38 @@ final class CatalogIndexTest extends TestCase
             'https://treadsafe.test/brandpage/productpage/763/Tungsten_Boot',
             $hits[0]['url'] ?? null
         );
+    }
+
+    public function test_html_crawl_runs_when_robots_and_sitemaps_time_out(): void
+    {
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            $url = $request->url();
+            if ($url === 'https://slowshop.test/') {
+                return Http::response(
+                    '<!DOCTYPE html><html><body>'
+                    .'<a href="/brandpage/productpage/1/Boot">Boot</a>'
+                    .'</body></html>',
+                    200,
+                    ['Content-Type' => 'text/html']
+                );
+            }
+            if ($url === 'https://slowshop.test/brandpage/productpage/1/Boot') {
+                return Http::response(
+                    '<!DOCTYPE html><html><body><h1>Boot</h1><p>CODE: JN1001 BRAND: Jonsson</p></body></html>',
+                    200,
+                    ['Content-Type' => 'text/html']
+                );
+            }
+
+            throw new ConnectionException('timeout');
+        });
+
+        $result = app(CatalogSitemapIndexer::class)->index('slowshop.test');
+
+        $this->assertGreaterThanOrEqual(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://slowshop.test/brandpage/productpage/1/Boot',
+        ]);
     }
 
     private function seedPage(string $url, ?string $manufacturer = null): void
