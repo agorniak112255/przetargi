@@ -58,7 +58,8 @@ final class ProductImageCandidateVerifier
             }
         }
 
-        $selected = [];
+        $skuHits = [];
+        $trustedHits = [];
         $unverified = [];
         foreach ($urls as $url) {
             if ($this->identity->imageUrlMentionsForeignBrand($url, $product)
@@ -66,43 +67,43 @@ final class ProductImageCandidateVerifier
                 continue;
             }
             if ($this->identity->imageUrlMentionsProduct($url, $product)) {
-                $selected[] = $url;
-                if (count($selected) >= $max) {
-                    return array_slice($selected, 0, $max);
-                }
+                $skuHits[] = $url;
 
                 continue;
             }
             if (! $this->isPotentialProductImage($url)) {
                 continue;
             }
-            // og:image / itemprop — na wskazanej karcie sklepu bez SKU w nazwie pliku
             if (isset($trusted[mb_strtolower($url)])
                 && (! $this->identity->nameRequiresArticleType($product) || $product->hintedShopUrl() !== null)) {
-                $selected[] = $url;
-                if (count($selected) >= $max) {
-                    return array_slice($selected, 0, $max);
-                }
+                $trustedHits[] = $url;
 
                 continue;
             }
             $unverified[] = $url;
         }
 
+        $auto = array_values(array_unique([...$skuHits, ...$trustedHits]));
+        $pool = array_values(array_unique([...$auto, ...$unverified]));
+        if (count($pool) <= 1 && $auto !== []) {
+            return array_slice($auto, 0, $max);
+        }
+
         usort(
             $unverified,
             fn (string $a, string $b): int => $this->layoutPenalty($a) <=> $this->layoutPenalty($b)
         );
+        $visionQueue = $this->preferHostDiversity(array_values(array_unique([...$auto, ...$unverified])));
 
         $loaded = [];
-        foreach (array_slice($unverified, 0, self::MAX_AI_CANDIDATES) as $url) {
+        foreach (array_slice($visionQueue, 0, self::MAX_AI_CANDIDATES) as $url) {
             $image = $this->loadForVision($url);
             if ($image !== null) {
                 $loaded[] = $image + ['url' => $url];
             }
         }
         if ($loaded === []) {
-            return $this->finishSelection($selected, $trusted, $urls, $max, $product);
+            return $this->finishSelection($auto, $trusted, $urls, $max, $product);
         }
 
         try {
@@ -125,7 +126,7 @@ final class ProductImageCandidateVerifier
                 'error' => $e->getMessage(),
             ]);
 
-            return $this->finishSelection($selected, $trusted, $urls, $max, $product);
+            return $this->finishSelection($auto, $trusted, $urls, $max, $product);
         }
 
         $verified = [];
@@ -144,6 +145,7 @@ final class ProductImageCandidateVerifier
             }
             if (($row['is_relevant_product'] ?? false) !== true
                 || ($row['is_logo_or_banner'] ?? false) === true
+                || ($row['is_watermarked'] ?? false) === true
                 || $confidence < self::MIN_CONFIDENCE) {
                 continue;
             }
@@ -157,12 +159,7 @@ final class ProductImageCandidateVerifier
             $verified,
             static fn (array $a, array $b): int => $b['confidence'] <=> $a['confidence']
         );
-        foreach ($verified as $candidate) {
-            $selected[] = $candidate['url'];
-            if (count($selected) >= $max) {
-                break;
-            }
-        }
+        $selected = $this->pickDiverseHosts($verified, $max);
 
         Log::info('Product image AI verification completed', [
             'product_id' => $product->id,
@@ -171,7 +168,11 @@ final class ProductImageCandidateVerifier
             'accepted' => array_column($verified, 'url'),
         ]);
 
-        return $this->finishSelection($selected, $trusted, $urls, $max, $product);
+        if ($selected !== []) {
+            return $selected;
+        }
+
+        return [];
     }
 
     /**
@@ -200,6 +201,72 @@ final class ProductImageCandidateVerifier
         }
 
         return [];
+    }
+
+    /**
+     * @param  list<string>  $urls
+     * @return list<string>
+     */
+    private function preferHostDiversity(array $urls): array
+    {
+        $buckets = [];
+        foreach ($urls as $url) {
+            $buckets[$this->hostOf($url)][] = $url;
+        }
+        $out = [];
+        $index = 0;
+        $more = true;
+        while ($more) {
+            $more = false;
+            foreach ($buckets as $list) {
+                if (isset($list[$index])) {
+                    $out[] = $list[$index];
+                    $more = true;
+                }
+            }
+            $index++;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<array{url: string, confidence: float}>  $verified
+     * @return list<string>
+     */
+    private function pickDiverseHosts(array $verified, int $max): array
+    {
+        $selected = [];
+        $usedHosts = [];
+        foreach ($verified as $candidate) {
+            $host = $this->hostOf($candidate['url']);
+            if (isset($usedHosts[$host])) {
+                continue;
+            }
+            $selected[] = $candidate['url'];
+            $usedHosts[$host] = true;
+            if (count($selected) >= $max) {
+                return $selected;
+            }
+        }
+        foreach ($verified as $candidate) {
+            if (in_array($candidate['url'], $selected, true)) {
+                continue;
+            }
+            $selected[] = $candidate['url'];
+            if (count($selected) >= $max) {
+                break;
+            }
+        }
+
+        return $selected;
+    }
+
+    private function hostOf(string $url): string
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+
+        return preg_replace('/^www\./', '', $host) ?? $host;
     }
 
     private function isPotentialProductImage(string $url): bool
@@ -301,12 +368,13 @@ Oceń {$count} kandydatów na GŁÓWNE zdjęcie katalogowe (packshot) tego produ
 
 {$typeBlock}
 
-Zaakceptuj TYLKO gdy widać sam ten produkt (pierwszy plan, ostro, studio/białe tło).
+Zaakceptuj TYLKO gdy widać sam ten produkt (pierwszy plan, ostro, studio/białe tło) BEZ znaku wodnego.
 Zawsze is_relevant_product=false gdy:
 - na zdjęciu są ludzie (twarz, ręce, kucharze, kelnerzy, personel, model w ubraniu, lifestyle, kuchnia, hotel jako motyw),
 - widać inny asortyment niż nazwa (kurtka/kombinezon/słoik przy ręczniku; ręcznik przy odzieży),
 - widać inną markę niż podana,
 - to logo, ikona, baner, mapa, reklama, dokument lub miniatura kolekcji.
+is_watermarked=true gdy na produkcie, w rogu albo w pasku widać logo/nazwę/URL sklepu albo półprzezroczysty napis. Taki kandydat odrzuć — szukamy zdjęcia z innej strony.
 
 Kontekst stron jest wskazówką, nie dowodem. Gdy obraz nie zgadza się z nazwą/marką — odrzuć, nawet jeśli strona wygląda na kartę produktu. Nie zgaduj modelu z wyglądu. Wątpliwość → confidence poniżej 0.85 i is_relevant_product=false.
 
@@ -314,7 +382,7 @@ Kontekst stron:
 {$this->joinContext($context)}
 
 Zwróć:
-{"candidates":[{"index":0,"is_relevant_product":true,"is_logo_or_banner":false,"confidence":0.0,"reason":"krótko"}]}
+{"candidates":[{"index":0,"is_relevant_product":true,"is_logo_or_banner":false,"is_watermarked":false,"confidence":0.0,"reason":"krótko"}]}
 Uwzględnij każdy indeks od 0 do {$countMinusOne}.
 PROMPT;
     }

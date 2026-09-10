@@ -1639,6 +1639,61 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame([$imageUrl], $selected);
     }
 
+    public function test_skips_watermarked_image_and_takes_other_host(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'URGENT-1005',
+            'name' => 'Rękawice URGENT 1005',
+            'manufacturer' => 'URGENT',
+        ]);
+        $marked = 'https://sklep-a.example.com/media/urgent-1005.jpg';
+        $clean = 'https://sklep-b.example.com/media/urgent-1005.jpg';
+        Http::fake([
+            'https://sklep-a.example.com/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
+            'https://sklep-b.example.com/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonWithImages')
+            ->once()
+            ->andReturn([
+                'candidates' => [
+                    [
+                        'index' => 0,
+                        'is_relevant_product' => true,
+                        'is_logo_or_banner' => false,
+                        'is_watermarked' => true,
+                        'confidence' => 0.99,
+                        'reason' => 'Logo sklepu na rękawicy.',
+                    ],
+                    [
+                        'index' => 1,
+                        'is_relevant_product' => true,
+                        'is_logo_or_banner' => false,
+                        'is_watermarked' => false,
+                        'confidence' => 0.94,
+                        'reason' => 'Czysty packshot.',
+                    ],
+                ],
+            ]);
+
+        $verifier = new ProductImageCandidateVerifier(
+            app(ProductSearchIdentity::class),
+            $llm,
+        );
+        $selected = $verifier->select(
+            $product,
+            [$marked, $clean],
+            [[
+                'url' => 'https://sklep-a.example.com/rekawice',
+                'text' => 'URGENT 1005',
+            ]],
+            1
+        );
+
+        $this->assertSame([$clean], $selected);
+    }
+
     public function test_pick_primary_keeps_verified_candidate_without_sku_in_url(): void
     {
         $product = $this->makeProduct([

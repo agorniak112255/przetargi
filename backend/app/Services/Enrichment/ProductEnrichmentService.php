@@ -674,20 +674,22 @@ final class ProductEnrichmentService
             // Zdjęcia z kart produktu: pewne URL-e przechodzą po SKU, pozostałe ocenia AI Vision.
             // Tavily include_images pozostaje wyłączone — kandydat musi pochodzić z pobranej karty.
             $t = microtime(true);
+            $candidateImages = $fetched['image_urls'];
+            foreach ($extracted['image_urls'] ?? [] as $url) {
+                if (is_string($url) && str_starts_with($url, 'http')) {
+                    $candidateImages[] = $url;
+                }
+            }
+            $hadImageCandidates = $candidateImages !== [] || $fetched['trusted_image_urls'] !== [];
             $imageUrls = $this->imageVerifier->select(
                 $product,
-                $fetched['image_urls'],
+                $candidateImages,
                 $pageSnippets,
                 3,
                 $fetched['trusted_image_urls']
             );
-            foreach ($extracted['image_urls'] ?? [] as $url) {
-                if (is_string($url) && $this->identity->imageUrlMentionsProduct($url, $product)) {
-                    $imageUrls[] = $url;
-                }
-            }
             $imageUrls = array_values(array_unique($imageUrls));
-            if ($imageUrls === []) {
+            if ($imageUrls === [] && ! $hadImageCandidates) {
                 $imageUrls = $this->cardImagesAfterConfirmation(
                     $fetched['trusted_image_urls'],
                     $fetched['image_urls'],
@@ -1189,7 +1191,8 @@ final class ProductEnrichmentService
                 3,
                 $fetched['trusted_image_urls']
             );
-            if ($urls === []) {
+            $hadImages = $fetched['image_urls'] !== [] || $fetched['trusted_image_urls'] !== [];
+            if ($urls === [] && ! $hadImages) {
                 $urls = $this->cardImagesAfterConfirmation(
                     $fetched['trusted_image_urls'],
                     $fetched['image_urls'],
