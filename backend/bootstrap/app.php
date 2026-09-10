@@ -30,6 +30,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withSchedule(function (Schedule $schedule): void {
         $schedule->command('activity-logs:prune')->dailyAt('02:15');
         $schedule->command('search-events:prune')->dailyAt('02:25');
+        $schedule->command('storage:prune')->hourly();
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->render(function (UnauthorizedException $e, $request) {
