@@ -1080,15 +1080,13 @@ final class CatalogIndexTest extends TestCase
         ]));
         $this->assertContains($card, array_column($hits, 'url'));
 
+        $jacket = 'https://dodatkimasarskiezwm.pl/110221-kurtka-oddychajaca-zapinana-na-zamek-bryzgoszczelny-285-aj-group-pros--pl';
         $jacketHits = app(CatalogIndexSearch::class)->findFor(new Product([
             'sku' => '205',
             'name' => 'Kurtka oddychająca zapinana na zamek bryzgoszczelny',
             'manufacturer' => 'AJ GROUP',
         ]));
-        $this->assertNotContains(
-            'https://dodatkimasarskiezwm.pl/110221-kurtka-oddychajaca-zapinana-na-zamek-bryzgoszczelny-285-aj-group-pros--pl',
-            array_column($jacketHits, 'url')
-        );
+        $this->assertContains($jacket, array_column($jacketHits, 'url'));
 
         $product = Product::query()->create([
             'sku' => '910',
@@ -1102,6 +1100,18 @@ final class CatalogIndexTest extends TestCase
         $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
         $this->assertSame('catalog_index', $pack['provider']);
         $this->assertSame($card, $pack['results'][0]['url'] ?? null);
+
+        $jacketProduct = Product::query()->create([
+            'sku' => '205',
+            'name' => 'Kurtka oddychająca zapinana na zamek bryzgoszczelny',
+            'manufacturer' => 'AJ GROUP',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        $jacketPack = app(HybridWebSearchService::class)->searchProduct($jacketProduct, 'manufacturer');
+        $this->assertSame('catalog_index', $jacketPack['provider']);
+        $this->assertSame($jacket, $jacketPack['results'][0]['url'] ?? null);
         Http::assertNothingSent();
     }
 

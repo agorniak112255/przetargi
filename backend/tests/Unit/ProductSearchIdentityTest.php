@@ -268,9 +268,14 @@ final class ProductSearchIdentityTest extends TestCase
             'name' => 'Kurtka oddychająca zapinana na zamek bryzgoszczelny',
             'manufacturer' => 'AJ GROUP',
         ]);
-        $other = 'https://dodatkimasarskiezwm.pl/110221-kurtka-oddychajaca-zapinana-na-zamek-bryzgoszczelny-285-aj-group-pros--pl';
-        $this->assertTrue($id->hayHasDistinctiveNamePhrase($other, $jacket));
-        $this->assertTrue($id->pageClaimsAnotherCode($other, 'Kurtka oddychająca 285', $jacket));
+        $de = 'https://dodatkimasarskiezwm.pl/110221-kurtka-oddychajaca-zapinana-na-zamek-bryzgoszczelny-285-aj-group-pros--de';
+        $this->assertTrue($id->hayHasDistinctiveNamePhrase($de, $jacket));
+        $this->assertFalse($id->pageClaimsAnotherCode($de, 'Kurtka oddychająca 285', $jacket));
+        $this->assertTrue($id->isConfirmedProductCard($de, 'Kurtka oddychająca 285', 'PROS', $jacket));
+        $this->assertSame(
+            'https://dodatkimasarskiezwm.pl/110221-kurtka-oddychajaca-zapinana-na-zamek-bryzgoszczelny-285-aj-group-pros--pl',
+            $id->preferredLocaleUrl($de, $jacket)
+        );
     }
 
     public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void

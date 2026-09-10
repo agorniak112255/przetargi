@@ -1627,6 +1627,9 @@ final class ProductSearchIdentity
         if ($this->urlHasGluedNumericModel($hay, $product)) {
             return true;
         }
+        if ($this->hayHasDistinctiveNamePhrase($hay, $product)) {
+            return true;
+        }
         $brands = $this->acceptedBrands($product);
         $tokens = $this->matchTokens($product);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
@@ -1766,7 +1769,8 @@ final class ProductSearchIdentity
         // 0100 ≠ art.1006: krótki numer magazynowy musi być na karcie, nie sama „kangurka”.
         if (preg_match('/^\d{3,4}$/u', trim((string) $product->sku)) === 1
             && ! $this->hayHasProductCode($hay, $product)
-            && ! $this->urlOrTitleCarriesShopModelNumber($url, $title, $product)) {
+            && ! $this->urlOrTitleCarriesShopModelNumber($url, $title, $product)
+            && ! $this->hayHasDistinctiveNamePhrase($hay, $product)) {
             return false;
         }
         if ($this->urlHasGluedNumericModel($hay, $product)
@@ -2252,6 +2256,10 @@ final class ProductSearchIdentity
      */
     public function pageClaimsAnotherCode(string $url, string $title, Product $product): bool
     {
+        // SKU 205, sklep „model 285” — ta sama kurtka, pełna nazwa w slugu.
+        if ($this->hayHasDistinctiveNamePhrase($url.' '.$title, $product)) {
+            return false;
+        }
         // Najpierw nasz model (CovaSpec 471 / 471 w slugu). Inaczej numer sklepu
         // (boe-471, art. 860) wygląda jak cudzy kod i odrzuca dobrą kartę.
         if ($this->urlOrTitleCarriesShopModelNumber($url, $title, $product)) {
@@ -3597,6 +3605,9 @@ final class ProductSearchIdentity
 
     public function preferredLocaleUrl(string $url, Product $product): string
     {
+        if (preg_match('#--(?!pl$)[a-z]{2}$#i', $url) === 1) {
+            $url = (string) preg_replace('#--[a-z]{2}$#i', '--pl', $url);
+        }
         $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
         if (! str_contains($brand, 'ansell')) {
             return $url;
