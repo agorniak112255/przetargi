@@ -38,7 +38,7 @@ final class ProductSearchIdentity
             'calzado', 'kotnik', 'monterk', 'shoe', 'boot', 'wader', 'woder', 'spodniobut',
         ],
         'helmet' => ['kask', 'helm', 'casque'],
-        'goggles' => ['okular', 'gogl'],
+        'goggles' => ['okular', 'gogl', 'brille', 'eyewear', 'spectacle'],
         'apron' => ['fartuch', 'apron'],
         'hearing' => ['nausznik', 'ochronnik', 'earmuff', 'headset'],
         'harness' => ['szelk'],
@@ -2626,14 +2626,20 @@ final class ProductSearchIdentity
      */
     public function officialCatalogHosts(Product $product): array
     {
+        $inferred = $this->inferredCatalogHosts($product);
         if ($this->manufacturerLooksUnrelatedToProduct($product)) {
-            return $this->preferCatalogHostsForProduct($product, $this->inferredCatalogHosts($product));
+            return $this->preferCatalogHostsForProduct($product, $inferred);
         }
 
-        return $this->preferCatalogHostsForProduct($product, $this->bareHosts($this->hostsFromConfigMap(
+        $configured = $this->bareHosts($this->hostsFromConfigMap(
             (array) config('enrichment.manufacturer_domains', []),
             array_merge($this->manufacturerKeyCandidates($product), $this->nameBrandKeys($product))
-        )));
+        ));
+
+        return $this->preferCatalogHostsForProduct(
+            $product,
+            array_values(array_unique(array_merge($inferred, $configured)))
+        );
     }
 
     /**
@@ -2953,7 +2959,8 @@ final class ProductSearchIdentity
             return true;
         }
         // T5163000 w cenniku, na karcie Infield jest „Raptor”
-        if ($this->rawSkuIsOfflineNoise($product) && $this->isStrongShopPhrase($phrase)) {
+        if (($this->rawSkuIsOfflineNoise($product) || $this->inferredBrandHint($product) !== '')
+            && $this->isStrongShopPhrase($phrase)) {
             return false;
         }
         if (preg_match('/^\d{3,6}$/u', trim((string) $product->sku)) === 1
@@ -4011,7 +4018,8 @@ final class ProductSearchIdentity
     {
         return $this->looksLikeInternalSku($product)
             || $this->looksLikeWarehouseArticleSku($product)
-            || $this->skuDiffersFromStrongShopIdentity($product);
+            || $this->skuDiffersFromStrongShopIdentity($product)
+            || $this->inferredBrandHint($product) !== '';
     }
 
     /**

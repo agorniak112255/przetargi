@@ -239,13 +239,17 @@ final class CatalogIndexSearch
                 continue;
             }
             $pageManufacturer = $page->manufacturer !== null ? (string) $page->manufacturer : null;
-            if ($this->pageManufacturer->conflictsWithProduct($pageManufacturer, $product)) {
+            if ($this->isCatalogNoiseUrl($url)) {
+                continue;
+            }
+            if ($this->pageManufacturer->conflictsWithProduct($pageManufacturer, $product)
+                && ! $this->inferredBrandMatchesPage($pageManufacturer, $product)) {
                 continue;
             }
             $row = [
                 'url' => $url,
                 'title' => (string) ($page->title ?? ''),
-                'snippet' => '',
+                'snippet' => (string) ($page->haystack ?? ''),
             ];
             if ($needType && ! $this->identity->hayHasRequiredTypeFromName(
                 $url.' '.$row['title'].' '.(string) $page->haystack,
@@ -257,7 +261,8 @@ final class CatalogIndexSearch
                 continue;
             }
             $hay = (string) $page->haystack;
-            $matchesManufacturer = $this->pageManufacturer->matchesProduct($pageManufacturer, $product);
+            $matchesManufacturer = $this->pageManufacturer->matchesProduct($pageManufacturer, $product)
+                || $this->inferredBrandMatchesPage($pageManufacturer, $product);
             $hasBrand = $matchesManufacturer
                 || $this->identity->hayHasBrand($hay, $product)
                 || ($brand !== '' && str_contains($hay, $brand));
@@ -277,6 +282,31 @@ final class CatalogIndexSearch
         }
 
         return array_slice(array_merge($official, $withManufacturer, $withBrand, $rest), 0, self::MAX_HITS);
+    }
+
+    private function inferredBrandMatchesPage(?string $pageManufacturer, Product $product): bool
+    {
+        $hint = $this->identity->inferredBrandHint($product);
+        if ($hint === '' || $pageManufacturer === null || $pageManufacturer === '') {
+            return false;
+        }
+        $pageKey = $this->pageManufacturer->knownKey($pageManufacturer);
+        $hintKey = $this->pageManufacturer->knownKey($hint);
+
+        return $pageKey !== null && $hintKey !== null
+            && $this->pageManufacturer->familyOf($pageKey) === $this->pageManufacturer->familyOf($hintKey);
+    }
+
+    private function isCatalogNoiseUrl(string $url): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        foreach (['/attribute-name/', '/wpfd_file/', '/wpfd-'] as $bad) {
+            if (str_contains($path, $bad)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function urlIsOfficialCatalogHost(string $url, Product $product): bool

@@ -537,6 +537,74 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://ardon.cz/multimedia/products/A5111_001.jpg']);
     }
 
+    public function test_indexes_sitemap_image_names_on_parent_page(): void
+    {
+        $card = 'https://infield-safety.com/produkte/schutzbrillen/buegelbrillen/gutschein-25/';
+        $image = 'https://infield-safety.com/wp-content/uploads/2022/08/9060105_raptor_schwarz_p.webp';
+        $this->fakeHttp([
+            'https://infield-safety.com/robots.txt' => Http::response(
+                "Sitemap: https://infield-safety.com/product-sitemap.xml\n",
+                200
+            ),
+            'https://infield-safety.com/product-sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">'
+                .'<url><loc>'.$card.'</loc>'
+                .'<image:image><image:loc>'.$image.'</image:loc></image:image>'
+                .'</url></urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('infield-safety.com');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => $card]);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => $image]);
+        $page = CatalogPage::query()->where('url', $card)->first();
+        $this->assertNotNull($page);
+        $this->assertStringContainsString('raptor', (string) $page->title);
+        $this->assertStringContainsString('raptor', (string) $page->haystack);
+    }
+
+    public function test_finds_secura_t51_raptor_on_infield_gutschein(): void
+    {
+        $card = 'https://infield-safety.com/produkte/schutzbrillen/buegelbrillen/gutschein-25/';
+        $this->seedPage($card, 'infield', 'raptor schwarz');
+
+        $product = new Product([
+            'sku' => 'T5163000',
+            'name' => 'Okulary Raptor przezroczyste',
+            'manufacturer' => 'SECURA',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+
+        $this->assertSame($card, $hits[0]['url'] ?? null);
+    }
+
+    public function test_search_uses_index_for_secura_t51_raptor(): void
+    {
+        $this->seedPage(
+            'https://infield-safety.com/produkte/schutzbrillen/buegelbrillen/gutschein-25/',
+            'infield',
+            'raptor schwarz'
+        );
+        $product = Product::query()->create([
+            'sku' => 'T5163000',
+            'name' => 'Okulary Raptor przezroczyste',
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        Http::fake();
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame('catalog_index', $pack['provider']);
+        Http::assertNothingSent();
+    }
+
     public function test_skips_image_files_listed_as_regular_loc(): void
     {
         $this->fakeHttp([
@@ -2120,14 +2188,15 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
-    private function seedPage(string $url, ?string $manufacturer = null): void
+    private function seedPage(string $url, ?string $manufacturer = null, string $title = ''): void
     {
         $page = CatalogPage::query()->create([
             'host' => (string) parse_url($url, PHP_URL_HOST),
             'manufacturer' => $manufacturer,
             'url_hash' => CatalogPage::hashFor($url),
             'url' => $url,
-            'haystack' => mb_strtolower($url),
+            'title' => $title !== '' ? $title : null,
+            'haystack' => mb_strtolower(trim($url.' '.$title)),
             'last_seen_at' => now(),
         ]);
 

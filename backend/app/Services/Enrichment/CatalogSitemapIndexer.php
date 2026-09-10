@@ -184,7 +184,7 @@ final class CatalogSitemapIndexer
 
             $found = 0;
             $requireBhp = $this->isGardenCatalogSitemap($sitemap);
-            $consume = function (string $loc) use (
+            $consume = function (string $loc, string $extra = '') use (
                 &$sitemaps, &$seen, &$rows, &$saved, &$offHost, &$timedOut, &$found,
                 &$shopListings, &$listingSeeds, $host, $maxUrls, $deadline, $requireBhp
             ): bool {
@@ -232,7 +232,7 @@ final class CatalogSitemapIndexer
                 if (count($seen) % 2000 === 0) {
                     $this->note($host, 'Zebrano '.count($seen).' adresów…');
                 }
-                $rows[] = $this->rowFor($locHost, $loc);
+                $rows[] = $this->rowFor($locHost, $loc, '', $extra);
                 if (count($rows) >= 500) {
                     $saved += $this->store($rows);
                     $rows = [];
@@ -449,7 +449,7 @@ final class CatalogSitemapIndexer
     /**
      * Sitemapy sklepów mają nawet setki MB — czytamy je kawałkami, żeby nie zjeść pamięci.
      *
-     * @param  callable(string): bool  $onLocation  false przerywa czytanie
+     * @param  callable(string, string=): bool  $onLocation  false przerywa czytanie
      */
     private function streamLocations(string $url, callable $onLocation, float $deadline = 0.0, int $timeout = 90, bool $allowCurl = true): bool
     {
@@ -545,7 +545,7 @@ final class CatalogSitemapIndexer
     /**
      * Cloudflare blokuje Guzzle (JA3), a systemowy curl przechodzi — np. bhp.pl.
      *
-     * @param  callable(string): bool  $onLocation
+     * @param  callable(string, string=): bool  $onLocation
      */
     private function streamFromCurl(string $url, callable $onLocation, int $timeout = 90): bool
     {
@@ -1172,12 +1172,15 @@ final class CatalogSitemapIndexer
     }
 
     /**
-     * Zwraca resztę bufora po ostatnim </loc> albo null, gdy odbiorca każe przerwać.
+     * Zwraca resztę bufora po ostatnim kompletnym wpisie albo null, gdy odbiorca każe przerwać.
      *
-     * @param  callable(string): bool  $onLocation
+     * @param  callable(string, string=): bool  $onLocation
      */
     private function drainLocations(string $buffer, callable $onLocation): ?string
     {
+        if (preg_match('#<(?:[a-z0-9]+:)?url\b#i', $buffer) === 1) {
+            return $this->drainUrlEntries($buffer, $onLocation);
+        }
         if (preg_match_all('#</(?:[a-z0-9]+:)?loc>#i', $buffer, $tags, PREG_OFFSET_CAPTURE) === 0) {
             // bufor bez pełnego wpisu nie może rosnąć w nieskończoność
             return strlen($buffer) > self::MAX_BUFFER_BYTES
@@ -1194,6 +1197,85 @@ final class CatalogSitemapIndexer
         }
 
         return substr($buffer, $cut);
+    }
+
+    /**
+     * @param  callable(string, string=): bool  $onLocation
+     */
+    private function drainUrlEntries(string $buffer, callable $onLocation): ?string
+    {
+        if (preg_match_all('#</(?:[a-z0-9]+:)?url>#i', $buffer, $tags, PREG_OFFSET_CAPTURE) === 0) {
+            return strlen($buffer) > self::MAX_BUFFER_BYTES
+                ? substr($buffer, -1024)
+                : $buffer;
+        }
+
+        $last = $tags[0][count($tags[0]) - 1];
+        $cut = (int) $last[1] + strlen((string) $last[0]);
+        foreach ($this->extractUrlEntries(substr($buffer, 0, $cut)) as $entry) {
+            if ($onLocation($entry['url'], $entry['extra']) === false) {
+                return null;
+            }
+        }
+
+        return substr($buffer, $cut);
+    }
+
+    /**
+     * Karta + nazwy z image:loc (sitemapa WooCommerce: gutschein-25 + 9060105_raptor_….webp).
+     *
+     * @return list<array{url: string, extra: string}>
+     */
+    public function extractUrlEntries(string $xml): array
+    {
+        if (preg_match_all('#<(?:[a-z0-9]+:)?url\b[^>]*>.*?</(?:[a-z0-9]+:)?url>#si', $xml, $blocks) === 0) {
+            $out = [];
+            foreach ($this->extractLocations($xml) as $loc) {
+                $out[] = ['url' => $loc, 'extra' => ''];
+            }
+
+            return $out;
+        }
+
+        $out = [];
+        foreach ($blocks[0] as $block) {
+            $locs = $this->extractLocations($block);
+            if ($locs === []) {
+                continue;
+            }
+            $extra = $this->imageNameExtra($block);
+            $out[] = ['url' => $locs[0], 'extra' => $extra];
+            for ($i = 1, $n = count($locs); $i < $n; $i++) {
+                $out[] = ['url' => $locs[$i], 'extra' => ''];
+            }
+        }
+
+        return $out;
+    }
+
+    private function imageNameExtra(string $xml): string
+    {
+        if (preg_match_all(
+            '#<image:loc>\s*(?:<!\[CDATA\[)?\s*(.*?)\s*(?:\]\]>)?\s*</image:loc>#si',
+            $xml,
+            $m
+        ) === 0) {
+            return '';
+        }
+
+        $parts = [];
+        foreach ($m[1] as $loc) {
+            $url = trim(html_entity_decode((string) $loc, ENT_QUOTES | ENT_XML1, 'UTF-8'));
+            $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+            $base = pathinfo($path, PATHINFO_FILENAME);
+            foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower($base)) ?: [] as $token) {
+                if (preg_match('/^[a-z]{4,16}$/u', $token) === 1) {
+                    $parts[$token] = $token;
+                }
+            }
+        }
+
+        return implode(' ', array_values($parts));
     }
 
     /**

@@ -1477,6 +1477,25 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_t51_secura_raptor_uses_infield_host_and_model_name(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'T5163000',
+            'name' => 'Okulary Raptor przezroczyste',
+            'manufacturer' => 'SECURA',
+        ]);
+        $url = 'https://infield-safety.com/produkte/schutzbrillen/buegelbrillen/gutschein-25/';
+
+        $this->assertSame('Infield', $id->inferredBrandHint($product));
+        $this->assertContains('infield-safety.com', $id->officialCatalogHosts($product));
+        $this->assertTrue($id->rawSkuIsOfflineNoise($product));
+        $this->assertFalse($id->isWeakShopIndexPhrase('Raptor', $product));
+        $this->assertContains('raptor', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertTrue($id->hayHasRequiredTypeFromName($url.' raptor', $product));
+        $this->assertTrue($id->urlOrTitleHasNamedShopIdentity($url, 'raptor schwarz', $product));
+    }
+
     public function test_reis_fc_sku_remaps_to_dickies_but_plain_reis_stays(): void
     {
         $id = new ProductSearchIdentity;
