@@ -198,6 +198,16 @@ final class ProductSearchIdentityTest extends TestCase
 
         $this->assertTrue($id->urlHasGluedNumericModel($url, $product));
         $this->assertTrue($id->isConfirmedProductCard($url, '', 'Spodnie wodoochronne do pasa', $product));
+        $this->assertFalse($id->urlHasGluedNumericModel(
+            'https://centrumelektronarzedzi.pl/pl/p/Pasek-do-spodni-130cm-granatowy-Lahti-Pro-L9020300',
+            $product
+        ));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://centrumelektronarzedzi.pl/pl/p/Pasek-do-spodni-130cm-granatowy-Lahti-Pro-L9020300',
+            'Pasek do spodni 130cm granatowy Lahti Pro L9020300',
+            'Pasek do spodni Lahti Pro L9020300',
+            $product
+        ));
         $this->assertTrue($id->hayHasProductCode(
             'https://shop.pl/zaciski-na-rekawice-048',
             new Product([

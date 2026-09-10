@@ -1020,6 +1020,7 @@ final class CatalogIndexTest extends TestCase
         $this->seedPage($card);
         $this->seedPage('https://icd.pl/znak-bc902-gasnica.html');
         $this->seedPage('https://behapownia.pl/kurtka-9022002');
+        $this->seedPage('https://centrumelektronarzedzi.pl/pl/p/Pasek-do-spodni-Lahti-Pro-L9020300');
 
         $product = new Product([
             'sku' => '902',
@@ -1033,6 +1034,10 @@ final class CatalogIndexTest extends TestCase
         $this->assertContains($card, $urls);
         $this->assertNotContains('https://icd.pl/znak-bc902-gasnica.html', $urls);
         $this->assertNotContains('https://behapownia.pl/kurtka-9022002', $urls);
+        $this->assertNotContains(
+            'https://centrumelektronarzedzi.pl/pl/p/Pasek-do-spodni-Lahti-Pro-L9020300',
+            $urls
+        );
     }
 
     public function test_glued_shop_id_index_is_used_instead_of_web(): void

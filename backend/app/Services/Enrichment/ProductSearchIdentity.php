@@ -3094,7 +3094,7 @@ final class ProductSearchIdentity
             if (preg_match('/^\d{3,4}$/u', $code) !== 1) {
                 continue;
             }
-            if (preg_match('/(?<![0-9])'.preg_quote($code, '/').'[0-9]{3,}(?![0-9])/u', $hay) === 1) {
+            if (preg_match('/(?<![0-9a-z])'.preg_quote($code, '/').'[0-9]{3,}(?![0-9a-z])/u', $hay) === 1) {
                 return true;
             }
         }
