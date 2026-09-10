@@ -1623,6 +1623,9 @@ final class ProductSearchIdentity
         if (! $this->hayHasRequiredTypeFromName($hay, $product)) {
             return false;
         }
+        if ($this->urlHasGluedNumericModel($hay, $product)) {
+            return true;
+        }
         $brands = $this->acceptedBrands($product);
         $tokens = $this->matchTokens($product);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
@@ -1764,6 +1767,10 @@ final class ProductSearchIdentity
             && ! $this->hayHasProductCode($hay, $product)
             && ! $this->urlOrTitleCarriesShopModelNumber($url, $title, $product)) {
             return false;
+        }
+        if ($this->urlHasGluedNumericModel($hay, $product)
+            && $this->hayHasRequiredTypeFromName($hay, $product)) {
+            return true;
         }
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($hay)) ?? '';
         if ($this->urlOrTitleHasNamedShopIdentity($url, $title, $product)
@@ -2129,6 +2136,10 @@ final class ProductSearchIdentity
         $sku = trim((string) $product->sku);
         if ($sku !== '') {
             $codes[] = $sku;
+            $compactSku = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($sku)) ?? '';
+            if ($compactSku !== '' && $compactSku !== mb_strtolower($sku) && mb_strlen($compactSku) >= 3) {
+                $codes[] = $compactSku;
+            }
         }
         $withoutSize = $this->catalogSkuWithoutSize($product);
         if ($withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)) {
@@ -2338,6 +2349,9 @@ final class ProductSearchIdentity
             }
         }
         $codes = array_values(array_unique($codes));
+        if ($this->urlHasGluedNumericModel($url.' '.$title, $product)) {
+            return true;
+        }
         if ($codes === []) {
             return false;
         }
@@ -3063,6 +3077,24 @@ final class ProductSearchIdentity
     {
         foreach ($this->productCodes($product) as $code) {
             if ($this->codeInText($hay, $code)) {
+                return true;
+            }
+        }
+
+        return $this->urlHasGluedNumericModel($hay, $product);
+    }
+
+    /**
+     * Sklep skleja krótki model z id karty: 902 → …-bemoregreen-9022002.
+     */
+    public function urlHasGluedNumericModel(string $hay, Product $product): bool
+    {
+        $hay = mb_strtolower($hay);
+        foreach ($this->compactProductCodes($product) as $code) {
+            if (preg_match('/^\d{3,4}$/u', $code) !== 1) {
+                continue;
+            }
+            if (preg_match('/(?<![0-9])'.preg_quote($code, '/').'[0-9]{3,}(?![0-9])/u', $hay) === 1) {
                 return true;
             }
         }

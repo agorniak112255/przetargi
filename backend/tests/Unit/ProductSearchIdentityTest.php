@@ -116,6 +116,11 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertContains('109', $id->skuSearchNeedles($product));
         $this->assertContains('site:pros.pl 109', $id->searchQueries($product, 'manufacturer'));
         $this->assertContains('109', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertContains('048', app(CatalogIndexSearch::class)->codes(new Product([
+            'sku' => '.048',
+            'name' => 'Zaciski na rękawice antyprzecięciowe',
+            'manufacturer' => 'AJ GROUP',
+        ])));
         $this->assertTrue($id->isConfirmedProductCard(
             'https://sklep-bhp.example/fartuchy/199-fartuch-model-109.html',
             'Fartuch model 109',
@@ -179,6 +184,28 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertNotContains('pasa', app(CatalogIndexSearch::class)->codes($product));
         $this->assertTrue($id->hayHasRequiredTypeFromName($ours, $product));
         $this->assertTrue($id->isConfirmedProductCard($ours, 'Ubranie model 101/112', 'PROS', $product));
+    }
+
+    public function test_glued_shop_id_confirms_short_numeric_model(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '902',
+            'name' => 'SPODNIE DO PASA',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $url = 'https://behapownia.pl/spodnie-wodoochronne-do-pasa-bemoregreen-9022002';
+
+        $this->assertTrue($id->urlHasGluedNumericModel($url, $product));
+        $this->assertTrue($id->isConfirmedProductCard($url, '', 'Spodnie wodoochronne do pasa', $product));
+        $this->assertTrue($id->hayHasProductCode(
+            'https://shop.pl/zaciski-na-rekawice-048',
+            new Product([
+                'sku' => '.048',
+                'name' => 'Zaciski na rękawice antyprzecięciowe',
+                'manufacturer' => 'AJ GROUP',
+            ])
+        ));
     }
 
     public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void

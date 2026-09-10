@@ -994,6 +994,68 @@ final class CatalogIndexTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_dotted_short_sku_finds_card_without_dot(): void
+    {
+        $card = 'https://behapownia.pl/zaciski-na-rekawice-antyprzecieciowe-048';
+        $this->seedPage($card);
+        $this->seedPage('https://behapownia.pl/doniczka-048-ceramiczna');
+
+        $product = new Product([
+            'sku' => '.048',
+            'name' => 'Zaciski na rękawice antyprzecięciowe',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains('048', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertContains($card, $urls);
+        $this->assertNotContains('https://behapownia.pl/doniczka-048-ceramiczna', $urls);
+    }
+
+    public function test_glued_shop_id_finds_short_numeric_trousers(): void
+    {
+        $card = 'https://behapownia.pl/spodnie-wodoochronne-do-pasa-bemoregreen-9022002';
+        $this->seedPage($card);
+        $this->seedPage('https://icd.pl/znak-bc902-gasnica.html');
+        $this->seedPage('https://behapownia.pl/kurtka-9022002');
+
+        $product = new Product([
+            'sku' => '902',
+            'name' => 'SPODNIE DO PASA',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains($card, $urls);
+        $this->assertNotContains('https://icd.pl/znak-bc902-gasnica.html', $urls);
+        $this->assertNotContains('https://behapownia.pl/kurtka-9022002', $urls);
+    }
+
+    public function test_glued_shop_id_index_is_used_instead_of_web(): void
+    {
+        $card = 'https://behapownia.pl/spodnie-wodoochronne-do-pasa-bemoregreen-9022002';
+        $this->seedPage($card);
+        $product = Product::query()->create([
+            'sku' => '902',
+            'name' => 'SPODNIE DO PASA',
+            'manufacturer' => 'AJ GROUP',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        Http::fake();
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame('catalog_index', $pack['provider']);
+        $this->assertSame($card, $pack['results'][0]['url'] ?? null);
+        Http::assertNothingSent();
+    }
+
     public function test_short_numeric_sku_index_prefers_official_card(): void
     {
         $this->seedPage('https://icd.pl/kurtka-wodoodporna-pros-300-czerwony.html', 'pros');

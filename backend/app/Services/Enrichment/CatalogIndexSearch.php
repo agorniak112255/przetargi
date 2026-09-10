@@ -81,7 +81,8 @@ final class CatalogIndexSearch
             }
             // „131-s1” jest w adresie jako „131”, „s1” i „131s1”
             $compact = preg_replace('/[^a-z0-9]+/u', '', $code) ?? $code;
-            if ($compact !== '' && mb_strlen($compact) >= 4 && mb_strlen($compact) <= 64) {
+            $min = preg_match('/^\d{3}$/u', $compact) === 1 ? 3 : 4;
+            if ($compact !== '' && mb_strlen($compact) >= $min && mb_strlen($compact) <= 64) {
                 $out[] = $compact;
             }
             if (mb_strlen($code) <= 64 && preg_match('/^[a-z0-9]+$/u', $code) === 1) {
@@ -125,6 +126,10 @@ final class CatalogIndexSearch
             ->limit(self::SQL_LIMIT)
             ->pluck('t.catalog_page_id')
             ->all();
+        $ids = array_values(array_unique(array_merge(
+            $ids,
+            $this->gluedNumericTokenPageIds($codes, $typePrefixes)
+        )));
 
         return $this->pages($ids, $product);
     }
@@ -217,7 +222,8 @@ final class CatalogIndexSearch
                 $withManufacturer[] = $row;
             } elseif ($hasBrand) {
                 $withBrand[] = $row;
-            } elseif (! $ambiguous) {
+            } elseif (! $ambiguous
+                || $this->identity->urlHasGluedNumericModel($url.' '.$row['title'].' '.$hay, $product)) {
                 $rest[] = $row;
             }
         }
@@ -240,6 +246,47 @@ final class CatalogIndexSearch
         }
 
         return false;
+    }
+
+    /**
+     * Sklep skleja model z id karty (902 → 9022002). LIKE zamiast REGEXP — działa też na sqlite.
+     *
+     * @param  list<string>  $codes
+     * @param  list<string>  $typePrefixes
+     * @return list<int>
+     */
+    private function gluedNumericTokenPageIds(array $codes, array $typePrefixes): array
+    {
+        $ids = [];
+        foreach ($codes as $code) {
+            if (preg_match('/^\d{3,4}$/u', $code) !== 1) {
+                continue;
+            }
+            $query = DB::table('catalog_page_tokens as t')
+                ->where('t.token', 'like', $code.'%')
+                ->whereRaw('LENGTH(t.token) >= ?', [strlen($code) + 3]);
+            if ($typePrefixes !== []) {
+                $query->whereExists(function ($q) use ($typePrefixes): void {
+                    $q->select(DB::raw(1))
+                        ->from('catalog_page_tokens as typ')
+                        ->whereColumn('typ.catalog_page_id', 't.catalog_page_id')
+                        ->where(function ($inner) use ($typePrefixes): void {
+                            foreach ($typePrefixes as $prefix) {
+                                $inner->orWhere('typ.token', 'like', $prefix.'%');
+                            }
+                        });
+                });
+            }
+            foreach ($query->select(['t.catalog_page_id', 't.token'])->limit(self::SQL_LIMIT * 3)->get() as $row) {
+                $token = (string) $row->token;
+                if (ctype_digit($token) && str_starts_with($token, $code)
+                    && strlen($token) >= strlen($code) + 3) {
+                    $ids[] = (int) $row->catalog_page_id;
+                }
+            }
+        }
+
+        return array_values(array_unique($ids));
     }
 
     private function isAmbiguousNumericSku(Product $product): bool
