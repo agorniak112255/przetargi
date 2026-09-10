@@ -28,6 +28,7 @@ use App\Http\Controllers\Api\ProductCatalogHealthController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductCrossRefController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
+use App\Http\Controllers\Api\ProductImageThumbController;
 use App\Http\Controllers\Api\ProductKitController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
@@ -48,6 +49,9 @@ use App\Http\Controllers\Api\UserDirectoryController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/login', [AuthController::class, 'login']);
+Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class, 'show'])
+    ->whereNumber('image')
+    ->name('product-images.thumb');
 
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);

@@ -193,6 +193,7 @@ class ProductController extends Controller
             $row['images'] = $product->images->map(static fn ($img): array => [
                 'id' => $img->id,
                 'url' => $img->url(),
+                'thumb_url' => $img->thumbUrl(),
                 'source_url' => $img->source_url,
                 'is_primary' => $img->is_primary,
                 'sort_order' => $img->sort_order,

@@ -78,6 +78,7 @@ export type Tender = {
 export type ProductImage = {
   id: number
   url: string
+  thumb_url?: string
   source_url: string | null
   is_primary: boolean
   sort_order: number

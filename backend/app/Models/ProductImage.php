@@ -46,6 +46,11 @@ class ProductImage extends Model
         return $this->publicUrl();
     }
 
+    public function thumbUrl(): string
+    {
+        return route('product-images.thumb', $this);
+    }
+
     private function publicUrl(): string
     {
         $path = (string) $this->path;
