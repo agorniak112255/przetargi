@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Models\Product;
+use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\Enrichment\ProductPageFetcher;
 use Illuminate\Support\Facades\Http;
 use ReflectionClass;
@@ -627,6 +628,7 @@ HTML;
     {
         $pageUrl = 'https://behapownia.pl/damska-kurtka-przeciwdeszczowa-bemoregreen-903';
         $og = 'https://behapownia.pl/environment/cache/images/productGfx_17565_500_500/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.webp';
+        $full = 'https://behapownia.pl/environment/cache/images/productGfx_17565_0_0/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.webp';
         $original = 'https://behapownia.pl/userdata/public/gfx/17565/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.jpg';
         $thumb = '/environment/cache/images/productGfx_17565_120_120/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.webp';
         $related = '/environment/cache/images/productGfx_17787_300_300/Polbuty-SAPHIR-S3-SRC-HRO-id-2707.webp?overlay=1';
@@ -662,7 +664,7 @@ HTML;
         /** @var list<string> $extracted */
         $extracted = $method->invoke($fetcher, $html, $pageUrl, '903');
         $this->assertContains($original, $extracted);
-        $this->assertContains($og, $extracted);
+        $this->assertContains($full, $extracted);
         $this->assertFalse(collect($extracted)->contains(
             static fn (string $u): bool => str_contains($u, '_120_120') || str_contains($u, '_300_300')
         ));
@@ -675,9 +677,62 @@ HTML;
 
         $this->assertContains($original, $result['image_urls']);
         $this->assertContains($original, $result['trusted_image_urls']);
-        $this->assertContains($og, $result['trusted_image_urls']);
+        $this->assertContains($full, $result['trusted_image_urls']);
         $this->assertFalse(collect($result['image_urls'])->contains(
             static fn (string $u): bool => str_contains($u, '_120_120') || str_contains($u, '_300_300')
         ));
+    }
+
+    public function test_reads_shoper_jsonld_original_and_skips_seo_logo_and_keeps_fullsize_zero(): void
+    {
+        $pageUrl = 'https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-2-m-Secura/48601';
+        $seo = 'https://centrumelektronarzedzi.pl/upload/img/seo/centrumelektronarzedzi-pl.png';
+        $og = 'https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46764_500_500/Chodnik-i-dywanik-elektroizolacyjny.jpg';
+        $full = 'https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46764_0_0/Chodnik-i-dywanik-elektroizolacyjny.webp';
+        $original = 'https://centrumelektronarzedzi.pl/userdata/public/gfx/46764/Chodnik-i-dywanik-elektroizolacyjny.jpg';
+        $thumb = '/environment/cache/images/productGfx_46764_120_120/Chodnik-i-dywanik-elektroizolacyjny.webp';
+        $html = <<<HTML
+<html><head>
+<meta property="og:image" content="{$seo}">
+<meta property="og:image" content="{$og}">
+<script type="application/ld+json">{"@id":"/pl/p/Chodnik/48601","image":["https:\\/\\/centrumelektronarzedzi.pl\\/userdata\\/public\\/gfx\\/46764\\/Chodnik-i-dywanik-elektroizolacyjny.jpg"]}</script>
+</head><body>
+<h1>Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 2 m) Secura</h1>
+<a class="js__open-gallery" href="{$full}">
+<img class="product-gallery__main-image" src="/environment/cache/images/productGfx_46764_750_750/Chodnik-i-dywanik-elektroizolacyjny.webp" alt="Chodnik">
+</a>
+<img src="{$thumb}" alt="miniatura">
+<p>Chodniki elektroizolacyjne w kl. 2 są przeznaczone do wykładania podłóg.
+Ochrona pracowników przed zagrożeniami elektrycznymi. Marka Secura. Klasa 2.</p>
+</body></html>
+HTML;
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+
+        $product = new Product([
+            'sku' => 'CH-20KV',
+            'name' => 'Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 2 m) Secura',
+            'manufacturer' => 'SECURA',
+            'shop_source_url' => $pageUrl,
+        ]);
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 2 m) Secura',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertContains($original, $result['trusted_image_urls']);
+        $this->assertContains($original, $result['image_urls']);
+        $this->assertContains($full, $result['image_urls']);
+        $this->assertNotContains($seo, $result['image_urls']);
+        $this->assertNotContains($seo, $result['trusted_image_urls']);
+        $this->assertFalse(collect($result['image_urls'])->contains(
+            static fn (string $u): bool => str_contains($u, '_120_120')
+        ));
+        $this->assertSame(
+            'https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46764_0_0/Chodnik-i-dywanik-elektroizolacyjny.jpg',
+            ProductImageDownloader::preferFullSizeUrl($og)
+        );
     }
 }

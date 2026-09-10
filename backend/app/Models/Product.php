@@ -184,7 +184,7 @@ class Product extends Model
             return mb_strtolower(rtrim($url, '/'));
         }
         $host = mb_strtolower((string) $parts['host']);
-        $path = rtrim((string) ($parts['path'] ?? ''), '/');
+        $path = rtrim(rawurldecode((string) ($parts['path'] ?? '')), '/');
         $query = isset($parts['query']) && $parts['query'] !== '' ? '?'.$parts['query'] : '';
 
         return $host.$path.$query;

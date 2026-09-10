@@ -1449,8 +1449,7 @@ final class ProductEnrichmentService
                 && (((int) $wm[1] < 400) || ((int) $wm[2] < 400))) {
                 continue;
             }
-            if (preg_match('#/productgfx_\d+_(\d+)_(\d+)/#i', $u, $sm)
-                && (((int) $sm[1] < 400) || ((int) $sm[2] < 400))) {
+            if (ProductImageDownloader::isSmallShoperCacheUrl($u)) {
                 continue;
             }
             // inny kod art. w pliku (7-003 przy SKU 9-084)
@@ -2507,6 +2506,7 @@ final class ProductEnrichmentService
             'koszyk', 'wallet', 'payu', 'przelewy', 'blik',
             'ochronki na buty', 'shoe-cover', 'shoe_cover', 'nakladki', 'folie-na',
             'placeholder', 'blank', 'pixel', 'bg_environment', 'environment_oily', '.svg',
+            '/upload/img/seo/', '/upload/img/icons/', '/upload/img/logo/',
             'loader', 'spinner', 'loading', 'preloader', 'ajax-loader', 'load.gif',
             'loading.gif', 'loader-1', 'loader-2', 'progress.gif',
             'menue-', 'menu-', '/01_menue', 'menue-pics', 'world-map', 'sitemap',

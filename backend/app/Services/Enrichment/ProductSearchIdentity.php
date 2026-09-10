@@ -291,8 +291,11 @@ final class ProductSearchIdentity
             && str_contains($u, '/mws/media/')) {
             return true;
         }
-        // Magento / Presta typowe galerie
-        if (str_contains($u, 'media/catalog/product') || str_contains($u, 'large_default') || str_contains($u, 'pim/products')) {
+        // Magento / Presta / Shoper — galeria karty bez SKU w nazwie pliku
+        if (str_contains($u, 'media/catalog/product') || str_contains($u, 'large_default') || str_contains($u, 'pim/products')
+            || str_contains($u, '/userdata/public/gfx/')
+            || (preg_match('#/productgfx_\d+_\d+_\d+/#i', $u) === 1
+                && ! ProductImageDownloader::isSmallShoperCacheUrl($u))) {
             return true;
         }
 

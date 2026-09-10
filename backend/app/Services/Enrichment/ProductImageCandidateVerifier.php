@@ -330,7 +330,7 @@ final class ProductImageCandidateVerifier
         $path = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')));
 
         return preg_match(
-            '/(?:^|[\/_.-])(logo|icon|sprite|favicon|banner|newsletter|payment|shipping|avatar|flag|menu)(?:[\/_.-]|$)/u',
+            '/(?:^|[\/_.-])(logo|icon|sprite|favicon|banner|newsletter|payment|shipping|avatar|flag|menu|seo)(?:[\/_.-]|$)/u',
             $path
         ) !== 1;
     }

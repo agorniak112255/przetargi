@@ -1218,9 +1218,8 @@ final class ProductPageFetcher
                 && (((int) $wm[1] < 400) || ((int) $wm[2] < 400))) {
                 continue;
             }
-            // Shoper: productGfx_*_120_120 / _300_300 to miniatury i kafle „polecane”, nie karta
-            if (preg_match('#/productgfx_\d+_(\d+)_(\d+)/#i', $meta, $sm)
-                && (((int) $sm[1] < 400) || ((int) $sm[2] < 400))) {
+            // Shoper: productGfx_*_120_120 / _300_300 to miniatury; _0_0 to oryginał
+            if (ProductImageDownloader::isSmallShoperCacheUrl($meta)) {
                 continue;
             }
             // uvex imgproxy miniatury /w:60/h:60/
@@ -1363,16 +1362,17 @@ final class ProductPageFetcher
 
         if (preg_match_all('#"image"\s*:\s*\[([^\]]+)\]#is', $html, $blocks)) {
             foreach ($blocks[1] as $block) {
-                if (preg_match_all('#https?://[^"\'\s]+#i', (string) $block, $matches)) {
+                $block = str_replace('\\/', '/', (string) $block);
+                if (preg_match_all('#https?://[^"\'\s]+#i', $block, $matches)) {
                     foreach ($matches[0] as $url) {
                         $urls[] = $url;
                     }
                 }
             }
         }
-        if (preg_match_all('#"image"\s*:\s*"(https?://[^"]+)"#i', $html, $matches)) {
+        if (preg_match_all('#"image"\s*:\s*"(https?:\\\\?/\\\\?/[^"]+)"#i', $html, $matches)) {
             foreach ($matches[1] as $url) {
-                $urls[] = $url;
+                $urls[] = str_replace('\\/', '/', $url);
             }
         }
 
@@ -1457,6 +1457,7 @@ final class ProductPageFetcher
             'koszyk', 'wallet', 'payu', 'przelewy', 'blik',
             'ochronki na buty', 'shoe-cover', 'shoe_cover', 'nakladki', 'folie-na',
             'placeholder', 'blank', 'pixel', 'bg_environment', 'environment_oily', '.svg',
+            '/upload/img/seo/', '/upload/img/icons/', '/upload/img/logo/',
             // placeholdery Magento / lazy-load
             'loader', 'spinner', 'loading', 'preloader', 'ajax-loader', 'load.gif',
             'loading.gif', 'loader-1', 'loader-2', 'progress.gif',

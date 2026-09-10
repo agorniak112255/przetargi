@@ -175,8 +175,34 @@ final class ProductImageDownloader
         ) ?? $url;
         // ICD / Magento: …/cache/{32hex}/f/a/plik.jpg → oryginał katalogu (nie miniatura 80×80)
         $url = preg_replace('#(/media/catalog/product/)cache/[a-f0-9]{32}/#i', '$1', $url) ?? $url;
+        // Shoper: productGfx_{id}_750_750 → _0_0 (oryginał). 0_0 to pełny rozmiar, nie pusta miniatura.
+        $url = preg_replace_callback(
+            '#(/environment/cache/images/productGfx_)(\d+)_(\d+)_(\d+)/#i',
+            static function (array $m): string {
+                $w = (int) $m[3];
+                $h = (int) $m[4];
+                if (($w === 0 && $h === 0) || ($w >= 400 && $h >= 400)) {
+                    return $m[1].$m[2].'_0_0/';
+                }
+
+                return $m[0];
+            },
+            $url
+        ) ?? $url;
 
         return $url;
+    }
+
+    /** Shoper: _120_120 / _300_300 to kafle; _0_0 i ≥400 to karta. */
+    public static function isSmallShoperCacheUrl(string $url): bool
+    {
+        if (preg_match('#/productgfx_\d+_(\d+)_(\d+)/#i', $url, $sm) !== 1) {
+            return false;
+        }
+        $w = (int) $sm[1];
+        $h = (int) $sm[2];
+
+        return ($w > 0 && $w < 400) || ($h > 0 && $h < 400);
     }
 
     private function downloadOne(Product $product, string $url, int $sortOrder): ?ProductImage

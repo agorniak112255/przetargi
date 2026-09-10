@@ -195,6 +195,31 @@ final class ProductImageRelevanceTest extends TestCase
         $this->assertSame('czapka / nakrycie głowy z daszkiem', $identity->requiredArticleTypeLabel($cap));
     }
 
+    public function test_accepts_shoper_gallery_without_sku_in_filename(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'CH-20KV',
+            'name' => 'Chodnik elektroizolacyjny 20 KV Secura',
+            'manufacturer' => 'SECURA',
+        ]);
+        $original = 'https://centrumelektronarzedzi.pl/userdata/public/gfx/46764/Chodnik-i-dywanik-elektroizolacyjny.jpg';
+        $full = 'https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46764_0_0/Chodnik-i-dywanik-elektroizolacyjny.webp';
+        $thumb = 'https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46764_120_120/Chodnik-i-dywanik-elektroizolacyjny.webp';
+        $seo = 'https://centrumelektronarzedzi.pl/upload/img/seo/centrumelektronarzedzi-pl.png';
+
+        $this->assertTrue($identity->looksLikeManufacturerGalleryUrl($original, $product));
+        $this->assertTrue($identity->looksLikeManufacturerGalleryUrl($full, $product));
+        $this->assertTrue($identity->isTrustedPageImageUrl($original, $product));
+        $this->assertFalse($identity->looksLikeManufacturerGalleryUrl($thumb, $product));
+        $this->assertFalse(ProductImageDownloader::isSmallShoperCacheUrl($full));
+        $this->assertTrue(ProductImageDownloader::isSmallShoperCacheUrl($thumb));
+        $this->assertSame($full, ProductImageDownloader::preferFullSizeUrl(
+            'https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46764_750_750/Chodnik-i-dywanik-elektroizolacyjny.webp'
+        ));
+        $this->assertFalse($identity->looksLikeManufacturerGalleryUrl($seo, $product));
+    }
+
     public function test_strips_magento_cache_hash_to_original_catalog_file(): void
     {
         $cached = 'https://icd.pl/media/catalog/product/cache/619fea8990fc50f1f0f0c116cd818ee3/f/a/fartuch-pros-wodoochronny-121-1.jpg';
