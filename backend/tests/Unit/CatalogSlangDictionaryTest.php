@@ -255,6 +255,34 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertGreaterThan(80, count(CatalogSlangDictionary::defaults()));
     }
 
+    public function test_ciop_hazard_phrases_expand_to_catalog_classes(): void
+    {
+        $dict = $this->dict();
+
+        $mud = mb_strtolower(implode(' ', $dict->phrasesFor('Trzewiki do pracy w błocie')));
+        $this->assertStringContainsString('s3', $mud);
+        $this->assertTrue($dict->matchesEvidence('Trzewiki do pracy w błocie', 'Trzewiki S3 SRC'));
+
+        $s5 = mb_strtolower(implode(' ', $dict->phrasesFor('Kalosze z podnoskiem')));
+        $this->assertStringContainsString('s5', $s5);
+
+        $spray = mb_strtolower(implode(' ', $dict->phrasesFor('Kombinezon do oprysków')));
+        $this->assertTrue(str_contains($spray, 'typ 4') || str_contains($spray, 'typ 6'));
+
+        $cut = mb_strtolower(implode(' ', $dict->phrasesFor('Rękawice z trójką na przecięcie')));
+        $this->assertStringContainsString('antyprzecięc', $cut);
+
+        $tig = mb_strtolower(implode(' ', $dict->phrasesFor('Rękawice do spawania TIG')));
+        $this->assertStringContainsString('tig', $tig);
+        $this->assertStringNotContainsString('odziez', $tig);
+
+        $hro = mb_strtolower(implode(' ', $dict->phrasesFor('Trzewiki HRO')));
+        $this->assertStringContainsString('hro', $hro);
+
+        $abek = mb_strtolower(implode(' ', $dict->phrasesFor('Pochłaniacz wielogazowy ABEK')));
+        $this->assertTrue(str_contains($abek, 'abek') || str_contains($abek, 'a2b2e2k2'));
+    }
+
     public function test_antyprzecieciowe_evidence_accepts_xtremcut_fiber(): void
     {
         $q = 'Rękawice antyprzecięciowe powlekane nitrylem do prac montażowych';
