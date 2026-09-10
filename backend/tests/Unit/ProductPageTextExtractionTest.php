@@ -39,6 +39,36 @@ HTML;
         $this->assertStringNotContainsString('Odstąpienie od umowy', $text);
     }
 
+    public function test_keeps_full_shop_description_and_drops_zobacz_teaser(): void
+    {
+        $html = <<<'HTML'
+<html><head>
+<meta name="description" content="Cena netto: 13,33 zł/szt. - Filtry 3M serii 2000 przeznaczone są do skompletowania z półmaskami 3M serii 6000, 6500 i serii 7500 oraz z maską pełnotwarzową 3M serii 6000. Zgodnie z normą EN143 filtr klasy P2 posiada skuteczność filtracji 94% i przeznaczony jest do ochrony przed: (Zobacz klasy ..."/>
+</head><body>
+<section class="data item content" id="description">
+<div class="description-main">
+<p>Filtry 3M serii 2000 przeznaczone są do skompletowania z półmaskami 3M serii 6000, 6500 i serii 7500 oraz z maską pełnotwarzową 3M serii 6000.</p>
+<p>Zgodnie z normą EN143 filtr klasy P2 posiada skuteczność filtracji 94% i przeznaczony jest do ochrony przed: (<a href="/klasyfikacja.xml">Zobacz klasyfikację filtrów i pochłaniaczy</a>)</p>
+<ul><li>cząstkami stałymi i ciekłymi o niskiej i średniej toksyczności dla których NDS≥0,05mg/m3 — w połączeniu z półmaską do 50xNDS</li></ul>
+<p>Mocowane do części twarzowej za pomocą złącza bagnetowego.</p>
+</div>
+</section>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractProductPageText');
+        $method->setAccessible(true);
+        $text = (string) $method->invoke($fetcher, $html, '3M-2125');
+
+        $this->assertStringContainsString('cząstkami stałymi', $text);
+        $this->assertStringContainsString('50xNDS', $text);
+        $this->assertStringContainsString('złącza bagnetowego', $text);
+        $this->assertStringNotContainsString('Zobacz klasy', $text);
+        $this->assertStringNotContainsString('Cena netto', $text);
+    }
+
     public function test_extracts_certificate_pdf_by_link_label_without_sku_in_url(): void
     {
         $html = <<<'HTML'

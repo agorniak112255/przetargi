@@ -1590,7 +1590,7 @@ final class ProductEnrichmentService
     private function looksLikeIncompleteDescription(string $description): bool
     {
         $d = trim($description);
-        if (mb_strlen($d) < 420) {
+        if (mb_strlen($d) < 420 || ProductPageFetcher::looksLikeTruncatedShopTeaser($d)) {
             return true;
         }
         $low = mb_strtolower($d);
@@ -2061,6 +2061,9 @@ final class ProductEnrichmentService
         if (mb_strlen($d) < 180) {
             return true;
         }
+        if (ProductPageFetcher::looksLikeTruncatedShopTeaser($d)) {
+            return true;
+        }
         $low = mb_strtolower($d);
         if ($this->looksLikeShopChromeDescription($d) || $this->looksLikeOffTopicDescription($d)
             || $this->looksLikeLinkDump($d)) {
@@ -2291,26 +2294,42 @@ final class ProductEnrichmentService
      */
     private function fallbackDescriptionFromPages(array $pageSnippets, string $sku): string
     {
+        $candidates = [];
         foreach ($pageSnippets as $page) {
-            $text = trim((string) ($page['text'] ?? ''));
+            $text = ProductPageFetcher::stripExpandLinkChrome(trim((string) ($page['text'] ?? '')));
             if ($text === '') {
                 continue;
             }
-            // pomiń sam og:description — szukaj dłuższego akapitu
             $parts = preg_split('/\n{2,}/u', $text) ?: [$text];
             foreach ($parts as $part) {
-                $part = trim((string) $part);
-                if (mb_strlen($part) >= 180 && ! $this->looksLikeMissingCardMeta($part) && ! $this->looksLikeThinDescription($part)) {
-                    return mb_substr($part, 0, 2000);
+                $part = ProductPageFetcher::stripExpandLinkChrome(trim((string) $part));
+                if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
+                    || $this->looksLikeMissingCardMeta($part)) {
+                    continue;
+                }
+                if (mb_strlen($part) >= 40) {
+                    $candidates[] = $part;
                 }
             }
-            $flat = trim(preg_replace('/\s+/u', ' ', $text) ?? $text);
-            if (mb_strlen($flat) >= 220 && ! $this->looksLikeThinDescription($flat)) {
-                return mb_substr($flat, 0, 2000);
+            if ($candidates === []) {
+                $flat = ProductPageFetcher::stripExpandLinkChrome(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
+                if ($flat !== '' && ! ProductPageFetcher::looksLikeTruncatedShopTeaser($flat)
+                    && ! $this->looksLikeThinDescription($flat) && mb_strlen($flat) >= 220) {
+                    $candidates[] = $flat;
+                }
             }
         }
+        $candidates = array_values(array_unique($candidates));
+        if ($candidates === []) {
+            return '';
+        }
+        usort($candidates, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
+        $best = $candidates[0];
+        if (! $this->looksLikeIncompleteDescription($best) || count($candidates) === 1) {
+            return mb_substr($best, 0, 5000);
+        }
 
-        return '';
+        return mb_substr(implode("\n\n", $candidates), 0, 5000);
     }
 
     private function isJunkImageUrl(string $url): bool
@@ -2773,14 +2792,16 @@ Zadanie: WSTĘPNA ANALIZA — wyrzuć śmieci sklepowe, zostaw wyłącznie infor
 
 WYRZUĆ całkowicie: logowanie, rejestracja, konto, obserwowane, koszyk, suma, zamówienie, menu kategorii, breadcrumby („jesteś tutaj”), wyszukiwanie, telefon/e-mail sklepu, wysyłka, koszty dostawy, płatności, prowizje, regulamin, polityka prywatności, odstąpienie od umowy, zwroty 14 dni, punkty lojalnościowe, porównanie, cookies, ceny marketingowe bez kontekstu produktu.
 
-ZOSTAW / przepisz zwięźle: nazwa modelu, producent, kod/SKU, normy (S3, SRC, EN ISO…), materiały, podnosek, podeszwa, cholewka, przeznaczenie, cechy techniczne, kolory/rozmiary jeśli produktowe.
-Nie cytuj całych akapitów ze strony i nie powtarzaj tego samego faktu.
+ZOSTAW pełny opis produktu ze strony: akapity, listy (np. po „ochrony przed:”), parametry, materiały, normy, przeznaczenie, cechy techniczne, kolory/rozmiary jeśli produktowe.
+Nie streszczaj do sloganu ani og:description. Nie urywaj na „(Zobacz…”, „czytaj dalej”, „rozwiń”.
+Wyrzuć same odnośniki typu „Zobacz klasyfikację…”, ale zostaw treść, która jest po nich.
+Nie powtarzaj tego samego faktu.
 
 JĘZYK: źródła bywają po francusku, niemiecku, czesku czy angielsku. ZAWSZE tłumacz fakty na polski.
 Nigdy nie przepisuj zdań w języku oryginału — nazwy własne modeli i oznaczenia norm zostaw bez zmian.
 
 Zwróć TYLKO JSON — bez pola thought/reasoning. Pierwszy znak to {.
-{"pages":[{"url":"…","text":"oczyszczone fakty po polsku, 4–10 zdań: parametry, materiały, normy, przeznaczenie"}]}
+{"pages":[{"url":"…","text":"pełny opis produktu po polsku — bez ucinania"}]}
 Jeśli na stronie nie ma faktów o produkcie → "text":"". Nie zmyślaj cech.
 Jeśli nazwa to PPE (obuwie, rękawice, odzież…), a tekst dotyczy odczynnika / numeru CAS / wzoru chemicznego — "text":"".
 SYS,

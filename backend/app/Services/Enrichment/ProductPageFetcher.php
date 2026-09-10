@@ -672,6 +672,35 @@ final class ProductPageFetcher
         return is_int($controls) && $controls > 8;
     }
 
+    /** Meta/og ucięte na „(Zobacz klasy …” zamiast pełnego opisu. */
+    public static function looksLikeTruncatedShopTeaser(string $text): bool
+    {
+        $t = trim($text);
+        if ($t === '') {
+            return false;
+        }
+        if (preg_match('/\(\s*zobacz\b[^)]{0,80}$/iu', $t) === 1) {
+            return true;
+        }
+        if (preg_match('/\b(zobacz|czytaj\s+(?:dalej|więcej)|rozwiń)\b.{0,80}(\.\.\.|…)\s*$/iu', $t) === 1) {
+            return true;
+        }
+
+        return preg_match('/\bprzed\s*:\s*(?:\([^)]{0,80})?$/iu', $t) === 1;
+    }
+
+    /** Link „(Zobacz klasyfikację…)” / „czytaj dalej” — nie treść produktu. */
+    public static function stripExpandLinkChrome(string $text): string
+    {
+        $text = preg_replace('/\(\s*zobacz\b[^)]{0,160}\)\s*/iu', '', $text) ?? $text;
+        $text = preg_replace('/\(\s*zobacz\b[^)]{0,80}$/iu', '', $text) ?? $text;
+        $text = preg_replace('/\b(czytaj\s+(?:dalej|więcej)|rozwiń)(?:\s*\.\.\.|\s*…)?\s*/iu', '', $text) ?? $text;
+        $text = preg_replace('/[ \t]{2,}/u', ' ', $text) ?? $text;
+        $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
+
+        return trim($text);
+    }
+
     /**
      * Tylko treść produktu — bez menu, koszyka, logowania, zwrotów, breadcrumbów.
      */
@@ -679,13 +708,14 @@ final class ProductPageFetcher
     {
         $chunks = [];
 
-        $ogDesc = $this->extractOgDescription($html);
-        if ($ogDesc !== '' && ! $this->looksLikeShopChrome($ogDesc)) {
+        $ogDesc = $this->usableExtractedChunk($this->extractOgDescription($html));
+        if ($ogDesc !== '') {
             $chunks[] = $ogDesc;
         }
 
         foreach ($this->extractMetaProductFields($html) as $field) {
-            if ($field !== '' && ! $this->looksLikeShopChrome($field)) {
+            $field = $this->usableExtractedChunk($field);
+            if ($field !== '') {
                 $chunks[] = $field;
             }
         }
@@ -699,9 +729,20 @@ final class ProductPageFetcher
 
         $text = trim(implode("\n\n", array_filter($chunks)));
         $text = $this->stripShopChromePhrases($text);
+        $text = self::stripExpandLinkChrome($text);
         $text = $this->keepProductRelevantParagraphs($text, $skuNorm);
 
         return mb_substr(trim($text), 0, 5000);
+    }
+
+    private function usableExtractedChunk(string $text): string
+    {
+        $text = self::stripExpandLinkChrome(trim($text));
+        if ($text === '' || $this->looksLikeShopChrome($text) || self::looksLikeTruncatedShopTeaser($text)) {
+            return '';
+        }
+
+        return $text;
     }
 
     /**
@@ -757,8 +798,8 @@ final class ProductPageFetcher
         foreach ($patterns as $pattern) {
             if (preg_match_all($pattern, $html, $m)) {
                 foreach ($m[1] as $block) {
-                    $t = $this->htmlToText((string) $block);
-                    if (mb_strlen($t) >= 40 && ! $this->looksLikeShopChrome($t)) {
+                    $t = self::stripExpandLinkChrome($this->htmlToText((string) $block));
+                    if (mb_strlen($t) >= 40 && ! $this->looksLikeShopChrome($t) && ! self::looksLikeTruncatedShopTeaser($t)) {
                         $parts[] = $t;
                     }
                 }
@@ -816,12 +857,13 @@ final class ProductPageFetcher
     {
         $parts = preg_split('/\n{2,}/u', $text) ?: [$text];
         $kept = [];
+        $haveProduct = false;
         foreach ($parts as $part) {
-            $part = trim((string) $part);
+            $part = self::stripExpandLinkChrome(trim((string) $part));
             if ($part === '' || mb_strlen($part) < 25) {
                 continue;
             }
-            if ($this->looksLikeShopChrome($part)) {
+            if ($this->looksLikeShopChrome($part) || self::looksLikeTruncatedShopTeaser($part)) {
                 continue;
             }
             $low = mb_strtolower($part);
@@ -834,6 +876,9 @@ final class ProductPageFetcher
                 || $this->hayMentionsNameTokens($low, mb_strtolower($skuNorm))
             );
             if ($productish || $mentionsSku || mb_strlen($part) >= 120) {
+                $kept[] = $part;
+                $haveProduct = true;
+            } elseif ($haveProduct) {
                 $kept[] = $part;
             }
         }

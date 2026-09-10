@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use App\Models\Product;
 use App\Services\Enrichment\ProductEnrichmentService;
+use App\Services\Enrichment\ProductPageFetcher;
 use ReflectionClass;
 use Tests\TestCase;
 
@@ -142,6 +143,38 @@ TXT;
             'Tablica informacyjna „Uwaga pies Beagle” marki CXS Canis z twardego PVC.',
             $beagle,
         ]));
+    }
+
+    public function test_rejects_zobacz_teaser_and_fallback_keeps_list_after_it(): void
+    {
+        $teaser = 'Cena netto: 13,33 zł/szt. - Filtry 3M serii 2000 przeznaczone są do skompletowania '
+            .'z półmaskami 3M serii 6000. Zgodnie z normą EN143 filtr klasy P2 posiada skuteczność '
+            .'filtracji 94% i przeznaczony jest do ochrony przed: (Zobacz klasy ...';
+        $full = 'Filtry 3M serii 2000 przeznaczone są do skompletowania z półmaskami 3M serii 6000, '
+            .'6500 i 7500 oraz z maską pełnotwarzową 3M serii 6000. Zgodnie z normą EN143 filtr klasy P2 '
+            .'posiada skuteczność filtracji 94% i przeznaczony jest do ochrony przed: '
+            .'(Zobacz klasyfikację filtrów i pochłaniaczy) cząstkami stałymi i ciekłymi o niskiej '
+            .'i średniej toksyczności, NDS≥0,05mg/m3. Mocowane złączen bagnetowym. Spełnia EN143. '
+            .'Stosowane przy pracach w pyle i w magazynie.';
+
+        $this->assertTrue(ProductPageFetcher::looksLikeTruncatedShopTeaser($teaser));
+        $this->assertFalse(ProductPageFetcher::looksLikeTruncatedShopTeaser($full));
+        $this->assertStringNotContainsString('Zobacz', ProductPageFetcher::stripExpandLinkChrome($full));
+
+        $service = app(ProductEnrichmentService::class);
+        $this->assertTrue($this->invoke($service, 'looksLikeThinDescription', [$teaser]));
+        $this->assertTrue($this->invoke($service, 'looksLikeIncompleteDescription', [$teaser]));
+
+        $fallback = $this->invoke($service, 'fallbackDescriptionFromPages', [
+            [
+                ['url' => 'https://icd.pl/filtr-3m-2125.html', 'text' => $teaser."\n\n".$full],
+            ],
+            '3M-2125',
+        ]);
+
+        $this->assertStringContainsString('cząstkami stałymi', $fallback);
+        $this->assertStringNotContainsString('Zobacz klasy', $fallback);
+        $this->assertGreaterThan(mb_strlen($teaser), mb_strlen($fallback));
     }
 
     /**
