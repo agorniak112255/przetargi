@@ -480,6 +480,12 @@ final class CatalogSitemapIndexer
         if ($deadline > 0.0) {
             $timeout = max(5, min($timeout, (int) ceil($deadline - microtime(true))));
         }
+        // Guzzle (JA3) dostaje Cloudflare 403; systemowy curl przechodzi.
+        if ($this->catalogUrl->isHtmlCatalogSitemap($url)
+            && $allowCurl
+            && $this->streamHtmlCatalogFromCurl($url, $onLocation, $timeout)) {
+            return true;
+        }
         try {
             $response = Http::withHeaders([
                 'User-Agent' => self::USER_AGENT,
@@ -564,7 +570,8 @@ final class CatalogSitemapIndexer
                     }
                     $html .= $more;
                 }
-                if ($this->catalogUrl->isHtmlCatalogSitemap($url)
+                if (! $this->isCloudflareChallenge($html)
+                    && $this->catalogUrl->isHtmlCatalogSitemap($url)
                     && $this->emitHtmlCatalogLocations($html, $onLocation, $url)) {
                     return true;
                 }
@@ -586,6 +593,35 @@ final class CatalogSitemapIndexer
     }
 
     /**
+     * @param  callable(string, string=): bool  $onLocation
+     */
+    private function streamHtmlCatalogFromCurl(string $url, callable $onLocation, int $timeout): bool
+    {
+        if (app()->environment('testing')) {
+            return false;
+        }
+        $body = $this->fetchViaCurl(
+            $url,
+            $timeout,
+            'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'
+        );
+        if ($body === null || $this->isCloudflareChallenge($body)) {
+            return false;
+        }
+
+        return $this->emitHtmlCatalogLocations($body, $onLocation, $url);
+    }
+
+    private function isCloudflareChallenge(string $body): bool
+    {
+        $head = mb_strtolower(mb_substr($body, 0, 1200));
+
+        return str_contains($head, 'just a moment')
+            || str_contains($head, 'cf-browser-verification')
+            || (str_contains($head, 'challenge-platform') && strlen($body) < 20000);
+    }
+
+    /**
      * Cloudflare blokuje Guzzle (JA3), a systemowy curl przechodzi — np. bhp.pl.
      *
      * @param  callable(string, string=): bool  $onLocation
@@ -597,7 +633,7 @@ final class CatalogSitemapIndexer
         }
 
         $body = $this->fetchViaCurl($url, $timeout);
-        if ($body === null) {
+        if ($body === null || $this->isCloudflareChallenge($body)) {
             return false;
         }
         if ($this->looksLikeHtml($body)) {
@@ -624,6 +660,10 @@ final class CatalogSitemapIndexer
             return null;
         }
         $timeout = max(5, $timeout);
+        $tmp = tempnam(sys_get_temp_dir(), 'smap');
+        if ($tmp === false) {
+            return null;
+        }
 
         $process = new Process([
             $binary,
@@ -635,6 +675,7 @@ final class CatalogSitemapIndexer
             '-A', self::USER_AGENT,
             '-H', $accept,
             '-H', 'Accept-Language: pl-PL,pl;q=0.9,en;q=0.8',
+            '-o', $tmp,
             $url,
         ]);
         $process->setTimeout($timeout + 5);
@@ -642,21 +683,22 @@ final class CatalogSitemapIndexer
         try {
             $process->run();
         } catch (Throwable $e) {
+            @unlink($tmp);
             Log::info('Sitemap curl failed', ['url' => $url, 'error' => $e->getMessage()]);
 
             return null;
         }
 
-        if (! $process->isSuccessful()) {
+        $size = is_file($tmp) ? (int) filesize($tmp) : 0;
+        if (! $process->isSuccessful() || $size < 1 || $size > self::CURL_MAX_BYTES) {
+            @unlink($tmp);
+
             return null;
         }
+        $body = (string) file_get_contents($tmp);
+        @unlink($tmp);
 
-        $body = $process->getOutput();
-        if ($body === '' || strlen($body) > self::CURL_MAX_BYTES) {
-            return null;
-        }
-
-        return $body;
+        return $body !== '' ? $body : null;
     }
 
     /**

@@ -2188,6 +2188,23 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
+    public function test_cloudflare_challenge_is_not_a_rawpol_catalog_map(): void
+    {
+        $challenge = '<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title></head>'
+            .'<body>challenge-platform</body></html>';
+        $this->fakeHttp([
+            'https://rawpol.com/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://www.rawpol.com/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://web.rawpol.com/?v=404&lang=pl' => Http::response($challenge, 200, ['Content-Type' => 'text/html']),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('rawpol.com');
+
+        $this->assertSame(0, $result['saved']);
+        $this->assertSame([], $result['sitemaps']);
+    }
+
     public function test_indexes_rawpol_html_catalog_sitemap(): void
     {
         $this->fakeHttp([
