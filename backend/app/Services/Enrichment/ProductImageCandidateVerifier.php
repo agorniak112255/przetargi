@@ -233,7 +233,9 @@ final class ProductImageCandidateVerifier
      */
     private function trustedImageIsSafe(string $url, Product $product, array $pages): bool
     {
-        if (! $this->identity->nameRequiresArticleType($product) || $product->hintedShopUrl() !== null) {
+        if ($pages !== []
+            || ! $this->identity->nameRequiresArticleType($product)
+            || $product->hintedShopUrl() !== null) {
             return true;
         }
         if ($this->identity->imageHayHasRequiredType($url, $product)) {

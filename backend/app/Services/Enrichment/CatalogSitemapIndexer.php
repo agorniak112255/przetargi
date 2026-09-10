@@ -792,6 +792,7 @@ final class CatalogSitemapIndexer
         foreach ([
             '/\bCODE\s*:?\s*([A-Z0-9][A-Z0-9\/\-]{2,24})/i',
             '/\bSKU\s*:?\s*([A-Z0-9][A-Z0-9\/\-]{2,24})/i',
+            '/\bModel\s*:?\s*(\d{3,4}[MD]?)/i',
             '/\b(?:Kod(?:\s+(?:produktu|towaru))?|Art(?:icle|\.)?\s*(?:nr\.?|no\.?|number)?)\s*:?\s*([A-Z0-9][A-Z0-9\/\-]{2,24})/i',
             '/\bBRAND\s*:?\s*(.+?)(?=\s+(?:CODE|SKU|SIZES|COLOURS|PRICE|Kod|Producent|Marka)\s*:|$)/i',
             '/\b(?:Producent|Marka)\s*:?\s*(.+?)(?=\s+(?:CODE|SKU|Kod|BRAND|Art)\s*:|$)/i',

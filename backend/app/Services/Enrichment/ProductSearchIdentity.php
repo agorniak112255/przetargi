@@ -2066,6 +2066,17 @@ final class ProductSearchIdentity
         return $hayCompact !== '' && str_contains($hayCompact, $phrase);
     }
 
+    /** Długa, unikalna nazwa w slugu (910 bez SKU w adresie) — nie „kurtka”. */
+    public function hayHasDistinctiveNamePhrase(string $hay, Product $product): bool
+    {
+        $phrase = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii((string) $product->name))) ?? '';
+        if (mb_strlen($phrase) < 24) {
+            return false;
+        }
+
+        return $this->hayHasNamePhrase($hay, $product);
+    }
+
     /**
      * Czy w tekście stoi dość słów z nazwy („skarpety … pomarańczowo-żółte”).
      * Odmiana: porównujemy po rdzeniu słowa, nie po całej formie.
@@ -2331,6 +2342,27 @@ final class ProductSearchIdentity
             if (! $mine) {
                 return true;
             }
+        }
+
+        $sku = trim((string) $product->sku);
+        if (preg_match('/^\d{3,4}$/u', $sku) !== 1) {
+            return false;
+        }
+        if (preg_match_all('/(?<![0-9a-z])(\d{3,4})(?![0-9a-z])/u', mb_strtolower($url.' '.$title), $nums) < 1) {
+            return false;
+        }
+        foreach ($nums[1] as $n) {
+            $n = (string) $n;
+            if ($this->looksLikeSizeSiblingCode($n, $product)) {
+                continue;
+            }
+            foreach ($ours as $code) {
+                if ($this->tokenMatchesOurCode($n, (string) $code)) {
+                    continue 2;
+                }
+            }
+
+            return true;
         }
 
         return false;

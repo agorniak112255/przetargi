@@ -32,8 +32,12 @@ final class CatalogIndexSearch
     public function findFor(Product $product): array
     {
         $hits = $this->byCode($product);
+        if ($hits !== []) {
+            return $hits;
+        }
+        $hits = $this->byBrandAndName($product);
 
-        return $hits !== [] ? $hits : $this->byBrandAndName($product);
+        return $hits !== [] ? $hits : $this->byDistinctiveName($product);
     }
 
     /**
@@ -168,6 +172,46 @@ final class CatalogIndexSearch
     }
 
     /**
+     * Karta bez SKU w slugu („peleryna-dla-niepelnosprawnych-wozek-aktywny”).
+     *
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function byDistinctiveName(Product $product): array
+    {
+        $words = $this->nameTokens($product);
+        if (count($words) < 3) {
+            return [];
+        }
+
+        $typePrefixes = $this->shortNumericVariantNeedsType($product, $this->codes($product))
+            ? $this->identity->catalogTypeTokenPrefixes($product)
+            : [];
+        $query = DB::table('catalog_page_tokens as t')
+            ->whereIn('t.token', $words);
+        if ($typePrefixes !== []) {
+            $query->whereExists(function ($q) use ($typePrefixes): void {
+                $q->select(DB::raw(1))
+                    ->from('catalog_page_tokens as typ')
+                    ->whereColumn('typ.catalog_page_id', 't.catalog_page_id')
+                    ->where(function ($inner) use ($typePrefixes): void {
+                        foreach ($typePrefixes as $prefix) {
+                            $inner->orWhere('typ.token', 'like', $prefix.'%');
+                        }
+                    });
+            });
+        }
+        $ids = $query
+            ->groupBy('t.catalog_page_id')
+            ->havingRaw('COUNT(DISTINCT t.token) >= ?', [3])
+            ->orderByRaw('COUNT(DISTINCT t.token) DESC')
+            ->limit(self::SQL_LIMIT)
+            ->pluck('t.catalog_page_id')
+            ->all();
+
+        return $this->pages($ids, $product);
+    }
+
+    /**
      * @param  list<int|string>  $ids
      * @return list<array{url: string, title: string, snippet: string}>
      */
@@ -209,6 +253,9 @@ final class CatalogIndexSearch
             )) {
                 continue;
             }
+            if ($this->identity->pageClaimsAnotherCode($url, $row['title'], $product)) {
+                continue;
+            }
             $hay = (string) $page->haystack;
             $matchesManufacturer = $this->pageManufacturer->matchesProduct($pageManufacturer, $product);
             $hasBrand = $matchesManufacturer
@@ -223,7 +270,8 @@ final class CatalogIndexSearch
             } elseif ($hasBrand) {
                 $withBrand[] = $row;
             } elseif (! $ambiguous
-                || $this->identity->urlHasGluedNumericModel($url.' '.$row['title'].' '.$hay, $product)) {
+                || $this->identity->urlHasGluedNumericModel($url.' '.$row['title'].' '.$hay, $product)
+                || $this->identity->hayHasDistinctiveNamePhrase($url.' '.$row['title'].' '.$hay, $product)) {
                 $rest[] = $row;
             }
         }

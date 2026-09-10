@@ -1419,7 +1419,7 @@ final class ProductPageFetcher
         foreach ([
             'logo', 'icon', 'sprite', 'favicon', 'banner', 'payment',
             'dhl', 'inpost', 'poczta', 'ups', 'fedex', 'dpd', 'gls',
-            'cart', 'koszyk', 'wallet', 'payu', 'przelewy', 'blik',
+            'koszyk', 'wallet', 'payu', 'przelewy', 'blik',
             'ochronki na buty', 'shoe-cover', 'shoe_cover', 'nakladki', 'folie-na',
             'placeholder', 'blank', 'pixel', 'bg_environment', 'environment_oily', '.svg',
             // placeholdery Magento / lazy-load
@@ -1436,7 +1436,8 @@ final class ProductPageFetcher
             }
         }
 
-        return false;
+        // /cart/ i cart_default — nie host redcart.pl
+        return preg_match('#(?<![a-z])cart(?![a-z])#', $u) === 1;
     }
 
     private function extractOgDescription(string $html): string

@@ -2454,7 +2454,7 @@ final class ProductEnrichmentService
         $blocked = [
             'logo', 'icon', 'sprite', 'favicon', 'banner', 'payment',
             'dhl', 'inpost', 'poczta', 'ups', 'fedex', 'dpd', 'gls',
-            'cart', 'koszyk', 'wallet', 'payu', 'przelewy', 'blik',
+            'koszyk', 'wallet', 'payu', 'przelewy', 'blik',
             'ochronki na buty', 'shoe-cover', 'shoe_cover', 'nakladki', 'folie-na',
             'placeholder', 'blank', 'pixel', 'bg_environment', 'environment_oily', '.svg',
             'loader', 'spinner', 'loading', 'preloader', 'ajax-loader', 'load.gif',
@@ -2469,7 +2469,7 @@ final class ProductEnrichmentService
             }
         }
 
-        return false;
+        return preg_match('#(?<![a-z])cart(?![a-z])#', $u) === 1;
     }
 
     public function markBatchItem(

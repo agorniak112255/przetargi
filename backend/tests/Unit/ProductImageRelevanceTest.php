@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Models\Product;
+use App\Services\Enrichment\ProductImageCandidateVerifier;
 use App\Services\Enrichment\ProductImageDownloader;
+use App\Services\Enrichment\ProductPageFetcher;
 use App\Services\Enrichment\ProductSearchIdentity;
+use ReflectionMethod;
 use Tests\TestCase;
 
 final class ProductImageRelevanceTest extends TestCase
@@ -199,5 +202,33 @@ final class ProductImageRelevanceTest extends TestCase
             'https://icd.pl/media/catalog/product/f/a/fartuch-pros-wodoochronny-121-1.jpg',
             ProductImageDownloader::preferFullSizeUrl($cached)
         );
+    }
+
+    public function test_redcart_cdn_is_not_junk_and_trusted_from_card(): void
+    {
+        $img = 'https://static3.redcart.pl/templates/images/thumb/4697/1024/1024/pl/0/templates/images/products/4697/9f854e302fba0cd0f0dafae92d468669.jpg';
+        $junk = new ReflectionMethod(ProductPageFetcher::class, 'isJunkImageUrl');
+        $this->assertFalse($junk->invoke(app(ProductPageFetcher::class), $img));
+        $this->assertTrue($junk->invoke(
+            app(ProductPageFetcher::class),
+            'https://shop.pl/cart/icon.png'
+        ));
+
+        $product = new Product([
+            'sku' => '905',
+            'name' => 'PELERYNA MĘSKA/DAMSKA',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $picked = app(ProductImageCandidateVerifier::class)->select(
+            $product,
+            [$img],
+            [[
+                'url' => 'https://dodatkimasarskiezwm.pl/111233-peleryna-meska-wodoochronna-pros-model-905m-pl',
+                'text' => 'Peleryna 905M',
+            ]],
+            1,
+            [$img]
+        );
+        $this->assertSame([$img], $picked);
     }
 }

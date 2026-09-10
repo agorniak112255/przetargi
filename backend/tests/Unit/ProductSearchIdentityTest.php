@@ -250,6 +250,29 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_distinctive_name_confirms_cape_without_sku_in_url(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '910',
+            'name' => 'PELERYNA DLA NIEPEŁNOSPRAWNYCH - WÓZEK AKTYWNY',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $url = 'https://dodatkimasarskiezwm.pl/111241-peleryna-dla-niepelnosprawnych-wozek-aktywny-pl';
+
+        $this->assertTrue($id->hayHasDistinctiveNamePhrase($url, $product));
+        $this->assertTrue($id->hayHasRequiredTypeFromName($url, $product));
+        $this->assertFalse($id->pageClaimsAnotherCode($url, '', $product));
+        $jacket = new Product([
+            'sku' => '205',
+            'name' => 'Kurtka oddychająca zapinana na zamek bryzgoszczelny',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $other = 'https://dodatkimasarskiezwm.pl/110221-kurtka-oddychajaca-zapinana-na-zamek-bryzgoszczelny-285-aj-group-pros--pl';
+        $this->assertTrue($id->hayHasDistinctiveNamePhrase($other, $jacket));
+        $this->assertTrue($id->pageClaimsAnotherCode($other, 'Kurtka oddychająca 285', $jacket));
+    }
+
     public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void
     {
         $id = new ProductSearchIdentity;

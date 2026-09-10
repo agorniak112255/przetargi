@@ -1067,6 +1067,44 @@ final class CatalogIndexTest extends TestCase
         );
     }
 
+    public function test_distinctive_name_finds_cape_without_sku_in_url(): void
+    {
+        $card = 'https://dodatkimasarskiezwm.pl/111241-peleryna-dla-niepelnosprawnych-wozek-aktywny-pl';
+        $this->seedPage($card);
+        $this->seedPage('https://dodatkimasarskiezwm.pl/110221-kurtka-oddychajaca-zapinana-na-zamek-bryzgoszczelny-285-aj-group-pros--pl');
+
+        $hits = app(CatalogIndexSearch::class)->findFor(new Product([
+            'sku' => '910',
+            'name' => 'PELERYNA DLA NIEPEŁNOSPRAWNYCH - WÓZEK AKTYWNY',
+            'manufacturer' => 'AJ GROUP',
+        ]));
+        $this->assertContains($card, array_column($hits, 'url'));
+
+        $jacketHits = app(CatalogIndexSearch::class)->findFor(new Product([
+            'sku' => '205',
+            'name' => 'Kurtka oddychająca zapinana na zamek bryzgoszczelny',
+            'manufacturer' => 'AJ GROUP',
+        ]));
+        $this->assertNotContains(
+            'https://dodatkimasarskiezwm.pl/110221-kurtka-oddychajaca-zapinana-na-zamek-bryzgoszczelny-285-aj-group-pros--pl',
+            array_column($jacketHits, 'url')
+        );
+
+        $product = Product::query()->create([
+            'sku' => '910',
+            'name' => 'PELERYNA DLA NIEPEŁNOSPRAWNYCH - WÓZEK AKTYWNY',
+            'manufacturer' => 'AJ GROUP',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        Http::fake();
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+        $this->assertSame('catalog_index', $pack['provider']);
+        $this->assertSame($card, $pack['results'][0]['url'] ?? null);
+        Http::assertNothingSent();
+    }
+
     public function test_gender_letter_suffix_index_is_used_instead_of_web(): void
     {
         $card = 'https://dodatkimasarskiezwm.pl/111233-peleryna-meska-wodoochronna-pros-model-905m-pl';

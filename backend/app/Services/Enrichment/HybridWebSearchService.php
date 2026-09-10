@@ -450,7 +450,8 @@ class HybridWebSearchService
             // ten sam filtr co w wyszukiwarce: sam kod „104” bez marki to kombinezon PROS,
             // nie rękawica Tegera. Skrócone MT-212 zostaje przez rodzinę kodu.
             if ($this->identity->hayMentionsProduct($hay, $product)
-                || $this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)) {
+                || $this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
+                || $this->identity->hayHasDistinctiveNamePhrase($hay, $product)) {
                 $out[] = [
                     'url' => $url,
                     'title' => $title !== '' ? $title : $url,
