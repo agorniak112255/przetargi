@@ -1112,6 +1112,34 @@ final class CatalogIndexTest extends TestCase
         $jacketPack = app(HybridWebSearchService::class)->searchProduct($jacketProduct, 'manufacturer');
         $this->assertSame('catalog_index', $jacketPack['provider']);
         $this->assertSame($jacket, $jacketPack['results'][0]['url'] ?? null);
+    }
+
+    public function test_cape_910_prefers_model_in_url_over_name_only_slug(): void
+    {
+        $nameOnly = 'https://dodatkimasarskiezwm.pl/111241-peleryna-dla-niepelnosprawnych-wozek-aktywny-pl';
+        $official = 'https://bemoregreen.eu/pl/peleryna/15-peleryna-na-wozek-aktywny-model-910.html';
+        $empik = 'https://www.empik.com/peleryna-na-wozek-aktywny-model-910,p1497595532,moda-p';
+        $this->seedPage($nameOnly);
+        $this->seedPage($official, 'aj-group');
+        $this->seedPage($empik);
+
+        $product = Product::query()->create([
+            'sku' => '910',
+            'name' => 'PELERYNA DLA NIEPEŁNOSPRAWNYCH - WÓZEK AKTYWNY',
+            'manufacturer' => 'AJ GROUP',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        Http::fake();
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $this->assertSame($official, $hits[0]['url'] ?? null);
+        $this->assertNotContains($nameOnly, array_slice(array_column($hits, 'url'), 0, 1));
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+        $this->assertSame('catalog_index', $pack['provider']);
+        $this->assertSame($official, $pack['results'][0]['url'] ?? null);
         Http::assertNothingSent();
     }
 

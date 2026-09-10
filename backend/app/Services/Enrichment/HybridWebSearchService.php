@@ -19,13 +19,20 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v59';
+    private const SEARCH_CACHE_VERSION = 'v60';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
 
     /** Prefetch: tylko SearXNG / indeks — bez modelu i bez Google/Bing. */
     private bool $localSearchOnly = false;
+
+    /**
+     * Karta z indeksu potwierdzona samą nazwą (bez kodu w adresie) — nie ucina drabinki.
+     *
+     * @var list<array{url: string, title: string, snippet: string}>
+     */
+    private array $nameOnlyCatalogHits = [];
 
     /** Ile fraz z otwartego internetu — dopiero po listach sklepów / producencie. */
     private const OPEN_QUERY_ATTEMPTS = 8;
@@ -88,25 +95,33 @@ class HybridWebSearchService
      */
     private function hitsFromLocalSources(Product $product): ?array
     {
+        $this->nameOnlyCatalogHits = [];
         $catalogHits = $this->confirmedCatalogHits($this->catalogHits($product), $product);
-        $this->attemptLog()->add(
-            'catalog',
-            $catalogHits === []
-                ? 'indeks sitemap: brak potwierdzonej karty'
-                : 'indeks sitemap: '.count($catalogHits).' kart'
-        );
-        if ($this->hasEnoughPageResults($catalogHits, 1)) {
+        $codedCatalog = $this->resultsCarryProductCode($catalogHits, $product);
+        $this->nameOnlyCatalogHits = $this->hitsWithoutCodedUrls($catalogHits, $codedCatalog);
+        if ($catalogHits === []) {
+            $this->attemptLog()->add('catalog', 'indeks sitemap: brak potwierdzonej karty');
+        } elseif ($codedCatalog === []) {
+            $this->attemptLog()->add(
+                'catalog',
+                'indeks sitemap: '.count($catalogHits).' kart bez kodu w adresie — szukam dalej'
+            );
+        } else {
+            $this->attemptLog()->add('catalog', 'indeks sitemap: '.count($catalogHits).' kart');
+        }
+        if ($this->hasEnoughPageResults($codedCatalog, 1)) {
             return [
-                'results' => array_slice($catalogHits, 0, 8),
+                'results' => array_slice(array_merge($codedCatalog, $this->nameOnlyCatalogHits), 0, 8),
                 'images' => [],
                 'provider' => 'catalog_index',
                 'raw_content' => null,
             ];
         }
         $official = $this->confirmedCatalogHits($this->ansellOfficial->find($product), $product);
-        if ($this->hasEnoughPageResults($official, 1)) {
+        $codedOfficial = $this->resultsCarryProductCode($official, $product);
+        if ($this->hasEnoughPageResults($codedOfficial, 1)) {
             return [
-                'results' => array_slice($official, 0, 8),
+                'results' => array_slice($codedOfficial, 0, 8),
                 'images' => [],
                 'provider' => 'ansell_official',
                 'raw_content' => null,
@@ -114,12 +129,14 @@ class HybridWebSearchService
         }
         $shopRaw = $this->retailerSearch->find($product);
         $shopHits = $this->confirmedCatalogHits($shopRaw, $product);
-        if (! $this->hasEnoughPageResults($shopHits, 1) && $shopRaw !== []) {
+        $codedShop = $this->resultsCarryProductCode($shopHits, $product);
+        if (! $this->hasEnoughPageResults($codedShop, 1) && $shopRaw !== []) {
             $shopHits = $this->keepHitsMentioningSkuOnPage($shopRaw, $product);
+            $codedShop = $this->resultsCarryProductCode($shopHits, $product);
         }
-        if ($this->hasEnoughPageResults($shopHits, 1)) {
+        if ($this->hasEnoughPageResults($codedShop, 1)) {
             return [
-                'results' => array_slice($shopHits, 0, 8),
+                'results' => array_slice($codedShop, 0, 8),
                 'images' => [],
                 'provider' => 'retailer_search',
                 'raw_content' => null,
@@ -174,6 +191,10 @@ class HybridWebSearchService
         }
 
         if ($merged === []) {
+            $fallback = $this->nameOnlyCatalogFallback();
+            if ($fallback !== null) {
+                return $fallback;
+            }
             $bare = $this->identity->stripBrandPrefix(
                 (string) $product->sku,
                 $this->identity->shortBrand((string) $product->manufacturer)
@@ -249,6 +270,10 @@ class HybridWebSearchService
         }
 
         if ($merged === []) {
+            $fallback = $this->nameOnlyCatalogFallback();
+            if ($fallback !== null) {
+                return $fallback;
+            }
             if ($this->identity->looksLikeInternalSku($product)
                 && $this->identity->internalSkuCore($product) === ''
                 && $this->identity->shopIdentityPhrases($product) === []) {
@@ -522,6 +547,54 @@ class HybridWebSearchService
         }
 
         return $out;
+    }
+
+    /**
+     * @param  list<array{url: string, title: string, snippet: string}>  $hits
+     * @param  list<array{url: string, title?: string, snippet?: string}>  $coded
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function hitsWithoutCodedUrls(array $hits, array $coded): array
+    {
+        $codedUrls = [];
+        foreach ($coded as $row) {
+            $url = mb_strtolower((string) ($row['url'] ?? ''));
+            if ($url !== '') {
+                $codedUrls[$url] = true;
+            }
+        }
+        $out = [];
+        foreach ($hits as $row) {
+            $url = mb_strtolower((string) ($row['url'] ?? ''));
+            if ($url === '' || isset($codedUrls[$url])) {
+                continue;
+            }
+            $out[] = $row;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     images: list<string>,
+     *     provider: string,
+     *     raw_content: ?string
+     * }|null
+     */
+    private function nameOnlyCatalogFallback(): ?array
+    {
+        if (! $this->hasEnoughPageResults($this->nameOnlyCatalogHits, 1)) {
+            return null;
+        }
+
+        return [
+            'results' => array_slice($this->nameOnlyCatalogHits, 0, 8),
+            'images' => [],
+            'provider' => 'catalog_index',
+            'raw_content' => null,
+        ];
     }
 
     /**

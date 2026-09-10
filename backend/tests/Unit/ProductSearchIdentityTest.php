@@ -276,6 +276,27 @@ final class ProductSearchIdentityTest extends TestCase
             'https://dodatkimasarskiezwm.pl/110221-kurtka-oddychajaca-zapinana-na-zamek-bryzgoszczelny-285-aj-group-pros--pl',
             $id->preferredLocaleUrl($de, $jacket)
         );
+
+        $official = 'https://bemoregreen.eu/pl/peleryna/15-peleryna-na-wozek-aktywny-model-910.html';
+        $empik = 'https://www.empik.com/peleryna-na-wozek-aktywny-model-910,p1497595532,moda-p';
+        $this->assertContains('bemoregreen.eu', $id->officialCatalogHosts($product));
+        $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('site:bemoregreen.eu', $joined);
+        $this->assertStringContainsString('site:empik.com', $joined);
+        $this->assertTrue($id->urlOrTitleCarriesCodeFamily($official, '', $product));
+        $this->assertTrue($id->urlOrTitleCarriesCodeFamily($empik, '', $product));
+        $this->assertTrue($id->isConfirmedProductCard(
+            $official,
+            'PELERYNA NA WÓZEK AKTYWNY MODEL 910',
+            'AJ Group PROS Plavitex Eco',
+            $product
+        ));
+        $this->assertTrue($id->isConfirmedProductCard(
+            $empik,
+            'Peleryna na wózek aktywny model 910',
+            'AJ Group peleryna na wózek aktywny',
+            $product
+        ));
     }
 
     public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void

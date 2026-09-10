@@ -69,9 +69,9 @@ return [
         'portwest' => ['portwest.com', 'www.portwest.com'],
         'coverguard' => ['coverguard.com', 'www.coverguard.com'],
         'singer' => ['singer.fr', 'www.singer.fr'],
-        'pros' => ['pros.pl', 'www.pros.pl'],
-        'aj-group' => ['pros.pl', 'www.pros.pl'],
-        'ajgroup' => ['pros.pl', 'www.pros.pl'],
+        'pros' => ['pros.pl', 'www.pros.pl', 'bemoregreen.eu', 'www.bemoregreen.eu'],
+        'aj-group' => ['pros.pl', 'www.pros.pl', 'bemoregreen.eu', 'www.bemoregreen.eu'],
+        'ajgroup' => ['pros.pl', 'www.pros.pl', 'bemoregreen.eu', 'www.bemoregreen.eu'],
         'urgent' => [
             'urgent.pl',
             'www.urgent.pl',
@@ -198,6 +198,9 @@ return [
     | Gdy brak wpisu, bierzemy manufacturer_domains.
     */
     'catalog_search_hosts' => [
+        'pros' => ['pros.pl', 'bemoregreen.eu', 'empik.com'],
+        'aj-group' => ['pros.pl', 'bemoregreen.eu', 'empik.com'],
+        'ajgroup' => ['pros.pl', 'bemoregreen.eu', 'empik.com'],
         '3m' => [
             '3m.com',
             '3mpolska.pl',
@@ -521,6 +524,8 @@ return [
         'roboczystyl.pl',
         'pros.pl',
         'www.pros.pl',
+        'bemoregreen.eu',
+        'www.bemoregreen.eu',
         'optimumbhp.pl',
         'www.optimumbhp.pl',
         'bpbhp.pl',
