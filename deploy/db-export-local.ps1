@@ -41,9 +41,9 @@ if (-not $OutFile) {
 Write-Host "==> dump bazy '$db' -> $OutFile" -ForegroundColor Cyan
 
 $dumpArgs = @(
-    "-h$dbHost",
-    "-P$port",
-    "-u$user",
+    "--host=$dbHost",
+    "--port=$port",
+    "--user=$user",
     "--single-transaction",
     "--routines",
     "--triggers",
