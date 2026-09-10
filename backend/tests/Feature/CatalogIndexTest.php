@@ -355,6 +355,33 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame([], $result['sitemaps']);
     }
 
+    public function test_indexes_empik_style_comma_product_id(): void
+    {
+        $card = 'https://www.empik.com/osuszacz-powietrza,p1702782328,agd-p';
+        $this->fakeHttp([
+            'https://empik.com/robots.txt' => Http::response(
+                "Sitemap: https://www.empik.com/sitemap/agd-4.xml.gz\n",
+                200
+            ),
+            'https://www.empik.com/sitemap/agd-4.xml.gz' => Http::response(
+                (string) gzencode(
+                    '<?xml version="1.0"?><urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">'
+                    .'<url><loc>'.$card.'</loc>'
+                    .'<image:image><image:loc>https://ecsmedia.pl/c/foto.jpg</image:loc></image:image>'
+                    .'</url></urlset>'
+                ),
+                200,
+                ['Content-Type' => 'application/x-gzip']
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('empik.com');
+
+        $this->assertSame(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => $card]);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://ecsmedia.pl/c/foto.jpg']);
+    }
+
     public function test_reads_gzipped_sitemap(): void
     {
         $this->fakeHttp([

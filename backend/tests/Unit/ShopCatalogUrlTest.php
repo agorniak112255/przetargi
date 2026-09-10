@@ -32,6 +32,15 @@ final class ShopCatalogUrlTest extends TestCase
         $this->assertTrue($this->urls->isClassicProduct(
             'https://www.misterworker.com/en/index.php?controller=product&id_product=74275'
         ));
+        $this->assertTrue($this->urls->isClassicProduct(
+            'https://www.empik.com/osuszacz-powietrza-pochlaniacz-wilgoci,p1702782328,agd-p'
+        ));
+        $this->assertFalse($this->urls->isIndexListing(
+            'https://www.empik.com/osuszacz-powietrza-pochlaniacz-wilgoci,p1702782328,agd-p'
+        ));
+        $this->assertFalse($this->urls->isFacetListing(
+            'https://www.empik.com/osuszacz-powietrza-pochlaniacz-wilgoci,p1702782328,agd-p'
+        ));
         $this->assertTrue($this->urls->isClassicProduct('https://shop.pl/123-buty-robocze-s3.html'));
         $this->assertTrue($this->urls->isClassicProduct(
             'https://dodatkimasarskiezwm.pl/111237-kalosz-damskimeski-pl'

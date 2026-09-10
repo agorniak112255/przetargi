@@ -49,6 +49,10 @@ final class ShopCatalogUrl
         if ($this->isSoteShopProduct($url)) {
             return true;
         }
+        // Empik i podobne: /slug,p1701980604,agd-p — przecinek to id karty, nie filtr
+        if (preg_match('#,p\d{4,}(?:,|$)#', $path) === 1) {
+            return true;
+        }
         if (preg_match('#-p\d{2,}(\.html)?$#', $path) === 1) {
             return true;
         }
@@ -119,7 +123,8 @@ final class ShopCatalogUrl
     public function isFacetListing(string $url): bool
     {
         $path = $this->path($url);
-        if ($this->isIaiProductCard($path) || $this->isSoteShopProduct($url) || $this->isSoteShopListing($url)) {
+        if ($this->isIaiProductCard($path) || $this->isSoteShopProduct($url) || $this->isSoteShopListing($url)
+            || preg_match('#,p\d{4,}(?:,|$)#', $path) === 1) {
             return false;
         }
         if (str_contains($path, ':')) {
