@@ -140,6 +140,30 @@ final class ProductSearchIdentityTest extends TestCase
         ])));
     }
 
+    public function test_sku_with_letter_and_catalog_tail_exposes_shop_model(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '001/A/ELR',
+            'name' => 'Spodnie ogrodniczki z elementami odblaskowymi',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $img = 'https://pros.pl/7198-large_default/spodnie-ogrodniczki-model-001.jpg';
+
+        $this->assertEqualsCanonicalizing(['001', '001A'], $id->variantBaseCodes($product));
+        $this->assertContains('001', $id->skuSearchNeedles($product));
+        $this->assertContains('001A', $id->skuSearchNeedles($product));
+        $this->assertContains('001', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertContains('001a', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertTrue($id->imageUrlMentionsProduct($img, $product));
+        $this->assertTrue($id->isConfirmedProductCard(
+            'https://pros.pl/pl/odziez-wodoochronna-standard/70-spodnie-ogrodniczki-model-001.html',
+            'Spodnie ogrodniczki model 001',
+            'PROS',
+            $product
+        ));
+    }
+
     public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void
     {
         $id = new ProductSearchIdentity;

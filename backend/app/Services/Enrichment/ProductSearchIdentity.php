@@ -172,6 +172,18 @@ final class ProductSearchIdentity
         if ($sku !== '' && mb_strlen($sku) >= 4 && $this->skuTokenInImageHay($hay, $hayCompact, $sku, $skuCompact)) {
             return true;
         }
+        foreach ($this->variantBaseCodes($product) as $base) {
+            $base = mb_strtolower(trim($base));
+            $baseCompact = preg_replace('/[^a-z0-9]+/iu', '', $base) ?? $base;
+            if ($base === '' || mb_strlen($baseCompact) < 3) {
+                continue;
+            }
+            if (($this->skuTokenInImageHay($hay, $hayCompact, $base, $baseCompact)
+                    || preg_match('/\bmodel[\s\-]?'.preg_quote($base, '/').'\b/u', $hay) === 1)
+                && $this->imageHayHasRequiredType($url, $product)) {
+                return true;
+            }
+        }
 
         foreach ($this->strongImageTokens($product) as $token) {
             if ($token === '' || mb_strlen($token) < 3) {
@@ -2673,7 +2685,7 @@ final class ProductSearchIdentity
         }
         foreach ($this->variantBaseCodes($product) as $base) {
             $base = trim($base);
-            if (preg_match('/^\d{2,4}$/u', $base) !== 1) {
+            if (preg_match('/^\d{2,4}[A-Z]?$/u', $base) !== 1) {
                 continue;
             }
             $key = mb_strtolower($base);
@@ -2823,10 +2835,18 @@ final class ProductSearchIdentity
             }
         }
         $sku = strtoupper(trim((string) $product->sku));
+        $sizes = new ProductSizeVariant;
         // 109/O, 109-C — model + jednoliterowy wariant (kolor), nie rozmiar i nie 101/001
         if (preg_match('/^(\d{2,4})[\/\-]([A-Z])$/u', $sku, $m) === 1
-            && ! (new ProductSizeVariant)->looksLikeWearSize($m[2])) {
+            && ! $sizes->looksLikeWearSize($m[2])) {
             $out[] = $m[1];
+        }
+        // 001/A/ELR — model + litera + ogon cennika; sklep ma model-001 / model-001a
+        if (preg_match('/^(\d{2,4})[\/\-]([A-Z])[\/\-]([A-Z]{2,4})$/u', $sku, $m) === 1
+            && ! $sizes->looksLikeWearSize($m[2])
+            && ! $sizes->looksLikeWearSize($m[3])) {
+            $out[] = $m[1];
+            $out[] = $m[1].$m[2];
         }
 
         return array_values(array_unique($out));

@@ -768,6 +768,30 @@ final class CatalogIndexTest extends TestCase
         );
     }
 
+    public function test_sku_with_catalog_tail_finds_numeric_model_page(): void
+    {
+        $this->seedPage('https://icd.pl/znak-bc001-gasnica.html');
+        $this->seedPage(
+            'https://pros.pl/pl/odziez-wodoochronna-standard/70-spodnie-ogrodniczki-model-001.html',
+            'aj-group'
+        );
+
+        $product = new Product([
+            'sku' => '001/A/ELR',
+            'name' => 'Spodnie ogrodniczki z elementami odblaskowymi',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains(
+            'https://pros.pl/pl/odziez-wodoochronna-standard/70-spodnie-ogrodniczki-model-001.html',
+            $urls
+        );
+        $this->assertNotContains('https://icd.pl/znak-bc001-gasnica.html', $urls);
+    }
+
     public function test_slash_letter_variant_finds_model_on_any_mapped_host(): void
     {
         $this->seedPage('https://icd.pl/znak-bc109-gasnica.html');
