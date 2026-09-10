@@ -60,6 +60,13 @@ class ProductImage extends Model
             return (string) ($this->source_url ?: $path);
         }
 
+        if (! Storage::disk('public')->exists($path)) {
+            $source = (string) ($this->source_url ?? '');
+            if (str_starts_with($source, 'http://') || str_starts_with($source, 'https://')) {
+                return $source;
+            }
+        }
+
         $basePath = rtrim((string) (parse_url((string) config('app.url'), PHP_URL_PATH) ?: ''), '/');
         if ($basePath === '' || $basePath === '/') {
             return Storage::disk('public')->url($this->path);

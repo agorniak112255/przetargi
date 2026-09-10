@@ -52,6 +52,37 @@ final class ProductImageThumbTest extends TestCase
             ->assertJsonPath('data.0.images.0.thumb_url', route('product-images.thumb', $image));
     }
 
+    public function test_product_show_exposes_thumb_url(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $image = $this->storePaddedImage();
+
+        $this->getJson('/api/products/'.$image->product_id)
+            ->assertOk()
+            ->assertJsonPath('images.0.thumb_url', route('product-images.thumb', $image));
+    }
+
+    public function test_url_falls_back_to_source_when_local_file_missing(): void
+    {
+        $product = Product::query()->create([
+            'sku' => 'MISS-1',
+            'name' => 'Bez pliku',
+            'manufacturer' => 'Lemaitre',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        $image = ProductImage::query()->create([
+            'product_id' => $product->id,
+            'path' => 'products/'.$product->id.'/gone.jpg',
+            'source_url' => 'https://example.com/gone.jpg',
+            'is_primary' => true,
+            'sort_order' => 0,
+        ]);
+
+        $this->assertSame('https://example.com/gone.jpg', $image->url());
+    }
+
     private function storePaddedImage(): ProductImage
     {
         $this->requireGd();

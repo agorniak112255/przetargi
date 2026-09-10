@@ -101,6 +101,9 @@ if [[ ! -d vendor ]]; then
   fi
 fi
 
+echo "==> storage:link"
+"$PHP_BIN" artisan storage:link || true
+
 echo "==> migrate"
 "$PHP_BIN" artisan migrate --force
 

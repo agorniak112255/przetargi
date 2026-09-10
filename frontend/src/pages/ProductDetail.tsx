@@ -701,18 +701,18 @@ export function ProductDetail() {
                 <button
                   key={img.id}
                   type="button"
-                  onClick={() => setImageModalUrl(img.url)}
+                  onClick={() => setImageModalUrl(img.thumb_url || img.url)}
                   className="rounded border border-slate-200 bg-slate-50 p-0 hover:border-blue-400"
                   title="Powiększ"
                 >
                   <img
-                    src={img.url}
+                    src={img.thumb_url || img.url}
                     alt={p.name}
                     className="h-32 w-32 object-contain"
                     onError={(e) => {
                       const el = e.currentTarget
                       el.style.display = 'none'
-                      setErr(`Nie można wyświetlić zdjęcia (${img.url}). Sprawdź storage:link / Apache.`)
+                      setErr(`Nie można wyświetlić zdjęcia. Użyj „Pobierz ponownie”.`)
                     }}
                   />
                 </button>
