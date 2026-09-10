@@ -207,6 +207,35 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_bare_numeric_sku_searches_model_and_catalog_brand(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '725',
+            'name' => 'Kurtka przeciwdeszczowa, damska',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $waders = 'https://waderspros.com/produkt/kurtka-przeciwdeszczowa-damska-pros-sports-model-725/';
+        $paka = 'https://www.pakawork.pl/pl/products/kurtka-przeciwdeszczowa-pros-aj-sport-725-34-3309.html';
+
+        $this->assertSame('PROS', $id->catalogSearchBrand($product));
+        $queries = $id->primaryQueries($product);
+        $this->assertSame('model 725 kurtka AJ GROUP PROS', $queries[0] ?? null);
+        $this->assertContains('725 AJ GROUP PROS', $queries);
+        $this->assertTrue($id->isConfirmedProductCard(
+            $waders,
+            'Kurtka przeciwdeszczowa damska PROS Sports model 725',
+            'PROS',
+            $product
+        ));
+        $this->assertTrue($id->isConfirmedProductCard(
+            $paka,
+            'Kurtka przeciwdeszczowa PROS AJ Sport 725',
+            'PROS',
+            $product
+        ));
+    }
+
     public function test_name_type_must_appear_on_page(): void
     {
         $id = new ProductSearchIdentity;

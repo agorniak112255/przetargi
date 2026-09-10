@@ -914,6 +914,7 @@ final class ProductSearchIdentity
             $fullNameEarly = $name;
         }
         // Model z nazwy (BEAGLE, C500, Carbon ESD PU Top) przed numerem magazynowym.
+        $bareNumeric = $this->skuIsBareNumericModel($product);
         $preferCatalogName = $composedSku || $shopName !== ''
             || $this->skuIsSharedShortCode($product)
             || ($this->looksLikeCompactTradeName($fullNameEarly)
@@ -940,6 +941,13 @@ final class ProductSearchIdentity
             if ($extra !== '') {
                 $skuQueries = [$this->queryWithManufacturer(trim($sku.' '.$extra), $product)];
             }
+        }
+        if ($bareNumeric && $usableSku && $shopName === ''
+            && ! $this->looksLikeCompactTradeName($fullNameEarly)) {
+            $type = $this->requiredArticleTypeLabel($product);
+            $typeBit = $type !== null ? trim(explode('/', $type)[0]) : '';
+            $modelQuery = trim('model '.$sku.($typeBit !== '' ? ' '.$typeBit : ''));
+            array_unshift($skuQueries, $this->queryWithManufacturer($modelQuery, $product));
         }
         if ($usableSku) {
             foreach ($this->skuSearchNeedles($product) as $needle) {
@@ -1114,16 +1122,61 @@ final class ProductSearchIdentity
         }
         if ($nameBrand !== '' && mb_strtolower($nameBrand) !== mb_strtolower($brand)) {
             if (! $this->phraseHasToken($query, $nameBrand)) {
-                return $query.' '.$nameBrand;
+                $query .= ' '.$nameBrand;
+            }
+        } elseif ($brand !== '' && ! $this->phraseHasToken($query, $brand)) {
+            $query .= ' '.$brand;
+        }
+
+        return $this->appendCatalogSearchBrand($query, $product);
+    }
+
+    /** AJ GROUP w cenniku, na sklepie „PROS model 725”. */
+    private function appendCatalogSearchBrand(string $query, Product $product): string
+    {
+        $catalog = $this->catalogSearchBrand($product);
+        if ($catalog === '' || $this->phraseHasToken($query, $catalog)) {
+            return $query;
+        }
+
+        return trim($query.' '.$catalog);
+    }
+
+    /**
+     * Marka z oficjalnej domeny, gdy cennik ma nazwę firmy (AJ GROUP), a sklep inną (PROS).
+     * Nie dopina siostrzanej marki (Eider ≠ Cerva).
+     */
+    public function catalogSearchBrand(Product $product): string
+    {
+        $legal = mb_strtolower($this->shortBrand((string) $product->manufacturer));
+        $legalCompact = preg_replace('/[^a-z0-9]+/u', '', $legal) ?? '';
+        if ($legal === '' || (preg_match('/\s/u', $legal) !== 1
+            && ! str_contains($legal, 'group') && ! str_ends_with($legalCompact, 'group'))) {
+            return '';
+        }
+        $family = array_fill_keys($this->brandFamilyOf($legal), true);
+        foreach ($this->officialCatalogHosts($product) as $host) {
+            $host = preg_replace('/^www\./u', '', mb_strtolower(trim($host))) ?? '';
+            $label = explode('.', $host)[0] ?? '';
+            if ($label === '' || mb_strlen($label) < 3) {
+                continue;
+            }
+            if ($label === $legal || $label === $legalCompact) {
+                continue;
+            }
+            if (! isset($family[$label])) {
+                continue;
             }
 
-            return $query;
-        }
-        if ($brand === '' || $this->phraseHasToken($query, $brand)) {
-            return $query;
+            return mb_strtoupper($label);
         }
 
-        return $query.' '.$brand;
+        return '';
+    }
+
+    public function skuIsBareNumericModel(Product $product): bool
+    {
+        return preg_match('/^\d{3,4}$/u', trim((string) $product->sku)) === 1;
     }
 
     /**
@@ -1306,8 +1359,20 @@ final class ProductSearchIdentity
         if (count($words) < 2 || count($words) > 6) {
             return false;
         }
+        if (preg_match('/\s[-–]\s+\p{L}.{20,}/u', $name) === 1) {
+            return false;
+        }
+        $specific = 0;
+        foreach ($words as $word) {
+            $word = trim((string) preg_replace('/[^\p{L}\p{N}]+/u', '', $word));
+            if ($word === '' || $this->isGenericCatalogNameWord($word)
+                || $this->isApparelTypeWord($word) || $this->isDescriptiveIdentityWord($word)) {
+                continue;
+            }
+            $specific++;
+        }
 
-        return preg_match('/\s[-–]\s+\p{L}.{20,}/u', $name) !== 1;
+        return $specific > 0;
     }
 
     /** „Carbon” z „Carbon ESD PU Top” nie może zająć slotu zamiast pełnej nazwy. */
@@ -4713,7 +4778,8 @@ final class ProductSearchIdentity
         return in_array($word, [
             'kurtka', 'bluza', 'spodnie', 'kamizelka', 'rekawice', 'rekawica', 'buty', 'polbuty',
             'obuv', 'boty', 'schuhe', 'chaussure', 'footwear',
-            'meska', 'meskie', 'krotka', 'krotki', 'odblaskowa', 'odblaskowy', 'odblaskowe',
+            'meska', 'meskie', 'damska', 'damskie', 'krotka', 'krotki', 'odblaskowa', 'odblaskowy', 'odblaskowe',
+            'przeciwdeszczowa', 'przeciwdeszczowy', 'przeciwdeszczowe',
             'trzewiki', 'sandaly', 'maska', 'kask', 'fartuch', 'ocieplana', 'ocieplany',
             'ostrzegawcza', 'ostr', 'nylon', 'nylonowa', 'nylonowy', 'polyester', 'polyes',
             'poliester', 'pongee', 'bawelna', 'skora', 'lateks', 'nitryl', 'poliuretan',

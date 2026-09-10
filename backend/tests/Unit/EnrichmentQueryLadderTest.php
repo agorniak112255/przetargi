@@ -360,7 +360,7 @@ final class EnrichmentQueryLadderTest extends TestCase
             'name' => 'Fartuch wodoochronny z PU',
         ]);
         $this->assertSame(['109'], $identity->variantBaseCodes($apron));
-        $this->assertContains('109 AJ GROUP', $identity->primaryQueries($apron));
+        $this->assertContains('109 AJ GROUP PROS', $identity->primaryQueries($apron));
         $this->assertContains('site:pros.pl 109', $identity->searchQueries($apron, 'manufacturer'));
     }
 

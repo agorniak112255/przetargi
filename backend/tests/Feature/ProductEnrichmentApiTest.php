@@ -1732,7 +1732,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'name' => 'Spodnie ogrodniczki z elementami odblaskowymi',
             'manufacturer' => 'AJ GROUP',
         ]);
-        $url = 'https://pros.pl/81-large_default/spodnie-ogrodniczki-antystatyczne-model-001a.jpg';
+        $url = 'https://pros.pl/81-large_default/spodnie-ogrodniczki-antystatyczne.jpg';
         Http::fake([
             'https://pros.pl/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
         ]);
@@ -1792,6 +1792,32 @@ final class ProductEnrichmentApiTest extends TestCase
         );
 
         $this->assertSame([$verifiedUrl], $picked);
+    }
+
+    public function test_description_images_stay_on_source_card(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $pages = [
+            [
+                'url' => 'https://www.bhp-gabi.pl/p34411,ubranie-101-112-p',
+                'text' => 'Ubranie 101/112',
+                'trusted_image_urls' => ['https://www.bhp-gabi.pl/media/101-112.jpg'],
+                'image_urls' => ['https://www.bhp-gabi.pl/media/101-112.jpg'],
+            ],
+            [
+                'url' => 'https://icd.pl/inny-model.html',
+                'text' => 'Inny model',
+                'trusted_image_urls' => ['https://icd.pl/media/obcy.jpg'],
+                'image_urls' => ['https://icd.pl/media/obcy.jpg'],
+            ],
+        ];
+        $desc = (new \ReflectionMethod($service, 'pagesForDescriptionImages'))
+            ->invoke($service, $pages, ['https://www.bhp-gabi.pl/p34411,ubranie-101-112-p']);
+        $images = (new \ReflectionMethod($service, 'imagesFromDescriptionPages'))
+            ->invoke($service, $desc);
+
+        $this->assertSame(['https://www.bhp-gabi.pl/media/101-112.jpg'], $images['trusted']);
+        $this->assertNotContains('https://icd.pl/media/obcy.jpg', $images['all']);
     }
 
     public function test_ai_settings_accept_web_search_fields(): void

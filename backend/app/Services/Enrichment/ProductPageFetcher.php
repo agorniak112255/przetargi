@@ -399,31 +399,17 @@ final class ProductPageFetcher
             : ($this->pageMentionsSku($url, $text, $title, $skuNorm)
                 || $this->pageMatchesProductIdentity($url, $text, $title)));
 
-        if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
-            $page = ['url' => $url, 'text' => mb_substr($text, 0, 5000)];
-            if ($optionSizes !== []) {
-                $page['option_sizes'] = $optionSizes;
-            }
-            $accessories = (new ProductAccessoryExtractor)->fromHtml($html);
-            if ($accessories !== []) {
-                $page['accessories'] = $accessories;
-            }
-            $goodPages[] = $page;
-        }
-
-        // Zdjęcia tylko z potwierdzonej karty — nie z „klienci kupili też” ani z obcej marki.
+        $pageImages = [];
+        $pageTrusted = [];
         if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
             $htmlForImages = $this->withoutRelatedProductHtml($html);
             foreach ($this->extractImageUrls($htmlForImages, $url, $skuNorm) as $img) {
                 if ($this->imageAllowedForProduct($img)) {
+                    $pageImages[] = $img;
                     $images[] = $img;
                 }
             }
-        }
-
-        // og:image bez potwierdzonego SKU nie zasługuje na status zaufanego
-        if ($pageLooksLikeProduct) {
-            foreach ($this->extractStructuredImageUrls($this->withoutRelatedProductHtml($html)) as $img) {
+            foreach ($this->extractStructuredImageUrls($htmlForImages) as $img) {
                 $absolute = $this->absolutize($img, $url);
                 if ($absolute !== null) {
                     $absolute = ProductImageDownloader::preferFullSizeUrl($absolute);
@@ -432,9 +418,27 @@ final class ProductPageFetcher
                     && ! $this->isJunkImageUrl($absolute)
                     && ProductImageDownloader::looksLikeImageUrl($absolute)
                     && $this->imageAllowedForProduct($absolute)) {
+                    $pageTrusted[] = $absolute;
                     $trustedImages[] = $absolute;
                 }
             }
+        }
+
+        if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
+            $page = [
+                'url' => $url,
+                'text' => mb_substr($text, 0, 5000),
+                'image_urls' => array_values(array_unique($pageImages)),
+                'trusted_image_urls' => array_values(array_unique($pageTrusted)),
+            ];
+            if ($optionSizes !== []) {
+                $page['option_sizes'] = $optionSizes;
+            }
+            $accessories = (new ProductAccessoryExtractor)->fromHtml($html);
+            if ($accessories !== []) {
+                $page['accessories'] = $accessories;
+            }
+            $goodPages[] = $page;
         }
         $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
         foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer) as $doc) {

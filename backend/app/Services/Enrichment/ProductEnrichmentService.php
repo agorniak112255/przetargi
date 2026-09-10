@@ -520,12 +520,6 @@ final class ProductEnrichmentService
                 foreach ($mfrFetched['document_urls'] as $url) {
                     $fetched['document_urls'][] = $url;
                 }
-                foreach ($mfrFetched['image_urls'] as $url) {
-                    $fetched['image_urls'][] = $url;
-                }
-                foreach ($mfrFetched['trusted_image_urls'] as $url) {
-                    $fetched['trusted_image_urls'][] = $url;
-                }
                 $mfrPageSnippets = $this->keepConfirmedCardPages($product, $mfrFetched['pages']);
             }
             $timing['fetch_ms'] = $this->elapsedMs($t);
@@ -629,12 +623,6 @@ final class ProductEnrichmentService
                         )
                     );
                 }
-                foreach ($supplement['image_urls'] as $url) {
-                    $fetched['image_urls'][] = $url;
-                }
-                foreach ($supplement['trusted_image_urls'] as $url) {
-                    $fetched['trusted_image_urls'][] = $url;
-                }
                 foreach ($supplement['document_urls'] as $url) {
                     $fetched['document_urls'][] = $url;
                 }
@@ -689,34 +677,6 @@ final class ProductEnrichmentService
                 );
             }
 
-            // Zdjęcia z kart produktu: pewne URL-e przechodzą po SKU, pozostałe ocenia AI Vision.
-            // Tavily include_images pozostaje wyłączone — kandydat musi pochodzić z pobranej karty.
-            $this->liveProgress()->step('weryfikacja zdjęć');
-            $t = microtime(true);
-            $candidateImages = $fetched['image_urls'];
-            foreach ($extracted['image_urls'] ?? [] as $url) {
-                if (is_string($url) && str_starts_with($url, 'http')) {
-                    $candidateImages[] = $url;
-                }
-            }
-            $hadImageCandidates = $candidateImages !== [] || $fetched['trusted_image_urls'] !== [];
-            $imageUrls = $this->imageVerifier->select(
-                $product,
-                $candidateImages,
-                $pageSnippets,
-                3,
-                $fetched['trusted_image_urls']
-            );
-            $imageUrls = array_values(array_unique($imageUrls));
-            if ($imageUrls === [] && ! $hadImageCandidates) {
-                $imageUrls = $this->cardImagesAfterConfirmation(
-                    $fetched['trusted_image_urls'],
-                    $fetched['image_urls'],
-                    $pageSnippets,
-                    $product
-                );
-            }
-
             $sourceUrls = [];
             foreach ($extracted['source_urls'] ?? [] as $url) {
                 if (is_string($url) && str_starts_with($url, 'http')) {
@@ -733,6 +693,43 @@ final class ProductEnrichmentService
             if ($sourceUrls === []) {
                 $sourceUrls = array_column(array_slice($pageSnippets, 0, 3), 'url');
             }
+
+            // Zdjęcie z tej samej karty co opis — nie z innej pobranej strony.
+            $this->liveProgress()->step('weryfikacja zdjęć');
+            $t = microtime(true);
+            $descPages = $this->pagesForDescriptionImages($pageSnippets, $sourceUrls);
+            $fromCards = $this->imagesFromDescriptionPages($descPages);
+            foreach ($extracted['image_urls'] ?? [] as $url) {
+                if (! is_string($url) || ! str_starts_with($url, 'http')) {
+                    continue;
+                }
+                if ($this->imageUrlMatchesDescriptionPages($url, $descPages)
+                    || $this->identity->imageUrlMentionsProduct($url, $product)) {
+                    $fromCards['all'][] = $url;
+                }
+            }
+            if ($fromCards['all'] === []) {
+                $fromCards = [
+                    'all' => $this->imagesOnDescriptionHosts($fetched['image_urls'], $descPages),
+                    'trusted' => $this->imagesOnDescriptionHosts($fetched['trusted_image_urls'], $descPages),
+                ];
+            }
+            $imageUrls = $this->cardImagesAfterConfirmation(
+                $fromCards['trusted'],
+                $fromCards['all'],
+                $descPages,
+                $product
+            );
+            if ($imageUrls === []) {
+                $imageUrls = $this->imageVerifier->select(
+                    $product,
+                    $fromCards['all'],
+                    $descPages,
+                    3,
+                    $fromCards['trusted']
+                );
+            }
+            $imageUrls = array_values(array_unique($imageUrls));
 
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
 
@@ -1291,6 +1288,116 @@ final class ProductEnrichmentService
         return array_values(array_unique(array_slice($chosen, 0, 3)));
     }
 
+    /**
+     * @param  array<string, mixed>  $from
+     * @param  array<string, mixed>  $to
+     * @return array<string, mixed>
+     */
+    private function copyPageMeta(array $from, array $to): array
+    {
+        foreach (['option_sizes', 'accessories', 'image_urls', 'trusted_image_urls'] as $key) {
+            if (isset($from[$key]) && is_array($from[$key])) {
+                $to[$key] = $from[$key];
+            }
+        }
+
+        return $to;
+    }
+
+    /**
+     * @param  list<array{url?: string, text?: string}>  $pages
+     * @param  list<string>  $sourceUrls
+     * @return list<array{url?: string, text?: string}>
+     */
+    private function pagesForDescriptionImages(array $pages, array $sourceUrls): array
+    {
+        $wanted = [];
+        foreach ($sourceUrls as $url) {
+            $key = mb_strtolower(trim($url));
+            if ($key !== '') {
+                $wanted[$key] = true;
+            }
+        }
+        if ($wanted === []) {
+            return $pages;
+        }
+        $matched = [];
+        foreach ($pages as $page) {
+            $key = mb_strtolower((string) ($page['url'] ?? ''));
+            if (isset($wanted[$key])) {
+                $matched[] = $page;
+            }
+        }
+
+        return $matched !== [] ? $matched : $pages;
+    }
+
+    /**
+     * @param  list<array{url?: string, image_urls?: list<string>, trusted_image_urls?: list<string>}>  $pages
+     * @return array{all: list<string>, trusted: list<string>}
+     */
+    private function imagesFromDescriptionPages(array $pages): array
+    {
+        $all = [];
+        $trusted = [];
+        foreach ($pages as $page) {
+            foreach ($page['trusted_image_urls'] ?? [] as $url) {
+                if (is_string($url) && $url !== '') {
+                    $trusted[] = $url;
+                    $all[] = $url;
+                }
+            }
+            foreach ($page['image_urls'] ?? [] as $url) {
+                if (is_string($url) && $url !== '') {
+                    $all[] = $url;
+                }
+            }
+        }
+
+        return [
+            'all' => array_values(array_unique($all)),
+            'trusted' => array_values(array_unique($trusted)),
+        ];
+    }
+
+    /**
+     * @param  list<string>  $urls
+     * @param  list<array{url?: string}>  $pages
+     * @return list<string>
+     */
+    private function imagesOnDescriptionHosts(array $urls, array $pages): array
+    {
+        $hosts = [];
+        foreach ($pages as $page) {
+            $host = mb_strtolower((string) (parse_url((string) ($page['url'] ?? ''), PHP_URL_HOST) ?? ''));
+            $host = preg_replace('/^www\./u', '', $host) ?? $host;
+            if ($host !== '') {
+                $hosts[$host] = true;
+            }
+        }
+        $out = [];
+        foreach ($urls as $url) {
+            if (! is_string($url) || $url === '') {
+                continue;
+            }
+            $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+            $host = preg_replace('/^www\./u', '', $host) ?? $host;
+            if ($host !== '' && isset($hosts[$host])) {
+                $out[] = $url;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * @param  list<array{url?: string}>  $pages
+     */
+    private function imageUrlMatchesDescriptionPages(string $url, array $pages): bool
+    {
+        return $this->imagesOnDescriptionHosts([$url], $pages) !== [];
+    }
+
     private function pickPrimaryImageUrls(array $allUrls, mixed $llmUrls, string $sku, string $name, ?Product $product = null): array
     {
         $scored = [];
@@ -1665,14 +1772,7 @@ final class ProductEnrichmentService
                 continue;
             }
             $seen[$url] = true;
-            $row = ['url' => (string) $page['url'], 'text' => $text];
-            if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
-                $row['option_sizes'] = $page['option_sizes'];
-            }
-            if (isset($page['accessories']) && is_array($page['accessories'])) {
-                $row['accessories'] = $page['accessories'];
-            }
-            $out[] = $row;
+            $out[] = $this->copyPageMeta($page, ['url' => (string) $page['url'], 'text' => $text]);
         }
 
         return $out;
@@ -2175,14 +2275,7 @@ final class ProductEnrichmentService
             }
             if ($product->isHintedShopUrl($url)
                 || $this->identity->isConfirmedProductCard($url, '', $text, $product)) {
-                $row = ['url' => $url, 'text' => $text];
-                if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
-                    $row['option_sizes'] = $page['option_sizes'];
-                }
-                if (isset($page['accessories']) && is_array($page['accessories'])) {
-                    $row['accessories'] = $page['accessories'];
-                }
-                $out[] = $row;
+                $out[] = $this->copyPageMeta($page, ['url' => $url, 'text' => $text]);
             }
         }
 
@@ -2861,14 +2954,7 @@ SYS,
         foreach ($compact as $orig) {
             $key = mb_strtolower((string) ($orig['url'] ?? ''));
             if ($key !== '' && isset($byUrl[$key])) {
-                $row = $byUrl[$key];
-                if (isset($orig['option_sizes']) && is_array($orig['option_sizes'])) {
-                    $row['option_sizes'] = $orig['option_sizes'];
-                }
-                if (isset($orig['accessories']) && is_array($orig['accessories'])) {
-                    $row['accessories'] = $orig['accessories'];
-                }
-                $cleaned[] = $row;
+                $cleaned[] = $this->copyPageMeta($orig, $byUrl[$key]);
             }
         }
         if ($cleaned === [] && $byUrl !== []) {
@@ -2918,14 +3004,10 @@ SYS,
             }
             $text = mb_substr($text, 0, min($perPage, $left));
             $left -= mb_strlen($text);
-            $row = ['url' => (string) ($page['url'] ?? ''), 'text' => $text];
-            if (isset($page['option_sizes']) && is_array($page['option_sizes'])) {
-                $row['option_sizes'] = $page['option_sizes'];
-            }
-            if (isset($page['accessories']) && is_array($page['accessories'])) {
-                $row['accessories'] = $page['accessories'];
-            }
-            $out[] = $row;
+            $out[] = $this->copyPageMeta($page, [
+                'url' => (string) ($page['url'] ?? ''),
+                'text' => $text,
+            ]);
         }
 
         return $out;
