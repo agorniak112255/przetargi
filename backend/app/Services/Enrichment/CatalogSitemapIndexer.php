@@ -139,6 +139,7 @@ final class CatalogSitemapIndexer
         $timedOut = microtime(true) >= $deadline;
         $guessStartedAt = null;
         $shopListings = false;
+        $listingSeeds = [];
 
         // indeks sitemap dokłada kolejne pliki w trakcie — foreach nie zobaczyłby dopisanych
         for ($i = 0; $i < count($sitemaps) && $i < self::MAX_SITEMAP_FILES; $i++) {
@@ -169,7 +170,7 @@ final class CatalogSitemapIndexer
             $found = 0;
             $consume = function (string $loc) use (
                 &$sitemaps, &$seen, &$rows, &$saved, &$offHost, &$timedOut, &$found,
-                &$shopListings, $host, $maxUrls, $deadline
+                &$shopListings, &$listingSeeds, $host, $maxUrls, $deadline
             ): bool {
                 if (microtime(true) >= $deadline) {
                     $timedOut = true;
@@ -186,6 +187,10 @@ final class CatalogSitemapIndexer
                 if ($this->isSkippableUrl($loc)) {
                     if ($this->catalogUrl->isSoteShopListing($loc)) {
                         $shopListings = true;
+                    }
+                    if ($this->catalogUrl->isSoteShopCategory($loc) && count($listingSeeds) < 400) {
+                        $https = preg_replace('#^http://#i', 'https://', $loc) ?? $loc;
+                        $listingSeeds[$https] = $https;
                     }
 
                     return true;
@@ -251,7 +256,7 @@ final class CatalogSitemapIndexer
                 : ($timedOut
                     ? 'Limit czasu na XML — pełzam po stronach sklepu.'
                     : 'Mało kart z XML — pełzam po stronach sklepu.'));
-            foreach ($this->crawlShopPages($host, $maxUrls, $deadline) as $row) {
+            foreach ($this->crawlShopPages($host, $maxUrls, $deadline, array_values($listingSeeds)) as $row) {
                 $url = (string) $row['url'];
                 if (isset($seen[$url])) {
                     continue;
@@ -595,13 +600,14 @@ final class CatalogSitemapIndexer
     /**
      * IAI/IdoSell i sklepy bez XML — crawler jak skrypt Python (seedy, BFS, CODE).
      *
+     * @param  list<string>  $extraSeeds
      * @return list<array<string, mixed>>
      */
-    private function crawlShopPages(string $host, int $maxUrls, float $deadline): array
+    private function crawlShopPages(string $host, int $maxUrls, float $deadline, array $extraSeeds = []): array
     {
         $found = $this->shopCrawler->crawl($host, $maxUrls, $deadline, function (string $text) use ($host): void {
             $this->note($host, $text);
-        });
+        }, $extraSeeds);
         $rows = [];
         foreach ($found as $item) {
             $rows[] = $this->rowForHref($item['url'], $host, $item['title'], $item['extra']);

@@ -137,16 +137,29 @@ final class ShopCatalogUrl
         return $this->isSoteShopProductQuery($this->query($url));
     }
 
-    /** SOTESHOP: kategoria /odziez-robocza,166.html albo strona listingu ,166,1634,2.html */
-    public function isSoteShopListing(string $url): bool
+    /** SOTESHOP: kategoria /odziez-robocza,166.html (bez paginacji). */
+    public function isSoteShopCategory(string $url): bool
     {
         $path = $this->path($url);
-        if (preg_match('#/[a-z][a-z0-9-]*,\d+\.html$#', $path) === 1
-            || preg_match('#/[a-z][a-z0-9-]*,\d+(,\d+)+\.html$#', $path) === 1) {
+        if (preg_match('#/[a-z][a-z0-9-]*,\d+\.html$#', $path) === 1) {
             return true;
         }
 
-        return $this->isSoteShopListingQuery($this->query($url));
+        return preg_match('/^[a-z][a-z0-9-]*,\d+(?:\.html)?$/', $this->query($url)) === 1;
+    }
+
+    /** SOTESHOP: kategoria albo strona listingu /odziez-robocza,166,1634,2.html */
+    public function isSoteShopListing(string $url): bool
+    {
+        if ($this->isSoteShopCategory($url)) {
+            return true;
+        }
+        $path = $this->path($url);
+        if (preg_match('#/[a-z][a-z0-9-]*,\d+(,\d+)+\.html$#', $path) === 1) {
+            return true;
+        }
+
+        return preg_match('/^[a-z][a-z0-9-]*,\d+(,\d+)+(?:\.html)?$/', $this->query($url)) === 1;
     }
 
     /** Query SOTESHOP zostawiamy w normalizacji — inaczej ?351,bluza… znika. */

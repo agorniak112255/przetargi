@@ -24,6 +24,11 @@ final class ShopHtmlCrawler
 
     private const MAX_QUEUE = 250;
 
+    /** SOTESHOP: sitemapa ucięta — trzeba przejść kategorie i paginację. */
+    private const DEEP_MAX_PAGES = 800;
+
+    private const DEEP_MAX_QUEUE = 1200;
+
     private const MAX_PRODUCT_FETCH = 400;
 
     /**
@@ -50,21 +55,33 @@ final class ShopHtmlCrawler
     private ?string $lockHost = null;
 
     /**
+     * @param  list<string>  $extraSeeds
      * @return list<array{url: string, title: string, extra: string}>
      */
-    public function crawl(string $host, int $maxUrls, float $deadline, callable $note): array
+    public function crawl(string $host, int $maxUrls, float $deadline, callable $note, array $extraSeeds = []): array
     {
         $this->preferReader = false;
         $this->lockHost = null;
         $queue = $this->seeds($host);
         $queued = array_fill_keys($queue, true);
+        foreach ($extraSeeds as $seed) {
+            $seed = trim($seed);
+            if ($seed === '' || isset($queued[$seed])) {
+                continue;
+            }
+            $queue[] = $seed;
+            $queued[$seed] = true;
+        }
+        $deep = $extraSeeds !== [];
+        $maxPages = $deep ? self::DEEP_MAX_PAGES : self::MAX_PAGES;
+        $maxQueue = $deep ? self::DEEP_MAX_QUEUE : self::MAX_QUEUE;
         $fetched = [];
         $products = [];
         $pages = 0;
         $htmlOk = 0;
         $homeFails = 0;
 
-        while ($queue !== [] && $pages < self::MAX_PAGES && count($products) < $maxUrls) {
+        while ($queue !== [] && $pages < $maxPages && count($products) < $maxUrls) {
             if (microtime(true) >= $deadline) {
                 break;
             }
@@ -130,9 +147,14 @@ final class ShopHtmlCrawler
                 if ($classic) {
                     continue;
                 }
-                if (! isset($queued[$href]) && count($queue) < self::MAX_QUEUE) {
+                if (isset($queued[$href]) || count($queue) >= $maxQueue) {
+                    continue;
+                }
+                $queued[$href] = true;
+                if ($this->catalogUrl->isSoteShopListing($href)) {
+                    array_unshift($queue, $href);
+                } else {
                     $queue[] = $href;
-                    $queued[$href] = true;
                 }
             }
         }

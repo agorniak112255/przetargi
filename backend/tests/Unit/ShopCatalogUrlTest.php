@@ -81,6 +81,8 @@ final class ShopCatalogUrlTest extends TestCase
         $this->assertFalse($this->urls->isFacetListing($card));
 
         $this->assertTrue($this->urls->isClassicProduct('https://www.fasterbhp.pl/?351,bluza-robocza-brixton'));
+        $this->assertTrue($this->urls->isSoteShopCategory('https://www.fasterbhp.pl/odziez-robocza,166.html'));
+        $this->assertFalse($this->urls->isSoteShopCategory('https://www.fasterbhp.pl/odziez-robocza,166,1634,2.html'));
         $this->assertTrue($this->urls->isIndexListing('https://www.fasterbhp.pl/odziez-robocza,166.html'));
         $this->assertTrue($this->urls->isIndexListing('https://www.fasterbhp.pl/odziez-robocza,166,1634,2.html'));
         $this->assertTrue($this->urls->isIndexListing('https://www.fasterbhp.pl/?o-sklepie,11'));

@@ -1485,6 +1485,101 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
+    public function test_uses_soteshop_sitemap_categories_as_crawl_seeds(): void
+    {
+        $locs = '';
+        for ($i = 1; $i <= 50; $i++) {
+            $locs .= '<url><loc>https://www.fasterbhp.pl/'.$i.',produkt-stary-'.$i.'.html</loc></url>';
+        }
+        $locs .= '<url><loc>https://www.fasterbhp.pl/odziez-robocza,166.html</loc></url>';
+        $this->fakeHttp([
+            'https://fasterbhp.pl/robots.txt' => Http::response(
+                "Sitemap: https://www.fasterbhp.pl/sitemaps.xml\n",
+                200
+            ),
+            'https://www.fasterbhp.pl/sitemaps.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'.$locs.'</urlset>',
+                200,
+                ['Content-Type' => 'application/xml']
+            ),
+            'https://www.fasterbhp.pl/' => Http::response(
+                '<!DOCTYPE html><html><body><p>Menu bez kategorii</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://fasterbhp.pl/' => Http::response(
+                '<!DOCTYPE html><html><body><p>Menu bez kategorii</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://www.fasterbhp.pl/odziez-robocza,166.html' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/888,kurtka-tylko-z-kategorii.html">Kurtka</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('fasterbhp.pl');
+
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.fasterbhp.pl/888,kurtka-tylko-z-kategorii.html',
+        ]);
+    }
+
+    public function test_follows_soteshop_pagination_to_collect_more_cards(): void
+    {
+        $this->fakeHttp([
+            'https://fasterbhp.pl/robots.txt' => Http::response(
+                "Sitemap: https://www.fasterbhp.pl/sitemaps.xml\n",
+                200
+            ),
+            'https://www.fasterbhp.pl/sitemaps.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.fasterbhp.pl/1,stara-karta.html</loc></url>'
+                .'<url><loc>https://www.fasterbhp.pl/odziez-robocza,166.html</loc></url>'
+                .'</urlset>',
+                200,
+                ['Content-Type' => 'application/xml']
+            ),
+            'https://www.fasterbhp.pl/' => Http::response(
+                '<!DOCTYPE html><html><body><a href="/odziez-robocza,166.html">Odzież</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://fasterbhp.pl/' => Http::response(
+                '<!DOCTYPE html><html><body><a href="/odziez-robocza,166.html">Odzież</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://www.fasterbhp.pl/odziez-robocza,166.html' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/10,bluza-strona-1.html">Bluza 1</a>'
+                .'<a href="/odziez-robocza,166,1634,2.html">2</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://www.fasterbhp.pl/odziez-robocza,166,1634,2.html' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/20,bluza-strona-2.html">Bluza 2</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('fasterbhp.pl');
+
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.fasterbhp.pl/10,bluza-strona-1.html',
+        ]);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.fasterbhp.pl/20,bluza-strona-2.html',
+        ]);
+    }
+
     private function seedPage(string $url, ?string $manufacturer = null): void
     {
         $page = CatalogPage::query()->create([
