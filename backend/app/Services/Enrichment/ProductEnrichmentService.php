@@ -69,6 +69,11 @@ final class ProductEnrichmentService
         return $this->attemptLog ?? app(EnrichmentAttemptLog::class);
     }
 
+    private function liveProgress(): EnrichmentLiveProgress
+    {
+        return app(EnrichmentLiveProgress::class);
+    }
+
     private function accessories(): ProductAccessorySyncService
     {
         return $this->accessories ?? app(ProductAccessorySyncService::class);
@@ -234,6 +239,10 @@ final class ProductEnrichmentService
             return;
         }
 
+        if ($batchId !== null) {
+            $this->liveProgress()->bind($batchId, $product);
+            $this->liveProgress()->step('Prefetch · wyszukiwarka');
+        }
         $this->pages->bypassCache($force);
         try {
             if ($force) {
@@ -276,6 +285,7 @@ final class ProductEnrichmentService
             ]);
         } finally {
             $this->pages->bypassCache(false);
+            $this->liveProgress()->clear();
         }
     }
 
@@ -381,7 +391,7 @@ final class ProductEnrichmentService
         $this->recordBatchProduct($batch, $product, ProductEnrichmentBatchItem::STATUS_RUNNING);
 
         try {
-            $this->enrichProduct($product, $force);
+            $this->enrichProduct($product, $force, $batch->id);
             $this->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE);
             $batch->refresh();
             $batch->update([
@@ -427,6 +437,9 @@ final class ProductEnrichmentService
         ]);
 
         $this->pages->bypassCache($force);
+        if ($batchId !== null) {
+            $this->liveProgress()->bind($batchId, $product);
+        }
         $started = microtime(true);
         $timing = [
             'product_id' => $product->id,
@@ -455,6 +468,7 @@ final class ProductEnrichmentService
             }
 
             $this->assertBatchNotCancelled($batchId);
+            $this->liveProgress()->step('wyszukiwarka');
             $t = microtime(true);
             $searchPack = $this->searchPackForEnrichment($product);
             $searchResults = $searchPack['results'];
@@ -489,6 +503,7 @@ final class ProductEnrichmentService
             }
             $timing['search_ms'] = $this->elapsedMs($t);
             $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
+            $this->liveProgress()->step('pobieranie kart');
             $t = microtime(true);
             $fetched = $this->pages->fetch($descResults, (string) $product->sku, 3, [], $product);
             $this->attemptLog()->add(
@@ -543,6 +558,7 @@ final class ProductEnrichmentService
             );
 
             // sklep → opis PL; producent → normy/materiały — jedno sanitize, żeby nie dublować vLLM
+            $this->liveProgress()->step('filtr stron');
             $t = microtime(true);
             $pageSnippets = $this->rememberOptionSizes(
                 $this->sanitizePagesWithLlm($product, $pageSnippets),
@@ -550,6 +566,7 @@ final class ProductEnrichmentService
             );
             $timing['llm_sanitize_ms'] = $this->elapsedMs($t);
 
+            $this->liveProgress()->step('opis produktu');
             $t = microtime(true);
             $cardSources = [];
             foreach (array_slice($pageSnippets, 0, 4) as $page) {
@@ -585,6 +602,7 @@ final class ProductEnrichmentService
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)
                 || $this->looksLikeIncompleteDescription($description)
                 || $this->looksLikeSparsePayload($extracted)) {
+                $this->liveProgress()->step('uzupełnienie');
                 $t = microtime(true);
                 $supplement = $this->supplementDescriptionFromOtherSites(
                     $product,
@@ -673,6 +691,7 @@ final class ProductEnrichmentService
 
             // Zdjęcia z kart produktu: pewne URL-e przechodzą po SKU, pozostałe ocenia AI Vision.
             // Tavily include_images pozostaje wyłączone — kandydat musi pochodzić z pobranej karty.
+            $this->liveProgress()->step('weryfikacja zdjęć');
             $t = microtime(true);
             $candidateImages = $fetched['image_urls'];
             foreach ($extracted['image_urls'] ?? [] as $url) {
@@ -913,6 +932,7 @@ final class ProductEnrichmentService
             throw $e;
         } finally {
             $this->pages->bypassCache(false);
+            $this->liveProgress()->clear();
         }
     }
 

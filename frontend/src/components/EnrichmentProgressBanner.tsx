@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { EnrichmentBatchLogModal } from './EnrichmentBatchLogModal'
+import { EnrichmentLiveMessage } from './EnrichmentLiveMessage'
 import { enrichmentProductHref, type EnrichmentBatch } from '../lib/api'
 
 type Props = {
@@ -87,12 +88,30 @@ function EnrichmentProgressItem({
           title={`Produkt ${batch.current_sku}`}
         >
           {nowLabel}
-          {batch.message ? ` · ${batch.message}` : ''}
+          {batch.message ? (
+            <>
+              {' · '}
+              <EnrichmentLiveMessage
+                message={batch.message}
+                updatedAt={batch.updated_at}
+                running={batch.status === 'running'}
+              />
+            </>
+          ) : null}
         </a>
       ) : (
         <p className="mt-1 text-blue-800">
           {nowLabel}
-          {batch.message ? ` · ${batch.message}` : ''}
+          {batch.message ? (
+            <>
+              {' · '}
+              <EnrichmentLiveMessage
+                message={batch.message}
+                updatedAt={batch.updated_at}
+                running={batch.status === 'running'}
+              />
+            </>
+          ) : null}
         </p>
       )}
     </div>

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Services\Enrichment\EnrichmentAttemptLog;
+use App\Services\Enrichment\EnrichmentLiveProgress;
 use App\Services\MailSettingsService;
 use App\Services\Presta\PrestaCatalogGateway;
 use App\Services\Presta\PrestaExportGateway;
@@ -18,6 +19,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(EnrichmentAttemptLog::class);
+        $this->app->scoped(EnrichmentLiveProgress::class);
         $this->app->bind(PrestaCatalogGateway::class, PrestaShopCatalogClient::class);
         $this->app->bind(PrestaExportGateway::class, PrestaShopExportClient::class);
     }

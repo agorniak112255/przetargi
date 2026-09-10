@@ -6,6 +6,7 @@ import {
   type EnrichmentBatchItem,
   type EnrichmentBatchLog,
 } from '../lib/api'
+import { EnrichmentLiveMessage } from './EnrichmentLiveMessage'
 
 const STATUS_LABEL: Record<string, string> = {
   failed: 'Błąd',
@@ -199,9 +200,12 @@ function LogRow({ item }: { item: EnrichmentBatchItem }) {
           <span className="block font-medium text-blue-800">{item.sku}</span>
           <span className="block truncate text-slate-600">{item.name}</span>
           {item.message ? (
-            <span className="block truncate text-[11px] text-slate-500" title={item.message}>
-              {item.message}
-            </span>
+            <EnrichmentLiveMessage
+              className="block whitespace-normal text-[11px] text-slate-500"
+              message={item.message}
+              updatedAt={item.updated_at}
+              running={item.status === 'running'}
+            />
           ) : null}
         </span>
       </a>

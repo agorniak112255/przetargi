@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { EnrichmentBatchLogModal } from './EnrichmentBatchLogModal'
+import { EnrichmentLiveMessage } from './EnrichmentLiveMessage'
 import {
   api,
   enrichmentProductHref,
@@ -50,7 +51,7 @@ function EnrichmentJobRow({
           {header}
         </button>
         {batch.manufacturer && <p className="text-slate-600">Producent: {batch.manufacturer}</p>}
-        <p className="truncate text-slate-500" title={batch.message ?? ''}>
+        <p className="whitespace-normal text-slate-500">
           {batch.done + batch.failed}/{batch.total}
           {batch.current_sku ? (
             <>
@@ -70,7 +71,16 @@ function EnrichmentJobRow({
               )}
             </>
           ) : null}
-          {batch.message ? ` · ${batch.message}` : ''}
+          {batch.message ? (
+            <>
+              {' · '}
+              <EnrichmentLiveMessage
+                message={batch.message}
+                updatedAt={batch.updated_at}
+                running={batch.status === 'running'}
+              />
+            </>
+          ) : null}
         </p>
         <div className="mt-1 h-1.5 w-40 overflow-hidden rounded bg-slate-200">
           <div

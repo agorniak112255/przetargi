@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Ai;
 
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
+use App\Services\Enrichment\EnrichmentLiveProgress;
 use App\Support\QueueWorkerIdentity;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Pool;
@@ -590,75 +591,86 @@ class OpenAiCompatibleClient
         $basePayload = $this->applyOpenRouterProvider($basePayload, $profile);
         $timeout = $profile['timeout_seconds'];
 
+        $started = microtime(true);
+        $usage = null;
+        $resultModel = $model;
+        $this->reportLiveWaiting($profile, $model);
         try {
-            $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
-        } catch (ConnectionException $e) {
-            throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
-        }
-
-        if (! $response->successful() && $this->isContextOverflow($response)) {
-            $compacted = $this->shrinkMessagesToFit(
-                $this->compactMessages($messages, 0.65),
-                self::MIN_OUTPUT_TOKENS,
-                $profile
-            );
-            $maxTokens = $this->fitMaxTokens(
-                max(self::MIN_OUTPUT_TOKENS, (int) floor($maxTokens * 0.7)),
-                $compacted,
-                $profile
-            );
-            $basePayload['messages'] = $compacted;
-            $basePayload['max_tokens'] = $maxTokens;
-            Log::info('AI przepełniony kontekst slota — ponawiam ze skróconymi źródłami', [
-                'model' => $model,
-                'max_tokens' => $maxTokens,
-            ]);
             try {
                 $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
             } catch (ConnectionException $e) {
                 throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
             }
-        }
 
-        if (! $response->successful()) {
-            throw new RuntimeException($this->formatHttpError($response, $profile));
-        }
-
-        $payload = $response->json();
-        $content = $this->contentReader->fromPayload($payload);
-
-        // reasoning zjadł budżet tokenów — powtórz z większym limitem, o ile slot jeszcze ma miejsce
-        if ($content === '' && $this->contentReader->finishReason($payload) === 'length' && $maxTokens < self::DEFAULT_MAX_TOKENS) {
-            $bumped = $this->fitMaxTokens(
-                self::DEFAULT_MAX_TOKENS,
-                $basePayload['messages'] ?? $messages,
-                $profile
-            );
-            if ($bumped > $maxTokens) {
-                $basePayload['max_tokens'] = $bumped;
+            if (! $response->successful() && $this->isContextOverflow($response)) {
+                $compacted = $this->shrinkMessagesToFit(
+                    $this->compactMessages($messages, 0.65),
+                    self::MIN_OUTPUT_TOKENS,
+                    $profile
+                );
+                $maxTokens = $this->fitMaxTokens(
+                    max(self::MIN_OUTPUT_TOKENS, (int) floor($maxTokens * 0.7)),
+                    $compacted,
+                    $profile
+                );
+                $basePayload['messages'] = $compacted;
+                $basePayload['max_tokens'] = $maxTokens;
+                Log::info('AI przepełniony kontekst slota — ponawiam ze skróconymi źródłami', [
+                    'model' => $model,
+                    'max_tokens' => $maxTokens,
+                ]);
                 try {
-                    $response = $this->postChat($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
+                    $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
                 } catch (ConnectionException $e) {
                     throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
                 }
-                if ($response->successful()) {
-                    $payload = $response->json();
-                    $content = $this->contentReader->fromPayload($payload);
+            }
+
+            if (! $response->successful()) {
+                throw new RuntimeException($this->formatHttpError($response, $profile));
+            }
+
+            $payload = $response->json();
+            $content = $this->contentReader->fromPayload($payload);
+
+            // reasoning zjadł budżet tokenów — powtórz z większym limitem, o ile slot jeszcze ma miejsce
+            if ($content === '' && $this->contentReader->finishReason($payload) === 'length' && $maxTokens < self::DEFAULT_MAX_TOKENS) {
+                $bumped = $this->fitMaxTokens(
+                    self::DEFAULT_MAX_TOKENS,
+                    $basePayload['messages'] ?? $messages,
+                    $profile
+                );
+                if ($bumped > $maxTokens) {
+                    $basePayload['max_tokens'] = $bumped;
+                    try {
+                        $response = $this->postChat($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
+                    } catch (ConnectionException $e) {
+                        throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
+                    }
+                    if ($response->successful()) {
+                        $payload = $response->json();
+                        $content = $this->contentReader->fromPayload($payload);
+                    }
                 }
             }
-        }
 
-        if ($content === '') {
-            Log::warning('AI empty content', ['body' => $payload, 'model' => $model]);
-            throw new RuntimeException('API AI zwróciło pustą odpowiedź (model reasoning potrzebuje więcej tokenów na wynik JSON).');
-        }
+            if ($content === '') {
+                Log::warning('AI empty content', ['body' => $payload, 'model' => $model]);
+                throw new RuntimeException('API AI zwróciło pustą odpowiedź (model reasoning potrzebuje więcej tokenów na wynik JSON).');
+            }
 
-        return [
-            'content' => $content,
-            'model' => (string) data_get($payload, 'model', $profile['model']),
-            'usage' => data_get($payload, 'usage'),
-            'finish_reason' => $this->contentReader->finishReason($payload),
-        ];
+            $resultModel = (string) data_get($payload, 'model', $profile['model']);
+            $usage = data_get($payload, 'usage');
+
+            return [
+                'content' => $content,
+                'model' => $resultModel,
+                'usage' => $usage,
+                'finish_reason' => $this->contentReader->finishReason($payload),
+            ];
+        } finally {
+            $this->reportLiveDone($profile, $resultModel, $started, $usage);
+        }
     }
 
     /**
@@ -997,34 +1009,45 @@ class OpenAiCompatibleClient
         );
         $payload = $this->applyOpenRouterProvider($payload, $profile);
 
+        $started = microtime(true);
+        $usage = null;
+        $resultModel = $profile['model'];
+        $this->reportLiveWaiting($profile, $profile['model']);
         try {
-            $response = $this->aiHttp($profile['api_key'], max(30, $timeoutSeconds))
-                ->connectTimeout(15)
-                ->post($url, $payload);
-        } catch (ConnectionException $e) {
-            throw new RuntimeException('Nie można połączyć z API AI (web search): '.$e->getMessage(), 0, $e);
-        }
+            try {
+                $response = $this->aiHttp($profile['api_key'], max(30, $timeoutSeconds))
+                    ->connectTimeout(15)
+                    ->post($url, $payload);
+            } catch (ConnectionException $e) {
+                throw new RuntimeException('Nie można połączyć z API AI (web search): '.$e->getMessage(), 0, $e);
+            }
 
-        if (! $response->successful()) {
-            $body = $response->json();
-            $detail = is_array($body)
-                ? (string) data_get($body, 'error.message', $response->body())
-                : $response->body();
-            throw new RuntimeException('Web search AI HTTP '.$response->status().': '.$detail);
-        }
+            if (! $response->successful()) {
+                $body = $response->json();
+                $detail = is_array($body)
+                    ? (string) data_get($body, 'error.message', $response->body())
+                    : $response->body();
+                throw new RuntimeException('Web search AI HTTP '.$response->status().': '.$detail);
+            }
 
-        $data = $response->json();
-        $content = $this->contentReader->fromPayload($data);
-        $citations = $this->extractChatWebCitations($data);
-        if ($content === '' && $citations === []) {
-            throw new RuntimeException('Web search AI zwróciło pustą odpowiedź.');
-        }
+            $data = $response->json();
+            $content = $this->contentReader->fromPayload($data);
+            $citations = $this->extractChatWebCitations($data);
+            if ($content === '' && $citations === []) {
+                throw new RuntimeException('Web search AI zwróciło pustą odpowiedź.');
+            }
 
-        return [
-            'content' => $content,
-            'model' => (string) data_get($data, 'model', $profile['model']),
-            'citations' => $citations,
-        ];
+            $resultModel = (string) data_get($data, 'model', $profile['model']);
+            $usage = data_get($data, 'usage');
+
+            return [
+                'content' => $content,
+                'model' => $resultModel,
+                'citations' => $citations,
+            ];
+        } finally {
+            $this->reportLiveDone($profile, $resultModel, $started, $usage);
+        }
     }
 
     /**
@@ -1805,5 +1828,58 @@ class OpenAiCompatibleClient
         $payload['chat_template_kwargs'] = $kwargs;
 
         return $payload;
+    }
+
+    /**
+     * @param  array{label?: string, base_url?: string}  $profile
+     */
+    private function reportLiveWaiting(array $profile, string $model): void
+    {
+        $live = app(EnrichmentLiveProgress::class);
+        if ($live->isBound()) {
+            $live->waiting($model, $this->providerLabel($profile));
+        }
+    }
+
+    /**
+     * @param  array{label?: string, base_url?: string}  $profile
+     */
+    private function reportLiveDone(array $profile, string $model, float $started, mixed $usage): void
+    {
+        $live = app(EnrichmentLiveProgress::class);
+        if (! $live->isBound()) {
+            return;
+        }
+        $prompt = is_array($usage) ? $this->usageInt($usage, 'prompt_tokens') : null;
+        $completion = is_array($usage) ? $this->usageInt($usage, 'completion_tokens') : null;
+        $live->done($model, microtime(true) - $started, $prompt, $completion);
+    }
+
+    /** @param  array<string, mixed>  $usage */
+    private function usageInt(array $usage, string $key): ?int
+    {
+        $value = $usage[$key] ?? null;
+
+        return is_numeric($value) ? (int) $value : null;
+    }
+
+    /**
+     * @param  array{label?: string, base_url?: string}  $profile
+     */
+    private function providerLabel(array $profile): string
+    {
+        $base = mb_strtolower((string) ($profile['base_url'] ?? ''));
+        if (str_contains($base, 'openrouter.ai')) {
+            return 'OpenRouter';
+        }
+        if (str_contains($base, 'api.openai.com')) {
+            return 'OpenAI';
+        }
+        if (str_contains($base, '127.0.0.1') || str_contains($base, 'localhost')) {
+            return 'lokalny';
+        }
+        $label = trim((string) ($profile['label'] ?? ''));
+
+        return $label !== '' ? $label : 'AI';
     }
 }
