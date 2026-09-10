@@ -188,7 +188,16 @@ final class ShopCatalogUrl
     public function isListingSlug(string $slug): bool
     {
         $slug = preg_replace('/\.(html?|php)$/i', '', $slug) ?? $slug;
-        if ($slug === '' || ! str_contains($slug, '-') || preg_match('/\d/', $slug) === 1) {
+        if ($slug === '' || ! str_contains($slug, '-')) {
+            return false;
+        }
+        if (preg_match('/^(strona|page|p|pagina)-\d+$/u', $slug) === 1) {
+            return true;
+        }
+        if (preg_match('/-(?:19|20)\d{2}$/u', $slug) === 1 && substr_count($slug, '-') <= 2) {
+            return true;
+        }
+        if (preg_match('/\d/', $slug) === 1) {
             return false;
         }
 

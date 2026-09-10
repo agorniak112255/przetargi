@@ -1107,7 +1107,7 @@ final class ProductPageFetcher
 
         // Galerie JS często przechowują pełny obraz poza znacznikiem <img>.
         if (preg_match_all(
-            '#\b(?:data-big|data-full|data-image|data-zoom-image)=["\']([^"\']+)["\']#i',
+            '#\b(?:data-big|data-full|data-image|data-zoom-image|data-img-name)=["\']([^"\']+)["\']#i',
             $html,
             $galleryImages
         )) {
@@ -1116,8 +1116,23 @@ final class ProductPageFetcher
             }
         }
 
-        /** @var list<string> $trustedUrls og:image / JSON-LD / itemprop — galeria karty, nie wymaga SKU w nazwie pliku */
+        $shoperOriginals = [];
+        if (preg_match_all(
+            '#href=["\']([^"\']*/userdata/public/gfx/[^"\']+\.(?:jpe?g|png|webp))["\']#i',
+            $html,
+            $shoperHits
+        )) {
+            foreach ($shoperHits[1] as $u) {
+                $shoperOriginals[] = $u;
+                $rawUrls[] = $u;
+            }
+        }
+
+        /** @var list<string> $trustedUrls og:image / JSON-LD / itemprop / Shoper gfx — galeria karty */
         $trustedUrls = $this->extractStructuredImageUrls($html);
+        foreach ($shoperOriginals as $u) {
+            $trustedUrls[] = $u;
+        }
         foreach ($trustedUrls as $u) {
             $rawUrls[] = $u;
         }
@@ -1203,6 +1218,11 @@ final class ProductPageFetcher
                 && (((int) $wm[1] < 400) || ((int) $wm[2] < 400))) {
                 continue;
             }
+            // Shoper: productGfx_*_120_120 / _300_300 to miniatury i kafle „polecane”, nie karta
+            if (preg_match('#/productgfx_\d+_(\d+)_(\d+)/#i', $meta, $sm)
+                && (((int) $sm[1] < 400) || ((int) $sm[2] < 400))) {
+                continue;
+            }
             // uvex imgproxy miniatury /w:60/h:60/
             if (preg_match('#/w:(\d+)/h:(\d+)/#i', $meta, $wm)
                 && (((int) $wm[1] < 200) || ((int) $wm[2] < 200))) {
@@ -1271,6 +1291,11 @@ final class ProductPageFetcher
             }
             // PrestaShop galeria produktu
             if (preg_match('#/\d+-(large_default|medium_default|home_default|pdt_\d+)/#i', $meta)) {
+                $score += 85;
+                $skuInUrl = true;
+            }
+            // Shoper: cache productGfx (duży) albo oryginał /userdata/public/gfx/
+            if (preg_match('#/productgfx_\d+_\d+_\d+/#i', $meta) || str_contains($meta, '/userdata/public/gfx/')) {
                 $score += 85;
                 $skuInUrl = true;
             }
@@ -1347,6 +1372,16 @@ final class ProductPageFetcher
         }
         if (preg_match_all('#"image"\s*:\s*"(https?://[^"]+)"#i', $html, $matches)) {
             foreach ($matches[1] as $url) {
+                $urls[] = $url;
+            }
+        }
+
+        if (preg_match_all(
+            '#href=["\']([^"\']*/userdata/public/gfx/[^"\']+\.(?:jpe?g|png|webp))["\']#i',
+            $html,
+            $shoper
+        )) {
+            foreach ($shoper[1] as $url) {
                 $urls[] = $url;
             }
         }

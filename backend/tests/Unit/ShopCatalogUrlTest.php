@@ -64,6 +64,12 @@ final class ShopCatalogUrlTest extends TestCase
         $this->assertTrue($this->urls->isIndexListing('https://store.myshopify.com/collections/running'));
         $this->assertTrue($this->urls->isIndexListing('https://shop.pl/kategoria/buty-robocze'));
         $this->assertTrue($this->urls->isIndexListing('https://shop.pl/c/buty-trekkingowe'));
+        $this->assertTrue($this->urls->isIndexListing('https://behapownia.pl/strona-2'));
+        $this->assertTrue($this->urls->isIndexListing('https://behapownia.pl/promocje-2024'));
+        $this->assertFalse($this->urls->isPrettyProduct('https://behapownia.pl/strona-2'));
+        $this->assertTrue($this->urls->isPrettyProduct(
+            'https://behapownia.pl/damska-kurtka-przeciwdeszczowa-bemoregreen-903'
+        ));
     }
 
     public function test_magento_pretty_card_vs_category_and_facet(): void
