@@ -59,6 +59,11 @@ final class ShopCatalogUrl
         if (preg_match('#/(product|produkt)/[^/]+#', $path) === 1) {
             return true;
         }
+        // Woo/WP: /eu-en/shop/310/ albo /shop/temres-281/
+        if (preg_match('#/shop/([a-z0-9][a-z0-9-]*)/?$#', $path, $shop) === 1
+            && ! in_array($shop[1], ['page', 'cart', 'checkout', 'account', 'category'], true)) {
+            return true;
+        }
         if (preg_match('#/products/[^/]+$#', $path) === 1 && ! str_contains($path, 'productcategory')) {
             return true;
         }

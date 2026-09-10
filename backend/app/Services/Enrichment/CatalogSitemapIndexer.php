@@ -162,6 +162,9 @@ final class CatalogSitemapIndexer
                 }
                 if ((microtime(true) - $guessStartedAt) >= self::CANDIDATE_GUESS_BUDGET
                     || microtime(true) >= $sitemapDeadline) {
+                    if ($this->hasPendingSitemap($sitemaps, $i + 1, $guessed)) {
+                        continue;
+                    }
                     $this->note($host, 'Zgadywanie sitemap nic nie dało — pełzam po HTML.');
                     break;
                 }
@@ -231,12 +234,16 @@ final class CatalogSitemapIndexer
             if (! $guessing) {
                 $this->note($host, 'Czytam '.$this->shortUrl($sitemap));
             }
+            $mapsBefore = count($sitemaps);
             $streamDeadline = $guessing ? min($deadline, $guessStartedAt + self::CANDIDATE_GUESS_BUDGET) : $deadline;
             if ($this->streamLocations($sitemap, $consume, $streamDeadline, $timeout, ! $guessing) && $found > 0) {
                 $used[] = $sitemap;
                 $this->note($host, 'Mapa dała '.$found.' adresów (łącznie '.count($seen).'): '.$this->shortUrl($sitemap));
             } elseif (! $guessing) {
-                $this->note($host, 'Mapa pusta albo nieczytelna: '.$this->shortUrl($sitemap));
+                $childMaps = count($sitemaps) - $mapsBefore;
+                $this->note($host, $childMaps > 0
+                    ? 'Indeks map: '.$childMaps.' plików z '.$this->shortUrl($sitemap)
+                    : 'Mapa pusta albo nieczytelna: '.$this->shortUrl($sitemap));
             }
             if (microtime(true) >= $deadline) {
                 $timedOut = true;
@@ -244,7 +251,7 @@ final class CatalogSitemapIndexer
             // robots.txt bywa bez Sitemap albo wskazuje 404 — wtedy zgadujemy typowe ścieżki
             if ($i === count($sitemaps) - 1 && count($seen) === 0 && ! $timedOut) {
                 $this->note($host, 'Nadal 0 kart — dokładam zgadywane ścieżki sitemapy.');
-                foreach ($this->candidateUrls($host) as $extra) {
+                foreach (array_merge($this->wordpressSitemapFallbacks($host), $this->candidateUrls($host)) as $extra) {
                     if (count($sitemaps) >= self::MAX_SITEMAP_FILES) {
                         break;
                     }
@@ -366,6 +373,7 @@ final class CatalogSitemapIndexer
             '/pub/media/sitemap.xml',
             '/xmlsitemap.php',
             '/sitemap_index.xml',
+            '/wp-sitemap.xml',
             '/media/sitemap/sitemap.xml',
             '/media/sitemap/sitemap_en.xml',
         ] as $path) {
@@ -373,6 +381,38 @@ final class CatalogSitemapIndexer
         }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Yoast w robots bywa 404 (WPML), a żywa mapa to /wp-sitemap.xml.
+     *
+     * @return list<string>
+     */
+    private function wordpressSitemapFallbacks(string $host): array
+    {
+        $host = $this->normalizeHost($host);
+        $out = [];
+        foreach ([$host, 'www.'.$host] as $name) {
+            $out[] = 'https://'.$name.'/wp-sitemap.xml';
+            $out[] = 'https://'.$name.'/wp-sitemap-posts-product-1.xml';
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<string>  $sitemaps
+     * @param  array<string, int>  $guessed
+     */
+    private function hasPendingSitemap(array $sitemaps, int $from, array $guessed): bool
+    {
+        for ($i = max(0, $from); $i < count($sitemaps); $i++) {
+            if (! isset($guessed[$sitemaps[$i]])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function sitemapFileTimeout(float $deadline): int

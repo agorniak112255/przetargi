@@ -1340,6 +1340,49 @@ final class CatalogIndexTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_falls_back_to_wp_sitemap_when_robots_maps_are_html_404(): void
+    {
+        $card = 'https://www.showagroup.com/eu-en/shop/310/';
+        $this->fakeHttp([
+            'https://showagroup.com/robots.txt' => Http::response(
+                "Sitemap: https://www.showagroup.com/eu-en/product-sitemap2.xml\n",
+                200
+            ),
+            'https://www.showagroup.com/eu-en/product-sitemap2.xml' => Http::response(
+                '<!DOCTYPE html><html><head><title>Page not found</title></head></html>',
+                404,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://www.showagroup.com/wp-sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><sitemapindex>'
+                .'<sitemap><loc>https://www.showagroup.com/eu-en/wp-sitemap-posts-product-1.xml</loc></sitemap>'
+                .'</sitemapindex>',
+                200,
+                ['Content-Type' => 'application/xml']
+            ),
+            'https://showagroup.com/wp-sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><sitemapindex>'
+                .'<sitemap><loc>https://www.showagroup.com/eu-en/wp-sitemap-posts-product-1.xml</loc></sitemap>'
+                .'</sitemapindex>',
+                200,
+                ['Content-Type' => 'application/xml']
+            ),
+            'https://www.showagroup.com/eu-en/wp-sitemap-posts-product-1.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>'.$card.'</loc></url>'
+                .'</urlset>',
+                200,
+                ['Content-Type' => 'application/xml']
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('showagroup.com');
+
+        $this->assertGreaterThanOrEqual(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => $card]);
+    }
+
     public function test_reads_wordpress_sitemap_index_served_as_html(): void
     {
         $this->fakeHttp([

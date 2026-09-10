@@ -54,6 +54,9 @@ final class ShopCatalogUrlTest extends TestCase
 
     public function test_shoper_woo_and_shopify_product_paths(): void
     {
+        $this->assertTrue($this->urls->isClassicProduct('https://www.showagroup.com/eu-en/shop/310/'));
+        $this->assertTrue($this->urls->isClassicProduct('https://www.showagroup.com/eu-en/shop/temres-281/'));
+        $this->assertFalse($this->urls->isIndexListing('https://www.showagroup.com/eu-en/shop/310/'));
         $this->assertTrue($this->urls->isClassicProduct('https://atlas.pl/produkt/rekawice-nitrilowe'));
         $this->assertTrue($this->urls->isClassicProduct('https://shop.pl/product/softshell-jacket'));
         $this->assertTrue($this->urls->isClassicProduct('https://shop.pl/p/55421'));
