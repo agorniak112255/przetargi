@@ -1725,6 +1725,51 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame([$clean], $selected);
     }
 
+    public function test_keeps_packshot_when_only_brand_mark_is_flagged_as_watermark(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '001/A/ELR',
+            'name' => 'Spodnie ogrodniczki z elementami odblaskowymi',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $url = 'https://pros.pl/81-large_default/spodnie-ogrodniczki-antystatyczne-model-001a.jpg';
+        Http::fake([
+            'https://pros.pl/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonWithImages')
+            ->once()
+            ->andReturn([
+                'candidates' => [
+                    [
+                        'index' => 0,
+                        'is_relevant_product' => true,
+                        'is_logo_or_banner' => false,
+                        'is_watermarked' => true,
+                        'confidence' => 0.96,
+                        'reason' => 'Naszywka PROS na ogrodniczkach.',
+                    ],
+                ],
+            ]);
+
+        $verifier = new ProductImageCandidateVerifier(
+            app(ProductSearchIdentity::class),
+            $llm,
+        );
+        $selected = $verifier->select(
+            $product,
+            [$url],
+            [[
+                'url' => 'https://pros.pl/pl/odziez-wodoochronna-antystatyczna/81-spodnie-ogrodniczki-antystatyczne-model-001a.html',
+                'text' => 'Spodnie ogrodniczki antystatyczne model 001A PROS.',
+            ]],
+            1
+        );
+
+        $this->assertSame([$url], $selected);
+    }
+
     public function test_pick_primary_keeps_verified_candidate_without_sku_in_url(): void
     {
         $product = $this->makeProduct([

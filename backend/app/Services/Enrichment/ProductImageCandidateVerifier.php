@@ -137,6 +137,7 @@ final class ProductImageCandidateVerifier
         }
 
         $verified = [];
+        $watermarked = [];
         $rows = is_array($response['candidates'] ?? null) ? $response['candidates'] : [];
         foreach ($rows as $row) {
             if (! is_array($row)) {
@@ -152,20 +153,28 @@ final class ProductImageCandidateVerifier
             }
             if (($row['is_relevant_product'] ?? false) !== true
                 || ($row['is_logo_or_banner'] ?? false) === true
-                || ($row['is_watermarked'] ?? false) === true
                 || $confidence < self::MIN_CONFIDENCE) {
                 continue;
             }
-            $verified[] = [
+            $item = [
                 'url' => $loaded[$index]['url'],
                 'confidence' => $confidence,
             ];
+            if (($row['is_watermarked'] ?? false) === true) {
+                $watermarked[] = $item;
+            } else {
+                $verified[] = $item;
+            }
         }
 
-        usort(
-            $verified,
-            static fn (array $a, array $b): int => $b['confidence'] <=> $a['confidence']
-        );
+        $byConfidence = static fn (array $a, array $b): int => $b['confidence'] <=> $a['confidence'];
+        usort($verified, $byConfidence);
+        usort($watermarked, $byConfidence);
+        // Nakładka sklepu ustępuje czystemu packshotowi; nadruk marki na produkcie
+        // nie może zostawić karty bez zdjęcia, gdy to jedyny kandydat.
+        if ($verified === []) {
+            $verified = $watermarked;
+        }
         $selected = $this->pickDiverseHosts($verified, $max);
 
         Log::info('Product image AI verification completed', [
@@ -409,13 +418,14 @@ Oceń {$count} kandydatów na GŁÓWNE zdjęcie katalogowe (packshot) tego produ
 
 {$typeBlock}
 
-Zaakceptuj TYLKO gdy widać sam ten produkt (pierwszy plan, ostro, studio/białe tło) BEZ znaku wodnego.
+Zaakceptuj TYLKO gdy widać sam ten produkt (pierwszy plan, ostro, studio/białe tło).
 Zawsze is_relevant_product=false gdy:
 - na zdjęciu są ludzie (twarz, ręce, kucharze, kelnerzy, personel, model w ubraniu, lifestyle, kuchnia, hotel jako motyw),
 - widać inny asortyment niż nazwa (kurtka/kombinezon/słoik przy ręczniku; ręcznik przy odzieży),
 - widać inną markę niż podana,
 - to logo, ikona, baner, mapa, reklama, dokument lub miniatura kolekcji.
-is_watermarked=true gdy na produkcie, w rogu albo w pasku widać logo/nazwę/URL sklepu albo półprzezroczysty napis. Taki kandydat odrzuć — szukamy zdjęcia z innej strony.
+is_watermarked=true TYLKO przy nakładce sklepu: półprzezroczysty napis, URL sklepu, logo sklepu w rogu albo w pasku.
+Nadruk, naszywka, piktogram albo nazwa marki producenta na produkcie (PROS, Ploviflex, 3M…) to nie znak wodny — is_watermarked=false.
 
 Kontekst stron jest wskazówką, nie dowodem. Gdy obraz nie zgadza się z nazwą/marką — odrzuć, nawet jeśli strona wygląda na kartę produktu. Nie zgaduj modelu z wyglądu. Wątpliwość → confidence poniżej 0.85 i is_relevant_product=false.
 
