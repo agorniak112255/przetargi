@@ -701,7 +701,7 @@ export function ProductDetail() {
                 <button
                   key={img.id}
                   type="button"
-                  onClick={() => setImageModalUrl(img.thumb_url || img.url)}
+                  onClick={() => setImageModalUrl(img.url)}
                   className="rounded border border-slate-200 bg-slate-50 p-0 hover:border-blue-400"
                   title="Powiększ"
                 >
