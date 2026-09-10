@@ -741,6 +741,33 @@ final class CatalogIndexTest extends TestCase
         $this->assertCount(1, $hits);
     }
 
+    public function test_short_numeric_sku_finds_typed_model_among_many_same_numbers(): void
+    {
+        $this->seedPage('https://icd.pl/znak-bc300-gasnica.html');
+        $this->seedPage('https://icd.pl/kurtka-wodoodporna-pros-300-czerwony.html', 'pros');
+        $this->seedPage('https://pros.pl/pl/odziez-wodoochronna-standard/62-kurtka-z-zamkiem-model-103.html', 'aj-group');
+        $this->seedPage('https://pros.pl/pl/odziez-wodoochronna-standard/63-kurtka-z-zamkiem-model-300.html', 'aj-group');
+        $this->seedPage('https://inny-sklep.pl/kurtka-wodoochronna-model-300.html', 'aj-group');
+
+        $product = new Product([
+            'sku' => '300',
+            'name' => 'Kurtka wodoochronna zapinana na zamek + stójka + rynienka',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+        $official = 'https://pros.pl/pl/odziez-wodoochronna-standard/63-kurtka-z-zamkiem-model-300.html';
+
+        $this->assertSame($official, $hits[0]['url'] ?? null);
+        $this->assertContains('https://inny-sklep.pl/kurtka-wodoochronna-model-300.html', $urls);
+        $this->assertNotContains('https://icd.pl/znak-bc300-gasnica.html', $urls);
+        $this->assertNotContains(
+            'https://pros.pl/pl/odziez-wodoochronna-standard/62-kurtka-z-zamkiem-model-103.html',
+            $urls
+        );
+    }
+
     public function test_slash_letter_variant_finds_model_on_any_mapped_host(): void
     {
         $this->seedPage('https://icd.pl/znak-bc109-gasnica.html');
@@ -779,6 +806,33 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame('catalog_index', $pack['provider']);
         $this->assertSame(
             'https://sklep-bhp.example/fartuch-model-109-zielony',
+            $pack['results'][0]['url'] ?? null
+        );
+        Http::assertNothingSent();
+    }
+
+    public function test_short_numeric_sku_index_prefers_official_card(): void
+    {
+        $this->seedPage('https://icd.pl/kurtka-wodoodporna-pros-300-czerwony.html', 'pros');
+        $this->seedPage(
+            'https://pros.pl/pl/odziez-wodoochronna-standard/63-kurtka-z-zamkiem-model-300.html',
+            'aj-group'
+        );
+        $product = Product::query()->create([
+            'sku' => '300',
+            'name' => 'Kurtka wodoochronna zapinana na zamek + stójka + rynienka',
+            'manufacturer' => 'AJ GROUP',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        Http::fake();
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame('catalog_index', $pack['provider']);
+        $this->assertSame(
+            'https://pros.pl/pl/odziez-wodoochronna-standard/63-kurtka-z-zamkiem-model-300.html',
             $pack['results'][0]['url'] ?? null
         );
         Http::assertNothingSent();

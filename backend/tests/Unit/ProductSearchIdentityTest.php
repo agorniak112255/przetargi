@@ -140,6 +140,32 @@ final class ProductSearchIdentityTest extends TestCase
         ])));
     }
 
+    public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '300',
+            'name' => 'Kurtka wodoochronna zapinana na zamek + stójka + rynienka',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $ours = 'https://pros.pl/pl/odziez-wodoochronna-standard/63-kurtka-z-zamkiem-model-300.html';
+        $other = 'https://pros.pl/pl/odziez-wodoochronna-standard/62-kurtka-z-zamkiem-model-103.html';
+
+        $this->assertTrue($id->isConfirmedProductCard(
+            $ours,
+            'Kurtka z zamkiem model 300',
+            'PROS',
+            $product
+        ));
+        $this->assertTrue($id->pageClaimsAnotherCode($other, 'Kurtka z zamkiem model 103', $product));
+        $this->assertFalse($id->isConfirmedProductCard(
+            $other,
+            'Kurtka z zamkiem model 103',
+            'PROS',
+            $product
+        ));
+    }
+
     public function test_name_type_must_appear_on_page(): void
     {
         $id = new ProductSearchIdentity;

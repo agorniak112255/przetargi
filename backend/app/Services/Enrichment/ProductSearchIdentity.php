@@ -2154,12 +2154,14 @@ final class ProductSearchIdentity
     {
         // Najpierw nasz model (CovaSpec 471 / 471 w slugu). Inaczej numer sklepu
         // (boe-471, art. 860) wygląda jak cudzy kod i odrzuca dobrą kartę.
-        if ($this->urlOrTitleCarriesShopModelNumber($url, $title, $product)
-            || $this->urlOrTitleHasNamedShopIdentity($url, $title, $product)) {
+        if ($this->urlOrTitleCarriesShopModelNumber($url, $title, $product)) {
             return false;
         }
         if ($this->urlOrTitleHasForeignModelNumber($url, $title, $product)) {
             return true;
+        }
+        if ($this->urlOrTitleHasNamedShopIdentity($url, $title, $product)) {
+            return false;
         }
         $tokens = $this->codeLikeTokens($url, $title);
 

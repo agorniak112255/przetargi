@@ -180,6 +180,8 @@ final class CatalogIndexSearch
         $ambiguous = $this->isAmbiguousNumericSku($product);
         $codes = $this->codes($product);
         $needType = $this->shortNumericVariantNeedsType($product, $codes);
+        $official = [];
+        $withManufacturer = [];
         $withBrand = [];
         $rest = [];
         foreach ($pages as $page) {
@@ -203,17 +205,41 @@ final class CatalogIndexSearch
                 continue;
             }
             $hay = (string) $page->haystack;
-            // strona z marką w adresie / zapisanym producentem jest pewniejsza niż sam kod
-            if ($this->pageManufacturer->matchesProduct($pageManufacturer, $product)
+            $matchesManufacturer = $this->pageManufacturer->matchesProduct($pageManufacturer, $product);
+            $hasBrand = $matchesManufacturer
                 || $this->identity->hayHasBrand($hay, $product)
-                || ($brand !== '' && str_contains($hay, $brand))) {
+                || ($brand !== '' && str_contains($hay, $brand));
+            // ICD i producent mają tę samą rodzinę (pros) — karta z domeny marki
+            // musi być przed wariantami kolorystycznymi sklepu (limit 8).
+            if ($this->urlIsOfficialCatalogHost($url, $product)) {
+                $official[] = $row;
+            } elseif ($matchesManufacturer) {
+                $withManufacturer[] = $row;
+            } elseif ($hasBrand) {
                 $withBrand[] = $row;
             } elseif (! $ambiguous) {
                 $rest[] = $row;
             }
         }
 
-        return array_slice(array_merge($withBrand, $rest), 0, self::MAX_HITS);
+        return array_slice(array_merge($official, $withManufacturer, $withBrand, $rest), 0, self::MAX_HITS);
+    }
+
+    private function urlIsOfficialCatalogHost(string $url, Product $product): bool
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $host = preg_replace('/^www\./u', '', $host) ?? $host;
+        if ($host === '') {
+            return false;
+        }
+        foreach ($this->identity->officialCatalogHosts($product) as $official) {
+            $official = preg_replace('/^www\./u', '', mb_strtolower(trim($official))) ?? '';
+            if ($official !== '' && ($host === $official || str_ends_with($host, '.'.$official))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function isAmbiguousNumericSku(Product $product): bool
@@ -224,15 +250,13 @@ final class CatalogIndexSearch
     }
 
     /**
-     * 109/O szuka tokenu „109” — bez typu z nazwy wpadłyby znaki BC109.
+     * Krótki numer (300, 109/O → 109) bez typu z nazwy trafia w znaki BC109
+     * i ginie w limicie SQL wśród tysięcy tokenów.
      *
      * @param  list<string>  $codes
      */
     private function shortNumericVariantNeedsType(Product $product, array $codes): bool
     {
-        if (preg_match('/^\d{3,4}$/u', trim((string) $product->sku)) === 1) {
-            return false;
-        }
         foreach ($codes as $code) {
             if (preg_match('/^\d{3,4}$/u', $code) === 1) {
                 return true;
