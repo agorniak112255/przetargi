@@ -792,6 +792,30 @@ final class CatalogIndexTest extends TestCase
         $this->assertNotContains('https://icd.pl/znak-bc001-gasnica.html', $urls);
     }
 
+    public function test_slash_numeric_set_finds_concatenated_model_page(): void
+    {
+        $this->seedPage('https://icd.pl/ubranie-robocze-pasa.html', 'aj-group');
+        $this->seedPage(
+            'https://pros.pl/pl/odziez-wodoochronna-standard/244-ubranie-model-101112.html',
+            'aj-group'
+        );
+
+        $product = new Product([
+            'sku' => '101/112',
+            'name' => 'Ubranie wodoochronne [kurtka 3/4 i spodnie do pasa]',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains(
+            'https://pros.pl/pl/odziez-wodoochronna-standard/244-ubranie-model-101112.html',
+            $urls
+        );
+        $this->assertNotContains('https://icd.pl/ubranie-robocze-pasa.html', $urls);
+    }
+
     public function test_slash_letter_variant_finds_model_on_any_mapped_host(): void
     {
         $this->seedPage('https://icd.pl/znak-bc109-gasnica.html');

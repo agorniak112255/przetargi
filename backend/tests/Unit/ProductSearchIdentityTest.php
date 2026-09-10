@@ -164,6 +164,23 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_clothing_set_sku_confirms_ubranie_card(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '101/112',
+            'name' => 'Ubranie wodoochronne [kurtka 3/4 i spodnie do pasa]',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $ours = 'https://pros.pl/pl/odziez-wodoochronna-standard/244-ubranie-model-101112.html';
+
+        $this->assertContains('101112', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertNotContains('ubranie', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertNotContains('pasa', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertTrue($id->hayHasRequiredTypeFromName($ours, $product));
+        $this->assertTrue($id->isConfirmedProductCard($ours, 'Ubranie model 101/112', 'PROS', $product));
+    }
+
     public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void
     {
         $id = new ProductSearchIdentity;

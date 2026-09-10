@@ -3318,10 +3318,19 @@ final class ProductSearchIdentity
     {
         $normalized = $this->normalizeTypeText($text);
         $required = [];
-        foreach (self::TYPE_STEMS as $stems) {
+        $keys = [];
+        foreach (self::TYPE_STEMS as $key => $stems) {
             if ($this->textHasTypeStem($normalized, $stems)) {
                 $required[] = $stems;
+                $keys[] = $key;
             }
+        }
+        // „Ubranie [kurtka + spodnie]” to komplet — sklep ma /ubranie-model-101112, nie kurtkę
+        $setPieces = ['jacket', 'trousers', 'coverall', 'vest', 'sweatshirt', 'apron'];
+        if (in_array('clothing', $keys, true)
+            && array_intersect($keys, $setPieces) !== []
+            && count($required) > 1) {
+            return [self::TYPE_STEMS['clothing']];
         }
 
         return $required;
@@ -4711,6 +4720,7 @@ final class ProductSearchIdentity
             'powlekany', 'powlekana', 'czarny', 'czarna', 'bialy', 'biala', 'zolty', 'zolta',
             'zolte', 'szary', 'szara', 'grafit', 'czerwony', 'niebieski', 'zielony', 'brazowy',
             'granat', 'pomarancz', 'robocza', 'robocze', 'ochronna', 'ochronne',
+            'ubranie', 'odziez', 'pasa',
             'wodoochronne', 'wodoochronny', 'hivis', 'hi', 'vis', 'free', 'dmf', 'cieg',
             'scieg', 'size', 'rozmiar', 'taille', 'szt', 'kpl', 'guma', 'polar', 'zima',
             'czapka', 'czapki', 'daszek', 'daszkiem', 'szwedzka', 'szwedzki', 'szwedzkie',
@@ -4823,6 +4833,7 @@ final class ProductSearchIdentity
             'buty', 'polbuty', 'trzewiki', 'sandaly', 'obuv', 'boty', 'schuhe',
             'chaussure', 'footwear', 'rukavice', 'bunda', 'kalhoty',
             'czapka', 'czapki', 'kombinezon', 'koszula', 'plaszcz', 'ogrodniczki',
+            'ubranie', 'odziez',
         ], true);
     }
 
