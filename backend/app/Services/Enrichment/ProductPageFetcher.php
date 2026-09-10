@@ -305,6 +305,7 @@ final class ProductPageFetcher
             if (! is_string($img) || $img === '' || ! $this->imageAllowedForProduct($img)) {
                 continue;
             }
+            $img = ProductImageDownloader::preferFullSizeUrl($img);
             $images[] = $img;
             if ($this->matchingProduct !== null
                 && $this->identity->isTrustedPageImageUrl($img, $this->matchingProduct)) {
@@ -424,6 +425,9 @@ final class ProductPageFetcher
         if ($pageLooksLikeProduct) {
             foreach ($this->extractStructuredImageUrls($this->withoutRelatedProductHtml($html)) as $img) {
                 $absolute = $this->absolutize($img, $url);
+                if ($absolute !== null) {
+                    $absolute = ProductImageDownloader::preferFullSizeUrl($absolute);
+                }
                 if ($absolute !== null
                     && ! $this->isJunkImageUrl($absolute)
                     && ProductImageDownloader::looksLikeImageUrl($absolute)
@@ -1163,6 +1167,7 @@ final class ProductPageFetcher
         foreach ($trustedUrls as $t) {
             $a = $this->absolutize(trim((string) $t), $pageUrl);
             if ($a !== null) {
+                $a = ProductImageDownloader::preferFullSizeUrl($a);
                 $trustedAbs[mb_strtolower($a)] = true;
             }
         }
@@ -1175,6 +1180,9 @@ final class ProductPageFetcher
             }
             $src = trim(explode(' ', trim($src))[0] ?? '');
             $abs = $this->absolutize($src, $pageUrl);
+            if ($abs !== null) {
+                $abs = ProductImageDownloader::preferFullSizeUrl($abs);
+            }
             if ($abs === null || $this->isJunkImageUrl($abs) || ! ProductImageDownloader::looksLikeImageUrl($abs)) {
                 continue;
             }

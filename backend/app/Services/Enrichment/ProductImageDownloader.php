@@ -161,18 +161,27 @@ final class ProductImageDownloader
         return null;
     }
 
-    private function downloadOne(Product $product, string $url, int $sortOrder): ?ProductImage
+    /**
+     * Miniatury sklepów → wariant pełny (WP, Demar, Presta, Magento cache/hash).
+     */
+    public static function preferFullSizeUrl(string $url): string
     {
-        // WP: foo-80x80.jpg → spróbuj pełnego foo.jpg
         $url = preg_replace('/-(\d{2,4})x(\d{2,4})(\.(jpe?g|png|webp))$/i', '$3', $url) ?? $url;
-        // Demar: foto_2_s.jpg / _m.jpg → foto_2.jpg
         $url = preg_replace('/_([sm])(\.(jpe?g|png|webp))$/i', '$2', $url) ?? $url;
-        // PrestaShop: medium/home → large_default
         $url = preg_replace(
             '#/(\d+)-(?:medium_default|home_default|pdt_\d+|small_default)/#i',
             '/$1-large_default/',
             $url
         ) ?? $url;
+        // ICD / Magento: …/cache/{32hex}/f/a/plik.jpg → oryginał katalogu (nie miniatura 80×80)
+        $url = preg_replace('#(/media/catalog/product/)cache/[a-f0-9]{32}/#i', '$1', $url) ?? $url;
+
+        return $url;
+    }
+
+    private function downloadOne(Product $product, string $url, int $sortOrder): ?ProductImage
+    {
+        $url = self::preferFullSizeUrl($url);
 
         $response = Http::timeout(12)
             ->connectTimeout(4)

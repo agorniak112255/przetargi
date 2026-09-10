@@ -51,10 +51,14 @@ final class ProductImageCandidateVerifier
             $urls,
             static fn (mixed $url): bool => is_string($url) && str_starts_with($url, 'http')
         )));
+        $urls = array_map(
+            static fn (string $url): string => ProductImageDownloader::preferFullSizeUrl($url),
+            $urls
+        );
         $trusted = [];
         foreach ($trustedUrls as $url) {
             if (is_string($url) && str_starts_with($url, 'http')) {
-                $trusted[mb_strtolower($url)] = true;
+                $trusted[mb_strtolower(ProductImageDownloader::preferFullSizeUrl($url))] = true;
             }
         }
 
@@ -75,7 +79,7 @@ final class ProductImageCandidateVerifier
                 continue;
             }
             if (isset($trusted[mb_strtolower($url)])
-                && (! $this->identity->nameRequiresArticleType($product) || $product->hintedShopUrl() !== null)) {
+                && $this->trustedImageIsSafe($url, $product, $pages)) {
                 $trustedHits[] = $url;
 
                 continue;
@@ -85,6 +89,9 @@ final class ProductImageCandidateVerifier
 
         $auto = array_values(array_unique([...$skuHits, ...$trustedHits]));
         $pool = array_values(array_unique([...$auto, ...$unverified]));
+        if ($trustedHits !== []) {
+            return array_values(array_unique(array_slice($trustedHits, 0, $max)));
+        }
         if (count($pool) <= 1 && $auto !== []) {
             return array_slice($auto, 0, $max);
         }
@@ -103,7 +110,7 @@ final class ProductImageCandidateVerifier
             }
         }
         if ($loaded === []) {
-            return $this->finishSelection($auto, $trusted, $urls, $max, $product);
+            return $this->finishSelection($auto, $trusted, $urls, $max, $product, $pages);
         }
 
         try {
@@ -126,7 +133,7 @@ final class ProductImageCandidateVerifier
                 'error' => $e->getMessage(),
             ]);
 
-            return $this->finishSelection($auto, $trusted, $urls, $max, $product);
+            return $this->finishSelection($auto, $trusted, $urls, $max, $product, $pages);
         }
 
         $verified = [];
@@ -179,10 +186,17 @@ final class ProductImageCandidateVerifier
      * @param  list<string>  $selected
      * @param  array<string, true>  $trusted
      * @param  list<string>  $urls
+     * @param  list<array{url: string, text: string}>  $pages
      * @return list<string>
      */
-    private function finishSelection(array $selected, array $trusted, array $urls, int $max, Product $product): array
-    {
+    private function finishSelection(
+        array $selected,
+        array $trusted,
+        array $urls,
+        int $max,
+        Product $product,
+        array $pages,
+    ): array {
         $selected = array_values(array_filter(
             $selected,
             fn (string $url): bool => ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
@@ -195,12 +209,39 @@ final class ProductImageCandidateVerifier
             if (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url)
                 && ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
                 && ! $this->identity->imageUrlHasForeignType($url, $product)
-                && (! $this->identity->nameRequiresArticleType($product) || $product->hintedShopUrl() !== null)) {
+                && $this->trustedImageIsSafe($url, $product, $pages)) {
                 return [$url];
             }
         }
 
         return [];
+    }
+
+    /**
+     * og:image z potwierdzonej karty: typ w URL, wskazany sklep albo ten sam host.
+     *
+     * @param  list<array{url?: string, text?: string}>  $pages
+     */
+    private function trustedImageIsSafe(string $url, Product $product, array $pages): bool
+    {
+        if (! $this->identity->nameRequiresArticleType($product) || $product->hintedShopUrl() !== null) {
+            return true;
+        }
+        if ($this->identity->imageHayHasRequiredType($url, $product)) {
+            return true;
+        }
+
+        $imgHost = $this->hostOf($url);
+        if ($imgHost === '') {
+            return false;
+        }
+        foreach ($pages as $page) {
+            if ($this->hostOf((string) ($page['url'] ?? '')) === $imgHost) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

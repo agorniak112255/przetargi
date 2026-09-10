@@ -1639,6 +1639,37 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame([$imageUrl], $selected);
     }
 
+    public function test_confirmed_card_og_image_skips_vision_when_name_requires_type(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '121',
+            'name' => 'Fartuch przedni z rękawami 120/100',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $og = 'https://icd.pl/media/catalog/product/f/a/fartuch-pros-wodoochronny-121-1.jpg';
+        $thumb = 'https://icd.pl/media/catalog/product/cache/619fea8990fc50f1f0f0c116cd818ee3/f/a/fartuch-pros-wodoochronny-121-1.jpg';
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJsonWithImages');
+        $verifier = new ProductImageCandidateVerifier(
+            app(ProductSearchIdentity::class),
+            $llm,
+        );
+
+        $selected = $verifier->select(
+            $product,
+            [$og, $thumb],
+            [[
+                'url' => 'https://icd.pl/fartuch-wodoochronny-pros-121-bialy.html',
+                'text' => 'Fartuch wodoochronny przedni z rękawami model 121 PROS.',
+            ]],
+            1,
+            [$og]
+        );
+
+        $this->assertSame([$og], $selected);
+    }
+
     public function test_skips_watermarked_image_and_takes_other_host(): void
     {
         $product = $this->makeProduct([

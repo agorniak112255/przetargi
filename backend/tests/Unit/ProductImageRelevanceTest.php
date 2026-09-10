@@ -191,4 +191,13 @@ final class ProductImageRelevanceTest extends TestCase
         ));
         $this->assertSame('czapka / nakrycie głowy z daszkiem', $identity->requiredArticleTypeLabel($cap));
     }
+
+    public function test_strips_magento_cache_hash_to_original_catalog_file(): void
+    {
+        $cached = 'https://icd.pl/media/catalog/product/cache/619fea8990fc50f1f0f0c116cd818ee3/f/a/fartuch-pros-wodoochronny-121-1.jpg';
+        $this->assertSame(
+            'https://icd.pl/media/catalog/product/f/a/fartuch-pros-wodoochronny-121-1.jpg',
+            ProductImageDownloader::preferFullSizeUrl($cached)
+        );
+    }
 }

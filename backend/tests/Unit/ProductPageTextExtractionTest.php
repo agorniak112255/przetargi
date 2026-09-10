@@ -589,4 +589,37 @@ HTML;
             static fn (string $u): bool => str_contains($u, 'logo-OpenGraph')
         ));
     }
+
+    public function test_collapses_magento_thumbnail_cache_to_original_catalog_image(): void
+    {
+        $pageUrl = 'https://icd.pl/fartuch-wodoochronny-pros-121-bialy.html';
+        $original = 'https://icd.pl/media/catalog/product/f/a/fartuch-pros-wodoochronny-121-1.jpg';
+        $og = 'https://icd.pl/media/catalog/product/cache/aa69c2be92cae7e9c97cb544ca63fc52/f/a/fartuch-pros-wodoochronny-121-1.jpg';
+        $thumb = 'https://icd.pl/media/catalog/product/cache/619fea8990fc50f1f0f0c116cd818ee3/f/a/fartuch-pros-wodoochronny-121-1.jpg';
+        $html = '<html><head><meta property="og:image" content="'.$og.'"></head><body>'
+            .'<h1>Fartuch wodoochronny przedni z rękawami model 121 - biały</h1>'
+            .'<img src="'.$thumb.'">'
+            .'<p>'.str_repeat('Fartuch przedni z rękawami model 121 PROS Plavitex EN ISO 13688. ', 40)
+            .'</p></body></html>';
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+
+        $product = new Product([
+            'sku' => '121',
+            'name' => 'Fartuch przedni z rękawami 120/100',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $result = (new ProductPageFetcher)->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Fartuch wodoochronny przedni z rękawami model 121 - biały',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertContains($original, $result['image_urls']);
+        $this->assertContains($original, $result['trusted_image_urls']);
+        $this->assertFalse(collect($result['image_urls'])->contains(
+            static fn (string $u): bool => str_contains($u, '/cache/')
+        ));
+    }
 }
