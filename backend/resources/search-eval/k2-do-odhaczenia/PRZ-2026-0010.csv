@@ -1,0 +1,16 @@
+﻿ok;przetarg;tytul;klient;lp;wymaganie_siwz;sku;nazwa;producent;zrodlo_dopasowania
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";1;"Rękawice wampirki uniwersalne";SILVER-DRACO;"SILVER DRACO - Rękawice robocze wykonane z dzianiny w kolorze szarym, powlekane czarnym lateksem o porowatej strukturze. KATEGORIA: II";WORKLINK;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";2;"Rękawice nakrapiane (dzianina) wampirki";091007142X;"PolyTRIX B 910";KCL;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";3;"Rękawice COVENT E";37320110;"AlphaTec 37320 SIZE 11.0";Ansell;ai_substitute
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";4;"Rękawice zimowe COVENT WINTER";WINTER-DRACO-003;"WINTER DRACO";Worklink;heuristic
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";5;"Rękawice nitrylowe lekkie";37320110;"AlphaTec 37320 SIZE 11.0";Ansell;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";6;"Rękawice nitrylowe RTELA";37320110;"AlphaTec 37320 SIZE 11.0";Ansell;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";7;"Rękawice typ „Rnyla”";37320110;"AlphaTec 37320 SIZE 11.0";Ansell;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";8;"Rękawice ciężkie pokryte gumą RNITNP";BRUKARZ-005;BRUKARZ;Worklink;ai_substitute
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";9;"Rękawice ocieplane R-Dragon";1020;"1020 ZIMA";Urgent;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";10;"Rękawice lekkie typu BLUTRIX pokryte do ściągacza nitrylem (gumą)";SUPER-TECH-BLUE-FIX-PREMIUM;"SUPER TECH BLUE FIX PREMIUM LINE - Rękawice wykonane z bezszwowej dzianiny poliestrowej, zakończone ściągaczem, powlekane do kości śródręcza wysokiej jakości, gładkim lateksem, końcówki palców pokryte szorstkowanym lateksem. KATEGORIA: II";WORKLINK;heuristic
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";11;"Rękawice ocieplane pokryte gumą „Nortex”";SUPER-TECH-BRUKARZ-PREMI-006;"SUPER TECH BRUKARZ PREMIUM LINE";Worklink;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";12;"Rękawice ocieplane wzmocnione skórą";60288;"Rękawica skórzana Top Grade 6000";uvex;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";13;"Rękawice spawalnicze";PROSOUD/1GAT;"1 LEFT GLOVE WELDER 100°C CUT PROTECTION";Rostaing;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";14;"Rękawice kwasoodporne";55-301;"Neoprenowe, bez podszewki";Ansell;vector
+;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";15;"Rękawice PCV długie do łokci";B0710CP;"Unsupported glove PVC coating CLEAN PACKED, long sleeve 600mm";Showa;vector

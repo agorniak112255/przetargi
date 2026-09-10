@@ -1,0 +1,9 @@
+﻿plik;numer;tytul;klient;status;linie_do_odhaczenia
+PRZ-2026-0004.csv;PRZ/2026/0004;Test;Mittal;wycena;2
+PRZ-2026-0005.csv;PRZ/2026/0005;test;test;wycena;3
+PRZ-2026-0006.csv;PRZ/2026/0006;"MPWIK kombinezony";MPWIK;wycena;20
+PRZ-2026-0007.csv;PRZ/2026/0007;"Azoty Tarnów";test;wycena;175
+PRZ-2026-0008.csv;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";wycena;48
+PRZ-2026-0009.csv;PRZ/2026/0009;"zapytania, przetarg";test;wycena;1
+PRZ-2026-0010.csv;PRZ/2026/0010;"MPGK Mielec";"MPGK Mielec";wycena;15
+PRZ-2026-TEST-AI.csv;PRZ/2026/TEST-AI;"Test dopasowania AI";"Zakład Produkcji Metali Sp. z o.o.";wycena;1

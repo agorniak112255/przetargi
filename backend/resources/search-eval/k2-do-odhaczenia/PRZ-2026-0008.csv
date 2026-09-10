@@ -1,0 +1,49 @@
+﻿ok;przetarg;tytul;klient;lp;wymaganie_siwz;sku;nazwa;producent;zrodlo_dopasowania
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";1;"Bluza damska długi rękaw";Bluza;"Bluza. Zapinanie na zamek błyskawiczny";"DELTA PLUS";heuristic
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";2;"Bluza damska krótki rękaw";Bluza;"Bluza. Zapinanie na zamek błyskawiczny";"DELTA PLUS";heuristic
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";3;"Bluza polarowa";Bluza;"Bluza. Zapinanie na zamek błyskawiczny";"DELTA PLUS";heuristic
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";4;"Buty gumowe damskie";0054;"RAINNY PRINT";DEMAR;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";5;"Buty gumowo- filcowe";.06/10;20345;Galmag;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";6;"Buty robocze z metalowymi noskami";62006;"GLOBAL TURBO 2 S3";"Howard Leight";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";7;"Czapka drelichowa";URG-TOP-S;"Czapka z daszkiem URG-TOP-S";Urgent;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";8;"Czapka ocieplana";CZAPKA-ZIMOWA-505;"Czapka zimowa 505 polar";Urgent;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";9;"Fartuch biały damski";115001210000;STELA;"CANIS SAFETY";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";10;"Fartuch biały laboratoryjny";1383071;"Fartuch laboratoryjny 3M™ 4440";3M;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";11;"Fartuch kwaso i ługowy";109/O;"Fartuch wodoochronny z PU";"AJ Group";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";12;"Fartuch przedni wodoodporny";109;"Fartuch wodoochronny 120/90 lub 90/120";"AJ Group";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";13;"Fartuch roboczy drelichowy";109000140000;VENCA;"CANIS SAFETY";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";15;"Fartuch spawalniczy skórzany";TAB/C;"Fartuch spawalniczy TAB/C - dwoina bydlęca";Lebon;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";16;"Kamizelka damska";131001880400;OMAK;"CANIS SAFETY";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";17;"Kamizelka ocieplana męska";KAMIZELKA-OCIEPLANA-GRZMOT-B-60;"Kamizelka ocieplana GRZMOT BASIC";PANTHER;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";18;"Kamizelka odblaskowa";PROS-KAMIZELKA-ODBLASK;"KAMIZELKA ODBLASKOWA";URGENT;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";19;"Kask ochronny";GV571-0000000-000;"V-Gard 500, szary, więźba Push-Key";MSA;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";20;"Koszula długi rękaw męska (pracownik ochr. Mienia, portier";KOSZULA-FLANELOWA-GITTER-KOL-146;"Koszula flanelowa GITTER kolor czerwony";PANTHER;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";21;"Koszula flanelowa";KOSZULA-FLANELOWA-TKANINA-AN-53;"Koszula flanelowa tkanina antystatyczna - CE na tkaninę";PANTHER;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";22;"Kurtka ocieplana";KURTKA-OCIEPLANA-TENREK-9;"Kurtka ocieplana TENREK";PANTHER;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";23;"Kurtka przeciwdeszczowa";4083;"Kurtka zapinana na zamek";"AJ Group";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";24;"Maseczka przeciwpyłowa,";10128873;"Affinity 1141 FFP2-V, węgiel aktywny, niebieska (10szt)";MSA;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";25;"Obuwie drewniaki";MEDIBUT-PRIMA-CLOG-SRC-ESD-FUKSJA;"PRIMA CLOG SRC ESD - FUKSJA";MEDIBUT;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";26;"Obuwie profilaktyczne";MEDIBUT-WZOR-01A;"WZÓR 01A";MEDIBUT;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";29;"Obuwie robocze skórzane";"MONTBRUN S3 SRC";"PÓŁBUTY ZE SKÓRZANEGO KRUPONU BARWIONEGO, PODESZWA Z DWUWARSTWOWEGO PU O ZRÓŻNICOWANYCH GĘSTOŚCIACH";"Delta Plus";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";30;"Obuwie robocze zimowe, damskie/męskie";000-933;"trzewiki zimowe";Reis;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";31;"Ochronniki słuchu";2600.001;"Ochronniki uvex K1, SNR 28, 171 g";uvex;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";32;"Okulary ochronne";9164_i-3;"okulary i-3, szybka antyrefleks, ramka: sky-blue; okulary uvex i-3s, węższe, szybka bezbarwna, powłoka supravision excellence, ramka: czarno-zielona; okulary uvex i-3s, węższe, szybka bezbarwna, powłoka supravision sapphire, ramka: niebiesko-szara; okulary uvex i-3s, węższe, szybka bezbarwna, powłoka supravision plus, ramka: czarno-szara; okulary uvex i-3s, węższe, szybka szara, powłoka supravision excellence, ramka: niebiesko-szara; okulary uvex i-3s, węższe, szybka bezbarwna AR, powłoka super antyrefleks, ramka: czarno-niebieska; okulary i-3, szybka bezbarwna, powłoka nieparująca excellence, ramka: antracytowo-niebieska";uvex;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";33;"Okulary ochronne przeciwodpryskowe,";S3750ASP-BLK;"3M™ SecureFit™ 3700 Okulary ochronne nakładkowe, czarne zauszniki, powłoka odpor";3M;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";34;"Okulary spawalnicze";9104.043;"Okulary spawalnicze 9104, szybka szara infradur st. ochr. 3, ramka: czarna 5";uvex;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";35;"Osłona twarzy przeciwodpryskowa";OL-101;"Osłona przeciwodpryskowa z poliwęglanu 1,0 mm";ŚNIADECKI;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";36;"Półbuty dielektryczne";"6400-SBP DIELECTRIC";WASHINGTON;"VM Footwear";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";37;"Rękawice dielektryczne";365000125011;ELEKTRA;"CANIS SAFETY";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";38;"Rękawice drelichowe";LS1039-AB;"Rękawice skóra LS1039 AB";Urgent;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";39;"Rękawice drelichowe ocieplane,";342000510110;DETA;"CANIS SAFETY";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";40;"Rękawice kwaso i ługoodporne";366000115010;TEKPLAST;"CANIS SAFETY";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";41;"Rękawice ochronne";92134;"MICROFLEX 92134 Versatility XS(5.5-6.0)";Ansell;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";42;"Rękawice termiczne";CRT13;"X-JUMBO 13 CUT LIGHTWEIGHT/ARAMID";PIP;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";43;"Szelki bezpieczeństwa";"LYNX HAR35R";"SZELKI Z PASEM I PASAMI UDOWYMI, 5 PUNKTÓW ZACZEPOWYCH";"Delta Plus";vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";44;"T- shirt z krótkim rękawem";T-Shirt-Sleeves-XS-2XL;"Anticcut - T-Shirt Sleeves - Size XS - 2XL";Lenard;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";45;"Ubranie robocze drelichowe";UBRANIE-SZWEDZKE-HIRARA-132;"Ubranie szwedzke HIRARA";PANTHER;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";46;"Ubranie robocze ocieplane";V566-0;"MOMPACH (04 ANTRAC./NERO/ARAN)";Cofra;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";47;"OKULAY NAKŁADKOWE 9169.260";9169;"super f OTG";uvex;heuristic
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";48;"Obuwie zawodowe dla personelu sprzątającego zgodne z normą EN ISO 20347:2012 O1 FO SR";.07;"PN-EN 20347:2012";Galmag;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";49;"Spodnie robocze męskie";PROS-URG-P-SPODNIE;"URG-P (spodnie)";URGENT;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";50;"Koszulka polo damska";SH21600;DAMEN-POLO-SHIRT;Reis;vector
+;PRZ/2026/0008;"Politechnika Rzeszowska";"Politechnika Rzeszowska";51;"Przemysłowy Lekki Hełm ochronny";"HC24HY/SP - FB3 CLA HY, 2021867";"3M™ First Base™ 3 Lekki hełm ochronny, Classic, żółty o podwyższonej widzialnośc";3M;vector
