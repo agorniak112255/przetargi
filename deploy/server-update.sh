@@ -102,7 +102,11 @@ if [[ ! -d vendor ]]; then
 fi
 
 echo "==> storage:link"
-"$PHP_BIN" artisan storage:link || true
+if [[ -L "$APP_ROOT/backend/public/storage" ]]; then
+  echo "    już istnieje"
+else
+  "$PHP_BIN" artisan storage:link || true
+fi
 
 echo "==> migrate"
 "$PHP_BIN" artisan migrate --force
