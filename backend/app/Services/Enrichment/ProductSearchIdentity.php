@@ -26,6 +26,7 @@ final class ProductSearchIdentity
         'gloves' => ['rekawic', 'rukavic', 'glove', 'glv', 'handschuh', 'gant'],
         'coverall' => ['kombinezon', 'kombineza', 'coverall', 'overall', 'cvrl', 'protective suit', 'protection suit'],
         'jacket' => ['kurtk', 'kangurk', 'jacket', 'jacke', 'plaszcz', 'bunda', 'parka'],
+        'cape' => ['peleryn', 'poncho', 'poncz'],
         'trousers' => ['spodn', 'trouser', 'pant', 'ogrodniczk', 'dungaree', 'bib brace', 'kalhot'],
         'cap' => ['czapk', 'czepek', 'czepk'],
         'sweatshirt' => ['bluza', 'sweatshirt'],
@@ -3085,16 +3086,35 @@ final class ProductSearchIdentity
     }
 
     /**
-     * Sklep skleja krótki model z id karty: 902 → …-bemoregreen-9022002.
+     * Sklep skleja krótki model z id karty (902 → …-9022002) albo dopiska płeć (905 → 905m).
      */
     public function urlHasGluedNumericModel(string $hay, Product $product): bool
     {
         $hay = mb_strtolower($hay);
+        $allowGender = $this->nameAllowsGenderModelSuffix($product);
         foreach ($this->compactProductCodes($product) as $code) {
             if (preg_match('/^\d{3,4}$/u', $code) !== 1) {
                 continue;
             }
-            if (preg_match('/(?<![0-9a-z])'.preg_quote($code, '/').'[0-9]{3,}(?![0-9a-z])/u', $hay) === 1) {
+            $quoted = preg_quote($code, '/');
+            if (preg_match('/(?<![0-9a-z])'.$quoted.'[0-9]{3,}(?![0-9a-z])/u', $hay) === 1) {
+                return true;
+            }
+            if ($allowGender
+                && preg_match('/(?<![0-9a-z])'.$quoted.'[md](?![0-9a-z])/u', $hay) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Peleryna / kurtka 905m, 905d — nie 1000g ani L9020300. */
+    private function nameAllowsGenderModelSuffix(Product $product): bool
+    {
+        $name = $this->normalizeTypeText((string) $product->name);
+        foreach (['cape', 'jacket', 'trousers', 'vest', 'coverall', 'sweatshirt', 'clothing', 'apron'] as $key) {
+            if ($this->textHasTypeStem($name, self::TYPE_STEMS[$key])) {
                 return true;
             }
         }
@@ -3357,6 +3377,7 @@ final class ProductSearchIdentity
             'gloves' => 'rękawice',
             'coverall' => 'kombinezon',
             'jacket' => 'kurtka',
+            'cape' => 'peleryna',
             'trousers' => 'spodnie lub ogrodniczki',
             'cap' => 'czapka / nakrycie głowy z daszkiem',
             'sweatshirt' => 'bluza',

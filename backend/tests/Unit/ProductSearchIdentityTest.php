@@ -218,6 +218,38 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_gender_letter_suffix_confirms_short_numeric_cape(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '905',
+            'name' => 'PELERYNA MĘSKA/DAMSKA',
+            'manufacturer' => 'AJ GROUP',
+            'category' => 'odziez',
+        ]);
+        $url = 'https://dodatkimasarskiezwm.pl/111233-peleryna-meska-wodoochronna-pros-model-905m-pl';
+
+        $this->assertSame('peleryna', $id->requiredArticleTypeLabel($product));
+        $this->assertContains('peleryn', $id->catalogTypeTokenPrefixes($product));
+        $this->assertTrue($id->hayHasRequiredTypeFromName($url, $product));
+        $this->assertTrue($id->urlHasGluedNumericModel($url, $product));
+        $this->assertTrue($id->isConfirmedProductCard($url, '', 'Peleryna męska wodoochronna PROS', $product));
+        $this->assertFalse($id->urlHasGluedNumericModel(
+            'https://shop.pl/p/Pasek-Lahti-Pro-L9050300',
+            $product
+        ));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://shop.pl/p/Pasek-Lahti-Pro-L9050300',
+            'Pasek Lahti Pro L9050300',
+            'Pasek Lahti Pro L9050300',
+            $product
+        ));
+        $this->assertFalse($id->hayHasRequiredTypeFromName(
+            'https://behapownia.pl/kurtka-wodoochronna-pros-model-905',
+            $product
+        ));
+    }
+
     public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void
     {
         $id = new ProductSearchIdentity;

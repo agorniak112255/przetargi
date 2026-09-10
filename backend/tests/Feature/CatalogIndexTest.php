@@ -1040,6 +1040,54 @@ final class CatalogIndexTest extends TestCase
         );
     }
 
+    public function test_gender_letter_suffix_finds_short_numeric_cape(): void
+    {
+        $card = 'https://dodatkimasarskiezwm.pl/111233-peleryna-meska-wodoochronna-pros-model-905m-pl';
+        $this->seedPage($card);
+        $this->seedPage('https://icd.pl/znak-bc905-gasnica.html');
+        $this->seedPage('https://behapownia.pl/kurtka-wodoochronna-pros-model-905');
+        $this->seedPage('https://centrumelektronarzedzi.pl/pl/p/Pasek-do-spodni-Lahti-Pro-L9050300');
+
+        $product = new Product([
+            'sku' => '905',
+            'name' => 'PELERYNA MĘSKA/DAMSKA',
+            'manufacturer' => 'AJ GROUP',
+            'category' => 'odziez',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains($card, $urls);
+        $this->assertNotContains('https://icd.pl/znak-bc905-gasnica.html', $urls);
+        $this->assertNotContains('https://behapownia.pl/kurtka-wodoochronna-pros-model-905', $urls);
+        $this->assertNotContains(
+            'https://centrumelektronarzedzi.pl/pl/p/Pasek-do-spodni-Lahti-Pro-L9050300',
+            $urls
+        );
+    }
+
+    public function test_gender_letter_suffix_index_is_used_instead_of_web(): void
+    {
+        $card = 'https://dodatkimasarskiezwm.pl/111233-peleryna-meska-wodoochronna-pros-model-905m-pl';
+        $this->seedPage($card);
+        $product = Product::query()->create([
+            'sku' => '905',
+            'name' => 'PELERYNA MĘSKA/DAMSKA',
+            'manufacturer' => 'AJ GROUP',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        Http::fake();
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame('catalog_index', $pack['provider']);
+        $this->assertSame($card, $pack['results'][0]['url'] ?? null);
+        Http::assertNothingSent();
+    }
+
     public function test_glued_shop_id_index_is_used_instead_of_web(): void
     {
         $card = 'https://behapownia.pl/spodnie-wodoochronne-do-pasa-bemoregreen-9022002';
