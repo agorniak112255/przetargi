@@ -70,6 +70,10 @@ final class ShopCatalogUrl
         if (preg_match('#/\d{2,}-[a-z0-9-]+\.html$#', $path) === 1) {
             return true;
         }
+        // Presta bez .html: /111237-kalosz-damskimeski-pl — kategoria ma zwykle 1–4 cyfry
+        if (preg_match('#/\d{5,}-[a-z0-9-]+$#', $path) === 1) {
+            return true;
+        }
 
         return str_contains($path, '/catalog/product/view');
     }
@@ -223,7 +227,7 @@ final class ShopCatalogUrl
         return false;
     }
 
-    /** Presta/Shoper: /12-buty-robocze to kategoria; karta ma .html albo id_product. */
+    /** Presta/Shoper: /12-buty-robocze to kategoria; karta ma .html albo id ≥ 5 cyfr. */
     private function isNumericPrefixCategory(string $url): bool
     {
         $path = rtrim($this->path($url), '/');
@@ -232,7 +236,7 @@ final class ShopCatalogUrl
         }
         $slug = $this->leafSlug($url);
 
-        return preg_match('/^\d+-[a-z0-9-]+$/', $slug) === 1;
+        return preg_match('/^\d{1,4}-[a-z0-9-]+$/', $slug) === 1;
     }
 
     private function hasCategoryPrefix(string $url): bool

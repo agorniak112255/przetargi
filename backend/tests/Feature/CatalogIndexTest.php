@@ -488,6 +488,39 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://www.bhp-gabi.pl/bluza-ochronna-mmb-reis']);
     }
 
+    public function test_ignores_llms_txt_listed_as_sitemap(): void
+    {
+        $this->fakeHttp([
+            'https://dodatkimasarskiezwm.pl/robots.txt' => Http::response(
+                "Sitemap: /llms.txt\nSitemap: https://dodatkimasarskiezwm.pl/sitemaps/sitemap_ab.xml\n",
+                200
+            ),
+            'https://dodatkimasarskiezwm.pl/sitemaps/sitemap_ab.xml' => Http::response(
+                '<?xml version="1.0"?><sitemapindex>'
+                .'<sitemap><loc>https://dodatkimasarskiezwm.pl/sitemaps/sitemap_ab_1.xml</loc></sitemap>'
+                .'</sitemapindex>',
+                200
+            ),
+            'https://dodatkimasarskiezwm.pl/sitemaps/sitemap_ab_1.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://dodatkimasarskiezwm.pl/111237-kalosz-damskimeski-pl</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('dodatkimasarskiezwm.pl');
+
+        $this->assertContains(
+            'https://dodatkimasarskiezwm.pl/sitemaps/sitemap_ab_1.xml',
+            $result['sitemaps']
+        );
+        $this->assertNotContains('https://dodatkimasarskiezwm.pl/llms.txt', $result['sitemaps']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://dodatkimasarskiezwm.pl/111237-kalosz-damskimeski-pl',
+        ]);
+    }
+
     public function test_resolves_relative_sitemap_path_from_robots(): void
     {
         $this->fakeHttp([
@@ -1178,6 +1211,7 @@ final class CatalogIndexTest extends TestCase
                 '<?xml version="1.0"?><urlset>'
                 .'<url><loc>https://shop.pl/buty-hoka-speedgoat-7-zielone</loc></url>'
                 .'<url><loc>https://shop.pl/123-buty-robocze-s3.html</loc></url>'
+                .'<url><loc>https://shop.pl/111237-kalosz-damskimeski-pl</loc></url>'
                 .'<url><loc>https://shop.pl/produkt/kurtka-softshell-damska</loc></url>'
                 .'<url><loc>https://shop.pl/namioty-kemping</loc></url>'
                 .'<url><loc>https://shop.pl/namioty-kemping:dla_1_osoby</loc></url>'
@@ -1192,12 +1226,13 @@ final class CatalogIndexTest extends TestCase
 
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://shop.pl/buty-hoka-speedgoat-7-zielone']);
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://shop.pl/123-buty-robocze-s3.html']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://shop.pl/111237-kalosz-damskimeski-pl']);
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://shop.pl/produkt/kurtka-softshell-damska']);
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://shop.pl/namioty-kemping']);
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://shop.pl/namioty-kemping:dla_1_osoby']);
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://shop.pl/on-running']);
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://shop.pl/kategoria/buty-robocze']);
-        $this->assertSame(3, $result['saved']);
+        $this->assertSame(4, $result['saved']);
     }
 
     public function test_crawls_pretty_cards_but_not_shop_listings(): void

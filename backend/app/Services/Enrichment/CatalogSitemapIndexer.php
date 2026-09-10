@@ -29,6 +29,9 @@ final class CatalogSitemapIndexer
     /** Limit pobrania przez curl.exe, gdy Guzzle dostaje 403 od WAF. */
     private const CURL_MAX_BYTES = 20971520;
 
+    /** Jedna mapa produktów bywa kilka MB — 45 s ucinało ją w połowie (~1100 z 3000+). */
+    private const SITEMAP_FILE_TIMEOUT = 180;
+
     /** Zgadywane ścieżki nie mogą zjeść całego --seconds na jednym 404. */
     private const CANDIDATE_TIMEOUT = 8;
 
@@ -222,7 +225,9 @@ final class CatalogSitemapIndexer
 
             // liczymy tylko mapy, które faktycznie coś dały — inaczej raport
             // pokazuje soft-404 sklepu jako znalezioną sitemapę
-            $timeout = $guessing ? self::CANDIDATE_TIMEOUT : 45;
+            $timeout = $guessing
+                ? self::CANDIDATE_TIMEOUT
+                : $this->sitemapFileTimeout($deadline);
             if (! $guessing) {
                 $this->note($host, 'Czytam '.$this->shortUrl($sitemap));
             }
@@ -370,6 +375,13 @@ final class CatalogSitemapIndexer
         return array_values(array_unique($out));
     }
 
+    private function sitemapFileTimeout(float $deadline): int
+    {
+        $left = $deadline > 0.0 ? (int) ceil($deadline - microtime(true)) : self::SITEMAP_FILE_TIMEOUT;
+
+        return max(45, min(self::SITEMAP_FILE_TIMEOUT, $left));
+    }
+
     /**
      * Sitemapy sklepów mają nawet setki MB — czytamy je kawałkami, żeby nie zjeść pamięci.
      *
@@ -434,7 +446,7 @@ final class CatalogSitemapIndexer
             } catch (Throwable $e) {
                 Log::info('Sitemap read stopped', ['url' => $url, 'error' => $e->getMessage()]);
 
-                return true;
+                return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
             }
             if ($chunk === '') {
                 break;
@@ -559,9 +571,14 @@ final class CatalogSitemapIndexer
                     ? 'https://'.$host.$url
                     : 'https://'.$host.'/'.$url;
             }
-            if (preg_match('#^https?://#i', $url) === 1) {
-                $out[] = $url;
+            if (preg_match('#^https?://#i', $url) !== 1) {
+                continue;
             }
+            $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+            if (str_ends_with($path, '.txt') && ! str_contains($path, 'sitemap')) {
+                continue;
+            }
+            $out[] = $url;
         }
     }
 
