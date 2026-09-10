@@ -813,7 +813,7 @@ final class ProductSearchIdentity
 
         if ($phase === 'manufacturer' && ! $this->queriesContainSite($queries)) {
             $hosts = $this->catalogSearchHosts($product);
-            $phrase = $this->siteSearchPhrase($product, $shopPhrase, $internalSku, $warehouseSku);
+            $phrase = $this->catalogSitePhrase($product);
             if ($phrase !== '' && $hosts !== []) {
                 $extra = $this->sharedShortSkuQueryExtra($product);
                 $sitePhrase = trim($phrase.($extra !== '' ? ' '.$extra : ''));
@@ -2511,6 +2511,17 @@ final class ProductSearchIdentity
         }
 
         return $this->officialCatalogHosts($product);
+    }
+
+    /** Fraza do site: — numer modelu (911), nie kawałek nazwy sprzed myślnika. */
+    public function catalogSitePhrase(Product $product): string
+    {
+        return $this->siteSearchPhrase(
+            $product,
+            $this->firstStrongShopPhrase($product),
+            $this->looksLikeInternalSku($product),
+            $this->looksLikeWarehouseArticleSku($product)
+        );
     }
 
     /**

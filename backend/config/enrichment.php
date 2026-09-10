@@ -69,9 +69,9 @@ return [
         'portwest' => ['portwest.com', 'www.portwest.com'],
         'coverguard' => ['coverguard.com', 'www.coverguard.com'],
         'singer' => ['singer.fr', 'www.singer.fr'],
-        'pros' => ['pros.pl', 'www.pros.pl', 'bemoregreen.eu', 'www.bemoregreen.eu'],
-        'aj-group' => ['pros.pl', 'www.pros.pl', 'bemoregreen.eu', 'www.bemoregreen.eu'],
-        'ajgroup' => ['pros.pl', 'www.pros.pl', 'bemoregreen.eu', 'www.bemoregreen.eu'],
+        'pros' => ['bemoregreen.eu', 'www.bemoregreen.eu', 'pros.pl', 'www.pros.pl'],
+        'aj-group' => ['bemoregreen.eu', 'www.bemoregreen.eu', 'pros.pl', 'www.pros.pl'],
+        'ajgroup' => ['bemoregreen.eu', 'www.bemoregreen.eu', 'pros.pl', 'www.pros.pl'],
         'urgent' => [
             'urgent.pl',
             'www.urgent.pl',
@@ -198,9 +198,9 @@ return [
     | Gdy brak wpisu, bierzemy manufacturer_domains.
     */
     'catalog_search_hosts' => [
-        'pros' => ['pros.pl', 'bemoregreen.eu', 'empik.com'],
-        'aj-group' => ['pros.pl', 'bemoregreen.eu', 'empik.com'],
-        'ajgroup' => ['pros.pl', 'bemoregreen.eu', 'empik.com'],
+        'pros' => ['bemoregreen.eu', 'pros.pl', 'empik.com'],
+        'aj-group' => ['bemoregreen.eu', 'pros.pl', 'empik.com'],
+        'ajgroup' => ['bemoregreen.eu', 'pros.pl', 'empik.com'],
         '3m' => [
             '3m.com',
             '3mpolska.pl',
