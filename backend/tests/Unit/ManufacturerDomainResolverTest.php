@@ -363,8 +363,14 @@ final class ManufacturerDomainResolverTest extends TestCase
 
         $domains = $resolver->domainsFor($product);
         $this->assertContains('pros.pl', $domains);
+        $this->assertContains('sportpros.pl', $domains);
         $this->assertTrue($resolver->isManufacturerUrl(
             'https://pros.pl/pl/pros-extreme/249-kangurka-morska-model-3011.html',
+            $product,
+            $domains
+        ));
+        $this->assertTrue($resolver->isManufacturerUrl(
+            'https://sportpros.pl/pl/dzieci/dziewczynki/kurtki/36-kurtka-wodoodporna-sportpros-dla-dziewczat-model-760.html',
             $product,
             $domains
         ));

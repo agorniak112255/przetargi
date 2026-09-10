@@ -322,6 +322,23 @@ final class ProductSearchIdentityTest extends TestCase
             'AJ Group PROS',
             $electric
         ));
+
+        $kidsJacket = new Product([
+            'sku' => '760',
+            'name' => 'Kurtka wodoodporna dziecięca',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $kidsCard = 'https://sportpros.pl/pl/dzieci/dziewczynki/kurtki/36-kurtka-wodoodporna-sportpros-dla-dziewczat-model-760.html';
+        $kidsQueries = $id->searchQueries($kidsJacket, 'manufacturer');
+        $this->assertContains('sportpros.pl', $id->officialCatalogHosts($kidsJacket));
+        $this->assertContains('site:sportpros.pl 760', $kidsQueries);
+        $this->assertTrue($id->urlOrTitleCarriesCodeFamily($kidsCard, '', $kidsJacket));
+        $this->assertTrue($id->isConfirmedProductCard(
+            $kidsCard,
+            'Kurtka wodoodporna SportPROS dla dziewcząt model 760',
+            'AJ Group SportPROS',
+            $kidsJacket
+        ));
     }
 
     public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void

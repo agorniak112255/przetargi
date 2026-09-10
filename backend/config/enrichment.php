@@ -69,9 +69,9 @@ return [
         'portwest' => ['portwest.com', 'www.portwest.com'],
         'coverguard' => ['coverguard.com', 'www.coverguard.com'],
         'singer' => ['singer.fr', 'www.singer.fr'],
-        'pros' => ['bemoregreen.eu', 'www.bemoregreen.eu', 'pros.pl', 'www.pros.pl'],
-        'aj-group' => ['bemoregreen.eu', 'www.bemoregreen.eu', 'pros.pl', 'www.pros.pl'],
-        'ajgroup' => ['bemoregreen.eu', 'www.bemoregreen.eu', 'pros.pl', 'www.pros.pl'],
+        'pros' => ['bemoregreen.eu', 'www.bemoregreen.eu', 'sportpros.pl', 'www.sportpros.pl', 'pros.pl', 'www.pros.pl'],
+        'aj-group' => ['bemoregreen.eu', 'www.bemoregreen.eu', 'sportpros.pl', 'www.sportpros.pl', 'pros.pl', 'www.pros.pl'],
+        'ajgroup' => ['bemoregreen.eu', 'www.bemoregreen.eu', 'sportpros.pl', 'www.sportpros.pl', 'pros.pl', 'www.pros.pl'],
         'urgent' => [
             'urgent.pl',
             'www.urgent.pl',
@@ -198,9 +198,9 @@ return [
     | Gdy brak wpisu, bierzemy manufacturer_domains.
     */
     'catalog_search_hosts' => [
-        'pros' => ['bemoregreen.eu', 'pros.pl', 'empik.com'],
-        'aj-group' => ['bemoregreen.eu', 'pros.pl', 'empik.com'],
-        'ajgroup' => ['bemoregreen.eu', 'pros.pl', 'empik.com'],
+        'pros' => ['bemoregreen.eu', 'sportpros.pl', 'pros.pl', 'empik.com'],
+        'aj-group' => ['bemoregreen.eu', 'sportpros.pl', 'pros.pl', 'empik.com'],
+        'ajgroup' => ['bemoregreen.eu', 'sportpros.pl', 'pros.pl', 'empik.com'],
         '3m' => [
             '3m.com',
             '3mpolska.pl',
@@ -314,6 +314,8 @@ return [
         'roboczystyl.pl',
         'pros.pl',
         'www.pros.pl',
+        'sportpros.pl',
+        'www.sportpros.pl',
         'optimumbhp.pl',
         'www.optimumbhp.pl',
         // znalezione przez „catalog:index --discover” dla marek bez pokrycia
@@ -524,6 +526,8 @@ return [
         'roboczystyl.pl',
         'pros.pl',
         'www.pros.pl',
+        'sportpros.pl',
+        'www.sportpros.pl',
         'bemoregreen.eu',
         'www.bemoregreen.eu',
         'optimumbhp.pl',
