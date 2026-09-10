@@ -1,4 +1,5 @@
 # Dump bazy na serwerze + import do lokalnego XAMPP.
+# Pomija catalog_pages i catalog_page_tokens — lokalny indeks zostaje.
 # Polaczenie zdalne: deploy/.env.db-remote (nie commituj).
 # Polaczenie lokalne: backend/.env (musi byc 127.0.0.1 / localhost).
 param(
@@ -74,10 +75,11 @@ if (-not $OutFile) {
     $OutFile = Join-Path $OutDir "przetargi_remote_$stamp.sql"
 }
 
-Write-Host "==> 1/3 dump serwer $remoteHost / $remoteDb" -ForegroundColor Cyan
+$skipTables = @("catalog_pages", "catalog_page_tokens")
+Write-Host "==> 1/3 dump serwer $remoteHost / $remoteDb (bez $($skipTables -join ', '))" -ForegroundColor Cyan
 $env:MYSQL_PWD = $remotePass
 try {
-    & $mysqldump @(
+    $dumpArgs = @(
         "--host=$remoteHost",
         "--port=$remotePort",
         "--user=$remoteUser",
@@ -85,9 +87,13 @@ try {
         "--routines",
         "--triggers",
         "--default-character-set=utf8mb4",
-        "--result-file=$OutFile",
-        $remoteDb
+        "--result-file=$OutFile"
     )
+    foreach ($table in $skipTables) {
+        $dumpArgs += "--ignore-table=$remoteDb.$table"
+    }
+    $dumpArgs += $remoteDb
+    & $mysqldump @dumpArgs
     if ($LASTEXITCODE -ne 0) {
         throw "mysqldump z serwera zakonczyl sie kodem $LASTEXITCODE"
     }
@@ -131,5 +137,5 @@ try {
     Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue
 }
 
-Write-Host "OK - baza z serwera wgrana lokalnie ($localDb)." -ForegroundColor Green
+Write-Host "OK - baza z serwera wgrana lokalnie ($localDb). Katalog (catalog_pages / catalog_page_tokens) bez zmian." -ForegroundColor Green
 Write-Host $OutFile
