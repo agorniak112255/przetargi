@@ -54,7 +54,6 @@ export function Login() {
         >
           {busy ? 'Logowanie…' : 'Zaloguj'}
         </button>
-        <p className="mt-3 text-xs text-slate-400">Demo: arek@supon.local / password</p>
       </form>
     </div>
   )
