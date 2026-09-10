@@ -31,13 +31,12 @@ final class CatalogIndexSearch
      */
     public function findFor(Product $product): array
     {
-        $hits = $this->byCode($product);
+        $hits = $this->mergeHits($this->byCode($product), $this->byBrandAndName($product));
         if ($hits !== []) {
             return $hits;
         }
-        $hits = $this->byBrandAndName($product);
 
-        return $hits !== [] ? $hits : $this->byDistinctiveName($product);
+        return $this->byDistinctiveName($product);
     }
 
     /**
@@ -410,6 +409,12 @@ final class CatalogIndexSearch
             // w adresach stron „wkładki” występuje jako „wkladki”
             $out[] = mb_strtolower(Str::ascii($word));
         }
+        foreach ($this->identity->catalogTypeTokenPrefixes($product) as $prefix) {
+            $prefix = mb_strtolower(Str::ascii($prefix));
+            if ($prefix !== '' && ! str_contains($prefix, ' ')) {
+                $out[] = $prefix;
+            }
+        }
         foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower((string) $product->name)) ?: [] as $word) {
             // liczby z nazwy („SECAIR 2000”) są mocnym sygnałem
             if (preg_match('/^\d{3,}$/u', $word) === 1) {
@@ -418,5 +423,29 @@ final class CatalogIndexSearch
         }
 
         return array_values(array_unique(array_slice(array_filter($out), 0, 6)));
+    }
+
+    /**
+     * @param  list<array{url: string, title: string, snippet: string}>  $first
+     * @param  list<array{url: string, title: string, snippet: string}>  $second
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function mergeHits(array $first, array $second): array
+    {
+        $seen = [];
+        $out = [];
+        foreach (array_merge($first, $second) as $row) {
+            $url = mb_strtolower((string) ($row['url'] ?? ''));
+            if ($url === '' || isset($seen[$url])) {
+                continue;
+            }
+            $seen[$url] = true;
+            $out[] = $row;
+            if (count($out) >= self::MAX_HITS) {
+                break;
+            }
+        }
+
+        return $out;
     }
 }

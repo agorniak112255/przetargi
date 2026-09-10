@@ -2065,13 +2065,58 @@ final class ProductSearchIdentity
      */
     public function hayHasNamePhrase(string $hay, Product $product): bool
     {
-        $phrase = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii((string) $product->name))) ?? '';
-        if (mb_strlen($phrase) < 6) {
+        $hayCompact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii($hay))) ?? '';
+        if ($hayCompact === '') {
             return false;
         }
-        $hayCompact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii($hay))) ?? '';
+        foreach ($this->compactNamePhraseVariants($product) as $phrase) {
+            if (mb_strlen($phrase) >= 6 && str_contains($hayCompact, $phrase)) {
+                return true;
+            }
+        }
 
-        return $hayCompact !== '' && str_contains($hayCompact, $phrase);
+        return false;
+    }
+
+    /**
+     * Ta sama nazwa z synonimem typu („dywanik” ↔ „chodnik”).
+     *
+     * @return list<string>
+     */
+    private function compactNamePhraseVariants(Product $product): array
+    {
+        $base = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii((string) $product->name))) ?? '';
+        if ($base === '') {
+            return [];
+        }
+        $out = [$base];
+        foreach ($this->typeStemsInText((string) $product->name) as $stems) {
+            $present = [];
+            foreach ($stems as $stem) {
+                $stem = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii($stem))) ?? '';
+                if ($stem !== '' && str_contains($base, $stem)) {
+                    $present[] = $stem;
+                }
+            }
+            if ($present === []) {
+                continue;
+            }
+            usort($present, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
+            foreach ($stems as $alt) {
+                $alt = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii($alt))) ?? '';
+                if ($alt === '') {
+                    continue;
+                }
+                foreach ($present as $from) {
+                    if ($from === $alt) {
+                        continue;
+                    }
+                    $out[] = str_replace($from, $alt, $base);
+                }
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     /** Długa, unikalna nazwa w slugu (910 bez SKU w adresie) — nie „kurtka”. */

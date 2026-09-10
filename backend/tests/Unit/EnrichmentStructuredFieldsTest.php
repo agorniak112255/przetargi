@@ -116,6 +116,22 @@ TXT;
         ]));
     }
 
+    public function test_full_name_confirms_description_without_sku(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'sku' => 'T5920000',
+            'name' => 'Dywanik elektroizolacyjny 20 KV',
+            'manufacturer' => 'SECURA',
+        ]);
+
+        $this->assertTrue($this->invoke($service, 'descriptionMentionsProduct', [
+            'Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 2 m) Secura. '
+            .'Chodniki elektroizolacyjne w kl. 2 są przeznaczone do wykładania podłóg.',
+            $product,
+        ]));
+    }
+
     public function test_rejects_foreign_card_that_only_shares_bhp_wording(): void
     {
         $service = app(ProductEnrichmentService::class);

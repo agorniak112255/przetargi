@@ -853,6 +853,36 @@ final class CatalogIndexTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_keeps_name_only_mat_card_when_another_hit_has_sku(): void
+    {
+        $coded = 'https://sklep.mistralbhp.pl/pl/p/Dywanik-elektroizolacyjny-20KV-0,75-m-x-0,75-m-Secura-T5920000/475';
+        $named = 'https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1,1-x-2-m-Secura/48601';
+        $this->seedPage($coded);
+        $this->seedPage($named);
+
+        $product = Product::query()->create([
+            'sku' => 'T5920000',
+            'name' => 'Dywanik elektroizolacyjny 20 KV',
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+        $this->assertContains($coded, $urls);
+        $this->assertContains($named, $urls);
+
+        Http::fake();
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+        $this->assertSame('catalog_index', $pack['provider']);
+        $packUrls = array_column($pack['results'], 'url');
+        $this->assertContains($coded, $packUrls);
+        $this->assertContains($named, $packUrls);
+        Http::assertNothingSent();
+    }
+
     public function test_finds_codeless_product_by_brand_and_name(): void
     {
         $this->seedPage('https://bhp-sklep.com.pl/wkladki-alutermiczne-urgent-do-butow');

@@ -2429,6 +2429,10 @@ final class ProductEnrichmentService
             && $this->identity->hayHasBrand($hay, $product)) {
             return $this->identity->hayHasRequiredTypeFromName($hay, $product);
         }
+        // sklep bez SKU, ale z pełną nazwą („Dywanik elektroizolacyjny 20 KV”)
+        if ($this->identity->hayHasDistinctiveNamePhrase($description, $product)) {
+            return $this->identity->hayHasRequiredTypeFromName($hay, $product);
+        }
 
         $tokens = $this->discriminativeNameTokens($product);
         $score = 0;

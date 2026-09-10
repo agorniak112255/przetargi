@@ -250,6 +250,27 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_full_name_confirms_mat_card_without_sku(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'T5920000',
+            'name' => 'Dywanik elektroizolacyjny 20 KV',
+            'manufacturer' => 'SECURA',
+        ]);
+        $url = 'https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1,1-x-2-m-Secura/48601';
+        $title = 'Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 2 m) Secura';
+
+        $this->assertTrue($id->hayHasDistinctiveNamePhrase($url.' '.$title, $product));
+        $this->assertTrue($id->hayHasRequiredTypeFromName($url.' '.$title, $product));
+        $this->assertFalse($id->pageClaimsAnotherCode($url, $title, $product));
+        $this->assertTrue($id->isConfirmedProductCard($url, $title, '', $product));
+        $this->assertFalse($id->hayHasDistinctiveNamePhrase(
+            'https://shop.pl/pl/p/Chodnik-elektroizolacyjny-30-KV-Secura/1',
+            $product
+        ));
+    }
+
     public function test_distinctive_name_confirms_cape_without_sku_in_url(): void
     {
         $id = new ProductSearchIdentity;
