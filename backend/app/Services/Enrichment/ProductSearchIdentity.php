@@ -2678,11 +2678,14 @@ final class ProductSearchIdentity
     private function shopPhraseLosesToCatalogSku(string $phrase, Product $product): bool
     {
         $sku = trim((string) $product->sku);
-        if (preg_match('/^\d{2}-\d{2,4}(?:-[A-Z0-9]{1,8})?$/iu', $sku) !== 1) {
-            return false;
+        if (preg_match('/^\d{2}-\d{2,4}(?:-[A-Z0-9]{1,8})?$/iu', $sku) === 1) {
+            return preg_match('/\d/u', $phrase) !== 1;
+        }
+        if ($this->skuIsBareNumericModel($product)) {
+            return preg_match('/\d/u', $phrase) !== 1;
         }
 
-        return preg_match('/\d/u', $phrase) !== 1;
+        return false;
     }
 
     public function isStrongShopPhrase(string $phrase): bool
@@ -2839,6 +2842,10 @@ final class ProductSearchIdentity
             if (preg_match('/^\d{2,4}$/u', $base) === 1) {
                 return $this->quoteSearchOperators($base);
             }
+        }
+        // 911 / 910 — nie „PELERYNA DLA NIEPEŁNOSPRAWNYCH” z myślnika w nazwie
+        if ($this->skuIsBareNumericModel($product) && $sku !== '') {
+            return $this->quoteSearchOperators($sku);
         }
         if ($shopPhrase !== '' && (! $stripped || ! $this->phraseContainsSizeTail($shopPhrase, $sku, $coded))) {
             $shopCompact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($shopPhrase)) ?? '';

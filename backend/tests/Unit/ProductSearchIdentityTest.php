@@ -297,6 +297,29 @@ final class ProductSearchIdentityTest extends TestCase
             'AJ Group peleryna na wózek aktywny',
             $product
         ));
+
+        $electric = new Product([
+            'sku' => '911',
+            'name' => 'PELERYNA DLA NIEPEŁNOSPRAWNYCH - WÓZEK ELEKRTYCZNY',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $electricCard = 'https://bemoregreen.eu/pl/peleryna/16-peleryna-na-wozek-elektryczny-model-911.html';
+        $this->assertContains('site:bemoregreen.eu 911', $id->searchQueries($electric, 'manufacturer'));
+        $this->assertContains('site:pros.pl 911', $id->searchQueries($electric, 'manufacturer'));
+        foreach ($id->searchQueries($electric, 'manufacturer') as $query) {
+            if (! str_contains($query, 'site:')) {
+                continue;
+            }
+            $this->assertStringContainsString('911', $query);
+            $this->assertStringNotContainsString('PELERYNA DLA NIEPEŁNOSPRAWNYCH', $query);
+        }
+        $this->assertTrue($id->urlOrTitleCarriesCodeFamily($electricCard, '', $electric));
+        $this->assertTrue($id->isConfirmedProductCard(
+            $electricCard,
+            'PELERYNA NA WÓZEK ELEKTRYCZNY MODEL 911',
+            'AJ Group PROS',
+            $electric
+        ));
     }
 
     public function test_short_numeric_sku_rejects_other_model_on_same_shop(): void
