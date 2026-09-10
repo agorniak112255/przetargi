@@ -34,6 +34,7 @@ const tiles: Tile[] = [
     to: '/admin/enrichment',
     label: 'Logi AI',
     description: 'Zakończone pobierania opisów',
+    permission: 'admin.enrichment.view',
   },
   {
     to: '/admin/smtp',
@@ -45,26 +46,31 @@ const tiles: Tile[] = [
     to: '/admin/presta',
     label: 'Sklep Presta',
     description: 'Połączenie i wyszukiwanie w sklepie',
+    permission: 'admin.presta.manage',
   },
   {
     to: '/admin/strony-wyszukiwarka',
     label: 'Strony wyszukiwarka',
     description: 'Domeny indeksu i liczba linków',
+    permission: 'admin.search_sites.manage',
   },
   {
     to: '/admin/strojenie-ai',
     label: 'Strojenie AI',
     description: 'Limit wyników wyszukiwania w katalogu',
+    permission: 'admin.ai_tuning.manage',
   },
   {
     to: '/admin/zargon',
     label: 'Żargon SIWZ',
     description: 'Słownik potocznych nazw z przetargów',
+    permission: 'admin.catalog_slang.manage',
   },
   {
     to: '/admin/szablony-opisow',
     label: 'Szablony opisów',
     description: 'Instrukcje AI wg rodziny BHP',
+    permission: 'admin.description_templates.manage',
   },
 ]
 

@@ -131,7 +131,14 @@ export default function App() {
                 </PermissionGuard>
               }
             />
-            <Route path="enrichment" element={<AdminEnrichmentLogs />} />
+            <Route
+              path="enrichment"
+              element={
+                <PermissionGuard permission="admin.enrichment.view">
+                  <AdminEnrichmentLogs />
+                </PermissionGuard>
+              }
+            />
             <Route
               path="smtp"
               element={
@@ -140,11 +147,46 @@ export default function App() {
                 </PermissionGuard>
               }
             />
-            <Route path="presta" element={<AdminPresta />} />
-            <Route path="strony-wyszukiwarka" element={<AdminSearchSites />} />
-            <Route path="strojenie-ai" element={<AdminAiTuning />} />
-            <Route path="zargon" element={<AdminCatalogSlang />} />
-            <Route path="szablony-opisow" element={<AdminDescriptionTemplates />} />
+            <Route
+              path="presta"
+              element={
+                <PermissionGuard permission="admin.presta.manage">
+                  <AdminPresta />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="strony-wyszukiwarka"
+              element={
+                <PermissionGuard permission="admin.search_sites.manage">
+                  <AdminSearchSites />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="strojenie-ai"
+              element={
+                <PermissionGuard permission="admin.ai_tuning.manage">
+                  <AdminAiTuning />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="zargon"
+              element={
+                <PermissionGuard permission="admin.catalog_slang.manage">
+                  <AdminCatalogSlang />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="szablony-opisow"
+              element={
+                <PermissionGuard permission="admin.description_templates.manage">
+                  <AdminDescriptionTemplates />
+                </PermissionGuard>
+              }
+            />
           </Route>
           <Route path="help" element={<Help />} />
           <Route path="*" element={<Navigate to="/" replace />} />

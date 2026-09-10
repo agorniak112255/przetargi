@@ -42,6 +42,12 @@ final class PermissionCatalog
         'admin.roles.manage',
         'admin.activity.view',
         'admin.mail.manage',
+        'admin.enrichment.view',
+        'admin.presta.manage',
+        'admin.search_sites.manage',
+        'admin.ai_tuning.manage',
+        'admin.catalog_slang.manage',
+        'admin.description_templates.manage',
         'presta.export',
     ];
 
@@ -187,6 +193,12 @@ final class PermissionCatalog
             ['admin.roles.manage', 'Zarządzanie rolami', 'Może zmieniać zestaw uprawnień przypisanych do ról.', 'Administracja'],
             ['admin.activity.view', 'Dziennik aktywności', 'Może przeglądać logowania i historię działań użytkowników (120 dni).', 'Administracja'],
             ['admin.mail.manage', 'Konfiguracja SMTP', 'Może zmieniać ustawienia poczty wychodzącej i wysyłać test e-mail.', 'Administracja'],
+            ['admin.enrichment.view', 'Logi AI', 'Może przeglądać zakończone pobierania opisów produktów.', 'Administracja'],
+            ['admin.presta.manage', 'Sklep Presta', 'Może konfigurować połączenie ze sklepem PrestaShop i mapować kategorie.', 'Administracja'],
+            ['admin.search_sites.manage', 'Strony wyszukiwarka', 'Może zarządzać domenami indeksu i liczbą linków wyszukiwarki.', 'Administracja'],
+            ['admin.ai_tuning.manage', 'Strojenie AI', 'Może zmieniać limit wyników wyszukiwania w katalogu i progi dopasowania.', 'Administracja'],
+            ['admin.catalog_slang.manage', 'Żargon SIWZ', 'Może edytować słownik potocznych nazw z przetargów.', 'Administracja'],
+            ['admin.description_templates.manage', 'Szablony opisów', 'Może edytować instrukcje AI wg rodziny BHP.', 'Administracja'],
             ['presta.export', 'Eksport do Presty', 'Może wysyłać produkty (opis, rozmiary, termin na zamówienie) do sklepu PrestaShop.', 'Administracja'],
         ];
 

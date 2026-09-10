@@ -191,4 +191,32 @@ final class RbacApiTest extends TestCase
 
         $this->getJson('/api/admin/users')->assertForbidden();
     }
+
+    public function test_admin_roles_list_includes_admin_setting_permissions(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->getJson('/api/admin/roles')
+            ->assertOk()
+            ->assertJsonFragment(['admin.enrichment.view'])
+            ->assertJsonFragment(['admin.presta.manage'])
+            ->assertJsonFragment(['admin.search_sites.manage'])
+            ->assertJsonFragment(['admin.ai_tuning.manage'])
+            ->assertJsonFragment(['admin.catalog_slang.manage'])
+            ->assertJsonFragment(['admin.description_templates.manage']);
+    }
+
+    public function test_admin_access_alone_cannot_open_admin_settings(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $user->givePermissionTo('admin.access');
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/admin/presta-settings')->assertForbidden();
+        $this->getJson('/api/admin/ai-tuning')->assertForbidden();
+        $this->getJson('/api/admin/catalog-slang')->assertForbidden();
+        $this->getJson('/api/admin/enrichment-description-templates')->assertForbidden();
+        $this->getJson('/api/admin/catalog-search-sites')->assertForbidden();
+    }
 }

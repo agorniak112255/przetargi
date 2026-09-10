@@ -165,7 +165,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/product-enrichment-batches/active', [ProductEnrichmentController::class, 'activeBatches'])
         ->middleware('permission:price_lists.import|products.view');
     Route::get('/product-enrichment-batches/history', [ProductEnrichmentController::class, 'historyBatches'])
-        ->middleware('permission:admin.access|price_lists.import|products.view');
+        ->middleware('permission:admin.enrichment.view|admin.access|price_lists.import|products.view');
     Route::post('/product-enrichment-batches/stop-all', [ProductEnrichmentController::class, 'stopAll'])
         ->middleware('permission:price_lists.import');
     Route::get('/product-enrichment-batches/{batch}', [ProductEnrichmentController::class, 'showBatch'])
@@ -234,38 +234,51 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/mail-settings/test', [AdminMailSettingsController::class, 'test'])
             ->middleware('permission:admin.mail.manage');
 
-        Route::get('/presta-settings', [AdminPrestaShopSettingsController::class, 'show']);
-        Route::put('/presta-settings', [AdminPrestaShopSettingsController::class, 'update']);
-        Route::post('/presta-settings/test', [AdminPrestaShopSettingsController::class, 'test']);
-        Route::get('/presta-categories', [AdminPrestaCategoryController::class, 'index']);
-        Route::post('/presta-categories/sync', [AdminPrestaCategoryController::class, 'sync']);
-        Route::post('/presta-categories/auto-map', [AdminPrestaCategoryController::class, 'autoMap']);
-        Route::post('/presta-categories/apply', [AdminPrestaCategoryController::class, 'apply']);
-        Route::post('/presta-categories/rewrite', [AdminPrestaCategoryController::class, 'rewrite']);
-        Route::put('/presta-categories/maps', [AdminPrestaCategoryController::class, 'updateMaps']);
+        Route::middleware('permission:admin.presta.manage')->group(function (): void {
+            Route::get('/presta-settings', [AdminPrestaShopSettingsController::class, 'show']);
+            Route::put('/presta-settings', [AdminPrestaShopSettingsController::class, 'update']);
+            Route::post('/presta-settings/test', [AdminPrestaShopSettingsController::class, 'test']);
+            Route::get('/presta-categories', [AdminPrestaCategoryController::class, 'index']);
+            Route::post('/presta-categories/sync', [AdminPrestaCategoryController::class, 'sync']);
+            Route::post('/presta-categories/auto-map', [AdminPrestaCategoryController::class, 'autoMap']);
+            Route::post('/presta-categories/apply', [AdminPrestaCategoryController::class, 'apply']);
+            Route::post('/presta-categories/rewrite', [AdminPrestaCategoryController::class, 'rewrite']);
+            Route::put('/presta-categories/maps', [AdminPrestaCategoryController::class, 'updateMaps']);
+        });
 
-        Route::get('/ai-tuning', [AdminAiTuningController::class, 'show']);
-        Route::put('/ai-tuning', [AdminAiTuningController::class, 'update']);
-        Route::get('/catalog-slang', [AdminCatalogSlangController::class, 'show']);
-        Route::put('/catalog-slang', [AdminCatalogSlangController::class, 'update']);
-        Route::get('/enrichment-description-templates', [AdminEnrichmentDescriptionTemplateController::class, 'index']);
-        Route::put('/enrichment-description-templates/{kategoria}', [AdminEnrichmentDescriptionTemplateController::class, 'update'])
-            ->where('kategoria', '[a-z_]+');
-        Route::post('/enrichment-description-templates/{kategoria}/restore', [AdminEnrichmentDescriptionTemplateController::class, 'restore'])
-            ->where('kategoria', '[a-z_]+');
-        Route::get('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'index']);
-        Route::post('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'store']);
-        Route::get('/catalog-search-sites/{host}/pages', [AdminCatalogSearchSiteController::class, 'pages'])
-            ->where('host', '[A-Za-z0-9._-]+');
-        Route::get('/catalog-search-sites/{host}/progress', [AdminCatalogSearchSiteController::class, 'progress'])
-            ->where('host', '[A-Za-z0-9._-]+');
-        Route::post('/catalog-search-sites/{host}/reindex', [AdminCatalogSearchSiteController::class, 'reindex'])
-            ->where('host', '[A-Za-z0-9._-]+');
-        Route::post('/catalog-search-sites/{host}/unskip', [AdminCatalogSearchSiteController::class, 'unskip'])
-            ->where('host', '[A-Za-z0-9._-]+');
-        Route::post('/catalog-search-sites/{host}/reskip', [AdminCatalogSearchSiteController::class, 'reskip'])
-            ->where('host', '[A-Za-z0-9._-]+');
-        Route::delete('/catalog-search-sites/{host}', [AdminCatalogSearchSiteController::class, 'destroy'])
-            ->where('host', '[A-Za-z0-9._-]+');
+        Route::middleware('permission:admin.ai_tuning.manage')->group(function (): void {
+            Route::get('/ai-tuning', [AdminAiTuningController::class, 'show']);
+            Route::put('/ai-tuning', [AdminAiTuningController::class, 'update']);
+        });
+
+        Route::middleware('permission:admin.catalog_slang.manage')->group(function (): void {
+            Route::get('/catalog-slang', [AdminCatalogSlangController::class, 'show']);
+            Route::put('/catalog-slang', [AdminCatalogSlangController::class, 'update']);
+        });
+
+        Route::middleware('permission:admin.description_templates.manage')->group(function (): void {
+            Route::get('/enrichment-description-templates', [AdminEnrichmentDescriptionTemplateController::class, 'index']);
+            Route::put('/enrichment-description-templates/{kategoria}', [AdminEnrichmentDescriptionTemplateController::class, 'update'])
+                ->where('kategoria', '[a-z_]+');
+            Route::post('/enrichment-description-templates/{kategoria}/restore', [AdminEnrichmentDescriptionTemplateController::class, 'restore'])
+                ->where('kategoria', '[a-z_]+');
+        });
+
+        Route::middleware('permission:admin.search_sites.manage')->group(function (): void {
+            Route::get('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'index']);
+            Route::post('/catalog-search-sites', [AdminCatalogSearchSiteController::class, 'store']);
+            Route::get('/catalog-search-sites/{host}/pages', [AdminCatalogSearchSiteController::class, 'pages'])
+                ->where('host', '[A-Za-z0-9._-]+');
+            Route::get('/catalog-search-sites/{host}/progress', [AdminCatalogSearchSiteController::class, 'progress'])
+                ->where('host', '[A-Za-z0-9._-]+');
+            Route::post('/catalog-search-sites/{host}/reindex', [AdminCatalogSearchSiteController::class, 'reindex'])
+                ->where('host', '[A-Za-z0-9._-]+');
+            Route::post('/catalog-search-sites/{host}/unskip', [AdminCatalogSearchSiteController::class, 'unskip'])
+                ->where('host', '[A-Za-z0-9._-]+');
+            Route::post('/catalog-search-sites/{host}/reskip', [AdminCatalogSearchSiteController::class, 'reskip'])
+                ->where('host', '[A-Za-z0-9._-]+');
+            Route::delete('/catalog-search-sites/{host}', [AdminCatalogSearchSiteController::class, 'destroy'])
+                ->where('host', '[A-Za-z0-9._-]+');
+        });
     });
 });
