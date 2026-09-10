@@ -34,6 +34,10 @@ final class CatalogIndexCommand extends Command
 
     public function handle(CatalogSitemapIndexer $indexer): int
     {
+        if (function_exists('ini_set')) {
+            ini_set('memory_limit', '512M');
+        }
+
         $hosts = $this->hosts();
         if ($hosts === []) {
             $this->error('Brak domen do zaindeksowania.');

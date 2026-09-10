@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -14,6 +15,10 @@ use Throwable;
  */
 final class BlockedPageReader
 {
+    private const MAX_TEXT_BYTES = 400000;
+
+    private const MAX_SCREENSHOT_BYTES = 8000000;
+
     /**
      * Zrzut karty produktu (PNG) — gdy CDN obrazków też za Incapsulą (Ansell .ashx).
      */
@@ -32,7 +37,7 @@ final class BlockedPageReader
                     'X-Return-Format' => 'screenshot',
                     'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
                 ])
-                ->withOptions(['allow_redirects' => true])
+                ->withOptions(['allow_redirects' => true, 'stream' => true])
                 ->get('https://r.jina.ai/'.$url);
         } catch (Throwable $e) {
             Log::info('Blocked page screenshot failed', ['url' => $url, 'error' => $e->getMessage()]);
@@ -44,7 +49,7 @@ final class BlockedPageReader
             return null;
         }
 
-        $bytes = $response->body();
+        $bytes = $this->readLimitedBody($response, self::MAX_SCREENSHOT_BYTES);
         if ($bytes === '' || strlen($bytes) < 8000) {
             return null;
         }
@@ -78,6 +83,7 @@ final class BlockedPageReader
                     'Accept' => 'text/plain,text/markdown,*/*',
                     'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
                 ])
+                ->withOptions(['stream' => true])
                 ->get($proxy);
         } catch (Throwable $e) {
             Log::info('Blocked page reader failed', ['url' => $url, 'error' => $e->getMessage()]);
@@ -89,7 +95,7 @@ final class BlockedPageReader
             return null;
         }
 
-        $markdown = trim($response->body());
+        $markdown = $this->readLimitedBody($response, self::MAX_TEXT_BYTES);
         if ($markdown === '' || mb_strlen($markdown) < 80) {
             return null;
         }
@@ -124,6 +130,7 @@ final class BlockedPageReader
                     'X-Return-Format' => 'html',
                     'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
                 ])
+                ->withOptions(['stream' => true])
                 ->get('https://r.jina.ai/'.$url);
         } catch (Throwable $e) {
             Log::info('Blocked page crawl fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
@@ -134,12 +141,45 @@ final class BlockedPageReader
         if (! $response->successful()) {
             return null;
         }
-        $body = trim($response->body());
-        if ($body === '' || mb_strlen($body) < 40) {
+        $body = $this->readLimitedBody($response, self::MAX_TEXT_BYTES);
+        if ($body === '' || strlen($body) < 40) {
             return null;
         }
 
-        return mb_substr($body, 0, 400000);
+        return $body;
+    }
+
+    private function readLimitedBody(Response $response, int $maxBytes): string
+    {
+        $buf = $this->readStreamPrefix($response, $maxBytes);
+        if ($buf !== null) {
+            return trim($buf);
+        }
+        $body = $response->body();
+
+        return trim(strlen($body) <= $maxBytes ? $body : substr($body, 0, $maxBytes));
+    }
+
+    private function readStreamPrefix(Response $response, int $maxBytes): ?string
+    {
+        try {
+            $stream = $response->toPsrResponse()->getBody();
+            if ($stream->isSeekable()) {
+                $stream->rewind();
+            }
+            $buf = '';
+            while (! $stream->eof() && strlen($buf) < $maxBytes) {
+                $chunk = $stream->read(min(8192, $maxBytes - strlen($buf)));
+                if ($chunk === '') {
+                    break;
+                }
+                $buf .= $chunk;
+            }
+
+            return $buf;
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     private function stripReaderChrome(string $markdown): string
