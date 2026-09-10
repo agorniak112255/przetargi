@@ -385,10 +385,14 @@ final class CatalogIndexTest extends TestCase
     public function test_indexes_house_garden_sitemaps_not_food_or_ebooks(): void
     {
         $garden = 'https://www.empik.com/rekawice-ogrodowe,p1701000001,dom-i-ogrod-p';
+        $boots = 'https://www.empik.com/buty-robocze-s3,p1701000005,dom-i-ogrod-p';
+        $pot = 'https://www.empik.com/doniczka-ceramiczna,p1701000006,dom-i-ogrod-p';
+        $apron = 'https://www.empik.com/fartuch-kuchenny,p1701000007,dom-i-ogrod-p';
         $food = 'https://www.empik.com/kawa,p1701000002,delikatesy-p';
         $ebook = 'https://www.empik.com/ebook,p1701000003,ebooki-i-mp3-p';
         $agd = 'https://www.empik.com/osuszacz,p1701000004,agd-p';
         $this->seedPage($food);
+        $this->seedPage($pot);
         $this->fakeHttp([
             'https://empik.com/robots.txt' => Http::response(
                 "Sitemap: https://www.empik.com/sitemap.xml\n",
@@ -426,7 +430,12 @@ final class CatalogIndexTest extends TestCase
             ),
             'https://www.empik.com/sitemap/dom-i-ogrod-1.xml.gz' => Http::response(
                 (string) gzencode(
-                    '<?xml version="1.0"?><urlset><url><loc>'.$garden.'</loc></url></urlset>'
+                    '<?xml version="1.0"?><urlset>'
+                    .'<url><loc>'.$garden.'</loc></url>'
+                    .'<url><loc>'.$boots.'</loc></url>'
+                    .'<url><loc>'.$pot.'</loc></url>'
+                    .'<url><loc>'.$apron.'</loc></url>'
+                    .'</urlset>'
                 ),
                 200,
                 ['Content-Type' => 'application/x-gzip']
@@ -440,6 +449,9 @@ final class CatalogIndexTest extends TestCase
         $this->assertNotContains('https://www.empik.com/sitemap/ebooki-i-mp3-1.xml.gz', $result['sitemaps']);
         $this->assertNotContains('https://www.empik.com/sitemap/agd-1.xml.gz', $result['sitemaps']);
         $this->assertDatabaseHas('catalog_pages', ['url' => $garden]);
+        $this->assertDatabaseHas('catalog_pages', ['url' => $boots]);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => $pot]);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => $apron]);
         $this->assertDatabaseMissing('catalog_pages', ['url' => $food]);
         $this->assertDatabaseMissing('catalog_pages', ['url' => $ebook]);
         $this->assertDatabaseMissing('catalog_pages', ['url' => $agd]);

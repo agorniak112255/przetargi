@@ -183,9 +183,10 @@ final class CatalogSitemapIndexer
             }
 
             $found = 0;
+            $requireBhp = $this->isGardenCatalogSitemap($sitemap);
             $consume = function (string $loc) use (
                 &$sitemaps, &$seen, &$rows, &$saved, &$offHost, &$timedOut, &$found,
-                &$shopListings, &$listingSeeds, $host, $maxUrls, $deadline
+                &$shopListings, &$listingSeeds, $host, $maxUrls, $deadline, $requireBhp
             ): bool {
                 if (microtime(true) >= $deadline) {
                     $timedOut = true;
@@ -210,6 +211,9 @@ final class CatalogSitemapIndexer
                         $listingSeeds[$https] = $https;
                     }
 
+                    return true;
+                }
+                if ($requireBhp && ! $this->looksLikeWorkplaceSafetyUrl($loc)) {
                     return true;
                 }
                 $found++;
@@ -259,6 +263,8 @@ final class CatalogSitemapIndexer
                     $this->note($host, 'Indeks map: '.$childMaps.' plików z '.$this->shortUrl($sitemap));
                 } elseif ($rawChildren > 0) {
                     $this->note($host, 'Pomijam mapy poza domem/ogrodem: '.$this->shortUrl($sitemap));
+                } elseif ($requireBhp && $streamed) {
+                    $this->note($host, 'Brak kart BHP: '.$this->shortUrl($sitemap));
                 } else {
                     $this->note($host, 'Mapa pusta albo nieczytelna: '.$this->shortUrl($sitemap));
                 }
@@ -1404,6 +1410,18 @@ final class CatalogSitemapIndexer
 
     private function isPreferredCatalogSlug(string $slug): bool
     {
+        return $this->isGardenCatalogSlug($slug) || in_array($slug, [
+            'bhp',
+            'ochrona-pracy',
+            'srodki-ochrony',
+            'odziez-robocza',
+            'odziez-ochronna',
+            'buty-robocze',
+        ], true);
+    }
+
+    private function isGardenCatalogSlug(string $slug): bool
+    {
         return in_array($slug, [
             'dom-i-ogrod',
             'dom-ogrod',
@@ -1413,13 +1431,86 @@ final class CatalogSitemapIndexer
             'house-garden',
             'house-and-garden',
             'home-and-garden',
-            'bhp',
-            'ochrona-pracy',
-            'srodki-ochrony',
-            'odziez-robocza',
-            'odziez-ochronna',
-            'buty-robocze',
         ], true);
+    }
+
+    private function isGardenCatalogSitemap(string $url): bool
+    {
+        $slug = $this->sitemapShardSlug($url);
+        if ($slug !== null && $this->isGardenCatalogSlug($slug)) {
+            return true;
+        }
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+
+        return str_contains($path, '/dom-i-ogrod')
+            || str_contains($path, '/dom-ogrod')
+            || str_contains($path, '/home-and-garden')
+            || str_contains($path, '/house-and-garden');
+    }
+
+    private function looksLikeWorkplaceSafetyUrl(string $url): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        $slug = trim((string) strtok(ltrim($path, '/'), ','), '/');
+        if ($slug === '' || $this->isGardenHomeNoiseSlug($slug)) {
+            return false;
+        }
+        $tokens = preg_split('/[^a-z0-9]+/u', $slug) ?: [];
+        $set = array_fill_keys($tokens, true);
+        foreach ([
+            'gogle', 'nauszniki', 'nausznik', 'kombinezon',
+            'kalosz', 'kalosze', 'trzewik', 'trzewiki',
+            'przylbica', 'polmaska', 'polmaski', 'bhp',
+            'wodoochronne', 'wodoochronny', 'wodoochronna',
+            'robocze', 'robocza', 'roboczy', 'hivis', 'kask',
+        ] as $token) {
+            if (isset($set[$token])) {
+                return true;
+            }
+        }
+        if ((isset($set['rekawice']) || isset($set['rekawica']) || isset($set['rekawiczki']))
+            && $this->slugHasWorkplaceGloveHint($slug)) {
+            return true;
+        }
+        if (isset($set['fartuch']) && (str_contains($slug, 'robocz') || str_contains($slug, 'ochron')
+            || str_contains($slug, 'spawal') || str_contains($slug, 'bhp') || str_contains($slug, 'wodoochron'))) {
+            return true;
+        }
+        if (str_contains($slug, 'okulary-ochron') || str_contains($slug, 'szelki-bezpieczen')
+            || str_contains($slug, 'szelki-asekur') || str_contains($slug, 'ostrzegaw')) {
+            return true;
+        }
+
+        return (isset($set['s1']) || isset($set['s2']) || isset($set['s3']) || isset($set['s1p']) || isset($set['sb']))
+            && (isset($set['buty']) || isset($set['polbuty']) || isset($set['trzewiki'])
+                || isset($set['trzewik']) || isset($set['sandaly']));
+    }
+
+    private function slugHasWorkplaceGloveHint(string $slug): bool
+    {
+        foreach (['ochron', 'robocz', 'ogrod', 'nitryl', 'lateks', 'latex', 'powlekan', 'spawal', 'monter', 'warsztat', 'bhp'] as $hint) {
+            if (str_contains($slug, $hint)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isGardenHomeNoiseSlug(string $slug): bool
+    {
+        foreach ([
+            'obraz', 'plakat', 'plotnie', 'oobrazy', 'feeby', 'arttor',
+            'amiplay', 'trixie', 'ferplast', 'dla-psa', 'dla-kota', 'krolik',
+            'kuchenke', 'kuchenka', 'kuchenny', 'kuchenne',
+            'vileda', 'aloes', 'silikon', 'kompresyj', 'przescieradl', 'folia',
+        ] as $bad) {
+            if (str_contains($slug, $bad)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function isRetailOffTopicSlug(string $slug): bool
@@ -1509,6 +1600,9 @@ final class CatalogSitemapIndexer
             return false;
         }
         $slug = $m[1];
+        if ($this->isGardenCatalogSlug($slug)) {
+            return ! $this->looksLikeWorkplaceSafetyUrl($url);
+        }
         if ($this->isPreferredCatalogSlug($slug)) {
             return false;
         }
