@@ -1794,6 +1794,29 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame([$verifiedUrl], $picked);
     }
 
+    public function test_pick_primary_keeps_redcart_gallery_from_card(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '205',
+            'name' => 'Kurtka oddychająca zapinana na zamek bryzgoszczelny',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $img = 'https://static4.redcart.pl/templates/images/thumb/4697/1024/1024/pl/0/templates/images/products/4697/7dbc670fc4f6909d7aaae4bad4830a19.jpg';
+
+        $service = app(ProductEnrichmentService::class);
+        $method = new \ReflectionMethod($service, 'pickPrimaryImageUrls');
+        $picked = $method->invoke(
+            $service,
+            [$img],
+            [],
+            (string) $product->sku,
+            (string) $product->name,
+            $product,
+        );
+
+        $this->assertSame([$img], $picked);
+    }
+
     public function test_description_images_stay_on_source_card(): void
     {
         $service = app(ProductEnrichmentService::class);

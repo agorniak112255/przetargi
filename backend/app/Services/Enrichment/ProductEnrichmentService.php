@@ -1490,8 +1490,9 @@ final class ProductEnrichmentService
             if (str_contains($u, 'menu-') || str_contains($u, 'menue-') || str_contains($u, 'favicon')) {
                 continue;
             }
-            // typowe zmyślone ścieżki z LLM
-            if (preg_match('#/images/products/#', $u) === 1 && ! str_contains($u, 'sites/default')) {
+            // zmyślone /images/products/ z LLM — nie galeria RedCart
+            if (preg_match('#(?<!/templates)/images/products/#', $u) === 1
+                && ! str_contains($u, 'sites/default')) {
                 $score -= 80;
             }
             if ($score >= 20) {
