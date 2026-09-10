@@ -130,6 +130,11 @@ final class CatalogSitemapIndexer
         $sitemapDeadline = $deadline - min(self::HTML_CRAWL_RESERVE, (int) floor($budget * 0.4));
         $sitemaps = $this->discoverSitemaps($host, $sitemapDeadline);
         $guessed = array_flip($this->candidateUrls($host));
+        $beforeMaps = count($sitemaps);
+        $sitemaps = $this->retainPreferredSitemaps($sitemaps);
+        if ($beforeMaps > count($sitemaps)) {
+            $this->note($host, 'Pomijam '.($beforeMaps - count($sitemaps)).' map poza domem/ogrodem i BHP.');
+        }
         if ($sitemaps === []) {
             $this->note($host, 'Brak sitemapy — pełzam po HTML jak skrypt sklepu.');
         }
@@ -153,6 +158,10 @@ final class CatalogSitemapIndexer
             if (microtime(true) >= $deadline) {
                 $timedOut = true;
                 break;
+            }
+
+            if (! $this->shouldFollowSitemap($sitemap, $sitemaps)) {
+                continue;
             }
 
             $guessing = isset($guessed[$sitemap]);
@@ -184,7 +193,9 @@ final class CatalogSitemapIndexer
                     return false;
                 }
                 if ($this->looksLikeSitemap($loc)) {
-                    if (count($sitemaps) < self::MAX_SITEMAP_FILES && ! in_array($loc, $sitemaps, true)) {
+                    if ($this->shouldFollowSitemap($loc, $sitemaps)
+                        && count($sitemaps) < self::MAX_SITEMAP_FILES
+                        && ! in_array($loc, $sitemaps, true)) {
                         $sitemaps[] = $loc;
                     }
 
@@ -236,14 +247,21 @@ final class CatalogSitemapIndexer
             }
             $mapsBefore = count($sitemaps);
             $streamDeadline = $guessing ? min($deadline, $guessStartedAt + self::CANDIDATE_GUESS_BUDGET) : $deadline;
-            if ($this->streamLocations($sitemap, $consume, $streamDeadline, $timeout, ! $guessing) && $found > 0) {
+            $streamed = $this->streamLocations($sitemap, $consume, $streamDeadline, $timeout, ! $guessing);
+            $rawChildren = count($sitemaps) - $mapsBefore;
+            $sitemaps = $this->retainPreferredSitemaps($sitemaps);
+            $childMaps = count($sitemaps) - $mapsBefore;
+            if ($streamed && $found > 0) {
                 $used[] = $sitemap;
                 $this->note($host, 'Mapa dała '.$found.' adresów (łącznie '.count($seen).'): '.$this->shortUrl($sitemap));
             } elseif (! $guessing) {
-                $childMaps = count($sitemaps) - $mapsBefore;
-                $this->note($host, $childMaps > 0
-                    ? 'Indeks map: '.$childMaps.' plików z '.$this->shortUrl($sitemap)
-                    : 'Mapa pusta albo nieczytelna: '.$this->shortUrl($sitemap));
+                if ($childMaps > 0) {
+                    $this->note($host, 'Indeks map: '.$childMaps.' plików z '.$this->shortUrl($sitemap));
+                } elseif ($rawChildren > 0) {
+                    $this->note($host, 'Pomijam mapy poza domem/ogrodem: '.$this->shortUrl($sitemap));
+                } else {
+                    $this->note($host, 'Mapa pusta albo nieczytelna: '.$this->shortUrl($sitemap));
+                }
             }
             if (microtime(true) >= $deadline) {
                 $timedOut = true;
@@ -1060,6 +1078,7 @@ final class CatalogSitemapIndexer
                 $ids = [];
                 foreach ($pages as $page) {
                     if ($this->isSkippableUrl((string) $page->url)
+                        || $this->isRetailOffTopicPageUrl((string) $page->url)
                         || $this->isErrorPageTitle((string) ($page->title ?? ''))) {
                         $ids[] = (int) $page->id;
                     }
@@ -1280,6 +1299,221 @@ final class CatalogSitemapIndexer
         }
 
         return str_contains($path, 'sitemap') && str_ends_with($path, '.php');
+    }
+
+    /**
+     * Marketplace dzieli katalog na pliki /sitemap/{dzial}-N.xml.gz.
+     * Przy mapach domu/ogrodu albo BHP nie czytamy żywności, ebooków ani AGD.
+     *
+     * @param  list<string>  $sitemaps
+     * @return list<string>
+     */
+    private function retainPreferredSitemaps(array $sitemaps): array
+    {
+        $hasPreferred = false;
+        foreach ($sitemaps as $url) {
+            if ($this->isPreferredCatalogSitemap($url)) {
+                $hasPreferred = true;
+                break;
+            }
+        }
+
+        $out = [];
+        foreach ($sitemaps as $url) {
+            if (! $this->shouldFollowSitemap($url, $sitemaps, $hasPreferred)) {
+                continue;
+            }
+            $out[] = $url;
+        }
+
+        return array_values($out);
+    }
+
+    /**
+     * @param  list<string>  $queued
+     */
+    private function shouldFollowSitemap(string $url, array $queued, ?bool $hasPreferred = null): bool
+    {
+        if ($this->isRetailOffTopicSitemap($url)) {
+            return false;
+        }
+        if ($hasPreferred === null) {
+            $hasPreferred = $this->isPreferredCatalogSitemap($url);
+            if (! $hasPreferred) {
+                foreach ($queued as $item) {
+                    if ($this->isPreferredCatalogSitemap($item)) {
+                        $hasPreferred = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if ($hasPreferred
+            && $this->isRetailCategorySitemap($url)
+            && ! $this->isPreferredCatalogSitemap($url)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function isPreferredCatalogSitemap(string $url): bool
+    {
+        $slug = $this->sitemapShardSlug($url);
+        if ($slug !== null && $this->isPreferredCatalogSlug($slug)) {
+            return true;
+        }
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+
+        return str_contains($path, '/dom-i-ogrod')
+            || str_contains($path, '/dom-ogrod')
+            || str_contains($path, '/home-and-garden')
+            || str_contains($path, '/house-and-garden');
+    }
+
+    private function isRetailOffTopicSitemap(string $url): bool
+    {
+        $slug = $this->sitemapShardSlug($url);
+
+        return $slug !== null && $this->isRetailOffTopicSlug($slug);
+    }
+
+    private function isRetailCategorySitemap(string $url): bool
+    {
+        $slug = $this->sitemapShardSlug($url);
+
+        return $slug !== null && ! $this->isGenericSitemapSlug($slug);
+    }
+
+    private function sitemapShardSlug(string $url): ?string
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        $base = basename($path);
+        foreach (['.xml.gz', '.xml', '.gz'] as $suffix) {
+            if (str_ends_with($base, $suffix)) {
+                $base = substr($base, 0, -strlen($suffix));
+                break;
+            }
+        }
+        if (preg_match('/^([a-z0-9-]+)-(\d+)$/', $base, $m) !== 1) {
+            return null;
+        }
+
+        return $m[1];
+    }
+
+    private function isPreferredCatalogSlug(string $slug): bool
+    {
+        return in_array($slug, [
+            'dom-i-ogrod',
+            'dom-ogrod',
+            'ogrod',
+            'garden',
+            'home-garden',
+            'house-garden',
+            'house-and-garden',
+            'home-and-garden',
+            'bhp',
+            'ochrona-pracy',
+            'srodki-ochrony',
+            'odziez-robocza',
+            'odziez-ochronna',
+            'buty-robocze',
+        ], true);
+    }
+
+    private function isRetailOffTopicSlug(string $slug): bool
+    {
+        return in_array($slug, [
+            'delikatesy',
+            'spozywcze',
+            'zywnosc',
+            'grocery',
+            'groceries',
+            'ebooki',
+            'ebooki-i-mp3',
+            'ebook',
+            'ebooks',
+            'mp3',
+            'audiobook',
+            'audiobooki',
+            'ksiazka',
+            'ksiazki',
+            'book',
+            'books',
+            'podreczniki',
+            'podreczniki-szkolne',
+            'prasa',
+            'film',
+            'filmy',
+            'movies',
+            'muzyka',
+            'music',
+            'multimedia',
+            'zabawki',
+            'toys',
+            'dziecko',
+            'news',
+            'empikultura',
+            'strona-glowna',
+            'kategorie',
+            'strony-kategorii',
+            'strony-serii-wydawniczych',
+            'strony-filtrow',
+            'strony-autorow',
+            'strony-wydawcow',
+            'przyjecia-i-okazje',
+            'szkolne-i-papiernicze',
+        ], true);
+    }
+
+    private function isSecondaryRetailSlug(string $slug): bool
+    {
+        return in_array($slug, [
+            'agd',
+            'elektronika',
+            'moda',
+            'sport',
+            'motoryzacja',
+            'perfumy',
+            'uroda',
+        ], true);
+    }
+
+    private function isGenericSitemapSlug(string $slug): bool
+    {
+        return in_array($slug, [
+            'sitemap',
+            'sitemap-index',
+            'sitemap_index',
+            'sitemap-products',
+            'sitemap-product',
+            'product-sitemap',
+            'products-sitemap',
+            'product',
+            'products',
+            'pages',
+            'page-sitemap',
+            'category-sitemap',
+            'wp-sitemap',
+            'wp-sitemap-posts-product',
+            'wp-sitemap-posts-page',
+            'post-sitemap',
+        ], true);
+    }
+
+    private function isRetailOffTopicPageUrl(string $url): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        if (preg_match('/,([a-z0-9-]+)-p$/', $path, $m) !== 1) {
+            return false;
+        }
+        $slug = $m[1];
+        if ($this->isPreferredCatalogSlug($slug)) {
+            return false;
+        }
+
+        return $this->isRetailOffTopicSlug($slug) || $this->isSecondaryRetailSlug($slug);
     }
 
     /** Portale społecznościowe i wyszukiwarki bywają linkowane w sitemapach — do indeksu nie wnoszą nic. */

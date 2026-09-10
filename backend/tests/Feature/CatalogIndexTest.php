@@ -382,6 +382,69 @@ final class CatalogIndexTest extends TestCase
         $this->assertDatabaseMissing('catalog_pages', ['url' => 'https://ecsmedia.pl/c/foto.jpg']);
     }
 
+    public function test_indexes_house_garden_sitemaps_not_food_or_ebooks(): void
+    {
+        $garden = 'https://www.empik.com/rekawice-ogrodowe,p1701000001,dom-i-ogrod-p';
+        $food = 'https://www.empik.com/kawa,p1701000002,delikatesy-p';
+        $ebook = 'https://www.empik.com/ebook,p1701000003,ebooki-i-mp3-p';
+        $agd = 'https://www.empik.com/osuszacz,p1701000004,agd-p';
+        $this->seedPage($food);
+        $this->fakeHttp([
+            'https://empik.com/robots.txt' => Http::response(
+                "Sitemap: https://www.empik.com/sitemap.xml\n",
+                200
+            ),
+            'https://www.empik.com/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><sitemapindex>'
+                .'<sitemap><loc>https://www.empik.com/sitemap/agd-1.xml.gz</loc></sitemap>'
+                .'<sitemap><loc>https://www.empik.com/sitemap/delikatesy-1.xml.gz</loc></sitemap>'
+                .'<sitemap><loc>https://www.empik.com/sitemap/ebooki-i-mp3-1.xml.gz</loc></sitemap>'
+                .'<sitemap><loc>https://www.empik.com/sitemap/dom-i-ogrod-1.xml.gz</loc></sitemap>'
+                .'</sitemapindex>',
+                200
+            ),
+            'https://www.empik.com/sitemap/agd-1.xml.gz' => Http::response(
+                (string) gzencode(
+                    '<?xml version="1.0"?><urlset><url><loc>'.$agd.'</loc></url></urlset>'
+                ),
+                200,
+                ['Content-Type' => 'application/x-gzip']
+            ),
+            'https://www.empik.com/sitemap/delikatesy-1.xml.gz' => Http::response(
+                (string) gzencode(
+                    '<?xml version="1.0"?><urlset><url><loc>'.$food.'</loc></url></urlset>'
+                ),
+                200,
+                ['Content-Type' => 'application/x-gzip']
+            ),
+            'https://www.empik.com/sitemap/ebooki-i-mp3-1.xml.gz' => Http::response(
+                (string) gzencode(
+                    '<?xml version="1.0"?><urlset><url><loc>'.$ebook.'</loc></url></urlset>'
+                ),
+                200,
+                ['Content-Type' => 'application/x-gzip']
+            ),
+            'https://www.empik.com/sitemap/dom-i-ogrod-1.xml.gz' => Http::response(
+                (string) gzencode(
+                    '<?xml version="1.0"?><urlset><url><loc>'.$garden.'</loc></url></urlset>'
+                ),
+                200,
+                ['Content-Type' => 'application/x-gzip']
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('empik.com');
+
+        $this->assertContains('https://www.empik.com/sitemap/dom-i-ogrod-1.xml.gz', $result['sitemaps']);
+        $this->assertNotContains('https://www.empik.com/sitemap/delikatesy-1.xml.gz', $result['sitemaps']);
+        $this->assertNotContains('https://www.empik.com/sitemap/ebooki-i-mp3-1.xml.gz', $result['sitemaps']);
+        $this->assertNotContains('https://www.empik.com/sitemap/agd-1.xml.gz', $result['sitemaps']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => $garden]);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => $food]);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => $ebook]);
+        $this->assertDatabaseMissing('catalog_pages', ['url' => $agd]);
+    }
+
     public function test_reads_gzipped_sitemap(): void
     {
         $this->fakeHttp([
