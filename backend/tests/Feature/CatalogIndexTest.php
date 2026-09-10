@@ -2188,6 +2188,46 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
+    public function test_indexes_rawpol_html_catalog_sitemap(): void
+    {
+        $this->fakeHttp([
+            'https://rawpol.com/robots.txt' => Http::response("User-agent: ClaudeBot\nDisallow: /\n", 200),
+            'https://www.rawpol.com/robots.txt' => Http::response("User-agent: ClaudeBot\nDisallow: /\n", 200),
+            'https://web.rawpol.com/?v=404&lang=pl' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="./?v=KCL-DERMA770&lang=pl">Dermatril</a>'
+                .'<a href="./?v=ALASKA&lang=pl">Alaska</a>'
+                .'<a href="./?v=category-ochrona-rak&lang=pl">Rękawice</a>'
+                .'<a href="./?v=info-ofirmie&lang=pl">O firmie</a>'
+                .'<a href="./?v=404&lang=pl">Mapa serwisu</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('rawpol.com');
+
+        $this->assertGreaterThanOrEqual(2, $result['saved']);
+        $this->assertContains('https://web.rawpol.com/?v=404&lang=pl', $result['sitemaps']);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://web.rawpol.com/?v=KCL-DERMA770&lang=pl',
+        ]);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://web.rawpol.com/?v=ALASKA&lang=pl',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://web.rawpol.com/?v=category-ochrona-rak&lang=pl',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://web.rawpol.com/?v=info-ofirmie&lang=pl',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://web.rawpol.com/?v=404&lang=pl',
+        ]);
+    }
+
     private function seedPage(string $url, ?string $manufacturer = null, string $title = ''): void
     {
         $page = CatalogPage::query()->create([

@@ -43,6 +43,9 @@ final class ShopCatalogUrl
         if (str_contains($query, 'id_product=') || str_contains($query, 'controller=product')) {
             return true;
         }
+        if ($this->isQueryCatalogProduct($url)) {
+            return true;
+        }
         if ($this->isIaiProductCard($path)) {
             return true;
         }
@@ -110,6 +113,9 @@ final class ShopCatalogUrl
         if ($this->isClassicProduct($url)) {
             return false;
         }
+        if ($this->isQueryCatalogListing($url)) {
+            return true;
+        }
         if ($this->isSoteShopListing($url)) {
             return true;
         }
@@ -176,12 +182,21 @@ final class ShopCatalogUrl
         return preg_match('/^[a-z][a-z0-9-]*,\d+(,\d+)+(?:\.html)?$/', $this->query($url)) === 1;
     }
 
-    /** Query SOTESHOP zostawiamy w normalizacji — inaczej ?351,bluza… znika. */
+    /** Query SOTESHOP i karty ?v=SKU (Raw-Pol) zostawiamy — inaczej znika tożsamość. */
     public function keepsShopQuery(string $query): bool
     {
         $query = mb_strtolower(trim($query));
+        if ($this->isSoteShopProductQuery($query) || $this->isSoteShopListingQuery($query)) {
+            return true;
+        }
 
-        return $this->isSoteShopProductQuery($query) || $this->isSoteShopListingQuery($query);
+        return $this->queryCatalogView($query) !== '';
+    }
+
+    /** Inspiria/Raw-Pol: „Mapa serwisu” to HTML pod ?v=404, nie XML. */
+    public function isHtmlCatalogSitemap(string $url): bool
+    {
+        return $this->queryCatalogView($this->query($url)) === '404';
     }
 
     /** Krótki slug bez cyfry: marka/kategoria, nie karta (namioty-kemping, on-running). */
@@ -214,6 +229,43 @@ final class ShopCatalogUrl
     public function isIaiShop(string $hostOrUrl): bool
     {
         return in_array($this->bareHost($hostOrUrl), self::IAI_HOSTS, true);
+    }
+
+    private function isQueryCatalogProduct(string $url): bool
+    {
+        $view = $this->queryCatalogView($this->query($url));
+
+        return $view !== '' && ! $this->isQueryCatalogListingView($view)
+            && preg_match('/^[a-z0-9][a-z0-9._-]{1,80}$/u', $view) === 1;
+    }
+
+    private function isQueryCatalogListing(string $url): bool
+    {
+        $view = $this->queryCatalogView($this->query($url));
+
+        return $view !== '' && $this->isQueryCatalogListingView($view);
+    }
+
+    private function isQueryCatalogListingView(string $view): bool
+    {
+        $view = mb_strtolower($view);
+        if (in_array($view, [
+            '404', 'root', 'welcome', 'contact', 'mmedia', 'ird', 'product-comparator',
+        ], true)) {
+            return true;
+        }
+
+        return str_starts_with($view, 'info-') || str_starts_with($view, 'category');
+    }
+
+    private function queryCatalogView(string $query): string
+    {
+        if ($query === '') {
+            return '';
+        }
+        parse_str($query, $params);
+
+        return mb_strtolower(trim((string) ($params['v'] ?? '')));
     }
 
     private function isSoteShopProductQuery(string $query): bool

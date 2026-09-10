@@ -363,6 +363,14 @@ final class CatalogSitemapIndexer
                 break;
             }
         }
+        if ($out === [] && $reachedHost) {
+            foreach ($this->htmlCatalogSitemapUrls($host) as $htmlMap) {
+                $out[] = $htmlMap;
+            }
+            if ($out !== []) {
+                $this->note($host, 'Brak XML — czytam mapę HTML katalogu.');
+            }
+        }
         if ($out === [] && $reachedHost && ($deadline <= 0.0 || microtime(true) < $deadline)) {
             $this->collectHtmlSitemaps($host, $out);
             if ($out !== []) {
@@ -405,6 +413,21 @@ final class CatalogSitemapIndexer
         }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Raw-Pol (Inspiria): brak sitemap.xml, karty są pod ?v=SKU, mapa HTML to ?v=404.
+     *
+     * @return list<string>
+     */
+    private function htmlCatalogSitemapUrls(string $host): array
+    {
+        $host = $this->normalizeHost($host);
+        if (! in_array($host, ['rawpol.com', 'web.rawpol.com'], true)) {
+            return [];
+        }
+
+        return ['https://web.rawpol.com/?v=404&lang=pl'];
     }
 
     /**
@@ -526,6 +549,26 @@ final class CatalogSitemapIndexer
                 $chunk = (string) inflate_add($inflate, $chunk);
             }
             if ($buffer === '' && $this->looksLikeHtml($chunk)) {
+                $html = $chunk;
+                while (! $body->eof() && strlen($html) < self::CURL_MAX_BYTES) {
+                    if ($deadline > 0.0 && microtime(true) >= $deadline) {
+                        break;
+                    }
+                    try {
+                        $more = $body->read(self::CHUNK_BYTES);
+                    } catch (Throwable) {
+                        break;
+                    }
+                    if ($more === '') {
+                        break;
+                    }
+                    $html .= $more;
+                }
+                if ($this->catalogUrl->isHtmlCatalogSitemap($url)
+                    && $this->emitHtmlCatalogLocations($html, $onLocation, $url)) {
+                    return true;
+                }
+
                 return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
             }
 
@@ -554,8 +597,12 @@ final class CatalogSitemapIndexer
         }
 
         $body = $this->fetchViaCurl($url, $timeout);
-        if ($body === null || $this->looksLikeHtml($body)) {
+        if ($body === null) {
             return false;
+        }
+        if ($this->looksLikeHtml($body)) {
+            return $this->catalogUrl->isHtmlCatalogSitemap($url)
+                && $this->emitHtmlCatalogLocations($body, $onLocation, $url);
         }
         if (str_starts_with($body, "\x1f\x8b")) {
             $decoded = @gzdecode($body);
@@ -818,6 +865,45 @@ final class CatalogSitemapIndexer
         $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
 
         return trim((string) preg_replace('/\s+/u', ' ', $text));
+    }
+
+    /**
+     * @param  callable(string, string=): bool  $onLocation
+     */
+    private function emitHtmlCatalogLocations(string $html, callable $onLocation, string $baseUrl): bool
+    {
+        $any = false;
+        foreach ($this->extractHtmlCatalogLocations($html, $baseUrl) as $loc) {
+            $any = true;
+            if ($onLocation($loc) === false) {
+                return true;
+            }
+        }
+
+        return $any;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractHtmlCatalogLocations(string $html, string $baseUrl): array
+    {
+        if (preg_match_all('/href\s*=\s*["\']([^"\']+)["\']/i', $html, $m) === 0) {
+            return [];
+        }
+        $host = $this->normalizeHost((string) (parse_url($baseUrl, PHP_URL_HOST) ?? ''));
+        $out = [];
+        $seen = [];
+        foreach ($m[1] as $href) {
+            $url = $this->resolveHref((string) $href, $host, $baseUrl);
+            if ($url === null || isset($seen[$url]) || ! $this->catalogUrl->isProductCard($url)) {
+                continue;
+            }
+            $seen[$url] = true;
+            $out[] = $url;
+        }
+
+        return $out;
     }
 
     /**
@@ -1377,6 +1463,9 @@ final class CatalogSitemapIndexer
 
     private function looksLikeSitemap(string $url): bool
     {
+        if ($this->catalogUrl->isHtmlCatalogSitemap($url)) {
+            return true;
+        }
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
         $query = mb_strtolower((string) (parse_url($url, PHP_URL_QUERY) ?? ''));
         $hay = $path.' '.$query;

@@ -100,6 +100,22 @@ final class ShopCatalogUrlTest extends TestCase
         $this->assertFalse($this->urls->isPrettyProduct('https://ox-on.com/gloves/cut-c'));
     }
 
+    public function test_query_catalog_v_sku_is_a_card(): void
+    {
+        $card = 'https://web.rawpol.com/?v=KCL-DERMA770&lang=pl';
+        $this->assertTrue($this->urls->isClassicProduct($card));
+        $this->assertTrue($this->urls->isProductCard($card));
+        $this->assertFalse($this->urls->isIndexListing($card));
+        $this->assertTrue($this->urls->keepsShopQuery('v=KCL-DERMA770&lang=pl'));
+        $this->assertTrue($this->urls->isClassicProduct('https://web.rawpol.com/?v=ALASKA&lang=pl'));
+        $this->assertTrue($this->urls->isHtmlCatalogSitemap('https://web.rawpol.com/?v=404&lang=pl'));
+        $this->assertFalse($this->urls->isClassicProduct('https://web.rawpol.com/?v=404&lang=pl'));
+        $this->assertTrue($this->urls->isIndexListing('https://web.rawpol.com/?v=404&lang=pl'));
+        $this->assertTrue($this->urls->isIndexListing('https://web.rawpol.com/?v=category-ochrona-rak&lang=pl'));
+        $this->assertTrue($this->urls->isIndexListing('https://web.rawpol.com/?v=info-ofirmie&lang=pl'));
+        $this->assertFalse($this->urls->isClassicProduct('https://web.rawpol.com/?v=category&lang=pl'));
+    }
+
     public function test_soteshop_id_slug_html_is_a_card(): void
     {
         $card = 'https://www.fasterbhp.pl/351,bluza-robocza-brixton-spark-grafitowy-polstar.html';
