@@ -47,6 +47,7 @@ final class ProductSearchIdentity
         'extinguisher' => ['gasnic', 'extinguisher', 'feuerlosch'],
         'firstaid' => ['aptecz', 'first aid', 'firstaid', 'verbandkasten'],
         'tape' => ['tasma', 'tasmy', 'tasmow', 'adhesive tape', 'warning tape', 'isolierband', 'tape'],
+        'mat' => ['chodnik', 'dywanik', 'matting', 'insulating mat'],
     ];
 
     /**
@@ -2904,6 +2905,10 @@ final class ProductSearchIdentity
         if ($phrase === '' || $this->isApparelTypeWord($phrase) || $this->isDescriptiveIdentityWord($phrase)) {
             return true;
         }
+        // T5163000 w cenniku, na karcie Infield jest „Raptor”
+        if ($this->rawSkuIsOfflineNoise($product) && $this->isStrongShopPhrase($phrase)) {
+            return false;
+        }
         if (preg_match('/^\d{3,6}$/u', trim((string) $product->sku)) === 1
             && preg_match('/^\p{L}{3,}$/u', $phrase) === 1) {
             return true;
@@ -3452,6 +3457,7 @@ final class ProductSearchIdentity
             'extinguisher' => 'gaśnica',
             'firstaid' => 'apteczka',
             'tape' => 'taśma',
+            'mat' => 'chodnik lub dywanik',
         ];
         foreach (self::TYPE_STEMS as $key => $stems) {
             if ($this->textHasTypeStem($name, $stems)) {

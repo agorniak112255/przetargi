@@ -2190,7 +2190,7 @@ final class ProductEnrichmentService
         }
         $low = mb_strtolower($d);
         if ($this->looksLikeShopChromeDescription($d) || $this->looksLikeOffTopicDescription($d)
-            || $this->looksLikeLinkDump($d)) {
+            || $this->looksLikeLinkDump($d) || $this->looksLikeCategoryIndexDescription($d)) {
             return true;
         }
 
@@ -2222,6 +2222,7 @@ final class ProductEnrichmentService
             'logowanie', 'rejestracja', 'do koszyka', 'obserwowane', 'realizuj zamówienie',
             'polityka prywatności', 'łatwy zwrot', 'jesteś tutaj', 'wyszukiwanie zaawansowane',
             'odstąpienie od umowy', 'kup za punkty', 'sprawdź status zamówienia',
+            'administrator danych osobowych', 'przetwarzamy je w celu', 'widżet języka',
         ] as $needle) {
             if (str_contains($low, $needle)) {
                 $hits++;
@@ -2246,6 +2247,50 @@ final class ProductEnrichmentService
         }
 
         return false;
+    }
+
+    /** Spis kategorii sklepu / menu BHP przepisane jako „opis”. */
+    private function looksLikeCategoryIndexDescription(string $description): bool
+    {
+        $text = trim($description);
+        if ($text === '') {
+            return false;
+        }
+        $low = mb_strtolower($text);
+        if (preg_match_all(
+            '/\b(polski|english|deutsch|français|francais|italiano|español|espanol|nederlands)\b/u',
+            $low
+        ) >= 5) {
+            return true;
+        }
+
+        $chunks = preg_split('/(?:\r\n|\n|\r|(?<=\s)[\*\-•]\s+)/u', $text) ?: [];
+        $headings = 0;
+        $families = [];
+        foreach ($chunks as $chunk) {
+            $line = trim((string) $chunk, " \t-*•");
+            if ($line === '' || mb_strlen($line) > 70) {
+                continue;
+            }
+            if (preg_match('/[.!?]{1}.{12,}/u', $line) === 1) {
+                continue;
+            }
+            $norm = mb_strtolower($line);
+            foreach ([
+                'buty', 'obuwie', 'rekawic', 'kask', 'amortyzator', 'linki asekur',
+                'zestawy asekur', 'szelk', 'odziez', 'spodnie', 'kurtk', 'chodnik',
+                'dywanik', 'sprzet', 'urzadzenia', 'splopl',
+            ] as $needle) {
+                if (! str_contains($norm, $needle)) {
+                    continue;
+                }
+                $headings++;
+                $families[$needle] = true;
+                break;
+            }
+        }
+
+        return $headings >= 6 && count($families) >= 3;
     }
 
     private function isUsableProductDescription(string $description, Product $product): bool

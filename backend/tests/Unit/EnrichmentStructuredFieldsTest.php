@@ -82,6 +82,40 @@ TXT;
         ]));
     }
 
+    public function test_rejects_shop_category_index_as_mat_description(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'sku' => 'T5921002',
+            'name' => 'Chodnik elektroizolacyjny 20KV',
+            'manufacturer' => 'SECURA',
+        ]);
+        $junk = <<<'TXT'
+* Amortyzatory bezpieczeństwa
+* Gotowe zestawy asekuracyjne
+* Linki asekuracyjne
+* Punkty kotwiczenia
+* Sploplazy / drzewolazy
+* Sprzęt arboristyczny
+* Sprzęt do pracy w podparciu
+* Szelki bezpieczeństwa
+* Urządzenia ewakuacyjne
+* Zatrzaśniki
+* Buty robocze damskie
+* Buty robocze męskie
+* Buty robocze kompozytowe
+TXT;
+
+        $this->assertTrue($this->invoke($service, 'looksLikeCategoryIndexDescription', [$junk]));
+        $this->assertFalse($this->invoke($service, 'isUsableProductDescription', [$junk, $product]));
+        $this->assertTrue($this->invoke($service, 'isUsableProductDescription', [
+            'Chodniki elektroizolacyjne w kl. 2 są przeznaczone do wykładania podłóg w celu ochrony '
+            .'pracowników przed zagrożeniami elektrycznymi przy urządzeniach o napięciu do 17 kV. '
+            .'Wymiary 1,1 x 2 m. Marka Secura. Klasa 2, gumowy chodnik elektroizolacyjny.',
+            $product,
+        ]));
+    }
+
     public function test_rejects_foreign_card_that_only_shares_bhp_wording(): void
     {
         $service = app(ProductEnrichmentService::class);
