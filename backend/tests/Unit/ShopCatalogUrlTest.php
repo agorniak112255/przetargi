@@ -42,6 +42,10 @@ final class ShopCatalogUrlTest extends TestCase
             'https://www.empik.com/osuszacz-powietrza-pochlaniacz-wilgoci,p1702782328,agd-p'
         ));
         $this->assertTrue($this->urls->isClassicProduct('https://shop.pl/123-buty-robocze-s3.html'));
+        $kidsCard = 'https://sportpros.pl/pl/dzieci/dziewczynki/kurtki/36-kurtka-wodoodporna-sportpros-dla-dziewczat-model-760.html';
+        $this->assertTrue($this->urls->isClassicProduct($kidsCard));
+        $this->assertTrue($this->urls->isProductCard($kidsCard));
+        $this->assertFalse($this->urls->isIndexListing($kidsCard));
         $this->assertTrue($this->urls->isClassicProduct(
             'https://dodatkimasarskiezwm.pl/111237-kalosz-damskimeski-pl'
         ));

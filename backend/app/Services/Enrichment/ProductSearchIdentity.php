@@ -2504,10 +2504,13 @@ final class ProductSearchIdentity
         ));
         $inferred = $this->inferredCatalogHosts($product);
         if ($inferred !== []) {
-            return array_values(array_unique(array_merge($inferred, $shops)));
+            return $this->preferCatalogHostsForProduct(
+                $product,
+                array_values(array_unique(array_merge($inferred, $shops)))
+            );
         }
         if ($shops !== []) {
-            return $shops;
+            return $this->preferCatalogHostsForProduct($product, $shops);
         }
 
         return $this->officialCatalogHosts($product);
@@ -2623,13 +2626,57 @@ final class ProductSearchIdentity
     public function officialCatalogHosts(Product $product): array
     {
         if ($this->manufacturerLooksUnrelatedToProduct($product)) {
-            return $this->inferredCatalogHosts($product);
+            return $this->preferCatalogHostsForProduct($product, $this->inferredCatalogHosts($product));
         }
 
-        return $this->bareHosts($this->hostsFromConfigMap(
+        return $this->preferCatalogHostsForProduct($product, $this->bareHosts($this->hostsFromConfigMap(
             (array) config('enrichment.manufacturer_domains', []),
             array_merge($this->manufacturerKeyCandidates($product), $this->nameBrandKeys($product))
-        ));
+        )));
+    }
+
+    /**
+     * Kurtka dziecięca jest na SportPROS, peleryna na BeMoreGreen — pierwsze site:
+     * idzie na ten sklep, nie na homepage innej domeny marki.
+     *
+     * @param  list<string>  $hosts
+     * @return list<string>
+     */
+    private function preferCatalogHostsForProduct(Product $product, array $hosts): array
+    {
+        $first = $this->preferredCatalogHostNeedles($product);
+        if ($first === [] || $hosts === []) {
+            return array_values($hosts);
+        }
+        $want = array_fill_keys($this->bareHosts($first), true);
+        $head = [];
+        $tail = [];
+        foreach ($hosts as $host) {
+            $bare = $this->bareHosts([$host])[0] ?? '';
+            if ($bare !== '' && isset($want[$bare])) {
+                $head[] = $host;
+            } else {
+                $tail[] = $host;
+            }
+        }
+
+        return array_values(array_unique(array_merge($head, $tail)));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function preferredCatalogHostNeedles(Product $product): array
+    {
+        $blob = $this->normalizeTypeText(trim((string) $product->name.' '.(string) $product->sku));
+        if (preg_match('/\b(dzieci|dzieciec|dziewcz|chlopc|kids|junior)/u', $blob) === 1) {
+            return ['sportpros.pl'];
+        }
+        if (preg_match('/\bpeleryn/u', $blob) === 1) {
+            return ['bemoregreen.eu'];
+        }
+
+        return [];
     }
 
     public function firstStrongShopPhrase(Product $product): string
