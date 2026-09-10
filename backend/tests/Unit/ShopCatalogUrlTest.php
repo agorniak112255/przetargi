@@ -71,4 +71,24 @@ final class ShopCatalogUrlTest extends TestCase
         $this->assertFalse($this->urls->isIndexListing('https://ox-on.com/gloves/cut-c'));
         $this->assertFalse($this->urls->isPrettyProduct('https://ox-on.com/gloves/cut-c'));
     }
+
+    public function test_soteshop_id_slug_html_is_a_card(): void
+    {
+        $card = 'https://www.fasterbhp.pl/351,bluza-robocza-brixton-spark-grafitowy-polstar.html';
+        $this->assertTrue($this->urls->isClassicProduct($card));
+        $this->assertTrue($this->urls->isProductCard($card));
+        $this->assertFalse($this->urls->isIndexListing($card));
+        $this->assertFalse($this->urls->isFacetListing($card));
+
+        $this->assertTrue($this->urls->isClassicProduct('https://www.fasterbhp.pl/?351,bluza-robocza-brixton'));
+        $this->assertTrue($this->urls->isIndexListing('https://www.fasterbhp.pl/odziez-robocza,166.html'));
+        $this->assertTrue($this->urls->isIndexListing('https://www.fasterbhp.pl/odziez-robocza,166,1634,2.html'));
+        $this->assertTrue($this->urls->isIndexListing('https://www.fasterbhp.pl/?o-sklepie,11'));
+        $this->assertFalse($this->urls->isClassicProduct('https://www.fasterbhp.pl/odziez-robocza,166.html'));
+        $this->assertFalse($this->urls->isFacetListing('https://www.fasterbhp.pl/odziez-robocza,166.html'));
+        $this->assertTrue($this->urls->isIndexListing('https://www.robocze-buty.pl/drewniaki-klapki,44-/'));
+        $this->assertTrue($this->urls->isClassicProduct(
+            'https://www.gvarant.pl/p28932,polbuty-lemaitre-ales-s3.html'
+        ));
+    }
 }

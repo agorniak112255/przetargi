@@ -138,6 +138,7 @@ final class CatalogSitemapIndexer
         $offHost = 0;
         $timedOut = microtime(true) >= $deadline;
         $guessStartedAt = null;
+        $shopListings = false;
 
         // indeks sitemap dokłada kolejne pliki w trakcie — foreach nie zobaczyłby dopisanych
         for ($i = 0; $i < count($sitemaps) && $i < self::MAX_SITEMAP_FILES; $i++) {
@@ -168,7 +169,7 @@ final class CatalogSitemapIndexer
             $found = 0;
             $consume = function (string $loc) use (
                 &$sitemaps, &$seen, &$rows, &$saved, &$offHost, &$timedOut, &$found,
-                $host, $maxUrls, $deadline
+                &$shopListings, $host, $maxUrls, $deadline
             ): bool {
                 if (microtime(true) >= $deadline) {
                     $timedOut = true;
@@ -183,6 +184,10 @@ final class CatalogSitemapIndexer
                     return true;
                 }
                 if ($this->isSkippableUrl($loc)) {
+                    if ($this->catalogUrl->isSoteShopListing($loc)) {
+                        $shopListings = true;
+                    }
+
                     return true;
                 }
                 $found++;
@@ -240,10 +245,12 @@ final class CatalogSitemapIndexer
             }
         }
 
-        if (count($seen) < self::SPARSE_SITEMAP_LIMIT) {
-            $this->note($host, $timedOut
-                ? 'Limit czasu na XML — pełzam po stronach sklepu.'
-                : 'Mało kart z XML — pełzam po stronach sklepu.');
+        if (count($seen) < self::SPARSE_SITEMAP_LIMIT || $shopListings) {
+            $this->note($host, $shopListings && count($seen) >= self::SPARSE_SITEMAP_LIMIT
+                ? 'Sitemapa bez pełnego katalogu — pełzam po kategoriach sklepu.'
+                : ($timedOut
+                    ? 'Limit czasu na XML — pełzam po stronach sklepu.'
+                    : 'Mało kart z XML — pełzam po stronach sklepu.'));
             foreach ($this->crawlShopPages($host, $maxUrls, $deadline) as $row) {
                 $url = (string) $row['url'];
                 if (isset($seen[$url])) {
@@ -808,6 +815,11 @@ final class CatalogSitemapIndexer
         }
         $path = (string) ($parts['path'] ?? '/');
         $query = (string) ($parts['query'] ?? '');
+        if ($query !== '' && $this->catalogUrl->keepsShopQuery($query)) {
+            $scheme = (string) ($parts['scheme'] ?? 'https');
+
+            return $scheme.'://'.$parts['host'].($path !== '' ? $path : '/').'?'.$query;
+        }
         $kept = [];
         if ($query !== '') {
             parse_str($query, $params);

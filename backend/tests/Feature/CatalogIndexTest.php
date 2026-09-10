@@ -1405,6 +1405,86 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
+    public function test_indexes_soteshop_cards_and_skips_categories(): void
+    {
+        $card = 'https://www.fasterbhp.pl/351,bluza-robocza-brixton-spark.html';
+        $this->fakeHttp([
+            'https://fasterbhp.pl/robots.txt' => Http::response(
+                "User-agent: *\nSitemap: http://www.fasterbhp.pl/sitemaps.xml\n",
+                200
+            ),
+            'http://www.fasterbhp.pl/sitemaps.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>'.$card.'</loc></url>'
+                .'<url><loc>https://www.fasterbhp.pl/odziez-robocza,166.html</loc></url>'
+                .'<url><loc>https://www.fasterbhp.pl/odziez-robocza,166,1634,2.html</loc></url>'
+                .'<url><loc>https://www.fasterbhp.pl/o-sklepie,11.html</loc></url>'
+                .'<url><loc>https://www.fasterbhp.pl/index.html</loc></url>'
+                .'</urlset>',
+                200,
+                ['Content-Type' => 'application/xml']
+            ),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('fasterbhp.pl');
+
+        $this->assertDatabaseHas('catalog_pages', ['url' => $card]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.fasterbhp.pl/odziez-robocza,166.html',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.fasterbhp.pl/odziez-robocza,166,1634,2.html',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.fasterbhp.pl/o-sklepie,11.html',
+        ]);
+        $this->assertGreaterThanOrEqual(1, $result['saved']);
+    }
+
+    public function test_crawls_soteshop_category_when_sitemap_already_has_cards(): void
+    {
+        $locs = '';
+        for ($i = 1; $i <= 50; $i++) {
+            $locs .= '<url><loc>https://www.fasterbhp.pl/'.$i.',produkt-stary-'.$i.'.html</loc></url>';
+        }
+        $locs .= '<url><loc>https://www.fasterbhp.pl/odziez-robocza,166.html</loc></url>';
+        $home = '<!DOCTYPE html><html><body>'
+            .'<a href="/odziez-robocza,166.html">Odzież</a>'
+            .'</body></html>';
+        $this->fakeHttp([
+            'https://fasterbhp.pl/robots.txt' => Http::response(
+                "Sitemap: https://www.fasterbhp.pl/sitemaps.xml\n",
+                200
+            ),
+            'https://www.fasterbhp.pl/sitemaps.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'.$locs.'</urlset>',
+                200,
+                ['Content-Type' => 'application/xml']
+            ),
+            'https://www.fasterbhp.pl/' => Http::response($home, 200, ['Content-Type' => 'text/html']),
+            'https://fasterbhp.pl/' => Http::response($home, 200, ['Content-Type' => 'text/html']),
+            'https://www.fasterbhp.pl/odziez-robocza,166.html' => Http::response(
+                '<!DOCTYPE html><html><body>'
+                .'<a href="/999,bluza-nowa-z-listingu.html">Nowa bluza</a>'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('fasterbhp.pl');
+
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.fasterbhp.pl/1,produkt-stary-1.html',
+        ]);
+        $this->assertDatabaseHas('catalog_pages', [
+            'url' => 'https://www.fasterbhp.pl/999,bluza-nowa-z-listingu.html',
+        ]);
+        $this->assertDatabaseMissing('catalog_pages', [
+            'url' => 'https://www.fasterbhp.pl/odziez-robocza,166.html',
+        ]);
+    }
+
     private function seedPage(string $url, ?string $manufacturer = null): void
     {
         $page = CatalogPage::query()->create([

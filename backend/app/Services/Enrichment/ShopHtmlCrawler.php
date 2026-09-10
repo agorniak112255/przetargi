@@ -456,6 +456,10 @@ final class ShopHtmlCrawler
         }
         $path = (string) ($parts['path'] ?? '/');
         $query = (string) ($parts['query'] ?? '');
+        $out = ((string) ($parts['scheme'] ?? 'https')).'://'.$parts['host'].($path !== '' ? $path : '/');
+        if ($query !== '' && $this->catalogUrl->keepsShopQuery($query)) {
+            return $out.'?'.$query;
+        }
         $kept = [];
         if ($query !== '') {
             parse_str($query, $params);
@@ -466,7 +470,6 @@ final class ShopHtmlCrawler
                 }
             }
         }
-        $out = ((string) ($parts['scheme'] ?? 'https')).'://'.$parts['host'].($path !== '' ? $path : '/');
         if ($kept !== []) {
             $out .= '?'.http_build_query($kept);
         }
@@ -520,7 +523,8 @@ final class ShopHtmlCrawler
                 return true;
             }
         }
-        if ($this->catalogUrl->isIaiProductCard($path)) {
+        if ($this->catalogUrl->isClassicProduct($url) || $this->catalogUrl->isSoteShopListing($url)
+            || $this->catalogUrl->isIaiProductCard($path)) {
             return false;
         }
 

@@ -8,6 +8,7 @@ namespace App\Services\Enrichment;
  * Karta produktu vs lista/kategoria — wspólne wzorce sklepów.
  *
  * IAI/IdoSell: /p123,slug.html
+ * SOTESHOP: karta /123,slug.html ; kategoria /slug,123.html
  * Presta: id_product= albo /123-rewrite.html
  * Shoper/Woo: /produkt/… /product/…
  * Magento (Deporvillage): pretty slug; facety z „:”
@@ -43,6 +44,9 @@ final class ShopCatalogUrl
             return true;
         }
         if ($this->isIaiProductCard($path)) {
+            return true;
+        }
+        if ($this->isSoteShopProduct($url)) {
             return true;
         }
         if (preg_match('#-p\d{2,}(\.html)?$#', $path) === 1) {
@@ -93,6 +97,9 @@ final class ShopCatalogUrl
         if ($this->isClassicProduct($url)) {
             return false;
         }
+        if ($this->isSoteShopListing($url)) {
+            return true;
+        }
         if ($this->isFacetListing($url) || $this->hasCategoryPrefix($url) || $this->isNumericPrefixCategory($url)) {
             return true;
         }
@@ -108,7 +115,7 @@ final class ShopCatalogUrl
     public function isFacetListing(string $url): bool
     {
         $path = $this->path($url);
-        if ($this->isIaiProductCard($path)) {
+        if ($this->isIaiProductCard($path) || $this->isSoteShopProduct($url) || $this->isSoteShopListing($url)) {
             return false;
         }
         if (str_contains($path, ':')) {
@@ -117,6 +124,37 @@ final class ShopCatalogUrl
         $slug = (string) basename(rtrim($path, '/'));
 
         return str_contains($slug, ',');
+    }
+
+    /** SOTESHOP: /123,bluza-robocza.html albo ?123,bluza-robocza */
+    public function isSoteShopProduct(string $url): bool
+    {
+        $path = $this->path($url);
+        if (preg_match('#/\d+,[a-z0-9-]+\.html$#', $path) === 1) {
+            return true;
+        }
+
+        return $this->isSoteShopProductQuery($this->query($url));
+    }
+
+    /** SOTESHOP: kategoria /odziez-robocza,166.html albo strona listingu ,166,1634,2.html */
+    public function isSoteShopListing(string $url): bool
+    {
+        $path = $this->path($url);
+        if (preg_match('#/[a-z][a-z0-9-]*,\d+\.html$#', $path) === 1
+            || preg_match('#/[a-z][a-z0-9-]*,\d+(,\d+)+\.html$#', $path) === 1) {
+            return true;
+        }
+
+        return $this->isSoteShopListingQuery($this->query($url));
+    }
+
+    /** Query SOTESHOP zostawiamy w normalizacji — inaczej ?351,bluza… znika. */
+    public function keepsShopQuery(string $query): bool
+    {
+        $query = mb_strtolower(trim($query));
+
+        return $this->isSoteShopProductQuery($query) || $this->isSoteShopListingQuery($query);
     }
 
     /** Krótki slug bez cyfry: marka/kategoria, nie karta (namioty-kemping, on-running). */
@@ -140,6 +178,19 @@ final class ShopCatalogUrl
     public function isIaiShop(string $hostOrUrl): bool
     {
         return in_array($this->bareHost($hostOrUrl), self::IAI_HOSTS, true);
+    }
+
+    private function isSoteShopProductQuery(string $query): bool
+    {
+        return $query !== '' && preg_match('/^\d+,[a-z0-9-]+(?:\.html)?$/', $query) === 1;
+    }
+
+    private function isSoteShopListingQuery(string $query): bool
+    {
+        return $query !== '' && (
+            preg_match('/^[a-z][a-z0-9-]*,\d+(?:\.html)?$/', $query) === 1
+            || preg_match('/^[a-z][a-z0-9-]*,\d+(,\d+)+(?:\.html)?$/', $query) === 1
+        );
     }
 
     public function isInformationalSlug(string $slug): bool
