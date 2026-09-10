@@ -1093,7 +1093,7 @@ export function Products() {
                         className="block overflow-hidden rounded border border-slate-200 bg-slate-50"
                         title="Pokaż pełne zdjęcie"
                       >
-                        <img src={thumb.url} alt="" className="h-10 w-10 object-cover" />
+                        <img src={thumb.url} alt="" className="h-20 w-20 object-cover" />
                       </button>
                     ) : (
                       <span className="text-slate-400">—</span>
