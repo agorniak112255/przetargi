@@ -25,7 +25,6 @@ use App\Services\Enrichment\HybridWebSearchService;
 use App\Services\Enrichment\ManufacturerDomainResolver;
 use App\Services\Enrichment\PrefetchSlots;
 use App\Services\Enrichment\ProductDocumentDownloader;
-use App\Services\Enrichment\ProductDocumentFinder;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\ProductImageCandidateVerifier;
 use App\Services\Enrichment\ProductImageDownloader;
@@ -75,23 +74,6 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $this->assertFalse($method->invoke($service, $documentOnly, 1));
         $this->assertTrue($method->invoke($service, $productPage, 1));
-    }
-
-    public function test_skips_document_search_only_when_pdf_url_mentions_sku(): void
-    {
-        $reflection = new \ReflectionClass(ProductEnrichmentService::class);
-        $service = $reflection->newInstanceWithoutConstructor();
-        $method = $reflection->getMethod('alreadyHasProductPdf');
-        $method->setAccessible(true);
-        $product = new Product(['sku' => '60549', 'name' => 'Uvex C500', 'manufacturer' => 'Uvex']);
-
-        $this->assertTrue($method->invoke($service, [
-            'https://cdn.example.com/DATASHEET/60549_PDB_EN.pdf',
-        ], $product));
-        $this->assertFalse($method->invoke($service, [
-            'https://cdn.example.com/katalog-ogolny.pdf',
-        ], $product));
-        $this->assertFalse($method->invoke($service, [], $product));
     }
 
     public function test_single_product_enrichment_runs_synchronously(): void
@@ -916,7 +898,6 @@ final class ProductEnrichmentApiTest extends TestCase
             app(ProductImageDownloader::class),
             app(ProductDocumentDownloader::class),
             app(ProductPageFetcher::class),
-            app(ProductDocumentFinder::class),
             app(ManufacturerDomainResolver::class),
             $llm,
             app(AiSettingsService::class),
@@ -978,7 +959,6 @@ final class ProductEnrichmentApiTest extends TestCase
             app(ProductImageDownloader::class),
             app(ProductDocumentDownloader::class),
             app(ProductPageFetcher::class),
-            app(ProductDocumentFinder::class),
             app(ManufacturerDomainResolver::class),
             $llm,
             app(AiSettingsService::class),
@@ -1030,7 +1010,6 @@ final class ProductEnrichmentApiTest extends TestCase
             app(ProductImageDownloader::class),
             app(ProductDocumentDownloader::class),
             app(ProductPageFetcher::class),
-            app(ProductDocumentFinder::class),
             app(ManufacturerDomainResolver::class),
             $llm,
             app(AiSettingsService::class),
@@ -1082,7 +1061,6 @@ final class ProductEnrichmentApiTest extends TestCase
             app(ProductImageDownloader::class),
             app(ProductDocumentDownloader::class),
             app(ProductPageFetcher::class),
-            app(ProductDocumentFinder::class),
             app(ManufacturerDomainResolver::class),
             $llm,
             app(AiSettingsService::class),
@@ -1133,7 +1111,6 @@ final class ProductEnrichmentApiTest extends TestCase
             app(ProductImageDownloader::class),
             app(ProductDocumentDownloader::class),
             app(ProductPageFetcher::class),
-            app(ProductDocumentFinder::class),
             app(ManufacturerDomainResolver::class),
             $llm,
             app(AiSettingsService::class),
@@ -1178,7 +1155,6 @@ final class ProductEnrichmentApiTest extends TestCase
             app(ProductImageDownloader::class),
             app(ProductDocumentDownloader::class),
             app(ProductPageFetcher::class),
-            app(ProductDocumentFinder::class),
             app(ManufacturerDomainResolver::class),
             Mockery::mock(OpenAiCompatibleClient::class),
             app(AiSettingsService::class),
@@ -1278,7 +1254,6 @@ final class ProductEnrichmentApiTest extends TestCase
             app(ProductImageDownloader::class),
             app(ProductDocumentDownloader::class),
             app(ProductPageFetcher::class),
-            app(ProductDocumentFinder::class),
             app(ManufacturerDomainResolver::class),
             $llm,
             app(AiSettingsService::class),
@@ -1301,6 +1276,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(1, ProductImage::query()->where('product_id', $product->id)->count());
         $this->assertSame(1, ProductDocument::query()->where('product_id', $product->id)->count());
         $this->assertNull($product->enrichment_trace);
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
     }
 
     public function test_keeps_shop_radio_sizes_after_llm_drops_them_from_text(): void

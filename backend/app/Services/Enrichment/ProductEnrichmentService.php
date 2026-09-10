@@ -53,7 +53,6 @@ final class ProductEnrichmentService
         private readonly ProductImageDownloader $images,
         private readonly ProductDocumentDownloader $documents,
         private readonly ProductPageFetcher $pages,
-        private readonly ProductDocumentFinder $documentFinder,
         private readonly ManufacturerDomainResolver $manufacturers,
         private readonly OpenAiCompatibleClient $llm,
         private readonly AiSettingsService $aiSettings,
@@ -821,33 +820,8 @@ final class ProductEnrichmentService
             }
             $this->assertBatchNotCancelled($batchId);
 
-            // PDF z karty (SKU w URL) wystarcza — nie odpalamy kolejnego SearXNG
-            $docHits = [];
-            $docPages = [];
-            if (! $this->alreadyHasProductPdf($documentUrls, $product)) {
-                $docHits = $this->documentFinder->findDocumentUrls($product);
-            }
-            foreach ($docHits as $url) {
-                if (ProductDocumentDownloader::looksLikeDocumentUrl($url) && (
-                    ProductDocumentDownloader::looksLikePdfUrl($url)
-                    || preg_match('#/(pds|doc|ukdoc)(/|$)#i', $url) === 1
-                    || str_ends_with(mb_strtolower((string) parse_url($url, PHP_URL_PATH)), '.ashx')
-                )) {
-                    $documentUrls[] = $url;
-                } else {
-                    $docPages[] = ['url' => $url, 'title' => '', 'snippet' => ''];
-                }
-            }
-            if ($docPages !== []) {
-                // indeksy deklaracji / karty producenta — bierz PDF ze strony
-                $docFetched = $this->pages->fetch($docPages, (string) $product->sku, 3, $mfrDomains, $product);
-                foreach ($docFetched['document_urls'] ?? [] as $url) {
-                    $documentUrls[] = $url;
-                }
-            }
             $mfrDomains = $this->manufacturers->discoverFromResults($product, array_merge(
                 $documentUrls,
-                array_column($docPages, 'url'),
                 array_column($searchResults, 'url'),
             ));
             $preferredDocs = $this->preferManufacturerDocuments($documentUrls, $product, $mfrDomains);
@@ -2025,20 +1999,6 @@ final class ProductEnrichmentService
         }
 
         return $otherPdf;
-    }
-
-    /**
-     * @param  list<string>  $documentUrls
-     */
-    private function alreadyHasProductPdf(array $documentUrls, Product $product): bool
-    {
-        foreach ($documentUrls as $url) {
-            if (is_string($url) && $this->pdfUrlMentionsProduct($url, $product)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private function pdfUrlMentionsProduct(string $url, Product $product): bool
