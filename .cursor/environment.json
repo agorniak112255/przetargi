@@ -1,0 +1,23 @@
+{
+  "name": "SUPON AI Przetargi",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "cd backend && php artisan serve --host=127.0.0.1 --port=8000"
+    },
+    {
+      "name": "frontend",
+      "command": "cd frontend && npm run dev -- --host 127.0.0.1"
+    }
+  ],
+  "ports": [
+    { "name": "api", "port": 8000 },
+    { "name": "vite", "port": 5173 }
+  ]
+}

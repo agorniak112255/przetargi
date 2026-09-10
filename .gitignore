@@ -38,6 +38,9 @@ backend/public/.htaccess
 # local data / samples (opcjonalnie duże)
 Cenniki/
 samples/
-.cursor/
+.cursor/*
+!.cursor/environment.json
+!.cursor/Dockerfile
+!.cursor/install.sh
 deploy/dumps/
 deploy/qdrant/
