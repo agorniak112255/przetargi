@@ -13,6 +13,7 @@ use App\Models\CatalogSearchSite;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductImage;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentBatchItem;
 use App\Models\ProductEnrichmentCache;
@@ -668,6 +669,19 @@ final class ProductEnrichmentService
                     $why !== [] ? implode('; ', $why) : 'karta nie potwierdziła produktu',
                     urls: array_column($pageSnippets, 'url')
                 );
+                $savedImages = $this->downloadImagesFromFetchedCards($product, $fetched, $pageSnippets);
+                if ($savedImages !== []) {
+                    $this->attemptLog()->add('image', 'zdjęcie z karty mimo cienkiego opisu');
+                    $product->update([
+                        'enrichment_status' => Product::ENRICHMENT_DONE,
+                        'enriched_at' => now(),
+                        'enrichment_error' => 'Zdjęcie z karty sklepu. Opis wpisz ręcznie.',
+                        'enrichment_trace' => $this->attemptLog()->snapshot($product),
+                    ]);
+                    $this->logEnrichmentTiming($timing, $started);
+
+                    return;
+                }
                 throw new ProductSourcesNotFoundException(
                     $searchResults === []
                         ? 'Nie znaleziono stron z tym SKU w internecie. '.$searchEmptyDetail
@@ -1245,6 +1259,42 @@ final class ProductEnrichmentService
      * @param  list<array{url?: string, text?: string}>  $pages
      * @return list<string>
      */
+    /**
+     * Wskazana karta Shoper ma packshot, ale og:description to newsletter —
+     * zdjęcie zapisujemy mimo odrzuconego opisu.
+     *
+     * @param  array{image_urls?: list<string>, trusted_image_urls?: list<string>}  $fetched
+     * @param  list<array{url?: string}>  $pages
+     * @return list<ProductImage>
+     */
+    private function downloadImagesFromFetchedCards(Product $product, array $fetched, array $pages): array
+    {
+        $trusted = is_array($fetched['trusted_image_urls'] ?? null) ? $fetched['trusted_image_urls'] : [];
+        $all = is_array($fetched['image_urls'] ?? null) ? $fetched['image_urls'] : [];
+        if ($trusted === [] && $all === []) {
+            return [];
+        }
+        if ($product->hintedShopUrl() === null && $pages === []) {
+            return [];
+        }
+        $urls = $this->cardImagesAfterConfirmation($trusted, $all, $pages, $product);
+        if ($urls === []) {
+            return [];
+        }
+
+        return $this->images->downloadMany(
+            $product,
+            $this->pickPrimaryImageUrls(
+                $urls,
+                [],
+                (string) $product->sku,
+                (string) $product->name,
+                $product
+            ),
+            1
+        );
+    }
+
     private function cardImagesAfterConfirmation(array $trusted, array $all, array $pages, Product $product): array
     {
         $usable = [];

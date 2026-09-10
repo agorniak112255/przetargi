@@ -987,6 +987,79 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertStringContainsString('CACHE-HINT', (string) $product->description);
     }
 
+    public function test_hinted_shoper_card_saves_image_when_description_is_thin(): void
+    {
+        Storage::fake('public');
+
+        $pageUrl = 'https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-8-m-Secura/48607';
+        $img = 'https://centrumelektronarzedzi.pl/userdata/public/gfx/46771/Chodnik-i-dywanik-elektroizolacyjny.jpg';
+        $product = $this->makeProduct([
+            'sku' => 'CH-20KV-8',
+            'name' => 'Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 8 m) Secura',
+            'manufacturer' => 'SECURA',
+            'shop_source_url' => $pageUrl,
+        ]);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
+        $search->shouldReceive('forgetProductCache')->zeroOrMoreTimes();
+
+        $llm = $this->mockLlmWithSanitize([
+            'description' => 'Chodnik Secura.',
+            'features' => [],
+            'specs' => [],
+            'norms' => [],
+            'certificates' => [],
+            'materials' => [],
+            'use_cases' => [],
+            'image_urls' => [],
+            'source_urls' => [$pageUrl],
+            'confidence' => 0.2,
+        ]);
+
+        $html = '<html><head>'
+            .'<meta property="og:image" content="https://centrumelektronarzedzi.pl/upload/img/seo/centrumelektronarzedzi-pl.png">'
+            .'<script type="application/ld+json">{"image":["https:\\/\\/centrumelektronarzedzi.pl\\/userdata\\/public\\/gfx\\/46771\\/Chodnik-i-dywanik-elektroizolacyjny.jpg"]}</script>'
+            .'</head><body>'
+            .'<h1>Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 8 m) Secura</h1>'
+            .'<div class="description newsletter__description">Podaj swój adres e-mail, jeżeli chcesz otrzymywać informacje o nowościach.</div>'
+            .'<div class="resetcss"><p>Chodniki elektroizolacyjne w kl. 2 są przeznaczone do wykładania podłóg w celu ochrony pracowników przed zagrożeniami elektrycznymi. Wymiary 1,1 x 8 m. Marka Secura. Klasa 2.</p></div>'
+            .'<a href="'.$img.'"><img src="https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46771_750_750/Chodnik-i-dywanik-elektroizolacyjny.webp" alt="Chodnik"></a>'
+            .'</body></html>';
+
+        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($html) {
+            $url = $request->url();
+            if (str_contains($url, '/userdata/') || str_contains($url, 'productGfx') || str_ends_with($url, '.jpg') || str_ends_with($url, '.webp')) {
+                return Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']);
+            }
+
+            return Http::response($html, 200, ['Content-Type' => 'text/html']);
+        });
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        $service->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertSame(1, $product->images()->count());
+        $this->assertStringContainsString('userdata/public/gfx/46771', (string) $product->images()->first()?->source_url);
+    }
+
     public function test_product_absent_from_web_goes_to_manual_and_leaves_queues(): void
     {
         Sanctum::actingAs($user = User::factory()->withRole('admin')->create());

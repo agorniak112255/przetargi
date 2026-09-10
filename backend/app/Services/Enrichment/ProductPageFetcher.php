@@ -729,9 +729,10 @@ final class ProductPageFetcher
         }
 
         $focused = $this->extractFocusedHtmlBlocks($html);
-        if ($focused !== '') {
+        if ($focused !== '' && ! $this->looksLikeEmbeddedCode($focused)) {
             $chunks[] = $focused;
-        } else {
+        }
+        if ($focused === '' || $this->looksLikeEmbeddedCode($focused) || mb_strlen($focused) < 180) {
             $chunks[] = $this->htmlToText($this->stripShopChromeHtml($html));
         }
 
@@ -798,7 +799,7 @@ final class ProductPageFetcher
     private function extractFocusedHtmlBlocks(string $html): string
     {
         $patterns = [
-            '#<(?:div|section|article)[^>]*(?:id|class)=["\'][^"\']*(?:product[-_ ]?desc|opis[-_ ]?produkt|short[-_ ]?desc|full[-_ ]?desc|product[-_ ]?detail|tab[-_ ]?description|description|specyfik|cechy|parametr)[^"\']*["\'][^>]*>(.*?)</(?:div|section|article)>#is',
+            '#<(?:div|section|article)[^>]*(?:id|class)=["\'][^"\']*(?:product[-_ ]?desc|product[-_]?page[-_]?desc|opis[-_ ]?produkt|short[-_ ]?desc|full[-_ ]?desc|product[-_ ]?detail|tab[-_ ]?description|description|resetcss|specyfik|cechy|parametr)[^"\']*["\'][^>]*>(.*?)</(?:div|section|article)>#is',
             '#<div[^>]*itemprop=["\']description["\'][^>]*>(.*?)</div>#is',
             '#<(?:p|div)[^>]*itemprop=["\']description["\'][^>]*>(.*?)</(?:p|div)>#is',
         ];
@@ -806,8 +807,9 @@ final class ProductPageFetcher
         foreach ($patterns as $pattern) {
             if (preg_match_all($pattern, $html, $m)) {
                 foreach ($m[1] as $block) {
-                    $t = self::stripExpandLinkChrome($this->htmlToText((string) $block));
-                    if (mb_strlen($t) >= 40 && ! $this->looksLikeShopChrome($t) && ! self::looksLikeTruncatedShopTeaser($t)) {
+                    $t = self::stripExpandLinkChrome($this->htmlToText($this->stripShopChromeHtml((string) $block)));
+                    if (mb_strlen($t) >= 40 && ! $this->looksLikeShopChrome($t)
+                        && ! $this->looksLikeEmbeddedCode($t) && ! self::looksLikeTruncatedShopTeaser($t)) {
                         $parts[] = $t;
                     }
                 }
@@ -876,7 +878,7 @@ final class ProductPageFetcher
             }
             $low = mb_strtolower($part);
             $productish = (bool) preg_match(
-                '#(trzewik|p[oó]łbut|obuwie|buty|rękaw|ochron|norm|en\s*\d|iso|s3|s1|src|hro|o1|podnosek|podeszw|skór|nitryl|producent|przeznacz|materiał|cholewka|wkładka|kalosz|winter|gloss|clic)#iu',
+                '#(trzewik|p[oó]łbut|obuwie|buty|rękaw|ochron|chodnik|dywanik|norm|en\s*\d|iso|s3|s1|src|hro|o1|podnosek|podeszw|skór|nitryl|producent|przeznacz|materiał|cholewka|wkładka|kalosz|winter|gloss|clic)#iu',
                 $low
             );
             $mentionsSku = $skuNorm !== '' && (
@@ -908,7 +910,8 @@ final class ProductPageFetcher
             'logowanie', 'rejestracja', 'do koszyka', 'obserwowane', 'realizuj zamówienie',
             'polityka prywatności', 'odstąpienie od umowy', 'łatwy zwrot', 'kup za punkty',
             'wyszukiwanie zaawansowane', 'jesteś tutaj', 'sprawdź status zamówienia',
-            'sposoby płatności', 'dodano do koszyka',
+            'sposoby płatności', 'dodano do koszyka', 'podaj swój adres e-mail',
+            'informacje o nowościach',
         ] as $needle) {
             if (str_contains($low, $needle)) {
                 $hits++;
@@ -923,6 +926,19 @@ final class ProductPageFetcher
         }
 
         return (bool) preg_match('/^\s*(0,00\s*zł|suma:)/iu', $text);
+    }
+
+    /** CSS zmiennych motywu / JS widgetu wklejony w „opis”. */
+    private function looksLikeEmbeddedCode(string $text): bool
+    {
+        if ($text === '') {
+            return false;
+        }
+
+        return str_contains($text, '--wce-')
+            || str_contains(mb_strtolower($text), 'intersectionobserver')
+            || preg_match('/=>\s*\{/', $text) === 1
+            || (substr_count($text, '{') >= 4 && substr_count($text, ';') >= 6);
     }
 
     /**

@@ -735,4 +735,62 @@ HTML;
             ProductImageDownloader::preferFullSizeUrl($og)
         );
     }
+
+    public function test_fetches_images_from_centrumelektronarzedzi_48607_card(): void
+    {
+        $pageUrl = 'https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-8-m-Secura/48607';
+        $original = 'https://centrumelektronarzedzi.pl/userdata/public/gfx/46771/Chodnik-i-dywanik-elektroizolacyjny.jpg';
+        $html = '<html><head>'
+            .'<meta property="og:image" content="https://centrumelektronarzedzi.pl/upload/img/seo/centrumelektronarzedzi-pl.png">'
+            .'<script type="application/ld+json">{"image":["https:\\/\\/centrumelektronarzedzi.pl\\/userdata\\/public\\/gfx\\/46771\\/Chodnik-i-dywanik-elektroizolacyjny.jpg"]}</script>'
+            .'</head><body>'
+            .'<h1>Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 8 m) Secura</h1>'
+            .'<div class="resetcss"><p>Chodniki elektroizolacyjne w kl. 2 są przeznaczone do wykładania podłóg w celu ochrony pracowników. Marka Secura.</p></div>'
+            .'<a href="'.$original.'"><img src="https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46771_750_750/Chodnik-i-dywanik-elektroizolacyjny.webp" alt="Chodnik"></a>'
+            .'</body></html>';
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+        $product = new Product([
+            'sku' => 'CH-20KV-8',
+            'name' => 'Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 8 m) Secura',
+            'manufacturer' => 'SECURA',
+            'shop_source_url' => $pageUrl,
+        ]);
+        $result = (new ProductPageFetcher)->bypassCache()->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Chodnik elektroizolacyjny 20 KV',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertNotSame([], $result['pages']);
+        $this->assertContains($original, $result['trusted_image_urls']);
+        $this->assertContains($original, $result['image_urls']);
+    }
+
+    public function test_reads_shoper_resetcss_description_instead_of_newsletter(): void
+    {
+        $html = <<<'HTML'
+<html><head>
+<meta name="description" content="Centrum Elektronarzedzi - elektronarzędzia, Milwaukee, DeWALT, Makita...">
+</head><body>
+<div class="description newsletter__description mb-xs-2">Podaj swój adres e-mail, jeżeli chcesz otrzymywać informacje o nowościach i promocjach.</div>
+<div class="wce-short-description resetcss"><script>var lazyObserver = new IntersectionObserver(function(){});</script>Chodnik 20 KV Secura Szczegóły</div>
+<div class="ce-product-page-desc"><style>#wce-tabs { --wce-tab-theme-bg: #fff; }</style>
+<div class="resetcss"><p>Chodniki elektroizolacyjne w kl. 2 są przeznaczone do wykładania podłóg w celu ochrony pracowników przed zagrożeniami elektrycznymi przy urządzeniach o napięciu 17000 V. Wymiary 1,1 x 8 m. Marka Secura. Klasa 2.</p></div>
+</div>
+</body></html>
+HTML;
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractProductPageText');
+        $method->setAccessible(true);
+        $text = (string) $method->invoke($fetcher, $html, 'CH-20KV-8');
+
+        $this->assertStringContainsString('Chodniki elektroizolacyjne', $text);
+        $this->assertStringContainsString('ochrony pracowników', $text);
+        $this->assertStringNotContainsString('Podaj swój adres e-mail', $text);
+        $this->assertStringNotContainsString('IntersectionObserver', $text);
+        $this->assertStringNotContainsString('--wce-', $text);
+    }
 }
