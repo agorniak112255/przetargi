@@ -11,6 +11,7 @@ use App\Models\CatalogSearchSite;
 use App\Models\CatalogSearchSiteExclusion;
 use App\Models\CatalogSkipOverride;
 use App\Models\ManufacturerSite;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 use Throwable;
@@ -217,7 +218,7 @@ final class CatalogSearchHostService
         $aliases = $this->hostAliases($host);
         $pages = CatalogPage::query()->whereIn('host', $aliases)->count();
 
-        CatalogPage::query()->whereIn('host', $aliases)->delete();
+        $this->forgetHostPages($aliases);
         CatalogHost::query()->whereIn('host', $aliases)->delete();
         CatalogSearchSite::query()->whereIn('host', $aliases)->delete();
         if (Schema::hasTable('manufacturer_sites')) {
@@ -348,6 +349,31 @@ final class CatalogSearchHostService
         }
 
         return $row;
+    }
+
+    /**
+     * @param  list<string>  $aliases
+     */
+    private function forgetHostPages(array $aliases): void
+    {
+        if ($aliases === []) {
+            return;
+        }
+
+        CatalogPage::query()
+            ->whereIn('host', $aliases)
+            ->orderBy('id')
+            ->chunkById(500, function ($pages): void {
+                $ids = [];
+                foreach ($pages as $page) {
+                    $ids[] = (int) $page->id;
+                }
+                if ($ids === []) {
+                    return;
+                }
+                DB::table('catalog_page_tokens')->whereIn('catalog_page_id', $ids)->delete();
+                CatalogPage::query()->whereIn('id', $ids)->delete();
+            });
     }
 
     /**

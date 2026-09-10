@@ -12,6 +12,7 @@ use App\Models\CatalogSearchSiteExclusion;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -90,8 +91,14 @@ final class CatalogSearchSiteApiTest extends TestCase
     public function test_admin_deletes_site_pages_and_hides_config_host(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
-        $this->seedPage('https://sklepbhp.pl/buty-s3');
-        $this->seedPage('https://www.sklepbhp.pl/kalosze');
+        $kept = $this->seedPage('https://inny-sklep.pl/karta');
+        $a = $this->seedPage('https://sklepbhp.pl/buty-s3');
+        $b = $this->seedPage('https://www.sklepbhp.pl/kalosze');
+        DB::table('catalog_page_tokens')->insert([
+            ['catalog_page_id' => $a->id, 'token' => 'buty'],
+            ['catalog_page_id' => $b->id, 'token' => 'kalosze'],
+            ['catalog_page_id' => $kept->id, 'token' => 'inny'],
+        ]);
 
         $this->deleteJson('/api/admin/catalog-search-sites/sklepbhp.pl')
             ->assertOk()
@@ -101,6 +108,8 @@ final class CatalogSearchSiteApiTest extends TestCase
 
         $this->assertFalse(CatalogPage::query()->where('host', 'sklepbhp.pl')->exists());
         $this->assertFalse(CatalogPage::query()->where('host', 'www.sklepbhp.pl')->exists());
+        $this->assertFalse(DB::table('catalog_page_tokens')->whereIn('catalog_page_id', [$a->id, $b->id])->exists());
+        $this->assertTrue(DB::table('catalog_page_tokens')->where('catalog_page_id', $kept->id)->where('token', 'inny')->exists());
         $this->assertTrue(CatalogSearchSiteExclusion::hasHost('sklepbhp.pl'));
 
         $this->getJson('/api/admin/catalog-search-sites')
@@ -310,9 +319,9 @@ final class CatalogSearchSiteApiTest extends TestCase
             ]);
     }
 
-    private function seedPage(string $url, ?string $title = null, ?string $manufacturer = null): void
+    private function seedPage(string $url, ?string $title = null, ?string $manufacturer = null): CatalogPage
     {
-        CatalogPage::query()->create([
+        return CatalogPage::query()->create([
             'host' => (string) parse_url($url, PHP_URL_HOST),
             'url_hash' => CatalogPage::hashFor($url),
             'url' => $url,
