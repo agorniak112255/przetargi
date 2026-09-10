@@ -102,12 +102,28 @@ final class CatalogIndexSearch
             return [];
         }
 
-        $ids = DB::table('catalog_page_tokens')
-            ->whereIn('token', $codes)
-            ->groupBy('catalog_page_id')
-            ->orderByRaw('COUNT(DISTINCT token) DESC')
+        $typePrefixes = $this->shortNumericVariantNeedsType($product, $codes)
+            ? $this->identity->catalogTypeTokenPrefixes($product)
+            : [];
+        $query = DB::table('catalog_page_tokens as t')
+            ->whereIn('t.token', $codes);
+        if ($typePrefixes !== []) {
+            $query->whereExists(function ($q) use ($typePrefixes): void {
+                $q->select(DB::raw(1))
+                    ->from('catalog_page_tokens as typ')
+                    ->whereColumn('typ.catalog_page_id', 't.catalog_page_id')
+                    ->where(function ($inner) use ($typePrefixes): void {
+                        foreach ($typePrefixes as $prefix) {
+                            $inner->orWhere('typ.token', 'like', $prefix.'%');
+                        }
+                    });
+            });
+        }
+        $ids = $query
+            ->groupBy('t.catalog_page_id')
+            ->orderByRaw('COUNT(DISTINCT t.token) DESC')
             ->limit(self::SQL_LIMIT)
-            ->pluck('catalog_page_id')
+            ->pluck('t.catalog_page_id')
             ->all();
 
         return $this->pages($ids, $product);
@@ -162,6 +178,8 @@ final class CatalogIndexSearch
 
         $brand = $this->brandToken($product);
         $ambiguous = $this->isAmbiguousNumericSku($product);
+        $codes = $this->codes($product);
+        $needType = $this->shortNumericVariantNeedsType($product, $codes);
         $withBrand = [];
         $rest = [];
         foreach ($pages as $page) {
@@ -178,6 +196,12 @@ final class CatalogIndexSearch
                 'title' => (string) ($page->title ?? ''),
                 'snippet' => '',
             ];
+            if ($needType && ! $this->identity->hayHasRequiredTypeFromName(
+                $url.' '.$row['title'].' '.(string) $page->haystack,
+                $product
+            )) {
+                continue;
+            }
             $hay = (string) $page->haystack;
             // strona z marką w adresie / zapisanym producentem jest pewniejsza niż sam kod
             if ($this->pageManufacturer->matchesProduct($pageManufacturer, $product)
@@ -197,6 +221,25 @@ final class CatalogIndexSearch
         $sku = mb_strtolower(trim((string) $product->sku));
 
         return preg_match('/^\d{3,4}$/', $sku) === 1;
+    }
+
+    /**
+     * 109/O szuka tokenu „109” — bez typu z nazwy wpadłyby znaki BC109.
+     *
+     * @param  list<string>  $codes
+     */
+    private function shortNumericVariantNeedsType(Product $product, array $codes): bool
+    {
+        if (preg_match('/^\d{3,4}$/u', trim((string) $product->sku)) === 1) {
+            return false;
+        }
+        foreach ($codes as $code) {
+            if (preg_match('/^\d{3,4}$/u', $code) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function brandToken(Product $product): string

@@ -103,6 +103,43 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_letter_color_suffix_exposes_numeric_model(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '109/O',
+            'name' => 'Fartuch wodoochronny z PU',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+
+        $this->assertSame(['109'], $id->variantBaseCodes($product));
+        $this->assertContains('109', $id->skuSearchNeedles($product));
+        $this->assertContains('site:pros.pl 109', $id->searchQueries($product, 'manufacturer'));
+        $this->assertContains('109', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertTrue($id->isConfirmedProductCard(
+            'https://sklep-bhp.example/fartuchy/199-fartuch-model-109.html',
+            'Fartuch model 109',
+            'Fartuch model 109 PROS',
+            $product
+        ));
+
+        $this->assertSame([], $id->variantBaseCodes(new Product([
+            'sku' => '101/001',
+            'name' => 'Ubranie 101/001',
+            'manufacturer' => 'PROS',
+        ])));
+        $this->assertSame([], $id->variantBaseCodes(new Product([
+            'sku' => '108/WZ',
+            'name' => 'Fartuch 108WZ',
+            'manufacturer' => 'AJ GROUP',
+        ])));
+        $this->assertNotContains('40', $id->variantBaseCodes(new Product([
+            'sku' => 'G3175/40',
+            'name' => 'Półbuty TRACK',
+            'manufacturer' => 'ARDON',
+        ])));
+    }
+
     public function test_name_type_must_appear_on_page(): void
     {
         $id = new ProductSearchIdentity;

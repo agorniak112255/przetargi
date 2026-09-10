@@ -2669,6 +2669,17 @@ final class ProductSearchIdentity
                 }
             }
         }
+        foreach ($this->variantBaseCodes($product) as $base) {
+            $base = trim($base);
+            if (preg_match('/^\d{2,4}$/u', $base) !== 1) {
+                continue;
+            }
+            $key = mb_strtolower($base);
+            if (! isset($seen[$key])) {
+                $seen[$key] = true;
+                $out[] = $base;
+            }
+        }
 
         return $out;
     }
@@ -2689,6 +2700,12 @@ final class ProductSearchIdentity
         $sku = trim((string) $product->sku);
         $coded = $this->catalogSkuWithoutSize($product);
         $stripped = $coded !== '' && mb_strtolower($coded) !== mb_strtolower($sku);
+        foreach ($this->variantBaseCodes($product) as $base) {
+            $base = trim($base);
+            if (preg_match('/^\d{2,4}$/u', $base) === 1) {
+                return $this->quoteSearchOperators($base);
+            }
+        }
         if ($shopPhrase !== '' && (! $stripped || ! $this->phraseContainsSizeTail($shopPhrase, $sku, $coded))) {
             $shopCompact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($shopPhrase)) ?? '';
             $codeCompact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($coded)) ?? '';
@@ -2801,6 +2818,32 @@ final class ProductSearchIdentity
                     continue;
                 }
                 $out[] = mb_strtoupper($hit[1]).' '.$hit[2];
+            }
+        }
+        $sku = strtoupper(trim((string) $product->sku));
+        // 109/O, 109-C — model + jednoliterowy wariant (kolor), nie rozmiar i nie 101/001
+        if (preg_match('/^(\d{2,4})[\/\-]([A-Z])$/u', $sku, $m) === 1
+            && ! (new ProductSizeVariant)->looksLikeWearSize($m[2])) {
+            $out[] = $m[1];
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Prefiksy tokenów typu z nazwy — zawężają indeks, gdy model to krótki numer (109/O → 109).
+     *
+     * @return list<string>
+     */
+    public function catalogTypeTokenPrefixes(Product $product): array
+    {
+        $out = [];
+        foreach ($this->requiredTypeStems($product, true) as $stems) {
+            foreach ($stems as $stem) {
+                $stem = mb_strtolower(trim($stem));
+                if (mb_strlen($stem) >= 4) {
+                    $out[] = $stem;
+                }
             }
         }
 

@@ -353,6 +353,15 @@ final class EnrichmentQueryLadderTest extends TestCase
         ]);
         $this->assertSame(['KRYTECH 563'], $identity->variantBaseCodes($mapa));
         $this->assertContains('KRYTECH 563 MAPA', $identity->primaryQueries($mapa));
+
+        $apron = new Product([
+            'manufacturer' => 'AJ GROUP',
+            'sku' => '109/O',
+            'name' => 'Fartuch wodoochronny z PU',
+        ]);
+        $this->assertSame(['109'], $identity->variantBaseCodes($apron));
+        $this->assertContains('109 AJ GROUP', $identity->primaryQueries($apron));
+        $this->assertContains('site:pros.pl 109', $identity->searchQueries($apron, 'manufacturer'));
     }
 
     public function test_only_page_titled_with_our_model_counts_as_product_card(): void

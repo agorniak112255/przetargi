@@ -741,6 +741,49 @@ final class CatalogIndexTest extends TestCase
         $this->assertCount(1, $hits);
     }
 
+    public function test_slash_letter_variant_finds_model_on_any_mapped_host(): void
+    {
+        $this->seedPage('https://icd.pl/znak-bc109-gasnica.html');
+        $this->seedPage('https://inny-sklep.pl/fartuch-wodoochronny-model-109.html', 'aj-group');
+        $this->seedPage('https://pros.pl/pl/fartuchy-wodoochronne/199-fartuch-model-109.html', 'aj-group');
+
+        $product = new Product([
+            'sku' => '109/O',
+            'name' => 'Fartuch wodoochronny z PU',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains('https://pros.pl/pl/fartuchy-wodoochronne/199-fartuch-model-109.html', $urls);
+        $this->assertContains('https://inny-sklep.pl/fartuch-wodoochronny-model-109.html', $urls);
+        $this->assertNotContains('https://icd.pl/znak-bc109-gasnica.html', $urls);
+    }
+
+    public function test_slash_letter_variant_index_is_used_instead_of_web(): void
+    {
+        $this->seedPage('https://sklep-bhp.example/fartuch-model-109-zielony', 'aj-group');
+        $product = Product::query()->create([
+            'sku' => '109/O',
+            'name' => 'Fartuch wodoochronny z PU',
+            'manufacturer' => 'AJ GROUP',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        Http::fake();
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertSame('catalog_index', $pack['provider']);
+        $this->assertSame(
+            'https://sklep-bhp.example/fartuch-model-109-zielony',
+            $pack['results'][0]['url'] ?? null
+        );
+        Http::assertNothingSent();
+    }
+
     public function test_prefers_page_with_brand_when_code_matches_twice(): void
     {
         $this->seedPage('https://sklep-a.pl/lampka-1202');
