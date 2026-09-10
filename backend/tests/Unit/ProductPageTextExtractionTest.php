@@ -622,4 +622,62 @@ HTML;
             static fn (string $u): bool => str_contains($u, '/cache/')
         ));
     }
+
+    public function test_reads_shoper_gallery_original_and_skips_related_thumbs(): void
+    {
+        $pageUrl = 'https://behapownia.pl/damska-kurtka-przeciwdeszczowa-bemoregreen-903';
+        $og = 'https://behapownia.pl/environment/cache/images/productGfx_17565_500_500/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.webp';
+        $original = 'https://behapownia.pl/userdata/public/gfx/17565/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.jpg';
+        $thumb = '/environment/cache/images/productGfx_17565_120_120/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.webp';
+        $related = '/environment/cache/images/productGfx_17787_300_300/Polbuty-SAPHIR-S3-SRC-HRO-id-2707.webp?overlay=1';
+        $html = <<<HTML
+<html><head><meta property="og:image" content="{$og}"></head><body>
+<h1>Damska kurtka przeciwdeszczowa BEMOREGREEN 903</h1>
+<div class="productimg">
+<img class="photo productimg gallery_17565" src="/environment/cache/images/productGfx_17565_500_500/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.webp?overlay=1" alt="Damska kurtka przeciwdeszczowa BEMOREGREEN 903">
+<a class="gallery js__gallery-anchor-image" href="/userdata/public/gfx/17565/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.jpg" title="Damska kurtka przeciwdeszczowa BEMOREGREEN 903">
+<img src="{$thumb}" data-img-name="/environment/cache/images/productGfx_17565_500_500/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.webp" alt="miniatura">
+</a>
+</div>
+<div class="product-description">
+<p>Damska kurtka przeciwdeszczowa BEMOREGREEN 903. Produkt zaprojektowany i wyprodukowany w Polsce.
+Kurtka nieprzemakalna, wiatroszczelna, z recyklingowego Plavitexu Eco. Marka AJ Group.</p>
+</div>
+<img data-src="{$related}" alt="Półbuty SAPHIR">
+</body></html>
+HTML;
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+
+        $product = new Product([
+            'sku' => '903',
+            'name' => 'Damska kurtka przeciwdeszczowa',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $fetcher = new ProductPageFetcher;
+        $extract = new ReflectionClass($fetcher);
+        $method = $extract->getMethod('extractImageUrls');
+        $method->setAccessible(true);
+        /** @var list<string> $extracted */
+        $extracted = $method->invoke($fetcher, $html, $pageUrl, '903');
+        $this->assertContains($original, $extracted);
+        $this->assertContains($og, $extracted);
+        $this->assertFalse(collect($extracted)->contains(
+            static fn (string $u): bool => str_contains($u, '_120_120') || str_contains($u, '_300_300')
+        ));
+
+        $result = $fetcher->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Damska kurtka przeciwdeszczowa BEMOREGREEN 903',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertContains($original, $result['image_urls']);
+        $this->assertContains($original, $result['trusted_image_urls']);
+        $this->assertContains($og, $result['trusted_image_urls']);
+        $this->assertFalse(collect($result['image_urls'])->contains(
+            static fn (string $u): bool => str_contains($u, '_120_120') || str_contains($u, '_300_300')
+        ));
+    }
 }

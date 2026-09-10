@@ -1449,6 +1449,10 @@ final class ProductEnrichmentService
                 && (((int) $wm[1] < 400) || ((int) $wm[2] < 400))) {
                 continue;
             }
+            if (preg_match('#/productgfx_\d+_(\d+)_(\d+)/#i', $u, $sm)
+                && (((int) $sm[1] < 400) || ((int) $sm[2] < 400))) {
+                continue;
+            }
             // inny kod art. w pliku (7-003 przy SKU 9-084)
             if ($skuTokens !== [] && preg_match_all('/\b(\d{1,2}-\d{3})\b/', $u, $foundCodes)) {
                 $wrong = false;
