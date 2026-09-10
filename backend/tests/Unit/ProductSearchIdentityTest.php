@@ -322,7 +322,11 @@ final class ProductSearchIdentityTest extends TestCase
             'AJ Group PROS',
             $electric
         ));
+    }
 
+    public function test_kids_jacket_760_searches_sportpros_first(): void
+    {
+        $id = new ProductSearchIdentity;
         $kidsJacket = new Product([
             'sku' => '760',
             'name' => 'Kurtka wodoodporna dziecięca',
@@ -330,8 +334,17 @@ final class ProductSearchIdentityTest extends TestCase
         ]);
         $kidsCard = 'https://sportpros.pl/pl/dzieci/dziewczynki/kurtki/36-kurtka-wodoodporna-sportpros-dla-dziewczat-model-760.html';
         $kidsQueries = $id->searchQueries($kidsJacket, 'manufacturer');
-        $this->assertContains('sportpros.pl', $id->officialCatalogHosts($kidsJacket));
+        $this->assertSame('sportpros.pl', $id->officialCatalogHosts($kidsJacket)[0] ?? null);
+        $this->assertSame('site:sportpros.pl 760', $kidsQueries[0] ?? null);
         $this->assertContains('site:sportpros.pl 760', $kidsQueries);
+        $adultJacket = new Product([
+            'sku' => '300',
+            'name' => 'Kurtka wodoochronna zapinana na zamek + stójka + rynienka',
+            'manufacturer' => 'AJ GROUP',
+        ]);
+        $adultQueries = $id->searchQueries($adultJacket, 'manufacturer');
+        $this->assertSame('site:bemoregreen.eu 300', $adultQueries[0] ?? null);
+        $this->assertContains('site:sportpros.pl 300', $adultQueries);
         $this->assertTrue($id->urlOrTitleCarriesCodeFamily($kidsCard, '', $kidsJacket));
         $this->assertTrue($id->isConfirmedProductCard(
             $kidsCard,

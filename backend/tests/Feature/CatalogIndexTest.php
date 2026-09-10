@@ -1212,6 +1212,30 @@ final class CatalogIndexTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_kids_jacket_760_finds_sportpros_card_in_index(): void
+    {
+        $card = 'https://sportpros.pl/pl/dzieci/dziewczynki/kurtki/36-kurtka-wodoodporna-sportpros-dla-dziewczat-model-760.html';
+        $this->seedPage($card, 'aj-group');
+        $this->seedPage('https://pros.pl/pl/odziez-wodoochronna-standard/63-kurtka-z-zamkiem-model-300.html', 'aj-group');
+        $product = Product::query()->create([
+            'sku' => '760',
+            'name' => 'Kurtka wodoodporna dziecięca',
+            'manufacturer' => 'AJ GROUP',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $this->assertSame($card, $hits[0]['url'] ?? null);
+
+        Http::fake();
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+        $this->assertSame('catalog_index', $pack['provider']);
+        $this->assertSame($card, $pack['results'][0]['url'] ?? null);
+        Http::assertNothingSent();
+    }
+
     public function test_prefers_page_with_brand_when_code_matches_twice(): void
     {
         $this->seedPage('https://sklep-a.pl/lampka-1202');
