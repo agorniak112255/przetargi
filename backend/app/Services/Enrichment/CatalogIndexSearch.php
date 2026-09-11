@@ -336,7 +336,10 @@ final class CatalogIndexSearch
         $brand = $this->brandToken($product);
         $ambiguous = $this->isAmbiguousNumericSku($product);
         $codes = $this->codes($product);
-        $needType = $this->shortNumericVariantNeedsType($product, $codes);
+        // rodzaj wyrobu wzięty z kategorii („Obuwie”) nie może odrzucać kart przed pobraniem —
+        // adres „…/arya-300-673560-s1-pl” nie zawiera słowa „buty”, a to właściwa karta
+        $needType = $this->shortNumericVariantNeedsType($product, $codes)
+            && $this->identity->nameRequiresArticleType($product);
         $official = [];
         $withManufacturer = [];
         $withBrand = [];

@@ -1071,6 +1071,32 @@ final class CatalogIndexTest extends TestCase
         $this->assertStringContainsString('3815089-arya-300-673560-s1-pl', $urls[0]);
     }
 
+    public function test_shop_card_without_type_word_passes_when_type_comes_from_category(): void
+    {
+        // „ARYA 300 673560 S1 PL” nie mówi, że to buty — rodzaj bierze się z kategorii,
+        // więc adres sklepu bez słowa „buty” nie może odpaść przed pobraniem karty
+        $this->seedPage('https://sklep-przyklad.pl/p/arya-300-673560-s1-pl');
+
+        $urls = array_column(app(HybridWebSearchService::class)->moreCatalogHits($this->aryaS1Pl(), []), 'url');
+
+        $this->assertContains('https://sklep-przyklad.pl/p/arya-300-673560-s1-pl', $urls);
+    }
+
+    public function test_type_from_product_name_still_filters_other_goods(): void
+    {
+        // nazwa mówi wprost „Rękawice”, więc karta kombinezonu dalej odpada przed pobraniem
+        $this->seedPage('https://sklep-przyklad.pl/p/kombinezon-ochronny-1202');
+        $product = new Product([
+            'sku' => '1202',
+            'name' => 'Rękawice robocze URGENT 1202',
+            'manufacturer' => 'Urgent',
+        ]);
+
+        $urls = array_column(app(HybridWebSearchService::class)->moreCatalogHits($product, []), 'url');
+
+        $this->assertNotContains('https://sklep-przyklad.pl/p/kombinezon-ochronny-1202', $urls);
+    }
+
     private function aryaS1Pl(): Product
     {
         return new Product([

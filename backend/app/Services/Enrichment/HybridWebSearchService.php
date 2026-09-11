@@ -484,7 +484,10 @@ class HybridWebSearchService
                 $this->identity->looksLikeNonProductCardUrl($url) => CandidateRejection::NOT_PRODUCT_CARD,
                 $this->identity->pageClaimsAnotherCode($url, $title, $product) => CandidateRejection::CLAIMS_OTHER_CODE,
                 $this->identity->looksLikeChemicalCatalogHit($hay) => CandidateRejection::CHEMICAL,
-                ! $official && ! $this->identity->hayHasRequiredTypeFromName($hay, $product) => CandidateRejection::TYPE_MISSING,
+                // typ z kategorii sprawdzamy dopiero na treści karty — w adresie bywa sam model
+                ! $official
+                    && $this->identity->nameRequiresArticleType($product)
+                    && ! $this->identity->hayHasRequiredTypeFromName($hay, $product) => CandidateRejection::TYPE_MISSING,
                 default => null,
             };
             if ($reason !== null) {
