@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
 import { CrossRefPanel } from '../components/CrossRefPanel'
@@ -43,9 +43,11 @@ const TRACE_LABEL: Record<string, string> = {
 
 export function ProductDetail() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const { user } = useAuth()
   const canEnrich = can(user, 'price_lists.import')
   const canExportPresta = can(user, 'presta.export')
+  const canDelete = can(user, 'products.delete')
   const [p, setP] = useState<Detail | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -57,6 +59,7 @@ export function ProductDetail() {
   const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
   const [exportBusy, setExportBusy] = useState(false)
   const [exportMsg, setExportMsg] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
   const [priceHistory, setPriceHistory] = useState<
     {
       id: number
@@ -255,6 +258,23 @@ export function ProductDetail() {
       setErr(ex instanceof Error ? ex.message : 'Błąd wysyłki do Presty')
     } finally {
       setExportBusy(false)
+    }
+  }
+
+  async function deleteProduct() {
+    if (!id || !p) return
+    const ok = window.confirm(
+      `Usunąć ${p.sku} ${p.name} z katalogu?\n\nTej operacji nie można cofnąć.`,
+    )
+    if (!ok) return
+    setDeleteBusy(true)
+    setErr('')
+    try {
+      await api(`/products/${id}`, { method: 'DELETE' })
+      navigate('/products')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd usuwania produktu')
+      setDeleteBusy(false)
     }
   }
 
@@ -460,6 +480,17 @@ export function ProductDetail() {
                 : p.presta_export?.presta_id
                   ? 'Aktualizuj w Preście'
                   : 'Wyślij do Presty'}
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              disabled={deleteBusy}
+              onClick={() => void deleteProduct()}
+              className="rounded border border-red-300 px-3 py-2 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+              title="Usuwa tę pozycję z katalogu"
+            >
+              {deleteBusy ? 'Usuwam…' : 'Usuń produkt'}
             </button>
           )}
           <button

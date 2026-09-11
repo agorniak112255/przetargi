@@ -254,6 +254,9 @@ export function Products() {
   const [searchParams] = useSearchParams()
   const canEnrich = can(user, 'price_lists.import')
   const canExportPresta = can(user, 'presta.export')
+  const canDelete = can(user, 'products.delete')
+  const canSelect = canEnrich || canDelete
+  const hasActions = canEnrich || canExportPresta || canDelete
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
   const [manufacturer, setManufacturer] = useState(() => searchParams.get('manufacturer') ?? '')
@@ -288,6 +291,8 @@ export function Products() {
   const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
   const [exportBusy, setExportBusy] = useState(false)
   const [exportRowId, setExportRowId] = useState<number | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteRowId, setDeleteRowId] = useState<number | null>(null)
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
   const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
   const [skipPrompt, setSkipPrompt] = useState<{
@@ -573,6 +578,40 @@ export function Products() {
     }
   }
 
+  async function deleteProducts(ids: number[], label?: string) {
+    if (ids.length === 0) return
+    const ok = window.confirm(
+      ids.length === 1
+        ? `Usunąć ${label ?? 'tę pozycję'} z katalogu?\n\nTej operacji nie można cofnąć.`
+        : `Usunąć ${ids.length} zaznaczonych produktów z katalogu?\n\nTej operacji nie można cofnąć.`,
+    )
+    if (!ok) return
+    setDeleteBusy(true)
+    if (ids.length === 1) setDeleteRowId(ids[0] ?? null)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>(
+        ids.length === 1 ? `/products/${ids[0]}` : '/products/delete',
+        ids.length === 1
+          ? { method: 'DELETE' }
+          : { method: 'POST', body: JSON.stringify({ product_ids: ids }) },
+      )
+      setMsg(res.message)
+      setSelected((prev) => {
+        const next = { ...prev }
+        for (const id of ids) delete next[id]
+        return next
+      })
+      setResult(await api<Page>(`/products?${buildParams()}`))
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd usuwania produktu')
+    } finally {
+      setDeleteBusy(false)
+      setDeleteRowId(null)
+    }
+  }
+
   async function searchPrestaIds(ids: number[]) {
     if (ids.length === 0) return
     setPrestaBusy(true)
@@ -664,7 +703,7 @@ export function Products() {
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selected[id])
   const batchActive = batch?.status === 'queued' || batch?.status === 'running'
-  const tableCols = 9 + (aiMode ? 2 : 0) + (canEnrich ? 1 : 0) + (canEnrich || canExportPresta ? 1 : 0)
+  const tableCols = 9 + (aiMode ? 2 : 0) + (canSelect ? 1 : 0) + (hasActions ? 1 : 0)
 
   return (
     <div>
@@ -827,6 +866,19 @@ export function Products() {
                 : `Wyślij do Presty${selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}`}
             </button>
           )}
+          {canDelete && (
+            <button
+              type="button"
+              disabled={deleteBusy || selectedIds.length === 0}
+              onClick={() => void deleteProducts(selectedIds)}
+              className="rounded border border-red-300 px-3 py-2 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+              title="Usuwa zaznaczone pozycje z katalogu"
+            >
+              {deleteBusy
+                ? 'Usuwam…'
+                : `Usuń zaznaczone${selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}`}
+            </button>
+          )}
           <select
             className="rounded border border-slate-300 px-3 py-2 text-sm"
             value={manufacturer}
@@ -929,7 +981,7 @@ export function Products() {
           <ProductListControls
             result={result}
             pages={pages}
-            canSelect={canEnrich}
+            canSelect={canSelect}
             allVisibleSelected={allVisibleSelected}
             visibleCount={visibleIds.length}
             selectedCount={selectedIds.length}
@@ -946,7 +998,7 @@ export function Products() {
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50">
-              {canEnrich && (
+              {canSelect && (
                 <th className="p-2 w-8">
                   <input
                     type="checkbox"
@@ -972,7 +1024,7 @@ export function Products() {
               <SortTh label="Upust" col="discount_percent" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Opis" col="description" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Zdjęcia" col="images_count" sort={sort} dir={dir} onSort={onSort} />
-              {(canEnrich || canExportPresta) && <th className="p-2">Akcja</th>}
+              {hasActions && <th className="p-2">Akcja</th>}
             </tr>
           </thead>
           <tbody>
@@ -981,7 +1033,7 @@ export function Products() {
               const thumb = p.images?.find((img) => img.is_primary) ?? p.images?.[0]
               return (
                 <tr key={p.id} className={`border-b ${selected[p.id] ? 'bg-blue-50/40' : ''}`}>
-                  {canEnrich && (
+                  {canSelect && (
                     <td className="p-2 select-none">
                       <input
                         type="checkbox"
@@ -1099,7 +1151,7 @@ export function Products() {
                       <span className="text-slate-400">—</span>
                     )}
                   </td>
-                  {(canEnrich || canExportPresta) && (
+                  {hasActions && (
                     <td className="p-2">
                       <div className="flex flex-wrap gap-1">
                         {canEnrich && (
@@ -1135,6 +1187,17 @@ export function Products() {
                                 : 'Do Presty'}
                           </button>
                         )}
+                        {canDelete && (
+                          <button
+                            type="button"
+                            disabled={deleteBusy}
+                            onClick={() => void deleteProducts([p.id], `${p.sku} ${p.name}`)}
+                            className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50 disabled:opacity-50"
+                            title="Usuń z katalogu"
+                          >
+                            {deleteRowId === p.id ? 'Usuwam…' : 'Usuń'}
+                          </button>
+                        )}
                       </div>
                     </td>
                   )}
@@ -1151,7 +1214,7 @@ export function Products() {
               </tr>
             )}
           </tbody>
-          {canEnrich && visibleIds.length > 0 && (
+          {canSelect && visibleIds.length > 0 && (
             <tfoot>
               <tr className="border-t bg-slate-50">
                 <td className="p-2 w-8">
@@ -1380,7 +1443,7 @@ export function Products() {
             <ProductListControls
               result={result}
               pages={pages}
-              canSelect={canEnrich}
+              canSelect={canSelect}
               allVisibleSelected={allVisibleSelected}
               visibleCount={visibleIds.length}
               selectedCount={selectedIds.length}

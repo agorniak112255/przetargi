@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\DestroyProductsRequest;
 use App\Http\Requests\UpdateProductCategoryRequest;
 use App\Http\Requests\UpdateProductShopSourceRequest;
 use App\Models\PrestaCategory;
@@ -13,10 +14,12 @@ use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\NbpExchangeRateService;
+use App\Services\ProductDeletionService;
 use App\Services\ProductKitService;
 use App\Support\ProductModelFuzzy;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Throwable;
 
 class ProductController extends Controller
 {
@@ -25,6 +28,7 @@ class ProductController extends Controller
         private readonly ProductModelFuzzy $modelFuzzy,
         private readonly EnrichmentDescriptionTemplateService $descriptionTemplates,
         private readonly ProductKitService $kit,
+        private readonly ProductDeletionService $deletion,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -343,6 +347,55 @@ class ProductController extends Controller
         ])->values()->all();
 
         return response()->json($payload);
+    }
+
+    public function destroy(Request $request, Product $product): JsonResponse
+    {
+        $user = $request->user();
+        if ($user === null) {
+            return response()->json(['message' => 'Brak autoryzacji.'], 401);
+        }
+
+        try {
+            $result = $this->deletion->deleteMany([(int) $product->id], $user);
+        } catch (Throwable $e) {
+            return response()->json([
+                'message' => 'Nie udało się usunąć produktu: '.$e->getMessage(),
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => sprintf('Usunięto produkt %s.', (string) $product->sku),
+            ...$result,
+        ]);
+    }
+
+    public function destroyMany(DestroyProductsRequest $request): JsonResponse
+    {
+        $user = $request->user();
+        if ($user === null) {
+            return response()->json(['message' => 'Brak autoryzacji.'], 401);
+        }
+
+        $ids = array_map(
+            static fn (mixed $id): int => (int) $id,
+            $request->validated('product_ids')
+        );
+
+        try {
+            $result = $this->deletion->deleteMany($ids, $user);
+        } catch (Throwable $e) {
+            return response()->json([
+                'message' => 'Nie udało się usunąć produktów: '.$e->getMessage(),
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => $result['deleted'] === 1
+                ? 'Usunięto 1 produkt.'
+                : sprintf('Usunięto %d produktów.', $result['deleted']),
+            ...$result,
+        ]);
     }
 
     public function priceHistory(Product $product): JsonResponse

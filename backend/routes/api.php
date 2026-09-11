@@ -139,7 +139,11 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:products.view');
     Route::post('/products/enrich', [ProductEnrichmentController::class, 'enrichProducts'])
         ->middleware('permission:price_lists.import');
+    Route::post('/products/delete', [ProductController::class, 'destroyMany'])
+        ->middleware('permission:products.delete');
     Route::get('/products/{product}', [ProductController::class, 'show'])->middleware('permission:products.view');
+    Route::delete('/products/{product}', [ProductController::class, 'destroy'])
+        ->middleware('permission:products.delete');
     Route::post('/products/{product}/kit-suggestions', [ProductKitController::class, 'suggest'])->middleware('permission:products.view');
     Route::post('/products/{product}/kit', [ProductKitController::class, 'attach'])->middleware('permission:products.view');
     Route::delete('/products/{product}/kit', [ProductKitController::class, 'destroy'])->middleware('permission:products.view');
