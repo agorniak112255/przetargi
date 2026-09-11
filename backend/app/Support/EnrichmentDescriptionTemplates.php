@@ -163,7 +163,7 @@ Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"d
   "source_urls": ["https://… karty produktu"],
   "confidence": 0.0
 }
-JĘZYK: cały tekst wyjściowy po polsku, także gdy źródła są francuskie, niemieckie, czeskie czy angielskie.
+JĘZYK: cały tekst wyjściowy po polsku, także gdy źródła są francuskie, niemieckie, czeskie, hiszpańskie, chińskie czy angielskie.
 Bez zdań w języku oryginału i bez etykiet typu „Produit”, „Matériaux”, „Usage” — tłumacz je na polskie odpowiedniki.
 WYPEŁNIJ tablice features/specs/norms/materials/use_cases oraz attributes, gdy fakty są w tekście — nie zostawiaj ich pustych „dla skrótu”.
 Nie powtarzaj tych samych zdań w description, features i specs — description zostaje pełny (6–12 zdań).

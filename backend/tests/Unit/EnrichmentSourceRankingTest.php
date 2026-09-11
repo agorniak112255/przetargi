@@ -62,6 +62,30 @@ final class EnrichmentSourceRankingTest extends TestCase
         $this->assertTrue(collect($urls)->contains(fn (string $u): bool => str_ends_with($u, '.pdf')));
     }
 
+    public function test_ansell_description_ranking_prefers_pl_product_over_blog_and_cn(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'manufacturer' => 'Ansell',
+            'sku' => 'WH20T-00111-09',
+            'name' => '2000-WH TSPLUS CVRL HOOD 111.5XL',
+        ]);
+        $mfrDomains = ['ansell.com', 'www.ansell.com'];
+
+        $ranked = $this->invoke($service, 'rankResultsForDescription', [
+            [
+                ['url' => 'https://www.ansell.com/hk/en/blogs/critical-insights/x', 'title' => 'blog', 'snippet' => ''],
+                ['url' => 'https://www.ansell.com/cn/zh-hans/products/bioclean-2000', 'title' => 'cn', 'snippet' => ''],
+                ['url' => 'https://www.ansell.com/pl/pl/products/bioclean-2000-hooded-coverall-model-111', 'title' => 'pl', 'snippet' => ''],
+            ],
+            $product,
+            $mfrDomains,
+        ]);
+
+        $this->assertStringContainsString('/pl/pl/products/', (string) ($ranked[0]['url'] ?? ''));
+        $this->assertStringContainsString('/blogs/', (string) ($ranked[count($ranked) - 1]['url'] ?? ''));
+    }
+
     /**
      * @param  list<mixed>  $args
      */

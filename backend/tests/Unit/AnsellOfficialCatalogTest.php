@@ -71,4 +71,26 @@ final class AnsellOfficialCatalogTest extends TestCase
 
         $this->assertSame($url, $hits[0]['url'] ?? null);
     }
+
+    public function test_finds_bioclean_tsplus_hooded_coverall(): void
+    {
+        $url = 'https://www.ansell.com/pl/pl/products/bioclean-2000-hooded-coverall-model-111';
+        Http::fake([
+            'https://r.jina.ai/'.$url => Http::response(
+                "# BioClean 2000 Hooded Coverall Model 111\n\n"
+                .'Sterile disposable BioClean 2000 coverall with hood, model 111. '
+                .str_repeat('opis ', 40),
+                200
+            ),
+            '*' => Http::response('Product Not Found — missing', 200),
+        ]);
+
+        $hits = app(AnsellOfficialCatalog::class)->find(new Product([
+            'sku' => 'WH20T-00111-09',
+            'name' => '2000-WH TSPLUS CVRL HOOD 111.5XL',
+            'manufacturer' => 'ANSELL',
+        ]));
+
+        $this->assertSame($url, $hits[0]['url'] ?? null);
+    }
 }

@@ -285,21 +285,24 @@ final class ProductPageFetcher
 
         $used = false;
         if ($viaReader['text'] !== '') {
-            $text = $viaReader['text'];
-            $optionSizes = (new ProductSizeVariant)->parseShopOptionSizes($text);
-            if ($optionSizes !== []) {
-                $text = trim('Dostępne rozmiary: '.implode(', ', $optionSizes)."\n\n".$text);
+            $skuNorm = mb_strtolower(trim((string) ($this->matchingProduct?->sku ?? '')));
+            $text = $this->cleanFetchedPageText($viaReader['text'], $skuNorm);
+            if ($text !== '') {
+                $optionSizes = (new ProductSizeVariant)->parseShopOptionSizes($text);
+                if ($optionSizes !== []) {
+                    $text = trim('Dostępne rozmiary: '.implode(', ', $optionSizes)."\n\n".$text);
+                }
+                $page = ['url' => $url, 'text' => $text];
+                if ($optionSizes !== []) {
+                    $page['option_sizes'] = $optionSizes;
+                }
+                $accessories = (new ProductAccessoryExtractor)->fromText($text);
+                if ($accessories !== []) {
+                    $page['accessories'] = $accessories;
+                }
+                $goodPages[] = $page;
+                $used = true;
             }
-            $page = ['url' => $url, 'text' => $text];
-            if ($optionSizes !== []) {
-                $page['option_sizes'] = $optionSizes;
-            }
-            $accessories = (new ProductAccessoryExtractor)->fromText($text);
-            if ($accessories !== []) {
-                $page['accessories'] = $accessories;
-            }
-            $goodPages[] = $page;
-            $used = true;
         }
         foreach ($viaReader['image_urls'] as $img) {
             if (! is_string($img) || $img === '' || ! $this->imageAllowedForProduct($img)) {
@@ -550,6 +553,17 @@ final class ProductPageFetcher
         if (str_contains($url, 'ceneo.pl') || str_contains($url, 'allegro.pl')) {
             $score -= 20;
         }
+        if (str_contains($url, '/blogs/') || str_contains($url, '/blog/')) {
+            $score -= 80;
+        }
+        if (preg_match('#ansell\.com/(?:cn|lac|hk|nz|apac|ap)/#', $url) === 1) {
+            $score -= 40;
+        }
+        if (str_contains($url, 'ansell.com/pl/pl/products/')) {
+            $score += 40;
+        } elseif (str_contains($url, 'ansell.com/gb/en/products/')) {
+            $score += 25;
+        }
 
         return $score;
     }
@@ -697,6 +711,72 @@ final class ProductPageFetcher
         return preg_match('/\bprzed\s*:\s*(?:\([^)]{0,80})?$/iu', $t) === 1;
     }
 
+    public static function looksLikeCookieConsent(string $text): bool
+    {
+        $low = mb_strtolower($text);
+        foreach ([
+            'when you visit our website, we store cookies',
+            'we store cookies on your browser',
+            'strictly necessary cookies',
+            'first party strictly necessary cookies',
+            'california consumer privacy act',
+            'sale of personal data',
+            'you cannot opt-out of our first party',
+            'these cookies collect information for analytics',
+            'exercise my rights',
+        ] as $needle) {
+            if (str_contains($low, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static function looksLikeCjkDump(string $text): bool
+    {
+        $han = preg_match_all('/\p{Han}/u', $text);
+
+        return is_int($han) && $han >= 40;
+    }
+
+    public static function looksLikeRawLocaleDump(string $text): bool
+    {
+        if (self::looksLikeCookieConsent($text) || self::looksLikeCjkDump($text)) {
+            return true;
+        }
+        $low = mb_strtolower($text);
+        $hits = 0;
+        foreach ([
+            'nº artículo', 'descripción del producto', 'reducción de los riesgos',
+            'cuartos limpios', '项目编号', '产品名称', '产品描述',
+        ] as $needle) {
+            if (str_contains($low, $needle) || str_contains($text, $needle)) {
+                $hits++;
+            }
+        }
+
+        return $hits >= 2;
+    }
+
+    public static function stripCookieConsentBlocks(string $text): string
+    {
+        $patterns = [
+            '/When you visit our website, we store cookies.{0,8000}?(?=\n\n|\n# |\n\* \*\*(?!Your Privacy|Strictly Necessary|Sale of Personal)|\z)/isu',
+            '/Under the California Consumer Privacy Act.{0,4000}?(?=\n\n|\n# |\z)/isu',
+            '/These cookies (?:are|collect).{0,2500}?(?=\n\n|\n# |\z)/isu',
+            '/\* \*\*Your Privacy\*\*.{0,2000}?(?=\n# |\z)/isu',
+            '/\* \*\*Strictly Necessary Cookies\*\*.{0,2000}?(?=\n# |\z)/isu',
+            '/\* \*\*Sale of Personal Data\*\*.{0,2000}?(?=\n# |\z)/isu',
+        ];
+        foreach ($patterns as $pattern) {
+            $text = preg_replace($pattern, "\n\n", $text) ?? $text;
+        }
+        $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
+
+        return trim($text);
+    }
+
     /** Link „(Zobacz klasyfikację…)” / „czytaj dalej” — nie treść produktu. */
     public static function stripExpandLinkChrome(string $text): string
     {
@@ -737,9 +817,19 @@ final class ProductPageFetcher
         }
 
         $text = trim(implode("\n\n", array_filter($chunks)));
+
+        return $this->cleanFetchedPageText($text, $skuNorm);
+    }
+
+    private function cleanFetchedPageText(string $text, string $skuNorm): string
+    {
+        $text = self::stripCookieConsentBlocks($text);
         $text = $this->stripShopChromePhrases($text);
         $text = self::stripExpandLinkChrome($text);
         $text = $this->keepProductRelevantParagraphs($text, $skuNorm);
+        if (self::looksLikeCookieConsent($text) || self::looksLikeCjkDump($text)) {
+            return '';
+        }
 
         return mb_substr(trim($text), 0, 5000);
     }
@@ -748,7 +838,7 @@ final class ProductPageFetcher
     {
         $text = self::stripExpandLinkChrome(trim($text));
         if ($text === '' || $this->looksLikeShopChrome($text) || self::looksLikeTruncatedShopTeaser($text)
-            || self::looksLikeCompanyImprint($text)) {
+            || self::looksLikeCompanyImprint($text) || self::looksLikeCookieConsent($text)) {
             return '';
         }
 
@@ -877,6 +967,7 @@ final class ProductPageFetcher
             $low = mb_strtolower($part);
             if ($this->looksLikeShopChrome($part) || self::looksLikeTruncatedShopTeaser($part)
                 || self::looksLikeCompanyImprint($part)
+                || self::looksLikeCookieConsent($part) || self::looksLikeCjkDump($part)
                 || str_contains($low, 'wähle eine option') || str_contains($low, 'wahle eine option')) {
                 continue;
             }
@@ -898,7 +989,8 @@ final class ProductPageFetcher
         if ($kept === []) {
             // ostatnia deska: wyczyść cały tekst ze śmieci i skróć
             $flat = $this->stripShopChromePhrases(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
-            if ($flat === '' || self::looksLikeCompanyImprint($flat)) {
+            if ($flat === '' || self::looksLikeCompanyImprint($flat)
+                || self::looksLikeCookieConsent($flat) || self::looksLikeCjkDump($flat)) {
                 return '';
             }
 
@@ -910,6 +1002,9 @@ final class ProductPageFetcher
 
     private function looksLikeShopChrome(string $text): bool
     {
+        if (self::looksLikeCookieConsent($text) || self::looksLikeRawLocaleDump($text)) {
+            return true;
+        }
         $low = mb_strtolower($text);
         $hits = 0;
         foreach ([

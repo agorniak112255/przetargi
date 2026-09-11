@@ -467,6 +467,7 @@ class HybridWebSearchService
                 && $this->identity->isOfficialThreeMProductUrl($url);
             if ($this->isListingWithoutProduct($url, $product)
                 || $this->identity->looksLikeUnrelatedRetailHost($url, $product)
+                || $this->identity->looksLikeNonProductCardUrl($url)
                 || $this->identity->pageClaimsAnotherCode($url, $title, $product)
                 || $this->identity->looksLikeChemicalCatalogHit($hay)
                 || (! $officialThreeM && ! $this->identity->hayHasRequiredTypeFromName($hay, $product))) {
@@ -1141,7 +1142,8 @@ class HybridWebSearchService
             if (preg_match('#(ochronki na buty|shoe[- ]?cover|folie na buty|nakladki na obuwie)#i', $hay)) {
                 continue;
             }
-            if ($this->identity->looksLikeUnrelatedRetailHost($url, $product)) {
+            if ($this->identity->looksLikeUnrelatedRetailHost($url, $product)
+                || $this->identity->looksLikeNonProductCardUrl($url)) {
                 continue;
             }
             if ($this->isListingWithoutProduct($url, $product)) {

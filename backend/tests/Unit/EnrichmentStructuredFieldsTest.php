@@ -252,6 +252,36 @@ TXT;
         ]));
     }
 
+    public function test_rejects_ansell_cookie_and_cjk_dump_as_description(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'sku' => 'WH20T-00111-09',
+            'name' => '2000-WH TSPLUS CVRL HOOD 111.5XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+        $cookies = 'When you visit our website, we store cookies on your browser to collect information. '
+            .'You cannot opt-out of our First Party Strictly Necessary Cookies as they are deployed '
+            .'in order to ensure the proper functioning of our website. '
+            .'Under the California Consumer Privacy Act, you have the right to opt-out of the sale '
+            .'of your personal information to third parties. These cookies collect information for analytics.';
+        $cjk = "| 项目编号 | 产品名称 | 产品描述 | 包装 | 箱数 |\n"
+            ."| WH20-B-BC-111-02-ST1 | BioClean | S | 每个密封PE内包装袋1件 | 25 |\n"
+            .str_repeat('无菌洁净服 2000 型号 111 ', 20);
+
+        $this->assertTrue(ProductPageFetcher::looksLikeCookieConsent($cookies));
+        $this->assertTrue(ProductPageFetcher::looksLikeCjkDump($cjk));
+        $this->assertTrue($this->invoke($service, 'looksLikeRawLocaleDump', [$cookies]));
+        $this->assertFalse($this->invoke($service, 'isUsableProductDescription', [$cookies, $product]));
+        $this->assertSame('', $this->invoke($service, 'fallbackDescriptionFromPages', [
+            [['url' => 'https://www.ansell.com/cn/zh-hans/products/bioclean-2000', 'text' => $cookies."\n\n".$cjk]],
+            $product,
+        ]));
+        $this->assertSame('', $this->invoke($service, 'descriptionFromConfirmedCards', [[
+            ['url' => 'https://www.ansell.com/lac/es/products/bioclean-2000', 'text' => $cookies],
+        ]]));
+    }
+
     /**
      * @param  list<mixed>  $args
      */

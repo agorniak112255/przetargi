@@ -1601,6 +1601,20 @@ final class ProductEnrichmentService
             return 100;
         }
         if ($this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
+            $u = mb_strtolower($url);
+            if (str_contains($u, '/blogs/') || str_contains($u, '/blog/')) {
+                return -80;
+            }
+            if (str_contains($u, 'ansell.com/pl/pl/products/')) {
+                return 8;
+            }
+            if (str_contains($u, 'ansell.com/gb/en/products/')) {
+                return 4;
+            }
+            if (preg_match('#ansell\.com/(?:cn|lac|hk|nz|apac|ap)/#', $u) === 1) {
+                return -40;
+            }
+
             return 0;
         }
         $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
@@ -1766,8 +1780,12 @@ final class ProductEnrichmentService
     private function isRicherDescription(string $candidate, string $current): bool
     {
         $candidate = trim($candidate);
-        if ($candidate === '' || $this->looksLikeMissingCardMeta($candidate)) {
+        if ($candidate === '' || $this->looksLikeMissingCardMeta($candidate)
+            || $this->looksLikeRawLocaleDump($candidate)) {
             return false;
+        }
+        if ($this->looksLikeRawLocaleDump($current) && ! $this->looksLikeRawLocaleDump($candidate)) {
+            return true;
         }
         if ($current === '' || $this->looksLikeMissingCardMeta($current) || $this->looksLikeThinDescription($current)) {
             return ! $this->looksLikeThinDescription($candidate) || mb_strlen($candidate) > mb_strlen($current) + 40;
@@ -2277,8 +2295,17 @@ final class ProductEnrichmentService
     }
 
     /** Skopiowany chrome sklepu zamiast opisu produktu. */
+    private function looksLikeRawLocaleDump(string $description): bool
+    {
+        return ProductPageFetcher::looksLikeRawLocaleDump($description)
+            || ProductPageFetcher::looksLikeCookieConsent($description);
+    }
+
     private function looksLikeShopChromeDescription(string $description): bool
     {
+        if ($this->looksLikeRawLocaleDump($description)) {
+            return true;
+        }
         $low = mb_strtolower($description);
         $hits = 0;
         foreach ([
@@ -2360,7 +2387,8 @@ final class ProductEnrichmentService
     private function isUsableProductDescription(string $description, Product $product): bool
     {
         $d = trim($description);
-        if ($d === '' || $this->looksLikeMissingCardMeta($d) || $this->looksLikeThinDescription($d)) {
+        if ($d === '' || $this->looksLikeMissingCardMeta($d) || $this->looksLikeThinDescription($d)
+            || $this->looksLikeRawLocaleDump($d)) {
             return false;
         }
         if ($product->hintedShopUrl() !== null) {
@@ -2536,7 +2564,8 @@ final class ProductEnrichmentService
                 if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
                     || $this->looksLikeMissingCardMeta($part)
                     || ProductPageFetcher::looksLikeCompanyImprint($part)
-                    || $this->looksLikeShopChromeDescription($part)) {
+                    || $this->looksLikeShopChromeDescription($part)
+                    || $this->looksLikeRawLocaleDump($part)) {
                     continue;
                 }
                 if (mb_strlen($part) >= 40 && $this->descriptionMentionsProduct($part, $product)) {
@@ -2546,7 +2575,8 @@ final class ProductEnrichmentService
             if ($candidates === []) {
                 $flat = ProductPageFetcher::stripExpandLinkChrome(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
                 if ($flat !== '' && ! ProductPageFetcher::looksLikeTruncatedShopTeaser($flat)
-                    && ! $this->looksLikeThinDescription($flat) && mb_strlen($flat) >= 220
+                    && ! $this->looksLikeThinDescription($flat) && ! $this->looksLikeRawLocaleDump($flat)
+                    && mb_strlen($flat) >= 220
                     && $this->descriptionMentionsProduct($flat, $product)) {
                     $candidates[] = $flat;
                 }
@@ -2587,6 +2617,7 @@ final class ProductEnrichmentService
                     || $this->looksLikeMissingCardMeta($part)
                     || ProductPageFetcher::looksLikeCompanyImprint($part)
                     || $this->looksLikeShopChromeDescription($part)
+                    || $this->looksLikeRawLocaleDump($part)
                     || $this->looksLikeOffTopicDescription($part)
                     || $this->looksLikeCategoryIndexDescription($part)
                     || $this->looksLikeLinkDump($part)) {
@@ -2597,13 +2628,20 @@ final class ProductEnrichmentService
                 }
             }
         }
-        $candidates = array_values(array_unique($candidates));
+        $candidates = array_values(array_filter(
+            array_unique($candidates),
+            fn (string $part): bool => ! $this->looksLikeRawLocaleDump($part)
+        ));
         if ($candidates === []) {
             return '';
         }
         usort($candidates, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
-        $out = mb_substr(implode("\n\n", $candidates), 0, 5000);
-        if ($this->looksLikeThinDescription($out) || $this->looksLikeMissingCardMeta($out)) {
+        $best = $candidates[0];
+        $out = ! $this->looksLikeIncompleteDescription($best) || count($candidates) === 1
+            ? mb_substr($best, 0, 5000)
+            : mb_substr(implode("\n\n", $candidates), 0, 5000);
+        if ($this->looksLikeThinDescription($out) || $this->looksLikeMissingCardMeta($out)
+            || $this->looksLikeRawLocaleDump($out)) {
             return '';
         }
 
@@ -3069,14 +3107,14 @@ final class ProductEnrichmentService
 Jesteś filtrem treści produktu BHP. Dostajesz surowy tekst ze stron sklepów.
 Zadanie: WSTĘPNA ANALIZA — wyrzuć śmieci sklepowe, zostaw wyłącznie informacje o produkcie.
 
-WYRZUĆ całkowicie: logowanie, rejestracja, konto, obserwowane, koszyk, suma, zamówienie, menu kategorii, breadcrumby („jesteś tutaj”), wyszukiwanie, telefon/e-mail sklepu, wysyłka, koszty dostawy, płatności, prowizje, regulamin, polityka prywatności, odstąpienie od umowy, zwroty 14 dni, punkty lojalnościowe, porównanie, cookies, ceny marketingowe bez kontekstu produktu.
+WYRZUĆ całkowicie: logowanie, rejestracja, konto, obserwowane, koszyk, suma, zamówienie, menu kategorii, breadcrumby („jesteś tutaj”), wyszukiwanie, telefon/e-mail sklepu, wysyłka, koszty dostawy, płatności, prowizje, regulamin, polityka prywatności, odstąpienie od umowy, zwroty 14 dni, punkty lojalnościowe, porównanie, cookies, baner CMP / OneTrust / CCPA / „When you visit our website, we store cookies”, ceny marketingowe bez kontekstu produktu.
 
 ZOSTAW pełny opis produktu ze strony: akapity, listy (np. po „ochrony przed:”), parametry, materiały, normy, przeznaczenie, cechy techniczne, kolory/rozmiary jeśli produktowe.
 Nie streszczaj do sloganu ani og:description. Nie urywaj na „(Zobacz…”, „czytaj dalej”, „rozwiń”.
 Wyrzuć same odnośniki typu „Zobacz klasyfikację…”, ale zostaw treść, która jest po nich.
 Nie powtarzaj tego samego faktu.
 
-JĘZYK: źródła bywają po francusku, niemiecku, czesku czy angielsku. ZAWSZE tłumacz fakty na polski.
+JĘZYK: źródła bywają po francusku, niemiecku, czesku, hiszpańsku, chińsku czy angielsku. ZAWSZE tłumacz fakty na polski.
 Nigdy nie przepisuj zdań w języku oryginału — nazwy własne modeli i oznaczenia norm zostaw bez zmian.
 
 Zwróć TYLKO JSON — bez pola thought/reasoning. Pierwszy znak to {.

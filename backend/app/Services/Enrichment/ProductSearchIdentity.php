@@ -672,7 +672,8 @@ final class ProductSearchIdentity
             $out = [];
             $series = $bits['series'] ?? '';
             if ($series !== '') {
-                $out[] = 'AlphaTec '.$series.' '.$model;
+                $line = $this->ansellIsBioClean($product) ? 'BioClean' : 'AlphaTec';
+                $out[] = $line.' '.$series.' '.$model;
             }
             if ($label !== '') {
                 $out[] = 'Ansell '.$label.' '.$padded;
@@ -715,6 +716,29 @@ final class ProductSearchIdentity
         }
         $series = mb_strtolower($series);
         $model = mb_strtolower($model);
+        $slugs = $this->ansellOfficialSlugs($product, $series, $model);
+        $out = [];
+        foreach ($slugs as $slug) {
+            foreach (['pl/pl', 'gb/en'] as $locale) {
+                $out[] = 'https://www.ansell.com/'.$locale.'/products/'.$slug;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function ansellOfficialSlugs(Product $product, string $series, string $model): array
+    {
+        if ($this->ansellIsBioClean($product)) {
+            return [
+                'bioclean-'.$series.'-hooded-coverall-model-'.$model,
+                'bioclean-'.$series.'-coverall-with-hood-model-'.$model,
+                'bioclean-'.$series.'-sterile-hooded-coverall-model-'.$model,
+            ];
+        }
         $name = mb_strtoupper((string) $product->name);
         $apron = str_contains($name, 'APRON') || str_contains($name, 'FARTUCH');
         $coverallSlugs = [
@@ -729,15 +753,19 @@ final class ProductSearchIdentity
             'alphatec-'.$series.'-apron-ultrasonically-welded-model-'.$model,
             'alphatec-'.$series.'-apron-stitched-model-'.$model,
         ];
-        $slugs = $apron ? [...$apronSlugs, ...$coverallSlugs] : [...$coverallSlugs, ...$apronSlugs];
-        $out = [];
-        foreach ($slugs as $slug) {
-            foreach (['pl/pl', 'gb/en'] as $locale) {
-                $out[] = 'https://www.ansell.com/'.$locale.'/products/'.$slug;
-            }
-        }
 
-        return $out;
+        return $apron ? [...$apronSlugs, ...$coverallSlugs] : [...$coverallSlugs, ...$apronSlugs];
+    }
+
+    public function ansellIsBioClean(Product $product): bool
+    {
+        $blob = mb_strtoupper(trim((string) $product->name.' '.(string) $product->sku));
+
+        return str_contains($blob, 'BIOCLEAN')
+            || str_contains($blob, 'TSPLUS')
+            || str_contains($blob, 'TS-PLUS')
+            || (bool) preg_match('/\bWH20B\b/', $blob)
+            || (bool) preg_match('/-BC-/', $blob);
     }
 
     /** Karta ansell.com/…/alphatec-4000-…-model-121 — typ (CVRL) nie musi być w slugu. */
@@ -750,12 +778,13 @@ final class ProductSearchIdentity
             return false;
         }
         $hay = mb_strtolower($hay);
-        if (! str_contains($hay, 'ansell.com') && ! str_contains($hay, 'alphatec-'.$series)) {
+        $line = $this->ansellIsBioClean($product) ? 'bioclean' : 'alphatec';
+        if (! str_contains($hay, 'ansell.com') && ! str_contains($hay, $line.'-'.$series)) {
             return false;
         }
 
         return preg_match(
-            '/alphatec[-_]?'.preg_quote($series, '/').'\b/u',
+            '/'.$line.'[-_]?'.preg_quote($series, '/').'\b/u',
             $hay
         ) === 1
             && preg_match('/(?:^|[^0-9])model[-_ ]'.preg_quote($model, '/').'(?:[^0-9]|$)/u', $hay) === 1;
@@ -1837,7 +1866,10 @@ final class ProductSearchIdentity
     public function looksLikeNonProductCardUrl(string $url): bool
     {
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
-        foreach (['/gutschein', '/voucher', '/coupon', '/impressum', '/imprint', '/kontakt'] as $bad) {
+        foreach ([
+            '/gutschein', '/voucher', '/coupon', '/impressum', '/imprint', '/kontakt',
+            '/blogs/', '/blog/',
+        ] as $bad) {
             if (str_contains($path, $bad)) {
                 return true;
             }
@@ -2373,7 +2405,8 @@ final class ProductSearchIdentity
      */
     public function pageClaimsAnotherCode(string $url, string $title, Product $product): bool
     {
-        if ($this->ansellPageClaimsForeignSeries($url, $title, $product)) {
+        if ($this->ansellPageClaimsForeignSeries($url, $title, $product)
+            || $this->ansellPageClaimsForeignLine($url, $product)) {
             return true;
         }
         // SKU 205, sklep „model 285” — ta sama kurtka, pełna nazwa w slugu.
@@ -2435,6 +2468,17 @@ final class ProductSearchIdentity
         }
 
         return false;
+    }
+
+    /** BioClean 2000 to nie karta AlphaTec 2000 (ta sama seria/model, inna linia). */
+    private function ansellPageClaimsForeignLine(string $url, Product $product): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? $url));
+        if ($this->ansellIsBioClean($product)) {
+            return preg_match('/alphatec[-_]/u', $path) === 1;
+        }
+
+        return preg_match('/bioclean[-_]/u', $path) === 1;
     }
 
     /** AlphaTec 3000 model 213 to nie karta AlphaTec 2000 model 213. */
@@ -3834,7 +3878,7 @@ final class ProductSearchIdentity
         }
 
         return preg_replace(
-            '#^(https?://(?:www\.)?ansell\.com)/[a-z]{2}/[a-z]{2}/(?=products/)#i',
+            '#^(https?://(?:www\.)?ansell\.com)/.+?/(?=products/)#i',
             '$1/pl/pl/',
             $url
         ) ?? $url;
@@ -4498,7 +4542,7 @@ final class ProductSearchIdentity
         $brand = mb_strtolower(trim($brand));
         $compact = preg_replace('/[^a-z0-9]+/u', '', $brand) ?? $brand;
         $families = [
-            'ansell' => ['ansell', 'kleenguard', 'kimberly', 'ringers', 'activarmr', 'alphatec'],
+            'ansell' => ['ansell', 'kleenguard', 'kimberly', 'ringers', 'activarmr', 'alphatec', 'bioclean'],
             'kleenguard' => ['ansell', 'kleenguard', 'kimberly'],
             'atg' => ['atg', 'maxiflex', 'maxicut', 'maxidry'],
             'maxiflex' => ['atg', 'maxiflex', 'maxicut', 'maxidry'],

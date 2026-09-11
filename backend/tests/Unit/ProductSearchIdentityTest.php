@@ -1177,6 +1177,85 @@ final class ProductSearchIdentityTest extends TestCase
                 $product
             )
         );
+        $this->assertSame(
+            'https://www.ansell.com/pl/pl/products/bioclean-2000-hooded-coverall-model-111',
+            $id->preferredLocaleUrl(
+                'https://www.ansell.com/cn/zh-hans/products/bioclean-2000-hooded-coverall-model-111',
+                $product
+            )
+        );
+        $this->assertSame(
+            'https://www.ansell.com/pl/pl/products/bioclean-2000-hooded-coverall-model-111',
+            $id->preferredLocaleUrl(
+                'https://www.ansell.com/lac/es/products/bioclean-2000-hooded-coverall-model-111',
+                $product
+            )
+        );
+        $this->assertSame(
+            'https://www.ansell.com/pl/pl/products/bioclean-2000-hooded-coverall-model-111',
+            $id->preferredLocaleUrl(
+                'https://www.ansell.com/apac/en/products/bioclean-2000-hooded-coverall-model-111',
+                $product
+            )
+        );
+        $blog = 'https://www.ansell.com/hk/en/blogs/critical-insights/bioclean-2000';
+        $this->assertSame($blog, $id->preferredLocaleUrl($blog, $product));
+        $this->assertTrue($id->looksLikeNonProductCardUrl($blog));
+    }
+
+    public function test_ansell_tsplus_uses_bioclean_card_not_alphatec_or_blog(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'WH20T-00111-09',
+            'name' => '2000-WH TSPLUS CVRL HOOD 111.5XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+
+        $this->assertTrue($id->ansellIsBioClean($product));
+        $this->assertSame('111', $id->ansellCatalogBits($product)['model']);
+        $this->assertSame('2000', $id->ansellCatalogBits($product)['series']);
+        $urls = $id->ansellOfficialProductUrls($product);
+        $this->assertSame(
+            'https://www.ansell.com/pl/pl/products/bioclean-2000-hooded-coverall-model-111',
+            $urls[0] ?? null
+        );
+        $this->assertContains(
+            'https://www.ansell.com/gb/en/products/bioclean-2000-hooded-coverall-model-111',
+            $urls
+        );
+        foreach ($urls as $url) {
+            $this->assertStringNotContainsString('alphatec', $url);
+        }
+
+        $early = implode(' | ', $id->ansellSearchPhrases($product, 'early'));
+        $this->assertStringContainsString('BioClean 2000 111', $early);
+        $this->assertStringNotContainsString('AlphaTec', $early);
+
+        $card = 'https://www.ansell.com/pl/pl/products/bioclean-2000-hooded-coverall-model-111';
+        $this->assertTrue($id->hayMentionsProduct(
+            $card.' BioClean 2000 hooded coverall Model 111 sterile',
+            $product
+        ));
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            $card,
+            'BioClean 2000 Hooded Coverall Model 111',
+            $product
+        ));
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://www.ansell.com/gb/en/products/alphatec-2000-standard-model-111',
+            'AlphaTec 2000 Standard Model 111',
+            $product
+        ));
+        $this->assertTrue($id->looksLikeNonProductCardUrl(
+            'https://www.ansell.com/nz/en/blogs/critical-insights/cleanroom-coveralls'
+        ));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://www.ansell.com/hk/en/blogs/critical-insights/bioclean-2000',
+            'BioClean 2000 Model 111',
+            'Sterile disposable coverall BioClean 2000 model 111 for cleanrooms.',
+            $product
+        ));
     }
 
     public function test_rejects_weight_false_positive_1000g_for_sku_1000(): void
