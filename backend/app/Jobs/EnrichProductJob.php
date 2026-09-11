@@ -11,6 +11,7 @@ use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentBatchItem;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\TavilyQuotaGuard;
@@ -256,9 +257,14 @@ class EnrichProductJob implements ShouldQueue
     ): void {
         $keepStatus = [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL];
         if ($product !== null && ! in_array($product->enrichment_status, $keepStatus, true)) {
+            // padnięcie poza samym wzbogacaniem (limit czasu, wyjątek workera) zostawiało produkt
+            // bez przebiegu — 508 z 516 „błędów” nie dało się zdiagnozować
+            $log = app(EnrichmentAttemptLog::class);
+            $log->add('fail', $error);
             $product->update([
                 'enrichment_status' => Product::ENRICHMENT_FAILED,
                 'enrichment_error' => mb_substr($error, 0, 2000),
+                'enrichment_trace' => $log->snapshot($product),
             ]);
         }
 

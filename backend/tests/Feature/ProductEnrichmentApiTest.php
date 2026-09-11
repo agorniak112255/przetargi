@@ -1613,6 +1613,47 @@ final class ProductEnrichmentApiTest extends TestCase
         );
     }
 
+    public function test_prefetch_search_steps_land_in_product_trace(): void
+    {
+        Http::fake(['*' => Http::response('', 404)]);
+        $product = $this->makeProduct(['sku' => '11618110', 'name' => 'HyFlex 11618 Size 11,0', 'manufacturer' => 'Ansell']);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')->andReturnUsing(static function (): array {
+            app(\App\Services\Enrichment\EnrichmentAttemptLog::class)->add('query', '„HyFlex 11618 Ansell” → 0 wyników');
+
+            return ['results' => [], 'errors' => ['brak wyników']];
+        });
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->never();
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        $service->prefetchProductSources($product, true);
+        try {
+            $service->enrichProduct($product, true);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException) {
+        }
+
+        // prefetch szuka w osobnym zadaniu — bez przeniesienia kroków przebieg miał tylko 4 pozycje
+        $steps = $product->fresh()->enrichment_trace['steps'] ?? [];
+        $messages = implode(' | ', array_column($steps, 'm'));
+        $this->assertStringContainsString('HyFlex 11618 Ansell', $messages);
+    }
+
     public function test_searxng_outage_marks_failed_not_manual(): void
     {
         $product = $this->makeProduct([

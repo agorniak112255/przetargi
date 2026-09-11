@@ -259,6 +259,9 @@ final class ProductEnrichmentService
 
             $t = microtime(true);
             $searchPack = $this->search->searchBothPhases($product, true);
+            // kroki wyszukiwania z prefetchu — bez nich przebieg produktu miał tylko 4 pozycje
+            // i nie było widać, czego i gdzie szukano
+            $searchPack['steps'] = $this->attemptLog()->snapshot($product)['steps'] ?? [];
             $this->rememberPrefetchPack($product, $searchPack);
             $onSearchReady !== null && $onSearchReady();
             $searchMs = $this->elapsedMs($t);
@@ -306,6 +309,7 @@ final class ProductEnrichmentService
     {
         $pack = $this->prefetchPack($product);
         if (is_array($pack)) {
+            $this->replayPrefetchSteps($pack['steps'] ?? null);
             $pack['results'] = $this->search->dropListingResults(
                 is_array($pack['results'] ?? null) ? $pack['results'] : [],
                 $product
@@ -359,6 +363,28 @@ final class ProductEnrichmentService
         $pack['results'] = $results;
 
         return $pack;
+    }
+
+    /**
+     * Prefetch szukał w osobnym zadaniu i jego kroki przepadały — tu wracają do przebiegu,
+     * żeby przy nieudanym produkcie było widać, czego szukano i co odpadło.
+     */
+    private function replayPrefetchSteps(mixed $steps): void
+    {
+        if (! is_array($steps)) {
+            return;
+        }
+        foreach ($steps as $step) {
+            if (! is_array($step) || ! is_string($step['m'] ?? null)) {
+                continue;
+            }
+            $this->attemptLog()->add(
+                (string) ($step['t'] ?? 'search'),
+                (string) $step['m'],
+                urls: is_array($step['urls'] ?? null) ? $step['urls'] : [],
+                why: is_array($step['why'] ?? null) ? $step['why'] : [],
+            );
+        }
     }
 
     /** @param  array<string, mixed>  $pack */
