@@ -1060,6 +1060,89 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertStringContainsString('userdata/public/gfx/46771', (string) $product->images()->first()?->source_url);
     }
 
+    public function test_confirmed_card_saves_page_description_when_llm_drops_model(): void
+    {
+        Storage::fake('public');
+
+        $pageUrl = 'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-151';
+        $img = 'https://bpbhp.pl/media/catalog/product/a/l/alphatec-4000-151.jpg';
+        $product = $this->makeProduct([
+            'sku' => 'GR40T-00151-09',
+            'name' => '4000-GR CVRL FACESEAL 151.5XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [[
+                    'url' => $pageUrl,
+                    'title' => 'Kombinezon Ansell AlphaTec 4000 model 151',
+                    'snippet' => 'Kombinezon chemoodporny AlphaTec 4000',
+                ]],
+                'errors' => [],
+            ]);
+        $search->shouldReceive('forgetProductCache')->zeroOrMoreTimes();
+
+        $llm = $this->mockLlmWithSanitize([
+            'description' => 'Kombinezon chemiczny.',
+            'features' => [],
+            'specs' => [],
+            'norms' => [],
+            'certificates' => [],
+            'materials' => [],
+            'use_cases' => [],
+            'image_urls' => [],
+            'source_urls' => [$pageUrl],
+            'confidence' => 0.2,
+        ]);
+
+        $html = '<html><head>'
+            .'<meta property="og:image" content="'.$img.'">'
+            .'</head><body>'
+            .'<h1>Kombinezon Ansell AlphaTec 4000 model 151</h1>'
+            .'<div class="product-description">'
+            .'Innowacyjna wielowarstwowa bariera przed chemikaliami, ochrona typu 3/4/5. '
+            .'Doskonała ochrona przed przenikaniem ponad 200 substancji chemicznych. '
+            .'Zgrzewane i zabezpieczone taśmą szwy to najskuteczniejsza bariera chroniąca przed cieczami. '
+            .'Antyelektrostatyczny — testowany zgodnie z normą EN 1149-5. '
+            .'Przeznaczony do pracy ze środkami chemicznymi oraz w procesach ratunkowych.'
+            .'</div>'
+            .'<img src="'.$img.'" alt="AlphaTec 4000">'
+            .'</body></html>';
+
+        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($html) {
+            $url = $request->url();
+            if (str_contains($url, '.jpg') || str_contains($url, 'alphatec-4000-151')) {
+                return Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']);
+            }
+
+            return Http::response($html, 200, ['Content-Type' => 'text/html']);
+        });
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        $service->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertStringContainsString('wielowarstwowa bariera', (string) $product->description);
+        $this->assertNotSame('Zdjęcie z karty sklepu. Opis wpisz ręcznie.', (string) $product->enrichment_error);
+    }
+
     public function test_product_absent_from_web_goes_to_manual_and_leaves_queues(): void
     {
         Sanctum::actingAs($user = User::factory()->withRole('admin')->create());

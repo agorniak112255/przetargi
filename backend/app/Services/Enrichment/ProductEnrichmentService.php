@@ -529,6 +529,7 @@ final class ProductEnrichmentService
                 $product,
                 $this->mergePageSnippets($pageSnippets, $mfrPageSnippets)
             );
+            $rawCardPages = $pageSnippets;
             if ($pageSnippets === []) {
                 $this->attemptLog()->add(
                     'page',
@@ -626,6 +627,14 @@ final class ProductEnrichmentService
                     $fetched['document_urls'][] = $url;
                 }
                 $timing['supplement_ms'] = $this->elapsedMs($t);
+                $rawCardPages = $this->mergePageSnippets($rawCardPages, $supplementedPages);
+            }
+
+            if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
+                $fromCard = $this->descriptionFromConfirmedCards($rawCardPages);
+                if ($fromCard !== '') {
+                    $description = $fromCard;
+                }
             }
 
             // Potwierdza karta, nie to, że model przepisał nazwę z cennika.
@@ -2556,6 +2565,49 @@ final class ProductEnrichmentService
         }
 
         return $this->isUsableProductDescription($out, $product) ? $out : '';
+    }
+
+    /**
+     * Karta już potwierdzona (ten sam URL co packshot) — nie wymagaj ponownie SKU/modelu w akapicie.
+     *
+     * @param  list<array{url?: string, text?: string}>  $pageSnippets
+     */
+    private function descriptionFromConfirmedCards(array $pageSnippets): string
+    {
+        $candidates = [];
+        foreach ($pageSnippets as $page) {
+            $text = ProductPageFetcher::stripExpandLinkChrome(trim((string) ($page['text'] ?? '')));
+            if ($text === '') {
+                continue;
+            }
+            $parts = preg_split('/\n{2,}/u', $text) ?: [$text];
+            foreach ($parts as $part) {
+                $part = ProductPageFetcher::stripExpandLinkChrome(trim((string) $part));
+                if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
+                    || $this->looksLikeMissingCardMeta($part)
+                    || ProductPageFetcher::looksLikeCompanyImprint($part)
+                    || $this->looksLikeShopChromeDescription($part)
+                    || $this->looksLikeOffTopicDescription($part)
+                    || $this->looksLikeCategoryIndexDescription($part)
+                    || $this->looksLikeLinkDump($part)) {
+                    continue;
+                }
+                if (mb_strlen($part) >= 40) {
+                    $candidates[] = $part;
+                }
+            }
+        }
+        $candidates = array_values(array_unique($candidates));
+        if ($candidates === []) {
+            return '';
+        }
+        usort($candidates, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
+        $out = mb_substr(implode("\n\n", $candidates), 0, 5000);
+        if ($this->looksLikeThinDescription($out) || $this->looksLikeMissingCardMeta($out)) {
+            return '';
+        }
+
+        return $out;
     }
 
     private function isJunkImageUrl(string $url): bool

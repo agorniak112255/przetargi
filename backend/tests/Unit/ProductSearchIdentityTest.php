@@ -711,6 +711,68 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_ansell_chin_strap_size_code_is_model_111(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'GR40-T-00-181-09',
+            'name' => '4000-GR C/W HOOD, CHIN STRAP 181.5XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+        $otherSize = new Product([
+            'sku' => 'GR40-T-00-182-07',
+            'name' => '4000-GR C/W HOOD, CHIN STRAP 182.4XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+
+        $this->assertSame('111', $id->ansellCatalogBits($product)['model']);
+        $this->assertSame('111', $id->ansellCatalogBits($otherSize)['model']);
+        $this->assertSame('4000', $id->ansellCatalogBits($product)['series']);
+        $this->assertSame('4000-GR C/W HOOD, CHIN STRAP', $id->ansellTradeName($product));
+        $this->assertContains('111', $id->ansellStyleCodes($product));
+        $this->assertNotContains('181', $id->ansellStyleCodes($product));
+
+        $card = 'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-111';
+        $title = 'KOMBINEZON ANSELL ALPHATEC 4000 MODEL 111';
+        $text = 'Kombinezon Ansell AlphaTec 4000 model 111. Ochrona typu 3/4/5.';
+        $this->assertFalse($id->pageClaimsAnotherCode($card, $title, $product));
+        $this->assertTrue($id->hayMentionsProduct($card.' '.$title.' '.$text, $product));
+        $this->assertTrue($id->isConfirmedProductCard($card, $title, $text, $product));
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121',
+            'Kombinezon AlphaTec 4000 model 121',
+            $product
+        ));
+
+        $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('site:bpbhp.pl', $joined);
+        $this->assertStringContainsString('111', $joined);
+        $this->assertStringContainsString('AlphaTec', $joined);
+    }
+
+    public function test_ansell_faceseal_and_sock_size_token_keep_catalog_model(): void
+    {
+        $id = new ProductSearchIdentity;
+        $faceseal = new Product([
+            'sku' => 'GR40T-00151-09',
+            'name' => '4000-GR CVRL FACESEAL 151.5XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+        $sock = new Product([
+            'sku' => 'YE30TA00757-07',
+            'name' => '3000-YE ENCAP AL AVNT2 SOCK 757.3XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+
+        $this->assertSame('151', $id->ansellCatalogBits($faceseal)['model']);
+        $this->assertSame('757', $id->ansellCatalogBits($sock)['model']);
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-151',
+            'Kombinezon AlphaTec 4000 model 151',
+            $faceseal
+        ));
+    }
+
     public function test_ansell_leading_zeros_come_later_in_search(): void
     {
         $id = new ProductSearchIdentity;

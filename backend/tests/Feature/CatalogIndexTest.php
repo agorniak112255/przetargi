@@ -983,6 +983,24 @@ final class CatalogIndexTest extends TestCase
         $this->assertContains('https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121', $urls);
     }
 
+    public function test_finds_ansell_chin_strap_coverall_on_bpbhp_model_111(): void
+    {
+        $this->seedPage('https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-111');
+        $this->seedPage('https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121');
+
+        $product = new Product([
+            'sku' => 'GR40-T-00-181-09',
+            'name' => '4000-GR C/W HOOD, CHIN STRAP 181.5XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains('https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-111', $urls);
+        $this->assertNotContains('https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121', $urls);
+    }
+
     public function test_finds_page_where_shop_shortened_the_code(): void
     {
         $this->seedPage('https://www.bezpieczni112.pl/maska-mt-212-p-8.html');

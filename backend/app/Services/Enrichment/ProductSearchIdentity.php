@@ -24,7 +24,10 @@ final class ProductSearchIdentity
      */
     private const TYPE_STEMS = [
         'gloves' => ['rekawic', 'rukavic', 'glove', 'glv', 'handschuh', 'gant'],
-        'coverall' => ['kombinezon', 'kombineza', 'coverall', 'overall', 'cvrl', 'protective suit', 'protection suit'],
+        'coverall' => [
+            'kombinezon', 'kombineza', 'coverall', 'overall', 'cvrl',
+            'protective suit', 'protection suit', 'chin strap', 'chinstrap',
+        ],
         'jacket' => ['kurtk', 'kangurk', 'jacket', 'jacke', 'plaszcz', 'bunda', 'parka'],
         'cape' => ['peleryn', 'poncho', 'poncz'],
         'trousers' => ['spodn', 'trouser', 'pant', 'ogrodniczk', 'dungaree', 'bib brace', 'kalhot'],
@@ -570,11 +573,17 @@ final class ProductSearchIdentity
         if (preg_match('/\b([456]\d{3})\b/', $name, $m) === 1) {
             $bits['series'] ??= $m[1];
         }
+        $fromName = null;
         if (preg_match('/(?:HOOD|MODEL|CVRL)\s+(\d{3})\b/', $name, $m) === 1
-            || preg_match('/\b(\d{3})-G\d{2}\b/', $name, $m) === 1
-            || preg_match('/\b(\d{3})\.\d+XL\b/', $name, $m) === 1) {
-            $bits['model'] ??= $m[1];
+            || preg_match('/\b(\d{3})-G\d{2}\b/', $name, $m) === 1) {
+            $fromName = $m[1];
         }
+        $fromType = $this->ansellModelFromGarmentType($name, $bits['series']);
+        $fromSizeToken = null;
+        if (preg_match('/\b(\d{3})\.\d+XL\b/', $name, $m) === 1) {
+            $fromSizeToken = $m[1];
+        }
+        $bits['model'] ??= $fromName ?? $fromType ?? $fromSizeToken;
 
         return $bits;
     }
@@ -590,8 +599,15 @@ final class ProductSearchIdentity
         $name = (string) preg_replace('/[\s\-]+G\d{2}(?:\.\d+)?XL$/i', '', $name);
         $name = (string) preg_replace('/\.\d+XL$/i', '', $name);
         $name = (string) preg_replace('/\.(?:XXL|XL|[SML])$/i', '', $name);
+        $name = trim($name, " \t-");
+        $model = $this->ansellCatalogBits($product)['model'];
+        if (is_string($model) && $model !== ''
+            && preg_match('/\s+(\d{3})$/', $name, $m) === 1
+            && $m[1] !== $model) {
+            $name = trim((string) preg_replace('/\s+\d{3}$/', '', $name));
+        }
 
-        return trim($name, " \t-");
+        return $name;
     }
 
     public function ansellStyleCodes(Product $product): array
@@ -616,6 +632,23 @@ final class ProductSearchIdentity
         }
 
         return array_values(array_unique(array_map(static fn (string $v): string => $v, $out)));
+    }
+
+    /**
+     * Cennik Ansell często daje rozmiar zamiast modelu: „C/W HOOD, CHIN STRAP 181.5XL”.
+     * To kroj 111 (kaptur + pasek pod brodę), nie model 181.
+     */
+    private function ansellModelFromGarmentType(string $name, ?string $series): ?string
+    {
+        if ($series === null || $series === '') {
+            return null;
+        }
+        $n = mb_strtoupper($name);
+        if (str_contains($n, 'CHIN STRAP') || str_contains($n, 'CHINSTRAP')) {
+            return '111';
+        }
+
+        return null;
     }
 
     /**
@@ -3957,7 +3990,7 @@ final class ProductSearchIdentity
         }
 
         // CVRL / AlphaTec 4000 to kombinezon — tylko z nazwy/SKU, nie z „Kombinezony / akcesoria”
-        if (preg_match('#(cvrl|coverall|kombinezon|overall|alphatec)#u', $nameSku) === 1) {
+        if (preg_match('#(cvrl|coverall|kombinezon|overall|alphatec|chin\\s*strap|c/w\\s*hood)#u', $nameSku) === 1) {
             return 'kombinezon';
         }
 
