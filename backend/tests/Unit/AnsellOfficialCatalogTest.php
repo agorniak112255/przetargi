@@ -49,4 +49,26 @@ final class AnsellOfficialCatalogTest extends TestCase
 
         $this->assertSame([], $hits);
     }
+
+    public function test_finds_alphatec_2000_apron_stitched_card(): void
+    {
+        $url = 'https://www.ansell.com/gb/en/products/alphatec-2000-standard-apron-stitched-model-213';
+        Http::fake([
+            'https://r.jina.ai/'.$url => Http::response(
+                "# AlphaTec 2000 Standard - Apron - Stitched - Model 213\n\n"
+                .'Chemical protective apron AlphaTec 2000 model 213 with stitched seams. '
+                .str_repeat('opis ', 40),
+                200
+            ),
+            '*' => Http::response('Product Not Found — missing', 200),
+        ]);
+
+        $hits = app(AnsellOfficialCatalog::class)->find(new Product([
+            'sku' => 'WH20S-00213-00',
+            'name' => '2000-WH APRON 213',
+            'manufacturer' => 'ANSELL',
+        ]));
+
+        $this->assertSame($url, $hits[0]['url'] ?? null);
+    }
 }

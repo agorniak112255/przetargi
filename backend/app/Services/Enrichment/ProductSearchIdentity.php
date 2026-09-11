@@ -566,15 +566,15 @@ final class ProductSearchIdentity
             $model = ltrim($m[3], '0');
             $bits['model'] = $model !== '' ? $model : null;
         }
-        if (preg_match('/\b([456]\d{3})-([A-Z]{2})\b/', $name, $m) === 1) {
+        if (preg_match('/\b([1-6]\d{3})-([A-Z]{2})\b/', $name, $m) === 1) {
             $bits['series'] ??= $m[1];
             $bits['color'] ??= $m[2];
         }
-        if (preg_match('/\b([456]\d{3})\b/', $name, $m) === 1) {
+        if (preg_match('/\b([1-6]\d{3})\b/', $name, $m) === 1) {
             $bits['series'] ??= $m[1];
         }
         $fromName = null;
-        if (preg_match('/(?:HOOD|MODEL|CVRL)\s+(\d{3})\b/', $name, $m) === 1
+        if (preg_match('/(?:HOOD|MODEL|CVRL|APRON)\s+(\d{3})\b/', $name, $m) === 1
             || preg_match('/\b(\d{3})-G\d{2}\b/', $name, $m) === 1) {
             $fromName = $m[1];
         }
@@ -689,7 +689,8 @@ final class ProductSearchIdentity
             if ($label !== '') {
                 $out[] = 'Ansell '.$label.' '.$model;
             }
-            $out[] = 'Ansell '.$model.' kombinezon';
+            $type = $this->requiredArticleTypeLabel($product) ?? 'kombinezon';
+            $out[] = 'Ansell '.$model.' '.$type;
             $stripped = $this->skuWithoutLeadingZeros($sku);
             if ($stripped !== '' && $stripped !== $sku) {
                 $out[] = $stripped;
@@ -714,16 +715,24 @@ final class ProductSearchIdentity
         }
         $series = mb_strtolower($series);
         $model = mb_strtolower($model);
-        $slugs = [
+        $name = mb_strtoupper((string) $product->name);
+        $apron = str_contains($name, 'APRON') || str_contains($name, 'FARTUCH');
+        $coverallSlugs = [
             'alphatec-'.$series.'-ultrasonically-welded-taped-model-'.$model,
             'alphatec-'.$series.'-standard-model-'.$model,
             'alphatec-'.$series.'-plus-model-'.$model,
             'alphatec-'.$series.'-standard-bound-model-'.$model,
             'alphatec-'.$series.'-stitched-taped-model-'.$model,
         ];
+        $apronSlugs = [
+            'alphatec-'.$series.'-standard-apron-stitched-model-'.$model,
+            'alphatec-'.$series.'-apron-ultrasonically-welded-model-'.$model,
+            'alphatec-'.$series.'-apron-stitched-model-'.$model,
+        ];
+        $slugs = $apron ? [...$apronSlugs, ...$coverallSlugs] : [...$coverallSlugs, ...$apronSlugs];
         $out = [];
-        foreach (['pl/pl', 'gb/en'] as $locale) {
-            foreach ($slugs as $slug) {
+        foreach ($slugs as $slug) {
+            foreach (['pl/pl', 'gb/en'] as $locale) {
                 $out[] = 'https://www.ansell.com/'.$locale.'/products/'.$slug;
             }
         }
@@ -2364,6 +2373,9 @@ final class ProductSearchIdentity
      */
     public function pageClaimsAnotherCode(string $url, string $title, Product $product): bool
     {
+        if ($this->ansellPageClaimsForeignSeries($url, $title, $product)) {
+            return true;
+        }
         // SKU 205, sklep „model 285” — ta sama kurtka, pełna nazwa w slugu.
         if ($this->hayHasDistinctiveNamePhrase($url.' '.$title, $product)) {
             return false;
@@ -2420,6 +2432,26 @@ final class ProductSearchIdentity
             }
 
             return true;
+        }
+
+        return false;
+    }
+
+    /** AlphaTec 3000 model 213 to nie karta AlphaTec 2000 model 213. */
+    private function ansellPageClaimsForeignSeries(string $url, string $title, Product $product): bool
+    {
+        $series = $this->ansellCatalogBits($product)['series'];
+        if (! is_string($series) || $series === '') {
+            return false;
+        }
+        $hay = mb_strtolower($url.' '.$title);
+        if (preg_match_all('/alphatec[-_ \/]?(\d{4})\b/u', $hay, $hits) < 1) {
+            return false;
+        }
+        foreach ($hits[1] as $found) {
+            if ((string) $found !== $series) {
+                return true;
+            }
         }
 
         return false;

@@ -773,6 +773,45 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_ansell_2000_apron_rejects_3000_card_and_uses_stitched_slug(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'WH20S-00213-00',
+            'name' => '2000-WH APRON 213',
+            'manufacturer' => 'ANSELL',
+        ]);
+
+        $this->assertSame('2000', $id->ansellCatalogBits($product)['series']);
+        $this->assertSame('213', $id->ansellCatalogBits($product)['model']);
+        $urls = $id->ansellOfficialProductUrls($product);
+        $this->assertContains(
+            'https://www.ansell.com/gb/en/products/alphatec-2000-standard-apron-stitched-model-213',
+            $urls
+        );
+        $this->assertSame(
+            'https://www.ansell.com/pl/pl/products/alphatec-2000-standard-apron-stitched-model-213',
+            $urls[0] ?? null
+        );
+
+        $ok = 'https://www.ansell.com/gb/en/products/alphatec-2000-standard-apron-stitched-model-213';
+        $this->assertFalse($id->pageClaimsAnotherCode($ok, 'AlphaTec 2000 Standard Apron Stitched Model 213', $product));
+        $this->assertTrue($id->hayMentionsProduct(
+            $ok.' AlphaTec 2000 Standard Apron — Model 213. Chemical protective apron.',
+            $product
+        ));
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://www.ansell.com/ap/en/products/alphatec-3000-apron-ultrasonically-welded-model-213',
+            'AlphaTec 3000 Apron Ultrasonically Welded Model 213',
+            $product
+        ));
+
+        $joined = implode(' | ', $id->searchQueries($product, 'manufacturer'));
+        $this->assertStringContainsString('AlphaTec 2000 213', $joined);
+        $this->assertStringContainsString('fartuch', $joined);
+        $this->assertStringNotContainsString('kombinezon', $joined);
+    }
+
     public function test_ansell_leading_zeros_come_later_in_search(): void
     {
         $id = new ProductSearchIdentity;
