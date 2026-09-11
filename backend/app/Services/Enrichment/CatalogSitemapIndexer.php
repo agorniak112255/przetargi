@@ -74,7 +74,8 @@ final class CatalogSitemapIndexer
 
     private const MAX_TOKEN_LENGTH = 64;
 
-    private const MAX_TOKENS_PER_PAGE = 24;
+    /** Slug karty plus tytuł mieszczą się w 32 tokenach; przy 24 ginęła końcówka adresu. */
+    private const MAX_TOKENS_PER_PAGE = 32;
 
     private const CANDIDATE_PATHS = [
         '/sitemap.xml',
@@ -1703,32 +1704,49 @@ final class CatalogSitemapIndexer
      */
     public function tokensFor(string $url, string $extra = ''): array
     {
-        $path = mb_strtolower(Str::ascii(urldecode(trim(
-            $extra.' '.(string) (parse_url($url, PHP_URL_PATH) ?? '').' '.(string) (parse_url($url, PHP_URL_QUERY) ?? '')
-        ))));
-        $parts = preg_split('/[^a-z0-9]+/u', $path) ?: [];
-        $parts = array_values(array_filter($parts, static fn (string $p): bool => $p !== ''));
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+        $segments = array_values(array_filter(
+            explode('/', $path),
+            static fn (string $s): bool => trim($s) !== ''
+        ));
+        // Kod produktu siedzi w ostatnim członie adresu, a tytuł bywa długi. Przy limicie
+        // tokenów tytuł zjadał cały budżet i SKU z końcówki adresu nie trafiało do indeksu —
+        // karta była w bazie, ale nie dawała się znaleźć po kodzie.
+        $sources = [
+            $segments === [] ? '' : (string) end($segments),
+            (string) (parse_url($url, PHP_URL_QUERY) ?? ''),
+            implode(' ', array_slice($segments, 0, -1)),
+            $extra,
+        ];
 
         $out = [];
-        foreach ($parts as $i => $part) {
-            if (mb_strlen($part) <= self::MAX_TOKEN_LENGTH) {
-                $out[] = $part;
+        foreach ($sources as $source) {
+            $source = mb_strtolower(Str::ascii(urldecode(trim($source))));
+            if ($source === '') {
+                continue;
             }
-            // „rekawice1202” → „rekawice” + „1202”
-            if (preg_match('/^[a-z]+$/u', $part) !== 1 && preg_match('/^[0-9]+$/u', $part) !== 1) {
-                foreach (preg_split('/(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])/u', $part) ?: [] as $piece) {
-                    if ($piece !== '' && mb_strlen($piece) <= self::MAX_TOKEN_LENGTH) {
-                        $out[] = $piece;
+            $parts = preg_split('/[^a-z0-9]+/u', $source) ?: [];
+            $parts = array_values(array_filter($parts, static fn (string $p): bool => $p !== ''));
+            foreach ($parts as $i => $part) {
+                if (mb_strlen($part) <= self::MAX_TOKEN_LENGTH) {
+                    $out[] = $part;
+                }
+                // „rekawice1202” → „rekawice” + „1202”
+                if (preg_match('/^[a-z]+$/u', $part) !== 1 && preg_match('/^[0-9]+$/u', $part) !== 1) {
+                    foreach (preg_split('/(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])/u', $part) ?: [] as $piece) {
+                        if ($piece !== '' && mb_strlen($piece) <= self::MAX_TOKEN_LENGTH) {
+                            $out[] = $piece;
+                        }
                     }
                 }
-            }
-            // krótkie pary („urg-c”, „42-874”) oraz model+numer („krytech-380”, „ultraneo-339”)
-            $next = $parts[$i + 1] ?? null;
-            if ($next !== null && (
-                (mb_strlen($part) <= 6 && mb_strlen($next) <= 6)
-                || (preg_match('/^[a-z]{3,12}$/u', $part) === 1 && preg_match('/^[0-9]{2,4}$/u', $next) === 1)
-            )) {
-                $out[] = $part.$next;
+                // krótkie pary („urg-c”, „42-874”) oraz model+numer („krytech-380”, „ultraneo-339”)
+                $next = $parts[$i + 1] ?? null;
+                if ($next !== null && (
+                    (mb_strlen($part) <= 6 && mb_strlen($next) <= 6)
+                    || (preg_match('/^[a-z]{3,12}$/u', $part) === 1 && preg_match('/^[0-9]{2,4}$/u', $next) === 1)
+                )) {
+                    $out[] = $part.$next;
+                }
             }
         }
 
@@ -2168,8 +2186,10 @@ final class CatalogSitemapIndexer
 
     /**
      * @param  list<string>  $hashes
+     * @param  bool  $replace  przelicz od nowa — insertOrIgnore sam nie usuwa tokenów
+     *                         po starych regułach, więc bez tego stare zostają na zawsze
      */
-    public function storeTokens(array $hashes): void
+    public function storeTokens(array $hashes, bool $replace = false): void
     {
         if ($hashes === []) {
             return;
@@ -2178,6 +2198,12 @@ final class CatalogSitemapIndexer
         $pages = CatalogPage::query()
             ->whereIn('url_hash', $hashes)
             ->get(['id', 'url', 'title']);
+
+        if ($replace && $pages->isNotEmpty()) {
+            foreach (array_chunk($pages->pluck('id')->all(), 400) as $ids) {
+                DB::table('catalog_page_tokens')->whereIn('catalog_page_id', $ids)->delete();
+            }
+        }
 
         $tokens = [];
         foreach ($pages as $page) {

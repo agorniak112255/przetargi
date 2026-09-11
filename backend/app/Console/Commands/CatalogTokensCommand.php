@@ -16,14 +16,19 @@ final class CatalogTokensCommand extends Command
 {
     protected $signature = 'catalog:tokens
         {--chunk=200 : Ile stron na porcję}
-        {--sleep=150 : Przerwa między porcjami w ms — chroni dysk przed zalaniem zapisami}';
+        {--sleep=150 : Przerwa między porcjami w ms — chroni dysk przed zalaniem zapisami}
+        {--refresh : Przelicz tokeny od nowa także dla stron, które już je mają}';
 
     protected $description = 'Uzupełnia tokeny wyszukiwania dla zaindeksowanych stron';
 
     public function handle(CatalogSitemapIndexer $indexer): int
     {
-        // strony z tokenami pomijamy, więc przerwany przebieg wznawia się tanio
-        $pending = CatalogPage::query()->whereDoesntHave('tokens');
+        // strony z tokenami pomijamy, więc przerwany przebieg wznawia się tanio;
+        // --refresh przelicza wszystkie, gdy zmienią się reguły tokenizacji
+        $refresh = (bool) $this->option('refresh');
+        $pending = $refresh
+            ? CatalogPage::query()
+            : CatalogPage::query()->whereDoesntHave('tokens');
         $total = (clone $pending)->count();
         if ($total === 0) {
             $this->info(CatalogPage::query()->exists()
@@ -40,8 +45,8 @@ final class CatalogTokensCommand extends Command
 
         $pending
             ->orderBy('id')
-            ->chunkById($chunk, function (Collection $pages) use ($indexer, $bar, $sleep): void {
-                $indexer->storeTokens($pages->pluck('url_hash')->all());
+            ->chunkById($chunk, function (Collection $pages) use ($indexer, $bar, $sleep, $refresh): void {
+                $indexer->storeTokens($pages->pluck('url_hash')->all(), $refresh);
                 $bar->advance($pages->count());
                 if ($sleep > 0) {
                     usleep($sleep);
