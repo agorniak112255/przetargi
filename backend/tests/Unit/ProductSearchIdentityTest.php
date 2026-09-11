@@ -1258,6 +1258,79 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_ansell_3000_coverall_rejects_rs_hand_tools_and_wrong_model(): void
+    {
+        $id = new ProductSearchIdentity;
+        $hood121 = new Product([
+            'sku' => 'YE30T-00121-07-G02',
+            'name' => '3000-YE CVRL HOOD 121-G02.3XL',
+            'manufacturer' => 'Ansell',
+        ]);
+        $hood132 = new Product([
+            'sku' => 'YE30T-00132-07',
+            'name' => '3000-YE CVRL HOOD 132.3XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+
+        $this->assertSame('121', $id->ansellCatalogBits($hood121)['model']);
+        $this->assertSame('3000', $id->ansellCatalogBits($hood121)['series']);
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-3000-ultrasonically-welded-taped-model-121',
+            $id->ansellOfficialProductUrls($hood121)
+        );
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-3000-ultrasonically-welded-taped-model-132',
+            $id->ansellOfficialProductUrls($hood132)
+        );
+
+        $this->assertFalse($id->hayHasRequiredTypeFromName(
+            'STAHLWILLE 9.53 mm Ratchet, 193mm Overall RS Stock No.: 127-8061',
+            $hood121
+        ));
+        $this->assertTrue($id->hayHasRequiredTypeFromName(
+            'AlphaTec 3000 protective overall with hood model 121',
+            $hood121
+        ));
+
+        $ratchet = 'https://mt.rsdelivers.com/product/stahlwille/121 '
+            .'Stahlwille 3/8in Reversible Ratchet 435QRN 193mm Overall '
+            .'Manufacturers Part No.: 12111020 Hand Tools > Spanners, Sockets & Wrenches';
+        $this->assertTrue($id->looksLikeUnrelatedHandToolPage($ratchet, $hood121));
+        $this->assertFalse($id->hayMentionsProduct($ratchet, $hood121));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://mt.rsdelivers.com/product/stahlwille/121',
+            'STAHLWILLE 9.53 mm Ratchet, 193mm Overall',
+            'Reversible ratchet 12111020. Hand Tools > Spanners. 193mm Overall.',
+            $hood121
+        ));
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://www.ansell.com/gb/en/products/alphatec-3000-ultrasonically-welded-taped-model-111',
+            'AlphaTec 3000 Model 111',
+            $hood121
+        ));
+
+        $driver = 'https://mt.rsdelivers.com/product/ck/t49144-040/ '
+            .'CK Insulated Screwdriver RS Stock No.: 132-5274 VDE approved '
+            .'Hand Tools > Screwdrivers 207mm Overall';
+        $this->assertTrue($id->looksLikeUnrelatedHandToolPage($driver, $hood132));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://mt.rsdelivers.com/product/ck/t49144-040/',
+            'CK Insulated, 100 mm Blade VDE/1000V Approved, 207mm Overall',
+            'C.K VDE SD Slotted Parallel Screwdrivers. RS Stock No.: 132-5274.',
+            $hood132
+        ));
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://www.ansell.com/gb/en/products/alphatec-2000-standard-bound-model-122',
+            'AlphaTec 2000 Standard Bound Model 122',
+            $hood132
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.ansell.com/gb/en/products/alphatec-3000-ultrasonically-welded-taped-model-121 '
+            .'Ansell AlphaTec 3000 coverall with hood Model 121',
+            $hood121
+        ));
+    }
+
     public function test_rejects_weight_false_positive_1000g_for_sku_1000(): void
     {
         $id = new ProductSearchIdentity;

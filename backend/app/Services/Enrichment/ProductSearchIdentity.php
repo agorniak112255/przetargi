@@ -1696,10 +1696,13 @@ final class ProductSearchIdentity
         if ($this->looksLikeUnrelatedApparel($hay, $product)) {
             return false;
         }
+        if ($this->looksLikeUnrelatedHandToolPage($hay, $product)) {
+            return false;
+        }
         if (! $this->hayHasRequiredTypeFromName($hay, $product)) {
             return false;
         }
-        if ($this->urlHasGluedNumericModel($hay, $product)) {
+        if ($this->gluedNumericModelConfirmsCard($hay, $product)) {
             return true;
         }
         if ($this->hayHasDistinctiveNamePhrase($hay, $product)) {
@@ -1823,7 +1826,8 @@ final class ProductSearchIdentity
     public function isConfirmedProductCard(string $url, string $title, string $text, Product $product): bool
     {
         if (self::isJunkSearchHost($url) || $this->looksLikeUnrelatedRetailHost($url, $product)
-            || $this->looksLikeNonProductCardUrl($url) || $this->pageLooksLikeMultiProductListing($text)) {
+            || $this->looksLikeNonProductCardUrl($url) || $this->pageLooksLikeMultiProductListing($text)
+            || $this->looksLikeUnrelatedHandToolPage($url.' '.$title.' '.$text, $product)) {
             return false;
         }
         if ($this->manufacturerIsThreeM($product) && $this->isOfficialThreeMProductUrl($url)) {
@@ -1849,7 +1853,7 @@ final class ProductSearchIdentity
             && ! $this->hayHasDistinctiveNamePhrase($hay, $product)) {
             return false;
         }
-        if ($this->urlHasGluedNumericModel($hay, $product)
+        if ($this->gluedNumericModelConfirmsCard($hay, $product)
             && $this->hayHasRequiredTypeFromName($hay, $product)) {
             return true;
         }
@@ -2574,7 +2578,7 @@ final class ProductSearchIdentity
             }
         }
         $codes = array_values(array_unique($codes));
-        if ($this->urlHasGluedNumericModel($url.' '.$title, $product)) {
+        if ($this->gluedNumericModelConfirmsCard($url.' '.$title, $product)) {
             return true;
         }
         if ($codes === []) {
@@ -3383,7 +3387,22 @@ final class ProductSearchIdentity
             }
         }
 
-        return $this->urlHasGluedNumericModel($hay, $product);
+        return $this->gluedNumericModelConfirmsCard($hay, $product);
+    }
+
+    /**
+     * Sklep skleja 902→9022002. Ansell 121 w 12111020 Stahlwille to nie ten model.
+     */
+    private function gluedNumericModelConfirmsCard(string $hay, Product $product): bool
+    {
+        if (! $this->urlHasGluedNumericModel($hay, $product)) {
+            return false;
+        }
+        if ($this->ansellCatalogBits($product)['model'] === null) {
+            return true;
+        }
+
+        return $this->hayHasBrand($hay, $product) || $this->ansellOfficialPathHasModel($hay, $product);
     }
 
     /**
@@ -3481,6 +3500,34 @@ final class ProductSearchIdentity
         foreach (['crankcase', 'breather-hose', 'ignition-coil', 'spark-plug'] as $auto) {
             if (str_contains($hay, $auto)) {
                 return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** RS „12111020 ratchet” / „132-5274 screwdriver” przy kombinezonie Ansell. */
+    public function looksLikeUnrelatedHandToolPage(string $hay, Product $product): bool
+    {
+        if (! $this->nameRequiresArticleType($product)) {
+            return false;
+        }
+        $name = $this->normalizeTypeText((string) $product->name.' '.(string) $product->sku);
+        foreach (['gloves', 'coverall', 'jacket', 'cape', 'trousers', 'vest', 'sweatshirt', 'apron', 'clothing'] as $key) {
+            if ($this->textHasTypeStem($name, self::TYPE_STEMS[$key])) {
+                $page = $this->normalizeTypeText($hay);
+                $hits = 0;
+                foreach ([
+                    'ratchet', 'screwdriver', 'socket wrench', 'spanners', 'hand tools',
+                    'quick release', 'vde approved', 'din 3122', 'hex torx',
+                    'socket wrenches', 'reversible ratchet',
+                ] as $marker) {
+                    if (str_contains($page, $marker)) {
+                        $hits++;
+                    }
+                }
+
+                return $hits >= 2;
             }
         }
 
@@ -3832,6 +3879,18 @@ final class ProductSearchIdentity
             }
             if ($stem === 'tape') {
                 if (preg_match('/\btapes?\b/u', $normalized) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if ($stem === 'overall') {
+                // „193mm Overall” / „Overall Length” to wymiar narzędzia, nie kombinezon
+                if (preg_match('/(?:\d+\s*)?(?:mm|cm|in|inch)\s+overall\b/u', $normalized) === 1
+                    || preg_match('/\boverall\s+(?:length|size|width)\b/u', $normalized) === 1) {
+                    continue;
+                }
+                if (preg_match('/\boveralls?\b/u', $normalized) === 1) {
                     return true;
                 }
 

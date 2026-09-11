@@ -93,4 +93,26 @@ final class AnsellOfficialCatalogTest extends TestCase
 
         $this->assertSame($url, $hits[0]['url'] ?? null);
     }
+
+    public function test_finds_alphatec_3000_hood_model_121(): void
+    {
+        $url = 'https://www.ansell.com/pl/pl/products/alphatec-3000-ultrasonically-welded-taped-model-121';
+        Http::fake([
+            'https://r.jina.ai/'.$url => Http::response(
+                "# AlphaTec 3000 Ultrasonically Welded & Taped - Model 121\n\n"
+                .'Chemical protective coverall AlphaTec 3000 model 121 with hood. '
+                .str_repeat('opis ', 40),
+                200
+            ),
+            '*' => Http::response('Product Not Found — missing', 200),
+        ]);
+
+        $hits = app(AnsellOfficialCatalog::class)->find(new Product([
+            'sku' => 'YE30T-00121-07-G02',
+            'name' => '3000-YE CVRL HOOD 121-G02.3XL',
+            'manufacturer' => 'Ansell',
+        ]));
+
+        $this->assertSame($url, $hits[0]['url'] ?? null);
+    }
 }
