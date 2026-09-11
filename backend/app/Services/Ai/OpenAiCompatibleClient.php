@@ -1683,7 +1683,12 @@ class OpenAiCompatibleClient
                 'User-Agent' => QueueWorkerIdentity::userAgent('SUPON-AI/1.0'),
                 'Expect' => '',
             ])
-            ->withOptions(['expect' => false])
+            // Zatrzymany dostawca potrafi trzymać połączenie bez danych dłużej niż timeout
+            // (zdarzały się godziny) — wtedy worker stoi. Brak ruchu przez minutę kończy próbę.
+            ->withOptions(['expect' => false, 'curl' => [
+                CURLOPT_LOW_SPEED_LIMIT => 1,
+                CURLOPT_LOW_SPEED_TIME => 60,
+            ]])
             ->timeout($timeoutSeconds)
             ->connectTimeout(15);
 
