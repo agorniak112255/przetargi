@@ -25,4 +25,14 @@ final class CurrencyDetectorTest extends TestCase
         $this->assertSame('ZAR', $d->detect('EURO 11419 Dominator 319.00 R 363.66 R'));
         $this->assertNull($d->detect('Steel toecap Sole Type'));
     }
+
+    public function test_detects_currency_from_parent_header_above_bez_vat(): void
+    {
+        $d = new CurrencyDetector;
+
+        $this->assertSame('EUR', $d->detectFromColumnStack(['EUR', 'bez VAT']));
+        $this->assertSame('PLN', $d->detectFromColumnStack(['PLN', '* NCD z VAT']));
+        $this->assertSame('EUR', $d->detectFromColumnStack(['EUR', 'Price EUR']));
+        $this->assertNull($d->detectFromColumnStack(['bez VAT']));
+    }
 }

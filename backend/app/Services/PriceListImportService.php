@@ -691,10 +691,16 @@ final class PriceListImportService
             $repeating = (bool) ($sheetMap['repeating_headers'] ?? false);
             $all = $this->cells->toRows($sheet);
             $headerLabels = $this->headerLabels($all, $headerIdx, $map);
-            $sheetDefaultCurrency = $this->currencyDetector->normalize(
-                is_string($mapping['currency'] ?? null) ? $mapping['currency'] : null,
-                $this->currencyDetector->detect(implode(' ', $headerLabels)) ?? 'PLN'
-            );
+            $fromPriceColumn = isset($map['catalog_price'])
+                ? $this->currencyDetector->detectFromColumnStack(
+                    $this->columnHeaderStack($all, $headerIdx, $map['catalog_price'])
+                )
+                : null;
+            $sheetDefaultCurrency = $fromPriceColumn
+                ?? $this->currencyDetector->normalize(
+                    is_string($mapping['currency'] ?? null) ? $mapping['currency'] : null,
+                    $this->currencyDetector->detect(implode(' ', $headerLabels)) ?? 'PLN'
+                );
             $dataRows = array_slice($all, $headerIdx + 1);
             $rowsTotal += count($dataRows);
             $carry = ['name' => null, 'category' => null, 'group' => null];
@@ -1097,6 +1103,21 @@ final class PriceListImportService
         }
 
         return $labels;
+    }
+
+    /**
+     * @param  list<list<mixed>>  $all
+     * @return list<string>
+     */
+    private function columnHeaderStack(array $all, int $headerIdx, int $col, int $above = 3): array
+    {
+        $stack = [];
+        $from = max(0, $headerIdx - $above);
+        for ($i = $from; $i <= $headerIdx; $i++) {
+            $stack[] = trim((string) ($all[$i][$col] ?? ''));
+        }
+
+        return $stack;
     }
 
     /**

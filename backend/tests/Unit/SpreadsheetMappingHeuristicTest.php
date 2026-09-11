@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Services\PriceListImportService;
+use App\Services\SpreadsheetColumnMapper;
 use App\Services\SpreadsheetMappingHeuristic;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
@@ -62,7 +63,7 @@ final class SpreadsheetMappingHeuristicTest extends TestCase
     {
         $path = $this->writeSheet('PL', [
             ['PHT Supon'],
-            [],
+            ['', '', '', '', '', 'kategoria', '', '', '', '', 'EUR', 'PLN'],
             ['lp.', 'kat.', 'artykuł', 'zdjęcie', 'typ', 'ochrony', 'podeszwa', 'metal free', 'kolekcja', 'rozm.', 'bez VAT', '* NCD z VAT'],
             ['1', 'NEW', 'AROX 7333 641460 S1 PL ESD', '', 'półbuty', 'S1 PL', 'LYFTOR', 'metal free', 'PINKYUM', '35-48', '36.19', '429'],
             ['2', 'NEW', 'AROX 733 648080 S1 PL ESD', '', 'półbuty', 'S1 PL', 'RAPTOR', '', 'PINKYUM', '35-48', '35.59', '429'],
@@ -76,6 +77,19 @@ final class SpreadsheetMappingHeuristicTest extends TestCase
             $this->assertSame(10, $cols['catalog_price']);
             $this->assertNotSame(11, $cols['catalog_price']);
             $this->assertNotSame(10, $cols['name']);
+            $this->assertSame('EUR', $mapping['currency']);
+
+            $refined = (new SpreadsheetColumnMapper)->refineMapping($path, [
+                'currency' => 'PLN',
+                'sheets' => $mapping['sheets'],
+            ]);
+            $this->assertSame('EUR', $refined['currency']);
+
+            $mapping['currency'] = 'PLN';
+            $preview = app(PriceListImportService::class)->previewFromMapping($path, $mapping, 8);
+            $this->assertGreaterThan(0, $preview['products_found']);
+            $this->assertSame('EUR', $preview['products'][0]['currency']);
+            $this->assertEqualsWithDelta(36.19, (float) $preview['products'][0]['catalog_price_net'], 0.001);
         } finally {
             @unlink($path);
         }

@@ -15,6 +15,7 @@ final class SpreadsheetMappingHeuristic
 {
     public function __construct(
         private readonly SpreadsheetColumnMapper $columns = new SpreadsheetColumnMapper,
+        private readonly CurrencyDetector $currencyDetector = new CurrencyDetector,
     ) {}
 
     /**
@@ -177,11 +178,13 @@ final class SpreadsheetMappingHeuristic
 
             if ($score > $bestScore) {
                 $bestScore = $score;
-                $currency = null;
-                if (str_contains($blob, '€') || str_contains($blob, 'eur')) {
-                    $currency = 'EUR';
-                } elseif (str_contains($blob, 'pln') || str_contains($blob, 'zł')) {
-                    $currency = 'PLN';
+                $currency = $this->currencyFromPriceHeader($grid, $excelRow, $cols['catalog_price']);
+                if ($currency === null) {
+                    if (str_contains($blob, '€') || str_contains($blob, 'eur')) {
+                        $currency = 'EUR';
+                    } elseif (str_contains($blob, 'pln') || str_contains($blob, 'zł')) {
+                        $currency = 'PLN';
+                    }
                 }
                 $best = [
                     'sheet' => $sheetName,
@@ -237,6 +240,23 @@ final class SpreadsheetMappingHeuristic
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $grid
+     */
+    private function currencyFromPriceHeader(array $grid, int $headerExcelRow, ?int $priceCol): ?string
+    {
+        if ($priceCol === null) {
+            return null;
+        }
+        $stack = [];
+        $from = max((int) array_key_first($grid), $headerExcelRow - 3);
+        for ($r = $from; $r <= $headerExcelRow; $r++) {
+            $stack[] = (string) ($grid[$r][$priceCol] ?? '');
+        }
+
+        return $this->currencyDetector->detectFromColumnStack($stack);
     }
 
     /**

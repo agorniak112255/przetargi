@@ -6,6 +6,7 @@ namespace App\Services;
 
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
 /**
  * Punktowane mapowanie kolumn cennika — pierwsze trafienie w „cena”/„kod”
@@ -13,6 +14,10 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
  */
 final class SpreadsheetColumnMapper
 {
+    public function __construct(
+        private readonly CurrencyDetector $currencyDetector = new CurrencyDetector,
+    ) {}
+
     /**
      * @param  list<string>  $labels  już dowolna wielkość liter
      * @return array<string, int|null>
@@ -144,12 +149,33 @@ final class SpreadsheetColumnMapper
             $sheetMap['include'] = (bool) ($sheetMap['include'] ?? false)
                 && ($cols['catalog_price'] ?? null) !== null
                 && ($cols['name'] ?? null) !== null;
+            $priceCurrency = $this->currencyFromPriceColumn($sheet, $headerExcel, $cols['catalog_price'] ?? null);
+            if ($priceCurrency !== null) {
+                $mapping['currency'] = $priceCurrency;
+            }
             $sheets[] = $sheetMap;
         }
         $spreadsheet->disconnectWorksheets();
         $mapping['sheets'] = $sheets;
 
         return $mapping;
+    }
+
+    /**
+     * Waluta z kolumny catalog_price: komórka nagłówka i do 3 wierszy nad nią.
+     */
+    public function currencyFromPriceColumn(Worksheet $sheet, int $headerExcel, int|string|null $priceCol0): ?string
+    {
+        if ($priceCol0 === null || ! is_numeric($priceCol0)) {
+            return null;
+        }
+        $col = (int) $priceCol0 + 1;
+        $stack = [];
+        for ($r = max(1, $headerExcel - 3); $r <= $headerExcel; $r++) {
+            $stack[] = trim((string) $sheet->getCell(Coordinate::stringFromColumnIndex($col).$r)->getFormattedValue());
+        }
+
+        return $this->currencyDetector->detectFromColumnStack($stack);
     }
 
     /**

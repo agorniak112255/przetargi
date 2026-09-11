@@ -65,6 +65,24 @@ final class CurrencyDetector
         return null;
     }
 
+    /**
+     * Waluta z nagłówka kolumny ceny i wierszy nad nią (np. EUR nad „bez VAT”).
+     * Bliższy wiersz wygrywa; puste / bez waluty są pomijane.
+     *
+     * @param  list<string>  $cells  od góry do wiersza nagłówka
+     */
+    public function detectFromColumnStack(array $cells): ?string
+    {
+        foreach (array_reverse($cells) as $cell) {
+            $detected = $this->detect(trim((string) $cell));
+            if ($detected !== null) {
+                return $detected;
+            }
+        }
+
+        return null;
+    }
+
     public function normalize(?string $code, ?string $fallback = 'PLN'): ?string
     {
         if ($code === null || trim($code) === '') {
