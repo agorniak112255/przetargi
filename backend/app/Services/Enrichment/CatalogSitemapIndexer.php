@@ -1461,9 +1461,12 @@ final class CatalogSitemapIndexer
                     }
                 }
             }
-            // sklejamy tylko krótkie sąsiedztwa, bo to rozbite kody („urg-c”, „42-874”)
+            // krótkie pary („urg-c”, „42-874”) oraz model+numer („krytech-380”, „ultraneo-339”)
             $next = $parts[$i + 1] ?? null;
-            if ($next !== null && mb_strlen($part) <= 6 && mb_strlen($next) <= 6) {
+            if ($next !== null && (
+                (mb_strlen($part) <= 6 && mb_strlen($next) <= 6)
+                || (preg_match('/^[a-z]{3,12}$/u', $part) === 1 && preg_match('/^[0-9]{2,4}$/u', $next) === 1)
+            )) {
                 $out[] = $part.$next;
             }
         }

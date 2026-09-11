@@ -163,6 +163,14 @@ final class RetailerOnSiteSearch
             return $early[0];
         }
         if ($this->identity->looksLikeWarehouseArticleSku($product)) {
+            $shop = $this->identity->firstStrongShopPhrase($product);
+            if ($shop === '') {
+                $shop = $this->identity->shopIdentityPhrases($product)[0] ?? '';
+            }
+            // 34380358 → KRYTECH 380 — Solr MAPA zna model, nie numer z cennika
+            if ($shop !== '' && preg_match('/\p{L}/u', $shop) === 1 && preg_match('/\d/u', $shop) === 1) {
+                return $shop;
+            }
             $article = $this->identity->catalogArticleCodes($product)[0] ?? '';
             if ($article !== '' && preg_match('/\p{L}/u', $article) === 1) {
                 return $article;

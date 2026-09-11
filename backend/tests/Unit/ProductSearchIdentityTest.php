@@ -822,6 +822,36 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_mapa_warehouse_sku_matches_official_model_slug(): void
+    {
+        $id = new ProductSearchIdentity;
+        $krytech = new Product([
+            'sku' => '34380358',
+            'name' => 'KRYTECH 380',
+            'manufacturer' => 'MAPA',
+        ]);
+        $ultra = new Product([
+            'sku' => '34339019',
+            'name' => 'ULTRANEO 339',
+            'manufacturer' => 'MAPA',
+        ]);
+
+        $this->assertTrue($id->looksLikeWarehouseArticleSku($krytech));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-380 KryTech 380',
+            $krytech
+        ));
+        $this->assertTrue($id->urlOrTitleHasShopIdentity(
+            'https://pl.rs-online.com/web/p/rekawice-robocze/0440258',
+            'MAPA KryTech 380 rękawice',
+            $krytech
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.mapa-pro.pl/produkty/strona-produktu/ultraneo-339 UltraNeo 339',
+            $ultra
+        ));
+    }
+
     public function test_mapa_article_number_is_not_required_on_shop_url(): void
     {
         $id = new ProductSearchIdentity;

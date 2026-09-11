@@ -144,6 +144,52 @@ final class RetailerOnSiteSearchTest extends TestCase
         $this->assertSame('KRYTECH 563', $search->query($product));
     }
 
+    public function test_mapa_warehouse_sku_searches_model_name(): void
+    {
+        $search = app(RetailerOnSiteSearch::class);
+
+        $this->assertSame('KRYTECH 380', $search->query(new Product([
+            'sku' => '34380358',
+            'name' => 'KRYTECH 380',
+            'manufacturer' => 'MAPA',
+        ])));
+        $this->assertSame('ULTRANEO 339', $search->query(new Product([
+            'sku' => '34339019',
+            'name' => 'ULTRANEO 339',
+            'manufacturer' => 'MAPA',
+        ])));
+    }
+
+    public function test_mapa_solr_finds_official_card_for_warehouse_sku(): void
+    {
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            $url = urldecode($request->url());
+            if (str_contains($url, 'wyszukiwanie-zaawansowane')) {
+                TestCase::assertStringContainsString('KRYTECH 380', $url);
+                TestCase::assertStringNotContainsString('34380358', $url);
+
+                return Http::response(
+                    '<h3 class="product-name"><a href="/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-380">KryTech 380</a></h3>',
+                    200
+                );
+            }
+
+            return Http::response('empty', 200);
+        });
+
+        $hits = app(RetailerOnSiteSearch::class)->find(new Product([
+            'sku' => '34380358',
+            'name' => 'KRYTECH 380',
+            'manufacturer' => 'MAPA',
+        ]));
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains(
+            'https://mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-380',
+            $urls
+        );
+    }
+
     public function test_mapa_falls_back_to_icd_when_official_catalog_is_empty(): void
     {
         Http::fake([

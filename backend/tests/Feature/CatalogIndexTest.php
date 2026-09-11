@@ -816,6 +816,28 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame([], app(CatalogIndexSearch::class)->findFor($product));
     }
 
+    public function test_mapa_model_slug_is_glued_for_index_search(): void
+    {
+        $url = 'https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-380';
+        $tokens = app(CatalogSitemapIndexer::class)->tokensFor($url);
+        $this->assertContains('krytech380', $tokens);
+        $this->assertContains(
+            'ultraneo339',
+            app(CatalogSitemapIndexer::class)->tokensFor(
+                'https://www.mapa-pro.pl/produkty/strona-produktu/ultraneo-339'
+            )
+        );
+
+        $this->seedPage($url, 'mapa');
+        $hits = app(CatalogIndexSearch::class)->findFor(new Product([
+            'sku' => '34380358',
+            'name' => 'KRYTECH 380',
+            'manufacturer' => 'MAPA',
+        ]));
+
+        $this->assertSame($url, $hits[0]['url'] ?? null);
+    }
+
     public function test_finds_product_page_by_code_in_url(): void
     {
         $this->seedPage('https://optimumbhp.pl/REKAWICE-ROBOCZE-1202-URGENT-p138481');
