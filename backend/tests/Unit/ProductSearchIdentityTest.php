@@ -271,6 +271,28 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_shop_category_gloves_does_not_reject_named_valve_flap(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'S56212-10',
+            'name' => 'Płatek zaworu wydechowego',
+            'manufacturer' => 'SECURA',
+            'category' => 'REKAWICE ELEKTROIZOLACYJNE',
+        ]);
+        $url = 'https://domtechniczny24.pl/płatek-zaworu-wydechowego-secura-3000-do-półmasek.html';
+        $hay = $url.' Płatek zaworu wydechowego SECURA 3000';
+
+        $this->assertTrue($id->hayHasRequiredTypeFromName($hay, $product));
+        $this->assertTrue($id->hayMentionsProduct($hay, $product));
+        $this->assertTrue($id->isConfirmedProductCard($url, 'Płatek zaworu wydechowego SECURA 3000', '', $product));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://centralabhp.pl/pl/p/Rekawice-elektroizolacyjne-ELSEC-10-kV-SECURA/2820 '
+            .'Rękawice elektroizolacyjne ELSEC 10 kV SECURA',
+            $product
+        ));
+    }
+
     public function test_distinctive_name_confirms_cape_without_sku_in_url(): void
     {
         $id = new ProductSearchIdentity;

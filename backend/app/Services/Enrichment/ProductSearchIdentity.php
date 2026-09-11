@@ -3609,7 +3609,9 @@ final class ProductSearchIdentity
         if ($fromName !== []) {
             return $fromName;
         }
-        if ($includeCategory) {
+        // Drzewo sklepu („RĘKAWICE…”) nie nadpisuje nazwy wyrobu
+        // („Płatek zaworu wydechowego”) — inaczej indeks ma kartę, a potwierdzenie ją zjada.
+        if ($includeCategory && count($this->nameWords($product)) < 2) {
             $fromCategory = $this->typeStemsInText((string) ($product->category ?? ''));
             if ($fromCategory !== []) {
                 return $fromCategory;
