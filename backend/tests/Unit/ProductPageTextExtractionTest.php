@@ -768,6 +768,55 @@ HTML;
         $this->assertContains($original, $result['image_urls']);
     }
 
+    public function test_reads_48602_gallery_and_skips_related_jsonld(): void
+    {
+        $pageUrl = 'https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-3-m-Secura/48602';
+        $original = 'https://centrumelektronarzedzi.pl/userdata/public/gfx/46766/Chodnik-i-dywanik-elektroizolacyjny.jpg';
+        $full = 'https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46766_0_0/Chodnik-i-dywanik-elektroizolacyjny.webp';
+        $kit = 'https://centrumelektronarzedzi.pl/userdata/public/gfx/46294/Zestaw-SECURA-3100-LAK.jpg';
+        $mask = 'https://centrumelektronarzedzi.pl/userdata/public/gfx/46287/Polmaska-SECURA-3100.jpg';
+        $relatedMat = 'https://centrumelektronarzedzi.pl/userdata/public/gfx/46763/Chodnik-i-dywanik-elektroizolacyjny.jpg';
+        $html = <<<HTML
+<html><head>
+<meta property="og:image" content="https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46766_500_500/Chodnik-i-dywanik-elektroizolacyjny.jpg">
+<meta property="og:image" content="https://centrumelektronarzedzi.pl/upload/img/seo/centrumelektronarzedzi-pl.png">
+<script type="application/ld+json">{"@id":"/pl/p/Chodnik/48602","image":["https:\\/\\/centrumelektronarzedzi.pl\\/userdata\\/public\\/gfx\\/46766\\/Chodnik-i-dywanik-elektroizolacyjny.jpg"]}</script>
+<script type="application/ld+json">{"@type":"Product","isRelatedTo":[{"@type":"Thing","name":"Zestaw SECURA 3100 LAK","image":"{$kit}"},{"@type":"Thing","name":"Półmaska SECURA 3100","image":"{$mask}"},{"@type":"Thing","name":"Dywanik 0,75 x 0,75","image":"{$relatedMat}"}]}</script>
+</head><body>
+<h1>Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 3 m) Secura</h1>
+<a class="js__gallery-anchor-image" href="{$full}">
+<img class="product-gallery__main-image" src="/environment/cache/images/productGfx_46766_750_750/Chodnik-i-dywanik-elektroizolacyjny.webp" alt="Chodnik">
+</a>
+<div class="related-products"><img src="/environment/cache/images/productGfx_46294_150_150/Zestaw-SECURA-3100-LAK.jpg" alt="Zestaw"></div>
+<p>Chodniki elektroizolacyjne w kl. 2 są przeznaczone do wykładania podłóg. Marka Secura. Klasa 2. Wymiary 1,1 x 3 m.</p>
+</body></html>
+HTML;
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+        $product = new Product([
+            'sku' => 'T59210033',
+            'name' => 'Chodnik elektroizolacyjny 20 kV',
+            'manufacturer' => 'SECURA',
+            'shop_source_url' => $pageUrl,
+        ]);
+        $result = (new ProductPageFetcher)->bypassCache()->fetch([[
+            'url' => $pageUrl,
+            'title' => 'Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 3 m) Secura',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertContains($original, $result['trusted_image_urls']);
+        $this->assertContains($original, $result['image_urls']);
+        $this->assertNotContains($kit, $result['trusted_image_urls']);
+        $this->assertNotContains($mask, $result['trusted_image_urls']);
+        $this->assertNotContains($relatedMat, $result['trusted_image_urls']);
+        $this->assertSame(
+            $original,
+            ProductImageDownloader::shoperOriginalUrl($full)
+        );
+    }
+
     public function test_reads_shoper_resetcss_description_instead_of_newsletter(): void
     {
         $html = <<<'HTML'

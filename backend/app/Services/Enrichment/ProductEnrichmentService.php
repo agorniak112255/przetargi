@@ -1301,7 +1301,8 @@ final class ProductEnrichmentService
         foreach (array_merge($trusted, $all) as $url) {
             if (! is_string($url) || $this->isJunkImageUrl($url)
                 || ! ProductImageDownloader::looksLikeImageUrl($url)
-                || $this->identity->imageUrlMentionsForeignBrand($url, $product)) {
+                || $this->identity->imageUrlMentionsForeignBrand($url, $product)
+                || $this->identity->imageUrlHasForeignType($url, $product)) {
                 continue;
             }
             $usable[] = $url;

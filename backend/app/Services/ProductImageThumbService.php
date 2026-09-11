@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\ProductImage;
+use App\Services\Enrichment\ProductImageDownloader;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 
@@ -63,11 +64,27 @@ final class ProductImageThumbService
             return null;
         }
 
-        $response = Http::timeout(8)->get($url);
-        if (! $response->successful() || $response->body() === '') {
-            return null;
+        $try = [$url];
+        $original = ProductImageDownloader::shoperOriginalUrl($url);
+        if ($original !== null && $original !== $url) {
+            array_unshift($try, $original);
+        }
+        foreach ($try as $candidate) {
+            $host = parse_url($candidate, PHP_URL_HOST);
+            $scheme = parse_url($candidate, PHP_URL_SCHEME) ?: 'https';
+            $referer = is_string($host) && $host !== '' ? $scheme.'://'.$host.'/' : 'https://www.google.com/';
+            $response = Http::timeout(8)
+                ->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                    'Accept' => 'image/jpeg,image/webp,image/png,image/*;q=0.8',
+                    'Referer' => $referer,
+                ])
+                ->get($candidate);
+            if ($response->successful() && $response->body() !== '') {
+                return $response->body();
+            }
         }
 
-        return $response->body();
+        return null;
     }
 }

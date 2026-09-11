@@ -711,6 +711,16 @@ export function ProductDetail() {
                     className="h-32 w-32 object-contain"
                     onError={(e) => {
                       const el = e.currentTarget
+                      const next =
+                        img.url && el.src !== img.url
+                          ? img.url
+                          : img.source_url && el.src !== img.source_url
+                            ? img.source_url
+                            : null
+                      if (next) {
+                        el.src = next
+                        return
+                      }
                       el.style.display = 'none'
                       setErr(`Nie można wyświetlić zdjęcia. Użyj „Pobierz ponownie”.`)
                     }}

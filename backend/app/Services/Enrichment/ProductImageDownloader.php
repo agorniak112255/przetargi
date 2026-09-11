@@ -193,6 +193,21 @@ final class ProductImageDownloader
         return $url;
     }
 
+    /** Cache Shoper → oryginał /userdata/public/gfx/{id}/plik.jpg */
+    public static function shoperOriginalUrl(string $url): ?string
+    {
+        if (preg_match(
+            '~^(https?://[^/]+)/environment/cache/images/productGfx_(\d+)_\d+_\d+/([^/?]+)~i',
+            $url,
+            $m
+        ) !== 1) {
+            return null;
+        }
+        $file = preg_replace('/\.(webp|avif)$/i', '.jpg', $m[3]) ?? $m[3];
+
+        return $m[1].'/userdata/public/gfx/'.$m[2].'/'.$file;
+    }
+
     /** Shoper: _120_120 / _300_300 to kafle; _0_0 i ≥400 to karta. */
     public static function isSmallShoperCacheUrl(string $url): bool
     {
@@ -208,13 +223,17 @@ final class ProductImageDownloader
     private function downloadOne(Product $product, string $url, int $sortOrder): ?ProductImage
     {
         $url = self::preferFullSizeUrl($url);
+        $original = self::shoperOriginalUrl($url);
+        if ($original !== null) {
+            $url = $original;
+        }
 
         $response = Http::timeout(12)
             ->connectTimeout(4)
             ->withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
                 // Preferuj JPEG/WebP — część CDN (uvex) i tak zwróci AVIF; obsługujemy też AVIF.
-                'Accept' => 'image/jpeg,image/webp,image/png,image/avif,image/*,*/*;q=0.8',
+                'Accept' => 'image/jpeg,image/webp,image/png,image/*,*/*;q=0.8',
                 'Referer' => $this->refererFor($url),
             ])
             ->withOptions(['allow_redirects' => true])

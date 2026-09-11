@@ -24,7 +24,7 @@ final class ProductPageFetcher
 
     private const CACHE_TTL_HOURS = 24;
 
-    private const MAX_CACHED_HTML_BYTES = 1_500_000;
+    private const MAX_CACHED_HTML_BYTES = 3_000_000;
 
     private bool $bypassCache = false;
 
@@ -165,7 +165,7 @@ final class ProductPageFetcher
             $live = Http::pool(function (Pool $pool) use ($pending) {
                 foreach ($pending as $i => $row) {
                     $pool->as((string) $i)
-                        ->timeout(10)
+                        ->timeout(20)
                         ->connectTimeout(4)
                         ->withHeaders([
                             'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -1360,6 +1360,7 @@ final class ProductPageFetcher
      */
     private function extractStructuredImageUrls(string $html): array
     {
+        $html = $this->withoutRelatedJsonLdImages($html);
         $urls = [];
         foreach ([
             '#property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i',
@@ -1393,16 +1394,26 @@ final class ProductPageFetcher
         }
 
         if (preg_match_all(
-            '#href=["\']([^"\']*/userdata/public/gfx/[^"\']+\.(?:jpe?g|png|webp))["\']#i',
+            '#href=["\']([^"\']*/(?:userdata/public/gfx|environment/cache/images/productGfx_)[^"\']+\.(?:jpe?g|png|webp))["\']#i',
             $html,
             $shoper
         )) {
             foreach ($shoper[1] as $url) {
-                $urls[] = $url;
+                if (! ProductImageDownloader::isSmallShoperCacheUrl($url)) {
+                    $urls[] = $url;
+                }
             }
         }
 
         return array_values(array_unique($urls));
+    }
+
+    /** Shoper JSON-LD: isRelatedTo niesie packshoty innych kart (maska, zestaw). */
+    private function withoutRelatedJsonLdImages(string $html): string
+    {
+        $stripped = preg_replace('#"isRelatedTo"\s*:\s*\[.*?]#s', '"isRelatedTo":[]', $html);
+
+        return is_string($stripped) ? $stripped : $html;
     }
 
     /**

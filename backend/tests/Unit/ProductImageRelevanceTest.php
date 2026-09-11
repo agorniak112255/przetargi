@@ -217,6 +217,7 @@ final class ProductImageRelevanceTest extends TestCase
         $this->assertSame($full, ProductImageDownloader::preferFullSizeUrl(
             'https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46764_750_750/Chodnik-i-dywanik-elektroizolacyjny.webp'
         ));
+        $this->assertSame($original, ProductImageDownloader::shoperOriginalUrl($full));
         $this->assertFalse($identity->looksLikeManufacturerGalleryUrl($seo, $product));
     }
 
