@@ -131,7 +131,8 @@ final class CatalogIndexSearch
             ->all();
         $ids = array_values(array_unique(array_merge(
             $ids,
-            $this->gluedNumericTokenPageIds($codes, $typePrefixes)
+            $this->gluedNumericTokenPageIds($codes, $typePrefixes),
+            $this->splitModelTokenPageIds($codes)
         )));
 
         return $this->pages($ids, $product);
@@ -323,6 +324,39 @@ final class CatalogIndexSearch
         }
 
         return false;
+    }
+
+    /**
+     * Stary indeks ma „ultraneo” + „420”, a kod z karty to „ultraneo420”.
+     *
+     * @param  list<string>  $codes
+     * @return list<int>
+     */
+    private function splitModelTokenPageIds(array $codes): array
+    {
+        $ids = [];
+        foreach ($codes as $code) {
+            if (preg_match('/^([a-z]{3,12})(\d{2,4})$/u', $code, $m) !== 1) {
+                continue;
+            }
+            $word = $m[1];
+            $num = $m[2];
+            $found = DB::table('catalog_page_tokens as w')
+                ->where('w.token', $word)
+                ->whereExists(function ($q) use ($num): void {
+                    $q->select(DB::raw(1))
+                        ->from('catalog_page_tokens as n')
+                        ->whereColumn('n.catalog_page_id', 'w.catalog_page_id')
+                        ->where('n.token', $num);
+                })
+                ->limit(self::SQL_LIMIT)
+                ->pluck('w.catalog_page_id');
+            foreach ($found as $id) {
+                $ids[] = (int) $id;
+            }
+        }
+
+        return array_values(array_unique($ids));
     }
 
     /**

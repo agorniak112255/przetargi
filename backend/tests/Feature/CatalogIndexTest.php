@@ -13,6 +13,7 @@ use App\Services\Enrichment\CatalogSitemapIndexer;
 use App\Services\Enrichment\HybridWebSearchService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -835,6 +836,37 @@ final class CatalogIndexTest extends TestCase
             'manufacturer' => 'MAPA',
         ]));
 
+        $this->assertSame($url, $hits[0]['url'] ?? null);
+    }
+
+    public function test_mapa_finds_split_ultraneo_tokens_without_glued_code(): void
+    {
+        $url = 'https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-420';
+        $page = CatalogPage::query()->create([
+            'host' => 'www.mapa-pro.pl',
+            'manufacturer' => 'mapa',
+            'url_hash' => CatalogPage::hashFor($url),
+            'url' => $url,
+            'title' => 'UltraNeo 420',
+            'haystack' => mb_strtolower($url.' UltraNeo 420'),
+            'last_seen_at' => now(),
+        ]);
+        DB::table('catalog_page_tokens')->insert([
+            ['catalog_page_id' => $page->id, 'token' => 'ultraneo'],
+            ['catalog_page_id' => $page->id, 'token' => '420'],
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor(new Product([
+            'sku' => '34420028',
+            'name' => 'ULTRANEO 420',
+            'manufacturer' => 'MAPA',
+        ]));
+
+        $this->assertContains('ultraneo420', app(CatalogIndexSearch::class)->codes(new Product([
+            'sku' => '34420028',
+            'name' => 'ULTRANEO 420',
+            'manufacturer' => 'MAPA',
+        ])));
         $this->assertSame($url, $hits[0]['url'] ?? null);
     }
 
