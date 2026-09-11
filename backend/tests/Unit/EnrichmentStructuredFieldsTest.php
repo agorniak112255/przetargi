@@ -40,6 +40,44 @@ TXT;
         $this->assertNotEmpty($extracted['use_cases']);
     }
 
+    public function test_extracts_specification_and_features_lists(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $text = <<<'TXT'
+PÓŁBUTY ROBOCZE ARGON 8229 1010 S2 ARTRA to obuwie bezpieczne klasy S2.
+
+Specyfikacja:
+EN ISO 20345: S2 - obuwie bezpieczne z podnoskiem 200 J.
+WKŁADKA ANTYPRZEBICIOWA - BRAK WKŁADKI ANTYPRZEBICIOWEJ; podeszwa bez elementu chroniącego przed przekłuciem.
+
+Cechy produktu:
+Cholewka PURYA SKINYUM - gładka mikrofibra ułatwia czyszczenie i dezynfekcję.
+Podeszwa GRIPPER PU.2D z technologią LEVITARYUM.
+
+Dlaczego warto wybrać półbuty robocze ARGON 8229:
+TXT;
+
+        $extracted = $this->invoke($service, 'enrichStructuredFieldsFromPages', [
+            [
+                'description' => 'Krótki opis ARGON 8229.',
+                'norms' => [],
+                'materials' => [],
+                'use_cases' => [],
+                'specs' => [],
+                'features' => [],
+            ],
+            [['url' => 'https://natare.pl/argon', 'text' => $text]],
+            'Krótki opis ARGON 8229.',
+        ]);
+
+        $this->assertTrue(collect($extracted['specs'])->contains(
+            fn (string $n): bool => str_contains($n, 'BRAK WKŁADKI ANTYPRZEBICIOWEJ')
+        ));
+        $this->assertTrue(collect($extracted['features'])->contains(
+            fn (string $n): bool => str_contains($n, 'SKINYUM')
+        ));
+    }
+
     public function test_sparse_payload_detection(): void
     {
         $service = app(ProductEnrichmentService::class);

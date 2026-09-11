@@ -15,20 +15,65 @@ final class ProductDescriptionText
         if ($text === '') {
             return '';
         }
-        if (preg_match('/^(.*)\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/us', $text, $m) === 1) {
-            $text = trim($m[1]);
-        }
         $text = preg_replace('#<(script|style|noscript)[^>]*>.*?</\1>#is', ' ', $text) ?? $text;
         $text = preg_replace('#<\s*br\s*/?\s*>#i', "\n", $text) ?? $text;
         $text = preg_replace('#</(?:p|div|li|h[1-6]|tr|section|article|table)>#i', "\n", $text) ?? $text;
         $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $text = preg_replace('/\{[^{}]{0,240}\}/u', ' ', $text) ?? $text;
+        $text = self::stripShopUi($text);
+        $text = self::cutGenericCatalogAppendix($text);
+        $text = self::unglueBrandWords($text);
         $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
         $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
         $text = preg_replace('/([^\n])\s+(\d{1,2})\)\s+/u', "$1\n$2) ", $text) ?? $text;
         $text = preg_replace('/(\S{72})(?=\S)/u', '$1 ', $text) ?? $text;
 
         return trim($text);
+    }
+
+    /** Ikony Presty, wysyłka, wycena — nie fakty o modelu. */
+    public static function stripShopUi(string $text): string
+    {
+        $text = preg_replace(
+            '/\b(?:zoom_out_map|zoom_in_map|chevron_left|chevron_right|shopping_cart|expand_more|expand_less)\b/u',
+            ' ',
+            $text
+        ) ?? $text;
+        $text = preg_replace(
+            '/\b(?:czas wysyłki(?: od \d+ do \d+ dni roboczych)?|indywidualna wycena(?: dla firm)?|zapytaj o wycenę|polityka bezpieczeństwa|zasady dostawy|zasady zwrotu|tabela rozmiarów(?: \w+)?|najniższa cena w okresie 30 dni[^.]{0,48})\b\.?/iu',
+            ' ',
+            $text
+        ) ?? $text;
+        $text = preg_replace('/\bcheck\s+czas wysyłki[^.]{0,40}\.?/iu', ' ', $text) ?? $text;
+        $text = preg_replace('/\b[-−]?\d{1,2}%\b/u', ' ', $text) ?? $text;
+
+        return trim($text);
+    }
+
+    /**
+     * Ogólna legenda piktogramów / tabela wszystkich klas ARTRA — nie karta tego modelu.
+     * Specyfikacja i Cechy zostają.
+     */
+    public static function cutGenericCatalogAppendix(string $text): string
+    {
+        // Tylko nagłówek od nowej linii — nie zakładka „Tabela rozmiarów i Piktogramy”.
+        if (preg_match(
+            '/^(.*?)(?:\n+\s*)(?:Piktogramy|Tabela zamiany rozmiaru|Klasyfikacja obuwia według kategorii)\b/us',
+            $text,
+            $m
+        ) === 1) {
+            return trim($m[1]);
+        }
+
+        return $text;
+    }
+
+    /** „ARTRABiałe półbuty” → „ARTRA Białe półbuty”. */
+    public static function unglueBrandWords(string $text): string
+    {
+        $text = (string) preg_replace('/\b([A-Z]{3,})(?=[A-Z][a-ząćęłńóśźż])/u', '$1 ', $text);
+
+        return (string) preg_replace('/\b([A-Z]{3,})(?=[a-ząćęłńóśźż])/u', '$1 ', $text);
     }
 
     /**

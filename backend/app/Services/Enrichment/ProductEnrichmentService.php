@@ -1907,6 +1907,21 @@ final class ProductEnrichmentService
             $extracted['use_cases'] = $this->extractUseCasesFromText($hay);
         }
 
+        $specs = $this->stringList($extracted['specs'] ?? null);
+        if ($specs === []) {
+            $fromSpec = $this->extractLabeledList($hay, 'Specyfikacja');
+            if ($fromSpec !== []) {
+                $extracted['specs'] = $fromSpec;
+            }
+        }
+        $features = $this->stringList($extracted['features'] ?? null);
+        if ($features === []) {
+            $fromFeat = $this->extractLabeledList($hay, 'Cechy(?: produktu)?');
+            if ($fromFeat !== []) {
+                $extracted['features'] = $fromFeat;
+            }
+        }
+
         $attrs = is_array($extracted['attributes'] ?? null) ? $extracted['attributes'] : [];
         $category = is_string($attrs['kategoria_bhp'] ?? null) ? $attrs['kategoria_bhp'] : null;
         $claimed = is_string($attrs['rozmiar'] ?? null) ? $attrs['rozmiar'] : null;
@@ -2075,6 +2090,29 @@ final class ProductEnrichmentService
     private function mergeOptionSizeLists(array $left, array $right): array
     {
         return count($right) > count($left) ? $right : $left;
+    }
+
+    /** @return list<string> */
+    private function extractLabeledList(string $text, string $heading): array
+    {
+        if (preg_match(
+            '/(?:^|\n)\s*'.$heading.'\s*:?\s*\n+(.+?)(?=\n\s*(?:[A-ZĄĆĘŁŃÓŚŹŻ][^\n]{0,48}\s*:?\s*\n|#{1,5}\s|\z))/isu',
+            $text,
+            $m
+        ) !== 1) {
+            return [];
+        }
+        $block = trim($m[1]);
+        $out = [];
+        foreach (preg_split('/\n+|;\s+(?=[A-ZĄĆĘŁŃÓŚŹŻ])/u', $block) ?: [] as $line) {
+            $line = trim((string) preg_replace('/^[\-\*•]+\s*/u', '', trim((string) $line)));
+            if ($line === '' || mb_strlen($line) < 12) {
+                continue;
+            }
+            $out[] = $line;
+        }
+
+        return array_values(array_unique($out));
     }
 
     /** @return list<string> */
@@ -2329,6 +2367,9 @@ final class ProductEnrichmentService
             'odstąpienie od umowy', 'kup za punkty', 'sprawdź status zamówienia',
             'administrator danych osobowych', 'przetwarzamy je w celu', 'widżet języka',
             'so finden sie uns', 'google-maps', 'impressum', 'herausgeber',
+            'czas wysyłki', 'indywidualna wycena', 'zapytaj o wycenę',
+            'polityka bezpieczeństwa', 'zasady dostawy', 'zasady zwrotu',
+            'zoom_out_map', 'chevron_left',
         ] as $needle) {
             if (str_contains($low, $needle)) {
                 $hits++;
@@ -2579,6 +2620,7 @@ final class ProductEnrichmentService
             foreach ($parts as $part) {
                 $part = ProductPageFetcher::stripExpandLinkChrome(trim((string) $part));
                 if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
+                    || ProductPageFetcher::looksLikeRelatedProductTeaser($part)
                     || $this->looksLikeMissingCardMeta($part)
                     || ProductPageFetcher::looksLikeCompanyImprint($part)
                     || $this->looksLikeShopChromeDescription($part)
@@ -2606,9 +2648,9 @@ final class ProductEnrichmentService
         usort($candidates, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
         $best = $candidates[0];
         if (! $this->looksLikeIncompleteDescription($best) || count($candidates) === 1) {
-            $out = mb_substr($best, 0, 5000);
+            $out = mb_substr($best, 0, 12000);
         } else {
-            $out = mb_substr(implode("\n\n", $candidates), 0, 5000);
+            $out = mb_substr(implode("\n\n", $candidates), 0, 12000);
         }
 
         return $this->isUsableProductDescription($out, $product) ? $out : '';
@@ -2631,6 +2673,7 @@ final class ProductEnrichmentService
             foreach ($parts as $part) {
                 $part = ProductPageFetcher::stripExpandLinkChrome(trim((string) $part));
                 if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
+                    || ProductPageFetcher::looksLikeRelatedProductTeaser($part)
                     || $this->looksLikeMissingCardMeta($part)
                     || ProductPageFetcher::looksLikeCompanyImprint($part)
                     || $this->looksLikeShopChromeDescription($part)
@@ -2655,8 +2698,8 @@ final class ProductEnrichmentService
         usort($candidates, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
         $best = $candidates[0];
         $out = ! $this->looksLikeIncompleteDescription($best) || count($candidates) === 1
-            ? mb_substr($best, 0, 5000)
-            : mb_substr(implode("\n\n", $candidates), 0, 5000);
+            ? mb_substr($best, 0, 12000)
+            : mb_substr(implode("\n\n", $candidates), 0, 12000);
         if ($this->looksLikeThinDescription($out) || $this->looksLikeMissingCardMeta($out)
             || $this->looksLikeRawLocaleDump($out)) {
             return '';
@@ -3108,8 +3151,8 @@ final class ProductEnrichmentService
 
         $pageCount = count($pageSnippets);
         $compact = $pageCount > 4
-            ? $this->fitPagesToBudget($pageSnippets, 6, 3000, 14000)
-            : $this->fitPagesToBudget($pageSnippets, 4, 3800, 12000);
+            ? $this->fitPagesToBudget($pageSnippets, 6, 8000, 20000)
+            : $this->fitPagesToBudget($pageSnippets, 4, 8000, 20000);
         if ($compact === []) {
             return $pageSnippets;
         }
@@ -3166,7 +3209,7 @@ SYS,
                 || $this->looksLikeOffTopicDescription($text)) {
                 continue;
             }
-            $byUrl[mb_strtolower($url)] = ['url' => $url, 'text' => mb_substr($text, 0, 3500)];
+            $byUrl[mb_strtolower($url)] = ['url' => $url, 'text' => mb_substr($text, 0, 8000)];
         }
 
         $cleaned = [];
@@ -3239,7 +3282,7 @@ SYS,
      */
     private function extractWithLlm(Product $product, array $searchResults, array $pageSnippets): array
     {
-        $compactPages = $this->fitPagesToBudget($pageSnippets, 5, 3000, 11500);
+        $compactPages = $this->fitPagesToBudget($pageSnippets, 5, 8000, 20000);
         $compactSources = array_map(static function (array $r): array {
             return [
                 'url' => mb_substr((string) ($r['url'] ?? ''), 0, 300),
@@ -3270,12 +3313,7 @@ SYS,
      */
     private function composeFullDescription(array $extracted): string
     {
-        $main = ProductDescriptionText::plain((string) ($extracted['description'] ?? ''));
-        if (preg_match('/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/u', $main, $m, PREG_OFFSET_CAPTURE)) {
-            $main = trim(mb_substr($main, 0, (int) $m[0][1]));
-        }
-
-        return $main;
+        return ProductDescriptionText::plain((string) ($extracted['description'] ?? ''));
     }
 
     /**

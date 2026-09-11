@@ -269,4 +269,18 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertSame(27, $n->snrRating('PELTOR X1 (SNR 27 dB)'));
         $this->assertNull($n->snrRating('Nauszniki przeciwhałasowe bez podanego tłumienia'));
     }
+
+    public function test_drops_foreign_model_code_when_name_has_other_word_digit_pair(): void
+    {
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['kod_producenta' => 'ARAGONIT 8423 1010 S2', 'kategoria_bhp' => 'obuwie'],
+            [
+                'name' => 'ARTRA Półbuty ARGON 8229 1010 S2',
+                'sku' => 'ARGON8229',
+                'category' => 'Obuwie',
+            ]
+        );
+
+        $this->assertSame('ARGON 8229 1010 S2', $attrs['kod_producenta']);
+    }
 }

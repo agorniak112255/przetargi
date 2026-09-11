@@ -25,13 +25,41 @@ final class ProductDescriptionTextTest extends TestCase
         $this->assertStringNotContainsString('white-space:nowrap', $plain);
     }
 
-    public function test_cuts_appended_spec_dump(): void
+    public function test_keeps_specification_and_cuts_pictogram_legend(): void
     {
         $plain = ProductDescriptionText::plain(
-            "Rękawice Camapren 720 z polichloroprenu.\n\nSpecyfikacja:\n- ukryte w opisie"
+            "Rękawice Camapren 720 z polichloroprenu.\n\nSpecyfikacja:\n- ukryte w opisie\n\n"
+            ."Piktogramy\nP / HRO — nie dotyczy tego modelu"
         );
 
-        $this->assertSame('Rękawice Camapren 720 z polichloroprenu.', $plain);
+        $this->assertStringContainsString('Specyfikacja', $plain);
+        $this->assertStringContainsString('ukryte w opisie', $plain);
+        $this->assertStringNotContainsString('Piktogramy', $plain);
+        $this->assertStringNotContainsString('HRO', $plain);
+    }
+
+    public function test_keeps_argon_card_and_strips_shop_chrome(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "ARTRABiałe półbuty robocze S2. zoom_out_map chevron_left −20% "
+            ."Czas wysyłki od 5 do 8 dni roboczych. Indywidualna wycena dla firm.\n\n"
+            ."PÓŁBUTY ROBOCZE ARGON 8229 1010 S2 ARTRA to obuwie bezpieczne klasy S2.\n\n"
+            ."Specyfikacja:\n"
+            ."- stalowy podnosek LIBERYUM\n"
+            ."- BRAK WKŁADKI ANTYPRZEBICIOWEJ\n\n"
+            ."Cechy produktu:\n- Cholewka PURYA SKINYUM\n\n"
+            ."Piktogramy\nP HRO — legenda wszystkich klas\n"
+            ."BUTY ROBOCZE PÓŁBUTY ARICA 6207 1010 S2 227,19 zł"
+        );
+
+        $this->assertStringContainsString('ARTRA Białe', $plain);
+        $this->assertStringContainsString('ARGON 8229', $plain);
+        $this->assertStringContainsString('LIBERYUM', $plain);
+        $this->assertStringContainsString('BRAK WKŁADKI ANTYPRZEBICIOWEJ', $plain);
+        $this->assertStringContainsString('SKINYUM', $plain);
+        $this->assertStringNotContainsString('zoom_out_map', $plain);
+        $this->assertStringNotContainsString('Piktogramy', $plain);
+        $this->assertStringNotContainsString('ARICA', $plain);
     }
 
     public function test_splits_long_blob_into_paragraphs(): void

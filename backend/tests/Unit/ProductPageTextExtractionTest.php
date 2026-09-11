@@ -40,6 +40,52 @@ HTML;
         $this->assertStringNotContainsString('Odstąpienie od umowy', $text);
     }
 
+    public function test_keeps_argon_spec_and_drops_related_teasers(): void
+    {
+        $html = <<<'HTML'
+<html><body>
+<nav>Opis Parametry Tabela rozmiarów i Piktogramy Normy butów ARTRA</nav>
+<div class="product-description">
+<h2>Białe półbuty robocze S2</h2>
+<p>PÓŁBUTY ROBOCZE ARGON 8229 1010 S2 ARTRA to obuwie bezpieczne klasy S2 do branży spożywczej.</p>
+<h4>Specyfikacja:</h4>
+<ul>
+<li>EN ISO 20345: S2 - obuwie bezpieczne z podnoskiem 200 J.</li>
+<li>PODNOSEK - stalowy podnosek LIBERYUM o zwiększonej szerokości.</li>
+<li>WKŁADKA ANTYPRZEBICIOWA - BRAK WKŁADKI ANTYPRZEBICIOWEJ.</li>
+</ul>
+<h4>Cechy produktu:</h4>
+<ul>
+<li>Cholewka PURYA SKINYUM - gładka mikrofibra ułatwia czyszczenie.</li>
+<li>Podeszwa GRIPPER PU.2D z technologią LEVITARYUM.</li>
+</ul>
+<p>Przemysł spożywczy i laboratoria — higiena i ochrona palców przez cały dzień pracy.</p>
+<h2>Piktogramy</h2>
+<p>P HRO — legenda wszystkich klas ARTRA, nie tego modelu S2.</p>
+</div>
+<div class="related">BUTY ROBOCZE PÓŁBUTY ARICA 6207 1010 S2 227,19 zł</div>
+<div class="related">BUTY ROBOCZE PÓŁBUTY ARAGON 920 6060 S3 ARTRA 191,99 zł</div>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractProductPageText');
+        $method->setAccessible(true);
+        $text = (string) $method->invoke($fetcher, $html, 'ARGON 8229 1010 S2');
+
+        $this->assertStringContainsString('ARGON 8229', $text);
+        $this->assertStringContainsString('LIBERYUM', $text);
+        $this->assertStringContainsString('BRAK WKŁADKI ANTYPRZEBICIOWEJ', $text);
+        $this->assertStringContainsString('SKINYUM', $text);
+        $this->assertStringNotContainsString('ARICA', $text);
+        $this->assertStringNotContainsString('ARAGON', $text);
+        $this->assertStringNotContainsString('Piktogramy', $text);
+        $this->assertTrue(ProductPageFetcher::looksLikeRelatedProductTeaser(
+            'BUTY ROBOCZE PÓŁBUTY ARICA 6207 1010 S2 227,19 zł'
+        ));
+    }
+
     public function test_drops_company_imprint_footer(): void
     {
         $html = <<<'HTML'

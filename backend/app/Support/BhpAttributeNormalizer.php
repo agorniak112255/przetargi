@@ -150,8 +150,15 @@ final class BhpAttributeNormalizer
             ?? $this->detectKategoria($katText)
         );
 
-        $out['kod_producenta'] = $this->nullableString($raw['kod_producenta'] ?? null)
-            ?? $this->nullableString($context['sku'] ?? null);
+        $kod = $this->nullableString($raw['kod_producenta'] ?? null);
+        $name = (string) ($context['name'] ?? '');
+        $sku = (string) ($context['sku'] ?? '');
+        if ($kod !== null && $this->codeConflictsWithIdentity($kod, $name, $sku)) {
+            $kod = $this->catalogCodeFromIdentity($name, $sku);
+        }
+        $out['kod_producenta'] = $kod
+            ?? $this->catalogCodeFromIdentity($name, $sku)
+            ?? $this->nullableString($sku !== '' ? $sku : null);
 
         $materials = array_values(array_unique(array_merge(
             $this->stringList($raw['materialy'] ?? null),
@@ -650,6 +657,49 @@ final class BhpAttributeNormalizer
             static fn (string $p): string => trim($p),
             preg_split('/[,;|]/u', $value) ?: []
         )));
+    }
+
+    /** @return list<string> */
+    private function wordDigitPairKeys(string $text): array
+    {
+        $keys = [];
+        foreach ((new ProductModelFuzzy)->catalogModelWordDigitPairs($text) as [$word, $num]) {
+            $keys[] = $word.' '.$num;
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    private function codeConflictsWithIdentity(string $kod, string $name, string $sku): bool
+    {
+        $idPairs = $this->wordDigitPairKeys(trim($name.' '.$sku));
+        $kodPairs = $this->wordDigitPairKeys($kod);
+        if ($idPairs === [] || $kodPairs === []) {
+            return false;
+        }
+
+        return array_intersect($idPairs, $kodPairs) === [];
+    }
+
+    private function catalogCodeFromIdentity(string $name, string $sku): ?string
+    {
+        $pairs = (new ProductModelFuzzy)->catalogModelWordDigitPairs($name);
+        if ($pairs !== []) {
+            [$word, $num] = $pairs[0];
+            if (preg_match(
+                '/\b('.preg_quote($word, '/').'\s+'.preg_quote($num, '/').'(?:\s+\d{4})?(?:\s+S[1-5][A-Z]{0,3})?)\b/iu',
+                $name,
+                $m
+            ) === 1) {
+                $code = trim((string) preg_replace('/\s+/u', ' ', $m[1]));
+
+                return mb_strtoupper($code);
+            }
+
+            return mb_strtoupper($word.' '.$num);
+        }
+
+        return $this->nullableString($sku !== '' ? $sku : null);
     }
 
     private function nullableString(mixed $value): ?string

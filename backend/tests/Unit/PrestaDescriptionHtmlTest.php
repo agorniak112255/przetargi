@@ -13,7 +13,7 @@ final class PrestaDescriptionHtmlTest extends TestCase
     public function test_builds_bhp_box_and_lists_like_przetargi(): void
     {
         $html = $this->html()->fromProduct($this->product([
-            'description' => "Rękawice Camapren 720 z polichloroprenu.\n\nSpecyfikacja:\n- ukryte w opisie",
+            'description' => 'Rękawice Camapren 720 z polichloroprenu.',
             'enrichment_payload' => [
                 'attributes' => [
                     'kategoria_bhp' => 'rekawice',
@@ -43,7 +43,6 @@ final class PrestaDescriptionHtmlTest extends TestCase
         $this->assertStringContainsString('przemysł chemiczny', $html);
         $this->assertStringNotContainsString('Źródła', $html);
         $this->assertStringNotContainsString('example.com/kcl-camapren', $html);
-        $this->assertStringNotContainsString('ukryte w opisie', $html);
         $this->assertStringContainsString('Camapren 720 z polichloroprenu', $html);
         $this->assertLessThan(
             strpos($html, 'Cechy') ?: PHP_INT_MAX,

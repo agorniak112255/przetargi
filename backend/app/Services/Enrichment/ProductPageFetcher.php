@@ -6,6 +6,7 @@ namespace App\Services\Enrichment;
 
 use App\Models\Product;
 use App\Support\ProductAccessoryExtractor;
+use App\Support\ProductDescriptionText;
 use App\Support\ProductSizeVariant;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Psr7\Response as Psr7Response;
@@ -430,7 +431,7 @@ final class ProductPageFetcher
         if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
             $page = [
                 'url' => $url,
-                'text' => mb_substr($text, 0, 5000),
+                'text' => mb_substr($text, 0, 12000),
                 'image_urls' => array_values(array_unique($pageImages)),
                 'trusted_image_urls' => array_values(array_unique($pageTrusted)),
             ];
@@ -831,7 +832,10 @@ final class ProductPageFetcher
             return '';
         }
 
-        return mb_substr(trim($text), 0, 5000);
+        $text = ProductDescriptionText::stripShopUi($text);
+        $text = ProductDescriptionText::cutGenericCatalogAppendix($text);
+
+        return mb_substr(trim($text), 0, 12000);
     }
 
     private function usableExtractedChunk(string $text): string
@@ -900,14 +904,15 @@ final class ProductPageFetcher
                 foreach ($m[1] as $block) {
                     $t = self::stripExpandLinkChrome($this->htmlToText($this->stripShopChromeHtml((string) $block)));
                     if (mb_strlen($t) >= 40 && ! $this->looksLikeShopChrome($t)
-                        && ! $this->looksLikeEmbeddedCode($t) && ! self::looksLikeTruncatedShopTeaser($t)) {
+                        && ! $this->looksLikeEmbeddedCode($t) && ! self::looksLikeTruncatedShopTeaser($t)
+                        && ! self::looksLikeRelatedProductTeaser($t)) {
                         $parts[] = $t;
                     }
                 }
             }
         }
 
-        return trim(implode("\n\n", array_slice(array_unique($parts), 0, 6)));
+        return trim(implode("\n\n", array_slice(array_unique($parts), 0, 16)));
     }
 
     private function stripShopChromeHtml(string $html): string
@@ -927,6 +932,9 @@ final class ProductPageFetcher
     private function htmlToText(string $html): string
     {
         $html = preg_replace('#<(script|style|noscript)[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+        $html = preg_replace('#<\s*br\s*/?\s*>#i', "\n", $html) ?? $html;
+        $html = preg_replace('#</(?:p|div|h[1-6]|section|article|table)>#i', "\n\n", $html) ?? $html;
+        $html = preg_replace('#</(?:li|tr|ul|ol)>#i', "\n", $html) ?? $html;
         $text = strip_tags($html);
         $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
@@ -961,23 +969,27 @@ final class ProductPageFetcher
         $haveProduct = false;
         foreach ($parts as $part) {
             $part = self::stripExpandLinkChrome(trim((string) $part));
-            if ($part === '' || mb_strlen($part) < 25) {
+            if ($part === '') {
                 continue;
             }
             $low = mb_strtolower($part);
+            $mentionsSku = $skuNorm !== '' && (
+                str_contains($low, mb_strtolower($skuNorm))
+                || $this->hayMentionsNameTokens($low, mb_strtolower($skuNorm))
+            );
+            if (mb_strlen($part) < 25 && ! $mentionsSku) {
+                continue;
+            }
             if ($this->looksLikeShopChrome($part) || self::looksLikeTruncatedShopTeaser($part)
                 || self::looksLikeCompanyImprint($part)
                 || self::looksLikeCookieConsent($part) || self::looksLikeCjkDump($part)
+                || self::looksLikeRelatedProductTeaser($part)
                 || str_contains($low, 'wähle eine option') || str_contains($low, 'wahle eine option')) {
                 continue;
             }
             $productish = (bool) preg_match(
                 '#(trzewik|p[oó]łbut|obuwie|buty|rękaw|ochron|chodnik|dywanik|norm|en\s*\d|iso|s3|s1|src|hro|o1|podnosek|podeszw|skór|nitryl|producent|przeznacz|materiał|cholewka|wkładka|kalosz|winter|gloss|clic)#iu',
                 $low
-            );
-            $mentionsSku = $skuNorm !== '' && (
-                str_contains($low, mb_strtolower($skuNorm))
-                || $this->hayMentionsNameTokens($low, mb_strtolower($skuNorm))
             );
             if ($productish || $mentionsSku || mb_strlen($part) >= 120) {
                 $kept[] = $part;
@@ -994,10 +1006,22 @@ final class ProductPageFetcher
                 return '';
             }
 
-            return mb_substr($flat, 0, 2000);
+            return mb_substr($flat, 0, 10000);
         }
 
-        return implode("\n\n", array_slice($kept, 0, 12));
+        return implode("\n\n", array_slice($kept, 0, 40));
+    }
+
+    /** Karuzela „inne półbuty ARTRA …” z ceną — nie karta tego modelu. */
+    public static function looksLikeRelatedProductTeaser(string $text): bool
+    {
+        $t = trim($text);
+        if ($t === '' || mb_strlen($t) > 200) {
+            return false;
+        }
+
+        return preg_match('/\b\d{1,3}[.,]\d{2}\s*zł\b/u', $t) === 1
+            && preg_match('/\b(buty|półbuty|polbuty|trzewiki|rękawice|rekawice)\b/iu', $t) === 1;
     }
 
     private function looksLikeShopChrome(string $text): bool
@@ -1013,6 +1037,9 @@ final class ProductPageFetcher
             'wyszukiwanie zaawansowane', 'jesteś tutaj', 'sprawdź status zamówienia',
             'sposoby płatności', 'dodano do koszyka', 'podaj swój adres e-mail',
             'informacje o nowościach',
+            'czas wysyłki', 'indywidualna wycena', 'zapytaj o wycenę',
+            'polityka bezpieczeństwa', 'zasady dostawy', 'zasady zwrotu',
+            'zoom_out_map', 'chevron_left',
         ] as $needle) {
             if (str_contains($low, $needle)) {
                 $hits++;
