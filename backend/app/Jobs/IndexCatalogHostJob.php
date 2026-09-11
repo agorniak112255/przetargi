@@ -59,6 +59,7 @@ class IndexCatalogHostJob implements ShouldQueue, ShouldBeUnique
                     'last_error' => $this->emptyError($result),
                 ]
             );
+            $indexer->refreshTableStatistics();
             $progress->finish($host, $this->doneMessage($result), true);
         } catch (Throwable $e) {
             CatalogHost::query()->updateOrCreate(

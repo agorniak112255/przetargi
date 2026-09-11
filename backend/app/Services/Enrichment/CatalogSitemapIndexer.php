@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\CatalogPage;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -2187,6 +2188,23 @@ final class CatalogSitemapIndexer
 
         foreach (array_chunk($tokens, 400) as $chunk) {
             DB::table('catalog_page_tokens')->insertOrIgnore($chunk);
+        }
+    }
+
+    /**
+     * catalog_pages ma wyłączone automatyczne przeliczanie statystyk (masowy import blokował
+     * MariaDB). Bez przeliczenia optymalizator widział pustą tabelę i czytał karty po id
+     * pełnym skanem — 1,3 s zamiast 13 ms przy 950 tys. wierszy. Po indeksowaniu, najwyżej co 10 min.
+     */
+    public function refreshTableStatistics(): void
+    {
+        if (DB::getDriverName() !== 'mysql' || ! Cache::add('catalog_pages_analyzed', 1, 600)) {
+            return;
+        }
+        try {
+            DB::statement('ANALYZE TABLE catalog_pages');
+        } catch (Throwable $e) {
+            Log::info('Catalog statistics refresh failed', ['error' => $e->getMessage()]);
         }
     }
 

@@ -100,6 +100,7 @@ final class CatalogIndexCommand extends Command
             }
         }
 
+        $indexer->refreshTableStatistics();
         $this->info(sprintf('Zaindeksowano %d adresów, domen z błędem: %d.', $total, $failed));
 
         return $failed === count($hosts) ? self::FAILURE : self::SUCCESS;

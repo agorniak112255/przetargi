@@ -76,6 +76,18 @@ final class AnsellGloveIdentityTest extends TestCase
         ));
     }
 
+    public function test_size_and_pack_words_do_not_identify_product(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $product = $this->glove('11618110', 'HyFlex 11618 Size 11,0');
+
+        $this->assertSame(['hyflex'], $identity->nameWords($product));
+        $this->assertSame(['alphatec'], $identity->nameWords($this->glove('87320100-PAIR', 'AlphaTec 87320 Pair Pack Size 10.0')));
+        // marka + „size” w adresie przepuszczały dowolną rękawicę Ansell jako HyFlex 11618
+        $url = 'https://www.example-shop.com/ansell-cut-resistant-gloves-size-8';
+        $this->assertFalse($identity->pageAgreesWithBrandAndName($url, $url, $product));
+    }
+
     private function glove(string $sku, string $name): Product
     {
         return new Product(['sku' => $sku, 'name' => $name, 'manufacturer' => 'Ansell']);

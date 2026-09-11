@@ -2432,8 +2432,11 @@ final class ProductSearchIdentity
      */
     public function nameWords(Product $product): array
     {
+        // „HyFlex 11618 Size 11,0” — size/pair/pack/vend z cennika to rozmiar i opakowanie,
+        // nie model; z marką potwierdzały każdą kartę „…-gloves-size-8” tego producenta
         $generic = ['bhp', 'robocze', 'roboczy', 'robocza', 'ochronne', 'ochronny', 'ochronna',
-            'damskie', 'meskie', 'męskie', 'nowosc', 'nowość', 'szt', 'kpl', 'para', 'rozmiar'];
+            'damskie', 'meskie', 'męskie', 'nowosc', 'nowość', 'szt', 'kpl', 'para', 'rozmiar',
+            'size', 'sizes', 'pair', 'pairs', 'pack', 'packs', 'vend', 'vending', 'each', 'piece', 'pieces'];
 
         $out = [];
         foreach (preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower(trim((string) $product->name))) ?: [] as $word) {
