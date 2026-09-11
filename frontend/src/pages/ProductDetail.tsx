@@ -564,11 +564,12 @@ export function ProductDetail() {
                     )}
                     {step.urls && step.urls.length > 0 && (
                       <ul className="mt-0.5 list-disc pl-4">
-                        {step.urls.map((url) => (
+                        {step.urls.map((url, j) => (
                           <li key={url}>
                             <a href={url} target="_blank" rel="noreferrer" className="underline break-all">
                               {url}
                             </a>
+                            {step.why?.[j] ? <span className="text-red-600"> — {step.why[j]}</span> : null}
                           </li>
                         ))}
                       </ul>

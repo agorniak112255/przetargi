@@ -154,8 +154,10 @@ final class CatalogSearchHostService
         }
 
         $hits = [];
+        $rejected = [];
         if ($selected !== null) {
             $hits = $this->enrichHits($this->catalog->findFor($selected));
+            $rejected = $this->rejectedRows($this->catalog->lastRejections());
         }
 
         return [
@@ -167,7 +169,29 @@ final class CatalogSearchHostService
             'hits' => $hits,
             'hit_hosts' => $this->hitHostRows($hits),
             'mapped' => $hits !== [],
+            'rejected' => $rejected,
         ];
+    }
+
+    /**
+     * Karty, które indeks znalazł, ale odsiał filtr tożsamości — z powodem.
+     *
+     * @param  list<array{url: string, reason: string}>  $rejections
+     * @return list<array{url: string, host: string, reason: string, label: string}>
+     */
+    private function rejectedRows(array $rejections): array
+    {
+        $out = [];
+        foreach (array_slice($rejections, 0, 40) as $row) {
+            $out[] = [
+                'url' => $row['url'],
+                'host' => $this->normalizeHost((string) (parse_url($row['url'], PHP_URL_HOST) ?? '')),
+                'reason' => $row['reason'],
+                'label' => CandidateRejection::label($row['reason']),
+            ];
+        }
+
+        return $out;
     }
 
     /**

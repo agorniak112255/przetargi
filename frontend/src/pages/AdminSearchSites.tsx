@@ -66,6 +66,13 @@ type LookupHit = {
   last_seen_at: string | null
 }
 
+type LookupRejected = {
+  url: string
+  host: string
+  reason: string
+  label: string
+}
+
 type LookupOfficialHost = {
   host: string
   links: number
@@ -81,6 +88,7 @@ type ProductLookupResponse = {
   hits: LookupHit[]
   hit_hosts: { host: string; hits: number }[]
   mapped: boolean
+  rejected?: LookupRejected[]
 }
 
 type SortKey = 'host' | 'links' | 'source_label' | 'last_seen_at'
@@ -1048,6 +1056,35 @@ function ProductMappingPanel({
               Indeks nie zwraca karty dla tego SKU/nazwy. Domeny producenta mogą być
               zaindeksowane, ale ta pozycja się nie łapie.
             </p>
+          )}
+          {data.rejected && data.rejected.length > 0 && (
+            <details className="rounded-lg border border-slate-200">
+              <summary className="cursor-pointer px-2 py-1.5 text-[11px] font-semibold text-slate-600">
+                Odrzucone przez filtr indeksu ({data.rejected.length})
+              </summary>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[12px]">
+                  <tbody>
+                    {data.rejected.map((r) => (
+                      <tr key={r.url} className="border-t">
+                        <td className="whitespace-nowrap p-2 text-slate-700">{r.host}</td>
+                        <td className="p-2">
+                          <a
+                            href={r.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="break-all text-sky-800 hover:underline"
+                          >
+                            {r.url}
+                          </a>
+                        </td>
+                        <td className="whitespace-nowrap p-2 text-amber-800">{r.label}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
           )}
         </div>
       )}

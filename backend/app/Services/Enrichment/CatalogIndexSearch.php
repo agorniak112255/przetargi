@@ -6,6 +6,8 @@ namespace App\Services\Enrichment;
 
 use App\Models\CatalogPage;
 use App\Models\Product;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -18,8 +20,23 @@ final class CatalogIndexSearch
     /** Ile stron zwracamy do dalszego przetwarzania. */
     private const MAX_HITS = 8;
 
-    /** Ile wierszy bierzemy z bazy przed filtrem tożsamości. */
+    /** Ile kandydatów naraz przepuszczamy przez filtr tożsamości. */
     private const SQL_LIMIT = 40;
+
+    /**
+     * Ile kandydatów w sumie przeglądamy. Przy 2,5 mln adresów pospolity token
+     * („3000”, marka) ma tysiące stron — właściwa bywa dalej niż pierwsze 40.
+     */
+    private const CANDIDATE_POOL = 400;
+
+    /** Powyżej tylu stron token jest pospolity — dalej nie liczymy. */
+    private const DF_CAP = 5000;
+
+    /** @var list<array{url: string, reason: string}> */
+    private array $rejections = [];
+
+    /** @var array<string, true> */
+    private array $except = [];
 
     public function __construct(
         private readonly ProductSearchIdentity $identity,
@@ -27,16 +44,36 @@ final class CatalogIndexSearch
     ) {}
 
     /**
+     * @param  list<string>  $exceptUrls  karty już sprawdzone — kolejne wywołanie daje następną partię
      * @return list<array{url: string, title: string, snippet: string}>
      */
-    public function findFor(Product $product): array
+    public function findFor(Product $product, array $exceptUrls = []): array
     {
+        $this->rejections = [];
+        $this->except = [];
+        foreach ($exceptUrls as $url) {
+            $key = mb_strtolower(trim((string) $url));
+            if ($key !== '') {
+                $this->except[$key] = true;
+            }
+        }
+
         $hits = $this->mergeHits($this->byCode($product), $this->byBrandAndName($product));
         if ($hits !== []) {
             return $hits;
         }
 
         return $this->byDistinctiveName($product);
+    }
+
+    /**
+     * Kandydaci z ostatniego findFor, których odsiał filtr tożsamości.
+     *
+     * @return list<array{url: string, reason: string}>
+     */
+    public function lastRejections(): array
+    {
+        return CandidateRejection::unique($this->rejections);
     }
 
     /**
@@ -109,33 +146,19 @@ final class CatalogIndexSearch
         $typePrefixes = $this->shortNumericVariantNeedsType($product, $codes)
             ? $this->identity->catalogTypeTokenPrefixes($product)
             : [];
+        $weights = $this->tokenWeights($codes);
         $query = DB::table('catalog_page_tokens as t')
             ->whereIn('t.token', $codes);
         if ($typePrefixes !== []) {
-            $query->whereExists(function ($q) use ($typePrefixes): void {
-                $q->select(DB::raw(1))
-                    ->from('catalog_page_tokens as typ')
-                    ->whereColumn('typ.catalog_page_id', 't.catalog_page_id')
-                    ->where(function ($inner) use ($typePrefixes): void {
-                        foreach ($typePrefixes as $prefix) {
-                            $inner->orWhere('typ.token', 'like', $prefix.'%');
-                        }
-                    });
-            });
+            $this->requireTypeToken($query, $typePrefixes);
         }
-        $ids = $query
-            ->groupBy('t.catalog_page_id')
-            ->orderByRaw('COUNT(DISTINCT t.token) DESC')
-            ->limit(self::SQL_LIMIT)
-            ->pluck('t.catalog_page_id')
-            ->all();
-        $ids = array_values(array_unique(array_merge(
-            $ids,
-            $this->gluedNumericTokenPageIds($codes, $typePrefixes),
-            $this->splitModelTokenPageIds($codes)
-        )));
+        $scores = $this->scoredPageIds($query, $weights);
+        // sklejony model („ultraneo420”, „9022002”) ma wagę kodu, z którego go wyprowadziliśmy
+        foreach ($this->gluedNumericTokenPageIds($codes, $typePrefixes) + $this->splitModelTokenPageIds($codes) as $id => $code) {
+            $scores[$id] = max($scores[$id] ?? 0, $weights[$code] ?? 0);
+        }
 
-        return $this->pages($ids, $product);
+        return $this->pages($this->rankedIds($scores), $product);
     }
 
     /**
@@ -152,23 +175,19 @@ final class CatalogIndexSearch
             return [];
         }
 
-        $need = min(2, count($words));
-        $ids = DB::table('catalog_page_tokens as t')
+        $query = DB::table('catalog_page_tokens as t')
             ->whereIn('t.token', $words)
             ->whereExists(function ($q) use ($brand): void {
                 $q->select(DB::raw(1))
                     ->from('catalog_page_tokens as b')
                     ->whereColumn('b.catalog_page_id', 't.catalog_page_id')
                     ->where('b.token', $brand);
-            })
-            ->groupBy('t.catalog_page_id')
-            ->havingRaw('COUNT(DISTINCT t.token) >= ?', [$need])
-            ->orderByRaw('COUNT(DISTINCT t.token) DESC')
-            ->limit(self::SQL_LIMIT)
-            ->pluck('t.catalog_page_id')
-            ->all();
+            });
 
-        return $this->pages($ids, $product);
+        return $this->pages(
+            $this->rankedIds($this->scoredPageIds($query, $this->tokenWeights($words), min(2, count($words)))),
+            $product
+        );
     }
 
     /**
@@ -189,30 +208,116 @@ final class CatalogIndexSearch
         $query = DB::table('catalog_page_tokens as t')
             ->whereIn('t.token', $words);
         if ($typePrefixes !== []) {
-            $query->whereExists(function ($q) use ($typePrefixes): void {
-                $q->select(DB::raw(1))
-                    ->from('catalog_page_tokens as typ')
-                    ->whereColumn('typ.catalog_page_id', 't.catalog_page_id')
-                    ->where(function ($inner) use ($typePrefixes): void {
-                        foreach ($typePrefixes as $prefix) {
-                            $inner->orWhere('typ.token', 'like', $prefix.'%');
-                        }
-                    });
-            });
+            $this->requireTypeToken($query, $typePrefixes);
         }
-        $ids = $query
-            ->groupBy('t.catalog_page_id')
-            ->havingRaw('COUNT(DISTINCT t.token) >= ?', [3])
-            ->orderByRaw('COUNT(DISTINCT t.token) DESC')
-            ->limit(self::SQL_LIMIT)
-            ->pluck('t.catalog_page_id')
-            ->all();
 
-        return $this->pages($ids, $product);
+        return $this->pages(
+            $this->rankedIds($this->scoredPageIds($query, $this->tokenWeights($words), 3)),
+            $product
+        );
     }
 
     /**
-     * @param  list<int|string>  $ids
+     * @param  list<string>  $typePrefixes
+     */
+    private function requireTypeToken(Builder $query, array $typePrefixes): void
+    {
+        $query->whereExists(function ($q) use ($typePrefixes): void {
+            $q->select(DB::raw(1))
+                ->from('catalog_page_tokens as typ')
+                ->whereColumn('typ.catalog_page_id', 't.catalog_page_id')
+                ->where(function ($inner) use ($typePrefixes): void {
+                    foreach ($typePrefixes as $prefix) {
+                        $inner->orWhere('typ.token', 'like', $prefix.'%');
+                    }
+                });
+        });
+    }
+
+    /**
+     * Strony z sumą wag trafionych tokenów. Rzadki kod przeważa nad pospolitym
+     * tokenem — sama liczba trafień remisowała i o kolejności decydowała baza.
+     *
+     * @param  array<string, int>  $weights
+     * @return array<int, int> id strony → wynik, od najlepszej
+     */
+    private function scoredPageIds(Builder $query, array $weights, ?int $minDistinct = null): array
+    {
+        $cases = [];
+        $bindings = [];
+        foreach ($weights as $token => $weight) {
+            $cases[] = 'WHEN ? THEN ?';
+            $bindings[] = (string) $token;
+            $bindings[] = $weight;
+        }
+        $query->select('t.catalog_page_id')
+            ->selectRaw('SUM(CASE t.token '.implode(' ', $cases).' ELSE 0 END) as score', $bindings)
+            ->groupBy('t.catalog_page_id');
+        if ($minDistinct !== null) {
+            $query->havingRaw('COUNT(DISTINCT t.token) >= ?', [$minDistinct]);
+        }
+
+        $out = [];
+        foreach ($query->orderByDesc('score')->orderBy('t.catalog_page_id')->limit(self::CANDIDATE_POOL)->get() as $row) {
+            $out[(int) $row->catalog_page_id] = (int) $row->score;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<int, int>  $scores
+     * @return list<int>
+     */
+    private function rankedIds(array $scores): array
+    {
+        // sortowanie stabilne — przy remisie zostaje kolejność z bazy
+        arsort($scores);
+
+        return array_slice(array_keys($scores), 0, self::CANDIDATE_POOL);
+    }
+
+    /**
+     * Waga tokenu wg rzadkości: kod z jednej strony ≈ 900, token z ≥ 5000 stron = 100.
+     *
+     * @param  list<string>  $tokens
+     * @return array<string, int>
+     */
+    private function tokenWeights(array $tokens): array
+    {
+        $out = [];
+        foreach ($tokens as $token) {
+            $token = (string) $token;
+            $df = (int) Cache::remember(
+                'catalog_token_df:v1:'.$token,
+                now()->addHours(12),
+                fn (): int => $this->documentFrequency($token)
+            );
+            $out[$token] = (int) round(100 * (1 + log((self::DF_CAP + 1) / ($df + 1))));
+        }
+
+        return $out;
+    }
+
+    /** Na ilu stronach stoi token — liczone najwyżej do DF_CAP, żeby nie skanować milionów wierszy. */
+    private function documentFrequency(string $token): int
+    {
+        return DB::query()
+            ->fromSub(
+                DB::table('catalog_page_tokens')
+                    ->select('catalog_page_id')
+                    ->where('token', $token)
+                    ->limit(self::DF_CAP),
+                'df'
+            )
+            ->count();
+    }
+
+    /**
+     * Kandydaci idą partiami w kolejności wyniku, aż uzbiera się MAX_HITS kart
+     * po filtrze — wcześniej ucinało na 40 wierszach, zanim filtr cokolwiek przepuścił.
+     *
+     * @param  list<int>  $ids
      * @return list<array{url: string, title: string, snippet: string}>
      */
     private function pages(array $ids, Product $product): array
@@ -220,10 +325,6 @@ final class CatalogIndexSearch
         if ($ids === []) {
             return [];
         }
-
-        $pages = CatalogPage::query()
-            ->whereIn('id', $ids)
-            ->get(['url', 'title', 'haystack', 'manufacturer']);
 
         $brand = $this->brandToken($product);
         $ambiguous = $this->isAmbiguousNumericSku($product);
@@ -233,55 +334,98 @@ final class CatalogIndexSearch
         $withManufacturer = [];
         $withBrand = [];
         $rest = [];
-        foreach ($pages as $page) {
-            $url = (string) $page->url;
-            if ($url === '') {
-                continue;
+        $accepted = 0;
+        foreach (array_chunk($ids, self::SQL_LIMIT) as $chunk) {
+            $pages = CatalogPage::query()
+                ->whereIn('id', $chunk)
+                ->get(['id', 'url', 'title', 'haystack', 'manufacturer'])
+                ->keyBy('id');
+            foreach ($chunk as $id) {
+                $page = $pages->get($id);
+                if ($page === null) {
+                    continue;
+                }
+                $url = (string) $page->url;
+                if ($url === '' || $this->isExcluded($url, $product)) {
+                    continue;
+                }
+                $pageManufacturer = $page->manufacturer !== null ? (string) $page->manufacturer : null;
+                if ($this->isCatalogNoiseUrl($url)) {
+                    $this->reject($url, CandidateRejection::NOISE_URL);
+
+                    continue;
+                }
+                if ($this->pageManufacturer->conflictsWithProduct($pageManufacturer, $product)
+                    && ! $this->inferredBrandMatchesPage($pageManufacturer, $product)) {
+                    $this->reject($url, CandidateRejection::MANUFACTURER_CONFLICT);
+
+                    continue;
+                }
+                $row = [
+                    'url' => $url,
+                    'title' => (string) ($page->title ?? ''),
+                    'snippet' => (string) ($page->haystack ?? ''),
+                ];
+                if ($needType && ! $this->identity->hayHasRequiredTypeFromName(
+                    $url.' '.$row['title'].' '.(string) $page->haystack,
+                    $product
+                )) {
+                    $this->reject($url, CandidateRejection::TYPE_MISSING);
+
+                    continue;
+                }
+                if ($this->identity->pageClaimsAnotherCode($url, $row['title'], $product)) {
+                    $this->reject($url, CandidateRejection::CLAIMS_OTHER_CODE);
+
+                    continue;
+                }
+                $hay = (string) $page->haystack;
+                $matchesManufacturer = $this->pageManufacturer->matchesProduct($pageManufacturer, $product)
+                    || $this->inferredBrandMatchesPage($pageManufacturer, $product);
+                $hasBrand = $matchesManufacturer
+                    || $this->identity->hayHasBrand($hay, $product)
+                    || ($brand !== '' && str_contains($hay, $brand));
+                // ICD i producent mają tę samą rodzinę (pros) — karta z domeny marki
+                // musi być przed wariantami kolorystycznymi sklepu (limit 8).
+                if ($this->urlIsOfficialCatalogHost($url, $product)) {
+                    $official[] = $row;
+                } elseif ($matchesManufacturer) {
+                    $withManufacturer[] = $row;
+                } elseif ($hasBrand) {
+                    $withBrand[] = $row;
+                } elseif (! $ambiguous
+                    || $this->identity->urlHasGluedNumericModel($url.' '.$row['title'].' '.$hay, $product)
+                    || $this->identity->hayHasDistinctiveNamePhrase($url.' '.$row['title'].' '.$hay, $product)) {
+                    $rest[] = $row;
+                } else {
+                    $this->reject($url, CandidateRejection::WEAK_MATCH);
+
+                    continue;
+                }
+                $accepted++;
             }
-            $pageManufacturer = $page->manufacturer !== null ? (string) $page->manufacturer : null;
-            if ($this->isCatalogNoiseUrl($url)) {
-                continue;
-            }
-            if ($this->pageManufacturer->conflictsWithProduct($pageManufacturer, $product)
-                && ! $this->inferredBrandMatchesPage($pageManufacturer, $product)) {
-                continue;
-            }
-            $row = [
-                'url' => $url,
-                'title' => (string) ($page->title ?? ''),
-                'snippet' => (string) ($page->haystack ?? ''),
-            ];
-            if ($needType && ! $this->identity->hayHasRequiredTypeFromName(
-                $url.' '.$row['title'].' '.(string) $page->haystack,
-                $product
-            )) {
-                continue;
-            }
-            if ($this->identity->pageClaimsAnotherCode($url, $row['title'], $product)) {
-                continue;
-            }
-            $hay = (string) $page->haystack;
-            $matchesManufacturer = $this->pageManufacturer->matchesProduct($pageManufacturer, $product)
-                || $this->inferredBrandMatchesPage($pageManufacturer, $product);
-            $hasBrand = $matchesManufacturer
-                || $this->identity->hayHasBrand($hay, $product)
-                || ($brand !== '' && str_contains($hay, $brand));
-            // ICD i producent mają tę samą rodzinę (pros) — karta z domeny marki
-            // musi być przed wariantami kolorystycznymi sklepu (limit 8).
-            if ($this->urlIsOfficialCatalogHost($url, $product)) {
-                $official[] = $row;
-            } elseif ($matchesManufacturer) {
-                $withManufacturer[] = $row;
-            } elseif ($hasBrand) {
-                $withBrand[] = $row;
-            } elseif (! $ambiguous
-                || $this->identity->urlHasGluedNumericModel($url.' '.$row['title'].' '.$hay, $product)
-                || $this->identity->hayHasDistinctiveNamePhrase($url.' '.$row['title'].' '.$hay, $product)) {
-                $rest[] = $row;
+            if ($accepted >= self::MAX_HITS) {
+                break;
             }
         }
 
         return array_slice(array_merge($official, $withManufacturer, $withBrand, $rest), 0, self::MAX_HITS);
+    }
+
+    private function reject(string $url, string $reason): void
+    {
+        $this->rejections[] = ['url' => $url, 'reason' => $reason];
+    }
+
+    /** Karta już sprawdzona w poprzedniej partii — także pod adresem w preferowanym języku. */
+    private function isExcluded(string $url, Product $product): bool
+    {
+        if ($this->except === []) {
+            return false;
+        }
+
+        return isset($this->except[mb_strtolower($url)])
+            || isset($this->except[mb_strtolower($this->identity->preferredLocaleUrl($url, $product))]);
     }
 
     private function inferredBrandMatchesPage(?string $pageManufacturer, Product $product): bool
@@ -330,7 +474,7 @@ final class CatalogIndexSearch
      * Stary indeks ma „ultraneo” + „420”, a kod z karty to „ultraneo420”.
      *
      * @param  list<string>  $codes
-     * @return list<int>
+     * @return array<int, string> id strony → kod, który ją znalazł
      */
     private function splitModelTokenPageIds(array $codes): array
     {
@@ -352,11 +496,11 @@ final class CatalogIndexSearch
                 ->limit(self::SQL_LIMIT)
                 ->pluck('w.catalog_page_id');
             foreach ($found as $id) {
-                $ids[] = (int) $id;
+                $ids[(int) $id] ??= $code;
             }
         }
 
-        return array_values(array_unique($ids));
+        return $ids;
     }
 
     /**
@@ -364,7 +508,7 @@ final class CatalogIndexSearch
      *
      * @param  list<string>  $codes
      * @param  list<string>  $typePrefixes
-     * @return list<int>
+     * @return array<int, string> id strony → kod, który ją znalazł
      */
     private function gluedNumericTokenPageIds(array $codes, array $typePrefixes): array
     {
@@ -377,27 +521,18 @@ final class CatalogIndexSearch
                 ->where('t.token', 'like', $code.'%')
                 ->whereRaw('LENGTH(t.token) >= ?', [strlen($code) + 3]);
             if ($typePrefixes !== []) {
-                $query->whereExists(function ($q) use ($typePrefixes): void {
-                    $q->select(DB::raw(1))
-                        ->from('catalog_page_tokens as typ')
-                        ->whereColumn('typ.catalog_page_id', 't.catalog_page_id')
-                        ->where(function ($inner) use ($typePrefixes): void {
-                            foreach ($typePrefixes as $prefix) {
-                                $inner->orWhere('typ.token', 'like', $prefix.'%');
-                            }
-                        });
-                });
+                $this->requireTypeToken($query, $typePrefixes);
             }
             foreach ($query->select(['t.catalog_page_id', 't.token'])->limit(self::SQL_LIMIT * 3)->get() as $row) {
                 $token = (string) $row->token;
                 if (ctype_digit($token) && str_starts_with($token, $code)
                     && strlen($token) >= strlen($code) + 3) {
-                    $ids[] = (int) $row->catalog_page_id;
+                    $ids[(int) $row->catalog_page_id] ??= $code;
                 }
             }
         }
 
-        return array_values(array_unique($ids));
+        return $ids;
     }
 
     private function isAmbiguousNumericSku(Product $product): bool

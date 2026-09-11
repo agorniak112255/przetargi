@@ -38,6 +38,9 @@ use Throwable;
 final class ProductEnrichmentService
 {
     /** Słowa, które pasują do połowy katalogu BHP — same nie potwierdzają modelu. */
+    /** Ile razy prosimy indeks o kolejną partię kart, zanim pójdziemy do wyszukiwarki. */
+    private const CATALOG_EXTRA_ROUNDS = 3;
+
     private const GENERIC_NAME_TOKENS = [
         'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
         'ubranie', 'odziez', 'odzież', 'buty', 'obuwie', 'trzewiki', 'polbuty', 'półbuty', 'sandaly',
@@ -550,17 +553,25 @@ final class ProductEnrichmentService
                     static fn ($p): string => is_array($p) ? (string) ($p['url'] ?? '') : '',
                     $fetched['pages']
                 )));
+                $this->logCardRejections($product, $fetched);
                 $this->attemptLog()->add(
                     'page',
-                    'pobrane strony nie potwierdzają produktu — szukam zmapowanych sklepów',
+                    'pobrane strony nie potwierdzają produktu — kolejne karty z indeksu, potem zmapowane sklepy',
                     urls: $triedUrls
                 );
-                [$pageSnippets, $fetched, $shopResults] = $this->fetchMappedRetailerCards(
+                [$pageSnippets, $fetched, $shopResults] = $this->fetchMoreCatalogCards(
                     $product,
                     $searchResults,
                     $fetched
                 );
-                if ($shopResults !== []) {
+                if ($pageSnippets === []) {
+                    [$pageSnippets, $fetched, $shopResults] = $this->fetchMappedRetailerCards(
+                        $product,
+                        array_values(array_merge($searchResults, $shopResults)),
+                        $fetched
+                    );
+                }
+                if ($shopResults !== [] && $pageSnippets !== []) {
                     $searchResults = array_values(array_merge($searchResults, $shopResults));
                     $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
                 }
@@ -1733,6 +1744,84 @@ final class ProductEnrichmentService
      *     document_urls: list<string>
      * }
      */
+    /**
+     * Karty z indeksu nie potwierdziły produktu — bierzemy kolejne z tego samego indeksu
+     * (inne domeny), zanim wyszukiwarka dostanie site: na kilku sklepach.
+     *
+     * @param  list<array<string, mixed>>  $searchResults
+     * @param  array<string, mixed>  $fetched
+     * @return array{0: list<array{url?: string, text?: string}>, 1: array<string, mixed>, 2: list<array<string, mixed>>}
+     */
+    private function fetchMoreCatalogCards(Product $product, array $searchResults, array $fetched): array
+    {
+        $tried = [];
+        foreach ($searchResults as $row) {
+            $url = (string) ($row['url'] ?? '');
+            if ($url !== '') {
+                $tried[] = $url;
+            }
+        }
+        foreach ($fetched['pages'] ?? [] as $page) {
+            $url = is_array($page) ? (string) ($page['url'] ?? '') : '';
+            if ($url !== '') {
+                $tried[] = $url;
+            }
+        }
+
+        $checked = [];
+        for ($round = 1; $round <= self::CATALOG_EXTRA_ROUNDS; $round++) {
+            $hits = $this->search->moreCatalogHits($product, $tried);
+            if ($hits === []) {
+                break;
+            }
+            foreach ($hits as $row) {
+                $tried[] = (string) $row['url'];
+                $checked[] = $row;
+            }
+            $this->attemptLog()->add(
+                'catalog',
+                'indeks: partia '.$round.' — '.count($hits).' kolejnych kart',
+                urls: array_column($hits, 'url')
+            );
+            $more = $this->pages->fetch($hits, (string) $product->sku, 3, [], $product);
+            $confirmed = $this->keepConfirmedCardPages($product, $more['pages'] ?? []);
+            if ($confirmed !== []) {
+                foreach (['image_urls', 'trusted_image_urls', 'document_urls'] as $key) {
+                    foreach ($more[$key] ?? [] as $url) {
+                        if (is_string($url) && $url !== '') {
+                            $fetched[$key][] = $url;
+                        }
+                    }
+                }
+
+                return [$confirmed, $fetched, $checked];
+            }
+            $this->logCardRejections($product, $more);
+        }
+
+        return [[], $fetched, $checked];
+    }
+
+    /**
+     * Pobrane karty, których nie przepuścił ani fetcher, ani końcowe potwierdzenie.
+     *
+     * @param  array<string, mixed>  $fetched
+     */
+    private function logCardRejections(Product $product, array $fetched): void
+    {
+        $rejections = is_array($fetched['rejected'] ?? null) ? $fetched['rejected'] : [];
+        $reason = $this->identity->requiresExactSkuOrNameOnCard($product)
+            ? CandidateRejection::UNCONFIRMED_STRICT
+            : CandidateRejection::UNCONFIRMED;
+        foreach ($fetched['pages'] ?? [] as $page) {
+            $url = is_array($page) ? (string) ($page['url'] ?? '') : '';
+            if ($url !== '') {
+                $rejections[] = ['url' => $url, 'reason' => $reason];
+            }
+        }
+        $this->attemptLog()->addRejections('pobrane karty', $rejections);
+    }
+
     /**
      * Listing / zła karta u producenta — szukaj dalej w zmapowanych sklepach.
      *

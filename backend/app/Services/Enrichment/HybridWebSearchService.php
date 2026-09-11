@@ -99,7 +99,12 @@ class HybridWebSearchService
     private function hitsFromLocalSources(Product $product): ?array
     {
         $this->nameOnlyCatalogHits = [];
-        $catalogHits = $this->confirmedCatalogHits($this->catalogHits($product), $product);
+        $catalogRejected = [];
+        $catalogHits = $this->confirmedCatalogHits($this->catalogHits($product), $product, $catalogRejected);
+        $this->attemptLog()->addRejections(
+            'indeks sitemap',
+            array_merge($this->catalog->lastRejections(), $catalogRejected)
+        );
         $codedCatalog = $this->resultsCarryProductCode($catalogHits, $product);
         $this->nameOnlyCatalogHits = $this->hitsWithoutCodedUrls($catalogHits, $codedCatalog);
         if ($catalogHits === []) {
@@ -450,9 +455,10 @@ class HybridWebSearchService
      * „maskpol” siedzi w adresie każdej strony producenta.
      *
      * @param  list<array{url: string, title: string, snippet: string}>  $hits
+     * @param  list<array{url: string, reason: string}>  $rejected  odsiane adresy z powodem
      * @return list<array{url: string, title: string, snippet: string}>
      */
-    private function confirmedCatalogHits(array $hits, Product $product): array
+    private function confirmedCatalogHits(array $hits, Product $product, array &$rejected = []): array
     {
         $out = [];
         foreach ($hits as $row) {
@@ -464,16 +470,24 @@ class HybridWebSearchService
             if ($threeMShort
                 && ! $this->identity->hayHasProductCode($hay, $product)
                 && ! $this->identity->urlOrTitleCarriesShopModelNumber($url, $title, $product)) {
+                $rejected[] = ['url' => $url, 'reason' => CandidateRejection::THREEM_SHORT];
+
                 continue;
             }
             $officialThreeM = $this->identity->manufacturerIsThreeM($product)
                 && $this->identity->isOfficialThreeMProductUrl($url);
-            if ($this->isListingWithoutProduct($url, $product)
-                || $this->identity->looksLikeUnrelatedRetailHost($url, $product)
-                || $this->identity->looksLikeNonProductCardUrl($url)
-                || $this->identity->pageClaimsAnotherCode($url, $title, $product)
-                || $this->identity->looksLikeChemicalCatalogHit($hay)
-                || (! $officialThreeM && ! $this->identity->hayHasRequiredTypeFromName($hay, $product))) {
+            $reason = match (true) {
+                $this->isListingWithoutProduct($url, $product) => CandidateRejection::LISTING,
+                $this->identity->looksLikeUnrelatedRetailHost($url, $product) => CandidateRejection::UNRELATED_HOST,
+                $this->identity->looksLikeNonProductCardUrl($url) => CandidateRejection::NOT_PRODUCT_CARD,
+                $this->identity->pageClaimsAnotherCode($url, $title, $product) => CandidateRejection::CLAIMS_OTHER_CODE,
+                $this->identity->looksLikeChemicalCatalogHit($hay) => CandidateRejection::CHEMICAL,
+                ! $officialThreeM && ! $this->identity->hayHasRequiredTypeFromName($hay, $product) => CandidateRejection::TYPE_MISSING,
+                default => null,
+            };
+            if ($reason !== null) {
+                $rejected[] = ['url' => $url, 'reason' => $reason];
+
                 continue;
             }
             // ten sam filtr co w wyszukiwarce: sam kod „104” bez marki to kombinezon PROS,
@@ -486,6 +500,8 @@ class HybridWebSearchService
                     'title' => $title !== '' ? $title : $url,
                     'snippet' => (string) ($row['snippet'] ?? ''),
                 ];
+            } else {
+                $rejected[] = ['url' => $url, 'reason' => CandidateRejection::NO_IDENTITY];
             }
         }
 
@@ -599,6 +615,43 @@ class HybridWebSearchService
             'provider' => 'catalog_index',
             'raw_content' => null,
         ];
+    }
+
+    /**
+     * Następna partia kart z indeksu — gdy pobrane nie potwierdziły produktu.
+     * Indeks ma inne domeny z tą samą kartą; wyszukiwarka zna tylko kilka sklepów.
+     *
+     * @param  list<string>  $exceptUrls  karty już sprawdzone
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function moreCatalogHits(Product $product, array $exceptUrls): array
+    {
+        try {
+            $raw = $this->catalog->findFor($product, $exceptUrls);
+        } catch (Throwable $e) {
+            Log::info('Catalog index next batch failed', [
+                'product_id' => $product->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+        $rejected = [];
+        $hits = $this->confirmedCatalogHits($raw, $product, $rejected);
+        $this->attemptLog()->addRejections(
+            'indeks — kolejna partia',
+            array_merge($this->catalog->lastRejections(), $rejected)
+        );
+
+        $skip = [];
+        foreach ($exceptUrls as $url) {
+            $skip[mb_strtolower((string) $url)] = true;
+        }
+
+        return array_values(array_filter(
+            $hits,
+            static fn (array $row): bool => ! isset($skip[mb_strtolower($row['url'])])
+        ));
     }
 
     /**

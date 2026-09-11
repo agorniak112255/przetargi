@@ -8,6 +8,7 @@ use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\CatalogSkipOverride;
 use App\Models\Product;
+use App\Services\Enrichment\CandidateRejection;
 use App\Services\Enrichment\CatalogIndexSearch;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use App\Services\Enrichment\HybridWebSearchService;
@@ -981,6 +982,79 @@ final class CatalogIndexTest extends TestCase
         $urls = array_column($hits, 'url');
 
         $this->assertContains('https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121', $urls);
+    }
+
+    public function test_finds_card_behind_first_candidate_batch(): void
+    {
+        // 45 stron innego producenta trafia w więcej kodów niż właściwa karta —
+        // dawniej LIMIT 40 brał same takie i filtr zostawiał pustą listę
+        for ($i = 1; $i <= 45; $i++) {
+            $this->seedPage(
+                'https://sklep'.$i.'.pl/kombinezon-ansell-alphatec-3000-model-192-hood-ye30t-00192',
+                'delta-plus'
+            );
+        }
+        $this->seedPage('https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192');
+
+        $hits = app(CatalogIndexSearch::class)->findFor($this->ansellBootCoverall());
+
+        $this->assertContains(
+            'https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192',
+            array_column($hits, 'url')
+        );
+    }
+
+    public function test_reports_rejected_catalog_candidates_with_reason(): void
+    {
+        $this->seedPage('https://sklep-delta.pl/kombinezon-ansell-alphatec-3000-model-192', 'delta-plus');
+        $this->seedPage('https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192');
+
+        $search = app(CatalogIndexSearch::class);
+        $search->findFor($this->ansellBootCoverall());
+
+        $this->assertContains(
+            [
+                'url' => 'https://sklep-delta.pl/kombinezon-ansell-alphatec-3000-model-192',
+                'reason' => CandidateRejection::MANUFACTURER_CONFLICT,
+            ],
+            $search->lastRejections()
+        );
+    }
+
+    public function test_find_for_skips_cards_already_checked(): void
+    {
+        $this->seedPage('https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192');
+        $this->seedPage('https://bpbhp.pl/kombinezon-ansell-alphatec-3000-model-192');
+
+        $urls = array_column(app(CatalogIndexSearch::class)->findFor(
+            $this->ansellBootCoverall(),
+            ['https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192']
+        ), 'url');
+
+        $this->assertContains('https://bpbhp.pl/kombinezon-ansell-alphatec-3000-model-192', $urls);
+        $this->assertNotContains('https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192', $urls);
+    }
+
+    public function test_more_catalog_hits_gives_next_confirmed_batch(): void
+    {
+        $this->seedPage('https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192');
+        $this->seedPage('https://bpbhp.pl/kombinezon-ansell-alphatec-3000-model-192');
+
+        $urls = array_column(app(HybridWebSearchService::class)->moreCatalogHits(
+            $this->ansellBootCoverall(),
+            ['https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192']
+        ), 'url');
+
+        $this->assertSame(['https://bpbhp.pl/kombinezon-ansell-alphatec-3000-model-192'], $urls);
+    }
+
+    private function ansellBootCoverall(): Product
+    {
+        return new Product([
+            'sku' => 'YE30T-00192-09-G01',
+            'name' => '3000-YE CVRL HOOD PVC BOOT 192-G01.5XL',
+            'manufacturer' => 'Ansell',
+        ]);
     }
 
     public function test_finds_ansell_chin_strap_coverall_on_bpbhp_model_111(): void

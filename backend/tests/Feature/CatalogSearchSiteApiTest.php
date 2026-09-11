@@ -358,6 +358,31 @@ final class CatalogSearchSiteApiTest extends TestCase
             ->assertJsonPath('hits.0.url', $url);
     }
 
+    public function test_lookup_lists_rejected_candidates_with_reason(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        config([
+            'enrichment.manufacturer_domains' => [
+                'secura' => ['infield-safety.com'],
+            ],
+        ]);
+        $url = 'https://infield-safety.com/produkte/schutzbrillen/t5163000-raptor';
+        $foreign = 'https://sklep-delta.pl/okulary-t5163000-raptor';
+        $this->seedIndexedPage($url, 'raptor schwarz', 'infield');
+        $this->seedIndexedPage($foreign, 'okulary raptor', 'delta-plus');
+        $this->createProduct('T5163000', 'Okulary Raptor przezroczyste', 'SECURA');
+
+        $this->getJson('/api/admin/catalog-search-sites/product-lookup?q=T5163000')
+            ->assertOk()
+            ->assertJsonPath('hits.0.url', $url)
+            ->assertJsonFragment([
+                'url' => $foreign,
+                'host' => 'sklep-delta.pl',
+                'reason' => 'manufacturer_conflict',
+                'label' => 'strona innego producenta',
+            ]);
+    }
+
     public function test_name_search_does_not_auto_pick_when_many_match(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

@@ -135,7 +135,7 @@ export type Product = {
     sku?: string
     name?: string
     manufacturer?: string
-    steps?: { t: string; m: string; url?: string; urls?: string[] }[]
+    steps?: { t: string; m: string; url?: string; urls?: string[]; why?: string[] }[]
   } | null
   price_change_percent?: number | null
   price_history_latest_at?: string | null

@@ -31,6 +31,9 @@ final class ProductPageFetcher
 
     private ?Product $matchingProduct = null;
 
+    /** @var list<array{url: string, reason: string}> */
+    private array $rejections = [];
+
     public function __construct(
         private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
         private readonly ProductSearchIdentity $identity = new ProductSearchIdentity,
@@ -50,7 +53,8 @@ final class ProductPageFetcher
      *     pages: list<array{url: string, text: string}>,
      *     image_urls: list<string>,
      *     trusted_image_urls: list<string>,
-     *     document_urls: list<string>
+     *     document_urls: list<string>,
+     *     rejected: list<array{url: string, reason: string}>
      * }
      */
     public function fetch(
@@ -61,11 +65,17 @@ final class ProductPageFetcher
         ?Product $product = null,
     ): array {
         $previous = $this->matchingProduct;
+        $previousRejections = $this->rejections;
         $this->matchingProduct = $product;
+        $this->rejections = [];
         try {
-            return $this->fetchInner($results, $sku, $maxPages, $manufacturerDomains);
+            $out = $this->fetchInner($results, $sku, $maxPages, $manufacturerDomains);
+            $out['rejected'] = CandidateRejection::unique($this->rejections);
+
+            return $out;
         } finally {
             $this->matchingProduct = $previous;
+            $this->rejections = $previousRejections;
         }
     }
 
@@ -357,6 +367,7 @@ final class ProductPageFetcher
                 return;
             }
             Log::info('Product page fetch skipped', ['url' => $url, 'status' => $status]);
+            $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::FETCH_FAILED];
             $snippet = trim((string) ($row['snippet'] ?? ''));
             if ($snippet !== '') {
                 $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
@@ -379,6 +390,7 @@ final class ProductPageFetcher
         }
         if ($this->looksLikeBotWall($html)) {
             if (! $this->ingestViaReader($url, $goodPages, $images, $documents, $trustedImages)) {
+                $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::BOT_WALL];
                 $snippet = trim((string) ($row['snippet'] ?? ''));
                 if ($snippet !== '') {
                     $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
@@ -403,6 +415,8 @@ final class ProductPageFetcher
         }
         $hinted = $this->matchingProduct !== null && $this->matchingProduct->isHintedShopUrl($url);
         if (! $hinted && $this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
+            $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::LONGER_VARIANT];
+
             return;
         }
         $named = $this->matchingProduct !== null
@@ -453,6 +467,8 @@ final class ProductPageFetcher
                 $page['accessories'] = $accessories;
             }
             $goodPages[] = $page;
+        } elseif ($this->matchingProduct !== null) {
+            $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::UNCONFIRMED];
         }
         $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
         foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer) as $doc) {
