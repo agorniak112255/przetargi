@@ -58,6 +58,11 @@ final class CatalogSitemapIndexer
     /** Poniżej tylu adresów z sitemapy dokładamy pełzanie po ładnych URL-ach kart. */
     private const SPARSE_SITEMAP_LIMIT = 50;
 
+    /** Lokalny XML (DataDome) — więcej kart niż jeden request HTTP. */
+    private const LOCAL_INDEX_MAX_URLS = 1000000;
+
+    private const LOCAL_INDEX_SECONDS = 1800;
+
     /**
      * Sklepy za WAF-em odrzucają nagłówki botów, więc przedstawiamy się jak przeglądarka.
      * Chrome/124 (w dowolnym formacie: 124.0 albo 124.0.0.0) jest na czarnej liście części
@@ -124,6 +129,18 @@ final class CatalogSitemapIndexer
         $removed = $this->purgeSkippablePages($host);
         if ($removed > 0) {
             $this->note($host, 'Usunięto '.$removed.' zdjęć/plików z indeksu.');
+        }
+        $local = $this->discoverLocalSitemaps($host);
+        if ($local['files'] !== [] || $local['skipped_images'] > 0) {
+            $budget = max(30, max($maxSeconds, self::LOCAL_INDEX_SECONDS));
+            $deadline = microtime(true) + $budget;
+
+            return $this->indexLocalFiles(
+                $host,
+                $local,
+                max($maxUrls, self::LOCAL_INDEX_MAX_URLS),
+                $deadline
+            );
         }
         $budget = max(30, $maxSeconds);
         $deadline = microtime(true) + $budget;
@@ -316,6 +333,249 @@ final class CatalogSitemapIndexer
             'off_host' => $offHost,
             'timed_out' => $timedOut,
         ];
+    }
+
+    /**
+     * XML wrzucony ręcznie — bez HTTP (DataDome) i bez map zdjęć.
+     *
+     * @param  array{dir: string, files: list<string>, skipped_images: int}  $local
+     * @return array{urls: int, saved: int, sitemaps: list<string>, off_host: int, timed_out: bool}
+     */
+    private function indexLocalFiles(string $host, array $local, int $maxUrls, float $deadline): array
+    {
+        if ($local['skipped_images'] > 0) {
+            $this->note($host, 'Pomijam '.$local['skipped_images'].' map ze zdjęciami.');
+        }
+        $this->note($host, 'Czytam '.count($local['files']).' lokalnych map — bez HTTP i bez pobierania zdjęć.');
+
+        $seen = [];
+        $rows = [];
+        $saved = 0;
+        $used = [];
+        $offHost = 0;
+        $timedOut = false;
+        $found = 0;
+        $queue = $local['files'];
+        $queued = array_fill_keys($queue, true);
+        $dir = $local['dir'];
+
+        $consume = function (string $loc, string $extra = '') use (
+            &$queue, &$queued, &$seen, &$rows, &$saved, &$offHost, &$timedOut, &$found,
+            $host, $maxUrls, $deadline, $dir
+        ): bool {
+            if (microtime(true) >= $deadline) {
+                $timedOut = true;
+
+                return false;
+            }
+            if ($this->looksLikeSitemap($loc)) {
+                $child = $this->localFileForSitemapUrl($loc, $dir);
+                if ($child !== null && ! isset($queued[$child])) {
+                    $queue[] = $child;
+                    $queued[$child] = true;
+                }
+
+                return true;
+            }
+            if ($this->isSkippableUrl($loc) || $this->isRetailOffTopicPageUrl($loc)) {
+                return true;
+            }
+            $found++;
+            if (isset($seen[$loc])) {
+                return true;
+            }
+            $locHost = $this->normalizeHost((string) (parse_url($loc, PHP_URL_HOST) ?? ''));
+            if ($locHost === '' || $this->isNoiseHost($locHost)) {
+                return true;
+            }
+            if (! $this->belongsToHost($loc, $host)) {
+                $offHost++;
+            }
+            $seen[$loc] = true;
+            if (count($seen) % 2000 === 0) {
+                $this->note($host, 'Zebrano '.count($seen).' adresów…');
+            }
+            $rows[] = $this->rowFor($locHost, $loc, '', $extra);
+            if (count($rows) >= 500) {
+                $saved += $this->store($rows);
+                $rows = [];
+            }
+
+            return count($seen) < $maxUrls;
+        };
+
+        for ($i = 0; $i < count($queue); $i++) {
+            if (count($seen) >= $maxUrls) {
+                break;
+            }
+            if (microtime(true) >= $deadline) {
+                $timedOut = true;
+                break;
+            }
+            $file = $queue[$i];
+            $found = 0;
+            $this->note($host, 'Czytam '.basename($file));
+            $this->streamLocalFile($file, $consume, $deadline);
+            if ($found > 0) {
+                $used[] = basename($file);
+                $this->note($host, 'Mapa dała '.$found.' adresów (łącznie '.count($seen).'): '.basename($file));
+            } elseif ($this->isImageSitemapName($file)) {
+                $this->note($host, 'Pomijam mapę ze zdjęciami: '.basename($file));
+            } else {
+                $this->note($host, 'Mapa pusta albo nieczytelna: '.basename($file));
+            }
+        }
+
+        if ($rows !== []) {
+            $saved += $this->store($rows);
+        }
+
+        $this->note($host, 'Koniec zbierania: '.$saved.' kart, map: '.count($used).($timedOut ? ', limit czasu' : '').'.');
+        Log::info('Catalog local sitemap indexed', ['host' => $host, 'urls' => count($seen), 'saved' => $saved]);
+
+        return [
+            'urls' => count($seen),
+            'saved' => $saved,
+            'sitemaps' => $used,
+            'off_host' => $offHost,
+            'timed_out' => $timedOut,
+        ];
+    }
+
+    /**
+     * @return array{dir: string, files: list<string>, skipped_images: int}
+     */
+    public function discoverLocalSitemaps(string $host): array
+    {
+        $host = $this->normalizeHost($host);
+        $empty = ['dir' => '', 'files' => [], 'skipped_images' => 0];
+        if ($host === '') {
+            return $empty;
+        }
+        foreach ($this->localSitemapDirs($host) as $dir) {
+            if (! is_dir($dir)) {
+                continue;
+            }
+            $files = [];
+            $skipped = 0;
+            foreach ($this->xmlFilesIn($dir) as $file) {
+                if ($this->isImageSitemapName($file)) {
+                    $skipped++;
+                    continue;
+                }
+                $files[] = $file;
+            }
+            if ($files === [] && $skipped === 0) {
+                continue;
+            }
+            natsort($files);
+
+            return [
+                'dir' => $dir,
+                'files' => array_values($files),
+                'skipped_images' => $skipped,
+            ];
+        }
+
+        return $empty;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function localSitemapDirs(string $host): array
+    {
+        return [
+            storage_path('catalog-sitemaps'.DIRECTORY_SEPARATOR.$host),
+            storage_path('app'.DIRECTORY_SEPARATOR.'catalog-sitemaps'.DIRECTORY_SEPARATOR.$host),
+            dirname(base_path()).DIRECTORY_SEPARATOR.'storage'.DIRECTORY_SEPARATOR.'catalog-sitemaps'.DIRECTORY_SEPARATOR.$host,
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function xmlFilesIn(string $dir): array
+    {
+        $found = array_merge(
+            glob($dir.DIRECTORY_SEPARATOR.'*.xml') ?: [],
+            glob($dir.DIRECTORY_SEPARATOR.'*.xml.gz') ?: [],
+        );
+
+        return array_values(array_filter($found, 'is_file'));
+    }
+
+    public function isImageSitemapName(string $pathOrUrl): bool
+    {
+        $path = str_contains($pathOrUrl, '://')
+            ? (string) (parse_url($pathOrUrl, PHP_URL_PATH) ?? $pathOrUrl)
+            : $pathOrUrl;
+        $base = mb_strtolower(basename($path));
+        $base = preg_replace('/\.xml(\.gz)?$/', '', $base) ?? $base;
+
+        return str_starts_with($base, 'image')
+            || str_contains($base, 'image-sitemap')
+            || str_contains($base, 'sitemap-image')
+            || preg_match('/(?:^|[-_.])(images?|img|photos?)(?:[-_.]|$)/', $base) === 1;
+    }
+
+    private function localFileForSitemapUrl(string $url, string $dir): ?string
+    {
+        if ($dir === '' || $this->isImageSitemapName($url)) {
+            return null;
+        }
+        $base = basename((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        if ($base === '' || preg_match('/\.xml(\.gz)?$/i', $base) !== 1) {
+            return null;
+        }
+        $path = $dir.DIRECTORY_SEPARATOR.$base;
+
+        return is_file($path) ? $path : null;
+    }
+
+    /**
+     * @param  callable(string, string=): bool  $onLocation
+     */
+    private function streamLocalFile(string $path, callable $onLocation, float $deadline = 0.0): bool
+    {
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            return false;
+        }
+        $buffer = '';
+        $inflate = null;
+        $first = true;
+        try {
+            while (! feof($handle)) {
+                if ($deadline > 0.0 && microtime(true) >= $deadline) {
+                    return true;
+                }
+                $chunk = fread($handle, self::CHUNK_BYTES);
+                if ($chunk === false || $chunk === '') {
+                    break;
+                }
+                if ($first) {
+                    $first = false;
+                    if (str_starts_with($chunk, "\x1f\x8b")) {
+                        $inflate = inflate_init(ZLIB_ENCODING_GZIP);
+                    }
+                }
+                if ($inflate !== false && $inflate !== null) {
+                    $chunk = (string) inflate_add($inflate, $chunk);
+                }
+                $buffer .= $chunk;
+                $remainder = $this->drainLocations($buffer, $onLocation);
+                if ($remainder === null) {
+                    return true;
+                }
+                $buffer = $remainder;
+            }
+            $this->drainLocations($buffer, $onLocation);
+        } finally {
+            fclose($handle);
+        }
+
+        return true;
     }
 
     /**

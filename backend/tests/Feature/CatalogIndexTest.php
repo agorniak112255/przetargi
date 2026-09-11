@@ -2387,6 +2387,75 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
+    public function test_indexes_local_sitemap_without_http_and_skips_image_maps(): void
+    {
+        $dir = storage_path('catalog-sitemaps'.DIRECTORY_SEPARATOR.'localsite.test');
+        @mkdir($dir, 0777, true);
+        $card = 'https://de.rubix.com/de/scotch-brite-handpad/p-G1000000003';
+        $image = 'https://media-pim.rubix.com/medias/G10000000031-300Wx300H.jpg';
+        file_put_contents(
+            $dir.DIRECTORY_SEPARATOR.'Variant-de-EUR-0.xml',
+            '<?xml version="1.0"?><urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">'
+            .'<url><loc>'.$card.'</loc>'
+            .'<image:image><image:loc>'.$image.'</image:loc></image:image></url></urlset>'
+        );
+        file_put_contents(
+            $dir.DIRECTORY_SEPARATOR.'Image-de-EUR.xml',
+            '<?xml version="1.0"?><urlset>'
+            .'<url><loc>https://de.rubix.com/de/should-not-index/p-G999</loc></url></urlset>'
+        );
+        try {
+            $indexer = app(CatalogSitemapIndexer::class);
+            $this->assertFalse($indexer->isImageSitemapName('Variant-de-EUR-0.xml'));
+            $this->assertTrue($indexer->isImageSitemapName('Image-de-EUR.xml'));
+            $this->assertTrue($indexer->isImageSitemapName('https://de.rubix.com/de/sitemap/DE/sitemap-image.xml'));
+
+            $result = $indexer->index('localsite.test');
+
+            $this->assertSame(1, $result['saved']);
+            $this->assertSame(['Variant-de-EUR-0.xml'], $result['sitemaps']);
+            $this->assertDatabaseHas('catalog_pages', ['url' => $card]);
+            $this->assertDatabaseMissing('catalog_pages', ['url' => $image]);
+            $this->assertDatabaseMissing('catalog_pages', [
+                'url' => 'https://de.rubix.com/de/should-not-index/p-G999',
+            ]);
+        } finally {
+            @unlink($dir.DIRECTORY_SEPARATOR.'Variant-de-EUR-0.xml');
+            @unlink($dir.DIRECTORY_SEPARATOR.'Image-de-EUR.xml');
+            @rmdir($dir);
+        }
+    }
+
+    public function test_local_index_follows_only_local_child_sitemaps(): void
+    {
+        $dir = storage_path('catalog-sitemaps'.DIRECTORY_SEPARATOR.'localindex.test');
+        @mkdir($dir, 0777, true);
+        file_put_contents(
+            $dir.DIRECTORY_SEPARATOR.'sitemap.xml',
+            '<?xml version="1.0"?><sitemapindex>'
+            .'<sitemap><loc>https://de.rubix.com/de/sitemap/DE/Variant-de-EUR-0.xml</loc></sitemap>'
+            .'<sitemap><loc>https://de.rubix.com/de/sitemap/DE/Image-de-EUR.xml</loc></sitemap>'
+            .'</sitemapindex>'
+        );
+        file_put_contents(
+            $dir.DIRECTORY_SEPARATOR.'Variant-de-EUR-0.xml',
+            '<?xml version="1.0"?><urlset>'
+            .'<url><loc>https://de.rubix.com/de/karta/p-G1</loc></url></urlset>'
+        );
+        try {
+            $result = app(CatalogSitemapIndexer::class)->index('localindex.test');
+
+            $this->assertGreaterThanOrEqual(1, $result['saved']);
+            $this->assertDatabaseHas('catalog_pages', [
+                'url' => 'https://de.rubix.com/de/karta/p-G1',
+            ]);
+        } finally {
+            @unlink($dir.DIRECTORY_SEPARATOR.'sitemap.xml');
+            @unlink($dir.DIRECTORY_SEPARATOR.'Variant-de-EUR-0.xml');
+            @rmdir($dir);
+        }
+    }
+
     private function seedPage(string $url, ?string $manufacturer = null, string $title = ''): void
     {
         $page = CatalogPage::query()->create([

@@ -36,6 +36,8 @@ backend/public/.htaccess
 
 
 # local data / samples (opcjonalnie duże)
+storage/catalog-sitemaps/*
+!storage/catalog-sitemaps/.gitignore
 Cenniki/
 samples/
 .cursor/
