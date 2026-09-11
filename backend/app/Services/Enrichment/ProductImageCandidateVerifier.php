@@ -233,8 +233,9 @@ final class ProductImageCandidateVerifier
      */
     private function trustedImageIsSafe(string $url, Product $product, array $pages): bool
     {
-        if ($pages !== []
-            || ! $this->identity->nameRequiresArticleType($product)
+        // Samo „są jakieś strony” przepuszczało każde og:image bez Vision — przy wzbogacaniu
+        // strony są zawsze, więc baner kolekcji albo zdjęcie „lifestyle” szły jako packshot.
+        if (! $this->identity->nameRequiresArticleType($product)
             || $product->hintedShopUrl() !== null) {
             return true;
         }
@@ -252,7 +253,16 @@ final class ProductImageCandidateVerifier
             }
         }
 
-        return false;
+        // CDN platformy sklepu (static3.redcart.pl/…/images/products/…) — inny host niż karta,
+        // ale ścieżka mediów produktu. Baner kolekcji (/media/cache/…) idzie do Vision.
+        return $this->looksLikeProductMediaPath($url);
+    }
+
+    private function looksLikeProductMediaPath(string $url): bool
+    {
+        $path = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+
+        return preg_match('#/(?:products?|produkty?|product-assets|pim)/|media/catalog/product|/productgfx_#u', $path) === 1;
     }
 
     /**
