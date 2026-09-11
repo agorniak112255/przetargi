@@ -22,6 +22,12 @@ class OpenAiCompatibleClient
 
     private const OVERLOAD_RETRIES = 5;
 
+    /**
+     * Limit zapytań u dostawcy nie mija od czekania tak jak chwilowe przeciążenie —
+     * pięć podejść z narastającą przerwą blokowało wzbogacanie na ponad dwie minuty.
+     */
+    private const RATE_LIMIT_RETRIES = 2;
+
     /** Domyślny budżet odpowiedzi. vLLM odrzuca prompt + max_tokens > --max-model-len. */
     private const DEFAULT_MAX_TOKENS = 6000;
 
@@ -339,7 +345,9 @@ class OpenAiCompatibleClient
 
         $url = $profile['base_url'].'/chat/completions';
         $apiKey = $profile['api_key'];
-        $timeout = max(240, $profile['timeout_seconds']);
+        // Krok pomocniczy (filtr stron) dostawał sztywno co najmniej 4 minuty, także gdy
+        // profil mówił mniej — jeden zawieszony request wstrzymywał cały produkt.
+        $timeout = max(60, $profile['timeout_seconds']);
         $bodies = [];
         foreach ($messageSets as $messages) {
             $bodies[] = $this->buildChatPayload($profile, $messages, null, $extra, $jsonMode);
@@ -1260,7 +1268,14 @@ class OpenAiCompatibleClient
     ): Response {
         $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
         $attempt = 0;
+        $rateLimited = 0;
         while (in_array($response->status(), self::OVERLOAD_STATUSES, true) && $attempt < self::OVERLOAD_RETRIES) {
+            if ($response->status() === 429) {
+                $rateLimited++;
+                if ($rateLimited > self::RATE_LIMIT_RETRIES) {
+                    break;
+                }
+            }
             $wait = $this->retryAfterSeconds($response, $attempt);
             if ($wait > 0) {
                 sleep($wait);

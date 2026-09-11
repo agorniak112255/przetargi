@@ -70,8 +70,11 @@ final class OpenAiRateLimitTest extends TestCase
         Http::assertSentCount(4);
     }
 
-    public function test_gives_up_after_five_overload_retries(): void
+    public function test_gives_up_quickly_when_rate_limit_persists(): void
     {
+        // Limit zapytań u dostawcy nie mija od czekania tak jak chwilowe przeciążenie.
+        // Pięć podejść z narastającą przerwą blokowało wzbogacanie produktu na ponad
+        // dwie minuty, więc po dwóch ponowieniach oddajemy błąd.
         Http::fake([
             'openrouter.ai/api/v1/chat/completions' => Http::response(
                 ['error' => ['message' => 'no slot available']],
@@ -84,6 +87,26 @@ final class OpenAiRateLimitTest extends TestCase
                 ['role' => 'user', 'content' => 'ping'],
             ]);
             $this->fail('Oczekiwano wyjątku 429');
+        } catch (\RuntimeException) {
+            Http::assertSentCount(3);
+        }
+    }
+
+    public function test_gives_up_after_five_overload_retries(): void
+    {
+        // Przeciążony model (529) mija sam z siebie — tu czekanie ma sens i zostaje pięć podejść.
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response(
+                ['error' => ['message' => 'overloaded']],
+                529
+            ),
+        ]);
+
+        try {
+            app(OpenAiCompatibleClient::class)->chatJson([
+                ['role' => 'user', 'content' => 'ping'],
+            ]);
+            $this->fail('Oczekiwano wyjątku 529');
         } catch (\RuntimeException) {
             Http::assertSentCount(6);
         }
