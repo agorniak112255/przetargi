@@ -1258,6 +1258,70 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_ansell_wh20b_std_uses_alphatec_standard_not_bioclean(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'WH20B-00111-12',
+            'name' => '2000-WH STD CVRL HOOD 111.8XL',
+            'manufacturer' => 'ANSELL',
+        ]);
+
+        $this->assertFalse($id->ansellIsBioClean($product));
+        $this->assertTrue($id->ansellPrefersStandardSlug($product));
+        $this->assertSame('111', $id->ansellCatalogBits($product)['model']);
+        $this->assertSame('2000', $id->ansellCatalogBits($product)['series']);
+
+        $urls = $id->ansellOfficialProductUrls($product);
+        $this->assertSame(
+            'https://www.ansell.com/pl/pl/products/alphatec-2000-standard-model-111',
+            $urls[0] ?? null
+        );
+        $this->assertContains(
+            'https://www.ansell.com/gb/en/products/alphatec-2000-standard-bound-model-111',
+            $urls
+        );
+        foreach ($urls as $url) {
+            $this->assertStringNotContainsString('bioclean', $url);
+        }
+
+        $early = implode(' | ', $id->ansellSearchPhrases($product, 'early'));
+        $this->assertStringContainsString('AlphaTec 2000 111', $early);
+        $this->assertStringNotContainsString('BioClean', $early);
+
+        $official = 'https://www.ansell.com/pl/pl/products/alphatec-2000-standard-model-111';
+        $this->assertTrue($id->hayMentionsProduct(
+            $official.' AlphaTec 2000 Standard coverall with hood Model 111',
+            $product
+        ));
+        $this->assertTrue($id->isConfirmedProductCard(
+            $official,
+            'AlphaTec 2000 Standard Model 111',
+            'Chemical protective coverall AlphaTec 2000 Standard with hood, model 111.',
+            $product
+        ));
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://www.ansell.com/pl/pl/products/bioclean-2000-coverall-with-hood-model-111',
+            'BioClean 2000 Coverall with Hood Model 111',
+            $product
+        ));
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://www.ansell.com/gb/en/products/alphatec-2000-ultrasonically-welded-taped-model-111',
+            'AlphaTec 2000 Ultrasonically Welded Model 111',
+            $product
+        ));
+
+        $rubix = 'https://de.rubix.com/de/alphatec-2000-standard-behalter-modell-111/p-G4010103691';
+        $this->assertTrue($id->ansellOfficialPathHasModel($rubix, $product));
+        $this->assertTrue($id->hayMentionsProduct($rubix, $product));
+        $this->assertTrue($id->isConfirmedProductCard(
+            $rubix,
+            'AlphaTec 2000 Standard Behälter Modell 111',
+            'Chemikalienschutzoverall AlphaTec 2000 Standard Modell 111 mit Kapuze.',
+            $product
+        ));
+    }
+
     public function test_ansell_3000_coverall_rejects_rs_hand_tools_and_wrong_model(): void
     {
         $id = new ProductSearchIdentity;

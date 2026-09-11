@@ -94,6 +94,28 @@ final class AnsellOfficialCatalogTest extends TestCase
         $this->assertSame($url, $hits[0]['url'] ?? null);
     }
 
+    public function test_finds_alphatec_2000_standard_for_wh20b_std(): void
+    {
+        $url = 'https://www.ansell.com/pl/pl/products/alphatec-2000-standard-model-111';
+        Http::fake([
+            'https://r.jina.ai/'.$url => Http::response(
+                "# AlphaTec 2000 Standard - Model 111\n\n"
+                .'Chemical protective coverall AlphaTec 2000 Standard with hood, model 111. '
+                .str_repeat('opis ', 40),
+                200
+            ),
+            '*' => Http::response('Product Not Found — missing', 200),
+        ]);
+
+        $hits = app(AnsellOfficialCatalog::class)->find(new Product([
+            'sku' => 'WH20B-00111-12',
+            'name' => '2000-WH STD CVRL HOOD 111.8XL',
+            'manufacturer' => 'ANSELL',
+        ]));
+
+        $this->assertSame($url, $hits[0]['url'] ?? null);
+    }
+
     public function test_finds_alphatec_3000_hood_model_121(): void
     {
         $url = 'https://www.ansell.com/pl/pl/products/alphatec-3000-ultrasonically-welded-taped-model-121';

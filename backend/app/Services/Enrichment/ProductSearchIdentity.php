@@ -741,13 +741,24 @@ final class ProductSearchIdentity
         }
         $name = mb_strtoupper((string) $product->name);
         $apron = str_contains($name, 'APRON') || str_contains($name, 'FARTUCH');
-        $coverallSlugs = [
-            'alphatec-'.$series.'-ultrasonically-welded-taped-model-'.$model,
+        $standardSlugs = [
             'alphatec-'.$series.'-standard-model-'.$model,
-            'alphatec-'.$series.'-plus-model-'.$model,
             'alphatec-'.$series.'-standard-bound-model-'.$model,
+        ];
+        $otherCoverallSlugs = [
+            'alphatec-'.$series.'-ultrasonically-welded-taped-model-'.$model,
+            'alphatec-'.$series.'-plus-model-'.$model,
             'alphatec-'.$series.'-stitched-taped-model-'.$model,
         ];
+        $coverallSlugs = $this->ansellPrefersStandardSlug($product)
+            ? [...$standardSlugs, ...$otherCoverallSlugs]
+            : [
+                'alphatec-'.$series.'-ultrasonically-welded-taped-model-'.$model,
+                'alphatec-'.$series.'-standard-model-'.$model,
+                'alphatec-'.$series.'-plus-model-'.$model,
+                'alphatec-'.$series.'-standard-bound-model-'.$model,
+                'alphatec-'.$series.'-stitched-taped-model-'.$model,
+            ];
         $apronSlugs = [
             'alphatec-'.$series.'-standard-apron-stitched-model-'.$model,
             'alphatec-'.$series.'-apron-ultrasonically-welded-model-'.$model,
@@ -764,8 +775,21 @@ final class ProductSearchIdentity
         return str_contains($blob, 'BIOCLEAN')
             || str_contains($blob, 'TSPLUS')
             || str_contains($blob, 'TS-PLUS')
-            || (bool) preg_match('/\bWH20B\b/', $blob)
             || (bool) preg_match('/-BC-/', $blob);
+    }
+
+    /** WH20B / „STD CVRL” → AlphaTec Standard, nie BioClean i nie taped. */
+    public function ansellPrefersStandardSlug(Product $product): bool
+    {
+        if ($this->ansellIsBioClean($product)) {
+            return false;
+        }
+        $sku = strtoupper(trim((string) $product->sku));
+        $name = mb_strtoupper((string) $product->name);
+
+        return str_contains($name, ' STD ')
+            || str_contains($name, 'STANDARD')
+            || preg_match('/^[A-Z]{2}\d{2}B(?:-|$)/', $sku) === 1;
     }
 
     /** Karta ansell.com/…/alphatec-4000-…-model-121 — typ (CVRL) nie musi być w slugu. */
@@ -787,7 +811,7 @@ final class ProductSearchIdentity
             '/'.$line.'[-_]?'.preg_quote($series, '/').'\b/u',
             $hay
         ) === 1
-            && preg_match('/(?:^|[^0-9])model[-_ ]'.preg_quote($model, '/').'(?:[^0-9]|$)/u', $hay) === 1;
+            && preg_match('/(?:^|[^0-9])modell?[-_ ]'.preg_quote($model, '/').'(?:[^0-9]|$)/u', $hay) === 1;
     }
 
     /** OR15S-00138-06 → OR15S-138-06 (zera tylko z długich członów, nie z rozmiaru 06). */
@@ -1726,6 +1750,9 @@ final class ProductSearchIdentity
             if (! $hasModel) {
                 return false;
             }
+            if ($this->ansellOfficialPathHasModel($hay, $product)) {
+                return true;
+            }
         }
 
         foreach ($tokens as $token) {
@@ -2410,7 +2437,8 @@ final class ProductSearchIdentity
     public function pageClaimsAnotherCode(string $url, string $title, Product $product): bool
     {
         if ($this->ansellPageClaimsForeignSeries($url, $title, $product)
-            || $this->ansellPageClaimsForeignLine($url, $product)) {
+            || $this->ansellPageClaimsForeignLine($url, $product)
+            || $this->ansellPageClaimsForeignVariant($url, $product)) {
             return true;
         }
         // SKU 205, sklep „model 285” — ta sama kurtka, pełna nazwa w slugu.
@@ -2483,6 +2511,19 @@ final class ProductSearchIdentity
         }
 
         return preg_match('/bioclean[-_]/u', $path) === 1;
+    }
+
+    /** Kombinezon STD/bound to nie karta taped/plus tej samej serii. */
+    private function ansellPageClaimsForeignVariant(string $url, Product $product): bool
+    {
+        if (! $this->ansellPrefersStandardSlug($product)) {
+            return false;
+        }
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? $url));
+
+        return str_contains($path, 'ultrasonically')
+            || str_contains($path, 'plus-model')
+            || str_contains($path, 'stitched-taped');
     }
 
     /** AlphaTec 3000 model 213 to nie karta AlphaTec 2000 model 213. */
