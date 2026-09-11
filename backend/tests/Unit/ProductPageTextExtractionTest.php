@@ -40,6 +40,26 @@ HTML;
         $this->assertStringNotContainsString('Odstąpienie od umowy', $text);
     }
 
+    public function test_drops_company_imprint_footer(): void
+    {
+        $html = <<<'HTML'
+<html><body>
+<p>INFIELD Safety GmbH Nordstraße 10a 42719 Solingen Telefon: +49 212 23234 0 Telefax: +49 212 23234 99 So finden Sie uns: mit Google-Maps</p>
+</body></html>
+HTML;
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractProductPageText');
+        $method->setAccessible(true);
+        $text = (string) $method->invoke($fetcher, $html, 'T5163000');
+
+        $this->assertTrue(ProductPageFetcher::looksLikeCompanyImprint(
+            'INFIELD Safety GmbH Nordstraße 10a Telefon: +49 212 23234 0'
+        ));
+        $this->assertStringNotContainsString('Nordstraße', $text);
+        $this->assertStringNotContainsString('Telefax', $text);
+    }
+
     public function test_keeps_full_shop_description_and_drops_zobacz_teaser(): void
     {
         $html = <<<'HTML'

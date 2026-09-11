@@ -585,10 +585,8 @@ final class ProductEnrichmentService
                 $description = '';
             }
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
-                $fallback = $this->fallbackDescriptionFromPages($pageSnippets, (string) $product->sku);
-                if ($fallback !== '' && ! $this->looksLikeThinDescription($fallback)) {
-                    $description = $fallback;
-                } elseif ($description === '' || $this->looksLikeMissingCardMeta($description)) {
+                $fallback = $this->fallbackDescriptionFromPages($pageSnippets, $product);
+                if ($fallback !== '' && $this->isUsableProductDescription($fallback, $product)) {
                     $description = $fallback;
                 }
             }
@@ -1739,8 +1737,9 @@ final class ProductEnrichmentService
         }
 
         if ($description === '' || $this->looksLikeThinDescription($description) || $this->looksLikeIncompleteDescription($description)) {
-            $fallback = $this->fallbackDescriptionFromPages($pageSnippets, (string) $product->sku);
-            if ($this->isRicherDescription($fallback, $description)) {
+            $fallback = $this->fallbackDescriptionFromPages($pageSnippets, $product);
+            if ($this->isUsableProductDescription($fallback, $product)
+                && $this->isRicherDescription($fallback, $description)) {
                 $description = $fallback;
             }
         }
@@ -2244,7 +2243,8 @@ final class ProductEnrichmentService
         }
         $low = mb_strtolower($d);
         if ($this->looksLikeShopChromeDescription($d) || $this->looksLikeOffTopicDescription($d)
-            || $this->looksLikeLinkDump($d) || $this->looksLikeCategoryIndexDescription($d)) {
+            || $this->looksLikeLinkDump($d) || $this->looksLikeCategoryIndexDescription($d)
+            || ProductPageFetcher::looksLikeCompanyImprint($d)) {
             return true;
         }
 
@@ -2277,6 +2277,7 @@ final class ProductEnrichmentService
             'polityka prywatności', 'łatwy zwrot', 'jesteś tutaj', 'wyszukiwanie zaawansowane',
             'odstąpienie od umowy', 'kup za punkty', 'sprawdź status zamówienia',
             'administrator danych osobowych', 'przetwarzamy je w celu', 'widżet języka',
+            'so finden sie uns', 'google-maps', 'impressum', 'herausgeber',
         ] as $needle) {
             if (str_contains($low, $needle)) {
                 $hits++;
@@ -2512,7 +2513,7 @@ final class ProductEnrichmentService
     /**
      * @param  list<array{url: string, text: string}>  $pageSnippets
      */
-    private function fallbackDescriptionFromPages(array $pageSnippets, string $sku): string
+    private function fallbackDescriptionFromPages(array $pageSnippets, Product $product): string
     {
         $candidates = [];
         foreach ($pageSnippets as $page) {
@@ -2524,17 +2525,20 @@ final class ProductEnrichmentService
             foreach ($parts as $part) {
                 $part = ProductPageFetcher::stripExpandLinkChrome(trim((string) $part));
                 if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
-                    || $this->looksLikeMissingCardMeta($part)) {
+                    || $this->looksLikeMissingCardMeta($part)
+                    || ProductPageFetcher::looksLikeCompanyImprint($part)
+                    || $this->looksLikeShopChromeDescription($part)) {
                     continue;
                 }
-                if (mb_strlen($part) >= 40) {
+                if (mb_strlen($part) >= 40 && $this->descriptionMentionsProduct($part, $product)) {
                     $candidates[] = $part;
                 }
             }
             if ($candidates === []) {
                 $flat = ProductPageFetcher::stripExpandLinkChrome(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
                 if ($flat !== '' && ! ProductPageFetcher::looksLikeTruncatedShopTeaser($flat)
-                    && ! $this->looksLikeThinDescription($flat) && mb_strlen($flat) >= 220) {
+                    && ! $this->looksLikeThinDescription($flat) && mb_strlen($flat) >= 220
+                    && $this->descriptionMentionsProduct($flat, $product)) {
                     $candidates[] = $flat;
                 }
             }
@@ -2546,10 +2550,12 @@ final class ProductEnrichmentService
         usort($candidates, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
         $best = $candidates[0];
         if (! $this->looksLikeIncompleteDescription($best) || count($candidates) === 1) {
-            return mb_substr($best, 0, 5000);
+            $out = mb_substr($best, 0, 5000);
+        } else {
+            $out = mb_substr(implode("\n\n", $candidates), 0, 5000);
         }
 
-        return mb_substr(implode("\n\n", $candidates), 0, 5000);
+        return $this->isUsableProductDescription($out, $product) ? $out : '';
     }
 
     private function isJunkImageUrl(string $url): bool

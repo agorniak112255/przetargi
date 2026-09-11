@@ -219,12 +219,37 @@ TXT;
             [
                 ['url' => 'https://icd.pl/filtr-3m-2125.html', 'text' => $teaser."\n\n".$full],
             ],
-            '3M-2125',
+            new Product([
+                'sku' => '3M-2125',
+                'name' => 'Filtry 3M serii 2000',
+                'manufacturer' => '3M',
+            ]),
         ]);
 
         $this->assertStringContainsString('cząstkami stałymi', $fallback);
         $this->assertStringNotContainsString('Zobacz klasy', $fallback);
         $this->assertGreaterThan(mb_strlen($teaser), mb_strlen($fallback));
+    }
+
+    public function test_rejects_infield_imprint_as_raptor_description(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'sku' => 'T5163000',
+            'name' => 'Okulary Raptor przezroczyste',
+            'manufacturer' => 'SECURA',
+        ]);
+        $imprint = "INFIELD Safety GmbH\nNordstraße 10a\n42719 Solingen\n"
+            ."Telefon: +49 212 23234 0\nTelefax: +49 212 23234 99\n"
+            .'So finden Sie uns: mit Google-Maps';
+
+        $this->assertTrue(ProductPageFetcher::looksLikeCompanyImprint($imprint));
+        $this->assertTrue($this->invoke($service, 'looksLikeThinDescription', [$imprint]));
+        $this->assertFalse($this->invoke($service, 'isUsableProductDescription', [$imprint, $product]));
+        $this->assertSame('', $this->invoke($service, 'fallbackDescriptionFromPages', [
+            [['url' => 'https://infield-safety.com/impressum/', 'text' => $imprint]],
+            $product,
+        ]));
     }
 
     /**

@@ -567,7 +567,7 @@ final class CatalogIndexTest extends TestCase
         $this->assertStringContainsString('raptor', (string) $page->haystack);
     }
 
-    public function test_finds_secura_t51_raptor_on_infield_gutschein(): void
+    public function test_skips_secura_t51_raptor_on_infield_gutschein_listing(): void
     {
         $card = 'https://infield-safety.com/produkte/schutzbrillen/buegelbrillen/gutschein-25/';
         $this->seedPage($card, 'infield', 'raptor schwarz');
@@ -580,10 +580,10 @@ final class CatalogIndexTest extends TestCase
 
         $hits = app(CatalogIndexSearch::class)->findFor($product);
 
-        $this->assertSame($card, $hits[0]['url'] ?? null);
+        $this->assertSame([], $hits);
     }
 
-    public function test_search_uses_index_for_secura_t51_raptor(): void
+    public function test_search_skips_infield_gutschein_listing(): void
     {
         $this->seedPage(
             'https://infield-safety.com/produkte/schutzbrillen/buegelbrillen/gutschein-25/',
@@ -600,10 +600,9 @@ final class CatalogIndexTest extends TestCase
         ]);
         Http::fake();
 
-        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
-
-        $this->assertSame('catalog_index', $pack['provider']);
-        Http::assertNothingSent();
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Brak stron produktu');
+        app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
     }
 
     public function test_skips_image_files_listed_as_regular_loc(): void

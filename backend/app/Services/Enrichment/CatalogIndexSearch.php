@@ -300,7 +300,7 @@ final class CatalogIndexSearch
     private function isCatalogNoiseUrl(string $url): bool
     {
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
-        foreach (['/attribute-name/', '/wpfd_file/', '/wpfd-'] as $bad) {
+        foreach (['/attribute-name/', '/wpfd_file/', '/wpfd-', '/gutschein', '/impressum', '/imprint', '/kontakt'] as $bad) {
             if (str_contains($path, $bad)) {
                 return true;
             }

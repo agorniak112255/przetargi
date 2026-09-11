@@ -104,7 +104,9 @@ final class ShopCatalogUrl
             return false;
         }
 
-        return ! $this->isInformationalSlug($slug) && ! $this->isListingSlug($slug);
+        return ! $this->isInformationalSlug($slug)
+            && ! $this->isCouponSlug($slug)
+            && ! $this->isListingSlug($slug);
     }
 
     /** Lista/filtr do pominięcia w indeksie (sitemap + purge). Kolejka crawla tego nie używa. */
@@ -285,6 +287,7 @@ final class ShopCatalogUrl
     {
         foreach ([
             'o-nas', 'o-firmie', 'about-us', 'about', 'kontakt', 'contact-us', 'contact',
+            'impressum', 'imprint',
             'regulamin', 'terms', 'polityka-prywatnosci', 'privacy-policy', 'privacy',
             'polityka-cookies', 'cookies', 'dostawa-i-platnosc', 'dostawa-i-platnosci',
             'shipping', 'returns', 'reklamacje', 'rodo', 'faq', 'pomoc',
@@ -296,6 +299,27 @@ final class ShopCatalogUrl
         }
 
         return false;
+    }
+
+    public function isCouponSlug(string $slug): bool
+    {
+        $slug = preg_replace('/\.(html?|php)$/i', '', $slug) ?? $slug;
+
+        return preg_match('/^(gutschein|voucher|coupon)(?:-\d+)?$/u', $slug) === 1;
+    }
+
+    /** Kupon, impressum, kontakt — nie karta wyrobu. */
+    public function isNonProductCardUrl(string $url): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        foreach (['/gutschein', '/voucher', '/coupon', '/impressum', '/imprint', '/kontakt'] as $bad) {
+            if (str_contains($path, $bad)) {
+                return true;
+            }
+        }
+        $slug = $this->leafSlug($url);
+
+        return $slug !== '' && ($this->isInformationalSlug($slug) || $this->isCouponSlug($slug));
     }
 
     /** Presta/Shoper: /12-buty-robocze to kategoria; karta ma .html albo id ≥ 5 cyfr. */

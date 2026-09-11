@@ -137,4 +137,15 @@ final class ShopCatalogUrlTest extends TestCase
             'https://www.gvarant.pl/p28932,polbuty-lemaitre-ales-s3.html'
         ));
     }
+
+    public function test_gutschein_and_impressum_are_not_product_cards(): void
+    {
+        $coupon = 'https://infield-safety.com/produkte/schutzbrillen/buegelbrillen/gutschein-25/';
+        $this->assertTrue($this->urls->isCouponSlug('gutschein-25'));
+        $this->assertTrue($this->urls->isNonProductCardUrl($coupon));
+        $this->assertFalse($this->urls->isProductCard($coupon));
+        $this->assertTrue($this->urls->isInformationalSlug('impressum'));
+        $this->assertTrue($this->urls->isNonProductCardUrl('https://infield-safety.com/impressum/'));
+        $this->assertTrue($this->urls->isNonProductCardUrl('https://infield-safety.com/kontakt/'));
+    }
 }

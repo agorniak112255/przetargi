@@ -1751,7 +1751,8 @@ final class ProductSearchIdentity
      */
     public function isConfirmedProductCard(string $url, string $title, string $text, Product $product): bool
     {
-        if (self::isJunkSearchHost($url) || $this->looksLikeUnrelatedRetailHost($url, $product)) {
+        if (self::isJunkSearchHost($url) || $this->looksLikeUnrelatedRetailHost($url, $product)
+            || $this->looksLikeNonProductCardUrl($url) || $this->pageLooksLikeMultiProductListing($text)) {
             return false;
         }
         if ($this->manufacturerIsThreeM($product) && $this->isOfficialThreeMProductUrl($url)) {
@@ -1788,6 +1789,31 @@ final class ProductSearchIdentity
         }
 
         return $this->pageAgreesWithBrandAndName($hay, $url, $product);
+    }
+
+    /** Kupon, impressum, kontakt — nie karta jednego wyrobu. */
+    public function looksLikeNonProductCardUrl(string $url): bool
+    {
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        foreach (['/gutschein', '/voucher', '/coupon', '/impressum', '/imprint', '/kontakt'] as $bad) {
+            if (str_contains($path, $bad)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Listing wielu modeli (Woo: RAPTOR + DEFENDOR + LEVIOR na jednej stronie). */
+    public function pageLooksLikeMultiProductListing(string $text): bool
+    {
+        $low = mb_strtolower($text);
+        $optionBlocks = substr_count($low, 'wähle eine option') + substr_count($low, 'wahle eine option');
+        if ($optionBlocks >= 2) {
+            return true;
+        }
+
+        return preg_match('/kunden,\s+die\s+sich\s+f[uü]r\s+diesen\s+artikel/u', $low) === 1;
     }
 
     /** Czy na stronie stoi któryś z kodów produktu na tyle długi, by nie trafić przypadkiem. */
@@ -2535,6 +2561,7 @@ final class ProductSearchIdentity
             fn (string $phrase): bool => $this->isStrongShopPhrase($phrase)
                 // Sama marka („OX-ON”) nie jest tożsamością modelu — pasuje do całego katalogu.
                 && ! $this->phraseIsBrandOnly($phrase, $product)
+                && ! $this->phraseIsTypeOrColorOnly($phrase)
         ));
     }
 
@@ -4066,8 +4093,7 @@ final class ProductSearchIdentity
     {
         return $this->looksLikeInternalSku($product)
             || $this->looksLikeWarehouseArticleSku($product)
-            || $this->skuDiffersFromStrongShopIdentity($product)
-            || $this->inferredBrandHint($product) !== '';
+            || $this->skuDiffersFromStrongShopIdentity($product);
     }
 
     /**
@@ -4633,6 +4659,7 @@ final class ProductSearchIdentity
                 continue;
             }
             if ($this->isGenericCatalogNameWord($word) || $this->isHouseSkuPrefix($word)
+                || $this->tokenIsArticleTypeWord($word)
                 || in_array(mb_strtolower($word), $this->skuBrandWords($product), true)) {
                 continue;
             }
@@ -4788,6 +4815,26 @@ final class ProductSearchIdentity
         $brand = mb_strtolower(trim((string) $product->manufacturer));
 
         return $phrase === $brand || $phrase === mb_strtolower($this->shortBrand((string) $product->manufacturer));
+    }
+
+    /** „Okulary” / „przezroczyste” to typ i kolor, nie model. */
+    private function phraseIsTypeOrColorOnly(string $phrase): bool
+    {
+        $words = preg_split('/[\s\-]+/u', trim($phrase)) ?: [];
+        if ($words === []) {
+            return true;
+        }
+        foreach ($words as $word) {
+            $word = trim((string) $word);
+            if ($word === '' || $this->isColorWord($word) || $this->tokenIsArticleTypeWord($word)
+                || $this->isDescriptiveIdentityWord($word) || $this->isGenericCatalogNameWord($word)) {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 
     /** Numer magazynowy / prefiks cennika — bez shopIdentityPhrases, żeby nie zapętlać rankingu. */
@@ -5081,10 +5128,11 @@ final class ProductSearchIdentity
             'czarny', 'czarna', 'czarne', 'bialy', 'biala', 'biale',
             'granatowy', 'granatowa', 'niebieski', 'niebieska',
             'czerwony', 'czerwona', 'czerwone',
+            'przezroczysty', 'przezroczysta', 'przezroczyste', 'transparent',
         ], true)) {
             return true;
         }
-        foreach (['zielon', 'zolt', 'czarn', 'bial', 'granat', 'niebiesk', 'czerwon', 'czerw', 'srebrn'] as $stem) {
+        foreach (['zielon', 'zolt', 'czarn', 'bial', 'granat', 'niebiesk', 'czerwon', 'czerw', 'srebrn', 'przezroczyst'] as $stem) {
             if (str_starts_with($word, $stem)) {
                 return true;
             }

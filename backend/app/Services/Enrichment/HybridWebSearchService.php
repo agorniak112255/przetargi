@@ -1357,7 +1357,9 @@ class HybridWebSearchService
         if (! $this->identity->hayMentionsProduct($url.' '.$text, $product)) {
             return false;
         }
-        if ($this->isListingWithoutProduct($url, $product)) {
+        if ($this->isListingWithoutProduct($url, $product)
+            || $this->identity->looksLikeNonProductCardUrl($url)
+            || $this->identity->pageLooksLikeMultiProductListing($text)) {
             return false;
         }
         // tytuł z cudzym oznaczeniem („MT 213/2”) przesądza — to karta innego modelu
@@ -1415,6 +1417,7 @@ class HybridWebSearchService
             // zbiorcze strony producenta wymieniają cały asortyment, w tym nasz kod
             '/deklaracje', '/certyfikat', '/do-pobrania', '/dokumenty', '/downloads',
             '/aktualnosci', '/news',
+            '/gutschein', '/voucher', '/coupon', '/impressum', '/imprint', '/kontakt',
         ] as $needle) {
             if (str_contains($u, $needle)) {
                 return true;

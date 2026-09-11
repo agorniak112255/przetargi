@@ -747,7 +747,8 @@ final class ProductPageFetcher
     private function usableExtractedChunk(string $text): string
     {
         $text = self::stripExpandLinkChrome(trim($text));
-        if ($text === '' || $this->looksLikeShopChrome($text) || self::looksLikeTruncatedShopTeaser($text)) {
+        if ($text === '' || $this->looksLikeShopChrome($text) || self::looksLikeTruncatedShopTeaser($text)
+            || self::looksLikeCompanyImprint($text)) {
             return '';
         }
 
@@ -873,10 +874,12 @@ final class ProductPageFetcher
             if ($part === '' || mb_strlen($part) < 25) {
                 continue;
             }
-            if ($this->looksLikeShopChrome($part) || self::looksLikeTruncatedShopTeaser($part)) {
+            $low = mb_strtolower($part);
+            if ($this->looksLikeShopChrome($part) || self::looksLikeTruncatedShopTeaser($part)
+                || self::looksLikeCompanyImprint($part)
+                || str_contains($low, 'wähle eine option') || str_contains($low, 'wahle eine option')) {
                 continue;
             }
-            $low = mb_strtolower($part);
             $productish = (bool) preg_match(
                 '#(trzewik|p[oó]łbut|obuwie|buty|rękaw|ochron|chodnik|dywanik|norm|en\s*\d|iso|s3|s1|src|hro|o1|podnosek|podeszw|skór|nitryl|producent|przeznacz|materiał|cholewka|wkładka|kalosz|winter|gloss|clic)#iu',
                 $low
@@ -895,6 +898,9 @@ final class ProductPageFetcher
         if ($kept === []) {
             // ostatnia deska: wyczyść cały tekst ze śmieci i skróć
             $flat = $this->stripShopChromePhrases(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
+            if ($flat === '' || self::looksLikeCompanyImprint($flat)) {
+                return '';
+            }
 
             return mb_substr($flat, 0, 2000);
         }
@@ -926,6 +932,22 @@ final class ProductPageFetcher
         }
 
         return (bool) preg_match('/^\s*(0,00\s*zł|suma:)/iu', $text);
+    }
+
+    /** Stopka / impressum firmy zamiast opisu wyrobu. */
+    public static function looksLikeCompanyImprint(string $text): bool
+    {
+        $low = mb_strtolower($text);
+        $company = str_contains($low, 'gmbh')
+            || preg_match('/\bsp(?:[óo]łka)?\.?\s*z\s*o\.?\s*o\.?\b/u', $low) === 1;
+        $street = preg_match('/\b(?:nordstra[sß]e|stra[sß]e|street|ul\.)\b/u', $low) === 1;
+        $phone = preg_match('/\b(?:telefon|telefax|tel\.|fax\.|fax:)\b/u', $low) === 1;
+        $maps = str_contains($low, 'google-maps')
+            || str_contains($low, 'so finden sie uns')
+            || str_contains($low, 'impressum')
+            || str_contains($low, 'herausgeber');
+
+        return ($company && $street) || ($company && $phone) || ($street && $phone) || ($company && $maps);
     }
 
     /** CSS zmiennych motywu / JS widgetu wklejony w „opis”. */

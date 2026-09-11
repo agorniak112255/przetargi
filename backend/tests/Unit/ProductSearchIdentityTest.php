@@ -1583,11 +1583,30 @@ final class ProductSearchIdentityTest extends TestCase
 
         $this->assertSame('Infield', $id->inferredBrandHint($product));
         $this->assertContains('infield-safety.com', $id->officialCatalogHosts($product));
-        $this->assertTrue($id->rawSkuIsOfflineNoise($product));
+        $this->assertFalse($id->rawSkuIsOfflineNoise($product));
         $this->assertFalse($id->isWeakShopIndexPhrase('Raptor', $product));
         $this->assertContains('raptor', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertContains('Raptor', $id->shopIdentityPhrases($product));
+        $this->assertNotContains('Okulary', $id->shopIdentityPhrases($product));
+        $this->assertNotContains('przezroczyste', $id->shopIdentityPhrases($product));
         $this->assertTrue($id->hayHasRequiredTypeFromName($url.' raptor', $product));
         $this->assertTrue($id->urlOrTitleHasNamedShopIdentity($url, 'raptor schwarz', $product));
+        $this->assertTrue($id->looksLikeNonProductCardUrl($url));
+        $this->assertFalse($id->isConfirmedProductCard($url, 'raptor schwarz', 'RAPTOR Schutzbrille', $product));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://infield-safety.com/impressum/',
+            'Impressum',
+            'INFIELD Safety GmbH Nordstraße 10a Telefon: +49 212 23234 0',
+            $product
+        ));
+        $listing = 'RAPTOR Schutzbrille. Wähle eine Option DEFENDOR XL. Wähle eine Option LEVIOR.';
+        $this->assertTrue($id->pageLooksLikeMultiProductListing($listing));
+        $this->assertFalse($id->isConfirmedProductCard(
+            'https://infield-safety.com/produkte/schutzbrillen/buegelbrillen/raptor/',
+            'RAPTOR',
+            $listing,
+            $product
+        ));
     }
 
     public function test_reis_fc_sku_remaps_to_dickies_but_plain_reis_stays(): void
