@@ -837,6 +837,39 @@ HTML;
         );
     }
 
+    public function test_reads_bpbhp_magento_og_image_as_trusted(): void
+    {
+        $pageUrl = 'https://bpbhp.pl/rekawice-jednorazowe-mapa-solo-987';
+        $cached = 'https://bpbhp.pl/media/catalog/product/cache/5cf0cd67d985c5a2729a2007397294b6/s/o/solo_987_1.jpg';
+        $original = 'https://bpbhp.pl/media/catalog/product/s/o/solo_987_1.jpg';
+        // poniżej 800 B fetcher uważa odpowiedź za bot-wall i idzie w reader
+        $html = '<html><head>'
+            .'<meta property="og:image" content="'.$cached.'">'
+            .'</head><body>'
+            .'<h1>RĘKAWICE JEDNORAZOWE MAPA SOLO 987</h1>'
+            .'<img class="gallery-placeholder__image" src="https://bpbhp.pl/media/catalog/product/cache/207e23213cf636ccdef205098cf3c8a3/s/o/solo_987_1.jpg" width="700" height="700">'
+            .'<p>'.str_repeat('Rękawice MAPA SOLO 987. Doskonała odporność mechaniczna, idealna do środowiska oleistego. ', 8).'</p>'
+            .'</body></html>';
+        Http::fake([
+            $pageUrl => Http::response($html, 200, ['Content-Type' => 'text/html']),
+        ]);
+        $product = new Product([
+            'sku' => '349870338',
+            'name' => 'SOLO 987',
+            'manufacturer' => 'MAPA',
+            'shop_source_url' => $pageUrl,
+        ]);
+        $result = (new ProductPageFetcher)->bypassCache()->fetch([[
+            'url' => $pageUrl,
+            'title' => 'RĘKAWICE JEDNORAZOWE MAPA SOLO 987',
+            'snippet' => '',
+        ]], (string) $product->sku, 1, [], $product);
+
+        $this->assertContains($original, $result['trusted_image_urls']);
+        $this->assertContains($original, $result['image_urls']);
+        $this->assertSame($original, ProductImageDownloader::preferFullSizeUrl($cached));
+    }
+
     public function test_reads_shoper_resetcss_description_instead_of_newsletter(): void
     {
         $html = <<<'HTML'

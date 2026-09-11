@@ -239,20 +239,29 @@ final class ProductImageDownloader
             ->withOptions(['allow_redirects' => true])
             ->get($url);
 
-        if (! $response->successful()) {
-            throw new \RuntimeException('HTTP '.$response->status());
+        $bytes = $response->successful() ? $response->body() : '';
+        $mime = (string) ($response->header('Content-Type') ?: '');
+        $mime = strtolower(trim(explode(';', $mime)[0] ?? ''));
+        $blocked = ! $response->successful()
+            || $bytes === ''
+            || str_contains($mime, 'text/html')
+            || str_contains($mime, 'application/json');
+        if ($blocked) {
+            $shot = $this->blockedPages->fetchScreenshot($url);
+            if ($shot === null) {
+                throw new \RuntimeException(
+                    $response->successful()
+                        ? 'Odpowiedź nie jest obrazem ('.$mime.')'
+                        : 'HTTP '.$response->status()
+                );
+            }
+            $bytes = $shot;
+            $mime = str_starts_with($shot, "\x89PNG") ? 'image/png' : 'image/jpeg';
         }
 
-        $bytes = $response->body();
         $size = strlen($bytes);
         if ($bytes === '' || $size > self::MAX_BYTES) {
             throw new \RuntimeException('Pusty lub zbyt duży plik');
-        }
-
-        $mime = (string) ($response->header('Content-Type') ?: '');
-        $mime = strtolower(trim(explode(';', $mime)[0] ?? ''));
-        if (str_contains($mime, 'text/html') || str_contains($mime, 'application/json')) {
-            throw new \RuntimeException('Odpowiedź nie jest obrazem ('.$mime.')');
         }
         if ($mime === '' || ! isset(self::ALLOWED_MIME[$mime])) {
             $finfo = new \finfo(FILEINFO_MIME_TYPE);
