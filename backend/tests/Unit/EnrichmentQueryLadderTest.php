@@ -361,7 +361,10 @@ final class EnrichmentQueryLadderTest extends TestCase
         ]);
         $this->assertSame(['109'], $identity->variantBaseCodes($apron));
         $this->assertContains('109 AJ GROUP PROS', $identity->primaryQueries($apron));
-        $this->assertContains('site:pros.pl 109', $identity->searchQueries($apron, 'manufacturer'));
+        $this->assertMatchesRegularExpression(
+            '/site:pros\.pl 109/i',
+            implode(' | ', $identity->searchQueries($apron, 'manufacturer'))
+        );
     }
 
     public function test_only_page_titled_with_our_model_counts_as_product_card(): void
@@ -706,6 +709,7 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertNotEmpty($ladder);
         $this->assertStringStartsWith('site:artra.pl', $ladder[0] ?? '');
         $this->assertStringContainsString('ARISAKA 333', $ladder[0] ?? '');
+        $this->assertStringContainsString('631460', $ladder[0] ?? '');
     }
 
     public function test_shopify_collections_listing_is_not_a_product_card(): void
@@ -756,6 +760,7 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertNotContains('3market-shop.pl', array_slice($hosts, 0, 4));
         $this->assertStringStartsWith('site:artra.pl/products', $ladder[0] ?? '');
         $this->assertStringContainsString('ARYK 322', $ladder[0] ?? '');
+        $this->assertStringContainsString('618080', $ladder[0] ?? '');
         $this->assertStringContainsString('site:icd.pl', implode(' | ', $ladder));
         $this->assertStringNotContainsString('site:3market-shop.pl', implode(' | ', $ladder));
         $dropped = $search->dropListingResults([
@@ -1943,5 +1948,51 @@ final class EnrichmentQueryLadderTest extends TestCase
         $carry = $coded->invoke($service, $hits, $product);
         $this->assertCount(1, $carry);
         $this->assertStringContainsString('reunion', mb_strtolower($carry[0]['title'] ?? ''));
+    }
+
+    public function test_artra_site_query_uses_full_sku_and_manufacturer(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'ARTRA',
+            'sku' => 'AROX 733 641460 S1 PL ESD',
+            'name' => 'AROX 733 641460 S1 PL ESD',
+        ]);
+        $identity = new ProductSearchIdentity;
+        $phrase = $identity->catalogSitePhrase($product);
+        $ladder = app(HybridWebSearchService::class)->fallbackSiteQueries($product);
+
+        $this->assertStringContainsString('641460', $phrase);
+        $this->assertStringContainsString('S1 PL ESD', $phrase);
+        $this->assertStringNotContainsString('site:', $phrase);
+        $this->assertTrue($identity->requiresExactSkuOrNameOnCard($product));
+        $this->assertStringContainsString('641460', $ladder[0] ?? '');
+        $this->assertStringContainsString('site:artra.pl', $ladder[0] ?? '');
+    }
+
+    public function test_artra_card_needs_sku_or_name_and_manufacturer(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'manufacturer' => 'ARTRA',
+            'sku' => 'AROX 733 641460 S1 PL ESD',
+            'name' => 'AROX 733 641460 S1 PL ESD',
+        ]);
+        $right = 'https://artra.pl/products/3815675-arox-733-641460-s1-pl-esd';
+        $noPl = 'https://artra.pl/products/3815674-arox-733-641460-s1-esd';
+        $otherColor = 'https://artra.pl/products/3815676-arox-733-648080-s1-pl-esd';
+
+        $this->assertTrue($identity->pageHasSkuOrNameAndManufacturer($right, '', '', $product));
+        $this->assertFalse($identity->pageHasSkuOrNameAndManufacturer($noPl, '', '', $product));
+        $this->assertFalse($identity->pageHasSkuOrNameAndManufacturer($otherColor, '', '', $product));
+
+        $keep = (new ReflectionClass(app(ProductEnrichmentService::class)))->getMethod('keepConfirmedCardPages');
+        $keep->setAccessible(true);
+        $kept = $keep->invoke(app(ProductEnrichmentService::class), $product, [
+            ['url' => $noPl, 'text' => ''],
+            ['url' => $right, 'text' => ''],
+            ['url' => $otherColor, 'text' => 'EU 42 - 37 EUR'],
+        ]);
+        $this->assertSame([$right], array_column($kept, 'url'));
+        $this->assertNotSame('', (string) ($kept[0]['text'] ?? ''));
     }
 }

@@ -389,16 +389,25 @@ final class ProductPageFetcher
         }
 
         $optionSizes = (new ProductSizeVariant)->parseShopOptionSizes($html);
+        $identityText = $this->extractProductIdentityText($html);
         $text = $this->extractProductPageText($html, $skuNorm);
+        if ($identityText !== '') {
+            $text = trim($identityText.($text !== '' ? "\n\n".$text : ''));
+        }
         if ($optionSizes !== []) {
             $text = trim('Dostępne rozmiary: '.implode(', ', $optionSizes)."\n\n".$text);
         }
         $title = (string) ($row['title'] ?? '');
+        if ($title === '' && $identityText !== '') {
+            $title = strtok($identityText, "\n") ?: $identityText;
+        }
         $hinted = $this->matchingProduct !== null && $this->matchingProduct->isHintedShopUrl($url);
         if (! $hinted && $this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
             return;
         }
-        $pageLooksLikeProduct = $hinted || ($this->matchingProduct !== null
+        $named = $this->matchingProduct !== null
+            && $this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $this->matchingProduct);
+        $pageLooksLikeProduct = $hinted || $named || ($this->matchingProduct !== null
             ? $this->identity->isConfirmedProductCard($url, $title, $text, $this->matchingProduct)
             : ($this->pageMentionsSku($url, $text, $title, $skuNorm)
                 || $this->pageMatchesProductIdentity($url, $text, $title)));
@@ -431,6 +440,7 @@ final class ProductPageFetcher
         if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
             $page = [
                 'url' => $url,
+                'title' => $title,
                 'text' => mb_substr($text, 0, 12000),
                 'image_urls' => array_values(array_unique($pageImages)),
                 'trusted_image_urls' => array_values(array_unique($pageTrusted)),
@@ -793,6 +803,59 @@ final class ProductPageFetcher
     /**
      * Tylko treść produktu — bez menu, koszyka, logowania, zwrotów, breadcrumbów.
      */
+    private function extractOgTitle(string $html): string
+    {
+        if (preg_match('#property=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $m)
+            || preg_match('#content=["\']([^"\']+)["\'][^>]*property=["\']og:title["\']#i', $html, $m)) {
+            return trim(html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+
+        return '';
+    }
+
+    private function extractDocumentTitle(string $html): string
+    {
+        if (preg_match('#<title[^>]*>(.*?)</title>#is', $html, $m)) {
+            return trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+
+        return '';
+    }
+
+    private function extractFirstHeading(string $html): string
+    {
+        if (preg_match('#<h1[^>]*>(.*?)</h1>#is', $html, $m)) {
+            return trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+
+        return '';
+    }
+
+    /** Tytuł / H1 / JSON-LD name — zostaje nawet gdy ciało karty to cennik rozmiarów. */
+    private function extractProductIdentityText(string $html): string
+    {
+        $bits = [];
+        foreach ([
+            $this->extractOgTitle($html),
+            $this->extractFirstHeading($html),
+            $this->extractDocumentTitle($html),
+        ] as $bit) {
+            $bit = trim($bit);
+            if ($bit !== '' && ! self::looksLikeCookieConsent($bit) && ! $this->looksLikeShopChrome($bit)) {
+                $bits[] = $bit;
+            }
+        }
+        foreach ($this->extractMetaProductFields($html) as $field) {
+            $field = trim($field);
+            if ($field !== '' && mb_strlen($field) <= 220 && ! self::looksLikeShopOfferDump($field)
+                && ! self::looksLikeCookieConsent($field)) {
+                $bits[] = $field;
+            }
+        }
+
+        return implode("\n", array_values(array_unique($bits)));
+    }
+
     private function extractProductPageText(string $html, string $skuNorm): string
     {
         $chunks = [];

@@ -2778,12 +2778,79 @@ final class ProductSearchIdentity
     /** Fraza do site: — numer modelu (911), nie kawałek nazwy sprzed myślnika. */
     public function catalogSitePhrase(Product $product): string
     {
+        $identity = $this->catalogSiteIdentity($product);
+        if ($identity === '') {
+            return '';
+        }
+
+        return $this->quoteSearchOperators($identity);
+    }
+
+    /** Pełne SKU, gdy fraza sklepu to tylko seria („AROX 733”). Inaczej jak dotychczas. */
+    private function catalogSiteIdentity(Product $product): string
+    {
+        $sku = trim((string) $product->sku);
+        $shop = $this->firstStrongShopPhrase($product);
+        if ($sku !== '' && preg_match('/\s/u', $sku) === 1
+            && ! $this->looksLikeInternalSku($product)
+            && ! $this->looksLikeWarehouseArticleSku($product)
+            && $this->shopPhraseIsSeriesPrefixOfIdentity($shop, $sku)) {
+            return $sku;
+        }
+
         return $this->siteSearchPhrase(
             $product,
-            $this->firstStrongShopPhrase($product),
+            $shop,
             $this->looksLikeInternalSku($product),
             $this->looksLikeWarehouseArticleSku($product)
         );
+    }
+
+    private function shopPhraseIsSeriesPrefixOfIdentity(string $shop, string $identity): bool
+    {
+        $shop = mb_strtolower(trim($shop));
+        $identity = mb_strtolower(trim($identity));
+        if ($shop === '' || $identity === '' || $shop === $identity) {
+            return false;
+        }
+
+        return str_starts_with($identity, $shop.' ') || str_starts_with($identity, $shop.'-');
+    }
+
+    /** Pełny kod katalogowy (AROX 733 641460 S1 PL ESD) — karta musi mieć SKU albo nazwę, nie samą serię. */
+    public function requiresExactSkuOrNameOnCard(Product $product): bool
+    {
+        $sku = trim((string) $product->sku);
+        if ($sku === '' || $this->looksLikeInternalSku($product)
+            || $this->looksLikeWarehouseArticleSku($product)) {
+            return false;
+        }
+
+        return preg_match('/\s/u', $sku) === 1
+            && preg_match('/\p{L}/u', $sku) === 1
+            && preg_match('/\d/u', $sku) === 1;
+    }
+
+    /** Producent oraz SKU albo nazwa — w URL, tytule albo opisie. */
+    public function pageHasSkuOrNameAndManufacturer(
+        string $url,
+        string $title,
+        string $text,
+        Product $product,
+    ): bool {
+        $hay = mb_strtolower($url.' '.$title.' '.$text);
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+        if (! $this->hayHasBrand($hay, $product) && ! $this->hayHasOfficialHost($hay, $url, $product)) {
+            return false;
+        }
+        $sku = trim((string) $product->sku);
+        $name = trim($this->usableProductName($product));
+        if ($sku !== '' && ! $this->looksLikeInternalSku($product)
+            && $this->tokenInHay($hay, $hayCompact, mb_strtolower($sku))) {
+            return true;
+        }
+
+        return $name !== '' && $this->tokenInHay($hay, $hayCompact, mb_strtolower($name));
     }
 
     /**

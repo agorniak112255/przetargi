@@ -2552,13 +2552,22 @@ final class ProductEnrichmentService
         foreach ($pages as $page) {
             $url = (string) ($page['url'] ?? '');
             $text = (string) ($page['text'] ?? '');
-            if ($url === '' || $text === '') {
+            $title = (string) ($page['title'] ?? '');
+            if ($url === '') {
                 continue;
             }
-            if ($product->isHintedShopUrl($url)
-                || $this->identity->isConfirmedProductCard($url, '', $text, $product)) {
-                $out[] = $this->copyPageMeta($page, ['url' => $url, 'text' => $text]);
+            $named = $this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $product);
+            $exact = $this->identity->requiresExactSkuOrNameOnCard($product);
+            $ok = $product->isHintedShopUrl($url)
+                || $named
+                || (! $exact && $this->identity->isConfirmedProductCard($url, $title, $text, $product));
+            if (! $ok) {
+                continue;
             }
+            if ($text === '') {
+                $text = $title !== '' ? $title : $url;
+            }
+            $out[] = $this->copyPageMeta($page, ['url' => $url, 'text' => $text, 'title' => $title]);
         }
 
         return $out;
@@ -3277,7 +3286,9 @@ Nigdy nie przepisuj zdań w języku oryginału — nazwy własne modeli i oznacz
 
 Zwróć TYLKO JSON — bez pola thought/reasoning. Pierwszy znak to {.
 {"pages":[{"url":"…","text":"fakty o produkcie po polsku, akapity — bez HTML"}]}
-Jeśli na stronie nie ma faktów o produkcie → "text":"". Nie zmyślaj cech.
+Karta jest TYM produktem tylko gdy w tytule, URL albo opisie jest producent ORAZ (SKU albo nazwa produktu). Inaczej "text":"".
+Nie zmyślaj cech. Cennik rozmiarów możesz pominąć, ale gdy to ten produkt zostaw nazwę, SKU, materiały i normy — nie zwracaj pustego text.
+Jeśli na stronie nie ma faktów o produkcie i nie ma SKU/nazwy → "text":"".
 Jeśli nazwa to PPE (obuwie, rękawice, odzież…), a tekst dotyczy odczynnika / numeru CAS / wzoru chemicznego — "text":"".
 SYS,
                 ],
