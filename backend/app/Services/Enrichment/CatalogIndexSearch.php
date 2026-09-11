@@ -112,6 +112,13 @@ final class CatalogIndexSearch
         foreach ($this->identity->skuSearchNeedles($product) as $needle) {
             $raw[] = $needle;
         }
+        // „ARYA 300 673560 S1 P” — numer wariantu stoi w adresie jako osobny token
+        // „673560”; sklejony cały kod nigdy nie jest tokenem indeksu
+        foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower(Str::ascii((string) $product->sku))) ?: [] as $part) {
+            if ($this->isDistinctiveSkuSegment($part)) {
+                $raw[] = $part;
+            }
+        }
 
         $out = [];
         foreach ($raw as $code) {
@@ -366,10 +373,12 @@ final class CatalogIndexSearch
                     'title' => (string) ($page->title ?? ''),
                     'snippet' => (string) ($page->haystack ?? ''),
                 ];
-                if ($needType && ! $this->identity->hayHasRequiredTypeFromName(
-                    $url.' '.$row['title'].' '.(string) $page->haystack,
-                    $product
-                )) {
+                // producent nie pisze „buty” w adresie własnej karty — typ sprawdza treść po pobraniu
+                if ($needType && ! $this->urlIsOfficialCatalogHost($url, $product)
+                    && ! $this->identity->hayHasRequiredTypeFromName(
+                        $url.' '.$row['title'].' '.(string) $page->haystack,
+                        $product
+                    )) {
                     $this->reject($url, CandidateRejection::TYPE_MISSING);
 
                     continue;
@@ -455,19 +464,7 @@ final class CatalogIndexSearch
 
     private function urlIsOfficialCatalogHost(string $url, Product $product): bool
     {
-        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
-        $host = preg_replace('/^www\./u', '', $host) ?? $host;
-        if ($host === '') {
-            return false;
-        }
-        foreach ($this->identity->officialCatalogHosts($product) as $official) {
-            $official = preg_replace('/^www\./u', '', mb_strtolower(trim($official))) ?? '';
-            if ($official !== '' && ($host === $official || str_ends_with($host, '.'.$official))) {
-                return true;
-            }
-        }
-
-        return false;
+        return $this->identity->isOfficialCatalogUrl($url, $product);
     }
 
     /**
@@ -533,6 +530,19 @@ final class CatalogIndexSearch
         }
 
         return $ids;
+    }
+
+    /** Człon SKU na tyle długi, że nie jest rozmiarem ani klasą („673560”, „ye30t”, nie „s1”, „300”). */
+    private function isDistinctiveSkuSegment(string $part): bool
+    {
+        $len = mb_strlen($part);
+        if (preg_match('/^\d+$/u', $part) === 1) {
+            return $len >= 5 && $len <= 14;
+        }
+
+        return $len >= 5 && $len <= 32
+            && preg_match('/[a-z]/u', $part) === 1
+            && preg_match('/\d/u', $part) === 1;
     }
 
     private function isAmbiguousNumericSku(Product $product): bool

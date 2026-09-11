@@ -295,10 +295,18 @@ final class ProductPageFetcher
         }
 
         $used = false;
+        // null — czytnik nie dał tekstu, zostają same zdjęcia jak dotąd
+        $confirmed = null;
         if ($viaReader['text'] !== '') {
             $skuNorm = mb_strtolower(trim((string) ($this->matchingProduct?->sku ?? '')));
             $text = $this->cleanFetchedPageText($viaReader['text'], $skuNorm);
-            if ($text !== '') {
+            $confirmed = $text !== ''
+                && ($this->matchingProduct === null || $this->pageConfirmsMatchingProduct($url, '', $text));
+            if ($text !== '' && ! $confirmed) {
+                // strona przeczytana, ale innego wariantu — nie zajmuje miejsca właściwej karty
+                $this->rejections[] = ['url' => $url, 'reason' => $this->unconfirmedReason()];
+                $used = true;
+            } elseif ($text !== '') {
                 $optionSizes = (new ProductSizeVariant)->parseShopOptionSizes($text);
                 if ($optionSizes !== []) {
                     $text = trim('Dostępne rozmiary: '.implode(', ', $optionSizes)."\n\n".$text);
@@ -315,7 +323,7 @@ final class ProductPageFetcher
                 $used = true;
             }
         }
-        foreach ($viaReader['image_urls'] as $img) {
+        foreach ($confirmed === false ? [] : $viaReader['image_urls'] as $img) {
             if (! is_string($img) || $img === '' || ! $this->imageAllowedForProduct($img)) {
                 continue;
             }
@@ -332,6 +340,32 @@ final class ProductPageFetcher
         }
 
         return $used;
+    }
+
+    /**
+     * Ten sam próg co końcowe potwierdzenie karty. Przy SKU z wariantem („ARYA 300 673560 S1 P”)
+     * karta innego wariantu tego modelu nie może zająć miejsca i zatrzymać pobierania kolejnych.
+     */
+    private function pageConfirmsMatchingProduct(string $url, string $title, string $text): bool
+    {
+        $product = $this->matchingProduct;
+        if ($product === null) {
+            return false;
+        }
+        if ($product->isHintedShopUrl($url)
+            || $this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $product)) {
+            return true;
+        }
+
+        return ! $this->identity->requiresExactSkuOrNameOnCard($product)
+            && $this->identity->isConfirmedProductCard($url, $title, $text, $product);
+    }
+
+    private function unconfirmedReason(): string
+    {
+        return $this->matchingProduct !== null && $this->identity->requiresExactSkuOrNameOnCard($this->matchingProduct)
+            ? CandidateRejection::UNCONFIRMED_STRICT
+            : CandidateRejection::UNCONFIRMED;
     }
 
     /**
@@ -419,12 +453,10 @@ final class ProductPageFetcher
 
             return;
         }
-        $named = $this->matchingProduct !== null
-            && $this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $this->matchingProduct);
-        $pageLooksLikeProduct = $hinted || $named || ($this->matchingProduct !== null
-            ? $this->identity->isConfirmedProductCard($url, $title, $text, $this->matchingProduct)
+        $pageLooksLikeProduct = $this->matchingProduct !== null
+            ? $this->pageConfirmsMatchingProduct($url, $title, $text)
             : ($this->pageMentionsSku($url, $text, $title, $skuNorm)
-                || $this->pageMatchesProductIdentity($url, $text, $title)));
+                || $this->pageMatchesProductIdentity($url, $text, $title));
 
         $pageImages = [];
         $pageTrusted = [];
@@ -468,7 +500,7 @@ final class ProductPageFetcher
             }
             $goodPages[] = $page;
         } elseif ($this->matchingProduct !== null) {
-            $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::UNCONFIRMED];
+            $this->rejections[] = ['url' => $url, 'reason' => $this->unconfirmedReason()];
         }
         $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
         foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer) as $doc) {

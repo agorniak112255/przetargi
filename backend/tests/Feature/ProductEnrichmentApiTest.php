@@ -1380,6 +1380,98 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertNotEmpty($product->enrichment_trace['steps'] ?? []);
     }
 
+    public function test_failed_force_keeps_photo_when_old_description_is_ours(): void
+    {
+        Storage::fake('public');
+        Storage::disk('public')->put('products/arya.jpg', 'x');
+        $product = $this->makeProduct([
+            'sku' => 'ARYA 300 673560 S1 P',
+            'name' => 'ARYA 300 673560 S1 PL',
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'description' => 'Obuwie ochronne ARTRA ARYA 300 673560 S1 PL z kompozytowym podnoskiem LIBERYUM, '
+                .'norma EN ISO 20345:2022 S1 PL FO SR.',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $product->images()->create([
+            'path' => 'products/arya.jpg',
+            'source_url' => 'https://artra.pl/arya.jpg',
+            'is_primary' => true,
+            'sort_order' => 0,
+            'checksum' => sha1('x'),
+        ]);
+
+        $this->failForcedEnrichmentWithoutCard($product);
+
+        $product->refresh();
+        $this->assertSame(1, $product->images()->count());
+        Storage::disk('public')->assertExists('products/arya.jpg');
+        $this->assertStringContainsString('ARYA 300', (string) $product->description);
+    }
+
+    public function test_failed_force_clears_photo_with_foreign_description(): void
+    {
+        Storage::fake('public');
+        Storage::disk('public')->put('products/koszula.jpg', 'x');
+        $product = $this->makeProduct([
+            'sku' => 'T-31',
+            'name' => 'Tablica pionowa AED + krok po kroku ZIELONA',
+            'manufacturer' => 'CABINAID',
+            'category' => 'Tablice / Oznakowanie',
+            'description' => 'Koszula flanelowa ARDON URBAN+ kod T-31, 100% bawełna, rozmiary S-4XL.',
+            'enrichment_status' => Product::ENRICHMENT_MANUAL,
+        ]);
+        $product->images()->create([
+            'path' => 'products/koszula.jpg',
+            'source_url' => 'https://ardon.pl/koszula.jpg',
+            'is_primary' => true,
+            'sort_order' => 0,
+            'checksum' => sha1('x'),
+        ]);
+
+        $this->failForcedEnrichmentWithoutCard($product);
+
+        $product->refresh();
+        $this->assertSame(0, $product->images()->count());
+        Storage::disk('public')->assertMissing('products/koszula.jpg');
+        $this->assertSame('', (string) $product->description);
+    }
+
+    private function failForcedEnrichmentWithoutCard(Product $product): void
+    {
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('forgetProductCache')->once();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
+        $search->shouldReceive('dropListingResults')
+            ->andReturnUsing(static fn (array $results): array => $results);
+        $search->shouldReceive('searchMappedRetailers')->andReturn([]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->never();
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, true);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException) {
+        }
+    }
+
     public function test_searxng_outage_marks_failed_not_manual(): void
     {
         $product = $this->makeProduct([

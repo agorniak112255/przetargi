@@ -1048,6 +1048,39 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame(['https://bpbhp.pl/kombinezon-ansell-alphatec-3000-model-192'], $urls);
     }
 
+    public function test_artra_codes_include_variant_number(): void
+    {
+        $this->assertContains('673560', app(CatalogIndexSearch::class)->codes($this->aryaS1Pl()));
+    }
+
+    public function test_artra_official_card_passes_without_shoe_word_and_exact_variant_goes_first(): void
+    {
+        // artra.com nie pisze „buty” w adresie — wszystkie 8 kart ARYA 300 odpadało
+        foreach ([
+            '3815108-arya-300-618080-s1-pl-esd',
+            '3815087-arya-300-671460-s1-pl',
+            '3815086-arya-300-671460-s1',
+            '3815089-arya-300-673560-s1-pl',
+        ] as $slug) {
+            $this->seedPage('https://artra.com/products/'.$slug, 'artra');
+        }
+
+        $urls = array_column(app(HybridWebSearchService::class)->moreCatalogHits($this->aryaS1Pl(), []), 'url');
+
+        $this->assertNotEmpty($urls);
+        $this->assertStringContainsString('3815089-arya-300-673560-s1-pl', $urls[0]);
+    }
+
+    private function aryaS1Pl(): Product
+    {
+        return new Product([
+            'sku' => 'ARYA 300 673560 S1 P',
+            'name' => 'ARYA 300 673560 S1 PL',
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+        ]);
+    }
+
     private function ansellBootCoverall(): Product
     {
         return new Product([

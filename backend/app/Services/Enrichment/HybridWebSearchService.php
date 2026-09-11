@@ -476,13 +476,15 @@ class HybridWebSearchService
             }
             $officialThreeM = $this->identity->manufacturerIsThreeM($product)
                 && $this->identity->isOfficialThreeMProductUrl($url);
+            // producent nie pisze „buty” w adresie własnej karty — typ sprawdza treść po pobraniu
+            $official = $officialThreeM || $this->identity->isOfficialCatalogUrl($url, $product);
             $reason = match (true) {
                 $this->isListingWithoutProduct($url, $product) => CandidateRejection::LISTING,
                 $this->identity->looksLikeUnrelatedRetailHost($url, $product) => CandidateRejection::UNRELATED_HOST,
                 $this->identity->looksLikeNonProductCardUrl($url) => CandidateRejection::NOT_PRODUCT_CARD,
                 $this->identity->pageClaimsAnotherCode($url, $title, $product) => CandidateRejection::CLAIMS_OTHER_CODE,
                 $this->identity->looksLikeChemicalCatalogHit($hay) => CandidateRejection::CHEMICAL,
-                ! $officialThreeM && ! $this->identity->hayHasRequiredTypeFromName($hay, $product) => CandidateRejection::TYPE_MISSING,
+                ! $official && ! $this->identity->hayHasRequiredTypeFromName($hay, $product) => CandidateRejection::TYPE_MISSING,
                 default => null,
             };
             if ($reason !== null) {

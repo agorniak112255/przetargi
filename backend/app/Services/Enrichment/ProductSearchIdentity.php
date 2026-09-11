@@ -2944,6 +2944,23 @@ final class ProductSearchIdentity
         return $this->inferredBrandResolution($product)['brand'] ?? '';
     }
 
+    /** Adres leży na oficjalnej domenie marki (artra.pl, ansell.com) albo jej subdomenie. */
+    public function isOfficialCatalogUrl(string $url, Product $product): bool
+    {
+        $host = preg_replace('/^www\./u', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
+        if ($host === '') {
+            return false;
+        }
+        foreach ($this->officialCatalogHosts($product) as $official) {
+            $official = preg_replace('/^www\./u', '', mb_strtolower(trim($official))) ?? '';
+            if ($official !== '' && ($host === $official || str_ends_with($host, '.'.$official))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Oficjalne domeny z config — bez tabeli discovered sites.
      *

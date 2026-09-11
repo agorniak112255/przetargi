@@ -482,8 +482,7 @@ final class ProductEnrichmentService
                 Cache::forget($this->prefetchPackKey($product));
                 $this->search->forgetProductCache($product);
                 $this->forgetSkuCache($product);
-                $this->clearProductImages($product);
-                $this->clearProductDocuments($product);
+                // zdjęcia i dokumenty kasujemy dopiero po potwierdzeniu nowej karty
             }
 
             $this->assertBatchNotCancelled($batchId);
@@ -582,6 +581,13 @@ final class ProductEnrichmentService
                     'Nie znaleziono karty potwierdzającej produkt '.$product->sku
                         .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.'
                 );
+            }
+
+            // Nowa karta potwierdzona — dopiero teraz stare zdjęcia i dokumenty ustępują.
+            // Nieudane ponowne pobranie zostawiało produkt z opisem, ale bez zdjęcia.
+            if ($force) {
+                $this->clearProductImages($product);
+                $this->clearProductDocuments($product);
             }
 
             $this->assertBatchNotCancelled($batchId);
@@ -986,6 +992,9 @@ final class ProductEnrichmentService
                     if ($old !== '' && ! $this->descriptionMentionsProduct($old, $product)) {
                         $failed['description'] = '';
                         $failed['enrichment_payload'] = null;
+                        // cudzy opis przyszedł z cudzej karty — jej zdjęcia i PDF-y też
+                        $this->clearProductImages($product);
+                        $this->clearProductDocuments($product);
                     }
                 }
                 $product->update($failed);
