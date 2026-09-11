@@ -46,6 +46,26 @@ final class ProductDescriptionText
         ) ?? $text;
         $text = preg_replace('/\bcheck\s+czas wysyłki[^.]{0,40}\.?/iu', ' ', $text) ?? $text;
         $text = preg_replace('/\b[-−]?\d{1,2}%\b/u', ' ', $text) ?? $text;
+        $text = preg_replace(
+            '/(?:(?:\s*EU\s*)?(?:3[2-9]|4[0-9]|5[0-2])\s*[-–]\s*\d{1,5}(?:[.,]\d{2})?\s*(?:zł|eur|€))+/iu',
+            ' ',
+            $text
+        ) ?? $text;
+        $text = preg_replace('/\bWariant\b/iu', ' ', $text) ?? $text;
+        $text = preg_replace('/(?:EU\s*(?:3[2-9]|4[0-9]|5[0-2])\s*){8,}/iu', ' ', $text) ?? $text;
+        $text = preg_replace(
+            '/(?:Rozmiar\s+EU\s+Długość stopy|#+\s*Jak dobrać rozmiar\?).{0,400}/isu',
+            ' ',
+            $text
+        ) ?? $text;
+        $text = preg_replace('/\*\*(?:3[5-9]|4[0-9])\*\*\s*[\d,]+/u', ' ', $text) ?? $text;
+        $text = preg_replace('/Jeśli obuwie nie będzie Państwu odpowiadać.{0,280}/isu', ' ', $text) ?? $text;
+        $text = preg_replace('/Na każde obuwie .{0,120}gwarancja.{0,160}/isu', ' ', $text) ?? $text;
+        $text = preg_replace(
+            '/\bNatychmiast do wysyłki\b(?:\s*[•·]\s*Darmowa dostawa)?/iu',
+            ' ',
+            $text
+        ) ?? $text;
 
         return trim($text);
     }

@@ -35,6 +35,8 @@ final class EnrichmentDescriptionTemplateServiceTest extends TestCase
         $this->assertStringContainsString('"description"', $prompt);
         $this->assertStringContainsString('Nie tłumacz karty produktu 1 do 1', $prompt);
         $this->assertStringContainsString('Nie powtarzaj zdań z description', $prompt);
+        $this->assertStringContainsString('wyłuszcz ochronę', $prompt);
+        $this->assertStringContainsString('cenników rozmiarów', $prompt);
     }
 
     public function test_unknown_product_falls_back_to_inne(): void

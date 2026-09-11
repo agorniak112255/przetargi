@@ -1084,6 +1084,9 @@ final class ProductEnrichmentApiTest extends TestCase
                 'errors' => [],
             ]);
         $search->shouldReceive('forgetProductCache')->zeroOrMoreTimes();
+        $search->shouldReceive('dropListingResults')
+            ->zeroOrMoreTimes()
+            ->andReturnUsing(static fn (array $results): array => $results);
 
         $llm = $this->mockLlmWithSanitize([
             'description' => 'Kombinezon chemiczny.',
@@ -1141,6 +1144,92 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
         $this->assertStringContainsString('wielowarstwowa bariera', (string) $product->description);
         $this->assertNotSame('Zdjęcie z karty sklepu. Opis wpisz ręcznie.', (string) $product->enrichment_error);
+    }
+
+    public function test_expert_description_is_not_replaced_by_shopify_price_dump(): void
+    {
+        Storage::fake('public');
+
+        $pageUrl = 'https://artra.pl/products/3815448-armen-9003-6660-s1-esd';
+        $img = 'https://artra.pl/cdn/armen-9003.jpg';
+        $product = $this->makeProduct([
+            'sku' => 'ARMEN 9003 6660 S1 ESD',
+            'name' => 'Półbuty ARMEN 9003 6660 S1 ESD',
+            'manufacturer' => 'ARTRA',
+        ]);
+        $expert = 'Półbuty ARMEN 9003 6660 S1 ESD to obuwie bezpieczne z kompozytowym podnoskiem LIBERYUM. '
+            .'Cholewka PURYA SKINYUM i podeszwa LYFTOR spełniają EN ISO 20345:2022 S1 FO SR. '
+            .'Przeznaczone do stref ESD, montażu i logistyki.';
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [[
+                    'url' => $pageUrl,
+                    'title' => 'ARMEN 9003 6660 S1 ESD ARTRA',
+                    'snippet' => 'Półbuty robocze ARMEN 9003 S1 ESD',
+                ]],
+                'errors' => [],
+            ]);
+        $search->shouldReceive('forgetProductCache')->zeroOrMoreTimes();
+        $search->shouldReceive('dropListingResults')
+            ->zeroOrMoreTimes()
+            ->andReturnUsing(static fn (array $results): array => $results);
+
+        $llm = $this->mockLlmWithSanitize([
+            'description' => $expert,
+            'features' => ['Kompozytowy podnosek LIBERYUM'],
+            'specs' => ['Klasa: S1', 'Rozmiary: EU 35-48'],
+            'norms' => ['EN ISO 20345:2022 S1 FO SR'],
+            'certificates' => [],
+            'materials' => ['PURYA SKINYUM'],
+            'use_cases' => ['Strefy ESD', 'Montaż'],
+            'image_urls' => [$img],
+            'source_urls' => [$pageUrl],
+            'confidence' => 0.9,
+        ]);
+
+        $html = '<html><head><meta property="og:image" content="'.$img.'"></head><body>'
+            .'<div class="product-description">'
+            .'<h1>ARMEN 9003 6660 S1 ESD</h1>'
+            .'<p>EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 złEU 39 - 309 zł'
+            .'EU 40 - 309 złEU 41 - 309 złEU 42 - 309 zł Wariant</p>'
+            .'<p>Półbuty ARMEN 9003 6660 S1 ESD z podnoskiem LIBERYUM. EN ISO 20345.</p>'
+            .'</div>'
+            .'<img src="'.$img.'" alt="ARMEN 9003">'
+            .'</body></html>';
+
+        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($html) {
+            if (str_contains($request->url(), '.jpg')) {
+                return Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']);
+            }
+
+            return Http::response($html, 200, ['Content-Type' => 'text/html']);
+        });
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        $service->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertStringContainsString('podnoskiem LIBERYUM', (string) $product->description);
+        $this->assertStringContainsString('EN ISO 20345', (string) $product->description);
+        $this->assertStringNotContainsString('309 zł', (string) $product->description);
+        $this->assertStringNotContainsString('Wariant', (string) $product->description);
     }
 
     public function test_product_absent_from_web_goes_to_manual_and_leaves_queues(): void

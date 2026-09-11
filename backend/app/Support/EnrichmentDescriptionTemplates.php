@@ -62,7 +62,7 @@ final class EnrichmentDescriptionTemplates
             'rekawice' => <<<'TXT'
 To rękawice ochronne. Zbierz pełną kartę katalogową tej pary — nie opisuj obuwia, odzieży ani kasków.
 
-W description (6–12 zdań) ujmij: przeznaczenie, materiał wkładki i powłoki, wykończenie (gładkie / piankowe / nitryl), mankiet, normy z poziomami, typowe prace.
+W description (2–4 akapity) ujmij: przeznaczenie, materiał wkładki i powłoki, wykończenie (gładkie / piankowe / nitryl), mankiet, normy z poziomami, typowe prace.
 W specs i attributes koniecznie: kod/SKU, materiał wkładki, powłoka, poziomy EN 388 (np. 4544C → attributes.poziomy_en388), EN 374 / EN 407 / EN 511 / EN ISO 21420 jeśli są w źródłach, długość, rozmiary 6–12 (albo 7–11).
 rozmiar: tylko numery rękawic ze źródeł; nigdy numery butów (36–48) ani 1–5XL.
 Nie zmyślaj poziomów EN 388 spoza źródeł.
@@ -129,7 +129,7 @@ W specs: wymiary, mocowanie, klasa, kompatybilność z kieszeniami odzieży.
 TXT,
             'inne' => <<<'TXT'
 Zbierz PEŁNĄ specyfikację jak na karcie katalogowej BHP/PPE.
-Opis: 1) przeznaczenie 2) budowa/materiały 3) właściwości użytkowe 4) normy/certyfikaty 5) zastosowania — min. 6–12 zdań.
+Opis: 1) przeznaczenie 2) budowa/materiały 3) właściwości użytkowe 4) normy/certyfikaty 5) zastosowania — 2–4 akapity.
 rozmiar: obuwie tylko EU 36–50; rękawice 6–12; odzież S–XXL; nigdy 1–5XL przy butach; brak w źródłach → null.
 Jeśli nazwa to PPE (obuwie, rękawice, odzież…), a tekst dotyczy odczynnika / CAS — description="" i confidence=0.
 TXT,
@@ -140,8 +140,10 @@ TXT,
     {
         return <<<'TXT'
 PISANIE OPISU — te zasady mają pierwszeństwo przed instrukcją rodziny:
+Jesteś ekspertem BHP: z faktów na karcie wyłuszcz ochronę, budowę, klasy/normy i zastosowanie.
 Przeczytaj fakty ze stron i NAPISZ nowy, czytelny tekst po polsku.
 Nie tłumacz karty produktu 1 do 1 i nie wklejaj jej jako opisu.
+Nie przepisuj UI sklepu: cenników rozmiarów (EU 35 - 309 zł), etykiet „Wariant”, tabeli długości stopy, zwrotów, gwarancji sklepu ani CTA wysyłki.
 description = 2–4 krótkie akapity (przeznaczenie, budowa, zastosowanie), oddzielone pustą linią.
 Bez HTML, CSS, markdown i bez tabeli parametrów / list SKU w description.
 specs = wyłącznie krótkie „parametr: wartość”. Nie powtarzaj zdań z description.
@@ -154,7 +156,7 @@ TXT;
         return <<<'SYS'
 Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"description":
 {
-  "description": "własny opis PL: 2–4 krótkie akapity oddzielone pustą linią — przeznaczenie, budowa, zastosowanie. Nie zrzut karty.",
+  "description": "własny opis eksperta BHP PL: 2–4 krótkie akapity — ochrona, budowa, normy, zastosowanie. Nie zrzut karty ani cennika.",
   "features": ["krótkie korzyści — nie zdania z description"],
   "specs": ["parametr: wartość (nr art./SKU, typ, materiał, powłoka, opakowanie, rozmiary)"],
   "norms": ["EN … z poziomami, jeśli podane w źródłach", "EN ISO …"],

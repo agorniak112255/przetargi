@@ -86,6 +86,53 @@ HTML;
         ));
     }
 
+    public function test_strips_shopify_offer_dump_from_product_card(): void
+    {
+        $html = <<<'HTML'
+<html><body>
+<div class="product-description">
+<h1>ARMEN 9003 6660 S1 ESD</h1>
+<p>EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 złEU 39 - 309 złEU 40 - 309 zł Wariant</p>
+<p>Półbuty ARMEN 9003 6660 S1 ESD z podnoskiem LIBERYUM i podeszwą LYFTOR. Norma EN ISO 20345.</p>
+</div>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractProductPageText');
+        $method->setAccessible(true);
+        $text = (string) $method->invoke($fetcher, $html, 'ARMEN 9003 6660 S1 ESD');
+
+        $this->assertTrue(ProductPageFetcher::looksLikeShopOfferDump(
+            'EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 zł Wariant'
+        ));
+        $this->assertStringContainsString('LIBERYUM', $text);
+        $this->assertStringContainsString('EN ISO 20345', $text);
+        $this->assertStringNotContainsString('309 zł', $text);
+        $this->assertStringNotContainsString('Wariant', $text);
+    }
+
+    public function test_price_only_shopify_block_does_not_become_page_text(): void
+    {
+        $html = <<<'HTML'
+<html><body>
+<div class="product-description">
+EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 złEU 39 - 309 złEU 40 - 309 zł Wariant
+</div>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractProductPageText');
+        $method->setAccessible(true);
+        $text = (string) $method->invoke($fetcher, $html, 'ARMEN 9003 6660 S1 ESD');
+
+        $this->assertStringNotContainsString('309 zł', $text);
+        $this->assertStringNotContainsString('Wariant', $text);
+    }
+
     public function test_drops_company_imprint_footer(): void
     {
         $html = <<<'HTML'

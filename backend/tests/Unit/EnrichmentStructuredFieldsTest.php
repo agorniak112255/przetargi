@@ -290,6 +290,63 @@ TXT;
         ]));
     }
 
+    public function test_expert_prose_is_not_replaced_by_shop_offer_dump(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'sku' => 'ARMEN 9003 6660 S1 ESD',
+            'name' => 'Półbuty ARMEN 9003 6660 S1 ESD',
+            'manufacturer' => 'ARTRA',
+        ]);
+        $expert = 'Półbuty ARMEN 9003 6660 S1 ESD to obuwie bezpieczne z kompozytowym podnoskiem. '
+            .'Cholewka PURYA SKINYUM i podeszwa LYFTOR spełniają EN ISO 20345:2022. '
+            .'Przeznaczone do stref ESD, montażu i logistyki.';
+        $dump = 'EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 złEU 39 - 309 zł '
+            .'EU 40 - 309 złEU 41 - 309 złEU 42 - 309 zł Wariant '
+            .'### Jak dobrać rozmiar? **35** 21,8';
+
+        $this->assertFalse($this->invoke($service, 'looksLikeIncompleteDescription', [$expert]));
+        $this->assertTrue(ProductPageFetcher::looksLikeShopOfferDump($dump));
+        $this->assertFalse($this->invoke($service, 'isRicherDescription', [$dump, $expert]));
+        $this->assertTrue($this->invoke($service, 'isUsableProductDescription', [$expert, $product]));
+        $this->assertFalse($this->invoke($service, 'isUsableProductDescription', [$dump, $product]));
+
+        $fallback = $this->invoke($service, 'fallbackDescriptionFromPages', [
+            [['url' => 'https://artra.pl/products/armen-9003', 'text' => $dump."\n\n".$expert]],
+            $product,
+        ]);
+        $this->assertStringContainsString('podnoskiem', $fallback);
+        $this->assertStringNotContainsString('309 zł', $fallback);
+        $this->assertStringNotContainsString('Wariant', $fallback);
+    }
+
+    public function test_two_prices_and_wariant_word_are_not_offer_dump(): void
+    {
+        $this->assertFalse(ProductPageFetcher::looksLikeShopOfferDump(
+            'Dostępny wariant S1 i S3. Cena katalogowa 89,00 zł netto, 99,00 zł brutto.'
+        ));
+    }
+
+    public function test_price_only_card_is_not_used_as_description(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $product = new Product([
+            'sku' => 'ARMEN 9003 6660 S1 ESD',
+            'name' => 'Półbuty ARMEN 9003',
+            'manufacturer' => 'ARTRA',
+        ]);
+        $dump = 'EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 zł '
+            .'EU 39 - 309 złEU 40 - 309 złEU 41 - 309 złEU 42 - 309 zł Wariant';
+
+        $this->assertSame('', $this->invoke($service, 'fallbackDescriptionFromPages', [
+            [['url' => 'https://artra.pl/products/armen-9003', 'text' => $dump]],
+            $product,
+        ]));
+        $this->assertSame('', $this->invoke($service, 'descriptionFromConfirmedCards', [
+            [['url' => 'https://artra.pl/products/armen-9003', 'text' => $dump]],
+        ]));
+    }
+
     public function test_compose_full_description_strips_html(): void
     {
         $service = app(ProductEnrichmentService::class);

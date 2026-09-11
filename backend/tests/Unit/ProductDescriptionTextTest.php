@@ -62,6 +62,43 @@ final class ProductDescriptionTextTest extends TestCase
         $this->assertStringNotContainsString('ARICA', $plain);
     }
 
+    public function test_strips_shopify_size_price_dump_and_keeps_bhp_facts(): void
+    {
+        $raw = "ARMEN 9003 6660 S1 ESD\n"
+            ."EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 złEU 39 - 309 zł"
+            ."EU 40 - 309 złEU 41 - 309 złEU 42 - 309 zł Wariant\n"
+            ."Konstrukcja obuwia ARELAX zapewnia przestrzeń dla palców. "
+            ."Podeszwa LYFTOR PU.2D z podnoskiem LIBERYUM.\n"
+            ."Rozmiar EU Długość stopy --- --- **35** 21,8 **36** 22,4\n"
+            ."### Jak dobrać rozmiar?\n"
+            ."Jeśli obuwie nie będzie Państwu odpowiadać, mogą je Państwo zwrócić w ciągu 30 dni od otrzymania.\n"
+            ."Natychmiast do wysyłki • Darmowa dostawa";
+
+        $plain = ProductDescriptionText::plain($raw);
+
+        $this->assertStringContainsString('ARELAX', $plain);
+        $this->assertStringContainsString('LIBERYUM', $plain);
+        $this->assertStringNotContainsString('309 zł', $plain);
+        $this->assertStringNotContainsString('Wariant', $plain);
+        $this->assertStringNotContainsString('Jak dobrać rozmiar', $plain);
+        $this->assertStringNotContainsString('30 dni', $plain);
+        $this->assertStringNotContainsString('Natychmiast do wysyłki', $plain);
+    }
+
+    public function test_strips_size_prices_without_eu_prefix_and_lowercase_wariant(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            '35 - 309 zł36 - 309 zł37 - 309 zł38 - 309 zł wariant '
+            .'Półbuty S1 z podnoskiem LIBERYUM. 50 - 129 eur51 - 129 €'
+        );
+
+        $this->assertStringContainsString('LIBERYUM', $plain);
+        $this->assertStringNotContainsString('309 zł', $plain);
+        $this->assertStringNotContainsString('wariant', mb_strtolower($plain));
+        $this->assertStringNotContainsString('129 eur', mb_strtolower($plain));
+        $this->assertStringNotContainsString('129 €', $plain);
+    }
+
     public function test_splits_long_blob_into_paragraphs(): void
     {
         $blob = 'Pierwsze zdanie opisuje przeznaczenie rękawic do montażu w suchych warunkach. '

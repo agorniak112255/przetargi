@@ -827,13 +827,14 @@ final class ProductPageFetcher
         $text = self::stripCookieConsentBlocks($text);
         $text = $this->stripShopChromePhrases($text);
         $text = self::stripExpandLinkChrome($text);
+        $text = ProductDescriptionText::stripShopUi($text);
+        $text = ProductDescriptionText::cutGenericCatalogAppendix($text);
         $text = $this->keepProductRelevantParagraphs($text, $skuNorm);
         if (self::looksLikeCookieConsent($text) || self::looksLikeCjkDump($text)) {
             return '';
         }
 
         $text = ProductDescriptionText::stripShopUi($text);
-        $text = ProductDescriptionText::cutGenericCatalogAppendix($text);
 
         return mb_substr(trim($text), 0, 12000);
     }
@@ -841,8 +842,10 @@ final class ProductPageFetcher
     private function usableExtractedChunk(string $text): string
     {
         $text = self::stripExpandLinkChrome(trim($text));
+        $text = ProductDescriptionText::stripShopUi($text);
         if ($text === '' || $this->looksLikeShopChrome($text) || self::looksLikeTruncatedShopTeaser($text)
-            || self::looksLikeCompanyImprint($text) || self::looksLikeCookieConsent($text)) {
+            || self::looksLikeCompanyImprint($text) || self::looksLikeCookieConsent($text)
+            || self::looksLikeShopOfferDump($text)) {
             return '';
         }
 
@@ -903,9 +906,11 @@ final class ProductPageFetcher
             if (preg_match_all($pattern, $html, $m)) {
                 foreach ($m[1] as $block) {
                     $t = self::stripExpandLinkChrome($this->htmlToText($this->stripShopChromeHtml((string) $block)));
+                    $t = ProductDescriptionText::stripShopUi($t);
                     if (mb_strlen($t) >= 40 && ! $this->looksLikeShopChrome($t)
                         && ! $this->looksLikeEmbeddedCode($t) && ! self::looksLikeTruncatedShopTeaser($t)
-                        && ! self::looksLikeRelatedProductTeaser($t)) {
+                        && ! self::looksLikeRelatedProductTeaser($t)
+                        && ! self::looksLikeShopOfferDump($t)) {
                         $parts[] = $t;
                     }
                 }
@@ -984,6 +989,7 @@ final class ProductPageFetcher
                 || self::looksLikeCompanyImprint($part)
                 || self::looksLikeCookieConsent($part) || self::looksLikeCjkDump($part)
                 || self::looksLikeRelatedProductTeaser($part)
+                || self::looksLikeShopOfferDump($part)
                 || str_contains($low, 'wähle eine option') || str_contains($low, 'wahle eine option')) {
                 continue;
             }
@@ -999,10 +1005,11 @@ final class ProductPageFetcher
             }
         }
         if ($kept === []) {
-            // ostatnia deska: wyczyść cały tekst ze śmieci i skróć
             $flat = $this->stripShopChromePhrases(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
+            $flat = ProductDescriptionText::stripShopUi($flat);
             if ($flat === '' || self::looksLikeCompanyImprint($flat)
-                || self::looksLikeCookieConsent($flat) || self::looksLikeCjkDump($flat)) {
+                || self::looksLikeCookieConsent($flat) || self::looksLikeCjkDump($flat)
+                || self::looksLikeShopOfferDump($flat) || $this->looksLikeShopChrome($flat)) {
                 return '';
             }
 
@@ -1010,6 +1017,25 @@ final class ProductPageFetcher
         }
 
         return implode("\n\n", array_slice($kept, 0, 40));
+    }
+
+    /** Cennik wariantów / tabela rozmiarów Shopify — nie opis BHP. */
+    public static function looksLikeShopOfferDump(string $text): bool
+    {
+        $priceHits = preg_match_all(
+            '/\b(?:EU\s*)?(?:3[2-9]|4[0-9]|5[0-2])\s*[-–]\s*\d{1,5}(?:[.,]\d{2})?\s*(?:zł|eur|€)/iu',
+            $text
+        );
+        if (is_int($priceHits) && $priceHits >= 4) {
+            return true;
+        }
+        $eu = preg_match_all('/\bEU\s*(?:3[2-9]|4[0-9]|5[0-2])\b/iu', $text);
+        $money = preg_match_all('/\b\d{1,5}(?:[.,]\d{2})?\s*(?:zł|eur|€)\b/iu', $text);
+        if (is_int($eu) && is_int($money) && $eu >= 6 && $money >= 3) {
+            return true;
+        }
+
+        return preg_match('/#{1,3}\s*jak dobrać rozmiar/iu', $text) === 1;
     }
 
     /** Karuzela „inne półbuty ARTRA …” z ceną — nie karta tego modelu. */
@@ -1026,7 +1052,8 @@ final class ProductPageFetcher
 
     private function looksLikeShopChrome(string $text): bool
     {
-        if (self::looksLikeCookieConsent($text) || self::looksLikeRawLocaleDump($text)) {
+        if (self::looksLikeCookieConsent($text) || self::looksLikeRawLocaleDump($text)
+            || self::looksLikeShopOfferDump($text)) {
             return true;
         }
         $low = mb_strtolower($text);

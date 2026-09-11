@@ -1873,7 +1873,9 @@ final class ProductEnrichmentService
     {
         $candidate = trim($candidate);
         if ($candidate === '' || $this->looksLikeMissingCardMeta($candidate)
-            || $this->looksLikeRawLocaleDump($candidate)) {
+            || $this->looksLikeRawLocaleDump($candidate)
+            || $this->looksLikeShopChromeDescription($candidate)
+            || ProductPageFetcher::looksLikeShopOfferDump($candidate)) {
             return false;
         }
         if ($this->looksLikeRawLocaleDump($current) && ! $this->looksLikeRawLocaleDump($candidate)) {
@@ -1882,7 +1884,9 @@ final class ProductEnrichmentService
         if ($current === '' || $this->looksLikeMissingCardMeta($current) || $this->looksLikeThinDescription($current)) {
             return ! $this->looksLikeThinDescription($candidate) || mb_strlen($candidate) > mb_strlen($current) + 40;
         }
-        if ($this->looksLikeThinDescription($candidate)) {
+        if ($this->looksLikeThinDescription($candidate)
+            || $this->looksLikeShopChromeDescription($candidate)
+            || ProductPageFetcher::looksLikeShopOfferDump($candidate)) {
             return false;
         }
 
@@ -1893,7 +1897,11 @@ final class ProductEnrichmentService
     private function looksLikeIncompleteDescription(string $description): bool
     {
         $d = trim($description);
-        if (mb_strlen($d) < 420 || ProductPageFetcher::looksLikeTruncatedShopTeaser($d)) {
+        if (ProductPageFetcher::looksLikeTruncatedShopTeaser($d)
+            || ProductPageFetcher::looksLikeShopOfferDump($d)) {
+            return true;
+        }
+        if (mb_strlen($d) < 180) {
             return true;
         }
         $low = mb_strtolower($d);
@@ -2433,7 +2441,8 @@ final class ProductEnrichmentService
 
     private function looksLikeShopChromeDescription(string $description): bool
     {
-        if ($this->looksLikeRawLocaleDump($description)) {
+        if ($this->looksLikeRawLocaleDump($description)
+            || ProductPageFetcher::looksLikeShopOfferDump($description)) {
             return true;
         }
         $low = mb_strtolower($description);
@@ -2523,7 +2532,7 @@ final class ProductEnrichmentService
     {
         $d = trim($description);
         if ($d === '' || $this->looksLikeMissingCardMeta($d) || $this->looksLikeThinDescription($d)
-            || $this->looksLikeRawLocaleDump($d)) {
+            || $this->looksLikeRawLocaleDump($d) || ProductPageFetcher::looksLikeShopOfferDump($d)) {
             return false;
         }
         if ($product->hintedShopUrl() !== null) {
@@ -2695,13 +2704,16 @@ final class ProductEnrichmentService
             }
             $parts = preg_split('/\n{2,}/u', $text) ?: [$text];
             foreach ($parts as $part) {
-                $part = ProductPageFetcher::stripExpandLinkChrome(trim((string) $part));
+                $part = ProductDescriptionText::stripShopUi(
+                    ProductPageFetcher::stripExpandLinkChrome(trim((string) $part))
+                );
                 if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
                     || ProductPageFetcher::looksLikeRelatedProductTeaser($part)
                     || $this->looksLikeMissingCardMeta($part)
                     || ProductPageFetcher::looksLikeCompanyImprint($part)
                     || $this->looksLikeShopChromeDescription($part)
-                    || $this->looksLikeRawLocaleDump($part)) {
+                    || $this->looksLikeRawLocaleDump($part)
+                    || ProductPageFetcher::looksLikeShopOfferDump($part)) {
                     continue;
                 }
                 if (mb_strlen($part) >= 40 && $this->descriptionMentionsProduct($part, $product)) {
@@ -2709,9 +2721,12 @@ final class ProductEnrichmentService
                 }
             }
             if ($candidates === []) {
-                $flat = ProductPageFetcher::stripExpandLinkChrome(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
+                $flat = ProductDescriptionText::stripShopUi(
+                    ProductPageFetcher::stripExpandLinkChrome(trim(preg_replace('/\s+/u', ' ', $text) ?? $text))
+                );
                 if ($flat !== '' && ! ProductPageFetcher::looksLikeTruncatedShopTeaser($flat)
                     && ! $this->looksLikeThinDescription($flat) && ! $this->looksLikeRawLocaleDump($flat)
+                    && ! ProductPageFetcher::looksLikeShopOfferDump($flat)
                     && mb_strlen($flat) >= 220
                     && $this->descriptionMentionsProduct($flat, $product)) {
                     $candidates[] = $flat;
@@ -2748,7 +2763,9 @@ final class ProductEnrichmentService
             }
             $parts = preg_split('/\n{2,}/u', $text) ?: [$text];
             foreach ($parts as $part) {
-                $part = ProductPageFetcher::stripExpandLinkChrome(trim((string) $part));
+                $part = ProductDescriptionText::stripShopUi(
+                    ProductPageFetcher::stripExpandLinkChrome(trim((string) $part))
+                );
                 if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
                     || ProductPageFetcher::looksLikeRelatedProductTeaser($part)
                     || $this->looksLikeMissingCardMeta($part)
@@ -2757,7 +2774,8 @@ final class ProductEnrichmentService
                     || $this->looksLikeRawLocaleDump($part)
                     || $this->looksLikeOffTopicDescription($part)
                     || $this->looksLikeCategoryIndexDescription($part)
-                    || $this->looksLikeLinkDump($part)) {
+                    || $this->looksLikeLinkDump($part)
+                    || ProductPageFetcher::looksLikeShopOfferDump($part)) {
                     continue;
                 }
                 if (mb_strlen($part) >= 40) {
@@ -2777,8 +2795,10 @@ final class ProductEnrichmentService
         $out = ! $this->looksLikeIncompleteDescription($best) || count($candidates) === 1
             ? mb_substr($best, 0, 12000)
             : mb_substr(implode("\n\n", $candidates), 0, 12000);
+        $out = ProductDescriptionText::stripShopUi($out);
         if ($this->looksLikeThinDescription($out) || $this->looksLikeMissingCardMeta($out)
-            || $this->looksLikeRawLocaleDump($out)) {
+            || $this->looksLikeRawLocaleDump($out)
+            || ProductPageFetcher::looksLikeShopOfferDump($out)) {
             return '';
         }
 
@@ -3244,7 +3264,7 @@ final class ProductEnrichmentService
 Jesteś filtrem treści produktu BHP. Dostajesz surowy tekst ze stron sklepów.
 Zadanie: WSTĘPNA ANALIZA — wyrzuć śmieci sklepowe, zostaw wyłącznie informacje o produkcie.
 
-WYRZUĆ całkowicie: logowanie, rejestracja, konto, obserwowane, koszyk, suma, zamówienie, menu kategorii, breadcrumby („jesteś tutaj”), wyszukiwanie, telefon/e-mail sklepu, wysyłka, koszty dostawy, płatności, prowizje, regulamin, polityka prywatności, odstąpienie od umowy, zwroty 14 dni, punkty lojalnościowe, porównanie, cookies, baner CMP / OneTrust / CCPA / „When you visit our website, we store cookies”, ceny marketingowe bez kontekstu produktu.
+WYRZUĆ całkowicie: logowanie, rejestracja, konto, obserwowane, koszyk, suma, zamówienie, menu kategorii, breadcrumby („jesteś tutaj”), wyszukiwanie, telefon/e-mail sklepu, wysyłka, koszty dostawy, płatności, prowizje, regulamin, polityka prywatności, odstąpienie od umowy, zwroty 14/30 dni, punkty lojalnościowe, porównanie, cookies, baner CMP / OneTrust / CCPA / „When you visit our website, we store cookies”, cenniki wariantów (EU 35 - 309 zł), etykietę „Wariant”, tabele doboru rozmiaru, gwarancję sklepu, „Natychmiast do wysyłki”, ceny marketingowe bez kontekstu produktu.
 
 ZOSTAW fakty o produkcie: przeznaczenie, materiały, normy, parametry, zastosowania.
 Zapisz je jako zwykły tekst z akapitami. Bez HTML, CSS, class/id i bez sklejania całej karty w jedną ścianę.
@@ -3272,7 +3292,7 @@ SYS,
                 'error' => $e->getMessage(),
             ]);
 
-            return $pageSnippets;
+            return $this->stripShopUiFromPages($pageSnippets);
         }
 
         $byUrl = [];
@@ -3300,7 +3320,27 @@ SYS,
             $cleaned = array_values($byUrl);
         }
 
-        return $cleaned !== [] ? $cleaned : $pageSnippets;
+        return $cleaned !== [] ? $cleaned : $this->stripShopUiFromPages($pageSnippets);
+    }
+
+    /**
+     * @param  list<array{url: string, text: string}>  $pages
+     * @return list<array{url: string, text: string}>
+     */
+    private function stripShopUiFromPages(array $pages): array
+    {
+        $out = [];
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            $text = ProductDescriptionText::stripShopUi(trim((string) ($page['text'] ?? '')));
+            if ($url === '' || $text === '' || ProductPageFetcher::looksLikeShopOfferDump($text)
+                || $this->looksLikeShopChromeDescription($text)) {
+                continue;
+            }
+            $out[] = $this->copyPageMeta($page, ['url' => $url, 'text' => $text]);
+        }
+
+        return $out;
     }
 
     /**
