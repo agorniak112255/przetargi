@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\DestroyCatalogSearchSiteRequest;
+use App\Http\Requests\Admin\LookupCatalogSearchSiteProductRequest;
 use App\Http\Requests\Admin\ShowCatalogSearchSitePagesRequest;
 use App\Http\Requests\Admin\ShowCatalogSearchSiteProgressRequest;
 use App\Http\Requests\Admin\StoreCatalogSearchSiteRequest;
@@ -43,6 +44,16 @@ class CatalogSearchSiteController extends Controller
         $row = $this->sites->add((string) $request->validated()['url']);
 
         return response()->json($row, 201);
+    }
+
+    public function lookup(LookupCatalogSearchSiteProductRequest $request): JsonResponse
+    {
+        $data = $request->validated();
+
+        return response()->json($this->sites->lookup(
+            isset($data['product_id']) ? (int) $data['product_id'] : null,
+            (string) ($data['q'] ?? ''),
+        ));
     }
 
     public function pages(ShowCatalogSearchSitePagesRequest $request, string $host): JsonResponse

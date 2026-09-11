@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { applyCheckboxRange } from '../lib/checkboxRange'
 import { api } from '../lib/api'
+import { productDisplayName } from '../lib/productLabel'
 
 type SearchSite = {
   host: string
@@ -48,6 +49,38 @@ type CheckProgress = {
   started_at: string | null
   finished_at: string | null
   lines: { at: string; text: string }[]
+}
+
+type LookupProduct = {
+  id: number
+  sku: string
+  name: string
+  manufacturer: string
+}
+
+type LookupHit = {
+  url: string
+  title: string
+  host: string
+  manufacturer: string | null
+  last_seen_at: string | null
+}
+
+type LookupOfficialHost = {
+  host: string
+  links: number
+  in_sites: boolean
+}
+
+type ProductLookupResponse = {
+  q: string
+  products: LookupProduct[]
+  product: LookupProduct | null
+  codes: string[]
+  official_hosts: LookupOfficialHost[]
+  hits: LookupHit[]
+  hit_hosts: { host: string; hits: number }[]
+  mapped: boolean
 }
 
 type SortKey = 'host' | 'links' | 'source_label' | 'last_seen_at'
@@ -147,6 +180,8 @@ export function AdminSearchSites() {
   const [checks, setChecks] = useState<Record<string, CheckProgress>>({})
   const [focusHost, setFocusHost] = useState(() => readWatchHosts()[0] ?? '')
   const [selected, setSelected] = useState<Record<string, boolean>>({})
+  const [mapHosts, setMapHosts] = useState<string[]>([])
+  const [onlyMapHosts, setOnlyMapHosts] = useState(false)
   const lastSelectIndex = useRef<number | null>(null)
   const lastChecks = useRef<Record<string, CheckProgress>>({})
   const userPickedHost = useRef(false)
@@ -280,14 +315,20 @@ export function AdminSearchSites() {
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    const filtered = needle === ''
-      ? rows
-      : rows.filter(
-          (r) =>
-            r.host.includes(needle) ||
-            r.source_label.toLowerCase().includes(needle) ||
-            (r.empty_reason ?? '').toLowerCase().includes(needle),
-        )
+    const mapSet = onlyMapHosts && mapHosts.length > 0 ? new Set(mapHosts) : null
+    const filtered = rows.filter((r) => {
+      if (mapSet && !mapSet.has(r.host)) {
+        return false
+      }
+      if (needle === '') {
+        return true
+      }
+      return (
+        r.host.includes(needle) ||
+        r.source_label.toLowerCase().includes(needle) ||
+        (r.empty_reason ?? '').toLowerCase().includes(needle)
+      )
+    })
     const copy = [...filtered]
     copy.sort((a, b) => {
       let cmp = 0
@@ -301,7 +342,7 @@ export function AdminSearchSites() {
       return sortDir === 'asc' ? cmp : -cmp
     })
     return copy
-  }, [rows, q, sortKey, sortDir])
+  }, [rows, q, sortKey, sortDir, mapHosts, onlyMapHosts])
 
   const selectedHosts = useMemo(
     () => visible.filter((r) => selected[r.host]).map((r) => r.host),
@@ -488,6 +529,20 @@ export function AdminSearchSites() {
         </div>
       </div>
 
+      <ProductMappingPanel
+        sites={rows}
+        onHitHosts={(hosts) => {
+          setMapHosts(hosts)
+          setOnlyMapHosts(hosts.length > 0)
+        }}
+        onOpenHost={(host) => {
+          const site = rows.find((r) => r.host === host)
+          if (site) {
+            setPagesHost(site)
+          }
+        }}
+      />
+
       <form
         onSubmit={(e) => void onAdd(e)}
         className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-end"
@@ -523,8 +578,22 @@ export function AdminSearchSites() {
             <p className="text-[12px] text-slate-500">
               {visible.length} z {rows.length} stron
               {selectedHosts.length > 0 ? ` · zaznaczono ${selectedHosts.length}` : ''}
+              {onlyMapHosts && mapHosts.length > 0 ? ` · domeny produktu (${mapHosts.length})` : ''}
               <span className="text-slate-400"> · Shift+klik: zakres</span>
             </p>
+            {mapHosts.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setOnlyMapHosts((v) => !v)}
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold ${
+                  onlyMapHosts
+                    ? 'bg-violet-600 text-white hover:bg-violet-700'
+                    : 'border border-violet-300 text-violet-800 hover:bg-violet-50'
+                }`}
+              >
+                {onlyMapHosts ? 'Pokaż wszystkie strony' : 'Tylko domeny produktu'}
+              </button>
+            )}
             <button
               type="button"
               disabled={selectedHosts.length === 0 || reindexHost !== ''}
@@ -576,11 +645,13 @@ export function AdminSearchSites() {
                 <tr
                   key={row.host}
                   className={`border-b last:border-0 ${
-                    selected[row.host]
-                      ? 'bg-blue-50/40'
-                      : row.links === 0
-                        ? 'bg-amber-50/40'
-                        : 'hover:bg-slate-50'
+                    mapHosts.includes(row.host)
+                      ? 'bg-violet-50/70'
+                      : selected[row.host]
+                        ? 'bg-blue-50/40'
+                        : row.links === 0
+                          ? 'bg-amber-50/40'
+                          : 'hover:bg-slate-50'
                   }`}
                 >
                   <td className="p-3 select-none">
@@ -706,6 +777,279 @@ export function AdminSearchSites() {
           reindexing={reindexHost === pagesHost.host}
           deleting={deleteHost === pagesHost.host}
         />
+      )}
+    </div>
+  )
+}
+
+function ProductMappingPanel({
+  sites,
+  onHitHosts,
+  onOpenHost,
+}: {
+  sites: SearchSite[]
+  onHitHosts: (hosts: string[]) => void
+  onOpenHost: (host: string) => void
+}) {
+  const [q, setQ] = useState('')
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [data, setData] = useState<ProductLookupResponse | null>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const lastQ = useRef('')
+
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (!wrapRef.current?.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [])
+
+  async function runLookup(params: { q?: string; productId?: number }) {
+    const query = new URLSearchParams()
+    if (params.productId) {
+      query.set('product_id', String(params.productId))
+    } else {
+      const needle = (params.q ?? '').trim()
+      if (needle.length < 2) {
+        setData(null)
+        onHitHosts([])
+        return
+      }
+      query.set('q', needle)
+    }
+    setBusy(true)
+    setErr('')
+    try {
+      const res = await api<ProductLookupResponse>(
+        `/admin/catalog-search-sites/product-lookup?${query}`,
+      )
+      setData(res)
+      onHitHosts(res.hit_hosts.map((h) => h.host))
+      if (res.product) {
+        setQ(`${res.product.sku} · ${productDisplayName(res.product)}`)
+        setOpen(false)
+      } else {
+        setOpen(true)
+      }
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd sprawdzania produktu')
+      setData(null)
+      onHitHosts([])
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    const needle = q.trim()
+    if (data?.product && needle === `${data.product.sku} · ${productDisplayName(data.product)}`) {
+      return
+    }
+    if (needle.length < 2) {
+      if (lastQ.current !== '') {
+        lastQ.current = ''
+        setData(null)
+        onHitHosts([])
+      }
+      return
+    }
+    const timer = window.setTimeout(() => {
+      if (needle === lastQ.current) {
+        return
+      }
+      lastQ.current = needle
+      void runLookup({ q: needle })
+    }, 280)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q])
+
+  const suggestions =
+    data && !data.product && data.products.length > 0 ? data.products : []
+  const knownHosts = new Set(sites.map((s) => s.host))
+
+  return (
+    <div className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-700">
+        Mapowanie produktu
+      </p>
+      <h3 className="mt-0.5 text-sm font-semibold text-slate-900">Czy mamy kartę w indeksie?</h3>
+      <p className="mt-1 text-[12px] text-slate-600">
+        Szukaj po SKU albo nazwie z katalogu — potem ta sama logika co przy wzbogacaniu
+        (kod, marka, nazwa).
+      </p>
+      <div ref={wrapRef} className="relative mt-3">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            lastQ.current = q.trim()
+            void runLookup({ q })
+          }}
+        >
+          <input
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value)
+              setOpen(true)
+            }}
+            onFocus={() => setOpen(true)}
+            placeholder="SKU albo nazwa produktu…"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-violet-200 focus:border-violet-400 focus:ring-2"
+          />
+        </form>
+        {open && suggestions.length > 0 && (
+          <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+            {suggestions.map((p) => (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 text-left text-[13px] hover:bg-violet-50"
+                  onClick={() => {
+                    lastQ.current = p.sku
+                    void runLookup({ productId: p.id })
+                  }}
+                >
+                  <span className="font-mono text-[12px] text-slate-700">{p.sku}</span>
+                  <span className="text-slate-400"> · </span>
+                  {productDisplayName(p, 52)}
+                  {p.manufacturer ? (
+                    <span className="ml-1 text-[11px] text-slate-400">{p.manufacturer}</span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {busy && <p className="mt-2 text-[11px] text-slate-400">Sprawdzam indeks…</p>}
+      {err && (
+        <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
+          {err}
+        </p>
+      )}
+      {data && !data.product && !busy && q.trim().length >= 2 && (
+        <p className="mt-2 text-[12px] text-amber-800">
+          {data.products.length === 0
+            ? 'Brak takiego produktu w katalogu. Wpisz dokładne SKU albo fragment nazwy.'
+            : `Znaleziono ${data.products.length} produktów — wybierz jeden z listy, albo wpisz dokładne SKU.`}
+        </p>
+      )}
+      {data?.product && (
+        <div className="mt-3 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="font-mono text-[13px] font-semibold text-slate-900">{data.product.sku}</p>
+              <p className="text-[12px] text-slate-600">
+                {productDisplayName(data.product)}
+                {data.product.manufacturer ? ` · ${data.product.manufacturer}` : ''}
+              </p>
+            </div>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                data.mapped
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-amber-100 text-amber-900'
+              }`}
+            >
+              {data.mapped
+                ? `Jest mapowanie (${data.hits.length})`
+                : 'Brak mapowania w indeksie'}
+            </span>
+          </div>
+          {data.codes.length > 0 && (
+            <p className="text-[11px] text-slate-500">
+              Kody z karty:{' '}
+              {data.codes.slice(0, 8).map((c) => (
+                <span
+                  key={c}
+                  className="mr-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700"
+                >
+                  {c}
+                </span>
+              ))}
+            </p>
+          )}
+          {data.official_hosts.length > 0 && (
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500">Domeny producenta</p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {data.official_hosts.map((h) => (
+                  <button
+                    key={h.host}
+                    type="button"
+                    disabled={!knownHosts.has(h.host)}
+                    onClick={() => onOpenHost(h.host)}
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-semibold disabled:cursor-default ${
+                      h.links > 0
+                        ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                        : h.in_sites
+                          ? 'bg-amber-100 text-amber-900 hover:bg-amber-200'
+                          : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    {h.host}
+                    {h.links > 0 ? ` · ${h.links.toLocaleString('pl-PL')}` : ' · 0 linków'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {data.hits.length > 0 ? (
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+              <table className="w-full text-left text-[12px]">
+                <thead>
+                  <tr className="border-b bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                    <th className="p-2">Domena</th>
+                    <th className="p-2">Karta</th>
+                    <th className="p-2">Producent</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.hits.map((hit) => (
+                    <tr key={hit.url} className="border-b last:border-0">
+                      <td className="whitespace-nowrap p-2">
+                        {knownHosts.has(hit.host) ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenHost(hit.host)}
+                            className="font-medium text-violet-800 hover:underline"
+                          >
+                            {hit.host}
+                          </button>
+                        ) : (
+                          <span className="text-slate-700">{hit.host}</span>
+                        )}
+                      </td>
+                      <td className="p-2">
+                        <a
+                          href={hit.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="break-all text-sky-800 hover:underline"
+                        >
+                          {hit.title || hit.url}
+                        </a>
+                      </td>
+                      <td className="whitespace-nowrap p-2 text-slate-500">
+                        {hit.manufacturer ?? '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-[12px] text-amber-800">
+              Indeks nie zwraca karty dla tego SKU/nazwy. Domeny producenta mogą być
+              zaindeksowane, ale ta pozycja się nie łapie.
+            </p>
+          )}
+        </div>
       )}
     </div>
   )

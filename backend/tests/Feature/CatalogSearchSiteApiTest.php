@@ -9,7 +9,9 @@ use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
 use App\Models\CatalogSearchSiteExclusion;
+use App\Models\Product;
 use App\Models\User;
+use App\Services\Enrichment\CatalogSitemapIndexer;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -82,6 +84,7 @@ final class CatalogSearchSiteApiTest extends TestCase
 
         $this->getJson('/api/admin/catalog-search-sites')->assertForbidden();
         $this->postJson('/api/admin/catalog-search-sites', ['url' => 'x.pl'])->assertForbidden();
+        $this->getJson('/api/admin/catalog-search-sites/product-lookup?q=T5163000')->assertForbidden();
         $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/pages')->assertForbidden();
         $this->getJson('/api/admin/catalog-search-sites/sklepbhp.pl/progress')->assertForbidden();
         $this->postJson('/api/admin/catalog-search-sites/sklepbhp.pl/reindex')->assertForbidden();
@@ -317,6 +320,87 @@ final class CatalogSearchSiteApiTest extends TestCase
                 'host' => 'cdn.example.cloudfront.net',
                 'empty_reason' => 'CDN — przy pełnym skanie pomijany.',
             ]);
+    }
+
+    public function test_admin_looks_up_mapping_by_exact_sku(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        config([
+            'enrichment.manufacturer_domains' => [
+                'secura' => ['infield-safety.com'],
+            ],
+        ]);
+        $url = 'https://infield-safety.com/produkte/schutzbrillen/t5163000-raptor';
+        $this->seedIndexedPage($url, 'raptor schwarz', 'infield');
+        $this->createProduct('T5163000', 'Okulary Raptor przezroczyste', 'SECURA');
+
+        $this->getJson('/api/admin/catalog-search-sites/product-lookup?q=T5163000')
+            ->assertOk()
+            ->assertJsonPath('product.sku', 'T5163000')
+            ->assertJsonPath('mapped', true)
+            ->assertJsonPath('hits.0.url', $url)
+            ->assertJsonPath('hits.0.host', 'infield-safety.com')
+            ->assertJsonPath('hit_hosts.0.host', 'infield-safety.com')
+            ->assertJsonFragment(['host' => 'infield-safety.com', 'in_sites' => true]);
+    }
+
+    public function test_admin_looks_up_mapping_by_product_id(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $url = 'https://infield-safety.com/produkte/schutzbrillen/t5163000-raptor';
+        $this->seedIndexedPage($url, 'raptor schwarz', 'infield');
+        $product = $this->createProduct('T5163000', 'Okulary Raptor przezroczyste', 'SECURA');
+
+        $this->getJson('/api/admin/catalog-search-sites/product-lookup?product_id='.$product->id)
+            ->assertOk()
+            ->assertJsonPath('product.id', $product->id)
+            ->assertJsonPath('mapped', true)
+            ->assertJsonPath('hits.0.url', $url);
+    }
+
+    public function test_name_search_does_not_auto_pick_when_many_match(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->createProduct('R-1', 'Okulary Raptor przezroczyste', 'SECURA');
+        $this->createProduct('R-2', 'Okulary Raptor przyciemniane', 'SECURA');
+
+        $this->getJson('/api/admin/catalog-search-sites/product-lookup?q=Raptor')
+            ->assertOk()
+            ->assertJsonPath('product', null)
+            ->assertJsonPath('mapped', false)
+            ->assertJsonCount(2, 'products');
+    }
+
+    public function test_lookup_requires_query_or_product(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->getJson('/api/admin/catalog-search-sites/product-lookup')
+            ->assertStatus(422);
+        $this->getJson('/api/admin/catalog-search-sites/product-lookup?q=x')
+            ->assertStatus(422);
+        $this->getJson('/api/admin/catalog-search-sites/product-lookup?product_id=999999')
+            ->assertStatus(422);
+    }
+
+    private function createProduct(string $sku, string $name, string $manufacturer): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => $manufacturer,
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+    }
+
+    private function seedIndexedPage(string $url, string $title, ?string $manufacturer = null): CatalogPage
+    {
+        $page = $this->seedPage($url, $title, $manufacturer);
+        app(CatalogSitemapIndexer::class)->storeTokens([$page->url_hash]);
+
+        return $page;
     }
 
     private function seedPage(string $url, ?string $title = null, ?string $manufacturer = null): CatalogPage

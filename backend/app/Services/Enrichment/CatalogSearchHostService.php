@@ -11,6 +11,7 @@ use App\Models\CatalogSearchSite;
 use App\Models\CatalogSearchSiteExclusion;
 use App\Models\CatalogSkipOverride;
 use App\Models\ManufacturerSite;
+use App\Models\Product;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -20,6 +21,8 @@ final class CatalogSearchHostService
 {
     public function __construct(
         private readonly CatalogIndexProgress $indexProgress,
+        private readonly CatalogIndexSearch $catalog,
+        private readonly ProductSearchIdentity $identity,
     ) {}
 
     /**
@@ -115,6 +118,56 @@ final class CatalogSearchHostService
         usort($out, static fn (array $a, array $b): int => $a['host'] <=> $b['host']);
 
         return $out;
+    }
+
+    /**
+     * Produkt z katalogu + ta sama logika co wzbogacanie (CatalogIndexSearch).
+     *
+     * @return array{
+     *     q: string,
+     *     products: list<array{id: int, sku: string, name: string, manufacturer: string}>,
+     *     product: array{id: int, sku: string, name: string, manufacturer: string}|null,
+     *     codes: list<string>,
+     *     official_hosts: list<array{host: string, links: int, in_sites: bool}>,
+     *     hits: list<array{url: string, title: string, host: string, manufacturer: string|null, last_seen_at: string|null}>,
+     *     hit_hosts: list<array{host: string, hits: int}>,
+     *     mapped: bool
+     * }
+     */
+    public function lookup(?int $productId, string $q): array
+    {
+        $q = trim($q);
+        $candidates = [];
+        $selected = null;
+
+        if ($productId !== null) {
+            $selected = Product::query()->find($productId);
+            if ($selected === null) {
+                throw ValidationException::withMessages([
+                    'product_id' => 'Nie znaleziono produktu o tym ID.',
+                ]);
+            }
+            $candidates = [$selected];
+        } else {
+            $candidates = $this->findProducts($q);
+            $selected = $this->pickProduct($candidates, $q);
+        }
+
+        $hits = [];
+        if ($selected !== null) {
+            $hits = $this->enrichHits($this->catalog->findFor($selected));
+        }
+
+        return [
+            'q' => $q,
+            'products' => array_map($this->productRow(...), $candidates),
+            'product' => $selected !== null ? $this->productRow($selected) : null,
+            'codes' => $selected !== null ? $this->catalog->codes($selected) : [],
+            'official_hosts' => $selected !== null ? $this->officialHostRows($selected) : [],
+            'hits' => $hits,
+            'hit_hosts' => $this->hitHostRows($hits),
+            'mapped' => $hits !== [],
+        ];
     }
 
     /**
@@ -311,6 +364,160 @@ final class CatalogSearchHostService
     public function progress(string $host): array
     {
         return $this->indexProgress->snapshot($this->normalizeHost($host));
+    }
+
+    /**
+     * @return list<Product>
+     */
+    private function findProducts(string $q): array
+    {
+        if (mb_strlen($q) < 2) {
+            return [];
+        }
+
+        $like = '%'.addcslashes($q, '%_\\').'%';
+        $exact = mb_strtolower($q);
+        $prefix = addcslashes($exact, '%_\\').'%';
+
+        return Product::query()
+            ->select(['id', 'sku', 'name', 'manufacturer'])
+            ->where(function ($builder) use ($like): void {
+                $builder->where('sku', 'like', $like)
+                    ->orWhere('name', 'like', $like);
+            })
+            ->orderByRaw(
+                'CASE WHEN LOWER(sku) = ? THEN 0 WHEN LOWER(sku) LIKE ? THEN 1 ELSE 2 END',
+                [$exact, $prefix]
+            )
+            ->orderBy('name')
+            ->limit(20)
+            ->get()
+            ->all();
+    }
+
+    /**
+     * @param  list<Product>  $candidates
+     */
+    private function pickProduct(array $candidates, string $q): ?Product
+    {
+        if ($candidates === []) {
+            return null;
+        }
+
+        $needle = mb_strtolower(trim($q));
+        foreach ($candidates as $product) {
+            if (mb_strtolower(trim((string) $product->sku)) === $needle) {
+                return $product;
+            }
+        }
+
+        return count($candidates) === 1 ? $candidates[0] : null;
+    }
+
+    /**
+     * @return array{id: int, sku: string, name: string, manufacturer: string}
+     */
+    private function productRow(Product $product): array
+    {
+        return [
+            'id' => (int) $product->id,
+            'sku' => (string) $product->sku,
+            'name' => (string) $product->name,
+            'manufacturer' => (string) $product->manufacturer,
+        ];
+    }
+
+    /**
+     * @param  list<array{url: string, title: string, snippet: string}>  $hits
+     * @return list<array{url: string, title: string, host: string, manufacturer: string|null, last_seen_at: string|null}>
+     */
+    private function enrichHits(array $hits): array
+    {
+        if ($hits === []) {
+            return [];
+        }
+
+        $urls = [];
+        foreach ($hits as $hit) {
+            $urls[] = (string) $hit['url'];
+        }
+        $pages = CatalogPage::query()
+            ->whereIn('url', $urls)
+            ->get(['url', 'host', 'manufacturer', 'last_seen_at']);
+        $byUrl = [];
+        foreach ($pages as $page) {
+            $byUrl[mb_strtolower((string) $page->url)] = $page;
+        }
+
+        $out = [];
+        foreach ($hits as $hit) {
+            $url = (string) $hit['url'];
+            $page = $byUrl[mb_strtolower($url)] ?? null;
+            $host = $page !== null
+                ? $this->normalizeHost((string) $page->host)
+                : $this->normalizeHost((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+            $manufacturer = $page?->manufacturer;
+            $out[] = [
+                'url' => $url,
+                'title' => (string) ($hit['title'] ?? ''),
+                'host' => $host,
+                'manufacturer' => is_string($manufacturer) && $manufacturer !== '' ? $manufacturer : null,
+                'last_seen_at' => $page?->last_seen_at?->toIso8601String(),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<array{host: string, links: int, in_sites: bool}>
+     */
+    private function officialHostRows(Product $product): array
+    {
+        $known = [];
+        foreach ($this->list() as $row) {
+            $known[$row['host']] = $row['links'];
+        }
+
+        $out = [];
+        $seen = [];
+        foreach ($this->identity->officialCatalogHosts($product) as $raw) {
+            $host = $this->normalizeHost($raw);
+            if ($host === '' || isset($seen[$host])) {
+                continue;
+            }
+            $seen[$host] = true;
+            $out[] = [
+                'host' => $host,
+                'links' => (int) ($known[$host] ?? 0),
+                'in_sites' => array_key_exists($host, $known),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<array{host: string}>  $hits
+     * @return list<array{host: string, hits: int}>
+     */
+    private function hitHostRows(array $hits): array
+    {
+        $counts = [];
+        foreach ($hits as $hit) {
+            $host = (string) $hit['host'];
+            if ($host === '') {
+                continue;
+            }
+            $counts[$host] = ($counts[$host] ?? 0) + 1;
+        }
+
+        $out = [];
+        foreach ($counts as $host => $n) {
+            $out[] = ['host' => $host, 'hits' => $n];
+        }
+
+        return $out;
     }
 
     public function normalizeHost(string $domain): string
