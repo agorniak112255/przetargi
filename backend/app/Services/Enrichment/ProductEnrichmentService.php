@@ -366,6 +366,31 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Domena, która oddała kartę, ma następnym razem iść w kolejce wcześniej, a adresy
+     * odcięte przez filtry liczą się jako pudło. Zapytań site: jest ograniczona liczba,
+     * więc o znalezieniu produktu decyduje to, które sklepy pytamy najpierw.
+     *
+     * @param  list<array{url?: string, text?: string}>  $pages
+     * @param  array<string, mixed>  $fetched
+     */
+    private function recordHostOutcomes(array $pages, array $fetched): void
+    {
+        $ranking = app(CatalogHostRanking::class);
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '') {
+                $ranking->recordHit($url);
+            }
+        }
+        foreach ($fetched['rejected'] ?? [] as $row) {
+            $url = is_array($row) ? (string) ($row['url'] ?? '') : '';
+            if ($url !== '') {
+                $ranking->recordMiss($url);
+            }
+        }
+    }
+
+    /**
      * Opis z podanych kart: filtr AI, wyciągnięcie faktów, opis zapasowy z treści karty.
      * Używane przy drugim podejściu, gdy pierwsze karty nie dały opisu.
      *
@@ -812,6 +837,7 @@ final class ProductEnrichmentService
                     $why !== [] ? implode('; ', $why) : 'karta nie potwierdziła produktu',
                     urls: array_column($pageSnippets, 'url')
                 );
+                $this->recordHostOutcomes([], $fetched);
                 $savedImages = $this->downloadImagesFromFetchedCards($product, $fetched, $pageSnippets);
                 if ($savedImages !== []) {
                     $this->attemptLog()->add('image', 'zdjęcie z karty mimo cienkiego opisu');
@@ -833,6 +859,8 @@ final class ProductEnrichmentService
                             .' — żaden opis nie wymieniał jego kodu ani modelu. Opis wpisz ręcznie.'
                 );
             }
+
+            $this->recordHostOutcomes($pageSnippets, $fetched);
 
             $sourceUrls = [];
             foreach ($extracted['source_urls'] ?? [] as $url) {

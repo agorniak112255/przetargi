@@ -67,6 +67,11 @@ class HybridWebSearchService
         return $this->attemptLog ?? app(EnrichmentAttemptLog::class);
     }
 
+    private function hostRanking(): CatalogHostRanking
+    {
+        return app(CatalogHostRanking::class);
+    }
+
     /**
      * Lokalny indeks sitemap — darmowy i bez limitów, więc pytamy go pierwszego.
      *
@@ -1187,7 +1192,9 @@ class HybridWebSearchService
             $out[$bare] = true;
         }
 
-        return array_keys($out);
+        // Zapytań site: jest najwyżej FALLBACK_SITE_ATTEMPTS, więc o wyniku decyduje to,
+        // które sklepy trafią na początek listy — sprawdzone idą przed tymi bez trafień.
+        return $this->hostRanking()->order(array_keys($out));
     }
 
     /**
