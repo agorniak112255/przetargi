@@ -40,6 +40,9 @@ class HybridWebSearchService
     /** Ile zapytań site: (oficjalna + sklepy) — nie tylko pierwsze 2 z listy marki. */
     private const SITE_QUERY_ATTEMPTS = 4;
 
+    /** Po pudle u producenta: /products + duże sklepy, nie pierwsze 4 z alfabetu mapy. */
+    private const FALLBACK_SITE_ATTEMPTS = 10;
+
     /** Tyle kart produktu wystarcza, żeby przerwać drabinkę fraz. */
     private const OPEN_ENOUGH_PAGES = 3;
 
@@ -974,7 +977,7 @@ class HybridWebSearchService
         if ($this->localSearchOnly) {
             return [];
         }
-        $this->attemptLog()->add('search', 'zmapowane sklepy — karta nie potwierdzona u producenta');
+        $this->attemptLog()->add('search', 'producent /products, potem duże sklepy');
         $profile = $this->settings->tavilySearchProfile();
         $errors = [];
         $found = $this->searchMappedRetailerSite(
@@ -983,10 +986,33 @@ class HybridWebSearchService
             $profile->mode,
             'industry',
             $errors,
-            $this->hostsFromUrls($exceptUrls)
+            $this->nonManufacturerHosts($product, $this->hostsFromUrls($exceptUrls))
         );
 
         return $found['results'];
+    }
+
+    /**
+     * Listing / kategoria nie zastępuje karty — prefetch i SERP to mieszają.
+     *
+     * @param  list<array<string, mixed>>  $results
+     * @return list<array<string, mixed>>
+     */
+    public function dropListingResults(array $results, Product $product): array
+    {
+        $out = [];
+        foreach ($results as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $url = (string) ($row['url'] ?? '');
+            if ($url === '' || $this->isListingWithoutProduct($url, $product)) {
+                continue;
+            }
+            $out[] = $row;
+        }
+
+        return $out;
     }
 
     /**
@@ -1014,12 +1040,12 @@ class HybridWebSearchService
             return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => $errors];
         }
 
-        foreach (array_slice($this->mappedRetailerHosts($product, $exceptHosts), 0, self::SITE_QUERY_ATTEMPTS) as $host) {
-            $query = 'site:'.$host.' '.$phrase;
+        foreach ($this->fallbackSiteQueries($product, $exceptHosts) as $query) {
+            $host = $this->siteHostFromQuery($query);
             $shop = $this->cachedTavilySearch(
                 $product,
                 $query,
-                [$host],
+                $host !== null ? [$host] : [],
                 $profile,
                 $cacheMode,
                 $phase,
@@ -1043,6 +1069,36 @@ class HybridWebSearchService
     }
 
     /**
+     * Producent /products, potem duże sklepy — nie alfabet mapy catalog_search_sites.
+     *
+     * @param  list<string>  $exceptHosts
+     * @return list<string>
+     */
+    public function fallbackSiteQueries(Product $product, array $exceptHosts = []): array
+    {
+        $phrase = $this->identity->catalogSitePhrase($product);
+        if ($phrase === '') {
+            $phrase = trim($this->identity->productNameWithManufacturer($product));
+        }
+        if ($phrase === '') {
+            return [];
+        }
+
+        $queries = [];
+        foreach ($this->manufacturerSearchHosts($product) as $host) {
+            $queries[] = 'site:'.$host.'/products '.$phrase;
+        }
+        foreach ($this->mappedRetailerHosts($product, $exceptHosts) as $host) {
+            $queries[] = 'site:'.$host.' '.$phrase;
+            if (count($queries) >= self::FALLBACK_SITE_ATTEMPTS) {
+                break;
+            }
+        }
+
+        return array_values(array_unique(array_slice($queries, 0, self::FALLBACK_SITE_ATTEMPTS)));
+    }
+
+    /**
      * @param  list<string>  $exceptHosts
      * @return list<string>
      */
@@ -1051,8 +1107,7 @@ class HybridWebSearchService
         $skip = [];
         foreach (array_merge(
             $exceptHosts,
-            $this->manufacturers->domainsFor($product),
-            $this->identity->officialCatalogHosts($product),
+            $this->manufacturerSearchHosts($product),
             (array) config('enrichment.catalog_skip_hosts', []),
         ) as $host) {
             $bare = $this->bareSearchHost((string) $host);
@@ -1063,8 +1118,7 @@ class HybridWebSearchService
 
         $out = [];
         foreach (array_merge(
-            $this->identity->catalogSearchHosts($product),
-            CatalogSearchSite::allHosts(),
+            (array) config('enrichment.fallback_retailer_hosts', []),
             (array) config('enrichment.preferred_domains', []),
             (array) config('enrichment.retailer_domains', []),
         ) as $host) {
@@ -1076,6 +1130,45 @@ class HybridWebSearchService
         }
 
         return array_keys($out);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function manufacturerSearchHosts(Product $product): array
+    {
+        $out = [];
+        foreach (array_merge(
+            $this->identity->officialCatalogHosts($product),
+            $this->manufacturers->domainsFor($product),
+        ) as $host) {
+            $bare = $this->bareSearchHost((string) $host);
+            if ($bare === '' || isset($out[$bare])) {
+                continue;
+            }
+            $out[$bare] = true;
+        }
+
+        return array_keys($out);
+    }
+
+    /**
+     * @param  list<string>  $hosts
+     * @return list<string>
+     */
+    private function nonManufacturerHosts(Product $product, array $hosts): array
+    {
+        $mfr = array_fill_keys($this->manufacturerSearchHosts($product), true);
+        $out = [];
+        foreach ($hosts as $host) {
+            $bare = $this->bareSearchHost((string) $host);
+            if ($bare === '' || isset($mfr[$bare])) {
+                continue;
+            }
+            $out[] = $bare;
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**

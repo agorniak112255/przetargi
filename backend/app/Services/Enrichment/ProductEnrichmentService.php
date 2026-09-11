@@ -299,8 +299,22 @@ final class ProductEnrichmentService
     private function searchPackForEnrichment(Product $product): array
     {
         $pack = $this->prefetchPack($product);
+        if (is_array($pack)) {
+            $pack['results'] = $this->search->dropListingResults(
+                is_array($pack['results'] ?? null) ? $pack['results'] : [],
+                $product
+            );
+        }
         if (! is_array($pack) || ($pack['results'] ?? []) === []) {
             $pack = $this->search->searchBothPhases($product);
+            $pack['results'] = $this->search->dropListingResults(
+                is_array($pack['results'] ?? null) ? $pack['results'] : [],
+                $product
+            );
+        }
+        if (($pack['results'] ?? []) === []) {
+            $pack['results'] = $this->search->searchMappedRetailers($product);
+            $pack['errors'] = $pack['errors'] ?? [];
         }
 
         return $this->withHintedShopResult($product, $pack);

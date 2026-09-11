@@ -514,6 +514,17 @@ return [
     ],
 
     /*
+    | Duże sklepy BHP — kolejność site: po producencie, zanim reszta preferred.
+    | Cała tabela catalog_search_sites jest do indeksu sitemap, nie do tej drabinki.
+    */
+    'fallback_retailer_hosts' => [
+        'icd.pl',
+        'bhp-gabi.pl',
+        'marketbhp.pl',
+        'bogarobhp.pl',
+    ],
+
+    /*
     | Preferowane domeny przy wyszukiwaniu kart produktu (producent + sklepy).
     */
     'preferred_domains' => [

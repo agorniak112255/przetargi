@@ -739,18 +739,33 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertContains('https://artra.pl/products/3815422-arisaka-333-631460-s2-esd', $urls);
     }
 
-    public function test_mapped_retailer_hosts_skip_artra_manufacturer(): void
+    public function test_mapped_retailer_hosts_start_with_large_bhp_shops(): void
     {
         $product = new Product([
             'manufacturer' => 'ARTRA',
-            'sku' => 'ARISAKA 333 631460 S2 ESD',
-            'name' => 'ARISAKA 333 631460 S2 ESD',
+            'sku' => 'ARYK 322 618080 S1 PL ESD',
+            'name' => 'ARYK 322 618080 S1 PL ESD',
         ]);
-        $hosts = app(HybridWebSearchService::class)->mappedRetailerHosts($product);
+        $search = app(HybridWebSearchService::class);
+        $hosts = $search->mappedRetailerHosts($product);
+        $ladder = $search->fallbackSiteQueries($product);
 
+        $this->assertSame(['icd.pl', 'bhp-gabi.pl', 'marketbhp.pl', 'bogarobhp.pl'], array_slice($hosts, 0, 4));
         $this->assertContains('natare.pl', $hosts);
         $this->assertNotContains('artra.pl', $hosts);
-        $this->assertNotContains('artra.com', $hosts);
+        $this->assertNotContains('3market-shop.pl', array_slice($hosts, 0, 4));
+        $this->assertStringStartsWith('site:artra.pl/products', $ladder[0] ?? '');
+        $this->assertStringContainsString('ARYK 322', $ladder[0] ?? '');
+        $this->assertStringContainsString('site:icd.pl', implode(' | ', $ladder));
+        $this->assertStringNotContainsString('site:3market-shop.pl', implode(' | ', $ladder));
+        $dropped = $search->dropListingResults([
+            [
+                'url' => 'https://artra.pl/collections/polbuty-bezpieczne-s1-pl',
+                'title' => 'Półbuty S1',
+                'snippet' => 'ARYK 322 ARTRA',
+            ],
+        ], $product);
+        $this->assertSame([], $dropped);
     }
 
     public function test_ansell_open_search_starts_on_bpbhp(): void
