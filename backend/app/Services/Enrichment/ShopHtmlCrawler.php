@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -30,6 +32,9 @@ final class ShopHtmlCrawler
     private const DEEP_MAX_QUEUE = 1200;
 
     private const MAX_PRODUCT_FETCH = 400;
+
+    /** Ile stron HTML pobieramy naraz (listingi i karty bez kodu). */
+    private const FETCH_CONCURRENCY = 10;
 
     /**
      * @var list<string>
@@ -85,77 +90,83 @@ final class ShopHtmlCrawler
             if (microtime(true) >= $deadline) {
                 break;
             }
-            $page = $this->lockUrl((string) array_shift($queue));
-            $key = mb_strtolower(rtrim($page, '/'));
-            if (isset($fetched[$key]) || $this->isJunkPath($page) || $this->isSkippable($page)) {
-                $fetched[$key] = true;
-
+            $wave = $htmlOk === 0 ? 1 : self::FETCH_CONCURRENCY;
+            $batch = $this->dequeuePages($queue, $fetched, min($wave, $maxPages - $pages));
+            if ($batch === []) {
                 continue;
             }
-            $fetched[$key] = true;
             $timeout = $this->preferReader ? self::FETCH_TIMEOUT : self::PROBE_TIMEOUT;
-            $body = $this->fetchPage($page, $timeout);
-            $pages++;
-            if ($body === null) {
-                if ($this->isHomepage($page)) {
-                    $homeFails++;
-                }
-                $note(sprintf('[BRAK %d] kolejka=%d kart=%d %s', $pages, count($queue), count($products), $this->shortUrl($page)));
-                if ($htmlOk === 0 && $homeFails >= 2) {
-                    $note('Serwer nie pobiera HTML z tej witryny — przerywam.');
-                    break;
-                }
+            $bodies = $this->fetchPages($batch, $timeout);
+            $full = false;
+            $gaveUp = false;
+            foreach ($batch as $page) {
+                $pages++;
+                $body = $bodies[$page] ?? null;
+                if ($body === null) {
+                    if ($this->isHomepage($page)) {
+                        $homeFails++;
+                    }
+                    $note(sprintf('[BRAK %d] kolejka=%d kart=%d %s', $pages, count($queue), count($products), $this->shortUrl($page)));
+                    if ($htmlOk === 0 && $homeFails >= 2) {
+                        $note('Serwer nie pobiera HTML z tej witryny — przerywam.');
+                        $gaveUp = true;
+                        break;
+                    }
 
-                continue;
-            }
-            $htmlOk++;
-            if ($this->lockHost === null) {
-                $this->lockHost = mb_strtolower((string) (parse_url($page, PHP_URL_HOST) ?? ''));
-                if ($this->lockHost !== '') {
-                    $note('Zostaję przy '.$this->lockHost.' — pomijam duplikaty www/apex i strony-śmieci.');
-                }
-            }
-            if ($htmlOk === 1 && $this->preferReader) {
-                $note('Dalej przez reader (sklep nie odpowiada bezpośrednio).');
-            }
-            $note(sprintf('[OK %d] kolejka=%d kart=%d %s', $pages, count($queue), count($products), $this->shortUrl($page)));
-
-            if ($this->catalogUrl->isClassicProduct($page)) {
-                $identity = $this->identityFrom($body);
-                $products[$page] = [
-                    'url' => $page,
-                    'title' => $identity['title'],
-                    'extra' => $identity['extra'],
-                ];
-            }
-
-            foreach ($this->extractLinks($body, $host, $page) as $href) {
-                $href = $this->lockUrl($href);
-                if ($this->isSkippable($href) || $this->isFilterPath($href) || $this->isJunkPath($href)) {
                     continue;
                 }
-                $classic = $this->catalogUrl->isClassicProduct($href);
-                $pretty = ! $classic && $this->catalogUrl->isPrettyProduct($href);
-                if ($classic || $pretty) {
-                    if (! isset($products[$href])) {
-                        $products[$href] = ['url' => $href, 'title' => '', 'extra' => ''];
-                    }
-                    if (count($products) >= $maxUrls) {
-                        break 2;
+                $htmlOk++;
+                if ($this->lockHost === null) {
+                    $this->lockHost = mb_strtolower((string) (parse_url($page, PHP_URL_HOST) ?? ''));
+                    if ($this->lockHost !== '') {
+                        $note('Zostaję przy '.$this->lockHost.' — pomijam duplikaty www/apex i strony-śmieci.');
                     }
                 }
-                if ($classic) {
-                    continue;
+                if ($htmlOk === 1 && $this->preferReader) {
+                    $note('Dalej przez reader (sklep nie odpowiada bezpośrednio).');
                 }
-                if (isset($queued[$href]) || count($queue) >= $maxQueue) {
-                    continue;
+                $note(sprintf('[OK %d] kolejka=%d kart=%d %s', $pages, count($queue), count($products), $this->shortUrl($page)));
+
+                if ($this->catalogUrl->isClassicProduct($page)) {
+                    $identity = $this->identityFrom($body);
+                    $products[$page] = [
+                        'url' => $page,
+                        'title' => $identity['title'],
+                        'extra' => $identity['extra'],
+                    ];
                 }
-                $queued[$href] = true;
-                if ($this->catalogUrl->isSoteShopListing($href)) {
-                    array_unshift($queue, $href);
-                } else {
-                    $queue[] = $href;
+
+                foreach ($this->extractLinks($body, $host, $page) as $href) {
+                    $href = $this->lockUrl($href);
+                    if ($this->isSkippable($href) || $this->isFilterPath($href) || $this->isJunkPath($href)) {
+                        continue;
+                    }
+                    $classic = $this->catalogUrl->isClassicProduct($href);
+                    $pretty = ! $classic && $this->catalogUrl->isPrettyProduct($href);
+                    if ($classic || $pretty) {
+                        if (! isset($products[$href])) {
+                            $products[$href] = ['url' => $href, 'title' => '', 'extra' => ''];
+                        }
+                        if (count($products) >= $maxUrls) {
+                            $full = true;
+                        }
+                    }
+                    if ($classic || $full) {
+                        continue;
+                    }
+                    if (isset($queued[$href]) || count($queue) >= $maxQueue) {
+                        continue;
+                    }
+                    $queued[$href] = true;
+                    if ($this->catalogUrl->isSoteShopListing($href)) {
+                        array_unshift($queue, $href);
+                    } else {
+                        $queue[] = $href;
+                    }
                 }
+            }
+            if ($gaveUp || $full) {
+                break;
             }
         }
 
@@ -191,15 +202,127 @@ final class ShopHtmlCrawler
         return $out;
     }
 
+    /**
+     * @param  list<string>  $queue
+     * @param  array<string, true>  $fetched
+     * @return list<string>
+     */
+    private function dequeuePages(array &$queue, array &$fetched, int $limit): array
+    {
+        $batch = [];
+        while ($queue !== [] && count($batch) < $limit) {
+            $page = $this->lockUrl((string) array_shift($queue));
+            $key = mb_strtolower(rtrim($page, '/'));
+            if (isset($fetched[$key]) || $this->isJunkPath($page) || $this->isSkippable($page)) {
+                $fetched[$key] = true;
+
+                continue;
+            }
+            $fetched[$key] = true;
+            $batch[] = $page;
+        }
+
+        return $batch;
+    }
+
+    /**
+     * @param  list<string>  $urls
+     * @return array<string, string|null>
+     */
+    private function fetchPages(array $urls, int $timeout): array
+    {
+        $out = [];
+        foreach ($urls as $url) {
+            $out[$url] = null;
+        }
+        if ($urls === []) {
+            return $out;
+        }
+
+        if (! $this->preferReader) {
+            try {
+                foreach ($this->poolDirect($urls, $timeout) as $url => $html) {
+                    if ($html !== null) {
+                        $out[$url] = $html;
+                    }
+                }
+            } catch (Throwable $e) {
+                Log::info('Shop HTML fetch pool failed', ['error' => $e->getMessage()]);
+                foreach ($urls as $url) {
+                    $out[$url] = $this->fetchPage($url, $timeout);
+                }
+
+                return $out;
+            }
+        }
+
+        foreach ($out as $url => $html) {
+            if ($html !== null) {
+                continue;
+            }
+            $via = $this->fetchReader($url);
+            if ($via !== null) {
+                $out[$url] = $via;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<string>  $urls
+     * @return array<string, string|null>
+     */
+    private function poolDirect(array $urls, int $timeout): array
+    {
+        $out = [];
+        foreach ($urls as $url) {
+            $out[$url] = null;
+        }
+        $timeout = max(5, $timeout);
+        $jobs = [];
+        foreach ($urls as $url) {
+            foreach ($this->fetchCandidates($url) as $candidate) {
+                $jobs[] = ['page' => $url, 'url' => $candidate];
+            }
+        }
+        $live = Http::pool(function (Pool $pool) use ($jobs, $timeout): void {
+            foreach ($jobs as $i => $job) {
+                $pool->as((string) $i)
+                    ->withHeaders($this->browserHeaders())
+                    ->timeout($timeout)
+                    ->connectTimeout(min(5, $timeout))
+                    ->get($job['url']);
+            }
+        });
+        foreach ($jobs as $i => $job) {
+            $page = $job['page'];
+            if ($out[$page] !== null) {
+                continue;
+            }
+            $out[$page] = $this->usableHtml($this->bodyFromResponse($live[(string) $i] ?? null));
+        }
+
+        return $out;
+    }
+
     private function fetchPage(string $url, int $timeout): ?string
     {
-        foreach ($this->fetchCandidates($url) as $candidate) {
-            if (! $this->preferReader) {
+        if (! $this->preferReader) {
+            foreach ($this->fetchCandidates($url) as $candidate) {
                 $direct = $this->usableHtml($this->fetchDirect($candidate, $timeout));
                 if ($direct !== null) {
                     return $direct;
                 }
             }
+        }
+
+        return $this->fetchReader($url);
+    }
+
+    private function fetchReader(string $url): ?string
+    {
+        foreach ($this->fetchCandidates($url) as $candidate) {
             $via = $this->usableHtml($this->reader->fetchForCrawl($candidate));
             if ($via !== null) {
                 $this->preferReader = true;
@@ -274,18 +397,33 @@ final class ShopHtmlCrawler
     {
         $timeout = max(5, $timeout);
         try {
-            $response = Http::withHeaders([
-                'User-Agent' => self::USER_AGENT,
-                'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
-                'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
-            ])->timeout($timeout)->connectTimeout(min(5, $timeout))
+            $response = Http::withHeaders($this->browserHeaders())
+                ->timeout($timeout)->connectTimeout(min(5, $timeout))
                 ->get($url);
         } catch (Throwable $e) {
             Log::info('Shop HTML fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
 
             return null;
         }
-        if (! $response->successful()) {
+
+        return $this->bodyFromResponse($response);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function browserHeaders(): array
+    {
+        return [
+            'User-Agent' => self::USER_AGENT,
+            'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+            'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
+        ];
+    }
+
+    private function bodyFromResponse(mixed $response): ?string
+    {
+        if (! $response instanceof Response || ! $response->successful()) {
             return null;
         }
         $type = mb_strtolower((string) $response->header('Content-Type'));
@@ -306,29 +444,44 @@ final class ShopHtmlCrawler
      */
     private function enrich(array $rows, float $deadline, callable $note): array
     {
-        $n = 0;
+        $pending = [];
         foreach ($rows as $i => $row) {
-            if ($n >= self::MAX_PRODUCT_FETCH || microtime(true) >= $deadline) {
-                break;
-            }
             if ($row['extra'] !== '' || $this->urlHasCode($row['url'])) {
                 continue;
             }
-            $body = $this->fetchPage($row['url'], self::FETCH_TIMEOUT);
-            $n++;
-            $note(sprintf('[KARTA %d] %s', $n, $this->shortUrl($row['url'])));
-            if ($body === null) {
-                continue;
+            $pending[] = $i;
+        }
+        $n = 0;
+        foreach (array_chunk($pending, self::FETCH_CONCURRENCY) as $chunk) {
+            if ($n >= self::MAX_PRODUCT_FETCH || microtime(true) >= $deadline) {
+                break;
             }
-            $identity = $this->identityFrom($body);
-            if ($identity['title'] === '' && $identity['extra'] === '') {
-                continue;
+            $room = self::MAX_PRODUCT_FETCH - $n;
+            if ($room < count($chunk)) {
+                $chunk = array_slice($chunk, 0, $room);
             }
-            $rows[$i] = [
-                'url' => $row['url'],
-                'title' => $identity['title'],
-                'extra' => $identity['extra'],
-            ];
+            $urls = [];
+            foreach ($chunk as $i) {
+                $urls[] = $rows[$i]['url'];
+            }
+            $bodies = $this->fetchPages($urls, self::FETCH_TIMEOUT);
+            foreach ($chunk as $i) {
+                $n++;
+                $note(sprintf('[KARTA %d] %s', $n, $this->shortUrl($rows[$i]['url'])));
+                $body = $bodies[$rows[$i]['url']] ?? null;
+                if ($body === null) {
+                    continue;
+                }
+                $identity = $this->identityFrom($body);
+                if ($identity['title'] === '' && $identity['extra'] === '') {
+                    continue;
+                }
+                $rows[$i] = [
+                    'url' => $rows[$i]['url'],
+                    'title' => $identity['title'],
+                    'extra' => $identity['extra'],
+                ];
+            }
         }
 
         return $rows;

@@ -2043,6 +2043,34 @@ final class CatalogIndexTest extends TestCase
         ]);
     }
 
+    public function test_html_crawl_collects_cards_from_ten_listing_pages(): void
+    {
+        $home = '';
+        $fakes = [
+            'https://waveshop.test/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+        ];
+        for ($i = 1; $i <= 10; $i++) {
+            $home .= '<a href="/c/odziez-'.$i.'">Kat '.$i.'</a>';
+            $listing = '<html><body><a href="/produkt/karta-falowa-'.$i.'">Karta '.$i.'</a></body></html>';
+            $fakes['https://waveshop.test/c/odziez-'.$i] = Http::response($listing, 200, ['Content-Type' => 'text/html']);
+            $fakes['https://www.waveshop.test/c/odziez-'.$i] = Http::response($listing, 200, ['Content-Type' => 'text/html']);
+        }
+        $homeHtml = '<html><body>'.$home.'</body></html>';
+        $fakes['https://waveshop.test/'] = Http::response($homeHtml, 200, ['Content-Type' => 'text/html']);
+        $fakes['https://www.waveshop.test/'] = Http::response($homeHtml, 200, ['Content-Type' => 'text/html']);
+        $this->fakeHttp($fakes);
+
+        $result = app(CatalogSitemapIndexer::class)->index('waveshop.test');
+
+        $this->assertSame(10, $result['saved']);
+        for ($i = 1; $i <= 10; $i++) {
+            $this->assertTrue(
+                CatalogPage::query()->where('url', 'like', '%/produkt/karta-falowa-'.$i)->exists(),
+                'brak karty '.$i
+            );
+        }
+    }
+
     public function test_indexes_soteshop_cards_and_skips_categories(): void
     {
         $card = 'https://www.fasterbhp.pl/351,bluza-robocza-brixton-spark.html';
