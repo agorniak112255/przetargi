@@ -468,16 +468,23 @@ return [
     ],
 
     /*
-    | Odstęp między zapytaniami do SearXNG (Google/Qwant liczą ruch z instancji).
-    | To jest ochrona przed 429 — nie liczba workerów LLM.
+    | Odstęp między zapytaniami do SearXNG z JEDNEGO adresu IP (Google/Qwant liczą
+    | ruch z adresu). To jest ochrona przed 429 — nie liczba workerów LLM.
     */
     'search_min_interval' => (float) env('ENRICHMENT_SEARCH_MIN_INTERVAL', 1.5),
 
     /*
-    | Ile produktów naraz szuka stron (kolejka prefetch). Model ma osobną pulę
-    | (kolejka enrich, limit z Ustawień AI). Nie podnoś tego do 16 — dostaniesz 429.
+    | Z ilu adresów IP SearXNG wysyła zapytania (source_ips). Workerom liczbę podaje
+    | deploy/ensure-enrichment-workers.sh — tu tylko dla procesów spoza workerów.
     */
-    'prefetch_concurrency' => max(1, min(8, (int) env('ENRICHMENT_PREFETCH_CONCURRENCY', 5))),
+    'search_lanes' => (int) env('ENRICHMENT_SEARCH_LANES', 1),
+
+    /*
+    | Ile produktów naraz szuka stron (kolejka prefetch). Model ma osobną pulę
+    | (kolejka enrich, limit z Ustawień AI). Workerom liczbę podaje skrypt wdrożenia
+    | — tyle, ile adresów IP wyszukiwarki; bez rotacji IP więcej niż 5 daje 429.
+    */
+    'prefetch_concurrency' => max(1, min(16, (int) env('ENRICHMENT_PREFETCH_CONCURRENCY', 5))),
 
     /*
     | Domeny pomijane przy „catalog:index” — globalne serwisy korporacyjne mają

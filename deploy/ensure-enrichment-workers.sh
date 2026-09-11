@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Dwie pule workerów:
 #   - enrich (domyślnie 16) — tylko vLLM / opisy
-#   - prefetch (domyślnie 5) — SearXNG + HTML
+#   - prefetch (domyślnie tyle, ile publicznych IP, min. 5, maks. 16) — SearXNG + HTML
 # Limit „Ile zapytań AI naraz” w panelu zajmuje sloty enrich, bez restartu.
+# SearXNG rotuje zapytania po publicznych IP hosta (install-on-server.sh → source_ips),
+# więc workery dostają liczbę adresów i szukają tyle razy szybciej — każdy adres
+# nadal widzi jedno zapytanie co ENRICHMENT_SEARCH_MIN_INTERVAL.
 # Więcej LLM: WORKERS=20 bash deploy/ensure-enrichment-workers.sh
 # Mniej/więcej wyszukiwań (ryzyko 429): PREFETCH_WORKERS=3 bash deploy/ensure-enrichment-workers.sh
+# Inna liczba adresów niż wykryta: SEARCH_LANES=4 bash deploy/ensure-enrichment-workers.sh
 set -euo pipefail
 
 APP_ROOT="${1:-/var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl}"
@@ -22,16 +26,30 @@ if [[ ! -f "$BACKEND/artisan" ]]; then
   exit 1
 fi
 
+# te same publiczne IPv4 co w deploy/searxng/install-on-server.sh (source_ips)
+PUBLIC_IP_COUNT="$(ip -4 -o addr show scope global 2>/dev/null \
+  | awk '{print $4}' | cut -d/ -f1 \
+  | grep -Ev '^(10\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)' \
+  | sort -u | wc -l | tr -d ' ' || true)"
+SEARCH_LANES="${SEARCH_LANES:-${PUBLIC_IP_COUNT:-1}}"
+if [[ ! "$SEARCH_LANES" =~ ^[0-9]+$ ]] || (( SEARCH_LANES < 1 )); then
+  SEARCH_LANES=1
+fi
+if (( SEARCH_LANES > 16 )); then
+  SEARCH_LANES=16
+fi
+
 WORKERS="${WORKERS:-16}"
-PREFETCH_WORKERS="${PREFETCH_WORKERS:-5}"
+PREFETCH_WORKERS="${PREFETCH_WORKERS:-$(( SEARCH_LANES > 5 ? SEARCH_LANES : 5 ))}"
 echo "==> workery: LLM ${WORKERS} (kolejka enrich) + wyszukiwanie ${PREFETCH_WORKERS} (kolejka prefetch)"
+echo "    adresy IP wyszukiwarki: ${SEARCH_LANES} (odstęp na adres bez zmian, razem ${SEARCH_LANES}× szybciej)"
 
 if (( WORKERS < 1 || WORKERS > SLOTS_MAX )); then
   echo "ERR: WORKERS=$WORKERS poza zakresem 1-$SLOTS_MAX" >&2
   exit 1
 fi
-if (( PREFETCH_WORKERS < 1 || PREFETCH_WORKERS > 8 )); then
-  echo "ERR: PREFETCH_WORKERS=$PREFETCH_WORKERS poza zakresem 1-8" >&2
+if (( PREFETCH_WORKERS < 1 || PREFETCH_WORKERS > 16 )); then
+  echo "ERR: PREFETCH_WORKERS=$PREFETCH_WORKERS poza zakresem 1-16" >&2
   exit 1
 fi
 
@@ -67,6 +85,8 @@ WorkingDirectory=$BACKEND
 Environment=QUEUE_WORKER_POOL=$pool
 Environment=QUEUE_WORKER_INDEX=%i
 Environment=QUEUE_WORKER_COUNT=$count
+Environment=ENRICHMENT_SEARCH_LANES=$SEARCH_LANES
+Environment=ENRICHMENT_PREFETCH_CONCURRENCY=$PREFETCH_WORKERS
 ExecStart=$PHP_BIN artisan queue:work --queue=$queues --sleep=1 --tries=3 --timeout=$timeout --max-time=3600
 Restart=always
 RestartSec=5
@@ -146,6 +166,6 @@ cd "$BACKEND"
 "$PHP_BIN" artisan queue:restart || true
 
 systemctl --no-pager --plain list-units "${ENRICH_UNIT}*" "${PREFETCH_UNIT}*" || true
-echo "==> workery: OK (LLM $WORKERS + prefetch $PREFETCH_WORKERS, log: $LOG_FILE)"
+echo "==> workery: OK (LLM $WORKERS + prefetch $PREFETCH_WORKERS, IP wyszukiwarki $SEARCH_LANES, log: $LOG_FILE)"
 echo "    Panel AI zmienia tylko sloty modelu (do $WORKERS). Więcej LLM: WORKERS=N $0"
 echo "    Więcej wyszukiwań (ostrożnie, 429): PREFETCH_WORKERS=N $0"

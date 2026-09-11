@@ -10,6 +10,21 @@ use Tests\TestCase;
 
 final class DuckDuckGoHtmlSearchTest extends TestCase
 {
+    public function test_search_interval_divides_by_number_of_search_ips(): void
+    {
+        config(['enrichment.search_min_interval' => 1.5, 'enrichment.search_lanes' => 1]);
+        $this->assertEqualsWithDelta(1.5, DuckDuckGoHtmlSearch::searchInterval(), 0.001);
+
+        // skrypt workerów podaje liczbę adresów, z których SearXNG rotuje zapytania
+        putenv('ENRICHMENT_SEARCH_LANES=9');
+        try {
+            $this->assertSame(9, DuckDuckGoHtmlSearch::searchLanes());
+            $this->assertEqualsWithDelta(1.5 / 9, DuckDuckGoHtmlSearch::searchInterval(), 0.001);
+        } finally {
+            putenv('ENRICHMENT_SEARCH_LANES');
+        }
+    }
+
     public function test_parses_result_links_and_decodes_uddg(): void
     {
         $html = <<<'HTML'

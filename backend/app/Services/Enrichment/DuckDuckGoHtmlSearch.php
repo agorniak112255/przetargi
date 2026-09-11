@@ -682,13 +682,34 @@ final class DuckDuckGoHtmlSearch
      * requestu” nie działa przy kilkunastu workerach — wszystkie odczytują ten sam
      * znacznik i ruszają razem. Tu każdy dostaje własne miejsce w kolejce.
      */
+    /**
+     * Odstęp między zapytaniami do SearXNG dla całego serwera. SearXNG rotuje adresy
+     * wychodzące (source_ips), więc przy N adresach każdy dostaje zapytanie co
+     * search_min_interval — tyle samo co przy jednym adresie, a razem N razy szybciej.
+     */
+    public static function searchInterval(): float
+    {
+        $perIp = max(0.2, (float) config('enrichment.search_min_interval', 1.5));
+
+        return max(0.1, $perIp / self::searchLanes());
+    }
+
+    /** Z ilu adresów IP SearXNG wysyła zapytania — workerom podaje to skrypt wdrożenia. */
+    public static function searchLanes(): int
+    {
+        $fromWorker = (int) (getenv('ENRICHMENT_SEARCH_LANES') ?: 0);
+        $lanes = $fromWorker > 0 ? $fromWorker : (int) config('enrichment.search_lanes', 1);
+
+        return max(1, min(16, $lanes));
+    }
+
     private function reserveSearchSlot(): void
     {
         if (app()->environment('testing')) {
             return;
         }
 
-        $interval = max(0.2, (float) config('enrichment.search_min_interval', 1.5));
+        $interval = self::searchInterval();
         $wait = 0.0;
         $lock = Cache::lock(self::SEARXNG_LAST_AT_KEY.'_lock', 10);
 

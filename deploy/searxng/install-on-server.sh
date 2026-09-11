@@ -65,7 +65,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -v "$CONF_DIR:/etc/searxng" \
   -e "GRANIAN_HOST=127.0.0.1" \
   -e "GRANIAN_PORT=$PORT" \
-  -e "GRANIAN_WORKERS=4" \
+  -e "GRANIAN_WORKERS=${GRANIAN_WORKERS:-8}" \
   -e "SEARXNG_BASE_URL=http://127.0.0.1:$PORT/" \
   -e "SEARXNG_SECRET=$SECRET" \
   searxng/searxng:latest >/dev/null
