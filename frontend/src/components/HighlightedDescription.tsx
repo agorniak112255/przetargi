@@ -76,7 +76,7 @@ export function HighlightedDescription({
   findPhrase,
   activeFindIndex,
   findIndexOffset = 0,
-  className = 'whitespace-pre-wrap text-[15px] leading-relaxed text-slate-800',
+  className = 'max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[15px] leading-relaxed text-slate-800',
   brand = null,
 }: Props) {
   const segs = highlightSegments(text, queryTokens, findPhrase)

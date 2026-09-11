@@ -115,8 +115,30 @@ export function highlightSegments(
 
 export function descriptionProse(text: string | null | undefined): string {
   if (!text) return ''
-  const cut = text.search(/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/)
-  let body = cut >= 0 ? text.slice(0, cut).trim() : text.trim()
+  let body = stripDescriptionHtml(text)
+  const cut = body.search(/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/)
+  body = cut >= 0 ? body.slice(0, cut).trim() : body.trim()
   body = body.replace(/([^\n])\s+(\d{1,2})\)\s+/g, '$1\n$2) ')
   return body
+}
+
+function stripDescriptionHtml(text: string): string {
+  if (!/<[a-zA-Z!/]/.test(text)) {
+    return text
+  }
+  let body = text
+    .replace(/<(script|style|noscript)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:p|div|li|h[1-6]|tr|section|article|table)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+  body = body.replace(/[ \t]+/g, ' ')
+  body = body.replace(/\n{3,}/g, '\n\n')
+  body = body.replace(/(\S{72})(?=\S)/g, '$1 ')
+  return body.trim()
 }

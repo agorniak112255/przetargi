@@ -23,6 +23,7 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
+use App\Support\ProductDescriptionText;
 use App\Support\ProductSizeVariant;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Cache;
@@ -581,14 +582,14 @@ final class ProductEnrichmentService
             $timing['llm_extract_ms'] = $this->elapsedMs($t);
 
             $rawDescription = $this->composeFullDescription($extracted);
-            $description = $rawDescription;
+            $description = ProductDescriptionText::plain($rawDescription);
             if (! $this->isUsableProductDescription($description, $product)) {
                 $description = '';
             }
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
                 $fallback = $this->fallbackDescriptionFromPages($pageSnippets, $product);
                 if ($fallback !== '' && $this->isUsableProductDescription($fallback, $product)) {
-                    $description = $fallback;
+                    $description = ProductDescriptionText::plain($fallback);
                 }
             }
 
@@ -605,7 +606,7 @@ final class ProductEnrichmentService
                     $extracted,
                     $description
                 );
-                $description = $supplement['description'];
+                $description = ProductDescriptionText::plain($supplement['description']);
                 $extracted = $this->enrichStructuredFieldsFromPages(
                     $supplement['extracted'],
                     $supplement['pages']
@@ -633,7 +634,7 @@ final class ProductEnrichmentService
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
                 $fromCard = $this->descriptionFromConfirmedCards($rawCardPages);
                 if ($fromCard !== '') {
-                    $description = $fromCard;
+                    $description = ProductDescriptionText::plain($fromCard);
                 }
             }
 
@@ -754,12 +755,18 @@ final class ProductEnrichmentService
 
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
 
-            $features = $this->stringList($extracted['features'] ?? null);
+            $features = ProductDescriptionText::dropDuplicatedListItems(
+                $this->stringList($extracted['features'] ?? null),
+                $description
+            );
             $norms = $this->stringList($extracted['norms'] ?? null);
             $certificates = $this->stringList($extracted['certificates'] ?? null);
             $materials = $this->stringList($extracted['materials'] ?? null);
             $useCases = $this->stringList($extracted['use_cases'] ?? null);
-            $specs = $this->stringList($extracted['specs'] ?? null);
+            $specs = ProductDescriptionText::dropDuplicatedListItems(
+                $this->stringList($extracted['specs'] ?? null),
+                $description
+            );
 
             $attributes = $this->bhpAttributes->normalize(
                 is_array($extracted['attributes'] ?? null) ? $extracted['attributes'] : null,
@@ -1068,8 +1075,16 @@ final class ProductEnrichmentService
 
         $payload = is_array($cache->enrichment_payload) ? $cache->enrichment_payload : [];
         $payload['from_cache'] = true;
-        $cacheDescription = (string) $cache->description;
-        $cacheSpecs = $this->stringList($payload['specs'] ?? null);
+        $cacheDescription = ProductDescriptionText::plain((string) $cache->description);
+        $cacheSpecs = ProductDescriptionText::dropDuplicatedListItems(
+            $this->stringList($payload['specs'] ?? null),
+            $cacheDescription
+        );
+        $payload['specs'] = $cacheSpecs;
+        $payload['features'] = ProductDescriptionText::dropDuplicatedListItems(
+            $this->stringList($payload['features'] ?? null),
+            $cacheDescription
+        );
         $payload['attributes'] = $this->bhpAttributes->normalize(
             is_array($payload['attributes'] ?? null) ? $payload['attributes'] : null,
             [
@@ -1119,7 +1134,7 @@ final class ProductEnrichmentService
 
         $product->refresh();
         $cached = [
-            'description' => mb_substr((string) $cache->description, 0, 10000),
+            'description' => mb_substr($cacheDescription, 0, 10000),
             'enrichment_payload' => $payload,
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
@@ -2331,6 +2346,8 @@ final class ProductEnrichmentService
             'office, industrial or commercial', 'multi-family housing',
             'powierzchni biurow', 'wynajmu nieruchomości', 'cushman', 'colliers', 'cbre',
             'oreillyauto', 'crankcase', 'breather hose', 'standard ignition',
+            'reversible ratchet', 'socket wrenches', 'hand tools >',
+            'vde approved', 'vde/1000v',
         ] as $needle) {
             if (str_contains($low, $needle)) {
                 return true;
@@ -3109,7 +3126,8 @@ Zadanie: WSTĘPNA ANALIZA — wyrzuć śmieci sklepowe, zostaw wyłącznie infor
 
 WYRZUĆ całkowicie: logowanie, rejestracja, konto, obserwowane, koszyk, suma, zamówienie, menu kategorii, breadcrumby („jesteś tutaj”), wyszukiwanie, telefon/e-mail sklepu, wysyłka, koszty dostawy, płatności, prowizje, regulamin, polityka prywatności, odstąpienie od umowy, zwroty 14 dni, punkty lojalnościowe, porównanie, cookies, baner CMP / OneTrust / CCPA / „When you visit our website, we store cookies”, ceny marketingowe bez kontekstu produktu.
 
-ZOSTAW pełny opis produktu ze strony: akapity, listy (np. po „ochrony przed:”), parametry, materiały, normy, przeznaczenie, cechy techniczne, kolory/rozmiary jeśli produktowe.
+ZOSTAW fakty o produkcie: przeznaczenie, materiały, normy, parametry, zastosowania.
+Zapisz je jako zwykły tekst z akapitami. Bez HTML, CSS, class/id i bez sklejania całej karty w jedną ścianę.
 Nie streszczaj do sloganu ani og:description. Nie urywaj na „(Zobacz…”, „czytaj dalej”, „rozwiń”.
 Wyrzuć same odnośniki typu „Zobacz klasyfikację…”, ale zostaw treść, która jest po nich.
 Nie powtarzaj tego samego faktu.
@@ -3118,7 +3136,7 @@ JĘZYK: źródła bywają po francusku, niemiecku, czesku, hiszpańsku, chińsku
 Nigdy nie przepisuj zdań w języku oryginału — nazwy własne modeli i oznaczenia norm zostaw bez zmian.
 
 Zwróć TYLKO JSON — bez pola thought/reasoning. Pierwszy znak to {.
-{"pages":[{"url":"…","text":"pełny opis produktu po polsku — bez ucinania"}]}
+{"pages":[{"url":"…","text":"fakty o produkcie po polsku, akapity — bez HTML"}]}
 Jeśli na stronie nie ma faktów o produkcie → "text":"". Nie zmyślaj cech.
 Jeśli nazwa to PPE (obuwie, rękawice, odzież…), a tekst dotyczy odczynnika / numeru CAS / wzoru chemicznego — "text":"".
 SYS,
@@ -3252,8 +3270,7 @@ SYS,
      */
     private function composeFullDescription(array $extracted): string
     {
-        $main = trim((string) ($extracted['description'] ?? ''));
-        // Odciąć ewentualne listy doklejone przez LLM (duplikat z payload).
+        $main = ProductDescriptionText::plain((string) ($extracted['description'] ?? ''));
         if (preg_match('/\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/u', $main, $m, PREG_OFFSET_CAPTURE)) {
             $main = trim(mb_substr($main, 0, (int) $m[0][1]));
         }

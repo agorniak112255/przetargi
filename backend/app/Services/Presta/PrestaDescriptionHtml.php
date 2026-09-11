@@ -6,6 +6,7 @@ namespace App\Services\Presta;
 
 use App\Models\Product;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
+use App\Support\ProductDescriptionText;
 
 /**
  * Opis HTML do Presty — układ z szablonu rodziny (albo domyślny systemowy).
@@ -71,7 +72,14 @@ final class PrestaDescriptionHtml
                 'attributes' => $attrPairs !== [] ? $this->attributesBox($attrPairs, $emphasis) : '',
                 'sources' => '',
                 default => isset(self::LIST_KEYS[$id])
-                    ? $this->listSection(self::LIST_KEYS[$id], $this->stringList($payload[$id] ?? null), $emphasis)
+                    ? $this->listSection(
+                        self::LIST_KEYS[$id],
+                        ProductDescriptionText::dropDuplicatedListItems(
+                            $this->stringList($payload[$id] ?? null),
+                            $prose
+                        ),
+                        $emphasis
+                    )
                     : '',
             };
             if ($chunk === '') {
@@ -87,42 +95,29 @@ final class PrestaDescriptionHtml
 
     public function prose(string $text): string
     {
-        $text = trim($text);
-        if ($text === '') {
-            return '';
-        }
-        if (preg_match('/^(.*)\n\n(?:Specyfikacja|Cechy|Materiały|Normy|Certyfikaty|Zastosowanie)\s*:/us', $text, $m) === 1) {
-            $text = trim($m[1]);
-        }
-        if (! $this->looksLikeHtml($text)) {
-            $text = preg_replace('/([^\n])\s+(\d{1,2})\)\s+/u', "$1\n$2) ", $text) ?? $text;
-        }
-
-        return trim($text);
+        return ProductDescriptionText::plain($text);
     }
 
     private function fallbackHtml(string $text): string
     {
-        $text = trim($text);
-        if ($text === '') {
-            return '<p></p>';
-        }
-        if ($this->looksLikeHtml($text)) {
-            return $text;
-        }
-        $escaped = htmlspecialchars($text, \ENT_QUOTES | \ENT_HTML5, 'UTF-8');
+        $html = $this->proseHtml(ProductDescriptionText::plain($text));
 
-        return '<p align="justify" style="margin:0 0 12px;text-align:justify">'.nl2br($escaped, false).'</p>';
+        return $html !== '' ? $html : '<p></p>';
     }
 
     private function proseHtml(string $text): string
     {
-        if ($this->looksLikeHtml($text)) {
-            return $text;
+        $plain = ProductDescriptionText::plain($text);
+        if ($plain === '') {
+            return '';
         }
-        $escaped = htmlspecialchars($text, \ENT_QUOTES | \ENT_HTML5, 'UTF-8');
+        $html = '';
+        foreach (ProductDescriptionText::paragraphs($plain) as $paragraph) {
+            $html .= '<p style="margin:0 0 12px;text-align:justify;overflow-wrap:anywhere;word-break:break-word;max-width:100%">'
+                .nl2br($this->e($paragraph), false).'</p>';
+        }
 
-        return '<p align="justify" style="margin:0 0 12px;text-align:justify">'.nl2br($escaped, false).'</p>';
+        return $html;
     }
 
     /**
@@ -256,11 +251,6 @@ final class PrestaDescriptionHtml
         $key = mb_strtolower($raw);
 
         return self::KATEGORIA_LABELS[$key] ?? $raw;
-    }
-
-    private function looksLikeHtml(string $text): bool
-    {
-        return str_contains($text, '<p') || str_contains($text, '<div') || str_contains($text, '<ul');
     }
 
     private function e(string $value): string

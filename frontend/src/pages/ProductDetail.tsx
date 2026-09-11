@@ -724,7 +724,7 @@ export function ProductDetail() {
         (p.images && p.images.length > 0) ||
         (p.documents && p.documents.length > 0) ||
         p.enrichment_payload) && (
-        <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+        <div className="mb-4 min-w-0 overflow-x-hidden rounded-xl bg-white p-4 shadow-sm">
           <h2 className="mb-2 text-sm font-semibold">Opis i zdjęcia</h2>
           {p.images && p.images.length > 0 ? (
             <div className="mb-3 flex flex-wrap gap-2">

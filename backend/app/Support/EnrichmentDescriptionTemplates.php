@@ -136,14 +136,27 @@ TXT,
         ];
     }
 
+    public static function writingRules(): string
+    {
+        return <<<'TXT'
+PISANIE OPISU — te zasady mają pierwszeństwo przed instrukcją rodziny:
+Przeczytaj fakty ze stron i NAPISZ nowy, czytelny tekst po polsku.
+Nie tłumacz karty produktu 1 do 1 i nie wklejaj jej jako opisu.
+description = 2–4 krótkie akapity (przeznaczenie, budowa, zastosowanie), oddzielone pustą linią.
+Bez HTML, CSS, markdown i bez tabeli parametrów / list SKU w description.
+specs = wyłącznie krótkie „parametr: wartość”. Nie powtarzaj zdań z description.
+features = krótkie korzyści, nie te same zdania co description.
+TXT;
+    }
+
     public static function jsonContract(): string
     {
         return <<<'SYS'
 Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"description":
 {
-  "description": "pełny opis PL: 1) przeznaczenie 2) budowa/materiały 3) właściwości użytkowe 4) normy/certyfikaty 5) zastosowania — min. 6–12 zdań",
-  "features": ["cechy i korzyści — min. 5 pozycji, gdy źródła na to pozwalają"],
-  "specs": ["parametr: wartość (nr art./SKU, typ, materiał wkładki, powłoka, opakowanie, rozmiary…)"],
+  "description": "własny opis PL: 2–4 krótkie akapity oddzielone pustą linią — przeznaczenie, budowa, zastosowanie. Nie zrzut karty.",
+  "features": ["krótkie korzyści — nie zdania z description"],
+  "specs": ["parametr: wartość (nr art./SKU, typ, materiał, powłoka, opakowanie, rozmiary)"],
   "norms": ["EN … z poziomami, jeśli podane w źródłach", "EN ISO …"],
   "certificates": ["certyfikaty, kat. PPE, CE"],
   "materials": ["materiały / powłoki"],
@@ -166,7 +179,7 @@ Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"d
 JĘZYK: cały tekst wyjściowy po polsku, także gdy źródła są francuskie, niemieckie, czeskie, hiszpańskie, chińskie czy angielskie.
 Bez zdań w języku oryginału i bez etykiet typu „Produit”, „Matériaux”, „Usage” — tłumacz je na polskie odpowiedniki.
 WYPEŁNIJ tablice features/specs/norms/materials/use_cases oraz attributes, gdy fakty są w tekście — nie zostawiaj ich pustych „dla skrótu”.
-Nie powtarzaj tych samych zdań w description, features i specs — description zostaje pełny (6–12 zdań).
+Nie powtarzaj tych samych zdań w description, features i specs.
 attributes: używaj wyłącznie wartości ze źródeł; brak danych → null / [].
 Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
 Nie przepisuj nazwy z cennika jako dowodu — opisuj wyłącznie podane strony.

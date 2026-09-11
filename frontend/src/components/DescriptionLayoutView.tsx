@@ -42,7 +42,7 @@ export function DescriptionLayoutView({
   let findOffset = 0
 
   return (
-    <div>
+    <div className="min-w-0 max-w-full overflow-x-hidden">
       {sections.map((section) => {
         const node = (
           <SectionView
@@ -113,7 +113,7 @@ function SectionView({
       <div className={wrap}>
         <HighlightedDescription
           text={section.text}
-          className={compact ? 'whitespace-pre-wrap text-sm text-slate-700' : undefined}
+          className={compact ? 'max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm text-slate-700' : undefined}
           {...highlight}
         />
       </div>
@@ -194,7 +194,7 @@ function SectionView({
             >
               <HighlightedDescription
                 text={item}
-                className="whitespace-pre-wrap text-xs leading-relaxed text-slate-600"
+                className="max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-xs leading-relaxed text-slate-600"
                 queryTokens={queryTokens}
                 findPhrase={findPhrase}
                 activeFindIndex={activeFindIndex}

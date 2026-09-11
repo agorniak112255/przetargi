@@ -33,6 +33,8 @@ final class EnrichmentDescriptionTemplateServiceTest extends TestCase
         $this->assertStringContainsString('Rodzina produktu do tej karty: Rękawice (rekawice)', $prompt);
         $this->assertStringContainsString('EN 388', $prompt);
         $this->assertStringContainsString('"description"', $prompt);
+        $this->assertStringContainsString('Nie tłumacz karty produktu 1 do 1', $prompt);
+        $this->assertStringContainsString('Nie powtarzaj zdań z description', $prompt);
     }
 
     public function test_unknown_product_falls_back_to_inne(): void

@@ -120,10 +120,19 @@ export function listItems(product: Product, id: string): string[] {
   const payload = product.enrichment_payload
   const raw = payload?.[id as 'specs' | 'features' | 'materials' | 'norms' | 'certificates' | 'use_cases']
   const items = Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s.trim() !== '') : []
-  if (id === 'norms' && product.norms && !items.some((s) => s.includes(product.norms ?? ''))) {
-    return [product.norms, ...items]
+  const withNorms =
+    id === 'norms' && product.norms && !items.some((s) => s.includes(product.norms ?? ''))
+      ? [product.norms, ...items]
+      : items
+  const prose = descriptionProse(product.description)
+  if (!prose) {
+    return withNorms
   }
-  return items
+  const norm = prose.toLocaleLowerCase('pl').replace(/\s+/g, ' ')
+  return withNorms.filter((s) => {
+    const n = s.trim().toLocaleLowerCase('pl').replace(/\s+/g, ' ')
+    return n.length < 40 || !norm.includes(n)
+  })
 }
 
 export function attributePairs(product: Product): AttributePair[] {

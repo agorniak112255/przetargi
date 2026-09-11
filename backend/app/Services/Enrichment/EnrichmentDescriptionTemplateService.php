@@ -178,6 +178,7 @@ final class EnrichmentDescriptionTemplateService
         return "Jesteś ekspertem BHP/PPE. Wejście to OCZYSZCZONE fakty o produkcie (bez chrome sklepu).\n"
             ."Rodzina produktu do tej karty: {$label} ({$key}). Stosuj poniższe instrukcje tej rodziny.\n\n"
             .$instructions."\n\n"
+            .EnrichmentDescriptionTemplates::writingRules()."\n\n"
             .EnrichmentDescriptionTemplates::jsonContract();
     }
 

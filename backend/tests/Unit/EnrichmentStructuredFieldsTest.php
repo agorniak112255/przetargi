@@ -252,6 +252,17 @@ TXT;
         ]));
     }
 
+    public function test_compose_full_description_strips_html(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $composed = $this->invoke($service, 'composeFullDescription', [[
+            'description' => '<div style="white-space:nowrap">Rękawice nitrylowe do montażu.</div>',
+        ]]);
+
+        $this->assertSame('Rękawice nitrylowe do montażu.', $composed);
+        $this->assertStringNotContainsString('<div', $composed);
+    }
+
     public function test_rejects_ansell_cookie_and_cjk_dump_as_description(): void
     {
         $service = app(ProductEnrichmentService::class);

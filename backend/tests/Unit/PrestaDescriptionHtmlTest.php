@@ -62,7 +62,7 @@ final class PrestaDescriptionHtmlTest extends TestCase
 
         $this->assertStringContainsString('<p', $html);
         $this->assertStringContainsString('Linia 1.', $html);
-        $this->assertStringContainsString('<br>', $html);
+        $this->assertStringContainsString('Linia 2.', $html);
         $this->assertStringNotContainsString('Atrybuty BHP', $html);
     }
 
@@ -79,17 +79,21 @@ final class PrestaDescriptionHtmlTest extends TestCase
         $this->assertStringNotContainsString('<script>', $html);
         $this->assertStringContainsString('&lt;script&gt;', $html);
         $this->assertStringNotContainsString('javascript:', $html);
-        $this->assertStringContainsString('&lt;img', $html);
+        $this->assertStringContainsString('Opis', $html);
+        $this->assertStringNotContainsString('<img', $html);
     }
 
-    public function test_keeps_existing_html_description_when_no_lists(): void
+    public function test_strips_raw_html_description_instead_of_passing_it_through(): void
     {
         $html = $this->html()->fromProduct($this->product([
             'description' => '<p>Pełny opis.</p><ul><li>lina 8 mm</li></ul>',
             'enrichment_payload' => null,
         ]));
 
-        $this->assertSame('<p>Pełny opis.</p><ul><li>lina 8 mm</li></ul>', $html);
+        $this->assertStringContainsString('Pełny opis.', $html);
+        $this->assertStringContainsString('lina 8 mm', $html);
+        $this->assertStringNotContainsString('<ul><li>', $html);
+        $this->assertStringContainsString('overflow-wrap:anywhere', $html);
     }
 
     /**
