@@ -683,6 +683,31 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertStringContainsString('site:mapa-pro.pl', implode(' | ', $ladder));
     }
 
+    public function test_artra_search_starts_on_polish_catalog(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'ARTRA',
+            'sku' => 'ARISAKA 333 631460 S2 ESD',
+            'name' => 'ARISAKA 333 631460 S2 ESD',
+        ]);
+        $identity = new ProductSearchIdentity;
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $build = $ref->getMethod('buildQueries');
+        $build->setAccessible(true);
+        $open = $ref->getMethod('openSearchQueries');
+        $open->setAccessible(true);
+
+        /** @var list<string> $ladder */
+        $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
+
+        $this->assertContains('artra.pl', $identity->catalogSearchHosts($product));
+        $this->assertSame('artra.pl', $identity->catalogSearchHosts($product)[0] ?? null);
+        $this->assertNotEmpty($ladder);
+        $this->assertStringStartsWith('site:artra.pl', $ladder[0] ?? '');
+        $this->assertStringContainsString('ARISAKA 333', $ladder[0] ?? '');
+    }
+
     public function test_ansell_open_search_starts_on_bpbhp(): void
     {
         $product = new Product([

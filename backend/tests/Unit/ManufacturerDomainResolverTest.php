@@ -179,6 +179,7 @@ final class ManufacturerDomainResolverTest extends TestCase
             'jagatex.pl',
             'demar.com.pl',
             'coba.com',
+            'artra.pl',
             'artra.com',
             'lemaitre-securite.com',
             'emercator.com',
@@ -313,6 +314,26 @@ final class ManufacturerDomainResolverTest extends TestCase
             $domains
         ));
         $this->assertContains('mapa-pro.pl', config('enrichment.preferred_domains'));
+    }
+
+    public function test_resolves_artra_polish_catalog_domain(): void
+    {
+        $resolver = app(ManufacturerDomainResolver::class);
+        $product = new Product([
+            'manufacturer' => 'ARTRA',
+            'sku' => 'ARISAKA 333 631460 S2 ESD',
+            'name' => 'ARISAKA 333 631460 S2 ESD',
+        ]);
+
+        $domains = $resolver->domainsFor($product);
+        $this->assertContains('artra.pl', $domains);
+        $this->assertTrue($resolver->isManufacturerUrl(
+            'https://artra.pl/products/3815422-arisaka-333-631460-s2-esd',
+            $product,
+            $domains
+        ));
+        $this->assertContains('artra.pl', config('enrichment.preferred_domains'));
+        $this->assertContains('artra.pl', config('enrichment.retailer_domains'));
     }
 
     public function test_pilne_gloves_use_urgent_manufacturer_domains(): void
