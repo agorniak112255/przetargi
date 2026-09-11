@@ -4569,6 +4569,11 @@ final class ProductSearchIdentity
             $name
         ) ?? $name;
         $name = preg_replace('/\s*\b\d{1,5}\s*(?:pcs?|szt|stk)\b/iu', '', $name) ?? $name;
+        $name = preg_replace(
+            '/\s*[-–]\s*(?:polybag|polybags|pouch|sachet|blister|dispenser|refill|opakowanie)\s*$/iu',
+            '',
+            $name
+        ) ?? $name;
 
         return trim($name, " \t-–()");
     }
@@ -4690,7 +4695,8 @@ final class ProductSearchIdentity
             return '';
         }
         $variant = trim($hit[2]);
-        if ($this->isDescriptiveIdentityWord($variant) || $this->isLineQualifierWord($variant)) {
+        if ($this->isDescriptiveIdentityWord($variant) || $this->isLineQualifierWord($variant)
+            || $this->isPackOrSizeToken($variant)) {
             return '';
         }
         $model = [];
@@ -4861,6 +4867,7 @@ final class ProductSearchIdentity
                 continue;
             }
             if ($this->isGenericCatalogNameWord($segment) || $this->isHouseSkuPrefix($segment)
+                || $this->isPackOrSizeToken($segment)
                 || in_array(mb_strtolower($segment), $this->skuBrandWords($product), true)) {
                 continue;
             }
@@ -5234,7 +5241,10 @@ final class ProductSearchIdentity
         if (preg_match('/^(0?[5-9]|1[0-4]|0[0-9])$/u', $token) === 1) {
             return true;
         }
-        if (in_array($token, ['box', 'pcs', 'pc', 'carton', 'pack', 'packs', 'pair', 'pairs'], true)) {
+        if (in_array($token, [
+            'box', 'pcs', 'pc', 'carton', 'pack', 'packs', 'pair', 'pairs',
+            'polybag', 'polybags', 'pouch', 'sachet', 'blister', 'dispenser', 'refill',
+        ], true)) {
             return true;
         }
 

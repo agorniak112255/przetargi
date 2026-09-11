@@ -852,6 +852,49 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_mapa_polybag_keeps_model_number_not_packaging(): void
+    {
+        $id = new ProductSearchIdentity;
+        $n410 = new Product([
+            'sku' => '34410008',
+            'name' => 'ULTRANITRIL 410 - Polybag',
+            'manufacturer' => 'MAPA',
+        ]);
+        $n358 = new Product([
+            'sku' => '34358008',
+            'name' => 'ULTRANITRIL 358 - POLYBAG',
+            'manufacturer' => 'MAPA',
+        ]);
+
+        $this->assertSame('ULTRANITRIL 410', $id->mapaCatalogName($n410));
+        $this->assertSame('ULTRANITRIL 410', $id->firstStrongShopPhrase($n410));
+        $this->assertSame('ULTRANITRIL 358', $id->firstStrongShopPhrase($n358));
+        $this->assertStringContainsString('site:mapa-pro.pl ULTRANITRIL 410', implode(' | ', $id->searchQueries($n410, 'manufacturer')));
+        $this->assertStringNotContainsString('Polybag', $id->firstStrongShopPhrase($n410));
+
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-410 UltraNitril 410',
+            $n410
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-358 UltraNitril 358',
+            $n358
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://int.rsdelivers.com/fi/product/mapa/34410008/mapa-ultranitril-410-black-yellow-nitrile-chloride/0315057 MAPA UltraNitril 410',
+            $n410
+        ));
+        $this->assertTrue($id->urlOrTitleHasShopIdentity(
+            'https://pl.rs-online.com/web/p/rekawice-robocze/0144921',
+            'MAPA UltraNitril 410 rękawice',
+            $n410
+        ));
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-472 UltraNitril 472',
+            $n410
+        ));
+    }
+
     public function test_mapa_article_number_is_not_required_on_shop_url(): void
     {
         $id = new ProductSearchIdentity;

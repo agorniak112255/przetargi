@@ -838,6 +838,19 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame($url, $hits[0]['url'] ?? null);
     }
 
+    public function test_mapa_polybag_name_finds_ultranitril_slug(): void
+    {
+        $url = 'https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-410';
+        $this->seedPage($url, 'mapa', 'UltraNitril 410');
+        $hits = app(CatalogIndexSearch::class)->findFor(new Product([
+            'sku' => '34410008',
+            'name' => 'ULTRANITRIL 410 - Polybag',
+            'manufacturer' => 'MAPA',
+        ]));
+
+        $this->assertSame($url, $hits[0]['url'] ?? null);
+    }
+
     public function test_finds_product_page_by_code_in_url(): void
     {
         $this->seedPage('https://optimumbhp.pl/REKAWICE-ROBOCZE-1202-URGENT-p138481');
