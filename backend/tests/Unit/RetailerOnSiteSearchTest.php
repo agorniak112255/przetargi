@@ -54,6 +54,45 @@ final class RetailerOnSiteSearchTest extends TestCase
         ])));
     }
 
+    public function test_ansell_shop_queries_are_series_model_not_warehouse_sku(): void
+    {
+        $search = app(RetailerOnSiteSearch::class);
+        $queries = $search->shopQueries(new Product([
+            'sku' => 'YE30T-00192-09-G01',
+            'name' => '3000-YE CVRL HOOD PVC BOOT 192-G01.5XL',
+            'manufacturer' => 'Ansell',
+        ]));
+
+        $this->assertContains('AlphaTec 3000 192', $queries);
+        $this->assertSame('AlphaTec 3000 192', $queries[0] ?? null);
+        $this->assertNotContains('YE30T-00192-09-G01', $queries);
+        $this->assertNotContains('BOOT 192', $queries);
+        $this->assertNotContains('G01', $queries);
+    }
+
+    public function test_ansell_searches_mapped_shop_when_bpbhp_misses(): void
+    {
+        Http::fake([
+            'https://bpbhp.pl/catalogsearch/result/*' => Http::response('brak', 200),
+            'https://optimumbhp.pl/search*' => Http::response(
+                '<a href="https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192">Kombinezon AlphaTec 3000 model 192</a>',
+                200
+            ),
+            '*' => Http::response('empty', 200),
+        ]);
+
+        $hits = app(RetailerOnSiteSearch::class)->find(new Product([
+            'sku' => 'YE30T-00192-09-G01',
+            'name' => '3000-YE CVRL HOOD PVC BOOT 192-G01.5XL',
+            'manufacturer' => 'Ansell',
+        ]));
+
+        $this->assertContains(
+            'https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192',
+            array_column($hits, 'url')
+        );
+    }
+
     public function test_marel_query_uses_shop_model_not_price_list_tail(): void
     {
         $search = app(RetailerOnSiteSearch::class);

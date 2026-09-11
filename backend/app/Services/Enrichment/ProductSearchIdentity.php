@@ -556,7 +556,7 @@ final class ProductSearchIdentity
             return $bits;
         }
 
-        if (preg_match('/^([A-Z]{2})(\d{2})[A-Z]?-0*(\d{3,5})(?:-\d{2})?$/', $sku, $m) === 1) {
+        if (preg_match('/^([A-Z]{2})(\d{2})[A-Z]?-0*(\d{3,5})(?:-\d{2})?(?:-G\d{2})?$/', $sku, $m) === 1) {
             $bits['color'] = $m[1];
             $bits['prefix'] = explode('-', $sku)[0] ?? null;
             $decade = (int) $m[2];
@@ -699,6 +699,51 @@ final class ProductSearchIdentity
         }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * bpbhp i ansell.com pierwsze — reszta to zmapowane sklepy z config.
+     *
+     * @return list<string>
+     */
+    public function ansellSearchHosts(Product $product): array
+    {
+        $hosts = $this->bareHosts(array_merge(
+            $this->catalogSearchHosts($product),
+            $this->officialCatalogHosts($product),
+            ['bpbhp.pl', 'ansell.com']
+        ));
+        $prefer = ['bpbhp.pl', 'ansell.com'];
+        $head = [];
+        foreach ($prefer as $host) {
+            if (in_array($host, $hosts, true)) {
+                $head[] = $host;
+            }
+        }
+        $tail = array_values(array_filter(
+            $hosts,
+            static fn (string $host): bool => ! in_array($host, $prefer, true)
+        ));
+
+        return array_values(array_unique(array_merge($head, $tail)));
+    }
+
+    /** AlphaTec 3000 192 — nie G02 ani magazynowe YE30T-00192-09-G01. */
+    public function ansellSeriesModelPhrase(Product $product): string
+    {
+        return $this->ansellSearchPhrases($product, 'early')[0] ?? '';
+    }
+
+    /** G02 / BOOT 192 — ogon cennika, nie model karty. */
+    private function isAnsellGarmentSuffixPhrase(string $phrase, Product $product): bool
+    {
+        if ($this->ansellCatalogBits($product)['model'] === null) {
+            return false;
+        }
+        $phrase = trim($phrase);
+
+        return preg_match('/^G\d{2}$/iu', $phrase) === 1
+            || preg_match('/^BOOT\s+\d{3}$/iu', $phrase) === 1;
     }
 
     /**
@@ -878,35 +923,14 @@ final class ProductSearchIdentity
 
         if ($phase === 'manufacturer'
             && (str_contains(mb_strtolower($brand), 'ansell') || $this->ansellStyleCodes($product) !== [])) {
-            $early = $this->ansellSearchPhrases($product, 'early');
-            $late = $this->ansellSearchPhrases($product, 'late');
-            $paddedPhrase = null;
-            foreach ($early as $phrase) {
-                if (preg_match('/\b0+\d{2,5}\b/', $phrase) === 1) {
-                    $paddedPhrase = $phrase;
-                    break;
+            $phrase = $this->ansellSearchPhrases($product, 'early')[0] ?? '';
+            if ($phrase !== '') {
+                foreach ($this->ansellSearchHosts($product) as $host) {
+                    $queries[] = 'site:'.$host.' '.$phrase;
                 }
             }
-            if ($paddedPhrase !== null) {
-                $queries[] = 'site:bpbhp.pl '.$paddedPhrase;
-            } elseif (($early[0] ?? '') !== '') {
-                $queries[] = 'site:bpbhp.pl '.$early[0];
-            }
-            // druga fraza site: musi być bez zer — drabinka bierze tylko 2× site:
-            if (($late[0] ?? '') !== '') {
-                $queries[] = 'site:bpbhp.pl '.$late[0];
-            }
-            if (($early[0] ?? '') !== '') {
-                $queries[] = 'site:ansell.com '.$early[0];
-            }
-            foreach (array_slice($early, 1) as $phrase) {
-                $queries[] = 'site:bpbhp.pl '.$phrase;
-            }
-            if ($sku !== '') {
-                $queries[] = 'site:bpbhp.pl '.$sku;
-            }
-            foreach (array_slice($late, 1) as $phrase) {
-                $queries[] = 'site:bpbhp.pl '.$phrase;
+            foreach ($this->ansellSearchPhrases($product, 'late') as $late) {
+                $queries[] = $late;
             }
         }
 
@@ -2646,6 +2670,10 @@ final class ProductSearchIdentity
     public function shopIdentityPhrases(Product $product): array
     {
         $out = [];
+        $ansellPhrase = $this->ansellSeriesModelPhrase($product);
+        if ($ansellPhrase !== '') {
+            $out[] = $ansellPhrase;
+        }
         foreach ($this->threeMCatalogCodesFromName($product) as $code) {
             $out[] = $code;
         }
@@ -2716,6 +2744,7 @@ final class ProductSearchIdentity
                 // Sama marka („OX-ON”) nie jest tożsamością modelu — pasuje do całego katalogu.
                 && ! $this->phraseIsBrandOnly($phrase, $product)
                 && ! $this->phraseIsTypeOrColorOnly($phrase)
+                && ! $this->isAnsellGarmentSuffixPhrase($phrase, $product)
         ));
     }
 
@@ -2917,6 +2946,10 @@ final class ProductSearchIdentity
 
     public function firstStrongShopPhrase(Product $product): string
     {
+        $ansellPhrase = $this->ansellSeriesModelPhrase($product);
+        if ($ansellPhrase !== '') {
+            return $ansellPhrase;
+        }
         $threeM = $this->preferredThreeMShopPhrase($product);
         if ($threeM !== '') {
             return $threeM;
@@ -3841,6 +3874,16 @@ final class ProductSearchIdentity
             && array_intersect($keys, $setPieces) !== []
             && count($required) > 1) {
             return [self::TYPE_STEMS['clothing']];
+        }
+        // PVC BOOT / sock przy CVRL to kombinezon z butami, nie obuwie
+        if (in_array('coverall', $keys, true) && in_array('footwear', $keys, true)) {
+            $required = [];
+            foreach ($keys as $key) {
+                if ($key === 'footwear') {
+                    continue;
+                }
+                $required[] = self::TYPE_STEMS[$key];
+            }
         }
 
         return $required;

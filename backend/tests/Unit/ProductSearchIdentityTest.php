@@ -711,6 +711,52 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_ansell_uses_mapped_shops_and_series_model_not_warehouse_sku(): void
+    {
+        $id = new ProductSearchIdentity;
+        $boot = new Product([
+            'sku' => 'YE30T-00192-09-G01',
+            'name' => '3000-YE CVRL HOOD PVC BOOT 192-G01.5XL',
+            'manufacturer' => 'Ansell',
+        ]);
+        $hood = new Product([
+            'sku' => 'YE30T-00121-07-G02',
+            'name' => '3000-YE CVRL HOOD 121-G02.3XL',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $this->assertSame('192', $id->ansellCatalogBits($boot)['model']);
+        $this->assertSame('121', $id->ansellCatalogBits($hood)['model']);
+        $this->assertSame('AlphaTec 3000 192', $id->firstStrongShopPhrase($boot));
+        $this->assertSame('AlphaTec 3000 121', $id->firstStrongShopPhrase($hood));
+        $this->assertNotContains('G02', $id->shopIdentityPhrases($hood));
+        $this->assertNotContains('BOOT 192', $id->shopIdentityPhrases($boot));
+
+        $hosts = $id->ansellSearchHosts($boot);
+        $this->assertSame('bpbhp.pl', $hosts[0] ?? null);
+        $this->assertContains('ansell.com', $hosts);
+        $this->assertContains('optimumbhp.pl', $hosts);
+        $this->assertContains('kams.com.pl', $hosts);
+        $this->assertContains('behapownia.pl', $hosts);
+
+        $joined = implode(' | ', $id->searchQueries($boot, 'manufacturer'));
+        $this->assertStringContainsString('site:bpbhp.pl AlphaTec 3000 192', $joined);
+        $this->assertStringContainsString('site:optimumbhp.pl AlphaTec 3000 192', $joined);
+        $this->assertStringContainsString('site:kams.com.pl AlphaTec 3000 192', $joined);
+        $this->assertStringNotContainsString('site:bpbhp.pl YE30T-00192-09-G01', $joined);
+        $this->assertStringNotContainsString('BOOT 192', $id->searchQueries($boot, 'manufacturer')[0] ?? '');
+
+        $this->assertTrue($id->hayHasRequiredTypeFromName(
+            'kombinezon ansell alphatec 3000 model 192',
+            $boot
+        ));
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192 '
+            .'Kombinezon Ansell AlphaTec 3000 model 192',
+            $boot
+        ));
+    }
+
     public function test_ansell_chin_strap_size_code_is_model_111(): void
     {
         $id = new ProductSearchIdentity;

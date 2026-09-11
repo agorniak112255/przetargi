@@ -222,6 +222,10 @@ final class RetailerOnSiteSearch
      */
     public function shopQueries(Product $product): array
     {
+        $ansell = $this->identity->ansellSearchPhrases($product, 'early');
+        if ($ansell !== []) {
+            return array_values(array_unique(array_filter($ansell)));
+        }
         $out = [];
         foreach ([
             $this->query($product),
@@ -312,7 +316,23 @@ final class RetailerOnSiteSearch
     private function endpointsFor(Product $product): array
     {
         if ($this->identity->ansellStyleCodes($product) !== []) {
-            return self::ENDPOINTS;
+            $byHost = [];
+            foreach ($this->allKnownEndpoints() as $row) {
+                $byHost[$row['host']] = $row;
+            }
+            $out = [];
+            foreach ($this->identity->ansellSearchHosts($product) as $host) {
+                if (isset($byHost[$host])) {
+                    $out[] = $byHost[$host];
+                }
+            }
+            foreach (self::ENDPOINTS as $row) {
+                if (! in_array($row['host'], array_column($out, 'host'), true)) {
+                    $out[] = $row;
+                }
+            }
+
+            return $out;
         }
         $hosts = $this->identity->catalogSearchHosts($product);
         $byHost = [];

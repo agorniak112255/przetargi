@@ -703,6 +703,8 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertNotEmpty($ladder);
         $this->assertStringStartsWith('site:bpbhp.pl', $ladder[0] ?? '');
         $this->assertMatchesRegularExpression('/121/', $ladder[0] ?? '');
+        $this->assertStringContainsString('AlphaTec 4000 121', $ladder[0] ?? '');
+        $this->assertStringContainsString('site:optimumbhp.pl', implode(' | ', $ladder));
         $this->assertStringContainsString('site:bpbhp.pl', implode(' | ', $ladder));
     }
 
