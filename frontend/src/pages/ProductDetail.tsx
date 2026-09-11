@@ -345,7 +345,28 @@ export function ProductDetail() {
       </Link>
       <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">{p.name}</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl font-semibold">{p.name}</h1>
+            <button
+              type="button"
+              className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50"
+              title="Kopiuje nazwę, firmę i SKU, otwiera Google"
+              onClick={() => {
+                const q = [p.name, p.manufacturer, p.sku]
+                  .map((s) => s?.trim())
+                  .filter(Boolean)
+                  .join(' ')
+                void navigator.clipboard.writeText(q).catch(() => undefined)
+                window.open(
+                  `https://www.google.com/search?q=${encodeURIComponent(q)}`,
+                  '_blank',
+                  'noopener,noreferrer',
+                )
+              }}
+            >
+              Szukaj w Google
+            </button>
+          </div>
           <p className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
             <span>{p.sku}</span>
             {p.manufacturer?.trim() ? (
