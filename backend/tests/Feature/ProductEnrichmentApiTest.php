@@ -1569,6 +1569,128 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertNotSame('', $method->invoke($service, $card, $ringers));
     }
 
+    public function test_empty_description_from_confirmed_card_tries_next_catalog_cards(): void
+    {
+        Storage::fake('public');
+
+        $junkUrl = 'https://sklepa.example.com/karta-retry-1';
+        $goodUrl = 'https://sklepb.example.com/karta-retry-1';
+
+        // karta potwierdza produkt nazwą i producentem, ale treść to ekran błędu sklepu —
+        // opis wychodził pusty i produkt kończył jako „nie znaleziono”, mimo że karta była
+        Http::fake([
+            'sklepa.example.com/*' => Http::response(
+                '<html><body><h1>Ansell Rękawice testowe RETRY-1</h1><p>'
+                .str_repeat('Loading ×Sorry to interrupt CSS Error ', 30)
+                .'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'sklepb.example.com/*' => Http::response(
+                '<html><body><h1>Ansell Rękawice testowe RETRY-1</h1><p>'
+                .str_repeat('Rękawice RETRY-1 marki Ansell chronią dłonie przy pracach montażowych. ', 12)
+                .'</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            '*' => Http::response('', 404),
+        ]);
+
+        $product = $this->makeProduct([
+            'sku' => 'RETRY-1',
+            'name' => 'Rękawice testowe RETRY-1',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [[
+                'url' => $junkUrl,
+                'title' => 'Rękawice testowe RETRY-1 Ansell',
+                'snippet' => 'Rękawice testowe RETRY-1 Ansell',
+            ]]]);
+        $rounds = 0;
+        $search->shouldReceive('moreCatalogHits')
+            ->atLeast()
+            ->once()
+            ->andReturnUsing(static function () use (&$rounds, $goodUrl): array {
+                $rounds++;
+
+                return $rounds === 1 ? [[
+                    'url' => $goodUrl,
+                    'title' => 'Rękawice testowe RETRY-1 Ansell',
+                    'snippet' => 'Rękawice testowe RETRY-1 Ansell',
+                ]] : [];
+            });
+
+        $good = 'Rękawice ochronne Ansell RETRY-1 przeznaczone do prac montażowych i precyzyjnych. '
+            .'Powłoka nitrylowa zapewnia pewny chwyt oraz odporność na ścieranie. Spełniają normę EN 388 '
+            .'i chronią dłonie przy codziennej pracy w warsztacie oraz na produkcji.';
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $handler = function (array $messages) use ($good, $goodUrl): array {
+            $system = (string) ($messages[0]['content'] ?? '');
+            $user = (string) ($messages[1]['content'] ?? '');
+            if (str_contains($system, 'filtrem treści')) {
+                $pages = [];
+                if (preg_match_all('#"url"\s*:\s*"(https?://[^"]+)"#', $user, $m)) {
+                    foreach ($m[1] as $url) {
+                        $pages[] = [
+                            'url' => $url,
+                            'text' => str_contains($url, 'sklepb')
+                                ? $good
+                                : 'Loading ×Sorry to interrupt CSS Error',
+                        ];
+                    }
+                }
+
+                return ['pages' => $pages];
+            }
+
+            // z pierwszej karty model nie ma czego wyciągnąć, z drugiej już tak
+            if (! str_contains($user, 'sklepb')) {
+                return ['description' => '', 'features' => [], 'specs' => [], 'norms' => []];
+            }
+
+            return [
+                'description' => $good,
+                'features' => ['nitryl'],
+                'specs' => ['SKU: RETRY-1'],
+                'norms' => ['EN 388'],
+                'certificates' => [],
+                'materials' => ['nitryl'],
+                'use_cases' => ['montaż'],
+                'image_urls' => [],
+                'source_urls' => [$goodUrl],
+                'confidence' => 0.8,
+            ];
+        };
+        $llm->shouldReceive('chatJsonEnrichment')->atLeast()->once()->andReturnUsing($handler);
+        $llm->shouldReceive('chatJson')->zeroOrMoreTimes()->andReturnUsing($handler);
+        $llm->shouldReceive('chatJsonWithImages')->zeroOrMoreTimes()->andReturn(['candidates' => []]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        $service->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertStringContainsString('RETRY-1', (string) $product->description);
+        $this->assertStringNotContainsString('Sorry to interrupt', (string) $product->description);
+    }
+
     public function test_prompt_names_manufacturer_model_code_for_ringers(): void
     {
         $product = $this->makeProduct([

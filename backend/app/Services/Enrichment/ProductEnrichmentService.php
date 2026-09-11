@@ -366,6 +366,42 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Opis z podanych kart: filtr AI, wyciągnięcie faktów, opis zapasowy z treści karty.
+     * Używane przy drugim podejściu, gdy pierwsze karty nie dały opisu.
+     *
+     * @param  list<array{url?: string, text?: string}>  $pages
+     * @return array{description: string, extracted: array<string, mixed>, pages: list<array{url?: string, text?: string}>}
+     */
+    private function describeFromPages(Product $product, array $pages): array
+    {
+        $clean = $this->rememberOptionSizes(
+            $this->sanitizePagesWithLlm($product, $pages),
+            $this->collectOptionSizes($pages, $this->sizeCategoryHint($product))
+        );
+        $cardSources = [];
+        foreach (array_slice($clean, 0, 4) as $page) {
+            $cardSources[] = [
+                'url' => (string) ($page['url'] ?? ''),
+                'title' => '',
+                'snippet' => mb_substr((string) ($page['text'] ?? ''), 0, 200),
+            ];
+        }
+        $extracted = $this->extractWithLlm($product, $cardSources, array_slice($clean, 0, 5));
+        $description = ProductDescriptionText::plain($this->composeFullDescription($extracted));
+        if (! $this->isUsableProductDescription($description, $product)) {
+            $description = '';
+        }
+        if ($description === '') {
+            $fallback = $this->fallbackDescriptionFromPages($clean, $product);
+            if ($fallback !== '' && $this->isUsableProductDescription($fallback, $product)) {
+                $description = ProductDescriptionText::plain($fallback);
+            }
+        }
+
+        return ['description' => $description, 'extracted' => $extracted, 'pages' => $clean];
+    }
+
+    /**
      * Prefetch szukał w osobnym zadaniu i jego kroki przepadały — tu wracają do przebiegu,
      * żeby przy nieudanym produkcie było widać, czego szukano i co odpadło.
      */
@@ -716,6 +752,32 @@ final class ProductEnrichmentService
                 && $description !== ''
                 && ! $this->looksLikeMissingCardMeta($description)
                 && ! $this->looksLikeThinDescription($description);
+
+            // Pusty opis z potwierdzonej karty kończył szukanie (Ringers 259/297) — zanim
+            // oddamy produkt do ręki, bierzemy jeszcze jedną porcję kart z indeksu i sklepów.
+            if (! $confirmed) {
+                [$retryPages, $fetched, $retryResults] = $this->fetchMoreCatalogCards($product, $searchResults, $fetched);
+                if ($retryPages === []) {
+                    [$retryPages, $fetched, $retryResults] = $this->fetchMappedRetailerCards(
+                        $product,
+                        array_values(array_merge($searchResults, $retryResults)),
+                        $fetched
+                    );
+                }
+                if ($retryPages !== []) {
+                    $this->attemptLog()->add('desc', 'pusty opis — próbuję na kolejnych kartach');
+                    $searchResults = array_values(array_merge($searchResults, $retryResults));
+                    $retry = $this->describeFromPages($product, $retryPages);
+                    if ($retry['description'] !== '') {
+                        $pageSnippets = $retry['pages'];
+                        $rawCardPages = $this->mergePageSnippets($rawCardPages, $retryPages);
+                        $extracted = $this->enrichStructuredFieldsFromPages($retry['extracted'], $pageSnippets);
+                        $description = $retry['description'];
+                        $confirmed = ! $this->looksLikeMissingCardMeta($description)
+                            && ! $this->looksLikeThinDescription($description);
+                    }
+                }
+            }
 
             if (! $confirmed) {
                 Log::warning('Product description rejected', [
