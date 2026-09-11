@@ -84,7 +84,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $product = $this->makeProduct();
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn([
@@ -162,7 +162,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'enriched_at' => now(),
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('forgetProductCache')
             ->once()
             ->with(Mockery::on(
@@ -658,7 +658,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'force' => false,
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn([
@@ -692,7 +692,7 @@ final class ProductEnrichmentApiTest extends TestCase
         Storage::fake('public');
         $product = $this->makeProduct(['sku' => 'PF-REUSE', 'manufacturer' => 'Uvex']);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn([
@@ -783,7 +783,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'force' => false,
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn(['results' => [], 'errors' => []]);
@@ -887,7 +887,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'manufacturer' => 'Ansell',
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldNotReceive('searchBothPhases');
 
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
@@ -935,7 +935,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'shop_source_url' => 'https://hint.example.com/karta-cache-hint',
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
@@ -1000,7 +1000,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'shop_source_url' => $pageUrl,
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
@@ -1072,7 +1072,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'manufacturer' => 'ANSELL',
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn([
@@ -1161,7 +1161,7 @@ final class ProductEnrichmentApiTest extends TestCase
             .'Cholewka PURYA SKINYUM i podeszwa LYFTOR spełniają EN ISO 20345:2022 S1 FO SR. '
             .'Przeznaczone do stref ESD, montażu i logistyki.';
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn([
@@ -1242,7 +1242,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'description' => null,
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
@@ -1293,7 +1293,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'description' => null,
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn(['results' => [], 'errors' => ['Brak stron produktu']]);
@@ -1342,7 +1342,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_MANUAL,
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('forgetProductCache')->once();
         $search->shouldReceive('searchBothPhases')
             ->once()
@@ -1439,7 +1439,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
     private function failForcedEnrichmentWithoutCard(Product $product): void
     {
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('forgetProductCache')->once();
         $search->shouldReceive('searchBothPhases')
             ->once()
@@ -1492,7 +1492,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'manufacturer' => 'Ansell',
         ]);
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn(['results' => [[
@@ -1620,7 +1620,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'manufacturer' => 'Honeywell',
             'description' => null,
         ]);
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')
             ->once()
             ->andReturn([
@@ -1657,7 +1657,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $product = $this->makeProduct();
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $shopUrl = 'https://bhp-sklep.com.pl/produkt/'.$product->sku;
         $mfrUrl = 'https://www.ansell.com/product/'.$product->sku;
 
@@ -1768,7 +1768,7 @@ final class ProductEnrichmentApiTest extends TestCase
         ]);
         $shopUrl = 'https://www.bhp-gabi.pl/p22243,polbuty-jet3-s1p-src.html';
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')->once()->andReturn([
             'results' => [[
                 'url' => $shopUrl,
@@ -1837,7 +1837,7 @@ final class ProductEnrichmentApiTest extends TestCase
         ]);
         $shopUrl = 'https://optimumbhp.pl/REKAWICE-ROBOCZE-Z-POWLOKA-NITRYLOWA-BRAD-A5016-ARDON-p134792';
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')->once()->andReturn([
             'results' => [[
                 'url' => $shopUrl,
@@ -1919,7 +1919,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $shop = 'https://labproinc.com/products/kg-g10-flex-ntrl-glv-blue-xl-54335';
         $shopImg = 'https://cdn.shop.example/g10-flex-54335.jpg';
 
-        $search = Mockery::mock(HybridWebSearchService::class);
+        $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')->once()->andReturn([
             'results' => [
                 ['url' => $ansell, 'title' => 'KleenGuard G10 Flex 54335', 'snippet' => 'Nitrile gloves 54335'],
@@ -3042,6 +3042,24 @@ final class ProductEnrichmentApiTest extends TestCase
     /**
      * @param  array<string, mixed>  $overrides
      */
+    /**
+     * Atrapa wyszukiwarki z bezpiecznymi domyślnymi odpowiedziami na kroki pomocnicze.
+     * Bez nich każde wywołanie dropListingResults wysypywało test na starcie i ścieżka
+     * wzbogacania przez długi czas nie była sprawdzana. Oczekiwania testu mają pierwszeństwo.
+     */
+    private function searchMock(): \Mockery\MockInterface
+    {
+        $mock = Mockery::mock(HybridWebSearchService::class);
+        $mock->shouldReceive('dropListingResults')
+            ->andReturnUsing(static fn (array $results): array => $results)
+            ->byDefault();
+        $mock->shouldReceive('moreCatalogHits')->andReturn([])->byDefault();
+        $mock->shouldReceive('searchMappedRetailers')->andReturn([])->byDefault();
+        $mock->shouldReceive('forgetProductCache')->byDefault();
+
+        return $mock;
+    }
+
     private function makeProduct(array $overrides = []): Product
     {
         return Product::query()->create(array_merge([
