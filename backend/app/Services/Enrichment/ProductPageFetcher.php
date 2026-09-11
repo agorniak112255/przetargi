@@ -89,6 +89,25 @@ final class ProductPageFetcher
      *     document_urls: list<string>
      * }
      */
+    /**
+     * Sklepy w całości rysowane skryptem (Salesforce Commerce) — HTML bez treści karty.
+     * Karta producenta pod www.ansell.com zostaje; odpada wyłącznie sklepowa skorupa.
+     */
+    public static function looksLikeScriptOnlyShopHost(string $url): bool
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        if ($host === '') {
+            return false;
+        }
+        foreach (['shop.ansell.com'] as $skip) {
+            if ($host === $skip || str_ends_with($host, '.'.$skip)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function fetchInner(array $results, string $sku, int $maxPages, array $manufacturerDomains): array
     {
         $wanted = max(1, $maxPages);
@@ -109,6 +128,14 @@ final class ProductPageFetcher
             $u = (string) ($row['url'] ?? '');
             if (ProductImageDownloader::looksLikeImageUrl($u)) {
                 $images[] = $u;
+
+                continue;
+            }
+            // Sklep rysowany skryptem oddaje samą skorupę („Sorry to interrupt / CSS Error”)
+            // zamiast karty. Zajmowała miejsce w limicie pobrań, a właściwy sklep bywał dopiero
+            // za nią — i trafiała do opisu jako treść strony.
+            if (self::looksLikeScriptOnlyShopHost($u)) {
+                $this->rejections[] = ['url' => $u, 'reason' => CandidateRejection::SCRIPT_SHELL];
 
                 continue;
             }

@@ -38,6 +38,39 @@ final class ProductPageFetcherTest extends TestCase
             .'<p>Obuwie ochronne ARTRA '.$model.'. Norma EN ISO 20345:2022.</p></body></html>');
     }
 
+    public function test_script_only_shop_is_not_fetched_as_a_card(): void
+    {
+        $shell = 'https://shop.ansell.com/eu/s/product/hyflex-1181';
+        Http::fake([
+            self::RIGHT => Http::response($this->card('HyFlex 11-618'), 200),
+            '*' => Http::response('', 404),
+        ]);
+
+        $product = new Product([
+            'sku' => '11618110',
+            'name' => 'HyFlex 11-618',
+            'manufacturer' => 'Ansell',
+        ]);
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [
+                ['url' => $shell, 'title' => 'HyFlex 11-618', 'snippet' => ''],
+                ['url' => self::RIGHT, 'title' => 'HyFlex 11-618', 'snippet' => ''],
+            ],
+            (string) $product->sku,
+            3,
+            [],
+            $product
+        );
+
+        // skorupa Salesforce nie jest nawet pobierana — nie zajmuje miejsca w limicie kart
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'shop.ansell.com'));
+        $this->assertNotContains($shell, array_column($fetched['pages'], 'url'));
+        $this->assertContains(
+            ['url' => $shell, 'reason' => CandidateRejection::SCRIPT_SHELL],
+            $fetched['rejected']
+        );
+    }
+
     /**
      * @param  callable(string): string  $html
      */
