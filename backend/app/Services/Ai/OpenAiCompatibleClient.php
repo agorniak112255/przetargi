@@ -1265,11 +1265,37 @@ class OpenAiCompatibleClient
             if ($wait > 0) {
                 sleep($wait);
             }
+            // Przypięty dostawca dalej przeciążony — po jednej powtórce wolno OpenRouterowi
+            // wziąć innego dostawcę tego modelu, zamiast czekać minutami na jednego.
+            if ($attempt >= 1) {
+                $payload = $this->relaxOverloadedProviderPin($payload);
+            }
             $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
             $attempt++;
         }
 
         return $response;
+    }
+
+    /**
+     * provider.only + allow_fallbacks=false → najpierw ten sam dostawca, ale z przejściem na innych.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function relaxOverloadedProviderPin(array $payload): array
+    {
+        $only = $payload['provider']['only'] ?? null;
+        if (! is_array($only) || $only === [] || ($payload['provider']['allow_fallbacks'] ?? true) !== false) {
+            return $payload;
+        }
+        Log::info('Dostawca OpenRouter przeciążony — dopuszczam innych dostawców modelu', [
+            'provider' => $only,
+            'model' => $payload['model'] ?? null,
+        ]);
+        $payload['provider'] = ['order' => array_values($only), 'allow_fallbacks' => true];
+
+        return $payload;
     }
 
     private function retryAfterSeconds(Response $response, int $attempt): int

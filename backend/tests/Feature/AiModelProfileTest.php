@@ -554,6 +554,47 @@ final class AiModelProfileTest extends TestCase
         });
     }
 
+    public function test_overloaded_pinned_provider_falls_back_to_other_providers(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedMainConfig();
+
+        $this->putJson('/api/ai-settings', [
+            'model_profiles' => [[
+                'id' => 'fast',
+                'name' => 'Profil 2',
+                'base_url' => 'https://openrouter.ai/api/v1',
+                'model' => 'deepseek/deepseek-v4-flash-0731',
+                'openrouter_provider' => 'makora',
+                'api_key' => 'sk-or-profile-123',
+                'tasks' => ['product_search'],
+            ]],
+        ])->assertOk();
+
+        // przypięta makora odpowiada 429 — przy wielu workerach czekały minutami na jednego dostawcę
+        Http::fake(['*' => Http::sequence()
+            ->push(['error' => ['message' => 'Rate limit exceeded']], 429)
+            ->push(['error' => ['message' => 'Rate limit exceeded']], 429)
+            ->push(self::jsonReply('{"ok":true}'))]);
+
+        $result = app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::ProductSearch
+        );
+
+        $this->assertSame(['ok' => true], $result);
+        $providers = array_map(
+            static fn (array $pair): mixed => $pair[0]->data()['provider'] ?? null,
+            Http::recorded()->all()
+        );
+        $this->assertSame(['only' => ['makora'], 'allow_fallbacks' => false], $providers[0]);
+        $this->assertSame(['order' => ['makora'], 'allow_fallbacks' => true], end($providers));
+    }
+
     public function test_openrouter_provider_is_ignored_on_local_endpoint(): void
     {
         $this->seedMainConfig();

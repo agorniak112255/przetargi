@@ -10,6 +10,7 @@ use App\Services\Enrichment\TavilyQuotaGuard;
 use App\Services\Enrichment\TavilySearchProfile;
 use App\Support\CatalogSlangDictionary;
 use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 
@@ -82,6 +83,14 @@ final class AiSettingsService
         self::PRODUCT_SEARCH_CARDS_SHORT,
     ];
 
+    /** Skrót wiersza ustawień, dla którego policzono self::$resolved — wspólny dla procesu. */
+    private static ?string $resolvedFingerprint = null;
+
+    /** @var array<string, mixed>|null */
+    private static ?array $resolved = null;
+
+    private static bool $settingsTableKnown = false;
+
     /**
      * @return array{
      *     enabled: bool,
@@ -128,8 +137,20 @@ final class AiSettingsService
     {
         // Świeża instalacja przed migracjami (i testy jednostkowe bez bazy) — wtedy
         // ustawienia biorą się wprost z konfiguracji, zamiast wywracać zapytanie.
-        $row = Schema::hasTable('ai_settings') ? AiSetting::query()->first() : null;
+        try {
+            $row = $this->settingsTableExists() ? AiSetting::query()->first() : null;
+        } catch (QueryException) {
+            // zapamiętana tabela zniknęła (baza bez migracji) — jak dotąd bierzemy konfigurację
+            self::$settingsTableKnown = false;
+            $row = null;
+        }
         if ($row !== null) {
+            // ~70 ms na wywołanie (kilkanaście zapytań information_schema + odszyfrowanie kluczy),
+            // a wzbogacanie woła to setki razy na produkt — liczymy od nowa tylko po zmianie wiersza
+            $fingerprint = md5(serialize($row->getAttributes()));
+            if (self::$resolvedFingerprint === $fingerprint && self::$resolved !== null) {
+                return self::$resolved;
+            }
             $key = $this->safeEncrypted($row, 'api_key');
             $tavily = $this->safeEncrypted($row, 'tavily_api_key');
             $qdrantKey = $this->safeEncrypted($row, 'qdrant_api_key');
@@ -138,7 +159,7 @@ final class AiSettingsService
             $hasVectorCols = Schema::hasColumn('ai_settings', 'vector_enabled');
             $hasProviderCol = Schema::hasColumn('ai_settings', 'embedding_provider');
 
-            return [
+            $resolved = [
                 'enabled' => (bool) $row->enabled,
                 'provider' => (string) $row->provider,
                 'base_url' => rtrim((string) $row->base_url, '/'),
@@ -237,6 +258,10 @@ final class AiSettingsService
                 'catalog_slang' => $this->slangFromRow($row),
                 'source' => 'database',
             ];
+            self::$resolvedFingerprint = $fingerprint;
+            self::$resolved = $resolved;
+
+            return $resolved;
         }
 
         $key = config('ai.api_key');
@@ -740,6 +765,16 @@ final class AiSettingsService
     public function enrichmentUsesLargeModel(): bool
     {
         return $this->enrichmentUsesLargeModelFrom($this->resolve());
+    }
+
+    /** Istnienie tabeli zapamiętujemy dopiero, gdy jest — przed migracjami sprawdzamy za każdym razem. */
+    private function settingsTableExists(): bool
+    {
+        if (self::$settingsTableKnown) {
+            return true;
+        }
+
+        return self::$settingsTableKnown = Schema::hasTable('ai_settings');
     }
 
     public function searchEngine(): string
