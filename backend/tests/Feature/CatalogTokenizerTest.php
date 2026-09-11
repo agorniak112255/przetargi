@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\CatalogPage;
+use App\Models\Product;
+use App\Services\Enrichment\CatalogIndexSearch;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -57,5 +59,24 @@ final class CatalogTokenizerTest extends TestCase
             'catalog_page_id' => $page->id,
             'token' => 'krytech380',
         ]);
+    }
+
+    public function test_multi_segment_sku_matches_tokens_the_index_really_stores(): void
+    {
+        $product = new Product([
+            'sku' => '7-003 B S1',
+            'name' => 'Rękawice powlekane',
+            'manufacturer' => 'Reis',
+        ]);
+
+        $codes = app(CatalogIndexSearch::class)->codes($product);
+        $indexTokens = app(CatalogSitemapIndexer::class)
+            ->tokensFor('https://sklep.example.pl/rekawice-7-003-b-s1');
+
+        // obie strony liczą tokeny tak samo — wcześniej zapytanie szło po „7003bs1”,
+        // którego indeks nigdy nie zapisuje, i karta nie dawała się znaleźć
+        $this->assertContains('7003', $codes);
+        $this->assertContains('7003', $indexTokens);
+        $this->assertNotEmpty(array_intersect($codes, $indexTokens));
     }
 }

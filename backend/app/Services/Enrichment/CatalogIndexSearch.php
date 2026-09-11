@@ -41,6 +41,7 @@ final class CatalogIndexSearch
     public function __construct(
         private readonly ProductSearchIdentity $identity,
         private readonly CatalogPageManufacturer $pageManufacturer,
+        private readonly CatalogSitemapIndexer $indexer,
     ) {}
 
     /**
@@ -134,6 +135,15 @@ final class CatalogIndexSearch
             }
             if (mb_strlen($code) <= 64 && preg_match('/^[a-z0-9]+$/u', $code) === 1) {
                 $out[] = $code;
+            }
+        }
+
+        // Ten sam tokenizer co przy indeksowaniu — „7-003 B S1” leży w adresie karty
+        // jako „7003” i „003b”, a sklejony kod („7003bs1”) nie jest tokenem żadnej strony.
+        // Cyfra i długość odsiewają zwykłe słowa z nazwy, które nie identyfikują produktu.
+        foreach ($this->indexer->tokensFor('', (string) $product->sku) as $token) {
+            if (mb_strlen($token) >= 4 && preg_match('/\d/u', $token) === 1) {
+                $out[] = $token;
             }
         }
 
