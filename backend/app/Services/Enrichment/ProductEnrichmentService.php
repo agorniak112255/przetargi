@@ -679,7 +679,7 @@ final class ProductEnrichmentService
             }
 
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
-                $fromCard = $this->descriptionFromConfirmedCards($rawCardPages);
+                $fromCard = $this->usableCardDescription($rawCardPages, $product);
                 if ($fromCard !== '') {
                     $description = ProductDescriptionText::plain($fromCard);
                 }
@@ -2868,6 +2868,20 @@ final class ProductEnrichmentService
      *
      * @param  list<array{url?: string, text?: string}>  $pageSnippets
      */
+    /**
+     * Tekst potwierdzonej karty jako opis — ta sama kontrola co opis od modelu.
+     * Bez niej ekran błędu sklepu („ANSELL | Protection solutions… Sorry to interrupt”)
+     * zapisywał się jako opis rękawicy ze statusem „Gotowe”.
+     *
+     * @param  list<array{url?: string, text?: string}>  $pages
+     */
+    private function usableCardDescription(array $pages, Product $product): string
+    {
+        $fromCard = $this->descriptionFromConfirmedCards($pages);
+
+        return $fromCard !== '' && $this->isUsableProductDescription($fromCard, $product) ? $fromCard : '';
+    }
+
     private function descriptionFromConfirmedCards(array $pageSnippets): string
     {
         $candidates = [];
@@ -3551,7 +3565,7 @@ SYS,
         $codes = [];
         foreach ($this->identity->modelAliases($product) as $alias) {
             $alias = trim((string) $alias);
-            if (preg_match('/^[a-z]{1,4}-?\d{2,6}$/iu', $alias) === 1) {
+            if (preg_match('/^(?:[a-z]{1,4}-?\d{2,6}|\d{2}-\d{3}[a-z]?)$/iu', $alias) === 1) {
                 $codes[] = mb_strtoupper($alias);
             }
         }

@@ -91,6 +91,11 @@ final class BlockedPageReader
         if (str_contains(mb_strtolower($markdown), 'incapsula') && mb_strlen($markdown) < 1200) {
             return null;
         }
+        // Jina oddaje 200 także wtedy, gdy strona zwróciła 404 — dopisuje tylko ostrzeżenie.
+        // Ekran „Sorry to interrupt / CSS Error” (sklep na Salesforce) też nie jest kartą.
+        if ($this->readerReportsTargetError($markdown) || self::looksLikeAppErrorShell($markdown)) {
+            return null;
+        }
         $head = mb_strtolower(mb_substr($markdown, 0, 500));
         if (str_contains($head, 'product not found') || str_contains($head, 'nie znaleziono produktu')) {
             return null;
@@ -138,6 +143,21 @@ final class BlockedPageReader
         }
 
         return null;
+    }
+
+    /** „Warning: Target URL returned error 404: Not Found” — Jina przeczytała stronę błędu. */
+    private function readerReportsTargetError(string $markdown): bool
+    {
+        return preg_match('/^Warning:\s*Target URL returned error\s+[45]\d\d\b/mi', $markdown) === 1;
+    }
+
+    /** Sklep na Salesforce bez przeglądarki pokazuje tylko „Loading… Sorry to interrupt… CSS Error”. */
+    public static function looksLikeAppErrorShell(string $text): bool
+    {
+        $low = mb_strtolower($text);
+
+        return str_contains($low, 'sorry to interrupt')
+            && (str_contains($low, 'css error') || str_contains($low, 'this page has an error'));
     }
 
     /** Surowy HTML albo markdown z linkami — do crawla sklepu bez sitemapy. */

@@ -1531,6 +1531,44 @@ final class ProductEnrichmentApiTest extends TestCase
         }
     }
 
+    public function test_card_text_that_does_not_name_product_is_not_a_description(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $method = new \ReflectionMethod($service, 'usableCardDescription');
+        $method->setAccessible(true);
+
+        // ekran błędu sklepu Ansell zapisywał się jako opis HyFlex ze statusem „Gotowe”
+        $hyflex = $this->makeProduct([
+            'sku' => '11819PRO110',
+            'name' => 'HyFlex 11819PRO SIZE 11,0',
+            'manufacturer' => 'Ansell',
+        ]);
+        $junk = [[
+            'url' => 'https://shop.ansell.com/eu/s/product/hyflex-1181',
+            'text' => "ANSELL | Protection solutions, gloves, personal protective equipment across Europe\n\n"
+                .'ANSELL Protection solutions, gloves, personal protective equipment across Europe '
+                .'Loading ×Sorry to interrupt CSS Error',
+        ]];
+        $this->assertSame('', $method->invoke($service, $junk, $hyflex));
+
+        // prawdziwa karta, która nazywa produkt, dalej daje opis
+        $ringers = $this->makeProduct([
+            'sku' => '259-13',
+            'name' => 'Ringers 259 Size 13.0',
+            'manufacturer' => 'Ansell',
+        ]);
+        $card = [[
+            'url' => 'https://www.ansell.com/pl/pl/products/ringers-r259',
+            'text' => 'RINGERS™ R259 to wytrzymałe rękawice robocze o konstrukcji z TPR (gumy termoplastycznej) '
+                .'i technologii F3™, które zapewniają ochronę przed uderzeniami oraz sprawność manualną i wygodę. '
+                .'Wykonana z syntetycznej skóry dłoń zapewnia lepszą przyczepność i odporność na ścieranie. '
+                .'Dodatkowa warstwa dłoni z Kevlaru™ zapewnia odporność na przecięcia na poziomie EN 388 E '
+                .'i ANSI/ISEA A5. Przedłużone neoprenowe zapięcie na nadgarstku zapewnia bezpieczne dopasowanie. '
+                .'Przeznaczone do obsługi ciężkiego sprzętu w przemyśle naftowym, gazowym i górniczym.',
+        ]];
+        $this->assertNotSame('', $method->invoke($service, $card, $ringers));
+    }
+
     public function test_prompt_names_manufacturer_model_code_for_ringers(): void
     {
         $product = $this->makeProduct([

@@ -278,9 +278,10 @@ final class ProductSearchIdentity
             return str_contains($u, 'shop-media')
                 || (str_contains($u, 'fileadmin') && str_contains($u, 'product') && ! str_contains($u, 'menue'));
         }
-        // Ansell PIM
+        // Ansell PIM — tylko packshoty produktów. Całe /-/media/ to też banery i zdjęcia
+        // „lifestyle” (osoba pisząca list trafiła jako zdjęcie KleenGuard G40).
         if (str_contains($host, 'ansell') || ($brand === 'ansell' && str_contains($u, 'product-assets'))) {
-            return str_contains($u, 'product-assets') || str_contains($u, '/-/media/');
+            return str_contains($u, 'product-assets');
         }
         if (str_contains($host, 'urgent.com.pl') || str_contains($host, 'urgent.pl')) {
             return str_contains($u, 'wp-content')
@@ -533,6 +534,11 @@ final class ProductSearchIdentity
         foreach ($this->ansellStyleCodes($product) as $style) {
             $out[] = $style;
         }
+        // HyFlex 11919VP100 → 11-919 (tak piszą Ansell i sklepy)
+        $gloveModel = $this->ansellGloveModel($product);
+        if ($gloveModel !== null) {
+            $out[] = $gloveModel;
+        }
 
         return array_values(array_unique($out));
     }
@@ -757,7 +763,7 @@ final class ProductSearchIdentity
         $series = $bits['series'];
         $model = $bits['model'];
         if ($series === null || $model === null) {
-            return [];
+            return $this->ansellGloveOfficialUrls($product);
         }
         $series = mb_strtolower($series);
         $model = mb_strtolower($model);
@@ -770,6 +776,101 @@ final class ProductSearchIdentity
         }
 
         return $out;
+    }
+
+    /**
+     * Model rękawicy Ansell z kodu cennika: 11919VP100 / „HyFlex 11919VP Size 10,0” → 11-919,
+     * 38003PP110 → 38-003. Cennik skleja model z dopiskiem opakowania i rozmiarem,
+     * a Ansell i sklepy piszą model z myślnikiem (hyflex-11-919).
+     */
+    public function ansellGloveModel(Product $product): ?string
+    {
+        $sku = mb_strtoupper(trim((string) $product->sku));
+        $name = mb_strtoupper(trim((string) $product->name));
+        $isAnsell = str_contains(mb_strtolower($this->shortBrand((string) $product->manufacturer)), 'ansell')
+            || $this->ansellGloveLine($product) !== null;
+        if (! $isAnsell) {
+            return null;
+        }
+        if (preg_match('/^(\d{2})(\d{3})[A-Z]{1,4}\d{0,3}$/u', $sku, $m) === 1
+            || preg_match('/^(\d{2})-(\d{3})(?:-\d{1,3})?$/u', $sku, $m) === 1
+            || ($this->ansellGloveLine($product) !== null
+                && preg_match('/\b(\d{2})-?(\d{3})[A-Z]{0,4}\b/u', $name, $m) === 1)) {
+            return $m[1].'-'.$m[2];
+        }
+
+        return null;
+    }
+
+    /** Linia rękawic Ansell z nazwy — do adresu karty (hyflex-11-919). */
+    private function ansellGloveLine(Product $product): ?string
+    {
+        $name = mb_strtolower((string) $product->name);
+        foreach ([
+            'hyflex' => 'hyflex',
+            'alphatec' => 'alphatec',
+            'activarmr' => 'activarmr',
+            'touchntuff' => 'touchntuff',
+            'microflex' => 'microflex',
+            'sol-vex' => 'solvex',
+            'solvex' => 'solvex',
+            'versatouch' => 'versatouch',
+        ] as $needle => $slug) {
+            if (str_contains($name, $needle)) {
+                return $slug;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function ansellGloveOfficialUrls(Product $product): array
+    {
+        $model = $this->ansellGloveModel($product);
+        $line = $this->ansellGloveLine($product);
+        if ($model === null || $line === null) {
+            return [];
+        }
+        $out = [];
+        foreach (['pl/pl', 'gb/en'] as $locale) {
+            $out[] = 'https://www.ansell.com/'.$locale.'/products/'.$line.'-'.$model;
+        }
+
+        return $out;
+    }
+
+    /** Numer modelu rękawicy Ansell na stronie: 11-919, 11 919 albo 11919. */
+    private function hayHasAnsellGloveModel(string $hay, string $model): bool
+    {
+        [$head, $tail] = explode('-', $model);
+
+        return preg_match('/(?<!\d)'.$head.'[\s\-]?'.$tail.'(?!\d)/u', mb_strtolower($hay)) === 1;
+    }
+
+    /** Karta HyFlex 11-842 przy naszym 11-919 — inny model tej samej linii. */
+    private function urlOrTitleHasForeignAnsellGloveModel(string $url, string $title, Product $product): bool
+    {
+        $ours = $this->ansellGloveModel($product);
+        if ($ours === null) {
+            return false;
+        }
+        $hay = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')).' '.$title);
+        if ($this->hayHasAnsellGloveModel($hay, $ours)) {
+            return false;
+        }
+        if (preg_match_all('/(?<!\d)(\d{2})[\s\-](\d{3})(?!\d)/u', $hay, $hits, PREG_SET_ORDER) < 1) {
+            return false;
+        }
+        foreach ($hits as $hit) {
+            if ($ours !== $hit[1].'-'.$hit[2]) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1897,6 +1998,12 @@ final class ProductSearchIdentity
         if ($this->pageClaimsAnotherCode($url, $title, $product)) {
             return false;
         }
+        // Rękawica Ansell ma numer modelu na każdej karcie — sama linia („AlphaTec”, „HyFlex”)
+        // i marka wpuszczały AlphaTec 58-270 jako nasze 38003PP.
+        $gloveModel = $this->ansellGloveModel($product);
+        if ($gloveModel !== null && ! $this->hayHasAnsellGloveModel($hay, $gloveModel)) {
+            return false;
+        }
         // 0100 ≠ art.1006: krótki numer magazynowy musi być na karcie, nie sama „kangurka”.
         if (preg_match('/^\d{3,4}$/u', trim((string) $product->sku)) === 1
             && ! $this->hayHasProductCode($hay, $product)
@@ -2382,6 +2489,10 @@ final class ProductSearchIdentity
         foreach ($this->ansellStyleCodes($product) as $style) {
             $codes[] = $style;
         }
+        $gloveModel = $this->ansellGloveModel($product);
+        if ($gloveModel !== null) {
+            $codes[] = $gloveModel;
+        }
         foreach ($this->threeMCatalogCodesFromName($product) as $code) {
             $codes[] = $code;
         }
@@ -2462,7 +2573,8 @@ final class ProductSearchIdentity
     {
         if ($this->ansellPageClaimsForeignSeries($url, $title, $product)
             || $this->ansellPageClaimsForeignLine($url, $product)
-            || $this->ansellPageClaimsForeignVariant($url, $product)) {
+            || $this->ansellPageClaimsForeignVariant($url, $product)
+            || $this->urlOrTitleHasForeignAnsellGloveModel($url, $title, $product)) {
             return true;
         }
         // SKU 205, sklep „model 285” — ta sama kurtka, pełna nazwa w slugu.

@@ -61,6 +61,36 @@ final class BlockedPageReaderTest extends TestCase
         Http::assertSentCount(2);
     }
 
+    public function test_fetch_rejects_reader_page_of_target_error(): void
+    {
+        // Jina odpowiada 200, ale pisze, że sklep zwrócił 404 — to strona błędu, nie karta HyFlex
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                "Title: Protection solutions, gloves, personal protective equipment across Europe\n\n"
+                ."URL Source: https://shop.ansell.com/eu/s/product/hyflex-1181\n\n"
+                ."Warning: Target URL returned error 404: Not Found\n\n"
+                ."Markdown Content:\nANSELL protection solutions, gloves, personal protective equipment across Europe",
+                200
+            ),
+        ]);
+
+        $this->assertNull((new BlockedPageReader)->fetch('https://shop.ansell.com/eu/s/product/hyflex-1181'));
+    }
+
+    public function test_fetch_rejects_salesforce_error_shell(): void
+    {
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                "Title: ANSELL shop\n\nMarkdown Content:\nLoading\n\n"
+                .'[×](https://shop.ansell.com/eu/s/product/x# "Cancel and close")Sorry to interrupt'
+                ."\n\nCSS Error\n\n[Refresh](https://shop.ansell.com/eu/s/product/x?)",
+                200
+            ),
+        ]);
+
+        $this->assertNull((new BlockedPageReader)->fetch('https://shop.ansell.com/eu/s/product/x'));
+    }
+
     public function test_fetch_does_not_retry_missing_page(): void
     {
         Http::fake(['https://r.jina.ai/*' => Http::response('Not found', 404)]);
