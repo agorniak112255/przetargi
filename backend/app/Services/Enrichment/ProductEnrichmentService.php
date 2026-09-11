@@ -41,6 +41,9 @@ final class ProductEnrichmentService
     /** Ile razy prosimy indeks o kolejną partię kart, zanim pójdziemy do wyszukiwarki. */
     private const CATALOG_EXTRA_ROUNDS = 3;
 
+    /** Krótszy fragment z wyszukiwarki nie wystarczy na opis — nie traktujemy go jak karty. */
+    private const SNIPPET_CARD_MIN_CHARS = 500;
+
     private const GENERIC_NAME_TOKENS = [
         'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
         'ubranie', 'odziez', 'odzież', 'buty', 'obuwie', 'trzewiki', 'polbuty', 'półbuty', 'sandaly',
@@ -2654,6 +2657,11 @@ final class ProductEnrichmentService
             if ($url === '') {
                 continue;
             }
+            // Sam fragment z wyszukiwarki (strona się nie otworzyła) nie jest kartą. Potwierdzony
+            // samym adresem ucinał dalsze szukanie, a model nie miał z czego napisać opisu.
+            if (! empty($page['snippet_only']) && mb_strlen(trim($text)) < self::SNIPPET_CARD_MIN_CHARS) {
+                continue;
+            }
             $named = $this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $product);
             $exact = $this->identity->requiresExactSkuOrNameOnCard($product);
             $ok = $product->isHintedShopUrl($url)
@@ -3392,7 +3400,8 @@ SYS,
                 ],
                 [
                     'role' => 'user',
-                    'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}\n\nStrony:\n{$pagesJson}",
+                    'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}"
+                        .$this->manufacturerModelHint($product)."\n\nStrony:\n{$pagesJson}",
                 ],
             ], 0.0, 4000);
         } catch (Throwable $e) {
@@ -3526,10 +3535,29 @@ SYS,
             ],
             [
                 'role' => 'user',
-                'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}\nEAN: ".($product->ean ?? '—')
+                'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}"
+                    .$this->manufacturerModelHint($product)."\nEAN: ".($product->ean ?? '—')
                     ."\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}",
             ],
         ], 0.1, 4500);
+    }
+
+    /**
+     * „Oznaczenie modelu u producenta: R259, R-259” — model łączy nasze 259-13 („Ringers 259”)
+     * z kartą RINGERS™ R259. Bez tego zwracał pusty opis, bo kodu z cennika nie było na karcie.
+     */
+    private function manufacturerModelHint(Product $product): string
+    {
+        $codes = [];
+        foreach ($this->identity->modelAliases($product) as $alias) {
+            $alias = trim((string) $alias);
+            if (preg_match('/^[a-z]{1,4}-?\d{2,6}$/iu', $alias) === 1) {
+                $codes[] = mb_strtoupper($alias);
+            }
+        }
+        $codes = array_values(array_unique($codes));
+
+        return $codes === [] ? '' : "\nOznaczenie modelu u producenta (ten sam produkt): ".implode(', ', $codes);
     }
 
     /**

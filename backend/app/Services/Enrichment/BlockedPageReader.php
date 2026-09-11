@@ -19,6 +19,11 @@ final class BlockedPageReader
 
     private const MAX_SCREENSHOT_BYTES = 8000000;
 
+    /** Druga próba po 429/5xx — limit Jiny przy wielu workerach bywa chwilowy. */
+    private const READER_ATTEMPTS = 2;
+
+    private const READER_RETRY_PAUSE_MICROS = 2_000_000;
+
     /**
      * Zrzut karty produktu (PNG) — gdy CDN obrazków też za Incapsulą (Ansell .ashx).
      */
@@ -74,24 +79,8 @@ final class BlockedPageReader
             return null;
         }
 
-        $proxy = 'https://r.jina.ai/'.$url;
-
-        try {
-            $response = Http::timeout(35)
-                ->connectTimeout(8)
-                ->withHeaders([
-                    'Accept' => 'text/plain,text/markdown,*/*',
-                    'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
-                ])
-                ->withOptions(['stream' => true])
-                ->get($proxy);
-        } catch (Throwable $e) {
-            Log::info('Blocked page reader failed', ['url' => $url, 'error' => $e->getMessage()]);
-
-            return null;
-        }
-
-        if (! $response->successful()) {
+        $response = $this->requestReader($url);
+        if ($response === null) {
             return null;
         }
 
@@ -112,6 +101,43 @@ final class BlockedPageReader
             'image_urls' => $this->extractImageUrls($markdown, $url),
             'document_urls' => $this->extractDocumentUrls($markdown, $url),
         ];
+    }
+
+    /**
+     * Przy wielu workerach naraz Jina potrafi chwilowo odmówić (429) albo paść (5xx) —
+     * wtedy druga próba po chwili. Timeoutu nie ponawiamy: to kolejne 35 s zadania.
+     */
+    private function requestReader(string $url): ?Response
+    {
+        for ($attempt = 1; $attempt <= self::READER_ATTEMPTS; $attempt++) {
+            try {
+                $response = Http::timeout(35)
+                    ->connectTimeout(8)
+                    ->withHeaders([
+                        'Accept' => 'text/plain,text/markdown,*/*',
+                        'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
+                    ])
+                    ->withOptions(['stream' => true])
+                    ->get('https://r.jina.ai/'.$url);
+            } catch (Throwable $e) {
+                Log::info('Blocked page reader failed', ['url' => $url, 'error' => $e->getMessage()]);
+
+                return null;
+            }
+            if ($response->successful()) {
+                return $response;
+            }
+            $status = $response->status();
+            Log::info('Blocked page reader refused', ['url' => $url, 'status' => $status, 'attempt' => $attempt]);
+            if ($status !== 429 && $status < 500) {
+                return null;
+            }
+            if ($attempt < self::READER_ATTEMPTS && ! app()->environment('testing')) {
+                usleep(self::READER_RETRY_PAUSE_MICROS);
+            }
+        }
+
+        return null;
     }
 
     /** Surowy HTML albo markdown z linkami — do crawla sklepu bez sitemapy. */

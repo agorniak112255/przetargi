@@ -404,7 +404,7 @@ final class ProductPageFetcher
             $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::FETCH_FAILED];
             $snippet = trim((string) ($row['snippet'] ?? ''));
             if ($snippet !== '') {
-                $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
+                $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000), 'snippet_only' => true];
             }
 
             return;
@@ -427,7 +427,7 @@ final class ProductPageFetcher
                 $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::BOT_WALL];
                 $snippet = trim((string) ($row['snippet'] ?? ''));
                 if ($snippet !== '') {
-                    $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000)];
+                    $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000), 'snippet_only' => true];
                 }
             }
 

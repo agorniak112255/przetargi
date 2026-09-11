@@ -1472,6 +1472,109 @@ final class ProductEnrichmentApiTest extends TestCase
         }
     }
 
+    public function test_search_snippet_of_blocked_card_is_not_a_confirmed_card(): void
+    {
+        // ansell.com za Incapsulą, reader chwilowo nie odpowiada — zostaje sam fragment
+        // z wyszukiwarki. Uznany za kartę samym adresem kończył szukanie pustym opisem.
+        $url = 'https://www.ansell.com/pl/pl/products/ringers-r259';
+        Http::fake([
+            'www.ansell.com/*' => Http::response(
+                '<html><head><script src="/_Incapsula_Resource?SWJIYLWA=1"></script></head>'
+                .'<body>Request unsuccessful. Incapsula incident ID: 1</body></html>',
+                200
+            ),
+            'r.jina.ai/*' => Http::response('Rate limit exceeded', 429),
+            '*' => Http::response('', 404),
+        ]);
+        $product = $this->makeProduct([
+            'sku' => '259-13',
+            'name' => 'Ringers 259 Size 13.0',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [[
+                'url' => $url,
+                'title' => 'RINGERS R259',
+                'snippet' => 'Wytrzymałe rękawice udarowe RINGERS R259',
+            ]]]);
+        $search->shouldReceive('dropListingResults')
+            ->andReturnUsing(static fn (array $results): array => $results);
+        // karta nie potwierdzona — szukanie idzie dalej, zamiast kończyć się na fragmencie
+        $search->shouldReceive('moreCatalogHits')->atLeast()->once()->andReturn([]);
+        $search->shouldReceive('searchMappedRetailers')->once()->andReturn([]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->never();
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException $e) {
+            $this->assertStringContainsString('Nie znaleziono karty potwierdzającej', $e->getMessage());
+        }
+    }
+
+    public function test_prompt_names_manufacturer_model_code_for_ringers(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '259-13',
+            'name' => 'Ringers 259 Size 13.0',
+            'manufacturer' => 'Ansell',
+        ]);
+        $sent = [];
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')
+            ->once()
+            ->andReturnUsing(function (array $messages) use (&$sent): array {
+                $sent = $messages;
+
+                return ['pages' => []];
+            });
+        $service = new ProductEnrichmentService(
+            Mockery::mock(HybridWebSearchService::class),
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        $sanitize = new \ReflectionMethod($service, 'sanitizePagesWithLlm');
+        $sanitize->setAccessible(true);
+        $sanitize->invoke($service, $product, [[
+            'url' => 'https://www.ansell.com/pl/pl/products/ringers-r259',
+            'text' => 'Wytrzymałe rękawice robocze z TPR, odporność na przecięcia EN 388 E.',
+        ]]);
+
+        // na karcie Ansell pisze „RINGERS™ R259”, a nie nasze 259-13 — model musi wiedzieć, że to ten sam produkt
+        $this->assertStringContainsString(
+            'Oznaczenie modelu u producenta (ten sam produkt): R259, R-259',
+            (string) ($sent[1]['content'] ?? '')
+        );
+    }
+
     public function test_searxng_outage_marks_failed_not_manual(): void
     {
         $product = $this->makeProduct([
