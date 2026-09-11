@@ -708,6 +708,51 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertStringContainsString('ARISAKA 333', $ladder[0] ?? '');
     }
 
+    public function test_shopify_collections_listing_is_not_a_product_card(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'ARTRA',
+            'sku' => 'ARISAKA 333 631460 S2 ESD',
+            'name' => 'ARISAKA 333 631460 S2 ESD',
+        ]);
+        $service = app(HybridWebSearchService::class);
+        $ref = new ReflectionClass($service);
+        $filter = $ref->getMethod('filterResultsByIdentity');
+        $filter->setAccessible(true);
+
+        /** @var list<array{url: string, title: string, snippet: string}> $kept */
+        $kept = $filter->invoke($service, [
+            [
+                'url' => 'https://artra.com/collections/safety-half-shoes-s2',
+                'title' => 'Safety half shoes S2',
+                'snippet' => 'ARISAKA 333 631460 S2 ESD ARTRA',
+            ],
+            [
+                'url' => 'https://artra.pl/products/3815422-arisaka-333-631460-s2-esd',
+                'title' => 'ARISAKA 333 631460 S2 ESD',
+                'snippet' => 'Półbuty robocze ARTRA S2 ESD',
+            ],
+        ], $product);
+
+        $urls = array_column($kept, 'url');
+        $this->assertNotContains('https://artra.com/collections/safety-half-shoes-s2', $urls);
+        $this->assertContains('https://artra.pl/products/3815422-arisaka-333-631460-s2-esd', $urls);
+    }
+
+    public function test_mapped_retailer_hosts_skip_artra_manufacturer(): void
+    {
+        $product = new Product([
+            'manufacturer' => 'ARTRA',
+            'sku' => 'ARISAKA 333 631460 S2 ESD',
+            'name' => 'ARISAKA 333 631460 S2 ESD',
+        ]);
+        $hosts = app(HybridWebSearchService::class)->mappedRetailerHosts($product);
+
+        $this->assertContains('natare.pl', $hosts);
+        $this->assertNotContains('artra.pl', $hosts);
+        $this->assertNotContains('artra.com', $hosts);
+    }
+
     public function test_ansell_open_search_starts_on_bpbhp(): void
     {
         $product = new Product([

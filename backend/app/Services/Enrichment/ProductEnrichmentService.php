@@ -532,14 +532,27 @@ final class ProductEnrichmentService
             );
             $rawCardPages = $pageSnippets;
             if ($pageSnippets === []) {
+                $triedUrls = array_values(array_filter(array_map(
+                    static fn ($p): string => is_array($p) ? (string) ($p['url'] ?? '') : '',
+                    $fetched['pages']
+                )));
                 $this->attemptLog()->add(
                     'page',
-                    'pobrane strony nie potwierdzają produktu',
-                    urls: array_values(array_filter(array_map(
-                        static fn ($p): string => is_array($p) ? (string) ($p['url'] ?? '') : '',
-                        $fetched['pages']
-                    )))
+                    'pobrane strony nie potwierdzają produktu — szukam zmapowanych sklepów',
+                    urls: $triedUrls
                 );
+                [$pageSnippets, $fetched, $shopResults] = $this->fetchMappedRetailerCards(
+                    $product,
+                    $searchResults,
+                    $fetched
+                );
+                if ($shopResults !== []) {
+                    $searchResults = array_values(array_merge($searchResults, $shopResults));
+                    $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
+                }
+                $rawCardPages = $pageSnippets;
+            }
+            if ($pageSnippets === []) {
                 throw new ProductSourcesNotFoundException(
                     'Nie znaleziono karty potwierdzającej produkt '.$product->sku
                         .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.'
@@ -1706,6 +1719,56 @@ final class ProductEnrichmentService
      *     document_urls: list<string>
      * }
      */
+    /**
+     * Listing / zła karta u producenta — szukaj dalej w zmapowanych sklepach.
+     *
+     * @param  list<array<string, mixed>>  $searchResults
+     * @param  array<string, mixed>  $fetched
+     * @return array{0: list<array{url?: string, text?: string}>, 1: array<string, mixed>, 2: list<array<string, mixed>>}
+     */
+    private function fetchMappedRetailerCards(Product $product, array $searchResults, array $fetched): array
+    {
+        $tried = [];
+        foreach ($searchResults as $row) {
+            $url = (string) ($row['url'] ?? '');
+            if ($url !== '') {
+                $tried[] = $url;
+            }
+        }
+        foreach ($fetched['pages'] ?? [] as $page) {
+            $url = is_array($page) ? (string) ($page['url'] ?? '') : '';
+            if ($url !== '') {
+                $tried[] = $url;
+            }
+        }
+
+        $shopResults = $this->search->searchMappedRetailers($product, $tried);
+        if ($shopResults === []) {
+            return [[], $fetched, []];
+        }
+
+        $this->attemptLog()->add(
+            'search',
+            'zmapowane sklepy po niepotwierdzonej karcie',
+            urls: array_values(array_filter(array_column($shopResults, 'url')))
+        );
+        $shopFetched = $this->pages->fetch($shopResults, (string) $product->sku, 3, [], $product);
+        foreach (['image_urls', 'trusted_image_urls', 'document_urls'] as $key) {
+            foreach ($shopFetched[$key] ?? [] as $url) {
+                if (! is_string($url) || $url === '') {
+                    continue;
+                }
+                $fetched[$key][] = $url;
+            }
+        }
+
+        return [
+            $this->keepConfirmedCardPages($product, $shopFetched['pages'] ?? []),
+            $fetched,
+            $shopResults,
+        ];
+    }
+
     private function supplementDescriptionFromOtherSites(
         Product $product,
         array $searchResults,

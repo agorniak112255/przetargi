@@ -2514,6 +2514,51 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame($mfrUrl, $pack['results'][0]['url'] ?? null);
     }
 
+    public function test_artra_manufacturer_miss_searches_mapped_shops(): void
+    {
+        $this->seedTavilySettings();
+        config([
+            'enrichment.preferred_domains' => ['natare.pl'],
+            'enrichment.retailer_domains' => ['natare.pl'],
+            'enrichment.catalog_search_hosts' => [],
+        ]);
+        $product = $this->makeProduct([
+            'sku' => 'ARISAKA 333 631460 S2 ESD',
+            'name' => 'ARISAKA 333 631460 S2 ESD',
+            'manufacturer' => 'ARTRA',
+        ]);
+        $shopUrl = 'https://natare.pl/polbuty-robocze-artra/9977-buty-robocze-polbuty-arisaka-333-631460-s2-esd-artra.html';
+        $shopQueries = [];
+        Http::fake(function ($request) use ($shopUrl, &$shopQueries) {
+            if (! str_contains($request->url(), 'tavily.com')) {
+                return Http::response('unused', 404);
+            }
+            $data = $request->data();
+            $query = (string) ($data['query'] ?? '');
+            $domains = $data['include_domains'] ?? [];
+            $onNatare = str_contains(mb_strtolower($query), 'site:natare.pl')
+                || (is_array($domains) && in_array('natare.pl', $domains, true));
+            if ($onNatare) {
+                $shopQueries[] = $query;
+
+                return Http::response([
+                    'results' => [[
+                        'url' => $shopUrl,
+                        'title' => 'ARISAKA 333 631460 S2 ESD ARTRA',
+                        'content' => 'Półbuty robocze ARISAKA 333 S2 ESD',
+                    ]],
+                ], 200);
+            }
+
+            return Http::response(['results' => []], 200);
+        });
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+
+        $this->assertNotEmpty($shopQueries);
+        $this->assertSame($shopUrl, $pack['results'][0]['url'] ?? null);
+    }
+
     public function test_large_model_search_skips_tavily_and_uses_ai_web_search(): void
     {
         AiSetting::query()->create([

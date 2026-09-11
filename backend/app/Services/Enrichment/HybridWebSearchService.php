@@ -889,6 +889,21 @@ class HybridWebSearchService
             }
         }
 
+        if ($profile->retailerFallback) {
+            $triedHosts = $this->hostsFromSiteQueries($siteQueries);
+            $mapped = $this->searchMappedRetailerSite(
+                $product,
+                $profile,
+                $cacheMode,
+                $phase,
+                $errors,
+                $triedHosts
+            );
+            if ($this->hasEnoughPageResults($mapped['results'], 1)) {
+                return $mapped;
+            }
+        }
+
         $openResults = [];
         $seen = [];
         $openProvider = '';
@@ -946,6 +961,164 @@ class HybridWebSearchService
         $host = mb_strtolower(rtrim((string) $m[1], '.'));
 
         return $host !== '' ? $host : null;
+    }
+
+    /**
+     * Po pudle u producenta — site: na zmapowanych sklepach, bez powtórki tej samej domeny.
+     *
+     * @param  list<string>  $exceptUrls
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function searchMappedRetailers(Product $product, array $exceptUrls = []): array
+    {
+        if ($this->localSearchOnly) {
+            return [];
+        }
+        $this->attemptLog()->add('search', 'zmapowane sklepy — karta nie potwierdzona u producenta');
+        $profile = $this->settings->tavilySearchProfile();
+        $errors = [];
+        $found = $this->searchMappedRetailerSite(
+            $product,
+            $profile,
+            $profile->mode,
+            'industry',
+            $errors,
+            $this->hostsFromUrls($exceptUrls)
+        );
+
+        return $found['results'];
+    }
+
+    /**
+     * @param  list<string>  $exceptHosts
+     * @param  list<string>  $errors
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     provider: string,
+     *     errors: list<string>
+     * }
+     */
+    private function searchMappedRetailerSite(
+        Product $product,
+        TavilySearchProfile $profile,
+        string $cacheMode,
+        string $phase,
+        array &$errors,
+        array $exceptHosts,
+    ): array {
+        $phrase = $this->identity->catalogSitePhrase($product);
+        if ($phrase === '') {
+            $phrase = trim($this->identity->productNameWithManufacturer($product));
+        }
+        if ($phrase === '') {
+            return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => $errors];
+        }
+
+        foreach (array_slice($this->mappedRetailerHosts($product, $exceptHosts), 0, self::SITE_QUERY_ATTEMPTS) as $host) {
+            $query = 'site:'.$host.' '.$phrase;
+            $shop = $this->cachedTavilySearch(
+                $product,
+                $query,
+                [$host],
+                $profile,
+                $cacheMode,
+                $phase,
+                'shop',
+                $errors
+            );
+            $codedShop = $this->resultsCarryProductCode($shop['results'], $product);
+            $usable = $codedShop !== [] ? $codedShop : $shop['results'];
+            if ($this->hasEnoughPageResults($usable, 1)) {
+                return [
+                    'results' => $usable,
+                    'provider' => $shop['provider'] !== ''
+                        ? $shop['provider']
+                        : $this->searchProviderName().'_shop',
+                    'errors' => $errors,
+                ];
+            }
+        }
+
+        return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => $errors];
+    }
+
+    /**
+     * @param  list<string>  $exceptHosts
+     * @return list<string>
+     */
+    public function mappedRetailerHosts(Product $product, array $exceptHosts = []): array
+    {
+        $skip = [];
+        foreach (array_merge(
+            $exceptHosts,
+            $this->manufacturers->domainsFor($product),
+            $this->identity->officialCatalogHosts($product),
+            (array) config('enrichment.catalog_skip_hosts', []),
+        ) as $host) {
+            $bare = $this->bareSearchHost((string) $host);
+            if ($bare !== '') {
+                $skip[$bare] = true;
+            }
+        }
+
+        $out = [];
+        foreach (array_merge(
+            $this->identity->catalogSearchHosts($product),
+            CatalogSearchSite::allHosts(),
+            (array) config('enrichment.preferred_domains', []),
+            (array) config('enrichment.retailer_domains', []),
+        ) as $host) {
+            $bare = $this->bareSearchHost((string) $host);
+            if ($bare === '' || isset($skip[$bare]) || isset($out[$bare])) {
+                continue;
+            }
+            $out[$bare] = true;
+        }
+
+        return array_keys($out);
+    }
+
+    /**
+     * @param  list<string>  $queries
+     * @return list<string>
+     */
+    private function hostsFromSiteQueries(array $queries): array
+    {
+        $hosts = [];
+        foreach ($queries as $query) {
+            $host = $this->siteHostFromQuery($query);
+            if ($host !== null) {
+                $hosts[] = $this->bareSearchHost($host);
+            }
+        }
+
+        return array_values(array_filter($hosts, static fn (string $host): bool => $host !== ''));
+    }
+
+    /**
+     * @param  list<string>  $urls
+     * @return list<string>
+     */
+    private function hostsFromUrls(array $urls): array
+    {
+        $hosts = [];
+        foreach ($urls as $url) {
+            $host = mb_strtolower((string) (parse_url((string) $url, PHP_URL_HOST) ?: $url));
+            $bare = $this->bareSearchHost($host);
+            if ($bare !== '') {
+                $hosts[] = $bare;
+            }
+        }
+
+        return array_values(array_unique($hosts));
+    }
+
+    private function bareSearchHost(string $host): string
+    {
+        $host = mb_strtolower(trim($host));
+        $host = preg_replace('/^www\./', '', $host) ?? $host;
+
+        return trim($host, '.');
     }
 
     /**
@@ -1413,7 +1586,8 @@ class HybridWebSearchService
         }
         foreach ([
             '/manufacturer/', '/producent/', '/brand/', '/marka/',
-            '/category/', '/kategoria/', '/kategorie/', '/collection/',
+            '/category/', '/kategoria/', '/kategorie/', '/collection/', '/collections/',
+            '/kolekcja/', '/kolekcje/',
             '/search', '/szukaj', '/vysledek-vyhledavani', '/catalog/', '/katalog/', '/blog/',
             '/wiki/', '/slowniki/', '/haslo/', '/q-',
             // zbiorcze strony producenta wymieniają cały asortyment, w tym nasz kod
