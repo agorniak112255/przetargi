@@ -6,16 +6,19 @@
 #   bash deploy/server-update.sh              # sam kod (szybko)
 #   bash deploy/server-update.sh --katalog    # + indeks sitemap sklepów (kilka–kilkanaście min)
 #   bash deploy/server-update.sh --indeks     # + pełne przeliczenie search_blob produktów
+#   bash deploy/server-update.sh --tokeny     # + przeliczenie tokenów indeksu (po zmianie reguł)
 #   bash deploy/server-update.sh /ścieżka
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Użycie: server-update.sh [--katalog|--indeks|--bez-katalogu] [katalog_aplikacji]
+Użycie: server-update.sh [--katalog|--indeks|--tokeny|--bez-katalogu] [katalog_aplikacji]
 
   (bez flagi)       pull, migracje, cache — bez pełnego skanu 20k produktów
   --indeks          products:rebuild-search-index (wolny pasek 0–100%)
   --katalog         dodatkowo catalog:index --missing-only (długo)
+  --tokeny          catalog:tokens --refresh — przelicza tokeny wyszukiwania
+                    istniejących stron po zmianie reguł tokenizacji (długo)
   --bez-katalogu    to samo co bez flagi (na wszelki wypadek)
   --help            ten tekst
 EOF
@@ -24,11 +27,13 @@ EOF
 APP_ROOT="/var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl"
 INDEX_CATALOG=0
 INDEX_SEARCH=0
+REFRESH_TOKENS=0
 
 for arg in "$@"; do
   case "$arg" in
     --katalog|--catalog) INDEX_CATALOG=1 ;;
     --indeks|--search-index) INDEX_SEARCH=1 ;;
+    --tokeny|--tokens) REFRESH_TOKENS=1 ;;
     --bez-katalogu|--skip-catalog) INDEX_CATALOG=0 ;;
     --help|-h) usage; exit 0 ;;
     /*) APP_ROOT="$arg" ;;
@@ -136,6 +141,14 @@ else
   echo "    albo tylko indeks:"
   echo "      cd $APP_ROOT/backend && $PHP_BIN artisan catalog:index --missing-only --seconds=180 --max=20000"
   echo "    jedna domena:  $PHP_BIN artisan catalog:index bhpstar.pl"
+fi
+
+if [[ "$REFRESH_TOKENS" -eq 1 ]]; then
+  echo "==> przeliczenie tokenów indeksu (kod z końcówki adresu przed tytułem)"
+  "$PHP_BIN" artisan catalog:tokens --refresh || true
+else
+  echo "==> tokeny indeksu bez zmian (po zmianie reguł tokenizacji uruchom raz):"
+  echo "      bash $APP_ROOT/deploy/server-update.sh --tokeny"
 fi
 
 echo "==> laravel scheduler (cron schedule:run)"
