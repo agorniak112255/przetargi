@@ -34,6 +34,48 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertStringNotContainsString('ubranie wodoochronne', $joined);
     }
 
+    public function test_investor_announcement_on_manufacturer_domain_is_not_a_product_card(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '259B-13',
+            'name' => 'RINGERS 259B',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        // slug niesie i markę, i słowo „gloves”, więc filtr treści go przepuszcza
+        $announcement = 'https://www.ansell.com/au/en/investor-center/asx-announcements/'
+            .'ansell-limited-to-acquire-oil-and-gas-and-specialty-glove-supplier-ringers-gloves';
+        $this->assertTrue($id->hayMentionsProduct(mb_strtolower($announcement), $product));
+        $this->assertTrue($id->looksLikeNonProductCardUrl($announcement));
+        $this->assertTrue($id->looksLikeNonProductCardUrl(
+            'https://www.ansell.com/au/en/investor-relations/'
+        ));
+        $this->assertTrue($id->looksLikeNonProductCardUrl(
+            'https://www.ansell.com/us/en/newsroom/media-releases/q1'
+        ));
+        // prawdziwa karta na tej samej domenie zostaje
+        $this->assertFalse($id->looksLikeNonProductCardUrl(
+            'https://www.ansell.com/pl/pl/products/ringers-259b'
+        ));
+    }
+
+    public function test_shop_product_id_after_dash_is_not_a_product_code(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'R014BAP2110',
+            'name' => 'ActivArmr CL014in BAPC2 SZ 11.0',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        // „-p-2110” to identyfikator sklepu, tak samo jak „-p2110” — sama zbieżność
+        // czterech cyfr z końcówką SKU nie robi z odczynnika rękawicy
+        $reagent = 'https://pol-aura.pl/cykloheksymid-66-81-9-p-2110.html';
+        $this->assertFalse($id->urlOrTitleCarriesCodeFamily($reagent, '', $product));
+        $this->assertFalse($id->hayMentionsProduct(mb_strtolower($reagent), $product));
+    }
+
     public function test_urgent_sweatshirt_is_not_treated_as_gloves(): void
     {
         $id = new ProductSearchIdentity;

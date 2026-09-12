@@ -2370,6 +2370,12 @@ final class ProductSearchIdentity
         if (preg_match('#/(?:about-us|about|o-nas|o-firmie|contact-us|press-releases)(/|$)#', $path) === 1) {
             return true;
         }
+        // Producent trzyma na własnej domenie także komunikaty giełdowe. „Ansell
+        // to acquire Ringers Gloves” niesie markę i słowo „gloves”, więc filtr
+        // treści je przepuszcza — a to komunikat prasowy, nie karta produktu.
+        if (preg_match('#/(?:investor-cent(?:er|re)|investor-relations|investors|asx-announcements|announcements|media-releases?|news-?room|press-release)(/|$)#', $path) === 1) {
+            return true;
+        }
 
         return false;
     }
@@ -3976,7 +3982,9 @@ final class ProductSearchIdentity
     {
         $path = (string) parse_url(mb_strtolower($url), PHP_URL_PATH);
         $path = (string) preg_replace('/\.[a-z]{2,5}$/u', '', $path);
-        $path = (string) preg_replace('/[_-][pc]\d+(?=\/|$)/u', '', $path);
+        // „…-p-2110” to ten sam identyfikator sklepu co „…-p2110”: osobny człon
+        // po myślniku zrównał kartę odczynnika z końcówką SKU R014BAP2110
+        $path = (string) preg_replace('/[_-][pc][_-]?\d+(?=\/|$)/u', '', $path);
         $hay = mb_strtolower($title).' '.str_replace(['/', '_'], ' ', $path);
 
         $out = [];
