@@ -80,6 +80,24 @@ final class EnrichmentAttemptLog
     }
 
     /**
+     * Treść kroków jednego rodzaju — np. wszystkie „err”, żeby rozpoznać
+     * awarię wyszukiwarki, a nie realny brak karty produktu.
+     *
+     * @return list<string>
+     */
+    public function messagesOfType(string $type): array
+    {
+        $out = [];
+        foreach ($this->steps as $step) {
+            if ($step['t'] === $type) {
+                $out[] = $step['m'];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * @return array{at: string, sku: string, name: string, manufacturer: string, steps: list<array<string, mixed>>}
      */
     public function snapshot(Product $product): array

@@ -37,10 +37,12 @@ final class DuckDuckGoHtmlSearch
 
     /**
      * @param  list<string>  $includeDomains
+     * @param  int|null  $foundBeforeDomainFilter  ile stron zwrócił silnik, zanim zadziałał filtr domen
      * @return list<array{url: string, title: string, snippet: string}>
      */
-    public function search(string $query, int $maxResults = 8, array $includeDomains = [], bool $allowPublicFallback = true): array
+    public function search(string $query, int $maxResults = 8, array $includeDomains = [], bool $allowPublicFallback = true, ?int &$foundBeforeDomainFilter = null): array
     {
+        $foundBeforeDomainFilter = 0;
         $query = trim($query);
         if ($query === '') {
             return [];
@@ -63,6 +65,8 @@ final class DuckDuckGoHtmlSearch
         $cacheKey = self::QUERY_CACHE_PREFIX.hash('sha256', $query);
         $cached = Cache::get($cacheKey);
         if (is_array($cached)) {
+            $foundBeforeDomainFilter = count($cached);
+
             return $this->limitResults($cached, $maxResults, $includeDomains);
         }
 
@@ -79,6 +83,7 @@ final class DuckDuckGoHtmlSearch
                     $results = $this->searchSearxng($searxng, $query);
                     if ($results !== []) {
                         Cache::put($cacheKey, $results, now()->addHours(6));
+                        $foundBeforeDomainFilter = count($results);
 
                         return $this->limitResults($results, $maxResults, $includeDomains);
                     }
@@ -113,6 +118,7 @@ final class DuckDuckGoHtmlSearch
         } finally {
             $this->releaseGate();
         }
+        $foundBeforeDomainFilter = is_array($cached) ? count($cached) : 0;
 
         return $this->limitResults($cached, $maxResults, $includeDomains);
     }
@@ -311,16 +317,12 @@ final class DuckDuckGoHtmlSearch
             $errors[] = $e->getMessage();
         }
 
-        try {
-            $this->throttle();
-            $results = $this->searchBing($query);
-            if ($results !== []) {
-                return $results;
-            }
-            $errors[] = 'Bing: brak wyników';
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
+        // Bing wypadł z drabinki: na „HyFlex 11-801 rękawice” oddaje primevideo.com,
+        // na „AlphaTec 58-301 Ansell” chatgpt.com, a w batchu #246 wstrzyknął
+        // tagesschau.de i whatsapp.com. Filtr tożsamości to odrzucał, ale każdy taki
+        // adres kosztował pobranie strony. Ten sam wniosek dał test silników SearXNG
+        // z IP serwerowni — stąd `bing: disabled` również tam. Metoda zostaje pod
+        // ręką, gdyby Bing kiedyś zaczął odpowiadać na zapytanie, o które go pytamy.
 
         try {
             $this->throttle();

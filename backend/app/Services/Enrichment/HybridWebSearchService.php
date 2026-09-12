@@ -1336,7 +1336,14 @@ class HybridWebSearchService
                     urls: array_column($packResults, 'url')
                 );
             } else {
-                $this->attemptLog()->add('query', '„'.$query.'” → 0 wyników');
+                $found = (int) ($pack['found'] ?? 0);
+                $this->attemptLog()->add(
+                    'query',
+                    $found > 0 && $includeDomains !== []
+                        ? '„'.$query.'” → 0 w domenie '.implode(', ', array_slice($includeDomains, 0, 2))
+                            .' (wyszukiwarka zwróciła '.$found.' stron spoza niej)'
+                        : '„'.$query.'” → 0 wyników'
+                );
             }
             $provider = (string) ($pack['provider'] ?? $this->searchProviderName());
             if ($includeDomains !== [] && ! str_contains($provider, 'manufacturer')) {
@@ -2039,7 +2046,8 @@ PROMPT;
      *     results: list<array{url: string, title: string, snippet: string}>,
      *     images: list<string>,
      *     provider: string,
-     *     raw_content: ?string
+     *     raw_content: ?string,
+     *     found?: int
      * }
      */
     private function searchViaConfiguredEngine(
@@ -2051,11 +2059,13 @@ PROMPT;
             $engine = $this->searchProviderName();
             // Darmowe szukanie nic nie kosztuje, a SearXNG miesza trafne karty z szumem —
             // bierzemy szerszą listę i zawężamy ją dopiero filtrem tożsamości produktu.
+            $foundPages = 0;
             $results = $this->duckDuckGo->search(
                 $query,
                 max($profile->maxResults, self::FREE_SEARCH_CANDIDATES),
                 $includeDomains,
-                ! $this->localSearchOnly
+                ! $this->localSearchOnly,
+                $foundPages
             );
 
             return [
@@ -2063,6 +2073,9 @@ PROMPT;
                 'images' => [],
                 'provider' => $includeDomains !== [] ? $engine.'_preferred' : $engine,
                 'raw_content' => null,
+                // ile stron silnik w ogóle zwrócił — bez tego „0 wyników” w logu
+                // znaczyło naraz „silnik padł” i „silnik zignorował site:”
+                'found' => $foundPages,
             ];
         }
 

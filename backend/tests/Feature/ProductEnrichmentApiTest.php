@@ -1814,6 +1814,93 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_FAILED, $product->fresh()?->enrichment_status);
     }
 
+    /** Batch #246: wszystkie darmowe silniki odmówiły, a produkt szedł do „wpisz ręcznie”. */
+    public function test_http_throttled_engines_mark_failed_not_manual(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'AC01P-00012-00',
+            'manufacturer' => 'Ansell',
+            'description' => null,
+        ]);
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [],
+                'errors' => [
+                    '„site:bhp-sklep.com.pl AlphaTec”: Google HTTP 429: brak wyników wyszukiwania.'
+                        .' | Bing: brak wyników | DuckDuckGo HTTP 202: brak wyników wyszukiwania.'
+                        .' | Qwant HTTP 403: brak wyników wyszukiwania.',
+                ],
+            ]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            Mockery::mock(OpenAiCompatibleClient::class),
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException $e) {
+            $this->assertStringNotContainsString('wpisz ręcznie', $e->getMessage());
+            $this->assertStringContainsString('Wyszukiwarka nie odpowiedziała', $e->getMessage());
+        }
+
+        $this->assertSame(Product::ENRICHMENT_FAILED, $product->fresh()?->enrichment_status);
+    }
+
+    /** SearXNG wyłączony: cURL 7 to awaria, nie dowód, że karty nie ma. */
+    public function test_searxng_connection_refused_marks_failed_not_manual(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => 'SC36BCPE',
+            'manufacturer' => 'Ansell',
+            'description' => null,
+        ]);
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [],
+                'errors' => [
+                    'SearXNG (http://127.0.0.1:8088/search) nie odpowiada:'
+                        .' cURL error 7: Failed to connect to 127.0.0.1 port 8088',
+                ],
+            ]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            Mockery::mock(OpenAiCompatibleClient::class),
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException) {
+        }
+
+        $this->assertSame(Product::ENRICHMENT_FAILED, $product->fresh()?->enrichment_status);
+    }
+
     public function test_enrichment_service_saves_description_and_image(): void
     {
         Storage::fake('public');

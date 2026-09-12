@@ -186,11 +186,16 @@ class EnrichProductJob implements ShouldQueue
             $enrichment->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE);
             $this->refreshBatchProgress($batch);
         } catch (ProductSourcesNotFoundException $e) {
+            // Awaria wyszukiwarki zostawia produkt w „failed” — to błąd do ponowienia,
+            // a nie karta, której nie ma i którą trzeba opisać ręcznie.
+            $outage = $product->fresh()?->enrichment_status === Product::ENRICHMENT_FAILED;
             $enrichment->markBatchItem(
                 $batch,
-                true,
+                ! $outage,
                 $product,
-                ProductEnrichmentBatchItem::STATUS_MANUAL,
+                $outage
+                    ? ProductEnrichmentBatchItem::STATUS_FAILED
+                    : ProductEnrichmentBatchItem::STATUS_MANUAL,
                 mb_substr($e->getMessage(), 0, 500),
             );
             $this->refreshBatchProgress($batch);

@@ -520,6 +520,7 @@ final class ProductEnrichmentService
                 false,
                 $product,
                 $e instanceof ProductSourcesNotFoundException
+                    && ! $this->searchFailedDueToEngineOutage($e->getMessage())
                     ? ProductEnrichmentBatchItem::STATUS_MANUAL
                     : ProductEnrichmentBatchItem::STATUS_FAILED,
                 mb_substr($e->getMessage(), 0, 500),
@@ -592,9 +593,11 @@ final class ProductEnrichmentService
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
             if ($searchResults === []) {
                 $this->attemptLog()->add('search', $searchEmptyDetail);
+                $outage = $this->engineOutageDetail($searchEmptyDetail);
                 throw new ProductSourcesNotFoundException(
-                    $this->searchFailedDueToEngineOutage($searchEmptyDetail)
-                        ? 'Nie znaleziono stron z tym SKU w internecie. '.$searchEmptyDetail
+                    $outage !== null
+                        ? 'Wyszukiwarka nie odpowiedziała przy produkcie '.$product->sku
+                            .' — nie wiadomo, czy karta istnieje. Ponów po przywróceniu wyszukiwarki. '.$outage
                         : 'Nie znaleziono karty produktu '.$product->sku
                             .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie. '.$searchEmptyDetail
                 );
@@ -673,9 +676,15 @@ final class ProductEnrichmentService
                 $rawCardPages = $pageSnippets;
             }
             if ($pageSnippets === []) {
+                // Gdy po drodze padła wyszukiwarka, „brak karty” jest tylko
+                // skutkiem awarii — produkt wraca do ponowienia, nie do ręki.
+                $outage = $this->engineOutageDetail($searchEmptyDetail);
                 throw new ProductSourcesNotFoundException(
-                    'Nie znaleziono karty potwierdzającej produkt '.$product->sku
-                        .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.'
+                    $outage !== null
+                        ? 'Wyszukiwarka nie odpowiedziała przy produkcie '.$product->sku
+                            .' — nie wiadomo, czy karta istnieje. Ponów po przywróceniu wyszukiwarki. '.$outage
+                        : 'Nie znaleziono karty potwierdzającej produkt '.$product->sku
+                            .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.'
                 );
             }
 
@@ -1145,25 +1154,54 @@ final class ProductEnrichmentService
         if (! $e instanceof ProductSourcesNotFoundException) {
             return Product::ENRICHMENT_FAILED;
         }
-        $msg = mb_strtolower($e->getMessage());
-        if (str_contains($msg, 'silniki zablokowane')
-            || str_contains($msg, 'too many requests')
-            || str_contains($msg, 'captcha')
-            || str_contains($msg, 'bez fallbacku publicznego')) {
+        if ($this->searchFailedDueToEngineOutage($e->getMessage())) {
             return Product::ENRICHMENT_FAILED;
         }
 
         return Product::ENRICHMENT_MANUAL;
     }
 
+    /**
+     * Wyszukiwarka padła (limit, captcha, brak połączenia) — to nie znaczy,
+     * że produkt nie ma karty w internecie. Taki przebieg wraca do kolejki,
+     * zamiast kazać człowiekowi pisać opis z ręki.
+     */
     private function searchFailedDueToEngineOutage(string $detail): bool
     {
         $msg = mb_strtolower($detail);
 
-        return str_contains($msg, 'silniki zablokowane')
+        if (str_contains($msg, 'silniki zablokowane')
             || str_contains($msg, 'too many requests')
             || str_contains($msg, 'captcha')
-            || str_contains($msg, 'bez fallbacku publicznego');
+            || str_contains($msg, 'bez fallbacku publicznego')
+            || str_contains($msg, 'nie odpowiada')
+            || str_contains($msg, 'curl error')
+        ) {
+            return true;
+        }
+
+        // „Google HTTP 429”, „DuckDuckGo HTTP 202”, „Qwant HTTP 403” — silnik
+        // odmówił odpowiedzi; 404 zostawiamy, bo to realnie brak strony.
+        return preg_match('/\bhttp (202|401|403|407|429|5\d\d)\b/', $msg) === 1;
+    }
+
+    /**
+     * Pierwszy komunikat świadczący o awarii wyszukiwarki — z podsumowania
+     * fazy szukania albo z kroków „err” całego przebiegu (kolejne partie
+     * kart i zmapowane sklepy szukają już po tym podsumowaniu).
+     */
+    private function engineOutageDetail(string $searchDetail): ?string
+    {
+        if ($this->searchFailedDueToEngineOutage($searchDetail)) {
+            return $searchDetail;
+        }
+        foreach ($this->attemptLog()->messagesOfType('err') as $message) {
+            if ($this->searchFailedDueToEngineOutage($message)) {
+                return $message;
+            }
+        }
+
+        return null;
     }
 
     private function elapsedMs(float $started): int
