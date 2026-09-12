@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Models\Product;
+use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\ProductImageCandidateVerifier;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\Enrichment\ProductPageFetcher;
@@ -256,5 +257,31 @@ final class ProductImageRelevanceTest extends TestCase
             [$img]
         );
         $this->assertSame([$img], $picked);
+    }
+
+    public function test_rejects_marketing_assets_from_a_manufacturer_media_server(): void
+    {
+        // Baner branżowy i przewodnik po asortymencie ładują się jako poprawne PNG/JPG
+        // o właściwych wymiarach, więc żaden późniejszy próg ich nie zatrzymywał —
+        // a stały w kolejce przed packshotem.
+        $junk = new ReflectionMethod(ProductEnrichmentService::class, 'isJunkImageUrl');
+        $service = app(ProductEnrichmentService::class);
+
+        $this->assertTrue($junk->invoke(
+            $service,
+            'https://multimedia.3m.com/mws/media/1812021O/industry-feature-image.png'
+        ));
+        $this->assertTrue($junk->invoke(
+            $service,
+            'https://multimedia.3m.com/mws/media/2552127J/e4e-engineered-tapes-reference-guide-end-customer-polish.jpg'
+        ));
+        $this->assertFalse($junk->invoke(
+            $service,
+            'https://multimedia.3m.com/mws/media/51586J/3m-tm-470-electroplating-anaod.jpg'
+        ));
+        $this->assertFalse($junk->invoke(
+            $service,
+            'https://icd.pl/media/catalog/product/r/e/rekawice-ansell-hyflex-11-618.jpg'
+        ));
     }
 }

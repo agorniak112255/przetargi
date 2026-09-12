@@ -13,10 +13,10 @@ use App\Models\CatalogSearchSite;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
-use App\Models\ProductImage;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentBatchItem;
 use App\Models\ProductEnrichmentCache;
+use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
@@ -2844,6 +2844,7 @@ final class ProductEnrichmentService
                 && $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
                 return true;
             }
+
             // Sklep nie pisze CABINAID — T-31 + tablica + AED wystarcza w opisie.
             return $this->identity->skuIsSharedShortCode($product)
                 && $this->identity->hayHasRequiredTypeFromName($hay, $product)
@@ -3078,6 +3079,9 @@ final class ProductEnrichmentService
             'menue-', 'menu-', '/01_menue', 'menue-pics', 'world-map', 'sitemap',
             'beer', 'fox-deluxe', 'sustainability_report', 'lego',
             '#screenshot', 'screenshot',
+            // materiały marketingowe z serwera mediów producenta: baner branżowy
+            // i przewodnik po asortymencie ładowały się jako poprawne PNG/JPG
+            'feature-image', 'reference-guide',
         ];
         foreach ($blocked as $needle) {
             if (str_contains($u, $needle)) {
@@ -3714,6 +3718,7 @@ SYS,
 
         $sourcesJson = json_encode($compactSources, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $pagesJson = json_encode($compactPages, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
         return $this->llm->chatJsonEnrichment([
             [
                 'role' => 'system',

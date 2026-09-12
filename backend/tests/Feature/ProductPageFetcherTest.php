@@ -130,4 +130,43 @@ final class ProductPageFetcherTest extends TestCase
             .'podczas całej zmiany. Podeszwa jest odporna na oleje i paliwa oraz ma właściwości antypoślizgowe.</p>'
             .'<ul>'.$specs.'</ul></main></body></html>';
     }
+
+    public function test_reader_page_carries_its_own_images_from_a_media_cdn(): void
+    {
+        // Karta 3M idzie przez czytnik (bezpośrednie pobranie blokowane), a packshoty
+        // leżą na osobnym serwerze mediów. Strona z czytnika nie niosła własnych zdjęć,
+        // więc zostawała pula zbiorcza filtrowana po hoście — i wycinała je co do jednego.
+        $card = 'https://www.3mpolska.pl/3M/pl_PL/p/d/v101476018/';
+        $photo = 'https://multimedia.3m.com/mws/media/51586J/3m-tm-470-electroplating-anaod.jpg';
+
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                "Title: 3M 470\n\n# Taśma do galwanizacji 3M 470\n\n"
+                .'![packshot]('.$photo.")\n\n"
+                .'Taśma galwanizacyjna 3M 470, 25 mm x 33 m, kod 716973. Norma EN ISO 9001.',
+                200
+            ),
+            '*' => Http::response('', 403),
+        ]);
+
+        $product = new Product([
+            'sku' => '716973',
+            'name' => 'Taśma do galwanizacji 3M 470',
+            'manufacturer' => '3M',
+        ]);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [['url' => $card, 'title' => '', 'snippet' => '']],
+            '716973',
+            1,
+            [],
+            $product,
+        );
+
+        $this->assertNotSame([], $fetched['pages']);
+        $page = $fetched['pages'][0];
+        $this->assertSame($card, $page['url']);
+        $this->assertContains($photo, $page['image_urls'] ?? []);
+        $this->assertContains($photo, $fetched['image_urls']);
+    }
 }

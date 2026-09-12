@@ -324,6 +324,12 @@ final class ProductPageFetcher
         $used = false;
         // null — czytnik nie dał tekstu, zostają same zdjęcia jak dotąd
         $confirmed = null;
+        // Strona z czytnika musi nieść własne zdjęcia tak samo jak pobrana zwykłym HTML-em.
+        // Bez tego zostawała tylko pula zbiorcza, a ta filtrowana jest po hoście — więc
+        // packshoty z serwera mediów producenta (multimedia.3m.com) przepadały co do jednego.
+        $readerPage = null;
+        $pageImages = [];
+        $pageTrusted = [];
         if ($viaReader['text'] !== '') {
             $skuNorm = mb_strtolower(trim((string) ($this->matchingProduct?->sku ?? '')));
             $text = $this->cleanFetchedPageText($viaReader['text'], $skuNorm);
@@ -346,7 +352,7 @@ final class ProductPageFetcher
                 if ($accessories !== []) {
                     $page['accessories'] = $accessories;
                 }
-                $goodPages[] = $page;
+                $readerPage = $page;
                 $used = true;
             }
         }
@@ -356,11 +362,18 @@ final class ProductPageFetcher
             }
             $img = ProductImageDownloader::preferFullSizeUrl($img);
             $images[] = $img;
+            $pageImages[] = $img;
             if ($this->matchingProduct !== null
                 && $this->identity->isTrustedPageImageUrl($img, $this->matchingProduct)) {
                 $trustedImages[] = $img;
+                $pageTrusted[] = $img;
             }
             $used = true;
+        }
+        if ($readerPage !== null) {
+            $readerPage['image_urls'] = array_values(array_unique($pageImages));
+            $readerPage['trusted_image_urls'] = array_values(array_unique($pageTrusted));
+            $goodPages[] = $readerPage;
         }
         foreach ($viaReader['document_urls'] as $doc) {
             $documents[] = $doc;
