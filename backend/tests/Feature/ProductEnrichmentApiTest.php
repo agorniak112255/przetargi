@@ -2365,6 +2365,8 @@ final class ProductEnrichmentApiTest extends TestCase
         } catch (ProductSourcesNotFoundException $e) {
             $this->assertStringContainsString('prawdopodobnie tu', $e->getMessage());
             $this->assertStringContainsString('hahn-kolb.net', $e->getMessage());
+            // liczba zalezy od tego, ile kart 403 poszlo przez reader w calym przebiegu
+            $this->assertMatchesRegularExpression('/reader: odmowa 403 ×[0-9]+/u', $e->getMessage());
             $this->assertStringContainsString('wpisz opis ręcznie', $e->getMessage());
             $this->assertStringNotContainsString('niepewnych', $e->getMessage());
             $this->assertStringNotContainsString('Ponów', $e->getMessage());

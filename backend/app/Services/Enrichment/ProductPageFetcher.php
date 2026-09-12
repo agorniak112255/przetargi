@@ -448,10 +448,11 @@ final class ProductPageFetcher
             // 403 od WAF (hahn-kolb: Akamai) plus padnięty reader to blokada stała, nie
             // chwilowy brak odpowiedzi — „ponów później” nic tu nie da. Osobny powód,
             // żeby wyżej dało się odróżnić ją od timeoutu.
-            $this->rejections[] = [
+            $this->rejections[] = array_filter([
                 'url' => $url,
                 'reason' => $walled ? CandidateRejection::BOT_WALL : CandidateRejection::FETCH_FAILED,
-            ];
+                'detail' => $walled ? $this->blockedPages->failureFor($url) : ($status === null ? 'brak odpowiedzi' : 'status '.$status),
+            ]);
             $snippet = trim((string) ($row['snippet'] ?? ''));
             if ($snippet !== '') {
                 $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000), 'snippet_only' => true];
@@ -474,7 +475,11 @@ final class ProductPageFetcher
         }
         if ($this->looksLikeBotWall($html)) {
             if (! $this->ingestViaReader($url, $goodPages, $images, $documents, $trustedImages)) {
-                $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::BOT_WALL];
+                $this->rejections[] = array_filter([
+                    'url' => $url,
+                    'reason' => CandidateRejection::BOT_WALL,
+                    'detail' => $this->blockedPages->failureFor($url),
+                ]);
                 $snippet = trim((string) ($row['snippet'] ?? ''));
                 if ($snippet !== '') {
                     $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000), 'snippet_only' => true];

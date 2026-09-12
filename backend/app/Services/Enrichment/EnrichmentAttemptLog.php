@@ -73,7 +73,7 @@ final class EnrichmentAttemptLog
             $label.': '.CandidateRejection::summary($rejections),
             urls: array_column($rejections, 'url'),
             why: array_map(
-                static fn (array $row): string => CandidateRejection::label($row['reason']),
+                static fn (array $row): string => CandidateRejection::labelWithDetail($row),
                 $rejections
             ),
         );

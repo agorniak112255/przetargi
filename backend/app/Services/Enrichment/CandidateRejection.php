@@ -70,6 +70,19 @@ final class CandidateRejection
     }
 
     /**
+     * Etykieta z powodem szczegolowym: „blokada WAF, reader tez nie przeszedl (reader 429)”.
+     *
+     * @param  array{url: string, reason: string, detail?: string}  $row
+     */
+    public static function labelWithDetail(array $row): string
+    {
+        $label = self::label((string) $row['reason']);
+        $detail = isset($row['detail']) && is_string($row['detail']) ? trim($row['detail']) : '';
+
+        return $detail !== '' ? $label.' ('.$detail.')' : $label;
+    }
+
+    /**
      * „odrzucono 5 — strona innego producenta 3, brak rodzaju wyrobu w adresie 2”.
      *
      * @param  list<array{url: string, reason: string}>  $rejections
@@ -106,7 +119,13 @@ final class CandidateRejection
                 continue;
             }
             $seen[$key] = true;
-            $out[] = ['url' => (string) $row['url'], 'reason' => (string) $row['reason']];
+            $clean = ['url' => (string) $row['url'], 'reason' => (string) $row['reason']];
+            // „reader 429” — bez tego w przebiegu widac tylko „reader tez nie przeszedl”,
+            // a nie wiadomo, czy to limit, odmowa, czy timeout
+            if (isset($row['detail']) && is_string($row['detail']) && $row['detail'] !== '') {
+                $clean['detail'] = $row['detail'];
+            }
+            $out[] = $clean;
         }
 
         return $out;

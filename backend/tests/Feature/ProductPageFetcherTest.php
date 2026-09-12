@@ -148,7 +148,7 @@ final class ProductPageFetcherTest extends TestCase
         );
         $this->assertSame([], $fetched['pages']);
         $this->assertSame(
-            [['url' => $card, 'reason' => CandidateRejection::BOT_WALL]],
+            [['url' => $card, 'reason' => CandidateRejection::BOT_WALL, 'detail' => 'reader: odmowa 403']],
             $fetched['rejected']
         );
 
@@ -157,7 +157,7 @@ final class ProductPageFetcherTest extends TestCase
             [['url' => $card, 'title' => '', 'snippet' => '']], 'AC01P-00014-00', 1, [], $product,
         );
         $this->assertSame(
-            [['url' => $card, 'reason' => CandidateRejection::FETCH_FAILED]],
+            [['url' => $card, 'reason' => CandidateRejection::FETCH_FAILED, 'detail' => 'brak odpowiedzi']],
             $fetched['rejected']
         );
     }

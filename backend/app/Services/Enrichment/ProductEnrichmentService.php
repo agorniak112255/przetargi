@@ -654,6 +654,7 @@ final class ProductEnrichmentService
             $rawCardPages = $pageSnippets;
             $openWebCardsUnreachable = false;
             $openWebWalledCards = [];
+            $this->walledReaderDetails = [];
             $openWebTried = false;
             if ($pageSnippets === []) {
                 $triedUrls = array_values(array_filter(array_map(
@@ -2131,7 +2132,17 @@ final class ProductEnrichmentService
             : 'Wyszukiwarka wskazała dla '.$product->sku.' tylko niepewnych kandydatów: '
                 .implode(', ', array_slice($other, 0, 2)).' (kod produktu nie stoi w adresie)';
 
-        return $head.' — sklep blokuje pobieranie automatyczne (403, także przez reader).'
+        $reader = '';
+        if ($this->walledReaderDetails !== []) {
+            arsort($this->walledReaderDetails);
+            $parts = [];
+            foreach (array_slice($this->walledReaderDetails, 0, 2, true) as $detail => $n) {
+                $parts[] = $detail.' ×'.$n;
+            }
+            $reader = ' ('.implode(', ', $parts).')';
+        }
+
+        return $head.' — sklep blokuje pobieranie automatyczne, reader też nie przeszedł'.$reader.'.'
             .' Otwórz w przeglądarce, sprawdź, czy to ten produkt, i wpisz opis ręcznie.';
     }
 
@@ -2146,10 +2157,21 @@ final class ProductEnrichmentService
                 return [];
             }
             $urls[] = $row['url'];
+            if (isset($row['detail']) && is_string($row['detail']) && $row['detail'] !== '') {
+                $this->walledReaderDetails[$row['detail']] = ($this->walledReaderDetails[$row['detail']] ?? 0) + 1;
+            }
         }
 
         return array_values(array_unique($urls));
     }
+
+    /**
+     * Powody odmowy readera zebrane przez walledCardUrls w tym przebiegu —
+     * „reader: limit 429 ×8” w komunikacie mówi, czy pomoże klucz API, czy nic.
+     *
+     * @var array<string, int>
+     */
+    private array $walledReaderDetails = [];
 
     /**
      * Listing / zła karta u producenta — szukaj dalej w zmapowanych sklepach.

@@ -25,6 +25,15 @@ final class BlockedPageReader
     private const READER_RETRY_PAUSE_MICROS = 2_000_000;
 
     /**
+     * Dlaczego reader nie oddał strony — per adres. Bez tego przebieg mówił tylko
+     * „reader też nie przeszedł”, a nie wiadomo było, czy to limit Jiny (429),
+     * odmowa, timeout czy strona „nie znaleziono”.
+     *
+     * @var array<string, string>
+     */
+    private array $failures = [];
+
+    /**
      * Zrzut karty produktu (PNG) — gdy CDN obrazków też za Incapsulą (Ansell .ashx).
      */
     public function fetchScreenshot(string $url): ?string
@@ -79,25 +88,36 @@ final class BlockedPageReader
             return null;
         }
 
+        unset($this->failures[$url]);
         $response = $this->requestReader($url);
         if ($response === null) {
+            $this->failures[$url] ??= 'reader nie odpowiedział';
+
             return null;
         }
 
         $markdown = $this->readLimitedBody($response, self::MAX_TEXT_BYTES);
         if ($markdown === '' || mb_strlen($markdown) < 80) {
+            $this->failures[$url] = 'reader oddał pustą stronę';
+
             return null;
         }
         if (str_contains(mb_strtolower($markdown), 'incapsula') && mb_strlen($markdown) < 1200) {
+            $this->failures[$url] = 'zapora także u readera';
+
             return null;
         }
         // Jina oddaje 200 także wtedy, gdy strona zwróciła 404 — dopisuje tylko ostrzeżenie.
         // Ekran „Sorry to interrupt / CSS Error” (sklep na Salesforce) też nie jest kartą.
         if ($this->readerReportsTargetError($markdown) || self::looksLikeAppErrorShell($markdown)) {
+            $this->failures[$url] = 'strona błędu u celu';
+
             return null;
         }
         $head = mb_strtolower(mb_substr($markdown, 0, 500));
         if (str_contains($head, 'product not found') || str_contains($head, 'nie znaleziono produktu')) {
+            $this->failures[$url] = 'strona „nie znaleziono produktu”';
+
             return null;
         }
 
@@ -126,6 +146,7 @@ final class BlockedPageReader
                     ->get('https://r.jina.ai/'.$url);
             } catch (Throwable $e) {
                 Log::info('Blocked page reader failed', ['url' => $url, 'error' => $e->getMessage()]);
+                $this->failures[$url] = 'reader: timeout albo brak połączenia';
 
                 return null;
             }
@@ -133,6 +154,9 @@ final class BlockedPageReader
                 return $response;
             }
             $status = $response->status();
+            // bez „HTTP 403” w tekscie: taki ciag SearchEngineOutage bierze za awarie
+            // wyszukiwarki i produkt szedlby do ponowienia zamiast do reki
+            $this->failures[$url] = $status === 429 ? 'reader: limit 429' : 'reader: odmowa '.$status;
             Log::info('Blocked page reader refused', ['url' => $url, 'status' => $status, 'attempt' => $attempt]);
             if ($status !== 429 && $status < 500) {
                 return null;
@@ -143,6 +167,12 @@ final class BlockedPageReader
         }
 
         return null;
+    }
+
+    /** Powód ostatniej porażki readera dla adresu — do listy odrzuceń w przebiegu. */
+    public function failureFor(string $url): ?string
+    {
+        return $this->failures[trim($url)] ?? null;
     }
 
     /** „Warning: Target URL returned error 404: Not Found” — Jina przeczytała stronę błędu. */
