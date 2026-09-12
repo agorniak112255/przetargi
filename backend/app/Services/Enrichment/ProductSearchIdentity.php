@@ -2429,6 +2429,19 @@ final class ProductSearchIdentity
         if (preg_match('#/(?:investor-cent(?:er|re)|investor-relations|investors|asx-announcements|announcements|media-releases?|news-?room|press-release)(/|$)#', $path) === 1) {
             return true;
         }
+        // Strony zagrożeń, branż i usług producenta („hazards/chemical-resistance”,
+        // „ansellguardian-chemical”) niosą markę i słowo z nazwy produktu, więc filtr
+        // treści je przepuszczał — IXELL X Chemical dostał z nich folder reklamowy.
+        if (preg_match('#/(?:hazards?|industries|industry|solutions|services|resources|why-[a-z]+|[a-z]*guardian[a-z\-]*)(/|$)#', $path) === 1) {
+            return true;
+        }
+        // Na ansell.com karta produktu leży wyłącznie pod /products/…; reszta
+        // (kategorie „protective-clothing”, marki, kampanie) to listingi i marketing.
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        if (str_ends_with($host, 'ansell.com') && ! str_starts_with($host, 'shop.')
+            && ! str_contains($path, '/products/') && ! str_contains($path, '/-/media/')) {
+            return true;
+        }
 
         return false;
     }

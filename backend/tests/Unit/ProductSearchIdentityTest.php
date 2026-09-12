@@ -34,6 +34,37 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertStringNotContainsString('ubranie wodoochronne', $joined);
     }
 
+    public function test_manufacturer_hazard_and_service_pages_are_not_product_cards(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => '7717275050',
+            'name' => 'IXELL X Chemical',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        // „chemical” z nazwy + marka w adresie wystarczaly filtrowi tresci
+        foreach ([
+            'https://www.ansell.com/int/en/hazards/chemical-resistance',
+            'https://www.ansell.com/pl/pl/ansellguardian-chemical',
+            'https://www.ansell.com/us/en/industries/chemical',
+            'https://www.ansell.com/pl/pl/protective-clothing',
+            'https://www.ansell.com/pl/pl/brands/alphatec',
+        ] as $corporate) {
+            $this->assertTrue($id->looksLikeNonProductCardUrl($corporate), $corporate);
+        }
+
+        // karty produktow i zasoby PIM zostaja
+        foreach ([
+            'https://www.ansell.com/pl/pl/products/alphatec-58-535b',
+            'https://www.ansell.com/int/en/products/alphatec-airline-passthrough',
+            'https://www.ansell.com/-/media/projects/ansell/website/pim/product-assets/x.ashx',
+            'https://shop.ansell.com/eu/s/product/hyflex-11-840/01t',
+        ] as $card) {
+            $this->assertFalse($id->looksLikeNonProductCardUrl($card), $card);
+        }
+    }
+
     public function test_investor_announcement_on_manufacturer_domain_is_not_a_product_card(): void
     {
         $id = new ProductSearchIdentity;
