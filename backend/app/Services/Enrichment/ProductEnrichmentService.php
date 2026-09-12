@@ -860,7 +860,19 @@ final class ProductEnrichmentService
                     urls: array_column($pageSnippets, 'url')
                 );
                 $this->recordHostOutcomes([], $fetched);
-                $savedImages = $this->downloadImagesFromFetchedCards($product, $fetched, $pageSnippets);
+                // Opis nie potwierdził produktu, więc zdjęcie jest ostatnią rzeczą,
+                // jaką z karty bierzemy — i musi pochodzić z karty niosącej kod
+                // produktu, a nie dopasowanej pospolitym słowem.
+                $codedCards = $this->cardsCarryProductCode($pageSnippets, $product);
+                $savedImages = $codedCards
+                    ? $this->downloadImagesFromFetchedCards($product, $fetched, $pageSnippets)
+                    : [];
+                if (! $codedCards) {
+                    $this->attemptLog()->add(
+                        'image',
+                        'bez zdjęcia — żadna karta nie niesie kodu produktu w adresie'
+                    );
+                }
                 if ($savedImages !== []) {
                     $this->attemptLog()->add('image', 'zdjęcie z karty mimo cienkiego opisu');
                     $product->update([
@@ -1484,6 +1496,34 @@ final class ProductEnrichmentService
      * @param  list<array{url?: string, text?: string}>  $pages
      * @return list<string>
      */
+    /**
+     * Czy któraś z potwierdzonych kart niesie w adresie kod produktu.
+     *
+     * Gdy opis nie potwierdził produktu, zdjęcie zostaje ostatnią rzeczą, jaką
+     * z karty bierzemy — musi więc pochodzić z karty związanej z produktem
+     * mocniej niż pospolitym słowem. „microflex-93-833” i „ih-72286-10” niosą
+     * kod i dają dobre zdjęcia mimo pustego opisu; „mata-monotone-150cm-x-mb”
+     * pasowała do pasa „GREY PES BLT … 150CM” samym „150cm” i dała mu zdjęcie
+     * osłony kabli. Wskazany ręcznie adres sklepu zostaje zaufany bez tego
+     * warunku — to człowiek wybrał tę stronę.
+     *
+     * @param  list<array{url?: string, title?: string}>  $pages
+     */
+    private function cardsCarryProductCode(array $pages, Product $product): bool
+    {
+        if ($product->hintedShopUrl() !== null) {
+            return true;
+        }
+        foreach ($pages as $page) {
+            $hay = mb_strtolower(((string) ($page['url'] ?? '')).' '.((string) ($page['title'] ?? '')));
+            if ($hay !== ' ' && $this->identity->hayHasProductCode($hay, $product)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Wskazana karta Shoper ma packshot, ale og:description to newsletter —
      * zdjęcie zapisujemy mimo odrzuconego opisu.

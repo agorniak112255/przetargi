@@ -20,6 +20,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
+use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\HybridWebSearchService;
 use App\Services\Enrichment\ManufacturerDomainResolver;
@@ -34,6 +35,7 @@ use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -41,6 +43,8 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
+use Mockery\MockInterface;
+use ReflectionMethod;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -1029,7 +1033,7 @@ final class ProductEnrichmentApiTest extends TestCase
             .'<a href="'.$img.'"><img src="https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46771_750_750/Chodnik-i-dywanik-elektroizolacyjny.webp" alt="Chodnik"></a>'
             .'</body></html>';
 
-        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($html) {
+        Http::fake(function (Request $request) use ($html) {
             $url = $request->url();
             if (str_contains($url, '/userdata/') || str_contains($url, 'productGfx') || str_ends_with($url, '.jpg') || str_ends_with($url, '.webp')) {
                 return Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']);
@@ -1058,6 +1062,86 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
         $this->assertSame(1, $product->images()->count());
         $this->assertStringContainsString('userdata/public/gfx/46771', (string) $product->images()->first()?->source_url);
+    }
+
+    public function test_image_from_unconfirmed_card_needs_product_code_in_url(): void
+    {
+        // Adresy prosto z przebiegow na produkcji. Gdy opis nie potwierdzil
+        // produktu, zdjecie wolno wziac tylko z karty niosacej kod produktu.
+        $service = app(ProductEnrichmentService::class);
+        $decide = new ReflectionMethod($service, 'cardsCarryProductCode');
+        $decide->setAccessible(true);
+
+        // pas 150 cm: karty mat i oslon kabli pasowaly samym „150cm”
+        $belt = $this->makeProduct([
+            'sku' => 'AC01P-00014-00',
+            'name' => 'GREY PES BLT & YKK BCKL LENGTH 150CM',
+            'manufacturer' => 'Ansell',
+        ]);
+        $this->assertFalse($decide->invoke($service, [
+            ['url' => 'https://icd.pl/mata-monotone-150cm-x-mb.html', 'title' => 'Mata monotone 150cm'],
+            ['url' => 'https://icd.pl/dancop-oslona-kabli-150cm.html', 'title' => 'Dancop oslona kabli 150cm'],
+        ], $belt));
+
+        // te same warunki, ale karta niesie kod — zdjecie jest wlasciwe
+        $microflex = $this->makeProduct([
+            'sku' => '93833100',
+            'name' => 'MICROFLEX 93833 SIZE XL (9.5-10.0)',
+            'manufacturer' => 'Ansell',
+        ]);
+        $this->assertTrue($decide->invoke($service, [
+            ['url' => 'https://www.ansell.com/pl/pl/products/microflex-93-833', 'title' => 'MICROFLEX 93-833'],
+        ], $microflex));
+
+        $hyflex = $this->makeProduct([
+            'sku' => '72286100',
+            'name' => 'HYFLEX 72286',
+            'manufacturer' => 'Ansell',
+        ]);
+        $this->assertTrue($decide->invoke($service, [
+            ['url' => 'https://cas-technik.eu/hand-protect/cut-and-stab-protection-gloves/'
+                .'ansell-profood-spectra-72-286-dyneema-cut-resistant-gloves/ih-72286-10',
+                'title' => 'Ansell 72-286'],
+        ], $hyflex));
+
+        // kombinezon „102” dostal karte spodni Carhartt 102438
+        $coverall = $this->makeProduct([
+            'sku' => 'WH20B-00102-09',
+            'name' => '2000-WH STD CVRL HOOD, LOOPS 102.5',
+            'manufacturer' => 'Ansell',
+        ]);
+        $this->assertFalse($decide->invoke($service, [
+            ['url' => 'https://workwearnation.com/products/carhartt-102438-rugged-flex-loose-fit-canvas-bib-overall', 'title' => ''],
+        ], $coverall));
+
+        // ochraniacze „400” dostaly karte butow Carhartt 400022
+        $overshoes = $this->makeProduct([
+            'sku' => 'WH25B-00400-00',
+            'name' => '2500-WH STD OVERSHOES 400.42-46',
+            'manufacturer' => 'Ansell',
+        ]);
+        $this->assertFalse($decide->invoke($service, [
+            ['url' => 'https://www.bhp-gabi.pl/p34016,400022-001-buty-carhartt-greenfields-2-chelsea-boot.html', 'title' => ''],
+        ], $overshoes));
+
+        // ta sama rodzina kodow, ale karta producenta z modelem 417 — zostaje
+        $bound = $this->makeProduct([
+            'sku' => 'WH20B-00417-02',
+            'name' => '2000-WH OVERSHOES 417.39-42',
+            'manufacturer' => 'Ansell',
+        ]);
+        $this->assertTrue($decide->invoke($service, [
+            ['url' => 'https://www.ansell.com/pl/pl/products/alphatec-2000-standard-overshoes-bound-model-417', 'title' => ''],
+        ], $bound));
+
+        // recznie wskazany adres sklepu zostaje zaufany — to czlowiek go wybral
+        $hinted = $this->makeProduct([
+            'sku' => 'AC01P-00014-05',
+            'name' => 'GREY PES BLT & YKK BCKL LENGTH 150CM',
+            'manufacturer' => 'Ansell',
+            'shop_source_url' => 'https://icd.pl/dancop-oslona-kabli-150cm.html',
+        ]);
+        $this->assertTrue($decide->invoke($service, [], $hinted));
     }
 
     public function test_confirmed_card_saves_page_description_when_llm_drops_model(): void
@@ -1115,7 +1199,7 @@ final class ProductEnrichmentApiTest extends TestCase
             .'<img src="'.$img.'" alt="AlphaTec 4000">'
             .'</body></html>';
 
-        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($html) {
+        Http::fake(function (Request $request) use ($html) {
             $url = $request->url();
             if (str_contains($url, '.jpg') || str_contains($url, 'alphatec-4000-151')) {
                 return Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']);
@@ -1200,7 +1284,7 @@ final class ProductEnrichmentApiTest extends TestCase
             .'<img src="'.$img.'" alt="ARMEN 9003">'
             .'</body></html>';
 
-        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($html) {
+        Http::fake(function (Request $request) use ($html) {
             if (str_contains($request->url(), '.jpg')) {
                 return Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']);
             }
@@ -1534,7 +1618,7 @@ final class ProductEnrichmentApiTest extends TestCase
     public function test_card_text_that_does_not_name_product_is_not_a_description(): void
     {
         $service = app(ProductEnrichmentService::class);
-        $method = new \ReflectionMethod($service, 'usableCardDescription');
+        $method = new ReflectionMethod($service, 'usableCardDescription');
         $method->setAccessible(true);
 
         // ekran błędu sklepu Ansell zapisywał się jako opis HyFlex ze statusem „Gotowe”
@@ -1721,7 +1805,7 @@ final class ProductEnrichmentApiTest extends TestCase
             app(PpeAssortment::class),
         );
 
-        $sanitize = new \ReflectionMethod($service, 'sanitizePagesWithLlm');
+        $sanitize = new ReflectionMethod($service, 'sanitizePagesWithLlm');
         $sanitize->setAccessible(true);
         $sanitize->invoke($service, $product, [[
             'url' => 'https://www.ansell.com/pl/pl/products/ringers-r259',
@@ -1742,7 +1826,7 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $search = $this->searchMock();
         $search->shouldReceive('searchBothPhases')->andReturnUsing(static function (): array {
-            app(\App\Services\Enrichment\EnrichmentAttemptLog::class)->add('query', '„HyFlex 11618 Ansell” → 0 wyników');
+            app(EnrichmentAttemptLog::class)->add('query', '„HyFlex 11618 Ansell” → 0 wyników');
 
             return ['results' => [], 'errors' => ['brak wyników']];
         });
@@ -2509,7 +2593,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $verifiedUrl = 'https://res.cloudinary.com/rsc/image/upload/c_pad,w_700/Y0428245-01.jpg';
 
         $service = app(ProductEnrichmentService::class);
-        $method = new \ReflectionMethod($service, 'pickPrimaryImageUrls');
+        $method = new ReflectionMethod($service, 'pickPrimaryImageUrls');
         $picked = $method->invoke(
             $service,
             [$verifiedUrl],
@@ -2532,7 +2616,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $img = 'https://static4.redcart.pl/templates/images/thumb/4697/1024/1024/pl/0/templates/images/products/4697/7dbc670fc4f6909d7aaae4bad4830a19.jpg';
 
         $service = app(ProductEnrichmentService::class);
-        $method = new \ReflectionMethod($service, 'pickPrimaryImageUrls');
+        $method = new ReflectionMethod($service, 'pickPrimaryImageUrls');
         $picked = $method->invoke(
             $service,
             [$img],
@@ -2562,9 +2646,9 @@ final class ProductEnrichmentApiTest extends TestCase
                 'image_urls' => ['https://icd.pl/media/obcy.jpg'],
             ],
         ];
-        $desc = (new \ReflectionMethod($service, 'pagesForDescriptionImages'))
+        $desc = (new ReflectionMethod($service, 'pagesForDescriptionImages'))
             ->invoke($service, $pages, ['https://www.bhp-gabi.pl/p34411,ubranie-101-112-p']);
-        $images = (new \ReflectionMethod($service, 'imagesFromDescriptionPages'))
+        $images = (new ReflectionMethod($service, 'imagesFromDescriptionPages'))
             ->invoke($service, $desc);
 
         $this->assertSame(['https://www.bhp-gabi.pl/media/101-112.jpg'], $images['trusted']);
@@ -2602,7 +2686,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'name' => 'Astro Cleat',
             'manufacturer' => 'GVS',
         ]);
-        $method = new \ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
+        $method = new ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
         $filtered = $method->invoke(app(HybridWebSearchService::class), [
             [
                 'url' => 'https://www.gvs.com/products/nv2032ce-astro-cleat',
@@ -2627,7 +2711,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'name' => 'ROBFM',
             'manufacturer' => 'JS Gloves',
         ]);
-        $method = new \ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
+        $method = new ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
         $filtered = $method->invoke(app(HybridWebSearchService::class), [
             [
                 'url' => 'https://shop.example/rekawice-termiczne',
@@ -2647,7 +2731,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'name' => 'Rękawice 1202 kozia czerwona',
             'manufacturer' => 'Urgent',
         ]);
-        $method = new \ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
+        $method = new ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
         $filtered = $method->invoke(app(HybridWebSearchService::class), [
             [
                 'url' => 'https://www.hq.nasa.gov/alsj/a11/a11.landing.html',
@@ -2671,7 +2755,7 @@ final class ProductEnrichmentApiTest extends TestCase
             'name' => 'Rękawice 1202 kozia czerwona',
             'manufacturer' => 'Urgent',
         ]);
-        $method = new \ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
+        $method = new ReflectionMethod(HybridWebSearchService::class, 'filterResultsByIdentity');
         $filtered = $method->invoke(app(HybridWebSearchService::class), [
             [
                 'url' => 'https://sklep.example/rekawice-urgent-1202',
@@ -3297,7 +3381,7 @@ final class ProductEnrichmentApiTest extends TestCase
      * Bez nich każde wywołanie dropListingResults wysypywało test na starcie i ścieżka
      * wzbogacania przez długi czas nie była sprawdzana. Oczekiwania testu mają pierwszeństwo.
      */
-    private function searchMock(): \Mockery\MockInterface
+    private function searchMock(): MockInterface
     {
         $mock = Mockery::mock(HybridWebSearchService::class);
         $mock->shouldReceive('dropListingResults')
