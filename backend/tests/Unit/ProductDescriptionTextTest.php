@@ -124,4 +124,96 @@ final class ProductDescriptionTextTest extends TestCase
 
         $this->assertSame(['SKU: 1024'], $items);
     }
+
+    public function test_cuts_glued_spec_table_dump_and_keeps_prose(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "Adhesion Strength (Imperial)22 oz/in\n"
+            ."Adhesion Strength (metric)24 N/100mm\n"
+            ."Overall Width (Imperial)4 in, 12 in, 24 in, 36 in\n"
+            ."Total Tape Thickness without Liner (Metric)424.2 mm\n\n"
+            .'Suitable for both indoor and outdoor use, our thick backing and specially formulated '
+            ."rubber adhesive provide a strong bond and clean removal to safeguard various surfaces."
+        );
+
+        $this->assertStringNotContainsString('Adhesion Strength', $plain);
+        $this->assertStringNotContainsString('oz/in', $plain);
+        $this->assertStringNotContainsString('424.2 mm', $plain);
+        $this->assertStringStartsWith('Suitable for both indoor', $plain);
+    }
+
+    public function test_cuts_flattened_comparison_table_of_other_products(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "Taśma ochronna do wymagających zastosowań.\n\n"
+            .'--- --- --- --- Overall Width (Metric) 609.6 mm 76.2 mm, 50.8 mm, 25.4 mm '
+            ."Product Color Tan Transparent\n"
+        );
+
+        $this->assertStringContainsString('Taśma ochronna', $plain);
+        $this->assertStringNotContainsString('609.6 mm', $plain);
+        $this->assertStringNotContainsString('Transparent', $plain);
+    }
+
+    public function test_cuts_size_table_with_unit_in_the_label(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "Rękawice antyprzecięciowe do prac montażowych w suchym środowisku.\n"
+            ."Obwód dłoni (mm)152 178 203 229 254 279 304\n"
+            ."Długość dłoni (mm)160 171 182 192 204 215 226\n"
+        );
+
+        $this->assertStringContainsString('Rękawice antyprzecięciowe', $plain);
+        $this->assertStringNotContainsString('Obwód dłoni', $plain);
+        $this->assertStringNotContainsString('229', $plain);
+    }
+
+    public function test_keeps_standard_designations(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "Odzież ostrzegawcza dla służb drogowych.\nEN ISO 13688\nEN ISO 20471\nISO 13997\n"
+        );
+
+        $this->assertStringContainsString('EN ISO 13688', $plain);
+        $this->assertStringContainsString('EN ISO 20471', $plain);
+        $this->assertStringContainsString('ISO 13997', $plain);
+    }
+
+    public function test_keeps_feature_bullets_that_are_not_table_rows(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "Extremely cut-resistant gloves with grippy micro-cup nitrile coating\n"
+            ."Ideal for high-risk jobs and handling sharp materials in dry conditions\n"
+            ."Touchscreen compatibility for convenience\n"
+            ."Kieszeń na telefon\n"
+            ."Ochrona podbródka zwiększa komfort\n"
+        );
+
+        $this->assertStringContainsString('Extremely cut-resistant gloves', $plain);
+        $this->assertStringContainsString('Touchscreen compatibility', $plain);
+        $this->assertStringContainsString('Kieszeń na telefon', $plain);
+        $this->assertStringContainsString('Ochrona podbródka', $plain);
+    }
+
+    public function test_keeps_sentence_that_merely_carries_a_unit(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "Pielęgnacja można prać w pralce przemysłowej do 40 °C\n"
+            ."Care washable in industrial machine up to 40 °C\n"
+        );
+
+        $this->assertStringContainsString('pralce przemysłowej do 40 °C', $plain);
+        $this->assertStringContainsString('industrial machine up to 40 °C', $plain);
+    }
+
+    public function test_keeps_product_name_whose_model_code_looks_like_a_unit(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "ARTRA Trzewiki bezpieczne ARUBA 941 6060 S3\nKangurka morska 3011\nTitan 850\n"
+        );
+
+        $this->assertStringContainsString('ARUBA 941 6060 S3', $plain);
+        $this->assertStringContainsString('Kangurka morska 3011', $plain);
+        $this->assertStringContainsString('Titan 850', $plain);
+    }
 }
