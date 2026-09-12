@@ -126,6 +126,46 @@ final class AnsellGloveIdentityTest extends TestCase
         $this->assertContains('https://www.ansell.com/pl/pl/products/edge-48-128', $urls);
     }
 
+    public function test_glued_price_list_code_is_queried_as_hyphenated_model(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $hyflex = $this->glove('11580120', 'HyFlex 11580 size 12.0');
+        $edge = $this->glove('48160100', 'EDGE 48160 size 10.0');
+
+        $this->assertSame('11-580', $identity->ansellGloveModel($hyflex));
+        $this->assertSame('HyFlex 11-580', $identity->firstStrongShopPhrase($hyflex));
+        $this->assertStringContainsString('11-580', implode(' ', $identity->searchQueries($hyflex, 'manufacturer')));
+        $this->assertStringNotContainsString('HyFlex 11580 Ansell', $identity->firstStrongShopPhrase($hyflex));
+
+        $this->assertSame('48-160', $identity->ansellGloveModel($edge));
+        $this->assertSame('EDGE 48-160', $identity->firstStrongShopPhrase($edge));
+    }
+
+    public function test_alphatec_hyphen_series_builds_coverall_url_not_glove_slug(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $suit = $this->glove('210000047', 'AlphaTec 66-300 model 111-G09, 3XL');
+
+        $this->assertSame('66-300', $identity->ansellCatalogBits($suit)['series']);
+        $this->assertSame('111', $identity->ansellCatalogBits($suit)['model']);
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-66-300-ultrasonically-welded-taped-model-111',
+            $identity->ansellOfficialProductUrls($suit)
+        );
+        $this->assertStringContainsString('66-300', $identity->firstStrongShopPhrase($suit));
+        $this->assertNotContains('111', $identity->ansellStyleCodes($suit));
+    }
+
+    public function test_klngd_price_name_is_searched_as_kleenguard_model(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $g80 = $this->glove('25625', 'KLNGD G80 Gloves Nitrile Gauntlet 11');
+        $g10 = $this->glove('54335', 'KG G10 Flex Ntrl Glv Blue XL');
+
+        $this->assertSame('KleenGuard G80', $identity->firstStrongShopPhrase($g80));
+        $this->assertSame('KleenGuard G10', $identity->firstStrongShopPhrase($g10));
+    }
+
     private function glove(string $sku, string $name): Product
     {
         return new Product(['sku' => $sku, 'name' => $name, 'manufacturer' => 'Ansell']);
