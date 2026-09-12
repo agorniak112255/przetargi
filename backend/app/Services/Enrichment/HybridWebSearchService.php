@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Exceptions\TavilyQuotaExceededException;
+use App\Models\CatalogHost;
 use App\Models\CatalogSearchSite;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
@@ -36,6 +37,12 @@ class HybridWebSearchService
 
     /** Ile fraz z otwartego internetu — dopiero po listach sklepów / producencie. */
     private const OPEN_QUERY_ATTEMPTS = 8;
+
+    /** Hosty, które mamy w lokalnym indeksie — pytanie o nie wyszukiwarki nic nie wnosi. */
+    private const INDEXED_HOSTS_CACHE_KEY = 'catalog_indexed_hosts_v1';
+
+    /** @var array<string, true>|null */
+    private ?array $indexedHosts = null;
 
     /** Ile zapytań site: (oficjalna + sklepy) — nie tylko pierwsze 2 z listy marki. */
     private const SITE_QUERY_ATTEMPTS = 4;
@@ -323,7 +330,9 @@ class HybridWebSearchService
     {
         $skuQuery = $this->primarySkuQuery($product, $this->buildQueries($product, 'manufacturer'));
         foreach (['manufacturer', 'industry'] as $phase) {
-            $ladder = $this->openSearchQueries($product, $this->buildQueries($product, $phase));
+            // Do czyszczenia bierzemy pelna drabinke, takze zapytania site: do
+            // zaindeksowanych sklepow - one moga siedziec w cache z wczesniej.
+            $ladder = $this->openSearchQueries($product, $this->buildQueries($product, $phase), false);
             // Darmowe szukanie ma wlasny cache po tresci zapytania, w tym pamiec
             // zapytan bez wynikow. Bez tego „wyczysc cache i sprobuj ponownie”
             // nic by nie dalo akurat produktom, ktore sie nie udaly.
@@ -737,7 +746,7 @@ class HybridWebSearchService
      * @param  list<string>  $queries
      * @return list<string>
      */
-    private function openSearchQueries(Product $product, array $queries): array
+    private function openSearchQueries(Product $product, array $queries, bool $skipIndexedHosts = true): array
     {
         $siteQueries = [];
         foreach ($queries as $query) {
@@ -801,10 +810,83 @@ class HybridWebSearchService
             }
         }
 
-        return array_merge(
-            $site,
-            array_slice($open, 0, max(1, self::OPEN_QUERY_ATTEMPTS - count($site)))
-        );
+        // Budżet fraz z otwartego internetu liczymy przed odsianiem, żeby
+        // wycięte „site:” nie zamieniły się po prostu na inne zapytania.
+        $openSlice = array_slice($open, 0, max(1, self::OPEN_QUERY_ATTEMPTS - count($site)));
+        if ($skipIndexedHosts) {
+            $site = array_values(array_filter(
+                $site,
+                fn (string $q): bool => ! $this->hostIsIndexedLocally($this->siteQueryHost($q))
+            ));
+        }
+
+        return array_merge($site, $openSlice);
+    }
+
+    /**
+     * Domena z operatora „site:”. „site:ansell.com/products” to nadal ansell.com,
+     * a ścieżka i tak bywa przez silniki ignorowana.
+     */
+    private function siteQueryHost(string $query): string
+    {
+        if (preg_match('/\bsite:([^\s]+)/i', $query, $m) !== 1) {
+            return '';
+        }
+        $host = mb_strtolower(trim($m[1]));
+        $host = explode('/', $host)[0];
+
+        return (string) preg_replace('/^www\./', '', $host);
+    }
+
+    /**
+     * Czy ten sklep mamy w całości u siebie.
+     *
+     * Lokalny indeks przeszukujemy przed wyszukiwarką i obejmuje on wszystkie
+     * strony takiego hosta, więc „site:ten-sklep fraza” nie może już dołożyć
+     * adresu, którego byśmy nie znali. W batchu #246 piętnaście z szesnastu
+     * zapytań szło właśnie do sklepów zaindeksowanych u nas w komplecie —
+     * i wszystkie wróciły ze stronami spoza żądanej domeny.
+     */
+    private function hostIsIndexedLocally(string $host): bool
+    {
+        if ($host === '') {
+            return false;
+        }
+        if ($this->indexedHosts === null) {
+            $this->indexedHosts = $this->loadIndexedHosts();
+        }
+
+        return isset($this->indexedHosts[$host]);
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private function loadIndexedHosts(): array
+    {
+        try {
+            return Cache::remember(
+                self::INDEXED_HOSTS_CACHE_KEY,
+                now()->addMinutes(10),
+                static function (): array {
+                    $out = [];
+                    foreach (CatalogHost::query()->where('pages_count', '>', 0)->pluck('host') as $host) {
+                        $bare = preg_replace('/^www\./', '', mb_strtolower(trim((string) $host))) ?? '';
+                        if ($bare !== '') {
+                            $out[$bare] = true;
+                        }
+                    }
+
+                    return $out;
+                }
+            );
+        } catch (Throwable $e) {
+            // Brak tabeli / migracji nie może wywalić wyszukiwania — wtedy po prostu
+            // pytamy wyszukiwarkę tak jak dotąd.
+            Log::info('Indexed host list unavailable', ['error' => $e->getMessage()]);
+
+            return [];
+        }
     }
 
     /**
@@ -1167,7 +1249,13 @@ class HybridWebSearchService
             }
         }
 
-        return array_values(array_unique(array_slice($queries, 0, self::FALLBACK_SITE_ATTEMPTS)));
+        $queries = array_values(array_unique(array_slice($queries, 0, self::FALLBACK_SITE_ATTEMPTS)));
+
+        // Sklep, ktorego wszystkie strony mamy u siebie, przeszukalismy juz lokalnie.
+        return array_values(array_filter(
+            $queries,
+            fn (string $q): bool => ! $this->hostIsIndexedLocally($this->siteQueryHost($q))
+        ));
     }
 
     /**

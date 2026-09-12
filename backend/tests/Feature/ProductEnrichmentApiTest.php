@@ -8,6 +8,7 @@ use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\EnrichProductJob;
 use App\Jobs\PrefetchProductSourcesJob;
 use App\Models\AiSetting;
+use App\Models\CatalogHost;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
@@ -1062,6 +1063,59 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
         $this->assertSame(1, $product->images()->count());
         $this->assertStringContainsString('userdata/public/gfx/46771', (string) $product->images()->first()?->source_url);
+    }
+
+    public function test_site_queries_skip_shops_we_have_in_the_local_index(): void
+    {
+        Cache::flush();
+        CatalogHost::query()->create(['host' => 'icd.pl', 'pages_count' => 29767]);
+        CatalogHost::query()->create(['host' => 'bhp-gabi.pl', 'pages_count' => 16980]);
+        // host znany, ale bez ani jednej strony — indeks nic o nim nie wie
+        CatalogHost::query()->create(['host' => 'pusty-sklep.pl', 'pages_count' => 0]);
+
+        $product = $this->makeProduct([
+            'sku' => 'AC01P-00022-00-N0C',
+            'name' => 'AVNT PASSTHRU WHSTL & RECTUS 96KS',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $hybrid = app(HybridWebSearchService::class);
+        $build = new ReflectionMethod($hybrid, 'openSearchQueries');
+        $build->setAccessible(true);
+
+        $queries = [
+            'site:icd.pl AlphaTec Pass-through',
+            'site:www.bhp-gabi.pl AlphaTec Pass-through',
+            'site:pusty-sklep.pl AlphaTec Pass-through',
+            'site:nieznany-sklep.pl AlphaTec Pass-through',
+            'AlphaTec Pass-through Ansell',
+        ];
+
+        $ladder = $build->invoke($hybrid, $product, $queries);
+        $joined = implode(' | ', $ladder);
+
+        // sklepy, ktore mamy u siebie w calosci - wyszukiwarka nic nie doda
+        $this->assertStringNotContainsString('site:icd.pl', $joined);
+        $this->assertStringNotContainsString('site:www.bhp-gabi.pl', $joined);
+        // reszta idzie do wyszukiwarki jak dotad
+        $this->assertStringContainsString('site:pusty-sklep.pl', $joined);
+        $this->assertStringContainsString('site:nieznany-sklep.pl', $joined);
+
+        // ten sam filtr chroni druga sciezke - zapytania do zmapowanych sklepow
+        $host = new ReflectionMethod($hybrid, 'siteQueryHost');
+        $host->setAccessible(true);
+        $indexed = new ReflectionMethod($hybrid, 'hostIsIndexedLocally');
+        $indexed->setAccessible(true);
+        // sciezka i „www.” w operatorze nie moga zmylic dopasowania hosta
+        $this->assertSame('icd.pl', $host->invoke($hybrid, 'site:icd.pl/products AlphaTec'));
+        $this->assertSame('bhp-gabi.pl', $host->invoke($hybrid, 'site:www.bhp-gabi.pl AlphaTec'));
+        $this->assertTrue($indexed->invoke($hybrid, 'icd.pl'));
+        $this->assertFalse($indexed->invoke($hybrid, 'pusty-sklep.pl'));
+        $this->assertFalse($indexed->invoke($hybrid, ''));
+
+        // czyszczenie cache musi widziec pelna drabinke, tez wyciete site:
+        $full = implode(' | ', $build->invoke($hybrid, $product, $queries, false));
+        $this->assertStringContainsString('site:icd.pl', $full);
     }
 
     public function test_image_from_unconfirmed_card_needs_product_code_in_url(): void
