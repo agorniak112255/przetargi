@@ -6,7 +6,9 @@ namespace Tests\Unit;
 
 use App\Models\Product;
 use App\Services\Enrichment\AnsellOfficialCatalog;
+use App\Services\Enrichment\HybridWebSearchService;
 use Illuminate\Support\Facades\Http;
+use ReflectionClass;
 use Tests\TestCase;
 
 final class AnsellOfficialCatalogTest extends TestCase
@@ -183,6 +185,33 @@ final class AnsellOfficialCatalogTest extends TestCase
         ]));
 
         $this->assertSame($url, $hits[0]['url'] ?? null);
+    }
+
+    public function test_named_official_card_is_used_without_sku_in_url(): void
+    {
+        $url = 'https://www.ansell.com/pl/pl/products/alphatec-glove-connector';
+        Http::fake([
+            'https://r.jina.ai/'.$url => Http::response(
+                "# AlphaTec Glove Connector\n\n"
+                .'AlphaTec Glove Connector 070 connects chemical protective gloves to the suit. '
+                .str_repeat('opis ', 40),
+                200
+            ),
+            '*' => Http::response('Title: Product Not Found | Ansell'."\n\n".str_repeat('nav ', 40), 200),
+        ]);
+
+        $product = new Product([
+            'sku' => 'AC01P-00070-00',
+            'name' => 'AlphaTec Glove Link 070',
+            'manufacturer' => 'Ansell',
+            'category' => 'rekawice',
+        ]);
+        $local = (new ReflectionClass(HybridWebSearchService::class))->getMethod('hitsFromLocalSources');
+        $local->setAccessible(true);
+        $pack = $local->invoke(app(HybridWebSearchService::class), $product);
+
+        $this->assertSame('ansell_official', $pack['provider'] ?? null);
+        $this->assertSame($url, $pack['results'][0]['url'] ?? null);
     }
 
     public function test_finds_kleenguard_g10_comfort_plus_on_labpro(): void

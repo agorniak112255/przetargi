@@ -124,9 +124,11 @@ class HybridWebSearchService
         }
         $official = $this->confirmedCatalogHits($this->ansellOfficial->find($product), $product);
         $codedOfficial = $this->resultsCarryProductCode($official, $product);
-        if ($this->hasEnoughPageResults($codedOfficial, 1)) {
+        // slug alphatec-glove-connector nie niesie SKU — find() już potwierdził treść karty
+        $usableOfficial = $codedOfficial !== [] ? $codedOfficial : $official;
+        if ($this->hasEnoughPageResults($usableOfficial, 1)) {
             return [
-                'results' => array_slice($codedOfficial, 0, 8),
+                'results' => array_slice($usableOfficial, 0, 8),
                 'images' => [],
                 'provider' => 'ansell_official',
                 'raw_content' => null,
