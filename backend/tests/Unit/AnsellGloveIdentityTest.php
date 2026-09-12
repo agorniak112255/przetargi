@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Models\Product;
+use App\Services\Enrichment\CatalogIndexSearch;
 use App\Services\Enrichment\ProductSearchIdentity;
 use Tests\TestCase;
 
@@ -102,6 +103,30 @@ final class AnsellGloveIdentityTest extends TestCase
         $this->assertSame('91-225', $identity->ansellGloveModel($this->glove('91225090', 'AccuTech 91225 Size 9.0')));
         // cennik gubi wiodące zero w SKU
         $this->assertSame('09-430', $identity->ansellGloveModel($this->glove('9430100', 'AlphaTec 09430 Size 10,0')));
+    }
+
+    public function test_size_stripped_sku_is_not_the_alphatec_09_430_card(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $product = $this->glove('9430100', 'AlphaTec 09430 Size 10,0');
+        $peli = 'https://strefa998.pl/system-oswietleniowy-peli/798-peli-model-9430-rals-zolte.html';
+        $card = 'https://www.ansell.com/pl/pl/products/alphatec-09-430';
+        $shop = 'https://bhp-sklep.com.pl/produkt/ansell-09-430-scorpio-rekawice/';
+
+        $this->assertSame('9430', $identity->catalogSkuWithoutSize($product));
+        $this->assertTrue($identity->isAnsellGloveWarehouseRemnant('9430', $product));
+        $this->assertNotContains('9430', $identity->productCodes($product));
+        $this->assertNotContains('9430', app(CatalogIndexSearch::class)->codes($product));
+        $this->assertContains('09-430', $identity->productCodes($product));
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-09-430',
+            $identity->ansellOfficialProductUrls($product)
+        );
+        $this->assertFalse($identity->hayHasProductCode($peli, $product));
+        $this->assertFalse($identity->urlOrTitleCarriesCodeFamily($peli, 'Peli 9430 RALS', $product));
+        $this->assertTrue($identity->hayMentionsProduct($card.' AlphaTec 09-430', $product));
+        $this->assertTrue($identity->hayHasProductCode($shop, $product));
+        $this->assertTrue($identity->hayMentionsProduct($shop, $product));
     }
 
     public function test_number_in_the_name_alone_is_not_a_model(): void

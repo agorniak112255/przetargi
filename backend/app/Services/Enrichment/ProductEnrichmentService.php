@@ -475,7 +475,7 @@ final class ProductEnrichmentService
 
     private function prefetchPackKey(Product $product): string
     {
-        return 'enrich_prefetch_pack:v2:'.$product->id;
+        return 'enrich_prefetch_pack:v3:'.$product->id;
     }
 
     /**

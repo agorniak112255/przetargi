@@ -2028,6 +2028,12 @@ final class ProductSearchIdentity
         if ($this->hayHasDistinctiveNamePhrase($hay, $product)) {
             return true;
         }
+        $gloveModel = $this->ansellGloveModel($product);
+        if ($gloveModel !== null
+            && $this->hayHasAnsellGloveModel($hay, $gloveModel)
+            && $this->hayHasBrand($hay, $product)) {
+            return true;
+        }
         $brands = $this->acceptedBrands($product);
         $tokens = $this->matchTokens($product);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
@@ -2643,7 +2649,8 @@ final class ProductSearchIdentity
             }
         }
         $withoutSize = $this->catalogSkuWithoutSize($product);
-        if ($withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)) {
+        if ($withoutSize !== '' && mb_strtolower($withoutSize) !== mb_strtolower($sku)
+            && ! $this->isAnsellGloveWarehouseRemnant($withoutSize, $product)) {
             $codes[] = $withoutSize;
         }
         foreach ($this->catalogArticleCodes($product) as $article) {
@@ -2677,7 +2684,12 @@ final class ProductSearchIdentity
             $codes[] = ltrim($sku, '0');
         }
 
-        return array_values(array_unique(array_map('mb_strtolower', $codes)));
+        $codes = array_values(array_unique(array_map('mb_strtolower', $codes)));
+
+        return array_values(array_filter(
+            $codes,
+            fn (string $code): bool => ! $this->isAnsellGloveWarehouseRemnant($code, $product)
+        ));
     }
 
     /**
@@ -2931,7 +2943,7 @@ final class ProductSearchIdentity
         }
         $codes = array_values(array_unique($codes));
         if ($this->gluedNumericModelConfirmsCard($url.' '.$title, $product)) {
-            return true;
+            return $this->ansellGloveUrlCarriesModel($url, $title, $product);
         }
         if ($codes === []) {
             return false;
@@ -2941,12 +2953,36 @@ final class ProductSearchIdentity
             $token = (string) $token;
             foreach ($codes as $code) {
                 if ($this->tokenMatchesOurCode($token, (string) $code)) {
-                    return true;
+                    return $this->ansellGloveUrlCarriesModel($url, $title, $product);
                 }
             }
         }
 
         return false;
+    }
+
+    /** 09-430 w slugu, nie samo 9430 z cennika (Peli 9430). */
+    private function ansellGloveUrlCarriesModel(string $url, string $title, Product $product): bool
+    {
+        $model = $this->ansellGloveModel($product);
+
+        return $model === null || $this->hayHasAnsellGloveModel($url.' '.$title, $model);
+    }
+
+    /** 9430100 − rozmiar 10 = 9430; karta Ansella to 09-430. */
+    public function isAnsellGloveWarehouseRemnant(string $code, Product $product): bool
+    {
+        $model = $this->ansellGloveModel($product);
+        if ($model === null) {
+            return false;
+        }
+        $codeDigits = preg_replace('/\D+/u', '', $code) ?? '';
+        $modelDigits = preg_replace('/\D+/u', '', $model) ?? '';
+        $stripped = preg_replace('/\D+/u', '', $this->catalogSkuWithoutSize($product)) ?? '';
+
+        return $codeDigits !== '' && $stripped !== '' && $modelDigits !== ''
+            && $codeDigits === $stripped
+            && $stripped !== $modelDigits;
     }
 
     /**
@@ -3496,7 +3532,7 @@ final class ProductSearchIdentity
         $out = [];
         foreach ([$this->catalogSkuWithoutSize($product), trim((string) $product->sku)] as $code) {
             $code = trim($code);
-            if ($code === '') {
+            if ($code === '' || $this->isAnsellGloveWarehouseRemnant($code, $product)) {
                 continue;
             }
             $key = mb_strtolower($code);
@@ -3505,6 +3541,9 @@ final class ProductSearchIdentity
                 $out[] = $code;
             }
             foreach ($sizes->skuSearchFallbacks($code) as $fallback) {
+                if ($this->isAnsellGloveWarehouseRemnant($fallback, $product)) {
+                    continue;
+                }
                 $fallbackKey = mb_strtolower($fallback);
                 if (! isset($seen[$fallbackKey])) {
                     $seen[$fallbackKey] = true;

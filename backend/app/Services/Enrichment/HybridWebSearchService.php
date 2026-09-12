@@ -19,7 +19,7 @@ use Throwable;
 
 class HybridWebSearchService
 {
-    private const SEARCH_CACHE_VERSION = 'v63';
+    private const SEARCH_CACHE_VERSION = 'v64';
 
     /** Ile wyników brać z darmowej wyszukiwarki przed filtrem tożsamości produktu. */
     private const FREE_SEARCH_CANDIDATES = 20;
@@ -122,14 +122,6 @@ class HybridWebSearchService
         } else {
             $this->attemptLog()->add('catalog', 'indeks sitemap: '.count($catalogHits).' kart');
         }
-        if ($this->hasEnoughPageResults($codedCatalog, 1)) {
-            return [
-                'results' => array_slice(array_merge($codedCatalog, $this->nameOnlyCatalogHits), 0, 8),
-                'images' => [],
-                'provider' => 'catalog_index',
-                'raw_content' => null,
-            ];
-        }
         $official = $this->confirmedCatalogHits($this->ansellOfficial->find($product), $product);
         $codedOfficial = $this->resultsCarryProductCode($official, $product);
         if ($this->hasEnoughPageResults($codedOfficial, 1)) {
@@ -137,6 +129,14 @@ class HybridWebSearchService
                 'results' => array_slice($codedOfficial, 0, 8),
                 'images' => [],
                 'provider' => 'ansell_official',
+                'raw_content' => null,
+            ];
+        }
+        if ($this->hasEnoughPageResults($codedCatalog, 1)) {
+            return [
+                'results' => array_slice(array_merge($codedCatalog, $this->nameOnlyCatalogHits), 0, 8),
+                'images' => [],
+                'provider' => 'catalog_index',
                 'raw_content' => null,
             ];
         }

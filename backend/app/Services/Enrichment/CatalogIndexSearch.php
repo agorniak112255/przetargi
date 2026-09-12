@@ -147,7 +147,12 @@ final class CatalogIndexSearch
             }
         }
 
-        return array_values(array_unique($out));
+        $out = array_values(array_unique($out));
+
+        return array_values(array_filter(
+            $out,
+            fn (string $code): bool => ! $this->identity->isAnsellGloveWarehouseRemnant($code, $product)
+        ));
     }
 
     /**
