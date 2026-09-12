@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Services\Presta\ProductCategorySanitizer;
 use App\Support\ProductSizeVariant;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use Throwable;
@@ -324,6 +325,10 @@ final class PriceListImportService
                 $payload = $this->clampProductFields($payload);
                 if (($payload['description'] ?? null) === null) {
                     unset($payload['description']);
+                }
+                // cennik bez kolumny modelu nie kasuje nazwy modelu z poprzedniego importu
+                if (($payload['model_name'] ?? null) === null) {
+                    unset($payload['model_name']);
                 }
                 $existing = $this->findExistingProduct($sku, $payload, $byManufacturer);
                 if ($existing !== null) {
@@ -675,7 +680,7 @@ final class PriceListImportService
 
             $cols = is_array($sheetMap['columns'] ?? null) ? $sheetMap['columns'] : [];
             $map = [];
-            foreach (['sku', 'sku_alt', 'name', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'currency'] as $key) {
+            foreach (['sku', 'sku_alt', 'name', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'] as $key) {
                 if (isset($cols[$key]) && is_numeric($cols[$key])) {
                     $map[$key] = (int) $cols[$key];
                 }
@@ -1004,7 +1009,7 @@ final class PriceListImportService
 
     /**
      * @param  array<string, mixed>  $payload
-     * @param  array<string, \Illuminate\Support\Collection<int, Product>>  $byManufacturer
+     * @param  array<string, Collection<int, Product>>  $byManufacturer
      */
     private function findExistingProduct(string $sku, array $payload, array &$byManufacturer): ?Product
     {
@@ -1345,6 +1350,7 @@ final class PriceListImportService
             'product' => [
                 'sku' => $sku,
                 'name' => $name,
+                'model_name' => $this->modelNameFromRow($row, $map, $sku),
                 'manufacturer' => $manufacturer,
                 'ean' => isset($map['ean']) ? trim((string) ($row[$map['ean']] ?? '')) ?: null : null,
                 'category' => $this->cleanCategory(is_string($category) ? $category : null, $name),
@@ -1361,6 +1367,29 @@ final class PriceListImportService
                 '_purchase_from_file' => $purchaseFromFile,
             ],
         ];
+    }
+
+    /**
+     * Nazwa modelu z cennika (Bollé: BAXTER, RUSH+ 2.0 XP). Musi mieć literę —
+     * „2.0” samo w sobie to nie model — i nie może powtarzać kodu produktu.
+     *
+     * @param  array<int, mixed>  $row
+     * @param  array<string, int>  $map
+     */
+    private function modelNameFromRow(array $row, array $map, string $sku): ?string
+    {
+        if (! isset($map['model_name'])) {
+            return null;
+        }
+        $value = trim((string) preg_replace('/\s+/u', ' ', (string) ($row[$map['model_name']] ?? '')));
+        if ($value === '' || preg_match('/\p{L}/u', $value) !== 1 || mb_strlen($value) > 120) {
+            return null;
+        }
+        if (mb_strtolower($value) === mb_strtolower(trim($sku))) {
+            return null;
+        }
+
+        return $value;
     }
 
     private function looksLikeNonProductName(string $name): bool
@@ -1650,6 +1679,7 @@ final class PriceListImportService
         $limits = [
             'category' => 255,
             'manufacturer' => 100,
+            'model_name' => 120,
             'packaging' => 120,
             'ean' => 32,
             'currency' => 8,

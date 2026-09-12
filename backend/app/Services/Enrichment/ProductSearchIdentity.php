@@ -2225,6 +2225,13 @@ final class ProductSearchIdentity
         if ($this->looksLikeUnrelatedHandToolPage($hay, $product)) {
             return false;
         }
+        // Nazwa modelu z cennika (BAXTER dla BAXCSP) z marką na stronie to tożsamość
+        // karty — nazwa produktu u Bollé jest opisem soczewek („taśma elastyczna”),
+        // więc bramka typu z nazwy zjadłaby każdą właściwą kartę.
+        $modelVerdict = $this->modelNameVerdict($hay, $product);
+        if ($modelVerdict !== null) {
+            return $modelVerdict;
+        }
         if (! $this->hayHasRequiredTypeFromName($hay, $product)) {
             return false;
         }
@@ -3243,6 +3250,12 @@ final class ProductSearchIdentity
     public function shopIdentityPhrases(Product $product): array
     {
         $out = [];
+        // nazwa modelu z cennika idzie pierwsza: BAXTER dla BAXCSP, gdy nazwa
+        // produktu to opis soczewek, a kodu nie ma w żadnym sklepie jako słowa
+        $modelName = $this->modelNamePhrase($product);
+        if ($modelName !== '') {
+            $out[] = $modelName;
+        }
         $ansellPhrase = $this->ansellSeriesModelPhrase($product);
         if ($ansellPhrase !== '') {
             $out[] = $ansellPhrase;
@@ -3317,10 +3330,14 @@ final class ProductSearchIdentity
 
         $ranked = $this->preferSpecificShopPhrases(array_values($uniq), $product);
         $ranked = $this->preferNumberFromName($ranked, $product);
+        // nazwa modelu z cennika na czele — to ona idzie do sklepu i do site:
+        if ($modelName !== '') {
+            $ranked = array_values(array_unique([$modelName, ...$ranked]));
+        }
 
         return array_values(array_filter(
             $ranked,
-            fn (string $phrase): bool => $this->isStrongShopPhrase($phrase)
+            fn (string $phrase): bool => ($phrase === $modelName || $this->isStrongShopPhrase($phrase))
                 // Sama marka („OX-ON”) nie jest tożsamością modelu — pasuje do całego katalogu.
                 && ! $this->phraseIsBrandOnly($phrase, $product)
                 && ! $this->phraseIsTypeOrColorOnly($phrase)
@@ -3610,6 +3627,10 @@ final class ProductSearchIdentity
 
     public function firstStrongShopPhrase(Product $product): string
     {
+        $modelName = $this->modelNamePhrase($product);
+        if ($modelName !== '') {
+            return $modelName;
+        }
         $ansellPhrase = $this->ansellSeriesModelPhrase($product);
         if ($ansellPhrase !== '') {
             return $ansellPhrase;
@@ -3685,6 +3706,98 @@ final class ProductSearchIdentity
         }
 
         return false;
+    }
+
+    /**
+     * true — nazwa modelu (albo sam kod) i marka są na stronie, a typ z kategorii się
+     * zgadza; false — strona niesie kod rodzeństwa z cennika (BAXPSI przy BAXCSP);
+     * null — nazwa modelu nic nie rozstrzyga, decydują pozostałe reguły.
+     */
+    private function modelNameVerdict(string $hay, Product $product): ?bool
+    {
+        $model = mb_strtolower($this->modelNamePhrase($product));
+        if ($model === '') {
+            return null;
+        }
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+        foreach ($this->siblingModelCodes($product) as $sibling) {
+            if ($this->tokenInHay($hay, $hayCompact, $sibling)) {
+                return false;
+            }
+        }
+        $brands = $this->acceptedBrands($product);
+        if ($brands !== [] && ! $this->hayHasAnyBrand($hay, $hayCompact, $brands)) {
+            return null;
+        }
+        $modelCompact = $this->compactCode($model);
+        $hasModel = $this->tokenInHay($hay, $hayCompact, $model)
+            // „RUSH+ 2.0 XP” w adresie to „rush-2-0-xp” — sklejona forma
+            || (preg_match('/\s/u', $model) === 1 && $modelCompact !== '' && str_contains($hayCompact, $modelCompact));
+        $skuCompact = $this->compactCode((string) $product->sku);
+        $hasCode = $skuCompact !== '' && $this->tokenInHay($hay, $hayCompact, $skuCompact);
+        if (! $hasModel && ! $hasCode) {
+            return null;
+        }
+        // typ z kategorii („Okulary ochronne”) musi stać na stronie — Bollé ma też gogle narciarskie
+        $page = $this->normalizeTypeText($hay);
+        foreach ($this->typeStemsInText((string) ($product->category ?? '')) as $stems) {
+            if (! $this->textHasTypeStem($page, $stems)) {
+                return null;
+            }
+        }
+
+        return true;
+    }
+
+    /** @var array<string, list<string>> */
+    private array $siblingCodes = [];
+
+    /**
+     * Kody innych wariantów tego samego modelu z cennika (BAXPSI, BAXPSF przy
+     * BAXCSP) — karta z takim kodem to karta rodzeństwa, nie nasza.
+     *
+     * @return list<string>
+     */
+    private function siblingModelCodes(Product $product): array
+    {
+        $model = trim((string) ($product->model_name ?? ''));
+        if ($model === '' || ! $product->exists) {
+            return [];
+        }
+        $own = $this->compactCode((string) $product->sku);
+        $key = mb_strtolower(trim((string) $product->manufacturer)).'|'.mb_strtolower($model).'|'.$product->getKey();
+        if (! isset($this->siblingCodes[$key])) {
+            $codes = [];
+            $skus = Product::query()
+                ->where('manufacturer', (string) $product->manufacturer)
+                ->where('model_name', $model)
+                ->whereKeyNot($product->getKey())
+                ->limit(50)
+                ->pluck('sku');
+            foreach ($skus as $sku) {
+                $compact = $this->compactCode((string) $sku);
+                if ($compact !== '' && $compact !== $own) {
+                    $codes[] = $compact;
+                }
+            }
+            $this->siblingCodes[$key] = array_values(array_unique($codes));
+        }
+
+        return $this->siblingCodes[$key];
+    }
+
+    /** Nazwa modelu z cennika jako fraza sklepowa — tylko gdy ma literę i nie jest samym kodem. */
+    public function modelNamePhrase(Product $product): string
+    {
+        $value = trim((string) preg_replace('/\s+/u', ' ', (string) ($product->model_name ?? '')));
+        if ($value === '' || preg_match('/\p{L}/u', $value) !== 1) {
+            return '';
+        }
+        if ($this->compactCode($value) === $this->compactCode((string) $product->sku)) {
+            return '';
+        }
+
+        return $value;
     }
 
     public function isStrongShopPhrase(string $phrase): bool
@@ -4719,6 +4832,10 @@ final class ProductSearchIdentity
         }
         $first = trim(explode('/', $m)[0] ?? $m);
         $first = trim(explode('(', $first)[0] ?? $first);
+        // cennik ma „Bole”, sklepy piszą Bollé/Bolle — zapytanie z „Bole” nic nie znajdzie
+        if (in_array(mb_strtolower($first), ['bole', 'bolle', 'bollé', 'bolle safety', 'bollé safety'], true)) {
+            return 'Bolle';
+        }
 
         return mb_substr($first, 0, 40);
     }
@@ -5396,6 +5513,10 @@ final class ProductSearchIdentity
             'eider' => ['eider', 'cerva'],
             'cerva' => ['eider', 'cerva'],
             'infield' => ['infield'],
+            'bole' => ['bolle', 'bollé', 'bole'],
+            'bolle' => ['bolle', 'bollé', 'bole'],
+            'bollé' => ['bolle', 'bollé', 'bole'],
+            'bollesafety' => ['bolle', 'bollé', 'bole'],
         ];
         $out = [];
         if ($compact !== '' && (mb_strlen($compact) >= 4

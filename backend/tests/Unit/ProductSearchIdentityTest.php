@@ -156,6 +156,44 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertStringContainsString('ubranie wodoochronne', $joined);
     }
 
+    public function test_price_list_model_name_identifies_bolle_card(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'BAXCSP',
+            'name' => 'Soczewki Copper PC (CSP) - powłoki PLATINUM - czarno-niebieskie oprawy PC - uszczelka piankowa i taśma elastyczna w kompletacji',
+            'model_name' => 'BAXTER',
+            'manufacturer' => 'Bole',
+            'category' => 'Okulary ochronne',
+        ]);
+
+        $this->assertSame('BAXTER', $id->shopIdentityPhrases($product)[0] ?? null);
+        $this->assertSame('BAXTER', $id->firstStrongShopPhrase($product));
+        $this->assertContains('Bolle BAXTER', $id->searchQueries($product, 'named'));
+
+        // nazwa modelu + marka na karcie okularów: nazwa produktu to opis soczewek
+        // z „taśmą elastyczną” — bramka typu z nazwy nie może zjeść właściwej karty
+        $this->assertTrue($id->hayMentionsProduct(
+            'https://www.sklep-bhp.pl/okulary-ochronne-bolle-baxter Okulary ochronne Bollé Baxter',
+            $product
+        ));
+        // inny model tej samej marki
+        $this->assertFalse($id->hayMentionsProduct(
+            'https://www.sklep-bhp.pl/okulary-ochronne-bolle-tracker-tracpsf Okulary ochronne Bollé Tracker TRACPSF',
+            $product
+        ));
+        // ta sama nazwa modelu bez marki i bez typu — to nie dowód
+        $this->assertFalse($id->hayMentionsProduct('https://example.com/baxter-x Kask Baxter X', $product));
+        // marka i model, ale typ z kategorii (okulary) nie stoi na stronie
+        $this->assertFalse($id->hayMentionsProduct('https://example.com/bolle-baxter-kask Kask Bollé Baxter', $product));
+
+        // „NESS+” i „RUSH+ 2.0 XP” też są frazami, choć plus i kropka psują test siły frazy
+        $ness = new Product(['sku' => 'PSSNESF028', 'name' => 'Bezbarwne soczewki PC', 'model_name' => 'NESS+', 'manufacturer' => 'Bole']);
+        $this->assertSame('NESS+', $id->shopIdentityPhrases($ness)[0] ?? null);
+        $rush = new Product(['sku' => 'RUSXMN10E', 'name' => 'Bezbarwne soczewki PC', 'model_name' => 'RUSH+ 2.0 XP', 'manufacturer' => 'Bole']);
+        $this->assertTrue($id->hayMentionsProduct('https://sklep.pl/okulary-bolle-rush-2-0-xp Okulary Bolle Rush+ 2.0 XP', $rush));
+    }
+
     public function test_matches_pros_model_slash_variant(): void
     {
         $id = new ProductSearchIdentity;

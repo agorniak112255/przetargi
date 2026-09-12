@@ -369,6 +369,11 @@ export function ProductDetail() {
           </div>
           <p className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
             <span>{p.sku}</span>
+            {p.model_name?.trim() ? (
+              <span className="font-semibold text-slate-700" title="Nazwa modelu z cennika">
+                {p.model_name.trim()}
+              </span>
+            ) : null}
             {p.manufacturer?.trim() ? (
               <span className="rounded-md bg-teal-600 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-white">
                 {p.manufacturer.trim()}

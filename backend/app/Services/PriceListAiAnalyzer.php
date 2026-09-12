@@ -1195,6 +1195,7 @@ Zwróć JSON:
         "pack_qty": null,
         "packaging": null,
         "model_key": null,
+        "model_name": null,
         "currency": null,
         "ean": null,
         "category": null
@@ -1222,6 +1223,8 @@ Priorytet pól (to nas interesuje):
 9) currency = kolumna waluty jeśli jest (EUR/PLN/USD); currency na poziomie pliku = dominująca z nagłówka (Price EUR, PLN, zł…)
 10) category = Category/Type / kategoria / grupa
 11) sku = Numer katalogowy produktu / Article Number / kod — NIE Kod EAN i NIE numer klienta.
+12) model_name = kolumna z nazwą modelu/rodziny (Nazwa Modelu, Model, Family: BAXTER, RUSH+ 2.0), gdy obok jest
+   osobna kolumna nazwy/opisu — NIE kod, NIE opis. Jeśli to jedyna nazwa w arkuszu, mapuj ją na name.
 
 Zasady:
 - Często nad tabelą jest blok rabatów/kontaktów — header_excel_row to wiersz z „Kod produktu”/„Nazwa”/„Cena…”, nie wiersz 1.
@@ -1262,7 +1265,7 @@ PROMPT;
             }
             $cols = is_array($sheet['columns'] ?? null) ? $sheet['columns'] : [];
             $normCols = [];
-            foreach (['sku', 'name', 'catalog_price', 'discount', 'purchase', 'pack_qty', 'packaging', 'model_key', 'currency', 'ean', 'category'] as $key) {
+            foreach (['sku', 'name', 'catalog_price', 'discount', 'purchase', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency', 'ean', 'category'] as $key) {
                 $v = $cols[$key] ?? null;
                 $normCols[$key] = is_numeric($v) ? (int) $v : null;
             }

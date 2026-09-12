@@ -785,7 +785,7 @@ final class SpreadsheetMappingHeuristic
     private function skipCols(array $cols): array
     {
         $skip = [];
-        foreach (['sku', 'sku_alt', 'name', 'ean', 'purchase', 'discount', 'catalog_price', 'model_key', 'packaging', 'pack_qty', 'currency', 'category'] as $key) {
+        foreach (['sku', 'sku_alt', 'name', 'ean', 'purchase', 'discount', 'catalog_price', 'model_key', 'model_name', 'packaging', 'pack_qty', 'currency', 'category'] as $key) {
             if (($cols[$key] ?? null) !== null) {
                 $skip[] = $cols[$key];
             }

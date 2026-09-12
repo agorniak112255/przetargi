@@ -89,6 +89,23 @@ final class SpreadsheetColumnMapperTest extends TestCase
         $this->assertSame(19, $kask['ean']);
     }
 
+    public function test_maps_bolle_model_name_next_to_sku_and_description(): void
+    {
+        $m = new SpreadsheetColumnMapper;
+
+        $bolle = $m->mapLabels(['Product Category 1', 'Product Category 2', 'Product Category 3', 'Nazwa Modelu', 'SKU', 'STATUS', 'ZAMIENNIK', 'EMEA Price EUR 2026', 'Opis produktu', 'EAN unit']);
+        $this->assertSame(3, $bolle['model_name']);
+        $this->assertSame(4, $bolle['sku']);
+        $this->assertSame(8, $bolle['name']);
+        $this->assertSame(7, $bolle['catalog_price']);
+        $this->assertSame(9, $bolle['ean']);
+
+        // „Model Name and Description” jako jedyna nazwa zostaje nazwą, nie modelem
+        $dupont = $m->mapLabels(['Article Number', 'Model Name and Description', 'Size', 'Price (€/pc)']);
+        $this->assertSame(1, $dupont['name']);
+        $this->assertNull($dupont['model_name']);
+    }
+
     public function test_classifies_special_and_skip_sheets(): void
     {
         $m = new SpreadsheetColumnMapper;
@@ -115,7 +132,7 @@ final class SpreadsheetColumnMapperTest extends TestCase
         $this->assertSame(3, $coba['catalog_price']);
         $this->assertNull($coba['purchase']);
 
-        $canis = $m->mapLabels(['Strana', 'Pomlčkový kód', 'Název', '', "Men´s working garments", 'UNIT', 'bal./kar.', 'Price CZK', 'Price EUR', 'Price USD', 'Price PLN']);
+        $canis = $m->mapLabels(['Strana', 'Pomlčkový kód', 'Název', '', 'Men´s working garments', 'UNIT', 'bal./kar.', 'Price CZK', 'Price EUR', 'Price USD', 'Price PLN']);
         $this->assertSame(1, $canis['sku']);
         $this->assertSame(2, $canis['name']);
         $this->assertSame(10, $canis['catalog_price']);

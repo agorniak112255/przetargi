@@ -111,6 +111,7 @@ export type Product = {
   id: number
   sku: string
   name: string
+  model_name?: string | null
   manufacturer: string
   category: string | null
   assortment_group_id?: number | null

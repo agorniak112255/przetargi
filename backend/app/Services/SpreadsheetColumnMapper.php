@@ -29,6 +29,7 @@ final class SpreadsheetColumnMapper
         $cols = [
             'sku' => $this->best($norm, $this->skuScores(...)),
             'model_key' => $this->best($norm, $this->modelKeyScores(...)),
+            'model_name' => $this->best($norm, $this->modelNameScores(...)),
             'name' => $this->best($norm, $this->nameScores(...)),
             'catalog_price' => $this->best($norm, $this->catalogScores(...)),
             'purchase' => $this->best($norm, $this->purchaseScores(...)),
@@ -42,6 +43,11 @@ final class SpreadsheetColumnMapper
 
         if ($cols['model_key'] !== null && $cols['model_key'] === $cols['sku']) {
             $cols['model_key'] = null;
+        }
+        // „Model Name and Description” bywa jedyną nazwą — wtedy to name, nie model_name
+        if ($cols['model_name'] !== null
+            && in_array($cols['model_name'], [$cols['sku'], $cols['name'], $cols['model_key']], true)) {
+            $cols['model_name'] = null;
         }
         if ($cols['purchase'] !== null && $cols['purchase'] === $cols['catalog_price']) {
             $cols['purchase'] = null;
@@ -139,7 +145,7 @@ final class SpreadsheetColumnMapper
                 continue;
             }
 
-            foreach (['catalog_price', 'purchase', 'discount', 'sku', 'sku_alt', 'name', 'ean', 'currency', 'pack_qty', 'packaging', 'category', 'model_key'] as $field) {
+            foreach (['catalog_price', 'purchase', 'discount', 'sku', 'sku_alt', 'name', 'ean', 'currency', 'pack_qty', 'packaging', 'category', 'model_key', 'model_name'] as $field) {
                 if ($scored[$field] !== null) {
                     $cols[$field] = $scored[$field];
                 }
@@ -505,6 +511,25 @@ final class SpreadsheetColumnMapper
             return 80;
         }
         if (str_contains($l, 'model code') || str_contains($l, 'short base style')) {
+            return 70;
+        }
+
+        return 0;
+    }
+
+    /**
+     * Nazwa modelu / rodziny (Bollé: „Nazwa Modelu” = BAXTER, RUSH+ 2.0) — osobna
+     * od kodu (SKU) i od nazwy handlowej, która u Bollé jest opisem soczewek.
+     */
+    private function modelNameScores(string $l): int
+    {
+        if (str_contains($l, 'description') || str_contains($l, 'opis') || str_contains($l, 'code') || str_contains($l, 'kod')) {
+            return 0;
+        }
+        if (str_contains($l, 'nazwa modelu') || $l === 'model name' || $l === 'modelname') {
+            return 100;
+        }
+        if ($l === 'model' || $l === 'rodzina' || $l === 'family' || $l === 'product family' || $l === 'seria' || $l === 'series') {
             return 70;
         }
 

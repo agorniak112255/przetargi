@@ -15,7 +15,7 @@ final class ProductSearchBlob
 {
     /** Kolumny, po których zmianie blob przestaje być aktualny. */
     public const SOURCE_COLUMNS = [
-        'sku', 'name', 'manufacturer', 'category', 'norms',
+        'sku', 'name', 'model_name', 'manufacturer', 'category', 'norms',
         'description', 'enrichment_payload',
     ];
 
@@ -79,6 +79,7 @@ final class ProductSearchBlob
         return trim(implode(' ', array_filter([
             (string) $product->sku,
             (string) $product->name,
+            (string) ($product->model_name ?? ''),
             (string) ($product->manufacturer ?? ''),
             (string) ($product->category ?? ''),
             (string) ($product->norms ?? ''),
