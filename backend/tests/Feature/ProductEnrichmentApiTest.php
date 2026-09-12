@@ -1065,6 +1065,69 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertStringContainsString('userdata/public/gfx/46771', (string) $product->images()->first()?->source_url);
     }
 
+    public function test_weak_index_hit_does_not_block_the_open_web_search(): void
+    {
+        // Indeks trafil „…-ac01-p-5502” samym „ac01”. Tresc tej karty produktu nie
+        // potwierdza, a wczesniej takie trafienie zamykalo droge do wyszukiwarki —
+        // akcesorium konczylo na „wpisz recznie” bez jednego zapytania do internetu.
+        $indexUrl = 'https://pol-paw.pl/rekawica-kolczugowa-1-sztuka-ac01-p-5502.html';
+        $product = $this->makeProduct([
+            'sku' => 'AC01P-00022-00-N0C',
+            'name' => 'AVNT PASSTHRU WHSTL & RECTUS 96KS',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->andReturn([
+                'results' => [[
+                    'url' => $indexUrl,
+                    'title' => 'Rekawica kolczugowa AC01',
+                    'snippet' => 'Rekawica kolczugowa jednoczesciowa',
+                ]],
+                'errors' => [],
+            ]);
+        // to jest sedno testu: internet musi zostac zapytany mimo trafienia w indeksie
+        $search->shouldReceive('searchWebWithoutLocalIndex')
+            ->once()
+            ->andReturn(['results' => [], 'images' => [], 'errors' => []]);
+
+        // zadna strona sie nie potwierdzi, wiec model opisu moze nie byc wolany wcale
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->zeroOrMoreTimes()->andReturn([]);
+        $llm->shouldReceive('chatJson')->zeroOrMoreTimes()->andReturn([]);
+        $llm->shouldReceive('chatJsonWithImages')->zeroOrMoreTimes()->andReturn(['candidates' => []]);
+
+        Http::fake(['*' => Http::response(
+            '<html><body><h1>Rekawica kolczugowa AC01</h1>'
+            .'<p>Rekawica kolczugowa jednoczesciowa ze stali nierdzewnej.</p></body></html>',
+            200,
+            ['Content-Type' => 'text/html']
+        )]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+        } catch (ProductSourcesNotFoundException) {
+            // karty i tak nie ma — liczy sie to, ze internet zostal zapytany
+        }
+
+        $search->shouldHaveReceived('searchWebWithoutLocalIndex');
+    }
+
     public function test_site_queries_skip_shops_we_have_in_the_local_index(): void
     {
         Cache::flush();
@@ -3451,6 +3514,9 @@ final class ProductEnrichmentApiTest extends TestCase
             ->byDefault();
         $mock->shouldReceive('moreCatalogHits')->andReturn([])->byDefault();
         $mock->shouldReceive('searchMappedRetailers')->andReturn([])->byDefault();
+        $mock->shouldReceive('searchWebWithoutLocalIndex')
+            ->andReturn(['results' => [], 'images' => [], 'errors' => []])
+            ->byDefault();
         $mock->shouldReceive('forgetProductCache')->byDefault();
 
         return $mock;

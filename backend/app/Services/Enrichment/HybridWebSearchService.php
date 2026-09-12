@@ -28,6 +28,9 @@ class HybridWebSearchService
     /** Prefetch: tylko SearXNG / indeks — bez modelu i bez Google/Bing. */
     private bool $localSearchOnly = false;
 
+    /** Pomija lokalny indeks, żeby słabe trafienie nie zamykało drogi do wyszukiwarki. */
+    private bool $skipLocalSources = false;
+
     /**
      * Karta z indeksu potwierdzona samą nazwą (bez kodu w adresie) — nie ucina drabinki.
      *
@@ -110,6 +113,10 @@ class HybridWebSearchService
      */
     private function hitsFromLocalSources(Product $product): ?array
     {
+        if ($this->skipLocalSources) {
+            return null;
+        }
+
         $this->nameOnlyCatalogHits = [];
         $catalogRejected = [];
         $catalogHits = $this->confirmedCatalogHits($this->catalogHits($product), $product, $catalogRejected);
@@ -379,6 +386,35 @@ class HybridWebSearchService
      *     errors: list<string>
      * }
      */
+    /**
+     * Szukanie w internecie z pominięciem lokalnego indeksu.
+     *
+     * Indeks potrafi zwrócić jedną kartę dopasowaną słabo — „…-ac01-p-5502”
+     * trafiło na AC01P-00022-00-N0C samym „ac01” — a samo istnienie takiego
+     * trafienia zamyka drogę do wyszukiwarki. Gdy treść tej karty produktu nie
+     * potwierdzi, nie zostaje już nic. Wtedy pytamy internet tak, jakby indeks
+     * nie miał nic.
+     *
+     * @return array{
+     *     results: list<array{url: string, title: string, snippet: string}>,
+     *     images: list<string>,
+     *     errors: list<string>
+     * }
+     */
+    public function searchWebWithoutLocalIndex(Product $product): array
+    {
+        if ($this->localSearchOnly) {
+            return ['results' => [], 'images' => [], 'errors' => []];
+        }
+        $previous = $this->skipLocalSources;
+        $this->skipLocalSources = true;
+        try {
+            return $this->searchBothPhases($product);
+        } finally {
+            $this->skipLocalSources = $previous;
+        }
+    }
+
     public function searchBothPhases(Product $product, bool $localSearchOnly = false): array
     {
         $previous = $this->localSearchOnly;

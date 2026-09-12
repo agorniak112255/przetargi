@@ -669,6 +669,15 @@ final class ProductEnrichmentService
                         $fetched
                     );
                 }
+                if ($pageSnippets === []) {
+                    [$pageSnippets, $fetched, $webResults] = $this->fetchCardsFromOpenWeb(
+                        $product,
+                        array_values(array_merge($searchResults, $shopResults)),
+                        $fetched,
+                        $mfrDomains
+                    );
+                    $shopResults = array_values(array_merge($shopResults, $webResults));
+                }
                 if ($shopResults !== [] && $pageSnippets !== []) {
                     $searchResults = array_values(array_merge($searchResults, $shopResults));
                     $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
@@ -2034,6 +2043,78 @@ final class ProductEnrichmentService
      * @param  array<string, mixed>  $fetched
      * @return array{0: list<array{url?: string, text?: string}>, 1: array<string, mixed>, 2: list<array<string, mixed>>}
      */
+    /**
+     * Ostatnia droga: zwykłe szukanie w internecie, z pominięciem indeksu.
+     *
+     * Gdy indeks podsunął kartę dopasowaną słabo, a jej treść produktu nie
+     * potwierdziła, wyszukiwarka nie była dotąd pytana ani razu — samo
+     * istnienie trafienia w indeksie zamykało tę drogę. Akcesoria typu
+     * AC01P-00022-00-N0C kończyły przez to na „wpisz ręcznie” bez jednego
+     * zapytania do internetu.
+     *
+     * @param  list<array<string, mixed>>  $searchResults  adresy już sprawdzone
+     * @param  array<string, mixed>  $fetched
+     * @param  list<string>  $mfrDomains
+     * @return array{0: list<array<string, mixed>>, 1: array<string, mixed>, 2: list<array<string, mixed>>}
+     */
+    private function fetchCardsFromOpenWeb(
+        Product $product,
+        array $searchResults,
+        array $fetched,
+        array $mfrDomains
+    ): array {
+        $seen = [];
+        foreach ($searchResults as $row) {
+            $url = mb_strtolower((string) ($row['url'] ?? ''));
+            if ($url !== '') {
+                $seen[$url] = true;
+            }
+        }
+        foreach ($fetched['pages'] ?? [] as $page) {
+            $url = mb_strtolower(is_array($page) ? (string) ($page['url'] ?? '') : '');
+            if ($url !== '') {
+                $seen[$url] = true;
+            }
+        }
+
+        $pack = $this->search->searchWebWithoutLocalIndex($product);
+        $fresh = [];
+        foreach ($pack['results'] as $row) {
+            $url = mb_strtolower((string) ($row['url'] ?? ''));
+            if ($url !== '' && ! isset($seen[$url])) {
+                $fresh[] = $row;
+            }
+        }
+        if ($fresh === []) {
+            $this->attemptLog()->add('search', 'internet bez indeksu: brak nowych adresów');
+
+            return [[], $fetched, []];
+        }
+
+        $this->attemptLog()->add(
+            'search',
+            'internet bez indeksu: '.count($fresh).' nowych adresów',
+            urls: array_slice(array_column($fresh, 'url'), 0, 5)
+        );
+        $webFetched = $this->pages->fetch($fresh, (string) $product->sku, 3, $mfrDomains, $product);
+        // Zdjęcia i dokumenty zbieramy tak samo jak ścieżka zmapowanych sklepów.
+        foreach (['image_urls', 'trusted_image_urls', 'document_urls'] as $key) {
+            foreach ($webFetched[$key] ?? [] as $url) {
+                if (is_string($url) && $url !== '') {
+                    $fetched[$key][] = $url;
+                }
+            }
+        }
+        $pages = $this->keepConfirmedCardPages($product, $webFetched['pages'] ?? []);
+        if ($pages === []) {
+            $this->logCardRejections($product, $webFetched);
+
+            return [[], $fetched, []];
+        }
+
+        return [$pages, $fetched, $fresh];
+    }
+
     private function fetchMappedRetailerCards(Product $product, array $searchResults, array $fetched): array
     {
         $tried = [];
