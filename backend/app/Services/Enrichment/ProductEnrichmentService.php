@@ -44,6 +44,12 @@ final class ProductEnrichmentService
     /** Krótszy fragment z wyszukiwarki nie wystarczy na opis — nie traktujemy go jak karty. */
     private const SNIPPET_CARD_MIN_CHARS = 500;
 
+    /**
+     * Job wzbogacania trwa do ~7 min (timeout 420 s + slot). Po tym czasie produkt
+     * wciąż w „running”, do którego nie ma joba, znaczy że proces padł.
+     */
+    private const STALE_RUNNING_AFTER_MINUTES = 15;
+
     private const GENERIC_NAME_TOKENS = [
         'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
         'ubranie', 'odziez', 'odzież', 'buty', 'obuwie', 'trzewiki', 'polbuty', 'półbuty', 'sandaly',
@@ -3446,6 +3452,49 @@ final class ProductEnrichmentService
             'marked_products' => (int) $markedProducts,
             'cancelled_batches' => $cancelledBatches,
         ];
+    }
+
+    /**
+     * Produkt zabity w locie (limit czasu, padnięty worker, zerwane MySQL) zostawał
+     * w „running” na zawsze — nic go nie odblokowywało, a taki produkt wstrzymywał
+     * domykanie wszystkich partii, bo finalizeIfJobsGone czeka na pusty stan.
+     *
+     * @return int liczba zwolnionych produktów
+     */
+    public function releaseStaleRunningProducts(): int
+    {
+        $stale = Product::query()
+            ->where('enrichment_status', Product::ENRICHMENT_RUNNING)
+            ->where('updated_at', '<', now()->subMinutes(self::STALE_RUNNING_AFTER_MINUTES))
+            ->pluck('id');
+
+        $released = 0;
+        foreach ($stale as $productId) {
+            if ($this->productHasPendingJob((int) $productId)) {
+                continue;
+            }
+            $released += Product::query()
+                ->whereKey($productId)
+                ->where('enrichment_status', Product::ENRICHMENT_RUNNING)
+                ->update([
+                    'enrichment_status' => Product::ENRICHMENT_FAILED,
+                    'enrichment_error' => 'Przebieg przerwany — proces zniknął bez zapisania wyniku.',
+                ]);
+        }
+
+        return $released;
+    }
+
+    private function productHasPendingJob(int $productId): bool
+    {
+        if (! Schema::hasTable('jobs')) {
+            return false;
+        }
+
+        // payload to JSON z serializacją PHP w środku — cudzysłowy bywają jako \"
+        return DB::table('jobs')
+            ->where('payload', 'like', '%productId%;i:'.$productId.';%')
+            ->exists();
     }
 
     public function enrichmentProductCounts(): array

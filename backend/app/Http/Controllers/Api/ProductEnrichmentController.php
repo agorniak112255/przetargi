@@ -139,6 +139,9 @@ class ProductEnrichmentController extends Controller
 
     public function activeBatches(): JsonResponse
     {
+        // najpierw produkty: zablokowany w „running” wstrzymuje domykanie każdej partii
+        $this->enrichment->releaseStaleRunningProducts();
+
         $batches = ProductEnrichmentBatch::query()
             ->whereIn('status', [
                 ProductEnrichmentBatch::STATUS_QUEUED,

@@ -3277,4 +3277,70 @@ final class ProductEnrichmentApiTest extends TestCase
 
         return is_string($bytes) ? $bytes : '';
     }
+
+    public function test_active_batches_releases_product_stuck_in_running(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+
+        $product = $this->makeProduct([
+            'sku' => 'SG-RWT001',
+            'name' => 'SPODNIE DO PASA',
+            'manufacturer' => 'AJ GROUP',
+            'enrichment_status' => Product::ENRICHMENT_RUNNING,
+        ]);
+        DB::table('products')->where('id', $product->id)->update([
+            'updated_at' => now()->subHours(3),
+        ]);
+
+        $this->getJson('/api/product-enrichment-batches/active')->assertOk();
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_FAILED, $product->enrichment_status);
+        $this->assertStringContainsString('proces zniknął', (string) $product->enrichment_error);
+    }
+
+    public function test_active_batches_leaves_product_that_only_just_started(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+
+        $product = $this->makeProduct([
+            'sku' => 'SG-RWT002',
+            'enrichment_status' => Product::ENRICHMENT_RUNNING,
+        ]);
+        DB::table('products')->where('id', $product->id)->update([
+            'updated_at' => now()->subMinutes(3),
+        ]);
+
+        $this->getJson('/api/product-enrichment-batches/active')->assertOk();
+
+        $this->assertSame(Product::ENRICHMENT_RUNNING, $product->refresh()->enrichment_status);
+    }
+
+    public function test_active_batches_leaves_stale_product_whose_job_still_waits(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+
+        $product = $this->makeProduct([
+            'sku' => 'SG-RWT003',
+            'enrichment_status' => Product::ENRICHMENT_RUNNING,
+        ]);
+        DB::table('products')->where('id', $product->id)->update([
+            'updated_at' => now()->subHours(3),
+        ]);
+        DB::table('jobs')->insert([
+            'queue' => 'default',
+            'payload' => '{"data":{"command":"O:31:\\"App\\Jobs\\EnrichProductJob\\":1:{s:9:\\"productId\\";i:'
+                .$product->id.';}"}}',
+            'attempts' => 0,
+            'available_at' => time(),
+            'created_at' => time(),
+        ]);
+
+        $this->getJson('/api/product-enrichment-batches/active')->assertOk();
+
+        $this->assertSame(Product::ENRICHMENT_RUNNING, $product->refresh()->enrichment_status);
+    }
 }
