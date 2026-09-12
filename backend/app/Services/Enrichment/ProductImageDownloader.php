@@ -31,6 +31,12 @@ final class ProductImageDownloader
     /**
      * Odrzuca URL karty produktu (HTML) — wcześniej SKU w ścieżce dawało fałszywy „hit”.
      */
+    /** Najkrótszy bok: pasek 1000x60 to baner, nie zdjęcie. */
+    private const MIN_SIDE = 100;
+
+    /** Pole: 150x150 (22 500) to miniatura, 190x417 (79 230) już zdjęcie. */
+    private const MIN_AREA = 40_000;
+
     public static function looksLikeImageUrl(string $url): bool
     {
         if (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://')) {
@@ -73,10 +79,26 @@ final class ProductImageDownloader
      * @param  list<string>  $urls
      * @return list<ProductImage>
      */
+    /**
+     * Powody odrzucenia z ostatniego downloadMany — „obrazek za mały (190x417)”,
+     * „HTTP 403”. Bez tego produkt dostawał „źródła zwróciły błędne URL”, choć
+     * adresy były dobre, a odpadał rozmiar.
+     *
+     * @var array<string, string>
+     */
+    private array $failures = [];
+
+    /** @return array<string, string> url => powód */
+    public function lastFailures(): array
+    {
+        return $this->failures;
+    }
+
     public function downloadMany(Product $product, array $urls, int $max = 5): array
     {
         $saved = [];
         $sort = 0;
+        $this->failures = [];
 
         foreach (array_values(array_unique($urls)) as $url) {
             if (count($saved) >= $max) {
@@ -86,6 +108,7 @@ final class ProductImageDownloader
                 continue;
             }
             if (! self::looksLikeImageUrl($url)) {
+                $this->failures[$url] = 'URL nie wygląda na plik obrazka';
                 Log::info('Product image download skipped', [
                     'product_id' => $product->id,
                     'url' => $url,
@@ -98,6 +121,7 @@ final class ProductImageDownloader
             try {
                 $image = $this->downloadOne($product, $url, $sort);
             } catch (Throwable $e) {
+                $this->failures[$url] = $e->getMessage();
                 Log::info('Product image download skipped', [
                     'product_id' => $product->id,
                     'url' => $url,
@@ -278,8 +302,10 @@ final class ProductImageDownloader
         if (is_array($dim)) {
             $w = (int) ($dim[0] ?? 0);
             $h = (int) ($dim[1] ?? 0);
-            // miniatury WP (-80x80) i placeholdery — za małe na kartę produktu
-            if ($w > 0 && $h > 0 && ($w < 200 || $h < 200)) {
+            // miniatury WP (-80x80) i placeholdery — za małe na kartę produktu.
+            // Packshot kombinezonu z cas-technik ma 190x417: wąski, ale to pełne
+            // zdjęcie — liczy się pole i najkrótszy bok, nie sam próg 200 px.
+            if ($w > 0 && $h > 0 && ($w < self::MIN_SIDE || $h < self::MIN_SIDE || $w * $h < self::MIN_AREA)) {
                 throw new \RuntimeException("Obrazek za mały ({$w}x{$h}) — miniatura/placeholder");
             }
         }

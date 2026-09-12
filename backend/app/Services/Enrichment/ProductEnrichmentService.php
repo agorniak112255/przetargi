@@ -1074,6 +1074,7 @@ final class ProductEnrichmentService
                 'source_urls' => array_slice($sourceUrls, 0, 3),
             ]);
             $savedImages = $this->images->downloadMany($product, $primaryImageUrls, 1);
+            $imageFailure = $this->imageFailureSummary($primaryImageUrls);
             if ($savedImages === []) {
                 $savedImages = $this->tryImagesFromOtherCards(
                     $product,
@@ -1155,7 +1156,7 @@ final class ProductEnrichmentService
                 'enrichment_status' => Product::ENRICHMENT_DONE,
                 'enriched_at' => now(),
                 'enrichment_error' => $cachedImageUrls === []
-                    ? 'Opis OK, nie udało się pobrać zdjęcia (źródła zwróciły błędne URL).'
+                    ? 'Opis OK, nie udało się pobrać zdjęcia'.($imageFailure !== '' ? ' ('.$imageFailure.')' : ' (karty nie miały zdjęcia produktu)').'.'
                     : null,
                 'enrichment_trace' => $cachedImageUrls === [] ? $this->attemptLog()->snapshot($product) : null,
             ];
@@ -1581,6 +1582,34 @@ final class ProductEnrichmentService
      * @param  list<array{url?: string}>  $pages
      * @return list<ProductImage>
      */
+    /**
+     * „obrazek za mały (190x417) ×3” — powód odrzucenia wybranych zdjęć trafia do
+     * komunikatu i przebiegu; wcześniej każda porażka wyglądała jak „błędne URL”.
+     *
+     * @param  list<string>  $urls
+     */
+    private function imageFailureSummary(array $urls): string
+    {
+        $failures = $this->images->lastFailures();
+        if ($urls === [] || $failures === []) {
+            return '';
+        }
+        $counts = [];
+        foreach ($failures as $url => $reason) {
+            $key = mb_strtolower(trim($reason));
+            $counts[$key] = ($counts[$key] ?? 0) + 1;
+        }
+        arsort($counts);
+        $parts = [];
+        foreach (array_slice($counts, 0, 2, true) as $reason => $n) {
+            $parts[] = $reason.($n > 1 ? ' ×'.$n : '');
+        }
+        $summary = implode(', ', $parts);
+        $this->attemptLog()->add('image', 'nie pobrano: '.$summary, urls: array_slice(array_keys($failures), 0, 3));
+
+        return $summary;
+    }
+
     private function downloadImagesFromFetchedCards(Product $product, array $fetched, array $pages): array
     {
         $trusted = is_array($fetched['trusted_image_urls'] ?? null) ? $fetched['trusted_image_urls'] : [];
