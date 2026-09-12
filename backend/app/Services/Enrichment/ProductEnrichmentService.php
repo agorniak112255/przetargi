@@ -789,8 +789,15 @@ final class ProductEnrichmentService
                         $fetched
                     );
                 }
+                // Ślad także wtedy, gdy druga próba nic nie znalazła — bez tego nie widać,
+                // czy w ogóle się odbyła (w próbce 45 produktów nie zostawiła ani jednego wpisu).
+                $this->attemptLog()->add(
+                    'desc',
+                    $retryPages === []
+                        ? 'pusty opis — brak kolejnych kart do sprawdzenia'
+                        : 'pusty opis — próbuję na '.count($retryPages).' kolejnych kartach'
+                );
                 if ($retryPages !== []) {
-                    $this->attemptLog()->add('desc', 'pusty opis — próbuję na kolejnych kartach');
                     $searchResults = array_values(array_merge($searchResults, $retryResults));
                     $retry = $this->describeFromPages($product, $retryPages);
                     if ($retry['description'] !== '') {
