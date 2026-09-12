@@ -485,6 +485,10 @@ return [
     'reader_min_interval' => (float) env('ENRICHMENT_READER_MIN_INTERVAL', 3.5),
     'reader_api_key' => env('JINA_API_KEY'),
 
+    // Brave Search API — silnik z kluczem, bez captchy dla ruchu z serwera.
+    // Darmowy plan: ~2000 zapytań/mies., 1 zapytanie/s. Bez klucza pomijany.
+    'brave_api_key' => env('BRAVE_SEARCH_API_KEY'),
+
     /*
     | Ile produktów naraz szuka stron (kolejka prefetch). Model ma osobną pulę
     | (kolejka enrich, limit z Ustawień AI). Workerom liczbę podaje skrypt wdrożenia

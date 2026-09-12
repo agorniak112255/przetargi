@@ -45,6 +45,19 @@ final class DuckDuckGoHtmlSearch
      */
     private const PUBLIC_BLOCKED_KEY = 'free_public_engines_blocked_v1';
 
+    /** Ile wyników bierzemy z silnika z kluczem — tyle co z SearXNG, filtr tożsamości zawęża. */
+    private const KEYED_MAX_RESULTS = 10;
+
+    /** Odstępy między zapytaniami do silników z kluczem (Brave: darmowy plan 1 zapytanie/s). */
+    private const JINA_SEARCH_LAST_AT_KEY = 'jina_search_last_at';
+
+    private const BRAVE_SEARCH_LAST_AT_KEY = 'brave_search_last_at';
+
+    public function __construct(
+        private readonly ?JinaSearchClient $jina = null,
+        private readonly ?BraveSearchClient $brave = null,
+    ) {}
+
     /** Gdy domyślne silniki padną (captcha / 429), jedna próba na tych, które zwykle jeszcze żyją. */
     private const SEARXNG_FALLBACK_ENGINES = 'yep,startpage';
 
@@ -128,12 +141,24 @@ final class DuckDuckGoHtmlSearch
             );
         }
 
+        // Silniki z kluczem (Jina, Brave) idą przed scrapowanymi: nie blokują adresu
+        // serwera, więc nie dotyczy ich ani bezpiecznik publicznych silników, ani
+        // 429 Google. Bez klucza są pomijane — nic się wtedy nie zmienia.
+        $keyedErrors = [];
+        $keyed = $this->searchKeyedEngines($query, $keyedErrors);
+        if ($keyed !== []) {
+            Cache::put($cacheKey, $keyed, now()->addHours(6));
+            $foundBeforeDomainFilter = count($keyed);
+
+            return $this->limitResults($keyed, $maxResults, $includeDomains);
+        }
+
         $blockedDetail = Cache::get(self::PUBLIC_BLOCKED_KEY);
         if (is_string($blockedDetail)) {
             // „silniki zablokowane” — ta fraza klasyfikuje przebieg jako awarie do
             // ponowienia, nie jako brak karty; produkt pada w sekundy, nie w minuty
             throw new RuntimeException(
-                'Publiczne silniki zablokowane (przerwa 10 min po: '.$blockedDetail.'). Ponow pozniej.'
+                implode(' | ', [...$keyedErrors, 'Publiczne silniki zablokowane (przerwa 10 min po: '.$blockedDetail.'). Ponow pozniej.'])
             );
         }
 
@@ -150,6 +175,10 @@ final class DuckDuckGoHtmlSearch
                         Cache::put($missKey, $e->getMessage(), now()->addHours(6));
                     } elseif ($this->everyEngineFailed($e->getMessage())) {
                         Cache::put(self::PUBLIC_BLOCKED_KEY, mb_substr($e->getMessage(), 0, 200), now()->addMinutes(10));
+                    }
+                    if ($keyedErrors !== []) {
+                        // w przebiegu ma być widać, że silniki z kluczem też pytano
+                        throw new RuntimeException(implode(' | ', [...$keyedErrors, $e->getMessage()]));
                     }
 
                     throw $e;
@@ -278,6 +307,44 @@ final class DuckDuckGoHtmlSearch
     public function isSearxngBlockedMessage(string $message): bool
     {
         return str_contains($message, 'silniki zablokowane');
+    }
+
+    /**
+     * Jina (s.jina.ai) i Brave — tylko gdy skonfigurowane. Pierwszy z wynikami
+     * wygrywa; pusta lista albo błąd trafia do $errors i idziemy dalej.
+     *
+     * @param  list<string>  $errors
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function searchKeyedEngines(string $query, array &$errors): array
+    {
+        $engines = [
+            ['Jina', $this->jina ?? new JinaSearchClient, 0.6, self::JINA_SEARCH_LAST_AT_KEY],
+            ['Brave', $this->brave ?? new BraveSearchClient, 1.1, self::BRAVE_SEARCH_LAST_AT_KEY],
+        ];
+        foreach ($engines as [$name, $client, $interval, $key]) {
+            if (! $client->isConfigured()) {
+                continue;
+            }
+            try {
+                $this->throttle($interval, $key);
+                $results = [];
+                foreach ($client->search($query, self::KEYED_MAX_RESULTS) as $row) {
+                    // ten sam filtr śmieciowych hostów co dla scrapowanych silników
+                    if ($this->publicHttpUrl((string) ($row['url'] ?? '')) !== null) {
+                        $results[] = $row;
+                    }
+                }
+                if ($results !== []) {
+                    return $results;
+                }
+                $errors[] = $name.': brak wyników';
+            } catch (Throwable $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+
+        return [];
     }
 
     /**

@@ -254,6 +254,72 @@ HTML;
         $this->assertGreaterThan($afterFirst, $count(), 'gdy jeden silnik zyje, drugie zapytanie idzie do silnikow');
     }
 
+    public function test_keyed_engine_results_skip_scraped_engines(): void
+    {
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => 'jina_test']);
+        Cache::flush();
+        Http::fake([
+            's.jina.ai/*' => Http::response(['data' => [[
+                'url' => 'https://www.ansell.com/pl/pl/products/hyflex-11-840',
+                'title' => 'HyFlex 11-840 | Ansell',
+                'description' => 'Rękawice HyFlex 11-840.',
+            ]]], 200),
+            '*' => Http::response('too many requests', 429),
+        ]);
+
+        $results = (new DuckDuckGoHtmlSearch)->search('HyFlex 11-840 Ansell');
+
+        $this->assertSame('https://www.ansell.com/pl/pl/products/hyflex-11-840', $results[0]['url'] ?? null);
+        // z kluczem nie ma po co budzic Google/DDG/Qwant — to one blokuja adres serwera
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'google.')
+            || str_contains($request->url(), 'duckduckgo.com')
+            || str_contains($request->url(), 'qwant.com'));
+    }
+
+    public function test_keyed_engine_without_results_falls_back_to_scraped(): void
+    {
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => 'jina_test']);
+        Cache::flush();
+        Http::fake([
+            's.jina.ai/*' => Http::response(['data' => []], 200),
+            '*' => Http::response('too many requests', 429),
+        ]);
+
+        $message = null;
+        try {
+            (new DuckDuckGoHtmlSearch)->search('YE65T-00803-07-GA2 Ansell');
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+        }
+
+        Http::assertSent(static fn ($request): bool => str_contains($request->url(), 'google.'));
+        $this->assertNotNull($message);
+        $this->assertStringContainsString('Jina: brak wyników', $message);
+        $this->assertStringContainsString('Google HTTP 429', $message);
+    }
+
+    public function test_keyed_engine_is_not_stopped_by_public_breaker(): void
+    {
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => 'jina_test']);
+        Cache::flush();
+        // bezpiecznik publicznych silnikow otwarty — Jina ma klucz, wiec pyta dalej
+        Cache::put('free_public_engines_blocked_v1', 'Google HTTP 429', now()->addMinutes(10));
+        Http::fake([
+            's.jina.ai/*' => Http::response(['data' => [[
+                'url' => 'https://icd.pl/rekawice-hyflex-11-840.html',
+                'title' => 'HyFlex 11-840',
+                'description' => 'ICD',
+            ]]], 200),
+            '*' => Http::response('too many requests', 429),
+        ]);
+
+        $results = (new DuckDuckGoHtmlSearch)->search('HyFlex 11-840 Ansell');
+
+        $this->assertCount(1, $results);
+        Http::assertSent(static fn ($request): bool => str_starts_with($request->url(), 'https://s.jina.ai/'));
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'google.'));
+    }
+
     public function test_searxng_retries_fallback_engines_when_blocked(): void
     {
         $hit = 'https://shop.example/portwest-2205';
