@@ -197,8 +197,8 @@ final class AnsellGloveIdentityTest extends TestCase
             'prefix' => null,
         ], $identity->ansellCatalogBits($link));
         $this->assertSame('AlphaTec Glove Connector 070', $identity->firstStrongShopPhrase($link));
-        $this->assertSame('GREY PES BLT & YKK BCKL LENGTH 150CM', $identity->firstStrongShopPhrase($belt));
-        $this->assertSame('AVNT PASSTHRU WHSTL & RECTUS 96KS', $identity->firstStrongShopPhrase($pass));
+        $this->assertSame('AlphaTec Grey PES Belt YKK Buckle 150cm', $identity->firstStrongShopPhrase($belt));
+        $this->assertSame('AlphaTec Pass-through Whistle Rectus 96KS', $identity->firstStrongShopPhrase($pass));
         $this->assertStringNotContainsString('Ansell -AC', $identity->firstStrongShopPhrase($link));
         $joined = implode(' | ', $identity->searchQueries($link, 'manufacturer'));
         $this->assertStringContainsString('AlphaTec Glove Connector 070', $joined);
@@ -211,6 +211,29 @@ final class AnsellGloveIdentityTest extends TestCase
             'https://www.ansell.com/pl/pl/products/alphatec-glove-link',
             $identity->ansellOfficialProductUrls($link)
         );
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-pass-through-whistle-rectus',
+            $identity->ansellOfficialProductUrls($pass)
+        );
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-grey-pes-belt-ykk-buckle',
+            $identity->ansellOfficialProductUrls($belt)
+        );
+        $this->assertContains('A01P022', array_map('strtoupper', $identity->productCodes($pass)));
+        $this->assertContains('A01P014', array_map('strtoupper', $identity->productCodes($belt)));
+        $this->assertStringContainsString('AlphaTec Pass-through Whistle Rectus 96KS', $identity->catalogSitePhrase($pass));
+        $this->assertStringContainsString('AlphaTec Grey PES Belt YKK Buckle 150cm', $identity->catalogSitePhrase($belt));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://bhp-sklep.com.pl/produkt/ansell-alphatec-pass-through-whistle-rectus-96ks/ '
+            .'AlphaTec Pass-through Whistle Rectus 96KS airline coupling.',
+            $pass
+        ));
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://bhp-sklep.com.pl/produkt/ansell-alphatec-grey-pes-belt-ykk-150cm/',
+            'AlphaTec Grey PES Belt YKK Buckle 150cm',
+            'Ansell AlphaTec grey PES belt with YKK buckle, length 150cm.',
+            $belt
+        ));
         $shop = 'https://bhp-sklep.com.pl/produkt/ansell-alphatec-glove-connector-070/';
         $shopTitle = 'Ansell AlphaTec Glove Connector 070';
         $shopText = 'Ansell AlphaTec Glove Connector 070 proste rozwiązanie do mocowania rękawic chemicznych do kombinezonu.';

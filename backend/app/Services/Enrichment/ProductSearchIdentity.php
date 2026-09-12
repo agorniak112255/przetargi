@@ -767,8 +767,52 @@ final class ProductSearchIdentity
                 $out[] = $alt;
             }
         }
+        $expanded = $this->expandAnsellPartCatalogName($base);
+        if ($expanded !== '' && strcasecmp($expanded, $base) !== 0) {
+            $out[] = $expanded;
+        }
 
         return array_values(array_unique($out));
+    }
+
+    /** PASSTHRU/WHSTL/BLT z cennika — sklepy piszą pass-through / whistle / belt. */
+    private function expandAnsellPartCatalogName(string $name): string
+    {
+        $text = trim((string) preg_replace('/\s*&\s*/u', ' ', $name));
+        $text = (string) preg_replace('/\bpassthru\b/iu', 'pass-through', $text);
+        $text = (string) preg_replace('/\bpass[\s\-]?thru\b/iu', 'pass-through', $text);
+        $text = (string) preg_replace('/\bwhstl\b/iu', 'whistle', $text);
+        $text = (string) preg_replace('/\bblt\b/iu', 'belt', $text);
+        $text = (string) preg_replace('/\bbckl\b/iu', 'buckle', $text);
+        $text = (string) preg_replace('/\bavnt\b/iu', 'AlphaTec', $text);
+        $text = (string) preg_replace('/\blength\b/iu', '', $text);
+        $text = (string) preg_replace('/\b(\d+)\s*cm\b/iu', '$1cm', $text);
+        $text = trim((string) preg_replace('/\s+/u', ' ', $text));
+        if ($text === '') {
+            return '';
+        }
+        if (preg_match('/\b(alphatec|hyflex|bioclean|kleenguard)\b/iu', $text) !== 1) {
+            $text = 'AlphaTec '.$text;
+        }
+        $keep = [
+            'alphatec' => 'AlphaTec',
+            'ykk' => 'YKK',
+            'pes' => 'PES',
+            'rectus' => 'Rectus',
+        ];
+        $words = [];
+        foreach (preg_split('/\s+/u', $text) ?: [] as $word) {
+            $low = mb_strtolower($word);
+            if (isset($keep[$low])) {
+                $words[] = $keep[$low];
+            } elseif (preg_match('/^\d/u', $word) === 1) {
+                $words[] = $word;
+            } else {
+                $words[] = mb_strtoupper(mb_substr($word, 0, 1)).mb_strtolower(mb_substr($word, 1));
+            }
+        }
+
+        return trim(implode(' ', $words));
     }
 
     /** AC01P-00070-00 — część z cennika, nie „Ansell -AC 00070”. */
@@ -780,8 +824,23 @@ final class ProductSearchIdentity
                 return $phrase;
             }
         }
+        foreach ($phrases as $phrase) {
+            if (preg_match('/\b(pass-through|whistle|belt|buckle)\b/iu', $phrase) === 1) {
+                return $phrase;
+            }
+        }
 
         return $phrases[0] ?? '';
+    }
+
+    /** AC01P-00070-00 → A01P070 (numer stylu na karcie Ansell). */
+    private function ansellAccessoryStyleCode(Product $product): ?string
+    {
+        if (preg_match('/^AC01P-0*(\d{3,5})(?:-\d{2})?(?:-[A-Z0-9]+)?$/iu', (string) $product->sku, $m) !== 1) {
+            return null;
+        }
+
+        return 'A01P'.str_pad($m[1], 3, '0', STR_PAD_LEFT);
     }
 
     /** AlphaTec 3000 192 — nie G02 ani magazynowe YE30T-00192-09-G01. */
@@ -1052,21 +1111,15 @@ final class ProductSearchIdentity
             $phrases = array_values(array_unique([$preferred, ...$phrases]));
         }
         foreach ($phrases as $phrase) {
-            if (preg_match('/^alphatec\s+((?:[a-z]{3,}(?:\s+[a-z]{3,}){0,3}))(?:\s+\d{2,4})?$/iu', $phrase, $m) !== 1) {
-                continue;
-            }
-            $rest = trim((string) preg_replace('/[^a-z0-9]+/iu', '-', mb_strtolower($m[1])), '-');
-            if ($rest !== '' && mb_strlen($rest) >= 4) {
-                $slugs[] = $rest;
+            $slug = $this->ansellNamedProductSlug($phrase);
+            if ($slug !== null) {
+                $slugs[] = $slug;
             }
         }
         if ($slugs === []) {
-            $name = trim((string) $product->name);
-            if (preg_match('/^alphatec\s+((?:[a-z]{3,}(?:\s+[a-z]{3,}){0,3}))(?:\s+\d{2,4})?$/iu', $name, $m) === 1) {
-                $rest = trim((string) preg_replace('/[^a-z0-9]+/iu', '-', mb_strtolower($m[1])), '-');
-                if ($rest !== '' && mb_strlen($rest) >= 4) {
-                    $slugs[] = $rest;
-                }
+            $slug = $this->ansellNamedProductSlug(trim((string) $product->name));
+            if ($slug !== null) {
+                $slugs[] = $slug;
             }
         }
         $out = [];
@@ -1077,6 +1130,21 @@ final class ProductSearchIdentity
         }
 
         return $out;
+    }
+
+    /** AlphaTec Glove Connector 070 → glove-connector; pass-through whistle Rectus 96KS → pass-through-whistle-rectus. */
+    private function ansellNamedProductSlug(string $phrase): ?string
+    {
+        $phrase = trim((string) preg_replace('/\s+[A-Z]*\d{2,4}[A-Z]{0,3}$/iu', '', $phrase));
+        if (preg_match('/^alphatec\s+((?:[a-z][a-z0-9\-]{2,}(?:\s+[a-z][a-z0-9\-]{2,}){0,5}))$/iu', $phrase, $m) !== 1) {
+            return null;
+        }
+        $rest = trim((string) preg_replace('/[^a-z0-9]+/iu', '-', mb_strtolower($m[1])), '-');
+        if ($rest === '' || mb_strlen($rest) < 4) {
+            return null;
+        }
+
+        return $rest;
     }
 
     private function ansellGloveOfficialUrls(Product $product): array
@@ -2762,6 +2830,10 @@ final class ProductSearchIdentity
         $gloveModel = $this->ansellGloveModel($product);
         if ($gloveModel !== null) {
             $codes[] = $gloveModel;
+        }
+        $accessory = $this->ansellAccessoryStyleCode($product);
+        if ($accessory !== null) {
+            $codes[] = $accessory;
         }
         foreach ($this->threeMCatalogCodesFromName($product) as $code) {
             $codes[] = $code;
