@@ -131,33 +131,68 @@ final class ProductPageFetcherTest extends TestCase
             .'<ul>'.$specs.'</ul></main></body></html>';
     }
 
-    public function test_waf_403_with_failed_reader_is_a_bot_wall_not_a_timeout(): void
+    /** Adres i produkt wspólne dla trzech przypadków zapory — hahn-kolb (Akamai). */
+    private function wallCase(): array
     {
-        // hahn-kolb (Akamai): 403 „Access Denied” dla karty i dla readera — blokada
-        // stała. Timeout bez statusu to co innego: strona moze odpowiedziec za chwile.
-        $card = 'https://www.hahn-kolb.net/ANSELL-Replacement-belt-and-buckle-AC01P-00014-00/95282536.sku/en/US/EUR/';
-        $product = new Product([
-            'sku' => 'AC01P-00014-00',
-            'name' => 'GREY PES BLT & YKK BCKL LENGTH 150CM',
-            'manufacturer' => 'Ansell',
-        ]);
+        return [
+            'https://www.hahn-kolb.net/ANSELL-Replacement-belt-and-buckle-AC01P-00014-00/95282536.sku/en/US/EUR/',
+            new Product([
+                'sku' => 'AC01P-00014-00',
+                'name' => 'GREY PES BLT & YKK BCKL LENGTH 150CM',
+                'manufacturer' => 'Ansell',
+            ]),
+        ];
+    }
 
+    public function test_waf_403_with_reader_refusal_is_a_permanent_bot_wall(): void
+    {
+        // hahn-kolb (Akamai): 403 „Access Denied” dla karty i dla readera — blokada stała
+        [$card, $product] = $this->wallCase();
         Http::fake(['*' => Http::response('Access Denied', 403)]);
+
         $fetched = app(ProductPageFetcher::class)->fetch(
             [['url' => $card, 'title' => '', 'snippet' => '']], 'AC01P-00014-00', 1, [], $product,
         );
+
         $this->assertSame([], $fetched['pages']);
         $this->assertSame(
             [['url' => $card, 'reason' => CandidateRejection::BOT_WALL, 'detail' => 'reader: odmowa 403']],
             $fetched['rejected']
         );
+    }
 
+    public function test_connection_timeout_is_a_retryable_fetch_failure(): void
+    {
+        // timeout bez statusu to co innego: strona może odpowiedzieć za chwilę
+        [$card, $product] = $this->wallCase();
         Http::fake(['*' => Http::failedConnection('cURL error 28: Connection timed out')]);
+
         $fetched = app(ProductPageFetcher::class)->fetch(
             [['url' => $card, 'title' => '', 'snippet' => '']], 'AC01P-00014-00', 1, [], $product,
         );
+
         $this->assertSame(
             [['url' => $card, 'reason' => CandidateRejection::FETCH_FAILED, 'detail' => 'brak odpowiedzi']],
+            $fetched['rejected']
+        );
+    }
+
+    public function test_waf_403_with_reader_rate_limit_is_retryable(): void
+    {
+        // zapora sklepu, ale reader odrzucił z limitem 429 — to jego chwilowa porażka,
+        // nie blokada stała: karta wraca do ponowienia, nie do ręki
+        [$card, $product] = $this->wallCase();
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response('Rate limit exceeded', 429),
+            '*' => Http::response('Access Denied', 403),
+        ]);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [['url' => $card, 'title' => '', 'snippet' => '']], 'AC01P-00014-00', 1, [], $product,
+        );
+
+        $this->assertSame(
+            [['url' => $card, 'reason' => CandidateRejection::FETCH_FAILED, 'detail' => 'reader: limit 429']],
             $fetched['rejected']
         );
     }

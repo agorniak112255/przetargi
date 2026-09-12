@@ -448,9 +448,13 @@ final class ProductPageFetcher
             // 403 od WAF (hahn-kolb: Akamai) plus padnięty reader to blokada stała, nie
             // chwilowy brak odpowiedzi — „ponów później” nic tu nie da. Osobny powód,
             // żeby wyżej dało się odróżnić ją od timeoutu.
+            // Zapora sklepu + limit readera (429) to nie blokada stała: reader za chwilę
+            // przejdzie, więc karta wraca do ponowienia. BOT_WALL zostaje dla przypadku,
+            // gdy sklep odmówił także readerowi — wtedy pomoże tylko człowiek.
+            $permanentWall = $walled && ! $this->blockedPages->failureIsTransient($url);
             $this->rejections[] = array_filter([
                 'url' => $url,
-                'reason' => $walled ? CandidateRejection::BOT_WALL : CandidateRejection::FETCH_FAILED,
+                'reason' => $permanentWall ? CandidateRejection::BOT_WALL : CandidateRejection::FETCH_FAILED,
                 'detail' => $walled ? $this->blockedPages->failureFor($url) : ($status === null ? 'brak odpowiedzi' : 'status '.$status),
             ]);
             $snippet = trim((string) ($row['snippet'] ?? ''));
@@ -477,7 +481,9 @@ final class ProductPageFetcher
             if (! $this->ingestViaReader($url, $goodPages, $images, $documents, $trustedImages)) {
                 $this->rejections[] = array_filter([
                     'url' => $url,
-                    'reason' => CandidateRejection::BOT_WALL,
+                    'reason' => $this->blockedPages->failureIsTransient($url)
+                        ? CandidateRejection::FETCH_FAILED
+                        : CandidateRejection::BOT_WALL,
                     'detail' => $this->blockedPages->failureFor($url),
                 ]);
                 $snippet = trim((string) ($row['snippet'] ?? ''));

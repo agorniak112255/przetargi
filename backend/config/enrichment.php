@@ -479,6 +479,12 @@ return [
     */
     'search_lanes' => (int) env('ENRICHMENT_SEARCH_LANES', 1),
 
+    // Reader r.jina.ai czyta karty zza zapór (Incapsula na ansell.com). Bez klucza
+    // Jina limituje ~20 zapytań/min na adres, a kilkanaście workerów naraz wpada
+    // w 429 — stąd odstęp między wywołaniami dla całego serwera i miejsce na klucz.
+    'reader_min_interval' => (float) env('ENRICHMENT_READER_MIN_INTERVAL', 3.5),
+    'reader_api_key' => env('JINA_API_KEY'),
+
     /*
     | Ile produktów naraz szuka stron (kolejka prefetch). Model ma osobną pulę
     | (kolejka enrich, limit z Ustawień AI). Workerom liczbę podaje skrypt wdrożenia
