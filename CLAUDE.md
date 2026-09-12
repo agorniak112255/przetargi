@@ -288,7 +288,21 @@ Before committing, inspect the diff.
 
 
 
-Do not create commits unless explicitly requested.
+Always commit once the relevant tests have passed.
+
+
+
+Before committing, run the tests that cover the change — unit, integration,
+
+type checking and linting. Commit only on a green run. A failing run, a run
+
+that was skipped, or a run that could not complete means no commit yet; say
+
+what failed instead.
+
+
+
+Never weaken, skip or delete a test in order to reach a green run.
 
 
 
