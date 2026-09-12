@@ -1396,6 +1396,21 @@ final class EnrichmentQueryLadderTest extends TestCase
             .'KleenGuard G10 Flex Blue Nitrile Gloves 54335 XL',
             $product
         ));
+        $comfort = new Product([
+            'sku' => '54189',
+            'name' => 'KG G10 Comfort Plus Ntrl Glv Lt Blue XL',
+            'manufacturer' => 'Ansell',
+        ]);
+        $this->assertFalse($identity->hayMentionsProduct(
+            'https://www.ansell.com/us/en/products/kleenguard-g10-flex-blue-nitrile-gloves '
+            .'KleenGuard G10 Flex Blue Nitrile Gloves 54335 XL',
+            $comfort
+        ));
+        $this->assertTrue($identity->pageClaimsAnotherCode(
+            'https://www.ansell.com/us/en/products/kleenguard-g10-flex-blue-nitrile-gloves',
+            'KleenGuard G10 Flex Blue Nitrile Gloves',
+            $comfort
+        ));
     }
 
     public function test_gvs_part_searches_sku_on_rpb_catalogs_not_as_safety_shoe(): void

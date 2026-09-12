@@ -770,7 +770,7 @@ final class ProductSearchIdentity
         return $line.' '.$model;
     }
 
-    /** Cennik pisze KLNGD/KG, karty — KleenGuard G80. */
+    /** Cennik pisze KLNGD/KG, karty — KleenGuard G80 / G10 Flex. */
     private function kleenGuardShopPhrase(Product $product): string
     {
         $name = mb_strtoupper(trim((string) $product->name));
@@ -778,11 +778,69 @@ final class ProductSearchIdentity
             && preg_match('/^KG\b/u', $name) !== 1) {
             return '';
         }
-        if (preg_match('/\b(KGA\d{2,3}|[AG]\d{2})\b/u', $name, $m) === 1) {
-            return 'KleenGuard '.$m[1];
+        if (preg_match('/\b(KGA\d{2,3}|[AG]\d{2})\b/u', $name, $m) !== 1) {
+            return '';
+        }
+        $phrase = 'KleenGuard '.$m[1];
+        $variant = $this->kleenGuardVariantKey($product);
+
+        return match ($variant) {
+            'comfort-plus' => $phrase.' Comfort Plus',
+            'flex' => $phrase.' Flex',
+            '2pro' => $phrase.' 2Pro',
+            default => $phrase,
+        };
+    }
+
+    /** G10 Comfort Plus, G10 Flex i G10 2Pro to trzy różne rękawice. */
+    private function kleenGuardVariantKey(Product $product): ?string
+    {
+        $name = mb_strtolower(trim((string) $product->name));
+        if (preg_match('/\b(?:klngd|kleenguard)\b/u', $name) !== 1
+            && preg_match('/^kg\b/u', $name) !== 1) {
+            return null;
+        }
+        if (str_contains($name, 'comfort plus') || str_contains($name, 'comfortplus')) {
+            return 'comfort-plus';
+        }
+        if (preg_match('/\b2\s*pro\b/u', $name) === 1) {
+            return '2pro';
+        }
+        if (preg_match('/\bflex\b/u', $name) === 1) {
+            return 'flex';
         }
 
-        return '';
+        return null;
+    }
+
+    private function kleenGuardHayHasVariant(string $hay, string $variant): bool
+    {
+        $hay = mb_strtolower($hay);
+
+        return match ($variant) {
+            'comfort-plus' => str_contains($hay, 'comfort-plus')
+                || str_contains($hay, 'comfort plus')
+                || str_contains($hay, 'comfortplus'),
+            '2pro' => preg_match('/\b2[- ]?pro\b/u', $hay) === 1,
+            'flex' => preg_match('/g10[-_ ]flex|\bflex[-_ ](?:blue|ntrl|nitrile)/u', $hay) === 1,
+            default => false,
+        };
+    }
+
+    private function kleenGuardPageClaimsForeignVariant(string $url, string $title, Product $product): bool
+    {
+        $ours = $this->kleenGuardVariantKey($product);
+        if ($ours === null) {
+            return false;
+        }
+        $hay = mb_strtolower($url.' '.$title);
+        foreach (['comfort-plus', 'flex', '2pro'] as $other) {
+            if ($other !== $ours && $this->kleenGuardHayHasVariant($hay, $other)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** G02 / BOOT 192 — ogon cennika, nie model karty. */
@@ -1938,6 +1996,10 @@ final class ProductSearchIdentity
         if (! $this->hayHasRequiredTypeFromName($hay, $product)) {
             return false;
         }
+        $kleenVariant = $this->kleenGuardVariantKey($product);
+        if ($kleenVariant !== null && ! $this->kleenGuardHayHasVariant($hay, $kleenVariant)) {
+            return false;
+        }
         if ($this->gluedNumericModelConfirmsCard($hay, $product)) {
             return true;
         }
@@ -2664,6 +2726,7 @@ final class ProductSearchIdentity
         if ($this->ansellPageClaimsForeignSeries($url, $title, $product)
             || $this->ansellPageClaimsForeignLine($url, $product)
             || $this->ansellPageClaimsForeignVariant($url, $product)
+            || $this->kleenGuardPageClaimsForeignVariant($url, $title, $product)
             || $this->urlOrTitleHasForeignAnsellGloveModel($url, $title, $product)) {
             return true;
         }

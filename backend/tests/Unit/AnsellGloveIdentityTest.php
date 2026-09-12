@@ -161,10 +161,33 @@ final class AnsellGloveIdentityTest extends TestCase
     {
         $identity = app(ProductSearchIdentity::class);
         $g80 = $this->glove('25625', 'KLNGD G80 Gloves Nitrile Gauntlet 11');
-        $g10 = $this->glove('54335', 'KG G10 Flex Ntrl Glv Blue XL');
+        $flex = $this->glove('54335', 'KG G10 Flex Ntrl Glv Blue XL');
+        $comfort = $this->glove('54189', 'KG G10 Comfort Plus Ntrl Glv Lt Blue XL');
+        $pro = $this->glove('54424', 'KG G10 2Pro Ntrl Glv Blue XL');
 
         $this->assertSame('KleenGuard G80', $identity->firstStrongShopPhrase($g80));
-        $this->assertSame('KleenGuard G10', $identity->firstStrongShopPhrase($g10));
+        $this->assertSame('KleenGuard G10 Flex', $identity->firstStrongShopPhrase($flex));
+        $this->assertSame('KleenGuard G10 Comfort Plus', $identity->firstStrongShopPhrase($comfort));
+        $this->assertSame('KleenGuard G10 2Pro', $identity->firstStrongShopPhrase($pro));
+    }
+
+    public function test_g10_comfort_plus_rejects_flex_card(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $comfort = $this->glove('54189', 'KG G10 Comfort Plus Ntrl Glv Lt Blue XL');
+        $flexUrl = 'https://www.ansell.com/pl/pl/products/kleenguard-g10-flex-blue-nitrile-gloves';
+        $flexTitle = 'KleenGuard G10 Flex Blue Nitrile Gloves';
+        $flexText = 'KleenGuard PPE protective clothing, hand, eye and face protection. '
+            .'V30 Nemesis with Cord Connect. Frequently Asked Questions.';
+
+        $this->assertTrue($identity->pageClaimsAnotherCode($flexUrl, $flexTitle, $comfort));
+        $this->assertFalse($identity->hayMentionsProduct($flexUrl.' '.$flexTitle.' '.$flexText, $comfort));
+        $this->assertFalse($identity->isConfirmedProductCard($flexUrl, $flexTitle, $flexText, $comfort));
+        $this->assertTrue($identity->hayMentionsProduct(
+            'https://www.ansell.com/us/en/products/kleenguard-g10-comfort-plus-nitrile-gloves '
+            .'KleenGuard G10 Comfort Plus Light Blue Nitrile Gloves 54189 XL',
+            $comfort
+        ));
     }
 
     private function glove(string $sku, string $name): Product
