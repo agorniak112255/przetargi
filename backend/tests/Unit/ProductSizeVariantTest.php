@@ -22,6 +22,23 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertSame($a, $b);
         $this->assertSame('37695VP', $svc->skuCore('37695VP100', 'AlphaTec 37695VP Size 10.0'));
         $this->assertSame('AlphaTec 37695VP', $svc->stripSizeFromName('AlphaTec 37695VP Size 10.0'));
+        $this->assertSame('AlphaTec 09430', $svc->stripSizeLabelFromName('AlphaTec 09430 Size 10,0'));
+        $this->assertSame('HyFlex 11919VP VEND', $svc->stripSizeLabelFromName('HyFlex 11919VP Size 10,0 VEND'));
+        $this->assertSame('KG G10 Comfort Plus Ntrl Glv Lt Blue XL', $svc->stripSizeLabelFromName('KG G10 Comfort Plus Ntrl Glv Lt Blue XL'));
+        $this->assertSame('1st Winter Dry 10', $svc->stripSizeLabelFromName('1st Winter Dry 10'));
+        $this->assertSame(
+            'Kaptur 3M Versaflo ze zintegrowaną więźbą, rozmiar L, S-133L',
+            $svc->stripSizeLabelFromName('Kaptur 3M Versaflo ze zintegrowaną więźbą, rozmiar L, S-133L')
+        );
+        $this->assertSame('Spodnie wodoochronne  ogrodniczki', $svc->stripSizeLabelFromName('Spodnie wodoochronne  ogrodniczki'));
+        $this->assertSame(
+            'Scotchlite 8725 N, srebrny,rozmiar 25,4 mm x 100 m',
+            $svc->stripSizeLabelFromName('Scotchlite 8725 N, srebrny,rozmiar 25,4 mm x 100 m')
+        );
+        $this->assertSame(
+            'Szelki ExoFit XE50 1112702, rozmiar 1, 1 szt./opakowanie',
+            $svc->stripSizeLabelFromName('Szelki ExoFit XE50 1112702, rozmiar 1, 1 szt./opakowanie')
+        );
     }
 
     #[Test]

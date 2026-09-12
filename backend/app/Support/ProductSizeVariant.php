@@ -399,6 +399,33 @@ final class ProductSizeVariant
         return trim(preg_replace('/\s+/u', ' ', $t) ?? $t);
     }
 
+    /** Tylko „Size 10,0” / „Rozmiar 9” — nie obcina gołego XL na końcu nazwy. */
+    public function stripSizeLabelFromName(string $name): string
+    {
+        $t = trim($name);
+        $changed = false;
+        $next = preg_replace_callback(
+            '/\b(?:size|rozmiar|taille|rozm\.?)\s*:?\s*(\d{1,2}[.,]\d|\d{1,2}(?![.,]\d))\b(?!\s*(?:mm|cm|m\b|km|kg|g\b|l\b|ml|szt))/iu',
+            function (array $m) use (&$changed): string {
+                if (! $this->looksLikeWearSize($m[1])) {
+                    return $m[0];
+                }
+                $changed = true;
+
+                return '';
+            },
+            $t
+        ) ?? $t;
+        if (! $changed || $next === $t) {
+            return $t;
+        }
+        $next = preg_replace('/\s*,\s*,+/u', ',', $next) ?? $next;
+        $next = trim(preg_replace('/[ \t]+/u', ' ', $next) ?? $next);
+        $next = trim($next, " \t,;–-");
+
+        return $next !== '' ? $next : $t;
+    }
+
     /**
      * Ostatni człon po / albo - to rozmiar (40, 09, XL) — sklepy trzymają sam model.
      */

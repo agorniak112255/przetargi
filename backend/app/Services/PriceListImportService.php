@@ -890,7 +890,7 @@ final class PriceListImportService
             }
         }
 
-        return $this->stripInternalProductKeys($product);
+        return $this->stripInternalProductKeys($this->withStrippedSizeLabel($product));
     }
 
     /**
@@ -1637,6 +1637,7 @@ final class PriceListImportService
     private function clampProductFields(array $payload): array
     {
         $maxName = 1000;
+        $payload = $this->withStrippedSizeLabel($payload);
         $name = trim((string) ($payload['name'] ?? ''));
         if (mb_strlen($name) > $maxName) {
             $desc = trim((string) ($payload['description'] ?? ''));
@@ -1695,5 +1696,20 @@ final class PriceListImportService
             'product_ids' => [],
             'special_prices' => 0,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     * @return array<string, mixed>
+     */
+    private function withStrippedSizeLabel(array $product): array
+    {
+        $name = trim((string) ($product['name'] ?? ''));
+        $clean = $this->sizes->stripSizeLabelFromName($name);
+        if ($clean !== '' && $clean !== $name) {
+            $product['name'] = $clean;
+        }
+
+        return $product;
     }
 }

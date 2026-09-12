@@ -103,6 +103,9 @@ final class PriceListGroupedRowsImportTest extends TestCase
             $this->assertContains('37695VP-7', $skus);
             $this->assertContains('37695VP-10', $skus);
             $this->assertSame(2, $preview['products_found']);
+            $names = array_column($preview['products'], 'name');
+            $this->assertContains('AlphaTec 37695VP', $names);
+            $this->assertSame([], preg_grep('/\bsize\b/i', $names));
         } finally {
             @unlink($path);
         }
