@@ -9,6 +9,7 @@ use App\Jobs\EnrichProductJob;
 use App\Jobs\PrefetchProductSourcesJob;
 use App\Models\AiSetting;
 use App\Models\CatalogHost;
+use App\Models\CatalogPage;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
@@ -1128,12 +1129,102 @@ final class ProductEnrichmentApiTest extends TestCase
         $search->shouldHaveReceived('searchWebWithoutLocalIndex');
     }
 
+    public function test_open_web_keeps_exact_name_hits_next_to_sibling_code_hits(): void
+    {
+        // Adresy z przebiegu AC01P-00022-00-N0C na produkcji: hahn-kolb niesie kod
+        // rodzenstwa (-N00), regalbau i lms-lab dokladna nazwe, rectus to zlaczka
+        // innego producenta.
+        $product = $this->makeProduct([
+            'sku' => 'AC01P-00022-00-N0C',
+            'name' => 'AVNT PASSTHRU WHSTL & RECTUS 96KS',
+            'manufacturer' => 'Ansell',
+        ]);
+        $sibling = 'https://www.hahn-kolb.net/ANSELL-Avant-pass-through-with-whistle-no-connector-AC01P-00022-00-N00/95282540.sku/cs/CZ/EUR/';
+        $named1 = 'https://www.regalbau-service.de/ANSELL-AVNT-PASSTHRU-WHSTL-RECTUS-96KS';
+        $named2 = 'https://www.lms-lab.de/en/avnt-passthru-whstl-rectus-96ks/2593587';
+        $foreign = 'https://rectus.pl/produkty/szybkozlacze-typ-96ks/';
+        $hits = [];
+        foreach ([$foreign, $named1, $sibling, $named2] as $url) {
+            $hits[] = ['url' => $url, 'title' => '', 'snippet' => ''];
+        }
+
+        $hybrid = app(HybridWebSearchService::class);
+        $pick = new ReflectionMethod($hybrid, 'codedThenNamed');
+        $pick->setAccessible(true);
+        $coded = [['url' => $sibling, 'title' => '', 'snippet' => '']];
+        $urls = array_column($pick->invoke($hybrid, $hits, $coded, $product), 'url');
+
+        $this->assertSame([$sibling, $named1, $named2], $urls);
+    }
+
+    public function test_empty_description_from_index_cards_still_reaches_open_web(): void
+    {
+        // Pas trafial w indeksie na karty potwierdzone adresem, model nie wyciagal
+        // z nich opisu i produkt konczyl na "wpisz recznie" bez pytania internetu.
+        $cardUrl = 'https://icd.pl/pas-ansell-ac01p-00014-00.html';
+        $product = $this->makeProduct([
+            'sku' => 'AC01P-00014-00',
+            'name' => 'GREY PES BLT & YKK BCKL LENGTH 150CM',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->andReturn(['results' => [['url' => $cardUrl, 'title' => 'Pas Ansell AC01P-00014-00', 'snippet' => '']], 'errors' => []]);
+        $search->shouldReceive('searchWebWithoutLocalIndex')
+            ->once()
+            ->andReturn(['results' => [], 'images' => [], 'errors' => []]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->zeroOrMoreTimes()->andReturn([
+            'description' => '', 'features' => [], 'specs' => [], 'norms' => [], 'certificates' => [],
+            'materials' => [], 'use_cases' => [], 'image_urls' => [], 'source_urls' => [], 'confidence' => 0.1,
+        ]);
+        $llm->shouldReceive('chatJson')->zeroOrMoreTimes()->andReturn([]);
+        $llm->shouldReceive('chatJsonWithImages')->zeroOrMoreTimes()->andReturn(['candidates' => []]);
+
+        Http::fake(['*' => Http::response(
+            '<html><body><h1>Pas Ansell AC01P-00014-00</h1><p>Pas PES z klamra YKK, dlugosc 150 cm.</p></body></html>',
+            200,
+            ['Content-Type' => 'text/html']
+        )]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+        } catch (ProductSourcesNotFoundException) {
+            // karty i tak nie ma - liczy sie to, ze internet zostal zapytany
+        }
+
+        $search->shouldHaveReceived('searchWebWithoutLocalIndex');
+    }
+
     public function test_site_queries_skip_shops_we_have_in_the_local_index(): void
     {
         Cache::flush();
-        CatalogHost::query()->create(['host' => 'icd.pl', 'pages_count' => 29767]);
-        CatalogHost::query()->create(['host' => 'bhp-gabi.pl', 'pages_count' => 16980]);
-        // host znany, ale bez ani jednej strony — indeks nic o nim nie wie
+        // O tym, czy sklep mamy u siebie, decyduja realne strony w catalog_pages.
+        foreach (['icd.pl' => 'https://icd.pl/mata-super-mat-150cm-x-mb.html',
+            'bhp-gabi.pl' => 'https://www.bhp-gabi.pl/p28924,gogle-ochronne-3m.html'] as $host => $url) {
+            CatalogPage::query()->create([
+                'host' => $host, 'url' => $url, 'url_hash' => hash('sha256', $url), 'haystack' => $url,
+            ]);
+        }
+        // licznik w catalog_hosts zostal po skasowaniu stron (hahn-kolb: 250 000,
+        // stron zero) — taki host NIE jest zaindeksowany i wolno o niego pytac
+        CatalogHost::query()->create(['host' => 'hahn-kolb.net', 'pages_count' => 250000]);
         CatalogHost::query()->create(['host' => 'pusty-sklep.pl', 'pages_count' => 0]);
 
         $product = $this->makeProduct([
@@ -1149,7 +1240,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $queries = [
             'site:icd.pl AlphaTec Pass-through',
             'site:www.bhp-gabi.pl AlphaTec Pass-through',
-            'site:pusty-sklep.pl AlphaTec Pass-through',
+            'site:hahn-kolb.net AlphaTec Pass-through',
             'site:nieznany-sklep.pl AlphaTec Pass-through',
             'AlphaTec Pass-through Ansell',
         ];
@@ -1161,7 +1252,8 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertStringNotContainsString('site:icd.pl', $joined);
         $this->assertStringNotContainsString('site:www.bhp-gabi.pl', $joined);
         // reszta idzie do wyszukiwarki jak dotad
-        $this->assertStringContainsString('site:pusty-sklep.pl', $joined);
+        // drabinka bierze najwyzej SITE_QUERY_ATTEMPTS (4) zapytan site:, stad cztery hosty
+        $this->assertStringContainsString('site:hahn-kolb.net', $joined, 'stary licznik bez stron nie czyni hosta zaindeksowanym');
         $this->assertStringContainsString('site:nieznany-sklep.pl', $joined);
 
         // ten sam filtr chroni druga sciezke - zapytania do zmapowanych sklepow
@@ -1173,6 +1265,7 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame('icd.pl', $host->invoke($hybrid, 'site:icd.pl/products AlphaTec'));
         $this->assertSame('bhp-gabi.pl', $host->invoke($hybrid, 'site:www.bhp-gabi.pl AlphaTec'));
         $this->assertTrue($indexed->invoke($hybrid, 'icd.pl'));
+        $this->assertFalse($indexed->invoke($hybrid, 'hahn-kolb.net'));
         $this->assertFalse($indexed->invoke($hybrid, 'pusty-sklep.pl'));
         $this->assertFalse($indexed->invoke($hybrid, ''));
 

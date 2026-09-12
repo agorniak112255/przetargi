@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Exceptions\TavilyQuotaExceededException;
-use App\Models\CatalogHost;
+use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
 use App\Models\Product;
 use App\Services\Ai\AiSettingsService;
@@ -637,6 +637,33 @@ class HybridWebSearchService
      * @param  list<array{url: string, title?: string, snippet?: string}>  $coded
      * @return list<array{url: string, title: string, snippet: string}>
      */
+    /**
+     * Trafienia z kodem, a za nimi te, które niosą pełną nazwę produktu.
+     *
+     * Sam kod w adresie bywa kodem rodzeństwa: dla AC01P-00022-00-N0C sklep
+     * hahn-kolb niósł „…-N00” i „…-N0A”, a karty z dokładną nazwą „AVNT PASSTHRU
+     * WHSTL RECTUS 96KS” (regalbau-service.de, lms-lab.de) szły do kosza, bo
+     * kodu w adresie nie miały. Potem cztery strony hahn-kolb nie odpowiedziały
+     * i produkt skończył na „wpisz ręcznie” z właściwymi kartami w ręku.
+     *
+     * @param  list<array<string, mixed>>  $hits
+     * @param  list<array<string, mixed>>  $coded
+     * @return list<array<string, mixed>>
+     */
+    private function codedThenNamed(array $hits, array $coded, Product $product): array
+    {
+        $named = [];
+        foreach ($this->hitsWithoutCodedUrls($hits, $coded) as $row) {
+            $url = (string) ($row['url'] ?? '');
+            $title = (string) ($row['title'] ?? '');
+            if ($url !== '' && $this->identity->hayHasDistinctiveNamePhrase($url.' '.$title, $product)) {
+                $named[] = $row;
+            }
+        }
+
+        return array_values(array_merge($coded, $named));
+    }
+
     private function hitsWithoutCodedUrls(array $hits, array $coded): array
     {
         $codedUrls = [];
@@ -905,8 +932,11 @@ class HybridWebSearchService
                 self::INDEXED_HOSTS_CACHE_KEY,
                 now()->addMinutes(10),
                 static function (): array {
+                    // Licznik w catalog_hosts bywa stary: po skasowaniu stron hosta
+                    // (hahn-kolb, rs-online, rubix) pokazywal dalej 250 000, a stron
+                    // bylo zero. Liczy sie to, co realnie lezy w catalog_pages.
                     $out = [];
-                    foreach (CatalogHost::query()->where('pages_count', '>', 0)->pluck('host') as $host) {
+                    foreach (CatalogPage::query()->distinct()->pluck('host') as $host) {
                         $bare = preg_replace('/^www\./', '', mb_strtolower(trim((string) $host))) ?? '';
                         if ($bare !== '') {
                             $out[$bare] = true;
@@ -1124,12 +1154,12 @@ class HybridWebSearchService
             }
             $codedSoFar = $this->resultsCarryProductCode($openResults, $product);
             if ($this->hasEnoughPageResults($codedSoFar, $enoughPages)) {
-                $openResults = $codedSoFar;
+                $openResults = $this->codedThenNamed($openResults, $codedSoFar, $product);
                 break;
             }
         }
         $coded = $this->resultsCarryProductCode($openResults, $product);
-        $usable = $coded !== [] ? $coded : $openResults;
+        $usable = $coded !== [] ? $this->codedThenNamed($openResults, $coded, $product) : $openResults;
         if ($usable !== []) {
             usort(
                 $usable,

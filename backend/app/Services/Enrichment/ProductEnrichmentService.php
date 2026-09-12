@@ -813,6 +813,17 @@ final class ProductEnrichmentService
                         $fetched
                     );
                 }
+                // Pas „GREY PES BLT … 150CM” kończył tu na matach z indeksu i nigdy nie
+                // trafiał do wyszukiwarki — ta gałąź nie miała trzeciej drogi, którą
+                // ma gałąź „strony nie potwierdzają produktu”.
+                if ($retryPages === []) {
+                    [$retryPages, $fetched, $retryResults] = $this->fetchCardsFromOpenWeb(
+                        $product,
+                        array_values(array_merge($searchResults, $retryResults)),
+                        $fetched,
+                        $mfrDomains
+                    );
+                }
                 // Ślad także wtedy, gdy druga próba nic nie znalazła — bez tego nie widać,
                 // czy w ogóle się odbyła (w próbce 45 produktów nie zostawiła ani jednego wpisu).
                 $this->attemptLog()->add(
