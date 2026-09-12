@@ -9,11 +9,13 @@ use App\Models\CatalogPage;
 use App\Models\CatalogSkipOverride;
 use App\Models\Product;
 use App\Services\Enrichment\CandidateRejection;
+use App\Services\Enrichment\CatalogIndexProgress;
 use App\Services\Enrichment\CatalogIndexSearch;
 use App\Services\Enrichment\CatalogSitemapIndexer;
 use App\Services\Enrichment\HybridWebSearchService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -160,6 +162,63 @@ final class CatalogIndexTest extends TestCase
 
         $this->assertSame(1, $result['saved']);
         $this->assertDatabaseHas('catalog_pages', ['url' => 'https://tmbhp.pl/pl/p/Rekawice-MSA/123']);
+    }
+
+    public function test_soteshop_robots_skips_other_platform_sitemap_guesses(): void
+    {
+        // bolle.pl: robots bez Sitemap, ale z modułami stXxxFrontend (SOTESHOP);
+        // sklep nie ma mapy XML, a po kilkunastu zgadywankach zaczyna oddawać 503
+        $this->fakeHttp([
+            'https://bolle.pl/robots.txt' => Http::response(
+                "User-agent: *\nDisallow: /basket\nDisallow: /productsCompare\nDisallow: /stNavigationFrontend\n",
+                200
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('bolle.pl');
+
+        Http::assertSent(static fn ($request): bool => $request->url() === 'https://bolle.pl/sitemap.xml');
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'wp-sitemap')
+            || str_contains($request->url(), '/media/sitemap')
+            || str_contains($request->url(), 'xmlsitemap.php')
+            || str_contains($request->url(), 'GoogleSitemap'));
+        $this->assertStringContainsString(
+            'Platforma po robots.txt: soteshop',
+            json_encode(app(CatalogIndexProgress::class)->snapshot('bolle.pl'), JSON_UNESCAPED_UNICODE)
+        );
+    }
+
+    public function test_stops_guessing_sitemaps_after_shop_throttles(): void
+    {
+        $this->fakeHttp([
+            'https://tmbhp.pl/robots.txt' => Http::response("User-agent: *\nAllow: /\n", 200),
+            'https://tmbhp.pl/sitemap.xml' => Http::response('Service Unavailable', 503, ['Content-Type' => 'text/html']),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('tmbhp.pl');
+
+        // po 503 nie ma sensu pytać o kolejne zgadywane ścieżki
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'sitemap_index.xml')
+            || str_contains($request->url(), 'sitemap-products.xml'));
+        $this->assertStringContainsString(
+            'HTTP 503) — przerywam zgadywanie',
+            json_encode(app(CatalogIndexProgress::class)->snapshot('tmbhp.pl'), JSON_UNESCAPED_UNICODE)
+        );
+    }
+
+    public function test_unreadable_robots_sitemap_logs_http_status(): void
+    {
+        $this->fakeHttp([
+            'https://gvarant.pl/robots.txt' => Http::response('Sitemap: https://gvarant.pl/sitemap.xml', 200),
+            'https://gvarant.pl/sitemap.xml' => Http::response('Service Unavailable', 503, ['Content-Type' => 'text/html']),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('gvarant.pl');
+
+        $this->assertStringContainsString(
+            'Mapa pusta albo nieczytelna (HTTP 503)',
+            json_encode(app(CatalogIndexProgress::class)->snapshot('gvarant.pl'), JSON_UNESCAPED_UNICODE)
+        );
     }
 
     public function test_waf_403_html_is_not_counted_as_sitemap(): void
@@ -2170,7 +2229,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_html_crawl_uses_reader_when_shop_is_unreachable(): void
     {
-        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+        Http::fake(function (Request $request) {
             $url = $request->url();
             if (str_starts_with($url, 'https://r.jina.ai/')) {
                 $target = mb_substr($url, mb_strlen('https://r.jina.ai/'));
@@ -2206,7 +2265,7 @@ final class CatalogIndexTest extends TestCase
     public function test_html_crawl_stops_when_both_homepages_fail(): void
     {
         $hit = [];
-        Http::fake(function (\Illuminate\Http\Client\Request $request) use (&$hit) {
+        Http::fake(function (Request $request) use (&$hit) {
             $hit[] = $request->url();
 
             return Http::response('no', 404);
@@ -2248,7 +2307,7 @@ final class CatalogIndexTest extends TestCase
 
     public function test_html_crawl_runs_when_robots_and_sitemaps_time_out(): void
     {
-        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+        Http::fake(function (Request $request) {
             $url = $request->url();
             if ($url === 'https://slowshop.test/') {
                 return Http::response(

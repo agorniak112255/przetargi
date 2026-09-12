@@ -77,38 +77,68 @@ final class CatalogSitemapIndexer
     /** Slug karty plus tytuł mieszczą się w 32 tokenach; przy 24 ginęła końcówka adresu. */
     private const MAX_TOKENS_PER_PAGE = 32;
 
-    private const CANDIDATE_PATHS = [
-        '/sitemap.xml',
-        '/sitemap.xml.gz',
+    /**
+     * Zgadywane ścieżki map — pogrupowane po platformie. Gdy robots.txt zdradza
+     * platformę (bolle.pl: SOTESHOP), pytamy tylko o jej mapy i wspólne: każde
+     * zbędne zapytanie to szansa, że zapora sklepu zacznie oddawać 503, zanim
+     * ruszy pełzanie po HTML.
+     */
+    private const CANDIDATE_GROUPS = [
+        'common' => [
+            '/sitemap.xml',
+            '/sitemap.xml.gz',
+            '/sitemap_index.xml',
+            '/sitemap-index.xml',
+            '/sitemapindex.xml',
+            '/sitemap/sitemap.xml',
+            '/sitemap/index.xml',
+            '/sitemap.php',
+            '/pl/sitemap.xml',
+            '/product-sitemap.xml',
+            '/products-sitemap.xml',
+            '/sitemap-products.xml',
+            '/sitemap/products.xml',
+        ],
         // Magento 2 — robots często nie wskazuje mapy, a /sitemap.xml to 404
-        '/media/sitemap.xml',
-        '/pub/media/sitemap.xml',
-        '/media/sitemap/sitemap.xml',
-        '/media/sitemap/sitemap_en.xml',
-        '/media/sitemap/sitemap_pl.xml',
-        '/media/sitemap/sitemap_de.xml',
-        '/sitemap_index.xml',
-        '/sitemap-index.xml',
-        '/sitemapindex.xml',
-        '/sitemap/sitemap.xml',
-        '/sitemap/index.xml',
-        // PrestaShop, WordPress/Yoast, Shoper i sklepy z prefiksem języka
-        '/1_pl_0_sitemap.xml',
-        '/1_index_sitemap.xml',
-        '/wp-sitemap.xml',
-        '/sitemap.php',
+        'magento' => [
+            '/media/sitemap.xml',
+            '/pub/media/sitemap.xml',
+            '/media/sitemap/sitemap.xml',
+            '/media/sitemap/sitemap_en.xml',
+            '/media/sitemap/sitemap_pl.xml',
+            '/media/sitemap/sitemap_de.xml',
+        ],
+        // PrestaShop i sklepy z prefiksem języka
+        'prestashop' => [
+            '/1_pl_0_sitemap.xml',
+            '/1_index_sitemap.xml',
+        ],
+        // WordPress/Yoast
+        'wordpress' => [
+            '/wp-sitemap.xml',
+        ],
         // BigCommerce — robots często bez Sitemap:, mapa jest pod xmlsitemap.php
-        '/xmlsitemap.php',
-        '/pl/sitemap.xml',
-        '/product-sitemap.xml',
-        '/products-sitemap.xml',
-        '/sitemap-products.xml',
-        '/sitemap/products.xml',
+        'bigcommerce' => [
+            '/xmlsitemap.php',
+        ],
         // Shoper / Shoparena
-        '/console/integration/execute/name/GoogleSitemap',
+        'shoper' => [
+            '/console/integration/execute/name/GoogleSitemap',
+        ],
         // Joomla OSMap
-        '/index.php?option=com_osmap&view=xml&id=1&format=xml',
+        'joomla' => [
+            '/index.php?option=com_osmap&view=xml&id=1&format=xml',
+        ],
     ];
+
+    /** Platforma rozpoznana po robots.txt — per host, na czas jednego indeksowania. */
+    private array $platformByHost = [];
+
+    /** Status HTTP ostatniego strumienia sitemapy (503 = sklep dławi zapytania). */
+    private ?int $lastStreamStatus = null;
+
+    /** Hosty, dla których discoverSitemaps nie miało nic z robots i zwróciło zgadywane ścieżki. */
+    private array $guessedHosts = [];
 
     public function __construct(
         private readonly CatalogIndexProgress $progress,
@@ -147,8 +177,11 @@ final class CatalogSitemapIndexer
         $budget = max(30, $maxSeconds);
         $deadline = microtime(true) + $budget;
         $sitemapDeadline = $deadline - min(self::HTML_CRAWL_RESERVE, (int) floor($budget * 0.4));
+        unset($this->guessedHosts[$host]);
         $sitemaps = $this->discoverSitemaps($host, $sitemapDeadline);
-        $guessed = array_flip($this->candidateUrls($host));
+        // Mapa z robots.txt pod /sitemap.xml to nie zgadywanka — dostaje pełny czas
+        // i wpis „Czytam”, a 503 od niej nie przerywa niczego, tylko trafia do logu.
+        $guessed = isset($this->guessedHosts[$host]) ? array_flip($this->candidateUrls($host)) : [];
         $beforeMaps = count($sitemaps);
         $sitemaps = $this->retainPreferredSitemaps($sitemaps);
         if ($beforeMaps > count($sitemaps)) {
@@ -271,6 +304,12 @@ final class CatalogSitemapIndexer
             $mapsBefore = count($sitemaps);
             $streamDeadline = $guessing ? min($deadline, $guessStartedAt + self::CANDIDATE_GUESS_BUDGET) : $deadline;
             $streamed = $this->streamLocations($sitemap, $consume, $streamDeadline, $timeout, ! $guessing);
+            // Zapora sklepu odpowiada 503/429 na serię zapytań (bolle.pl po 3–4 strzałach).
+            // Każda kolejna zgadywana ścieżka tylko pogłębia dławienie przed pełzaniem.
+            if ($guessing && in_array($this->lastStreamStatus, [429, 503], true)) {
+                $this->note($host, 'Sklep dławi zapytania (HTTP '.$this->lastStreamStatus.') — przerywam zgadywanie map, pełzam po HTML.');
+                break;
+            }
             $rawChildren = count($sitemaps) - $mapsBefore;
             $sitemaps = $this->retainPreferredSitemaps($sitemaps);
             $childMaps = count($sitemaps) - $mapsBefore;
@@ -285,7 +324,10 @@ final class CatalogSitemapIndexer
                 } elseif ($requireBhp && $streamed) {
                     $this->note($host, 'Brak kart BHP: '.$this->shortUrl($sitemap));
                 } else {
-                    $this->note($host, 'Mapa pusta albo nieczytelna: '.$this->shortUrl($sitemap));
+                    $status = $this->lastStreamStatus !== null && $this->lastStreamStatus >= 400
+                        ? ' (HTTP '.$this->lastStreamStatus.')'
+                        : '';
+                    $this->note($host, 'Mapa pusta albo nieczytelna'.$status.': '.$this->shortUrl($sitemap));
                 }
             }
             if (microtime(true) >= $deadline) {
@@ -294,9 +336,14 @@ final class CatalogSitemapIndexer
             // robots.txt bywa bez Sitemap albo wskazuje 404 — wtedy zgadujemy typowe ścieżki
             if ($i === count($sitemaps) - 1 && count($seen) === 0 && ! $timedOut) {
                 $this->note($host, 'Nadal 0 kart — dokładam zgadywane ścieżki sitemapy.');
-                foreach (array_merge($this->wordpressSitemapFallbacks($host), $this->candidateUrls($host)) as $extra) {
+                $platform = $this->platformByHost[$host] ?? null;
+                $wordpress = $platform === null || $platform === 'wordpress' ? $this->wordpressSitemapFallbacks($host) : [];
+                foreach (array_merge($wordpress, $this->candidateUrls($host)) as $extra) {
                     if (count($sitemaps) >= self::MAX_SITEMAP_FILES) {
                         break;
+                    }
+                    if (! in_array($extra, $wordpress, true)) {
+                        $guessed[$extra] = true;
                     }
                     if (! in_array($extra, $sitemaps, true)) {
                         $sitemaps[] = $extra;
@@ -463,6 +510,7 @@ final class CatalogSitemapIndexer
             foreach ($this->xmlFilesIn($dir) as $file) {
                 if ($this->isImageSitemapName($file)) {
                     $skipped++;
+
                     continue;
                 }
                 $files[] = $file;
@@ -600,6 +648,13 @@ final class CatalogSitemapIndexer
             if ($robots !== null) {
                 $reachedHost = true;
             }
+            if (is_string($robots) && ! isset($this->platformByHost[$host])) {
+                $platform = $this->detectPlatform($robots);
+                if ($platform !== null) {
+                    $this->platformByHost[$host] = $platform;
+                    $this->note($host, 'Platforma po robots.txt: '.$platform.' — zgaduję tylko jej mapy i wspólne.');
+                }
+            }
             $before = count($out);
             $this->collectRobotSitemaps($robots, $out, $name);
             if ($out === [] && ! app()->environment('testing')) {
@@ -642,6 +697,7 @@ final class CatalogSitemapIndexer
         if ($out === [] && $reachedHost) {
             $this->note($host, 'Brak sitemapy w robots — zgaduję typowe ścieżki.');
             $out = $this->candidateUrls($host);
+            $this->guessedHosts[$host] = true;
         } elseif ($out === []) {
             $this->note($host, 'Host nie odpowiada na robots — pomijam zgadywanie sitemap, pełzam po HTML.');
         }
@@ -655,8 +711,18 @@ final class CatalogSitemapIndexer
     public function candidateUrls(string $host): array
     {
         $host = $this->normalizeHost($host);
+        $platform = $this->platformByHost[$host] ?? null;
+        $paths = [];
+        foreach (self::CANDIDATE_GROUPS as $group => $groupPaths) {
+            if ($platform !== null && $group !== 'common' && $group !== $platform) {
+                continue;
+            }
+            foreach ($groupPaths as $path) {
+                $paths[] = $path;
+            }
+        }
         $out = [];
-        foreach (self::CANDIDATE_PATHS as $path) {
+        foreach ($paths as $path) {
             $out[] = 'https://'.$host.$path;
         }
         // www tylko dla najczęściej działających ścieżek — reszta tylko wydłuża update
@@ -671,10 +737,43 @@ final class CatalogSitemapIndexer
             '/media/sitemap/sitemap.xml',
             '/media/sitemap/sitemap_en.xml',
         ] as $path) {
-            $out[] = 'https://www.'.$host.$path;
+            if (in_array($path, $paths, true)) {
+                $out[] = 'https://www.'.$host.$path;
+            }
         }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Platforma sklepu po wpisach Disallow w robots.txt. Tylko jednoznaczne
+     * znaczniki — przy wątpliwości null, czyli zgadujemy jak dotąd.
+     */
+    public function detectPlatform(string $robots): ?string
+    {
+        $low = mb_strtolower($robots);
+        if ($low === '' || $this->looksLikeHtml($robots)) {
+            return null;
+        }
+        // SOTESHOP: moduły stXxxFrontend, /productsCompare, /basket (bolle.pl)
+        if (preg_match('#/st[a-z]+frontend#u', $low) === 1
+            || (str_contains($low, '/productscompare') && str_contains($low, '/basket'))) {
+            return 'soteshop';
+        }
+        if (str_contains($low, '/wp-admin') || str_contains($low, '/wp-content')) {
+            return 'wordpress';
+        }
+        if (str_contains($low, '/catalogsearch/') || (str_contains($low, '/checkout/') && str_contains($low, '/customer/'))) {
+            return 'magento';
+        }
+        if (str_contains($low, '/console') && (str_contains($low, '/koszyk') || str_contains($low, '/webapi'))) {
+            return 'shoper';
+        }
+        if (str_contains($low, '*orderby=') || str_contains($low, '/module/') || str_contains($low, '/authentication')) {
+            return 'prestashop';
+        }
+
+        return null;
     }
 
     /**
@@ -738,6 +837,7 @@ final class CatalogSitemapIndexer
      */
     private function streamLocations(string $url, callable $onLocation, float $deadline = 0.0, int $timeout = 90, bool $allowCurl = true): bool
     {
+        $this->lastStreamStatus = null;
         $timeout = max(5, $timeout);
         if ($deadline > 0.0) {
             $timeout = max(5, min($timeout, (int) ceil($deadline - microtime(true))));
@@ -772,6 +872,8 @@ final class CatalogSitemapIndexer
         }
 
         if (! $response->successful()) {
+            $this->lastStreamStatus = $response->status();
+
             return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
         }
         // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
