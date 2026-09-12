@@ -744,17 +744,44 @@ final class ProductSearchIdentity
         return array_values(array_unique(array_merge($head, $tail)));
     }
 
-    /** AC01P-00070-00 — część z cennika, nie „Ansell -AC 00070”. */
-    private function ansellPartShopPhrase(Product $product): string
+    /**
+     * AC01P-00070-00 — część z cennika, nie „Ansell -AC 00070”.
+     * Cennik pisze Glove Link, sklepy i Ansell — Glove Connector.
+     *
+     * @return list<string>
+     */
+    private function ansellPartShopPhrases(Product $product): array
     {
         $sku = strtoupper(trim((string) $product->sku));
         if (preg_match('/^[A-Z]{2}(\d{2})[A-Z]?-\d{5}(?:-\d{2})?(?:-[A-Z0-9]+)?$/', $sku, $m) !== 1
             || (int) $m[1] >= 15) {
-            return '';
+            return [];
         }
         $name = trim((string) $product->name);
+        $base = $name !== '' && mb_strlen($name) >= 8 ? $name : $sku;
+        $out = [$base];
+        $asConnector = trim((string) preg_replace('/\bglove\s+link\b/iu', 'Glove Connector', $base));
+        $asLink = trim((string) preg_replace('/\bglove\s+connector\b/iu', 'Glove Link', $base));
+        foreach ([$asConnector, $asLink] as $alt) {
+            if ($alt !== '' && strcasecmp($alt, $base) !== 0) {
+                $out[] = $alt;
+            }
+        }
 
-        return $name !== '' && mb_strlen($name) >= 8 ? $name : $sku;
+        return array_values(array_unique($out));
+    }
+
+    /** AC01P-00070-00 — część z cennika, nie „Ansell -AC 00070”. */
+    private function ansellPartShopPhrase(Product $product): string
+    {
+        $phrases = $this->ansellPartShopPhrases($product);
+        foreach ($phrases as $phrase) {
+            if (preg_match('/\bglove\s+connector\b/iu', $phrase) === 1) {
+                return $phrase;
+            }
+        }
+
+        return $phrases[0] ?? '';
     }
 
     /** AlphaTec 3000 192 — nie G02 ani magazynowe YE30T-00192-09-G01. */
@@ -1008,10 +1035,7 @@ final class ProductSearchIdentity
     }
 
     /**
-     * @return list<string>
-     */
-    /**
-     * AlphaTec Glove Link 070 — nazwa z cennika, nie seria 1500/4000.
+     * AlphaTec Glove Link / Connector 070 — nazwa z cennika, nie seria 1500/4000.
      *
      * @return list<string>
      */
@@ -1021,17 +1045,35 @@ final class ProductSearchIdentity
             || $this->ansellGloveModel($product) !== null) {
             return [];
         }
-        $name = trim((string) $product->name);
-        if (preg_match('/^alphatec\s+((?:[a-z]{3,}(?:\s+[a-z]{3,}){0,3}))(?:\s+\d{2,4})?$/iu', $name, $m) !== 1) {
-            return [];
+        $slugs = [];
+        $phrases = $this->ansellPartShopPhrases($product);
+        $preferred = $this->ansellPartShopPhrase($product);
+        if ($preferred !== '') {
+            $phrases = array_values(array_unique([$preferred, ...$phrases]));
         }
-        $rest = trim((string) preg_replace('/[^a-z0-9]+/iu', '-', mb_strtolower($m[1])), '-');
-        if ($rest === '' || mb_strlen($rest) < 4) {
-            return [];
+        foreach ($phrases as $phrase) {
+            if (preg_match('/^alphatec\s+((?:[a-z]{3,}(?:\s+[a-z]{3,}){0,3}))(?:\s+\d{2,4})?$/iu', $phrase, $m) !== 1) {
+                continue;
+            }
+            $rest = trim((string) preg_replace('/[^a-z0-9]+/iu', '-', mb_strtolower($m[1])), '-');
+            if ($rest !== '' && mb_strlen($rest) >= 4) {
+                $slugs[] = $rest;
+            }
+        }
+        if ($slugs === []) {
+            $name = trim((string) $product->name);
+            if (preg_match('/^alphatec\s+((?:[a-z]{3,}(?:\s+[a-z]{3,}){0,3}))(?:\s+\d{2,4})?$/iu', $name, $m) === 1) {
+                $rest = trim((string) preg_replace('/[^a-z0-9]+/iu', '-', mb_strtolower($m[1])), '-');
+                if ($rest !== '' && mb_strlen($rest) >= 4) {
+                    $slugs[] = $rest;
+                }
+            }
         }
         $out = [];
-        foreach (self::ANSELL_CARD_LOCALES as $locale) {
-            $out[] = 'https://www.ansell.com/'.$locale.'/products/alphatec-'.$rest;
+        foreach (array_values(array_unique($slugs)) as $slug) {
+            foreach (self::ANSELL_CARD_LOCALES as $locale) {
+                $out[] = 'https://www.ansell.com/'.$locale.'/products/alphatec-'.$slug;
+            }
         }
 
         return $out;
@@ -3044,8 +3086,7 @@ final class ProductSearchIdentity
         if ($ansellPhrase !== '') {
             $out[] = $ansellPhrase;
         }
-        $part = $this->ansellPartShopPhrase($product);
-        if ($part !== '') {
+        foreach ($this->ansellPartShopPhrases($product) as $part) {
             $out[] = $part;
         }
         $kleen = $this->kleenGuardShopPhrase($product);

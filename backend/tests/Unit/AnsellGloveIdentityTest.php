@@ -196,17 +196,26 @@ final class AnsellGloveIdentityTest extends TestCase
             'model' => null,
             'prefix' => null,
         ], $identity->ansellCatalogBits($link));
-        $this->assertSame('AlphaTec Glove Link 070', $identity->firstStrongShopPhrase($link));
+        $this->assertSame('AlphaTec Glove Connector 070', $identity->firstStrongShopPhrase($link));
         $this->assertSame('GREY PES BLT & YKK BCKL LENGTH 150CM', $identity->firstStrongShopPhrase($belt));
         $this->assertSame('AVNT PASSTHRU WHSTL & RECTUS 96KS', $identity->firstStrongShopPhrase($pass));
         $this->assertStringNotContainsString('Ansell -AC', $identity->firstStrongShopPhrase($link));
         $joined = implode(' | ', $identity->searchQueries($link, 'manufacturer'));
-        $this->assertStringContainsString('AlphaTec Glove Link 070', $joined);
+        $this->assertStringContainsString('AlphaTec Glove Connector 070', $joined);
         $this->assertStringNotContainsString('Ansell -AC 00070', $joined);
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-glove-connector',
+            $identity->ansellOfficialProductUrls($link)
+        );
         $this->assertContains(
             'https://www.ansell.com/pl/pl/products/alphatec-glove-link',
             $identity->ansellOfficialProductUrls($link)
         );
+        $shop = 'https://bhp-sklep.com.pl/produkt/ansell-alphatec-glove-connector-070/';
+        $shopTitle = 'Ansell AlphaTec Glove Connector 070';
+        $shopText = 'Ansell AlphaTec Glove Connector 070 proste rozwiązanie do mocowania rękawic chemicznych do kombinezonu.';
+        $this->assertTrue($identity->hayMentionsProduct($shop.' '.$shopTitle.' '.$shopText, $link));
+        $this->assertTrue($identity->isConfirmedProductCard($shop, $shopTitle, $shopText, $link));
         $this->assertTrue($identity->looksLikeNonProductCardUrl($about));
         $this->assertFalse($identity->isConfirmedProductCard(
             $about,
