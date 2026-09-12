@@ -98,8 +98,9 @@ final class ProductSearchIdentity
             if ($slashToDash !== $low) {
                 $out[] = $slashToDash;
             }
-            // sam rdzeń cyfrowy (≥3) z kodu typu PROS-1001 / 101/001
-            if (preg_match_all('/\d{3,}/u', $low, $m)) {
+            // sam rdzeń cyfrowy (≥3) z kodu typu PROS-1001 / 101/001 — ale nie z wymiaru:
+            // „200” z „LENGTH 200CM” potwierdzało pasowi kartę rękawicy alphatec-23-200
+            if (preg_match_all('/\d{3,}(?!\s?(?:cm|mm|m|km|kg|g|mg|l|ml)\b)/iu', $low, $m)) {
                 foreach ($m[0] as $digits) {
                     $out[] = $digits;
                 }
@@ -533,6 +534,13 @@ final class ProductSearchIdentity
             $out[] = 'r-'.$n;
             $out[] = $n.'g';
             $out[] = 'ringers';
+        }
+        // RINGERS 259B (SKU 259B-13): model z literą nie łapie się w \d{2,3}\b, więc za
+        // model brany był rozmiar „13” → r013. Karta Ansella to ringers-r259b.
+        if (preg_match('/\bringers?\s+r?[\s\-]?(\d{2,3}[a-z])\b/u', $name, $lm) === 1) {
+            $out[] = 'r'.$lm[1];
+            $out[] = 'r-'.$lm[1];
+            $out[] = $lm[1];
         }
 
         // Ansell size SKU 065-06 → artykuł 065
@@ -2911,6 +2919,13 @@ final class ProductSearchIdentity
         }
         foreach ($this->threeMCatalogCodesFromName($product) as $code) {
             $codes[] = $code;
+        }
+        // RINGERS 259B: karta Ansella to ringers-r259b. Bez „r259b” wśród kodów
+        // pageClaimsAnotherCode brał własną kartę za cudzy model (56 lokalizacji odrzuconych).
+        foreach ($this->modelAliases($product) as $alias) {
+            if (preg_match('/^r\d{2,3}[a-z]$/u', $alias) === 1) {
+                $codes[] = $alias;
+            }
         }
         if ($this->manufacturerIsThreeM($product) && preg_match('/^\d{4}$/u', $sku) === 1) {
             $codes[] = '0'.$sku;

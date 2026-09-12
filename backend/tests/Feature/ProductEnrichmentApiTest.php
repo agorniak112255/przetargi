@@ -1862,7 +1862,11 @@ final class ProductEnrichmentApiTest extends TestCase
             $service->enrichProduct($product);
             $this->fail('Oczekiwano ProductSourcesNotFoundException.');
         } catch (ProductSourcesNotFoundException $e) {
-            $this->assertStringContainsString('Nie znaleziono karty potwierdzającej', $e->getMessage());
+            // zapora + padniety reader: czlowiek dostaje adres karty do otwarcia,
+            // zamiast golego „nie znaleziono” — fragment z wyszukiwarki nadal nie jest karta
+            $this->assertStringContainsString('ringers-r259', $e->getMessage());
+            $this->assertStringContainsString('sklep blokuje pobieranie', $e->getMessage());
+            $this->assertStringContainsString('wpisz opis ręcznie', $e->getMessage());
         }
     }
 
@@ -2359,14 +2363,72 @@ final class ProductEnrichmentApiTest extends TestCase
             $service->enrichProduct($product, false);
             $this->fail('Oczekiwano ProductSourcesNotFoundException.');
         } catch (ProductSourcesNotFoundException $e) {
-            $this->assertStringContainsString('istnieje', $e->getMessage());
+            $this->assertStringContainsString('prawdopodobnie tu', $e->getMessage());
             $this->assertStringContainsString('hahn-kolb.net', $e->getMessage());
             $this->assertStringContainsString('wpisz opis ręcznie', $e->getMessage());
+            $this->assertStringNotContainsString('niepewnych', $e->getMessage());
             $this->assertStringNotContainsString('Ponów', $e->getMessage());
         }
 
         $product->refresh();
         $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+    }
+
+    /**
+     * AlphaTec 58-301: za zapora zostaly 58-530w i 58-201 - cudze modele. Komunikat
+     * nie moze mowic „karta istnieje”, bo nikt tego nie sprawdzil; ma podpisac je
+     * jako niepewnych kandydatow. A gdy zapore spotyka juz pierwsze pobranie
+     * (HyFlex 11-130), adres tez ma trafic do komunikatu.
+     */
+    public function test_walled_sibling_candidates_are_labelled_uncertain_even_on_first_fetch(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '58301110',
+            'name' => 'AlphaTec 58-301',
+            'manufacturer' => 'Ansell',
+            'description' => null,
+        ]);
+        $search = $this->searchMock();
+        // pierwsze szukanie od razu daje karty producenta - i one od razu dostaja 403
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [
+                    ['url' => 'https://www.ansell.com/pl/pl/products/alphatec-58-530w', 'title' => 'AlphaTec 58-530W', 'snippet' => ''],
+                    ['url' => 'https://www.ansell.com/pl/pl/products/alphatec-58-201', 'title' => 'AlphaTec 58-201', 'snippet' => ''],
+                ],
+                'errors' => [],
+            ]);
+        $search->shouldReceive('searchWebWithoutLocalIndex')
+            ->zeroOrMoreTimes()
+            ->andReturn(['results' => [], 'images' => [], 'errors' => []]);
+
+        Http::fake(['*' => Http::response('Access Denied', 403)]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            Mockery::mock(OpenAiCompatibleClient::class),
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException $e) {
+            $this->assertStringContainsString('niepewnych kandydatów', $e->getMessage());
+            $this->assertStringContainsString('alphatec-58-530w', $e->getMessage());
+            $this->assertStringNotContainsString('prawdopodobnie tu', $e->getMessage());
+            $this->assertStringContainsString('sprawdź, czy to ten produkt', $e->getMessage());
+        }
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->fresh()?->enrichment_status);
     }
 
     public function test_enrichment_service_saves_description_and_image(): void

@@ -2215,6 +2215,43 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_ringers_model_with_letter_gets_r_prefixed_alias(): void
+    {
+        $id = new ProductSearchIdentity;
+        // SKU 259B-13: model 259B, rozmiar 13. Alias bral rozmiar za model (r013),
+        // a karta Ansella to ringers-r259b - indeks trzymal ja w 56 lokalizacjach.
+        $ringers = new Product([
+            'sku' => '259B-13',
+            'name' => 'RINGERS 259B',
+            'manufacturer' => 'Ansell',
+        ]);
+        $aliases = $id->modelAliases($ringers);
+        $this->assertContains('r259b', $aliases);
+        $this->assertContains('259b', $aliases);
+        $card = 'https://www.ansell.com/pl/pl/products/ringers-r259b';
+        $this->assertTrue($id->hayMentionsProduct($card, $ringers));
+        // to wlasnie odrzucalo 56 lokalizacji karty: „r259b” uchodzil za cudzy kod
+        $this->assertContains('r259b', $id->productCodes($ringers));
+        $this->assertTrue($id->hayHasProductCode($card, $ringers));
+        $this->assertFalse($id->pageClaimsAnotherCode($card, '', $ringers));
+    }
+
+    public function test_digits_of_a_measurement_are_not_a_code_token(): void
+    {
+        $id = new ProductSearchIdentity;
+        // „200” z „LENGTH 200CM” potwierdzalo pasowi karte rekawicy alphatec-23-200
+        $belt = new Product([
+            'sku' => 'AC01P-00014-05',
+            'name' => 'GREY PES BLT & YKK BCKL LENGTH 200CM',
+            'manufacturer' => 'Ansell',
+        ]);
+        $this->assertNotContains('200', $id->matchTokens($belt));
+        $this->assertFalse($id->hayMentionsProduct('https://www.ansell.com/pl/pl/products/alphatec-23-200', $belt));
+        // prawdziwy kod z cyframi nadal jest tokenem
+        $glove = new Product(['sku' => 'PROS-1001', 'name' => '1001', 'manufacturer' => 'PROS']);
+        $this->assertContains('1001', $id->matchTokens($glove));
+    }
+
     public function test_bare_measurement_never_confirms_a_card(): void
     {
         $id = new ProductSearchIdentity;

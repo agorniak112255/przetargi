@@ -660,7 +660,9 @@ final class ProductEnrichmentService
                     static fn ($p): string => is_array($p) ? (string) ($p['url'] ?? '') : '',
                     $fetched['pages']
                 )));
-                $this->logCardRejections($product, $fetched);
+                // HyFlex 11-130 i Ringers R259B: zaporę spotkało już pierwsze pobranie,
+                // a komunikat końcowy nie niósł adresu — człowiek nie wiedział, co otworzyć.
+                $openWebWalledCards = $this->walledCardUrls($this->logCardRejections($product, $fetched));
                 $this->attemptLog()->add(
                     'page',
                     'pobrane strony nie potwierdzają produktu — kolejne karty z indeksu, potem zmapowane sklepy',
@@ -680,13 +682,14 @@ final class ProductEnrichmentService
                 }
                 if ($pageSnippets === []) {
                     $openWebTried = true;
-                    [$pageSnippets, $fetched, $webResults, $openWebCardsUnreachable, $openWebWalledCards] = $this->fetchCardsFromOpenWeb(
+                    [$pageSnippets, $fetched, $webResults, $openWebCardsUnreachable, $webWalledCards] = $this->fetchCardsFromOpenWeb(
                         $product,
                         array_values(array_merge($searchResults, $shopResults)),
                         $fetched,
                         $mfrDomains
                     );
                     $shopResults = array_values(array_merge($shopResults, $webResults));
+                    $openWebWalledCards = array_values(array_unique(array_merge($openWebWalledCards, $webWalledCards)));
                 }
                 if ($shopResults !== [] && $pageSnippets !== []) {
                     $searchResults = array_values(array_merge($searchResults, $shopResults));
@@ -709,10 +712,7 @@ final class ProductEnrichmentService
                         .' więc nie wiadomo, czy potwierdzają produkt. Ponów później.',
                     // Bez frazy „nie odpowiada”: to ma trafić do ręki, nie do kolejki —
                     // WAF, którego nie przeszedł reader, nie puści też za godzinę.
-                    $openWebWalledCards !== [] => 'Karta produktu '.$product->sku.' istnieje: '
-                        .implode(', ', array_slice($openWebWalledCards, 0, 2))
-                        .' — sklep blokuje pobieranie automatyczne (403, także przez reader).'
-                        .' Otwórz ją w przeglądarce i wpisz opis ręcznie.',
+                    $openWebWalledCards !== [] => $this->walledCardsMessage($product, $openWebWalledCards),
                     default => 'Nie znaleziono karty potwierdzającej produkt '.$product->sku
                         .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.',
                 });
@@ -2108,6 +2108,33 @@ final class ProductEnrichmentService
      * @param  list<array{url: string, reason: string}>  $rejections
      * @return list<string>
      */
+    /**
+     * Adresy za zaporą nikt nie zweryfikował — to kandydaci z wyszukiwarki, nie karty.
+     * Dla AlphaTec 58-301 były to 58-530w i 58-201, dla pasa 200 cm rękawica 23-200.
+     * Na przód idą te z kodem produktu w adresie; reszta jest podpisana jako niepewna.
+     *
+     * @param  list<string>  $urls
+     */
+    private function walledCardsMessage(Product $product, array $urls): string
+    {
+        $coded = [];
+        $other = [];
+        foreach ($urls as $url) {
+            if ($this->identity->hayHasProductCode(mb_strtolower($url), $product)) {
+                $coded[] = $url;
+            } else {
+                $other[] = $url;
+            }
+        }
+        $head = $coded !== []
+            ? 'Karta produktu '.$product->sku.' prawdopodobnie tu: '.implode(', ', array_slice($coded, 0, 2))
+            : 'Wyszukiwarka wskazała dla '.$product->sku.' tylko niepewnych kandydatów: '
+                .implode(', ', array_slice($other, 0, 2)).' (kod produktu nie stoi w adresie)';
+
+        return $head.' — sklep blokuje pobieranie automatyczne (403, także przez reader).'
+            .' Otwórz w przeglądarce, sprawdź, czy to ten produkt, i wpisz opis ręcznie.';
+    }
+
     private function walledCardUrls(array $rejections): array
     {
         if ($rejections === []) {
