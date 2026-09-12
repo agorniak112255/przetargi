@@ -21,7 +21,7 @@ final class AnsellOfficialCatalog
      */
     public function find(Product $product): array
     {
-        $urls = array_slice($this->identity->ansellOfficialProductUrls($product), 0, 6);
+        $urls = array_slice($this->identity->ansellOfficialProductUrls($product), 0, 9);
         foreach ($urls as $url) {
             $page = $this->reader->fetch($url);
             if ($page === null) {

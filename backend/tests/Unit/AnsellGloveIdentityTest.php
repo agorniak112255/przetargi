@@ -28,6 +28,7 @@ final class AnsellGloveIdentityTest extends TestCase
         );
 
         $this->assertContains('https://www.ansell.com/pl/pl/products/hyflex-11-919', $urls);
+        $this->assertContains('https://www.ansell.com/us/en/products/hyflex-11-919', $urls);
     }
 
     public function test_other_model_of_same_line_is_not_our_card(): void

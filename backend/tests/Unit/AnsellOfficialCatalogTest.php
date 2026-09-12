@@ -137,4 +137,25 @@ final class AnsellOfficialCatalogTest extends TestCase
 
         $this->assertSame($url, $hits[0]['url'] ?? null);
     }
+
+    public function test_falls_back_to_us_locale_when_pl_card_is_missing(): void
+    {
+        $us = 'https://www.ansell.com/us/en/products/hyflex-11-581';
+        Http::fake([
+            'https://r.jina.ai/'.$us => Http::response(
+                "# HyFlex 11-581\n\nAnsell HyFlex 11-581 cut resistant glove. "
+                .str_repeat('opis ', 40),
+                200
+            ),
+            '*' => Http::response('Title: Product Not Found | Ansell'."\n\n".str_repeat('nav ', 40), 200),
+        ]);
+
+        $hits = app(AnsellOfficialCatalog::class)->find(new Product([
+            'sku' => '11581120',
+            'name' => 'HyFlex 11581 SIZE 12,0',
+            'manufacturer' => 'Ansell',
+        ]));
+
+        $this->assertSame($us, $hits[0]['url'] ?? null);
+    }
 }

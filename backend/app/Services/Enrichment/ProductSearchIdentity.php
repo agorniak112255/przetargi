@@ -17,6 +17,9 @@ final class ProductSearchIdentity
     /** Prefiksy norm i certyfikatów — „EN 166” to nie oznaczenie modelu. */
     private const NORM_PREFIXES = ['en', 'iso', 'pn', 'din', 'ansi', 'astm', 'nfpa', 'ce', 'sr', 'nbr'];
 
+    /** /pl/pl bywa 404, a karta żyje na /us/en lub /gb/en. */
+    private const ANSELL_CARD_LOCALES = ['pl/pl', 'gb/en', 'us/en'];
+
     /**
      * Typ z nazwy produktu (rękawice, kombinezon…) musi wrócić w URL/tekście karty.
      *
@@ -812,7 +815,7 @@ final class ProductSearchIdentity
         $slugs = $this->ansellOfficialSlugs($product, $series, $model);
         $out = [];
         foreach ($slugs as $slug) {
-            foreach (['pl/pl', 'gb/en'] as $locale) {
+            foreach (self::ANSELL_CARD_LOCALES as $locale) {
                 $out[] = 'https://www.ansell.com/'.$locale.'/products/'.$slug;
             }
         }
@@ -918,7 +921,7 @@ final class ProductSearchIdentity
             return [];
         }
         $out = [];
-        foreach (['pl/pl', 'gb/en'] as $locale) {
+        foreach (self::ANSELL_CARD_LOCALES as $locale) {
             $out[] = 'https://www.ansell.com/'.$locale.'/products/'.$line.'-'.$model;
         }
 
@@ -4308,6 +4311,13 @@ final class ProductSearchIdentity
         }
         $brand = mb_strtolower($this->shortBrand((string) $product->manufacturer));
         if (! str_contains($brand, 'ansell')) {
+            return $url;
+        }
+        $keep = implode('|', array_map(
+            static fn (string $locale): string => preg_quote($locale, '#'),
+            self::ANSELL_CARD_LOCALES
+        ));
+        if (preg_match('#^https?://(?:www\.)?ansell\.com/(?:'.$keep.')/products/#i', $url) === 1) {
             return $url;
         }
 

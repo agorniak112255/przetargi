@@ -1207,7 +1207,7 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertSame('ROBFM JS Gloves BHP', $id->productNameWithManufacturer($product));
     }
 
-    public function test_ansell_product_source_uses_polish_locale(): void
+    public function test_ansell_product_source_keeps_working_locale(): void
     {
         $id = new ProductSearchIdentity;
         $product = new Product([
@@ -1217,9 +1217,16 @@ final class ProductSearchIdentityTest extends TestCase
         ]);
 
         $this->assertSame(
-            'https://www.ansell.com/pl/pl/products/ringers-r065',
+            'https://www.ansell.com/gb/en/products/ringers-r065',
             $id->preferredLocaleUrl(
                 'https://www.ansell.com/gb/en/products/ringers-r065',
+                $product
+            )
+        );
+        $this->assertSame(
+            'https://www.ansell.com/us/en/products/hyflex-11-581',
+            $id->preferredLocaleUrl(
+                'https://www.ansell.com/us/en/products/hyflex-11-581',
                 $product
             )
         );
