@@ -37,6 +37,14 @@ final class DuckDuckGoHtmlSearch
 
     private const SEARXNG_BLOCKED_KEY = 'searxng_engines_blocked_v1';
 
+    /**
+     * Bezpiecznik dla Google/DDG/Qwant. Gdy wszystkie trzy padly (429, captcha,
+     * timeout), kazde kolejne zapytanie i tak skonczy tak samo — tylko po
+     * kolejce, 429 od Google, timeoucie DDG i 403 od Qwanta. Batch #283: kazdy
+     * produkt Bolle przechodzil 16 takich zapytan i trwal 5 minut, zanim padl.
+     */
+    private const PUBLIC_BLOCKED_KEY = 'free_public_engines_blocked_v1';
+
     /** Gdy domyślne silniki padną (captcha / 429), jedna próba na tych, które zwykle jeszcze żyją. */
     private const SEARXNG_FALLBACK_ENGINES = 'yep,startpage';
 
@@ -120,6 +128,15 @@ final class DuckDuckGoHtmlSearch
             );
         }
 
+        $blockedDetail = Cache::get(self::PUBLIC_BLOCKED_KEY);
+        if (is_string($blockedDetail)) {
+            // „silniki zablokowane” — ta fraza klasyfikuje przebieg jako awarie do
+            // ponowienia, nie jako brak karty; produkt pada w sekundy, nie w minuty
+            throw new RuntimeException(
+                'Publiczne silniki zablokowane (przerwa 10 min po: '.$blockedDetail.'). Ponow pozniej.'
+            );
+        }
+
         $this->acquireGate();
         try {
             $cached = Cache::get($cacheKey);
@@ -131,6 +148,8 @@ final class DuckDuckGoHtmlSearch
                     // istnieje, wiec zamrozilibysmy na godziny nieznany wynik.
                     if (! SearchEngineOutage::matches($e->getMessage())) {
                         Cache::put($missKey, $e->getMessage(), now()->addHours(6));
+                    } elseif ($this->everyEngineFailed($e->getMessage())) {
+                        Cache::put(self::PUBLIC_BLOCKED_KEY, mb_substr($e->getMessage(), 0, 200), now()->addMinutes(10));
                     }
 
                     throw $e;
@@ -259,6 +278,26 @@ final class DuckDuckGoHtmlSearch
     public function isSearxngBlockedMessage(string $message): bool
     {
         return str_contains($message, 'silniki zablokowane');
+    }
+
+    /**
+     * Kazdy czlon „Google HTTP 429 | DuckDuckGo: timeout/captcha | Qwant HTTP 403”
+     * to awaria silnika. Jesli choc jeden odpowiedzial „brak wynikow” (200),
+     * silniki zyja i bezpiecznik zostaje zamkniety — to wtedy realny brak karty.
+     */
+    private function everyEngineFailed(string $message): bool
+    {
+        $parts = array_values(array_filter(array_map('trim', explode(' | ', $message))));
+        if ($parts === []) {
+            return false;
+        }
+        foreach ($parts as $part) {
+            if (! SearchEngineOutage::matches($part)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function markSearxngBlocked(): void

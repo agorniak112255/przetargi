@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
+use App\Services\Enrichment\SearchEngineOutage;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -126,14 +127,20 @@ HTML;
         }
         $afterFirst = $count();
 
+        $second = null;
         try {
             $search->search('AlphaTec 5000 9151 Ansell');
-        } catch (RuntimeException) {
-            // oczekiwane
+        } catch (RuntimeException $e) {
+            $second = $e->getMessage();
         }
 
-        // gdyby awaria trafila do pamieci, drugi przebieg nie zapytalby nikogo
-        $this->assertGreaterThan($afterFirst, $count());
+        // awaria nie moze zostac zapamietana jako „brak strony”: drugi przebieg
+        // (tu: przez bezpiecznik) nadal konczy sie awaria do ponowienia,
+        // a pamiec pustych wynikow zostaje pusta
+        $this->assertNotNull($second);
+        $this->assertTrue(SearchEngineOutage::matches($second), $second);
+        $this->assertNull(Cache::get('free_web_search_miss_v1:'.hash('sha256', 'AlphaTec 5000 9151 Ansell')));
+        $this->assertGreaterThanOrEqual($afterFirst, $count());
     }
 
     public function test_forget_query_drops_remembered_miss(): void
@@ -169,6 +176,82 @@ HTML;
             return true;
         });
         $this->assertGreaterThan($before, $after, 'po wyczyszczeniu cache pytamy silniki ponownie');
+    }
+
+    public function test_full_public_outage_opens_breaker_for_next_queries(): void
+    {
+        config(['enrichment.search_min_interval' => 0]);
+        Cache::flush();
+        // Google 429, DDG 429, Qwant 429 — wszystkie trzy padly naraz
+        Http::fake(['*' => Http::response('too many requests', 429)]);
+
+        $search = new DuckDuckGoHtmlSearch;
+        $count = static function (): int {
+            $n = 0;
+            Http::assertSent(static function () use (&$n): bool {
+                $n++;
+
+                return true;
+            });
+
+            return $n;
+        };
+
+        try {
+            $search->search('HyFlex 11-840 Ansell');
+        } catch (RuntimeException) {
+            // oczekiwane
+        }
+        $afterFirst = $count();
+        $this->assertGreaterThan(0, $afterFirst);
+
+        // inne zapytanie: bezpiecznik otwarty, ani jednego zapytania do silnikow
+        $second = null;
+        try {
+            $search->search('AlphaTec 58-330 Ansell');
+        } catch (RuntimeException $e) {
+            $second = $e->getMessage();
+        }
+        $this->assertSame($afterFirst, $count(), 'przy otwartym bezpieczniku nie pytamy silnikow');
+        $this->assertNotNull($second);
+        $this->assertStringContainsString('silniki zablokowane', mb_strtolower($second));
+        // to nadal awaria do ponowienia, nie „wpisz recznie”
+        $this->assertTrue(SearchEngineOutage::matches($second));
+    }
+
+    public function test_partial_outage_keeps_breaker_closed(): void
+    {
+        config(['enrichment.search_min_interval' => 0]);
+        Cache::flush();
+        // Google odpowiada (200, bez wynikow), DDG i Qwant padly — silniki zyja
+        Http::fake([
+            '*google*' => Http::response('<html><body>brak</body></html>', 200),
+            '*' => Http::response('too many requests', 429),
+        ]);
+
+        $search = new DuckDuckGoHtmlSearch;
+        $count = static function (): int {
+            $n = 0;
+            Http::assertSent(static function () use (&$n): bool {
+                $n++;
+
+                return true;
+            });
+
+            return $n;
+        };
+        try {
+            $search->search('HyFlex 11-840 Ansell');
+        } catch (RuntimeException) {
+            // oczekiwane
+        }
+        $afterFirst = $count();
+        try {
+            $search->search('AlphaTec 58-330 Ansell');
+        } catch (RuntimeException) {
+            // oczekiwane
+        }
+        $this->assertGreaterThan($afterFirst, $count(), 'gdy jeden silnik zyje, drugie zapytanie idzie do silnikow');
     }
 
     public function test_searxng_retries_fallback_engines_when_blocked(): void
