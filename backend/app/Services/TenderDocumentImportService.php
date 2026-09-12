@@ -84,26 +84,7 @@ final class TenderDocumentImportService
             }
         }
 
-        if ($mode === 'ai' || $mode === 'full') {
-            try {
-                $parsed = $this->analyzer->analyze($text, $targets);
-            } catch (\Throwable) {
-                $parsed = $this->analyzer->heuristic($text, $targets);
-            }
-            $needItems = in_array('items', $targets, true) && ($parsed['items'] ?? []) === [];
-            $needCond = in_array('conditions', $targets, true) && ($parsed['conditions'] ?? []) === [];
-            if ($needItems || $needCond) {
-                $fallback = $this->analyzer->heuristic($text, $targets);
-                if ($needItems) {
-                    $parsed['items'] = $fallback['items'];
-                }
-                if ($needCond) {
-                    $parsed['conditions'] = $fallback['conditions'];
-                }
-            }
-        } else {
-            $parsed = $this->analyzer->heuristic($text, $targets);
-        }
+        $parsed = $this->parseText($text, $mode, $this->textTargets($targets, $sheetItems !== null));
 
         // Arkusz z wykrytymi kolumnami ma priorytet nad „sklejonym” tekstem
         if ($sheetItems !== null) {
@@ -185,18 +166,8 @@ final class TenderDocumentImportService
             throw new RuntimeException('Brak tekstu dokumentu do ponownej analizy.');
         }
 
-        if ($mode === 'ai' || $mode === 'full') {
-            $parsed = $this->analyzer->analyze($text, $targets);
-        } else {
-            $parsed = $this->analyzer->heuristic($text, $targets);
-        }
-
-        $items = array_map(
-            fn (array $r) => $this->normalizePreviewItem($r) + ['selected' => true],
-            array_slice($parsed['items'], 0, 800),
-        );
-        $conditions = array_map(static fn (array $r) => $r + ['selected' => true], $parsed['conditions']);
-
+        // najpierw arkusz/tabela — gdy pozycje są stamtąd, model nie ma ich przepisywać
+        $sheetItems = null;
         if ($document->disk_path && in_array('items', $targets, true)) {
             $abs = Storage::disk('local')->path($document->disk_path);
             $ext = (string) $document->extension;
@@ -208,12 +179,22 @@ final class TenderDocumentImportService
                 $sheet = $this->docxItems->extract($abs, $useAi);
             }
             if ($sheet !== null && $sheet['items'] !== []) {
-                $items = array_map(
-                    fn (array $r) => $this->normalizePreviewItem($r) + ['selected' => true],
-                    array_slice($sheet['items'], 0, 800),
-                );
+                $sheetItems = $sheet['items'];
             }
         }
+
+        $parsed = $mode === 'ai' || $mode === 'full'
+            ? $this->parseText($text, $mode, $this->textTargets($targets, $sheetItems !== null))
+            : $this->analyzer->heuristic($text, $targets);
+        if ($sheetItems !== null) {
+            $parsed['items'] = $sheetItems;
+        }
+
+        $items = array_map(
+            fn (array $r) => $this->normalizePreviewItem($r) + ['selected' => true],
+            array_slice($parsed['items'], 0, 800),
+        );
+        $conditions = array_map(static fn (array $r) => $r + ['selected' => true], $parsed['conditions']);
 
         $document->mode = $mode;
         $document->targets = $targets;
@@ -233,6 +214,51 @@ final class TenderDocumentImportService
             'items' => $items,
             'conditions' => $conditions,
         ];
+    }
+
+    /**
+     * Pozycje z arkusza nie idą drugi raz do modelu: dla 15 długich opisów SIWZ
+     * model przepisywał kilka tysięcy tokenów JSON, a wynik i tak był wyrzucany
+     * (arkusz ma pierwszeństwo). Zostają tylko warunki — albo nic.
+     *
+     * @param  list<string>  $targets
+     * @return list<string>
+     */
+    private function textTargets(array $targets, bool $itemsFromSheet): array
+    {
+        return $itemsFromSheet ? array_values(array_diff($targets, ['items'])) : $targets;
+    }
+
+    /**
+     * @param  list<string>  $targets
+     * @return array{items: list<array<string, mixed>>, conditions: list<array{category: ?string, content: string}>}
+     */
+    private function parseText(string $text, string $mode, array $targets): array
+    {
+        if ($targets === []) {
+            return ['items' => [], 'conditions' => []];
+        }
+        if ($mode !== 'ai' && $mode !== 'full') {
+            return $this->analyzer->heuristic($text, $targets);
+        }
+        try {
+            $parsed = $this->analyzer->analyze($text, $targets);
+        } catch (\Throwable) {
+            return $this->analyzer->heuristic($text, $targets);
+        }
+        $needItems = in_array('items', $targets, true) && ($parsed['items'] ?? []) === [];
+        $needCond = in_array('conditions', $targets, true) && ($parsed['conditions'] ?? []) === [];
+        if ($needItems || $needCond) {
+            $fallback = $this->analyzer->heuristic($text, $targets);
+            if ($needItems) {
+                $parsed['items'] = $fallback['items'];
+            }
+            if ($needCond) {
+                $parsed['conditions'] = $fallback['conditions'];
+            }
+        }
+
+        return $parsed;
     }
 
     /**
