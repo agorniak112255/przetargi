@@ -1280,6 +1280,42 @@ final class ProductSearchIdentity
             && preg_match('/(?:^|[^0-9])modell?[-_ ]'.preg_quote($model, '/').'(?:[^0-9]|$)/u', $hay) === 1;
     }
 
+    /**
+     * Karta ansell.com/…/products/alphatec-airline-passthrough dla „AVNT PASSTHRU WHSTL …”:
+     * slug nie niesie SKU części, ale niesie rozwinięty typ z cennika (PASSTHRU → pass-through).
+     * Pisownie passthrough / pass-through / passthru liczymy jako jedno. Pas (BLT) tej strony nie dostaje.
+     */
+    private function ansellOfficialPathHasPartType(string $hay, Product $product): bool
+    {
+        if ($this->ansellPartShopPhrases($product) === []) {
+            return false;
+        }
+        // lokalizacja to pl/pl, au/en albo int/en
+        if (preg_match('~ansell\.com/(?:[a-z]{2,3}/[a-z]{2}/)?products/([a-z0-9\-]+)~iu', $hay, $m) !== 1) {
+            return false;
+        }
+        $slug = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower($m[1])) ?? '';
+        $expanded = mb_strtolower($this->expandAnsellPartCatalogName(trim((string) $product->name)));
+        $partTypes = [
+            'pass-through' => ['passthrough', 'passthru'],
+            'whistle' => ['whistle'],
+            'belt' => ['belt'],
+            'buckle' => ['buckle'],
+        ];
+        foreach ($partTypes as $type => $slugSpellings) {
+            if (preg_match('/\b'.preg_quote($type, '/').'\b/u', $expanded) !== 1) {
+                continue;
+            }
+            foreach ($slugSpellings as $spelling) {
+                if (str_contains($slug, $spelling)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /** OR15S-00138-06 → OR15S-138-06 (zera tylko z długich członów, nie z rozmiaru 06). */
     public function skuWithoutLeadingZeros(string $sku): string
     {
@@ -2209,6 +2245,11 @@ final class ProductSearchIdentity
             if ($this->ansellOfficialPathHasModel($hay, $product)) {
                 return true;
             }
+        }
+        // Strona rodziny akcesorium ansell.com/…/products/alphatec-airline-passthrough
+        // nie niesie SKU ani modelu — niesie rozwinięty typ części z cennika (PASSTHRU).
+        if ($this->ansellOfficialPathHasPartType($hay, $product)) {
+            return true;
         }
 
         foreach ($tokens as $token) {

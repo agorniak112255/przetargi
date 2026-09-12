@@ -42,7 +42,7 @@ class HybridWebSearchService
     private const OPEN_QUERY_ATTEMPTS = 8;
 
     /** Hosty, które mamy w lokalnym indeksie — pytanie o nie wyszukiwarki nic nie wnosi. */
-    private const INDEXED_HOSTS_CACHE_KEY = 'catalog_indexed_hosts_v1';
+    private const INDEXED_HOSTS_CACHE_KEY = 'catalog_indexed_hosts_v2';
 
     /** @var array<string, true>|null */
     private ?array $indexedHosts = null;
@@ -633,11 +633,6 @@ class HybridWebSearchService
     }
 
     /**
-     * @param  list<array{url: string, title: string, snippet: string}>  $hits
-     * @param  list<array{url: string, title?: string, snippet?: string}>  $coded
-     * @return list<array{url: string, title: string, snippet: string}>
-     */
-    /**
      * Trafienia z kodem, a za nimi te, które niosą pełną nazwę produktu.
      *
      * Sam kod w adresie bywa kodem rodzeństwa: dla AC01P-00022-00-N0C sklep
@@ -656,7 +651,9 @@ class HybridWebSearchService
         foreach ($this->hitsWithoutCodedUrls($hits, $coded) as $row) {
             $url = (string) ($row['url'] ?? '');
             $title = (string) ($row['title'] ?? '');
-            if ($url !== '' && $this->identity->hayHasDistinctiveNamePhrase($url.' '.$title, $product)) {
+            if ($url !== ''
+                && ! $this->identity->looksLikeUnrelatedRetailHost($url, $product)
+                && $this->identity->hayHasDistinctiveNamePhrase($url.' '.$title, $product)) {
                 $named[] = $row;
             }
         }
@@ -664,6 +661,11 @@ class HybridWebSearchService
         return array_values(array_merge($coded, $named));
     }
 
+    /**
+     * @param  list<array{url: string, title: string, snippet: string}>  $hits
+     * @param  list<array{url: string, title?: string, snippet?: string}>  $coded
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
     private function hitsWithoutCodedUrls(array $hits, array $coded): array
     {
         $codedUrls = [];
@@ -1065,7 +1067,7 @@ class HybridWebSearchService
             $codedShop = $this->resultsCarryProductCode($shop['results'], $product);
             if ($this->hasEnoughPageResults($codedShop, 1)) {
                 return [
-                    'results' => $codedShop,
+                    'results' => $this->codedThenNamed($shop['results'], $codedShop, $product),
                     'provider' => $this->searchProviderName().'_shop',
                     'errors' => $errors,
                 ];
@@ -1100,7 +1102,7 @@ class HybridWebSearchService
                     $errors
                 );
                 $codedMfr = $this->resultsCarryProductCode($mfr['results'], $product);
-                $usableMfr = $codedMfr !== [] ? $codedMfr : $mfr['results'];
+                $usableMfr = $codedMfr !== [] ? $this->codedThenNamed($mfr['results'], $codedMfr, $product) : $mfr['results'];
                 if ($this->hasEnoughPageResults($usableMfr, 1)) {
                     return [
                         'results' => $usableMfr,
@@ -1308,7 +1310,7 @@ class HybridWebSearchService
                 $errors
             );
             $codedShop = $this->resultsCarryProductCode($shop['results'], $product);
-            $usable = $codedShop !== [] ? $codedShop : $shop['results'];
+            $usable = $codedShop !== [] ? $this->codedThenNamed($shop['results'], $codedShop, $product) : $shop['results'];
             if ($this->hasEnoughPageResults($usable, 1)) {
                 return [
                     'results' => $usable,

@@ -182,6 +182,22 @@ final class AnsellGloveIdentityTest extends TestCase
         $this->assertNotContains('111', $identity->ansellStyleCodes($suit));
     }
 
+    public function test_index_codes_split_expanded_part_name_into_url_tokens(): void
+    {
+        // indeks trzyma kartę ansell.com/…/alphatec-airline-passthrough jako tokeny
+        // „alphatec”, „airline”, „passthrough” — cennikowe „passthru” w nie nie trafia
+        $codes = app(CatalogIndexSearch::class)->codes(
+            $this->glove('AC01P-00022-00-N0C', 'AVNT PASSTHRU WHSTL & RECTUS 96KS')
+        );
+
+        $this->assertContains('passthrough', $codes);
+        $this->assertContains('whistle', $codes);
+        $this->assertContains('rectus', $codes);
+        $this->assertContains('alphatecpassthroughwhistlerectus96ks', $codes);
+        $this->assertNotContains('alphatec', $codes);
+        $this->assertNotContains('ansell', $codes);
+    }
+
     public function test_ac01p_part_uses_name_not_fake_garment_model(): void
     {
         $identity = app(ProductSearchIdentity::class);

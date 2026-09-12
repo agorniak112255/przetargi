@@ -1217,7 +1217,7 @@ final class ProductEnrichmentApiTest extends TestCase
         Cache::flush();
         // O tym, czy sklep mamy u siebie, decyduja realne strony w catalog_pages.
         foreach (['icd.pl' => 'https://icd.pl/mata-super-mat-150cm-x-mb.html',
-            'bhp-gabi.pl' => 'https://www.bhp-gabi.pl/p28924,gogle-ochronne-3m.html'] as $host => $url) {
+            'www.bhp-gabi.pl' => 'https://www.bhp-gabi.pl/p28924,gogle-ochronne-3m.html'] as $host => $url) {
             CatalogPage::query()->create([
                 'host' => $host, 'url' => $url, 'url_hash' => hash('sha256', $url), 'haystack' => $url,
             ]);
@@ -2201,6 +2201,73 @@ final class ProductEnrichmentApiTest extends TestCase
         }
 
         $this->assertSame(Product::ENRICHMENT_FAILED, $product->fresh()?->enrichment_status);
+    }
+
+    /**
+     * Wyszukiwarka znalazła 4 karty na hahn-kolb, żadna nie odpowiedziała (blokada/timeout),
+     * a produkt szedł do „wpisz ręcznie” — jakby karty nie było. Karty są, sklep nie
+     * odpowiedział: to awaria do ponowienia, tak jak padnięta wyszukiwarka.
+     */
+    public function test_found_cards_that_do_not_respond_mark_failed_not_manual(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '49-00-0142',
+            'name' => 'Rękawice ochronne HyFlex 11-840',
+            'manufacturer' => 'Ansell',
+            'description' => null,
+        ]);
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [[
+                    'url' => 'https://pol-paw.pl/rekawice-hyflex-11-840-p-9911.html',
+                    'title' => 'Rękawice HyFlex 11-840',
+                    'snippet' => 'Rękawice montażowe',
+                ]],
+                'errors' => [],
+            ]);
+        $search->shouldReceive('searchWebWithoutLocalIndex')
+            ->once()
+            ->andReturn([
+                'results' => [
+                    ['url' => 'https://www.hahn-kolb.de/Handschuhe/49-00-0142.html', 'title' => 'HyFlex 11-840', 'snippet' => 'Ansell 49-00-0142'],
+                    ['url' => 'https://www.hahn-kolb.net/en/Gloves/49-00-0142.html', 'title' => 'HyFlex 11-840', 'snippet' => 'Ansell 49-00-0142'],
+                    ['url' => 'https://www.hahn-kolb.de/Arbeitsschutz/HyFlex-11-840.html', 'title' => 'HyFlex 11-840', 'snippet' => 'Ansell'],
+                    ['url' => 'https://www.hahn-kolb.net/en/PPE/HyFlex-11-840.html', 'title' => 'HyFlex 11-840', 'snippet' => 'Ansell'],
+                ],
+                'images' => [],
+                'errors' => [],
+            ]);
+
+        // żaden sklep nie odpowiada — connection timeout na każdym adresie
+        Http::fake(['*' => Http::failedConnection('cURL error 28: Connection timed out after 4001 milliseconds')]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            Mockery::mock(OpenAiCompatibleClient::class),
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException $e) {
+            $this->assertStringNotContainsString('wpisz ręcznie', $e->getMessage());
+            $this->assertStringContainsString('nie odpowiedziały', $e->getMessage());
+        }
+
+        $product->refresh();
+        $this->assertNotSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+        $this->assertSame(Product::ENRICHMENT_FAILED, $product->enrichment_status);
     }
 
     public function test_enrichment_service_saves_description_and_image(): void

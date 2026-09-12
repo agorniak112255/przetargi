@@ -104,11 +104,18 @@ final class CatalogIndexSearch
         foreach ($this->identity->modelAliases($product) as $alias) {
             $raw[] = $alias;
         }
+        $brand = $this->identity->shortBrand((string) $product->manufacturer);
         foreach ($this->identity->shopIdentityPhrases($product) as $phrase) {
             if ($this->identity->isWeakShopIndexPhrase($phrase, $product)) {
                 continue;
             }
             $raw[] = $phrase;
+            // „AlphaTec Pass-through Whistle Rectus 96KS” leży w adresie karty jako osobne
+            // tokeny „passthrough” i „whistle” — sklejona fraza nie jest tokenem żadnej strony,
+            // a cennikowe „passthru” z surowej nazwy nie trafia w rozwinięte słowo
+            foreach ($this->phraseWordTokens($phrase, $brand, $product) as $word) {
+                $raw[] = $word;
+            }
         }
         foreach ($this->identity->skuSearchNeedles($product) as $needle) {
             $raw[] = $needle;
@@ -548,6 +555,39 @@ final class CatalogIndexSearch
         }
 
         return $ids;
+    }
+
+    /**
+     * Słowa frazy sklepowej, które mogą stać w adresie jako osobne tokeny: „passthrough”,
+     * „whistle” — bez marki i linii („alphatec”), bez krótkich członów („96ks”).
+     *
+     * @return list<string>
+     */
+    private function phraseWordTokens(string $phrase, string $brand, Product $product): array
+    {
+        $words = preg_split('/\s+/u', trim($phrase)) ?: [];
+        if (count($words) < 2) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($words as $word) {
+            // „Pass-through” w adresie to „passthrough”; „wkładki” — „wkladki”
+            $compact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii($word))) ?? '';
+            if (mb_strlen($compact) < 5 || mb_strlen($compact) > 64) {
+                continue;
+            }
+            // marka i jej linie (Ansell, AlphaTec) stoją w adresie każdej karty producenta
+            if ($brand !== '' && $this->identity->hayHasBrand($compact, $product)) {
+                continue;
+            }
+            // Slabosc sprawdzilismy dla calej frazy; pojedyncze „pass-through” czy
+            // „house” sa slabe jako fraza, ale jako token adresu to wlasnie one
+            // odrozniaja karte. Pospolite slowa tnie DF_CAP, reszte filtr tozsamosci.
+            $out[] = $compact;
+        }
+
+        return $out;
     }
 
     /** Człon SKU na tyle długi, że nie jest rozmiarem ani klasą („673560”, „ye30t”, nie „s1”, „300”). */

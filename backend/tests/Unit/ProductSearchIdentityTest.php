@@ -2183,4 +2183,44 @@ final class ProductSearchIdentityTest extends TestCase
             $tape
         ));
     }
+
+    public function test_ansell_part_family_page_matches_expanded_part_type_in_slug(): void
+    {
+        $id = new ProductSearchIdentity;
+        $whistle = new Product([
+            'sku' => 'AC01P-00022-00-N0C',
+            'name' => 'AVNT PASSTHRU WHSTL & RECTUS 96KS',
+            'manufacturer' => 'Ansell',
+        ]);
+        $housing = new Product([
+            'sku' => 'AC01P-00012-00',
+            'name' => 'AVNT PASS-THRU HOUSE STS V.1',
+            'manufacturer' => 'Ansell',
+        ]);
+        $belt = new Product([
+            'sku' => 'AC01P-00014-00',
+            'name' => 'GREY PES BLT & YKK BCKL LENGTH 150CM',
+            'manufacturer' => 'Ansell',
+        ]);
+        $family = 'https://www.ansell.com/int/en/products/alphatec-airline-passthrough';
+
+        // slug niesie „passthrough” = rozwinięte PASSTHRU / PASS-THRU z cennika
+        $this->assertTrue($id->hayMentionsProduct(mb_strtolower($family), $whistle));
+        $this->assertTrue($id->hayMentionsProduct(
+            mb_strtolower('https://www.ansell.com/pl/pl/products/alphatec-airline-passthrough'),
+            $whistle
+        ));
+        $this->assertTrue($id->hayMentionsProduct(mb_strtolower($family), $housing));
+        // pas (BLT) — slug nie niesie „belt”
+        $this->assertFalse($id->hayMentionsProduct(mb_strtolower($family), $belt));
+        // inna karta, strona marki i kategoria sklepu — bez typu części w slugu
+        foreach ([
+            'https://www.ansell.com/pl/pl/products/alphatec-09-430',
+            'https://www.ansell.com/pl/pl/brands/alphatec',
+            'https://shop.ansell.com/eu/s/category/shop-by-brand/alphatec/0ZG5p000000FQXoGAO',
+        ] as $other) {
+            $this->assertFalse($id->hayMentionsProduct(mb_strtolower($other), $whistle), $other);
+            $this->assertFalse($id->hayMentionsProduct(mb_strtolower($other), $belt), $other);
+        }
+    }
 }

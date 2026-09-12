@@ -43,3 +43,6 @@ samples/
 .cursor/
 deploy/dumps/
 deploy/qdrant/
+
+# kopie robocze agentow Claude Code
+.claude/worktrees/

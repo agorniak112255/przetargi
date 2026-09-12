@@ -646,6 +646,8 @@ final class ProductEnrichmentService
                 $this->mergePageSnippets($pageSnippets, $mfrPageSnippets)
             );
             $rawCardPages = $pageSnippets;
+            $openWebCardsUnreachable = false;
+            $openWebTried = false;
             if ($pageSnippets === []) {
                 $triedUrls = array_values(array_filter(array_map(
                     static fn ($p): string => is_array($p) ? (string) ($p['url'] ?? '') : '',
@@ -670,7 +672,8 @@ final class ProductEnrichmentService
                     );
                 }
                 if ($pageSnippets === []) {
-                    [$pageSnippets, $fetched, $webResults] = $this->fetchCardsFromOpenWeb(
+                    $openWebTried = true;
+                    [$pageSnippets, $fetched, $webResults, $openWebCardsUnreachable] = $this->fetchCardsFromOpenWeb(
                         $product,
                         array_values(array_merge($searchResults, $shopResults)),
                         $fetched,
@@ -687,14 +690,19 @@ final class ProductEnrichmentService
             if ($pageSnippets === []) {
                 // Gdy po drodze padła wyszukiwarka, „brak karty” jest tylko
                 // skutkiem awarii — produkt wraca do ponowienia, nie do ręki.
+                // To samo, gdy wyszukiwarka karty znalazła, ale żadna nie odpowiedziała:
+                // „sklep nie odpowiada” to celowo fraza z SearchEngineOutage — przez nią
+                // przebieg kończy w `failed`, nie w „wpisz ręcznie”.
                 $outage = $this->engineOutageDetail($searchEmptyDetail);
-                throw new ProductSourcesNotFoundException(
-                    $outage !== null
-                        ? 'Wyszukiwarka nie odpowiedziała przy produkcie '.$product->sku
-                            .' — nie wiadomo, czy karta istnieje. Ponów po przywróceniu wyszukiwarki. '.$outage
-                        : 'Nie znaleziono karty potwierdzającej produkt '.$product->sku
-                            .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.'
-                );
+                throw new ProductSourcesNotFoundException(match (true) {
+                    $outage !== null => 'Wyszukiwarka nie odpowiedziała przy produkcie '.$product->sku
+                        .' — nie wiadomo, czy karta istnieje. Ponów po przywróceniu wyszukiwarki. '.$outage,
+                    $openWebCardsUnreachable => 'Znalezione karty produktu '.$product->sku
+                        .' nie odpowiedziały — sklep nie odpowiada albo blokuje pobieranie,'
+                        .' więc nie wiadomo, czy potwierdzają produkt. Ponów później.',
+                    default => 'Nie znaleziono karty potwierdzającej produkt '.$product->sku
+                        .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.',
+                });
             }
 
             // Nowa karta potwierdzona — dopiero teraz stare zdjęcia i dokumenty ustępują.
@@ -805,21 +813,28 @@ final class ProductEnrichmentService
             // Pusty opis z potwierdzonej karty kończył szukanie (Ringers 259/297) — zanim
             // oddamy produkt do ręki, bierzemy jeszcze jedną porcję kart z indeksu i sklepów.
             if (! $confirmed) {
-                [$retryPages, $fetched, $retryResults] = $this->fetchMoreCatalogCards($product, $searchResults, $fetched);
+                // Karty z indeksu, które pobrano i odrzucono, trzymamy osobno od
+                // $searchResults — tam idą tylko wyniki, które coś dały. Bez tego
+                // wyszukiwarka pobierałaby drugi raz adres, który indeks już podsunął.
+                [$retryPages, $fetched, $triedResults] = $this->fetchMoreCatalogCards($product, $searchResults, $fetched);
+                $retryResults = [];
                 if ($retryPages === []) {
                     [$retryPages, $fetched, $retryResults] = $this->fetchMappedRetailerCards(
                         $product,
-                        array_values(array_merge($searchResults, $retryResults)),
+                        array_values(array_merge($searchResults, $triedResults)),
                         $fetched
                     );
+                    $triedResults = array_values(array_merge($triedResults, $retryResults));
                 }
                 // Pas „GREY PES BLT … 150CM” kończył tu na matach z indeksu i nigdy nie
                 // trafiał do wyszukiwarki — ta gałąź nie miała trzeciej drogi, którą
-                // ma gałąź „strony nie potwierdzają produktu”.
-                if ($retryPages === []) {
+                // ma gałąź „strony nie potwierdzają produktu”. Gdy tamta gałąź już
+                // internet pytała, nie pytamy drugi raz — wpis „brak nowych adresów”
+                // sugerowałby, że internet nic nie miał.
+                if ($retryPages === [] && ! $openWebTried) {
                     [$retryPages, $fetched, $retryResults] = $this->fetchCardsFromOpenWeb(
                         $product,
-                        array_values(array_merge($searchResults, $retryResults)),
+                        array_values(array_merge($searchResults, $triedResults)),
                         $fetched,
                         $mfrDomains
                     );
@@ -2031,8 +2046,9 @@ final class ProductEnrichmentService
      * Pobrane karty, których nie przepuścił ani fetcher, ani końcowe potwierdzenie.
      *
      * @param  array<string, mixed>  $fetched
+     * @return list<array{url: string, reason: string}> jeden adres raz, z pierwszym powodem
      */
-    private function logCardRejections(Product $product, array $fetched): void
+    private function logCardRejections(Product $product, array $fetched): array
     {
         $rejections = is_array($fetched['rejected'] ?? null) ? $fetched['rejected'] : [];
         $reason = $this->identity->requiresExactSkuOrNameOnCard($product)
@@ -2044,7 +2060,31 @@ final class ProductEnrichmentService
                 $rejections[] = ['url' => $url, 'reason' => $reason];
             }
         }
+        $rejections = CandidateRejection::unique($rejections);
         $this->attemptLog()->addRejections('pobrane karty', $rejections);
+
+        return $rejections;
+    }
+
+    /**
+     * Każda znaleziona karta odpadła wyłącznie dlatego, że sklep nie odpowiedział
+     * (blokada, timeout). Nikt nie zobaczył treści, więc „brak karty” nic nie mówi
+     * o produkcie — jedna karta odrzucona za treść już to rozstrzyga na niekorzyść.
+     *
+     * @param  list<array{url: string, reason: string}>  $rejections
+     */
+    private function allCardsUnreachable(array $rejections): bool
+    {
+        if ($rejections === []) {
+            return false;
+        }
+        foreach ($rejections as $row) {
+            if ($row['reason'] !== CandidateRejection::FETCH_FAILED) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -2063,10 +2103,14 @@ final class ProductEnrichmentService
      * AC01P-00022-00-N0C kończyły przez to na „wpisz ręcznie” bez jednego
      * zapytania do internetu.
      *
+     * Gdy wyszukiwarka karty znalazła, ale żadna nie odpowiedziała (blokada sklepu,
+     * timeout), czwarty element mówi o tym wprost — taki koniec to awaria do
+     * ponowienia, nie dowód, że karty nie ma.
+     *
      * @param  list<array<string, mixed>>  $searchResults  adresy już sprawdzone
      * @param  array<string, mixed>  $fetched
      * @param  list<string>  $mfrDomains
-     * @return array{0: list<array<string, mixed>>, 1: array<string, mixed>, 2: list<array<string, mixed>>}
+     * @return array{0: list<array<string, mixed>>, 1: array<string, mixed>, 2: list<array<string, mixed>>, 3: bool}
      */
     private function fetchCardsFromOpenWeb(
         Product $product,
@@ -2099,7 +2143,7 @@ final class ProductEnrichmentService
         if ($fresh === []) {
             $this->attemptLog()->add('search', 'internet bez indeksu: brak nowych adresów');
 
-            return [[], $fetched, []];
+            return [[], $fetched, [], false];
         }
 
         $this->attemptLog()->add(
@@ -2118,12 +2162,12 @@ final class ProductEnrichmentService
         }
         $pages = $this->keepConfirmedCardPages($product, $webFetched['pages'] ?? []);
         if ($pages === []) {
-            $this->logCardRejections($product, $webFetched);
+            $rejections = $this->logCardRejections($product, $webFetched);
 
-            return [[], $fetched, []];
+            return [[], $fetched, [], $this->allCardsUnreachable($rejections)];
         }
 
-        return [$pages, $fetched, $fresh];
+        return [$pages, $fetched, $fresh, false];
     }
 
     private function fetchMappedRetailerCards(Product $product, array $searchResults, array $fetched): array
