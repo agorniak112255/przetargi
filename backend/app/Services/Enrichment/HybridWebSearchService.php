@@ -324,6 +324,12 @@ class HybridWebSearchService
         $skuQuery = $this->primarySkuQuery($product, $this->buildQueries($product, 'manufacturer'));
         foreach (['manufacturer', 'industry'] as $phase) {
             $ladder = $this->openSearchQueries($product, $this->buildQueries($product, $phase));
+            // Darmowe szukanie ma wlasny cache po tresci zapytania, w tym pamiec
+            // zapytan bez wynikow. Bez tego „wyczysc cache i sprobuj ponownie”
+            // nic by nie dalo akurat produktom, ktore sie nie udaly.
+            foreach ($ladder as $query) {
+                $this->duckDuckGo->forgetQuery($query);
+            }
             foreach (array_merge(TavilySearchProfile::MODES, ['large_model']) as $mode) {
                 foreach ($ladder as $query) {
                     foreach (['open', 'mfr'] as $step) {
@@ -1018,6 +1024,7 @@ class HybridWebSearchService
                 'errors' => $errors,
             ];
         }
+
         return ['results' => [], 'provider' => $this->searchProviderName(), 'errors' => $errors];
     }
 

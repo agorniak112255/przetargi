@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use RuntimeException;
 use Tests\TestCase;
 
 final class DuckDuckGoHtmlSearchTest extends TestCase
@@ -55,6 +57,118 @@ HTML;
         $urls = array_column($results, 'url');
 
         $this->assertSame(['https://safespec.dupont.com/product/tychem-6000'], $urls);
+    }
+
+    public function test_query_without_results_is_remembered_and_not_asked_again(): void
+    {
+        config(['enrichment.search_min_interval' => 0]);
+        Cache::flush();
+        // wszystkie silniki odpowiadaja, tylko nie maja nic na to zapytanie
+        Http::fake(['*' => Http::response('<html><body>brak</body></html>', 200)]);
+
+        $search = new DuckDuckGoHtmlSearch;
+        $first = null;
+        try {
+            $search->search('YE65T-00803-07-GA2 Ansell');
+        } catch (RuntimeException $e) {
+            $first = $e->getMessage();
+        }
+        $this->assertNotNull($first, 'brak wynikow powinien konczyc sie wyjatkiem');
+        $asked = 0;
+        Http::assertSent(static function () use (&$asked): bool {
+            $asked++;
+
+            return true;
+        });
+        $this->assertGreaterThan(0, $asked);
+
+        $second = null;
+        try {
+            $search->search('YE65T-00803-07-GA2 Ansell');
+        } catch (RuntimeException $e) {
+            $second = $e->getMessage();
+        }
+        $this->assertSame($first, $second);
+
+        // drugie podejscie nie dolozylo ani jednego zapytania do silnikow
+        $afterSecond = 0;
+        Http::assertSent(static function () use (&$afterSecond): bool {
+            $afterSecond++;
+
+            return true;
+        });
+        $this->assertSame($asked, $afterSecond);
+    }
+
+    public function test_engine_outage_is_not_remembered_as_missing_page(): void
+    {
+        config(['enrichment.search_min_interval' => 0]);
+        Cache::flush();
+        // 429 to odmowa silnika, a nie dowod, ze karty nie ma
+        Http::fake(['*' => Http::response('too many requests', 429)]);
+
+        $search = new DuckDuckGoHtmlSearch;
+        $count = static function (): int {
+            $n = 0;
+            Http::assertSent(static function () use (&$n): bool {
+                $n++;
+
+                return true;
+            });
+
+            return $n;
+        };
+
+        try {
+            $search->search('AlphaTec 5000 9151 Ansell');
+        } catch (RuntimeException) {
+            // oczekiwane
+        }
+        $afterFirst = $count();
+
+        try {
+            $search->search('AlphaTec 5000 9151 Ansell');
+        } catch (RuntimeException) {
+            // oczekiwane
+        }
+
+        // gdyby awaria trafila do pamieci, drugi przebieg nie zapytalby nikogo
+        $this->assertGreaterThan($afterFirst, $count());
+    }
+
+    public function test_forget_query_drops_remembered_miss(): void
+    {
+        config(['enrichment.search_min_interval' => 0]);
+        Cache::flush();
+        Http::fake(['*' => Http::response('<html><body>brak</body></html>', 200)]);
+
+        $search = new DuckDuckGoHtmlSearch;
+        try {
+            $search->search('C244110 NITROTOUGH');
+        } catch (RuntimeException) {
+            // oczekiwane
+        }
+        $before = 0;
+        Http::assertSent(static function () use (&$before): bool {
+            $before++;
+
+            return true;
+        });
+
+        $search->forgetQuery('C244110 NITROTOUGH');
+        try {
+            $search->search('C244110 NITROTOUGH');
+        } catch (RuntimeException) {
+            // oczekiwane
+        }
+
+        $after = 0;
+        Http::assertSent(static function () use (&$after): bool {
+            $after++;
+
+            return true;
+        });
+        $this->assertGreaterThan($before, $after, 'po wyczyszczeniu cache pytamy silniki ponownie');
     }
 
     public function test_searxng_retries_fallback_engines_when_blocked(): void

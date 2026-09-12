@@ -21,6 +21,14 @@ final class DuckDuckGoHtmlSearch
 {
     private const QUERY_CACHE_PREFIX = 'free_web_search_v5:';
 
+    /**
+     * Zapytania, po ktorych cala drabinka silnikow nie znalazla nic.
+     * Bez tego produkt bez karty odpala te same zapytania w kazdej fazie
+     * i przy kazdym ponowieniu batcha - czyli caly wolumen generuja te
+     * produkty, dla ktorych i tak nic nie ma.
+     */
+    private const MISS_CACHE_PREFIX = 'free_web_search_miss_v1:';
+
     private const GATE_KEY = 'free_web_search_gate';
 
     private const LAST_AT_KEY = 'free_web_search_last_at';
@@ -70,6 +78,12 @@ final class DuckDuckGoHtmlSearch
             return $this->limitResults($cached, $maxResults, $includeDomains);
         }
 
+        $missKey = self::MISS_CACHE_PREFIX.hash('sha256', $query);
+        $remembered = Cache::get($missKey);
+        if (is_string($remembered)) {
+            throw new RuntimeException($remembered);
+        }
+
         $searxng = $this->searxngBaseUrl();
         if ($searxng !== null) {
             if ($this->searxngRecentlyBlocked() && ! $allowPublicFallback) {
@@ -110,7 +124,17 @@ final class DuckDuckGoHtmlSearch
         try {
             $cached = Cache::get($cacheKey);
             if (! is_array($cached)) {
-                $cached = $this->searchUncached($query);
+                try {
+                    $cached = $this->searchUncached($query);
+                } catch (RuntimeException $e) {
+                    // Awarii nie zapamietujemy: nikt nie sprawdzil, czy karta
+                    // istnieje, wiec zamrozilibysmy na godziny nieznany wynik.
+                    if (! SearchEngineOutage::matches($e->getMessage())) {
+                        Cache::put($missKey, $e->getMessage(), now()->addHours(6));
+                    }
+
+                    throw $e;
+                }
                 if ($cached !== []) {
                     Cache::put($cacheKey, $cached, now()->addHours(6));
                 }
@@ -218,6 +242,18 @@ final class DuckDuckGoHtmlSearch
         }
 
         return (string) $response->body();
+    }
+
+    /** „Wyczysc cache i sprobuj ponownie” musi kasowac takze zapamietany brak wynikow. */
+    public function forgetQuery(string $query): void
+    {
+        $query = trim($query);
+        if ($query === '') {
+            return;
+        }
+        $hash = hash('sha256', $query);
+        Cache::forget(self::QUERY_CACHE_PREFIX.$hash);
+        Cache::forget(self::MISS_CACHE_PREFIX.$hash);
     }
 
     public function isSearxngBlockedMessage(string $message): bool

@@ -1168,21 +1168,7 @@ final class ProductEnrichmentService
      */
     private function searchFailedDueToEngineOutage(string $detail): bool
     {
-        $msg = mb_strtolower($detail);
-
-        if (str_contains($msg, 'silniki zablokowane')
-            || str_contains($msg, 'too many requests')
-            || str_contains($msg, 'captcha')
-            || str_contains($msg, 'bez fallbacku publicznego')
-            || str_contains($msg, 'nie odpowiada')
-            || str_contains($msg, 'curl error')
-        ) {
-            return true;
-        }
-
-        // „Google HTTP 429”, „DuckDuckGo HTTP 202”, „Qwant HTTP 403” — silnik
-        // odmówił odpowiedzi; 404 zostawiamy, bo to realnie brak strony.
-        return preg_match('/\bhttp (202|401|403|407|429|5\d\d)\b/', $msg) === 1;
+        return SearchEngineOutage::matches($detail);
     }
 
     /**
