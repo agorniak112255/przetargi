@@ -436,12 +436,22 @@ final class ProductPageFetcher
             // WAF sklepu (gloves.co.uk, rs-online) odrzuca IP serwerowni jeszcze przed treścią,
             // więc kartę czytamy przez zewnętrzny reader zamiast odpuszczać stronę.
             // 3mpolska.pl / 3m.com przy timeout (Akamai) też nie oddają statusu 403.
-            if (($this->isBlockedStatus($status) || $this->officialThreeMFetchNeedsReader($url, $status))
+            // Reader ratuje kartę i przy 403 od WAF, i przy zerwanym TLS 3M (status null).
+            // Ale tylko jawne 403/401/429… to blokada stała; timeout bez statusu zostaje
+            // „nie odpowiedziała” i wraca do ponowienia.
+            $walled = $this->isBlockedStatus($status);
+            if (($walled || $this->officialThreeMFetchNeedsReader($url, $status))
                 && $this->ingestViaReader($url, $goodPages, $images, $documents, $trustedImages)) {
                 return;
             }
             Log::info('Product page fetch skipped', ['url' => $url, 'status' => $status]);
-            $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::FETCH_FAILED];
+            // 403 od WAF (hahn-kolb: Akamai) plus padnięty reader to blokada stała, nie
+            // chwilowy brak odpowiedzi — „ponów później” nic tu nie da. Osobny powód,
+            // żeby wyżej dało się odróżnić ją od timeoutu.
+            $this->rejections[] = [
+                'url' => $url,
+                'reason' => $walled ? CandidateRejection::BOT_WALL : CandidateRejection::FETCH_FAILED,
+            ];
             $snippet = trim((string) ($row['snippet'] ?? ''));
             if ($snippet !== '') {
                 $fallbackPages[] = ['url' => $url, 'text' => mb_substr($snippet, 0, 3000), 'snippet_only' => true];

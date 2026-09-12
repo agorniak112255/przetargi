@@ -2303,6 +2303,72 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_FAILED, $product->enrichment_status);
     }
 
+    /**
+     * hahn-kolb (Akamai) oddaje 403 „Access Denied” dla wszystkiego, także dla readera —
+     * to blokada stała, nie chwilowy brak odpowiedzi. Produkt ma trafić do ręki
+     * z adresem karty, a nie do kolejki na „ponów później”.
+     */
+    public function test_found_cards_behind_a_waf_go_to_manual_with_the_url(): void
+    {
+        $card = 'https://www.hahn-kolb.net/ANSELL-Replacement-belt-and-buckle-AC01P-00014-00/95282536.sku/en/US/EUR/';
+        $product = $this->makeProduct([
+            'sku' => 'AC01P-00014-00',
+            'name' => 'GREY PES BLT & YKK BCKL LENGTH 150CM',
+            'manufacturer' => 'Ansell',
+            'description' => null,
+        ]);
+        $search = $this->searchMock();
+        // jak na produkcji: pierwsze szukanie daje rekawice kolczugowa pol-paw (ta sama
+        // koncowka „ac01”), jej tresc nie potwierdza pasa, dopiero internet znajduje karte
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [[
+                    'url' => 'https://pol-paw.pl/rekawica-kolczugowa-1-sztuka-ac01-p-5502.html',
+                    'title' => 'Rekawica kolczugowa AC01',
+                    'snippet' => 'Rekawica kolczugowa jednoczesciowa',
+                ]],
+                'errors' => [],
+            ]);
+        $search->shouldReceive('searchWebWithoutLocalIndex')
+            ->once()
+            ->andReturn([
+                'results' => [['url' => $card, 'title' => 'ANSELL Replacement belt and buckle AC01P-00014-00', 'snippet' => 'Ansell']],
+                'images' => [],
+                'errors' => [],
+            ]);
+
+        // 403 z WAF-u dla karty i dla readera (r.jina.ai idzie przez to samo Http)
+        Http::fake(['*' => Http::response('Access Denied', 403)]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            Mockery::mock(OpenAiCompatibleClient::class),
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException $e) {
+            $this->assertStringContainsString('istnieje', $e->getMessage());
+            $this->assertStringContainsString('hahn-kolb.net', $e->getMessage());
+            $this->assertStringContainsString('wpisz opis ręcznie', $e->getMessage());
+            $this->assertStringNotContainsString('Ponów', $e->getMessage());
+        }
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+    }
+
     public function test_enrichment_service_saves_description_and_image(): void
     {
         Storage::fake('public');

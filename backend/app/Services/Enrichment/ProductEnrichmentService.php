@@ -653,6 +653,7 @@ final class ProductEnrichmentService
             );
             $rawCardPages = $pageSnippets;
             $openWebCardsUnreachable = false;
+            $openWebWalledCards = [];
             $openWebTried = false;
             if ($pageSnippets === []) {
                 $triedUrls = array_values(array_filter(array_map(
@@ -679,7 +680,7 @@ final class ProductEnrichmentService
                 }
                 if ($pageSnippets === []) {
                     $openWebTried = true;
-                    [$pageSnippets, $fetched, $webResults, $openWebCardsUnreachable] = $this->fetchCardsFromOpenWeb(
+                    [$pageSnippets, $fetched, $webResults, $openWebCardsUnreachable, $openWebWalledCards] = $this->fetchCardsFromOpenWeb(
                         $product,
                         array_values(array_merge($searchResults, $shopResults)),
                         $fetched,
@@ -706,6 +707,12 @@ final class ProductEnrichmentService
                     $openWebCardsUnreachable => 'Znalezione karty produktu '.$product->sku
                         .' nie odpowiedziały — sklep nie odpowiada albo blokuje pobieranie,'
                         .' więc nie wiadomo, czy potwierdzają produkt. Ponów później.',
+                    // Bez frazy „nie odpowiada”: to ma trafić do ręki, nie do kolejki —
+                    // WAF, którego nie przeszedł reader, nie puści też za godzinę.
+                    $openWebWalledCards !== [] => 'Karta produktu '.$product->sku.' istnieje: '
+                        .implode(', ', array_slice($openWebWalledCards, 0, 2))
+                        .' — sklep blokuje pobieranie automatyczne (403, także przez reader).'
+                        .' Otwórz ją w przeglądarce i wpisz opis ręcznie.',
                     default => 'Nie znaleziono karty potwierdzającej produkt '.$product->sku
                         .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.',
                 });
@@ -2094,6 +2101,30 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Każda znaleziona karta odpadła przez WAF sklepu, którego nie przeszedł też reader
+     * (hahn-kolb: Akamai, 403 nawet dla przeglądarki). To blokada stała — karta istnieje,
+     * ale automat jej nie przeczyta. Zwraca adresy tych kart, żeby człowiek mógł je otworzyć.
+     *
+     * @param  list<array{url: string, reason: string}>  $rejections
+     * @return list<string>
+     */
+    private function walledCardUrls(array $rejections): array
+    {
+        if ($rejections === []) {
+            return [];
+        }
+        $urls = [];
+        foreach ($rejections as $row) {
+            if ($row['reason'] !== CandidateRejection::BOT_WALL) {
+                return [];
+            }
+            $urls[] = $row['url'];
+        }
+
+        return array_values(array_unique($urls));
+    }
+
+    /**
      * Listing / zła karta u producenta — szukaj dalej w zmapowanych sklepach.
      *
      * @param  list<array<string, mixed>>  $searchResults
@@ -2116,7 +2147,9 @@ final class ProductEnrichmentService
      * @param  list<array<string, mixed>>  $searchResults  adresy już sprawdzone
      * @param  array<string, mixed>  $fetched
      * @param  list<string>  $mfrDomains
-     * @return array{0: list<array<string, mixed>>, 1: array<string, mixed>, 2: list<array<string, mixed>>, 3: bool}
+     *                                    Piąty element to adresy kart za WAF-em (403 + padnięty reader): taka blokada jest
+     *                                    stała, więc produkt idzie do ręki z adresem, a nie do ponowienia.
+     * @return array{0: list<array<string, mixed>>, 1: array<string, mixed>, 2: list<array<string, mixed>>, 3: bool, 4: list<string>}
      */
     private function fetchCardsFromOpenWeb(
         Product $product,
@@ -2149,7 +2182,7 @@ final class ProductEnrichmentService
         if ($fresh === []) {
             $this->attemptLog()->add('search', 'internet bez indeksu: brak nowych adresów');
 
-            return [[], $fetched, [], false];
+            return [[], $fetched, [], false, []];
         }
 
         $this->attemptLog()->add(
@@ -2170,10 +2203,10 @@ final class ProductEnrichmentService
         if ($pages === []) {
             $rejections = $this->logCardRejections($product, $webFetched);
 
-            return [[], $fetched, [], $this->allCardsUnreachable($rejections)];
+            return [[], $fetched, [], $this->allCardsUnreachable($rejections), $this->walledCardUrls($rejections)];
         }
 
-        return [$pages, $fetched, $fresh, false];
+        return [$pages, $fetched, $fresh, false, []];
     }
 
     private function fetchMappedRetailerCards(Product $product, array $searchResults, array $fetched): array
