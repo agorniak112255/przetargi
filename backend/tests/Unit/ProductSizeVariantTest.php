@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use App\Models\Product;
 use App\Support\ProductSizeVariant;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
@@ -26,6 +27,8 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertSame('HyFlex 11919VP VEND', $svc->stripSizeLabelFromName('HyFlex 11919VP Size 10,0 VEND'));
         $this->assertSame('KG G10 Comfort Plus Ntrl Glv Lt Blue XL', $svc->stripSizeLabelFromName('KG G10 Comfort Plus Ntrl Glv Lt Blue XL'));
         $this->assertSame('1st Winter Dry 10', $svc->stripSizeLabelFromName('1st Winter Dry 10'));
+        $this->assertSame('Men´s jacket CXS SOLIS FLEX, blue-black', $svc->stripSizeLabelFromName('Men´s jacket CXS SOLIS FLEX, blue-black, size 46 - 68'));
+        $this->assertSame('Men´s jacket CXS SOLIS FLEX, redblack', $svc->stripSizeLabelFromName('Men´s jacket CXS SOLIS FLEX, redblack, size 46  64'));
         $this->assertSame(
             'Kaptur 3M Versaflo ze zintegrowaną więźbą, rozmiar L, S-133L',
             $svc->stripSizeLabelFromName('Kaptur 3M Versaflo ze zintegrowaną więźbą, rozmiar L, S-133L')
@@ -436,7 +439,7 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertNull($svc->extractSize(null, '1260348'));
         $this->assertNull($svc->extractSize(null, '7100336246'));
 
-        $product = new \App\Models\Product([
+        $product = new Product([
             'sku' => '1260348',
             'name' => $name,
             'packaging' => null,

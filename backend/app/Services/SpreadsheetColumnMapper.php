@@ -150,6 +150,7 @@ final class SpreadsheetColumnMapper
                     $cols[$field] = $scored[$field];
                 }
             }
+            $cols = $this->preferDescriptiveNameColumn($sheet, $headerExcel, $maxC, $cols);
             $sheetMap['columns'] = $cols;
             $sheetMap['role'] = 'catalog';
             $sheetMap['include'] = (bool) ($sheetMap['include'] ?? false)
@@ -165,6 +166,95 @@ final class SpreadsheetColumnMapper
         $mapping['sheets'] = $sheets;
 
         return $mapping;
+    }
+
+    /** Tyle wierszy pod nagłówkiem wystarczy, by poznać charakter kolumny. */
+    private const NAME_SAMPLE_ROWS = 60;
+
+    /**
+     * CXS: „Název” to powtarzana nazwa rodziny (SOLIS FLEX), a pełna nazwa wyrobu
+     * („Men´s jacket CXS SOLIS FLEX, blue-black, size 46 - 68”) stoi w kolumnie bez
+     * własnej etykiety — jej nagłówek to tytuł sekcji. Krótka i powtarzalna kolumna
+     * zostaje nazwą modelu, długa i różnorodna — nazwą produktu.
+     *
+     * @param  array<string, int|null>  $cols
+     * @return array<string, int|null>
+     */
+    private function preferDescriptiveNameColumn(Worksheet $sheet, int $headerExcel, int $maxC, array $cols): array
+    {
+        $nameCol = $cols['name'] ?? null;
+        if (! is_int($nameCol)) {
+            return $cols;
+        }
+        [$rows, $stats] = $this->columnTextStats($sheet, $headerExcel, $maxC);
+        $current = $stats[$nameCol] ?? null;
+        if ($rows < 5 || $current === null) {
+            return $cols;
+        }
+        // nazwa musi być gęsta, krótka i powtarzalna — rzadka (rozmiarówka DuPont) zostaje
+        if ($current['count'] < 0.6 * $rows || $current['avg'] > 30 || $current['distinct'] > 0.6 * $current['count']) {
+            return $cols;
+        }
+        $taken = array_filter($cols, static fn ($v, string $k): bool => is_int($v) && $k !== 'name', ARRAY_FILTER_USE_BOTH);
+        $best = null;
+        foreach ($stats as $col => $stat) {
+            if ($col === $nameCol || in_array($col, $taken, true)) {
+                continue;
+            }
+            if ($stat['count'] < 0.6 * $rows || $stat['avg'] < 25 || $stat['avg'] < 1.5 * $current['avg']
+                || $stat['distinct'] < 0.8 * $stat['count']) {
+                continue;
+            }
+            if ($best === null || $stat['avg'] > $stats[$best]['avg']) {
+                $best = $col;
+            }
+        }
+        if ($best === null) {
+            return $cols;
+        }
+        if (($cols['model_name'] ?? null) === null) {
+            $cols['model_name'] = $nameCol;
+        }
+        $cols['name'] = $best;
+
+        return $cols;
+    }
+
+    /**
+     * Statystyki tekstu w kolumnach pod nagłówkiem: ile wierszy ma tekst, średnia
+     * długość, ile wartości różnych. Liczby (ceny, ilości) nie są tekstem.
+     *
+     * @return array{0: int, 1: array<int, array{count: int, avg: float, distinct: int}>}
+     */
+    private function columnTextStats(Worksheet $sheet, int $headerExcel, int $maxC): array
+    {
+        $lastRow = min((int) $sheet->getHighestDataRow(), $headerExcel + self::NAME_SAMPLE_ROWS);
+        $rows = 0;
+        $values = [];
+        for ($r = $headerExcel + 1; $r <= $lastRow; $r++) {
+            $rowHasText = false;
+            for ($c = 1; $c <= $maxC; $c++) {
+                $value = trim((string) $sheet->getCell(Coordinate::stringFromColumnIndex($c).$r)->getFormattedValue());
+                if ($value === '' || is_numeric(str_replace([',', ' '], ['.', ''], $value))) {
+                    continue;
+                }
+                $values[$c - 1][] = mb_strtolower($value);
+                $rowHasText = true;
+            }
+            if ($rowHasText) {
+                $rows++;
+            }
+        }
+        $stats = [];
+        foreach ($values as $col => $list) {
+            $stats[$col] = [
+                'count' => count($list),
+                'avg' => array_sum(array_map('mb_strlen', $list)) / count($list),
+                'distinct' => count(array_unique($list)),
+            ];
+        }
+
+        return [$rows, $stats];
     }
 
     /**

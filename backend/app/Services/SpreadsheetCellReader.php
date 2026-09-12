@@ -17,13 +17,16 @@ use Throwable;
  */
 final class SpreadsheetCellReader
 {
+    /** Żaden cennik nie ma 200 kolumn — dalej są tylko śmieci po formatowaniu. */
+    private const MAX_COLUMNS = 200;
+
     /**
      * @return list<list<string>>
      */
     public function toRows(Worksheet $sheet): array
     {
         $maxRow = max(1, (int) $sheet->getHighestDataRow());
-        $maxCol = max(1, Coordinate::columnIndexFromString($sheet->getHighestDataColumn() ?: 'A'));
+        $maxCol = $this->dataWidth($sheet);
         $out = [];
         for ($r = 1; $r <= $maxRow; $r++) {
             $row = [];
@@ -35,6 +38,32 @@ final class SpreadsheetCellReader
         }
 
         return $out;
+    }
+
+    /**
+     * Najdalsza kolumna z realną wartością. getHighestDataColumn liczy też pustą,
+     * sformatowaną komórkę — cennik COBA miał ją w XEB i 593 wiersze × 16 tys.
+     * kolumn zjadało 1 GB pamięci, zanim import zaczął czytać nazwy.
+     */
+    private function dataWidth(Worksheet $sheet): int
+    {
+        $highest = max(1, Coordinate::columnIndexFromString($sheet->getHighestDataColumn() ?: 'A'));
+        if ($highest <= 1) {
+            return 1;
+        }
+        $max = 1;
+        foreach ($sheet->getCellCollection()->getCoordinates() as $coordinate) {
+            [$column] = Coordinate::coordinateFromString($coordinate);
+            $index = Coordinate::columnIndexFromString($column);
+            if ($index <= $max || $index > self::MAX_COLUMNS) {
+                continue;
+            }
+            if ($this->readCell($sheet->getCell($coordinate)) !== '') {
+                $max = $index;
+            }
+        }
+
+        return min($max, $highest, self::MAX_COLUMNS);
     }
 
     public function stringify(mixed $value): string

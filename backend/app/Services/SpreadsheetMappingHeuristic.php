@@ -714,6 +714,7 @@ final class SpreadsheetMappingHeuristic
             }
             $priced = 0;
             $qty = 0;
+            $numbers = [];
             foreach ($grid as $r => $cells) {
                 if ($r <= $headerRow) {
                     continue;
@@ -728,13 +729,14 @@ final class SpreadsheetMappingHeuristic
                     $n = (int) $raw;
                     if ($n >= 1 && $n <= 2000) {
                         $qty++;
+                        $numbers[] = $n;
                     }
                 }
                 if ($priced >= 40) {
                     break;
                 }
             }
-            if ($priced < 2) {
+            if ($priced < 2 || $this->looksLikePageOrOrdinal($numbers)) {
                 continue;
             }
             $rate = $qty / $priced;
@@ -807,6 +809,30 @@ final class SpreadsheetMappingHeuristic
         return $width;
     }
 
+    /**
+     * Numer strony katalogu („Strana”: 41, 41, 42, 42…) i liczba porządkowa (1, 2, 3…)
+     * rosną wiersz po wierszu; ilość w opakowaniu tak się nie zachowuje.
+     *
+     * @param  list<int>  $numbers
+     */
+    private function looksLikePageOrOrdinal(array $numbers): bool
+    {
+        // w próbce 40 wierszy cennika CXS są tylko trzy strony (41, 42, 43), a jeden
+        // odsyłacz do strony 150 w środku psuje ścisłą monotoniczność — liczymy spadki
+        $n = count($numbers);
+        if ($n < 8 || count(array_unique($numbers)) < 3) {
+            return false;
+        }
+        $drops = 0;
+        for ($i = 1; $i < $n; $i++) {
+            if ($numbers[$i] < $numbers[$i - 1]) {
+                $drops++;
+            }
+        }
+
+        return $drops <= 0.1 * ($n - 1);
+    }
+
     private function looksLikeModelCode(string $value): bool
     {
         if (mb_strlen($value) < 6 || mb_strlen($value) > 48) {
@@ -819,6 +845,12 @@ final class SpreadsheetMappingHeuristic
             return false;
         }
         if (preg_match('/[A-Za-z]/', $value) !== 1 || preg_match('/\d/', $value) !== 1) {
+            return false;
+        }
+        // „NEW 6/2026”, „NOVINKA 2026” — notatka o nowości w kolumnie uwag, nie kod;
+        // jako model_key stawała się kodem produktu i grupowała różne wyroby
+        if (preg_match('/\b\d{1,2}\/(?:19|20)\d{2}\b/', $value) === 1
+            || preg_match('/^(?:new|novinka|nowość|nowosc)\b/iu', $value) === 1) {
             return false;
         }
 

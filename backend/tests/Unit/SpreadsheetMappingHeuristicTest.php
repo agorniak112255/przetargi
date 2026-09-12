@@ -13,6 +13,20 @@ use Tests\TestCase;
 
 final class SpreadsheetMappingHeuristicTest extends TestCase
 {
+    public function test_cxs_note_column_and_page_number_are_not_model_key_or_pack_qty(): void
+    {
+        // pierwsze 60 wierszy prawdziwego cennika CXS z formatowaniem — wersja
+        // zbudowana z samych wartości nie odtwarzała wyboru nagłówka w wierszu 4
+        $mapping = (new SpreadsheetMappingHeuristic)->detect(__DIR__.'/../Fixtures/cxs_price_list_head.xlsx');
+        $this->assertNotNull($mapping);
+        $cols = $mapping['sheets'][0]['columns'];
+        $this->assertSame(1, $cols['sku'], 'Pomlčkový kód');
+        $this->assertSame(10, $cols['catalog_price'], 'Price PLN');
+        // „NEW 6/2026” w kolumnie uwag stawało się kodem modelu, numer strony („Strana”) — ilością w opakowaniu
+        $this->assertNull($cols['model_key']);
+        $this->assertNull($cols['pack_qty']);
+    }
+
     public function test_prefers_article_number_over_sparse_reference(): void
     {
         $path = $this->makeDupontLikeSpreadsheet();

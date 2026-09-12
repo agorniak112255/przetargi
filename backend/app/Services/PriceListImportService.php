@@ -1478,6 +1478,12 @@ final class PriceListImportService
         if (mb_strlen($value) < 4 || mb_strlen($value) > 48) {
             return false;
         }
+        // „NEW 6/2026” w kolumnie uwag (CXS) — notatka o nowości, nie kod; stawała się
+        // kodem produktu zamiast „1010-135-710-00” z kolumny kodu
+        if (preg_match('/\b\d{1,2}\/(?:19|20)\d{2}\b/', $value) === 1
+            || preg_match('/^(?:new|novinka|nowość|nowosc)\b/iu', $value) === 1) {
+            return false;
+        }
         if (str_contains($value, ' ')) {
             // kody typu „TD 0125 S WH 00” / „TK GEVJ T YL 00”
             if (preg_match('/^[A-Z0-9][A-Z0-9 .\-\/]{3,}$/i', $value) !== 1) {

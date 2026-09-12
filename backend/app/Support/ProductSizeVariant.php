@@ -404,11 +404,19 @@ final class ProductSizeVariant
     {
         $t = trim($name);
         $changed = false;
+        // „size 46 - 64” (CXS) to zakres — obcinamy cały, nie tylko „size 46”, bo zostawało „- 64”
         $next = preg_replace_callback(
-            '/\b(?:size|rozmiar|taille|rozm\.?)\s*:?\s*(\d{1,2}[.,]\d|\d{1,2}(?![.,]\d))\b(?!\s*(?:mm|cm|m\b|km|kg|g\b|l\b|ml|szt))/iu',
+            '/\b(?:size|rozmiar|taille|rozm\.?)\s*:?\s*(\d{1,2}[.,]\d|\d{1,2}(?![.,]\d))\b(?!\s*(?:mm|cm|m\b|km|kg|g\b|l\b|ml|szt))'
+            .'(?:\s*[-–]?\s*(\d{1,2})\b(?![.,]?\d)(?!\s*(?:mm|cm|m\b|km|kg|g\b|l\b|ml|szt)))?/iu',
             function (array $m) use (&$changed): string {
                 if (! $this->looksLikeWearSize($m[1])) {
                     return $m[0];
+                }
+                if (isset($m[2]) && $m[2] !== '' && ! $this->looksLikeWearSize($m[2])) {
+                    // „size 10 20 szt” — druga liczba nie jest rozmiarem, zostaje
+                    $changed = true;
+
+                    return ' '.$m[2];
                 }
                 $changed = true;
 

@@ -29,6 +29,25 @@ final class SpreadsheetCellReaderTest extends TestCase
         $this->assertSame('TYVEK', $reader->stringify($rich));
     }
 
+    public function test_to_rows_ignores_empty_formatted_cell_far_right(): void
+    {
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->fromArray([
+            ['Numer produktu', 'Nazwa', 'ExWorks'],
+            ['AF060001', 'Orthomat Standard Szary', 74.58],
+        ]);
+        // pusta, sformatowana komórka w XEB — jak w cenniku COBA (16 tys. kolumn, 1 GB pamięci)
+        $sheet->getCell('XEB1')->setValue('');
+        $sheet->getStyle('XEB1')->getFont()->setBold(true);
+
+        $rows = (new SpreadsheetCellReader)->toRows($sheet);
+
+        $this->assertCount(2, $rows);
+        $this->assertCount(3, $rows[0]);
+        $this->assertSame(['AF060001', 'Orthomat Standard Szary', '74.58'], $rows[1]);
+    }
+
     public function test_to_rows_does_not_throw_on_in_cell_drawing(): void
     {
         $spreadsheet = new Spreadsheet;
