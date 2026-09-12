@@ -188,6 +188,14 @@ final class AnsellGloveIdentityTest extends TestCase
             .'KleenGuard G10 Comfort Plus Light Blue Nitrile Gloves 54189 XL',
             $comfort
         ));
+        $this->assertSame(
+            ['https://labproinc.com/products/kg-g10-comfort-plus-ntrl-glv-lt-blue-xl-54189'],
+            $identity->kleenGuardCatalogCardUrls($comfort)
+        );
+        $this->assertSame(
+            ['https://labproinc.com/products/kg-g10-flex-ntrl-glv-blue-xl-54335'],
+            $identity->kleenGuardCatalogCardUrls($this->glove('54335', 'KG G10 Flex Ntrl Glv Blue XL'))
+        );
     }
 
     private function glove(string $sku, string $name): Product

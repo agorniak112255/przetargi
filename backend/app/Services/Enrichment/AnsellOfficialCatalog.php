@@ -21,32 +21,46 @@ final class AnsellOfficialCatalog
      */
     public function find(Product $product): array
     {
-        $urls = array_slice($this->identity->ansellOfficialProductUrls($product), 0, 9);
+        $urls = array_values(array_unique(array_merge(
+            array_slice($this->identity->ansellOfficialProductUrls($product), 0, 9),
+            $this->identity->kleenGuardCatalogCardUrls($product),
+        )));
         foreach ($urls as $url) {
-            $page = $this->reader->fetch($url);
-            if ($page === null) {
-                continue;
+            $hit = $this->hitIfOurCard($url, $product);
+            if ($hit !== null) {
+                return [$hit];
             }
-            $text = $page['text'];
-            $head = mb_strtolower(mb_substr($text, 0, 400));
-            if (str_contains($head, 'product not found') || str_contains($head, 'nie znaleziono produktu')) {
-                continue;
-            }
-            $title = $this->titleFrom($text, $url);
-            $hay = $url.' '.$title.' '.$text;
-            if (! $this->identity->hayMentionsProduct($hay, $product)
-                || $this->identity->pageClaimsAnotherCode($url, $title, $product)) {
-                continue;
-            }
-
-            return [[
-                'url' => $url,
-                'title' => $title,
-                'snippet' => mb_substr($text, 0, 400),
-            ]];
         }
 
         return [];
+    }
+
+    /**
+     * @return array{url: string, title: string, snippet: string}|null
+     */
+    private function hitIfOurCard(string $url, Product $product): ?array
+    {
+        $page = $this->reader->fetch($url);
+        if ($page === null) {
+            return null;
+        }
+        $text = $page['text'];
+        $head = mb_strtolower(mb_substr($text, 0, 400));
+        if (str_contains($head, 'product not found') || str_contains($head, 'nie znaleziono produktu')) {
+            return null;
+        }
+        $title = $this->titleFrom($text, $url);
+        $hay = $url.' '.$title.' '.$text;
+        if (! $this->identity->hayMentionsProduct($hay, $product)
+            || $this->identity->pageClaimsAnotherCode($url, $title, $product)) {
+            return null;
+        }
+
+        return [
+            'url' => $url,
+            'title' => $title,
+            'snippet' => mb_substr($text, 0, 400),
+        ];
     }
 
     private function titleFrom(string $text, string $url): string

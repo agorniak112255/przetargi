@@ -843,6 +843,28 @@ final class ProductSearchIdentity
         return false;
     }
 
+    /**
+     * Karta KG w sklepie: nazwa cennika + SKU (ansell.com oddaje tylko landing KleenGuard).
+     *
+     * @return list<string>
+     */
+    public function kleenGuardCatalogCardUrls(Product $product): array
+    {
+        if ($this->kleenGuardShopPhrase($product) === '') {
+            return [];
+        }
+        $sku = mb_strtolower(trim((string) $product->sku));
+        $slug = trim((string) preg_replace('/[^a-z0-9]+/u', '-', mb_strtolower(trim((string) $product->name))), '-');
+        if ($sku === '' || $slug === '') {
+            return [];
+        }
+        if (! str_ends_with($slug, '-'.$sku)) {
+            $slug .= '-'.$sku;
+        }
+
+        return ['https://labproinc.com/products/'.$slug];
+    }
+
     /** G02 / BOOT 192 — ogon cennika, nie model karty. */
     private function isAnsellGarmentSuffixPhrase(string $phrase, Product $product): bool
     {

@@ -158,4 +158,27 @@ final class AnsellOfficialCatalogTest extends TestCase
 
         $this->assertSame($us, $hits[0]['url'] ?? null);
     }
+
+    public function test_finds_kleenguard_g10_comfort_plus_on_labpro(): void
+    {
+        $url = 'https://labproinc.com/products/kg-g10-comfort-plus-ntrl-glv-lt-blue-xl-54189';
+        Http::fake([
+            'https://r.jina.ai/'.$url => Http::response(
+                "# Kimberly Clark KG G10 Comfort Plus Ntrl Glv Lt Blue XL - 54189\n\n"
+                .'Product Number:54189 Powder free cleanroom nitrile gloves. '
+                .str_repeat('opis ', 40),
+                200
+            ),
+            '*' => Http::response('Title: Product Not Found | Ansell'."\n\n".str_repeat('nav ', 40), 200),
+        ]);
+
+        $hits = app(AnsellOfficialCatalog::class)->find(new Product([
+            'sku' => '54189',
+            'name' => 'KG G10 Comfort Plus Ntrl Glv Lt Blue XL',
+            'manufacturer' => 'Ansell',
+        ]));
+
+        $this->assertSame($url, $hits[0]['url'] ?? null);
+        $this->assertStringContainsString('54189', $hits[0]['title'] ?? '');
+    }
 }
