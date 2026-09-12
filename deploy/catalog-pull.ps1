@@ -11,10 +11,18 @@
 # INSERT IGNORE po unikalnym url_hash, wiec MySQL nadaje wlasne ID, a lokalnie
 # zaindeksowane hosty (np. szortbhp.pl) zostaja nietkniete.
 #
+# -Mirror: zamiast scalac, robi wierna kopie obu tabel z serwera razem z ID,
+# wiec tokeny przychodza gotowe i nie trzeba ich liczyc godzinami. Strumieniuje
+# prosto mysqldump -> mysql, bez pliku posredniego, bo kilku GB dumpa moze nie
+# byc gdzie zapisac. Lokalne tabele katalogowe sa najpierw czyszczone: przy
+# innodb_file_per_table=ON zwalnia to miejsce jeszcze przed importem.
+# Uwaga: -Mirror kasuje hosty zaindeksowane tylko lokalnie.
+#
 #   powershell -File deploy\catalog-pull.ps1
 #   powershell -File deploy\catalog-pull.ps1 -Hosts "ansell.com,icd.pl"
 #   powershell -File deploy\catalog-pull.ps1 -SkipTokens
 #   powershell -File deploy\catalog-pull.ps1 -Force        # po przerwanym przebiegu
+#   powershell -File deploy\catalog-pull.ps1 -Mirror       # wierna kopia z serwera
 #
 # Polaczenie zdalne: deploy\.env.db-remote (nie commituj).
 # Polaczenie lokalne: backend\.env (musi byc 127.0.0.1 / localhost).
@@ -23,7 +31,8 @@ param(
     [string]$OutFile = "",
     [string]$Hosts = "",
     [switch]$SkipTokens,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Mirror
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,6 +68,20 @@ function Get-LocalScalar([string]$sql) {
     } finally {
         Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue
     }
+}
+
+# Zwraca pojedyncza wartosc z bazy wskazanej plikiem opcji (uzywane dla serwera,
+# zeby nie przepuszczac hasla przez wiersz polecenia).
+function Get-CnfScalar([string]$cnf, [string]$db, [string]$sql) {
+    $out = & $script:mysql @(
+        "--defaults-file=$cnf",
+        "--batch",
+        "--skip-column-names",
+        $db,
+        "-e", $sql
+    )
+    if ($LASTEXITCODE -ne 0) { throw "zapytanie zdalne zakonczylo sie kodem $LASTEXITCODE" }
+    return ($out | Select-Object -First 1)
 }
 
 function Invoke-LocalSql([string]$sql) {
@@ -123,6 +146,74 @@ if (Test-LocalMysqlHost $remoteHost) {
     throw "deploy\.env.db-remote wskazuje lokalny host. To ma byc baza na serwerze."
 }
 
+if ($Mirror) {
+    if ($Hosts -ne "") {
+        throw "-Mirror kopiuje cala tabele; -Hosts da sie uzyc tylko w trybie scalania."
+    }
+
+    # Haslo w wierszu polecenia widac w liscie procesow, a MYSQL_PWD obsluzy tylko
+    # jedna strone potoku - stad dwa tymczasowe pliki opcji, kasowane w finally.
+    $remoteCnf = [System.IO.Path]::GetTempFileName()
+    $localCnf = [System.IO.Path]::GetTempFileName()
+    try {
+        Set-Content -Path $remoteCnf -Encoding ascii -Value @(
+            "[client]", "host=$remoteHost", "port=$remotePort",
+            "user=$remoteUser", "password=$remotePass", "default-character-set=utf8mb4"
+        )
+        Set-Content -Path $localCnf -Encoding ascii -Value @(
+            "[client]", "host=$localHost", "port=$localPort",
+            "user=$localUser", "password=$localPass", "default-character-set=utf8mb4"
+        )
+
+        Write-Host "==> 1/3 czyszcze lokalne tabele katalogowe (zwalnia miejsce przed importem)" -ForegroundColor Cyan
+        $before = Get-LocalScalar "SELECT COUNT(*) FROM ``$localDb``.catalog_pages;"
+        Write-Host "    lokalnie przed: $before stron (zostana zastapione stanem serwera)"
+        Invoke-LocalSql @"
+SET FOREIGN_KEY_CHECKS=0;
+TRUNCATE TABLE ``$localDb``.catalog_page_tokens;
+TRUNCATE TABLE ``$localDb``.catalog_pages;
+SET FOREIGN_KEY_CHECKS=1;
+"@
+
+        Write-Host "==> 2/3 strumien mysqldump -> mysql (bez pliku posredniego)" -ForegroundColor Cyan
+        Write-Host "    catalog_pages + catalog_page_tokens z ID serwera - tokenow nie liczymy"
+        # cmd daje prawdziwy potok bajtowy; potok PowerShella przepuszcza tekst
+        # liniami i przy kilku GB potrafi zdlawic transfer albo przekrecic kodowanie.
+        # --compress: dump SQL to krotkie ciagi i liczby, wiec kompresja protokolu
+        # scina transfer kilkukrotnie. Bez niej 3,4 GB szlo po ~1 MB/s godzinami.
+        $pipe = '"{0}" --defaults-file="{1}" --compress --single-transaction --no-create-info --skip-add-locks --disable-keys --default-character-set=utf8mb4 {2} catalog_pages catalog_page_tokens | "{3}" --defaults-file="{4}" {5}' -f `
+            $mysqldump, $remoteCnf, $remoteDb, $mysql, $localCnf, $localDb
+        & cmd.exe /c $pipe
+        if ($LASTEXITCODE -ne 0) {
+            throw "strumien dump->import zakonczyl sie kodem $LASTEXITCODE. Lokalne tabele katalogowe sa puste - powtorz -Mirror."
+        }
+
+        Write-Host "==> 3/3 kontrola (porownanie z serwerem, nie z kopia)" -ForegroundColor Cyan
+        # Porownujemy ZAWSZE z serwerem. Sama lokalna liczba nic nie mowi o tym,
+        # czy import sie urwal, a osierocone tokeny potrafia byc dziedziczone po
+        # serwerze - wtedy nie sa objawem urwania.
+        $countsSql = "SELECT (SELECT COUNT(*) FROM catalog_pages), (SELECT COUNT(*) FROM catalog_page_tokens), (SELECT COUNT(*) FROM catalog_page_tokens t LEFT JOIN catalog_pages p ON p.id = t.catalog_page_id WHERE p.id IS NULL);"
+        $localRow = (Get-CnfScalar $localCnf $localDb $countsSql) -split "`t"
+        $remoteRow = (Get-CnfScalar $remoteCnf $remoteDb $countsSql) -split "`t"
+        Write-Host "    strony:  lokalnie $($localRow[0]) | serwer $($remoteRow[0])"
+        Write-Host "    tokeny:  lokalnie $($localRow[1]) | serwer $($remoteRow[1])"
+        Write-Host "    tokeny bez strony: lokalnie $($localRow[2]) | serwer $($remoteRow[2])"
+        if ($localRow[0] -ne $remoteRow[0] -or $localRow[1] -ne $remoteRow[1]) {
+            throw "import niepelny - lokalne liczby nie zgadzaja sie z serwerem. Powtorz -Mirror."
+        }
+        if ($localRow[2] -ne $remoteRow[2]) {
+            Write-Host "    UWAGA: inna liczba osieroconych tokenow niz na serwerze - sprawdz import." -ForegroundColor Yellow
+        } elseif ([int]$localRow[2] -gt 0) {
+            Write-Host "    (osierocone tokeny sa takze na serwerze - to stan zrodla, nie urwany import)"
+        }
+    } finally {
+        Remove-Item $remoteCnf, $localCnf -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "OK - lokalny indeks jest wierna kopia serwera ($localDb), potwierdzona licznikami z obu baz." -ForegroundColor Green
+    return
+}
+
 $stagingDb = "${localDb}_catalog_import"
 if ($stagingDb -eq $localDb) {
     throw "Baza przejsciowa nie moze nazywac sie tak samo jak docelowa ($localDb)."
@@ -157,6 +248,7 @@ try {
         "--host=$remoteHost",
         "--port=$remotePort",
         "--user=$remoteUser",
+        "--compress",
         "--single-transaction",
         "--no-create-db",
         "--skip-add-drop-table",
