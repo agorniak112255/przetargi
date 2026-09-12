@@ -61,7 +61,9 @@ class TenderMatchController extends Controller
                 ->whereIn('id', $refreshIds)
                 ->get();
             foreach ($items as $item) {
-                $this->battlecards->forItem($item, true);
+                // zamienniki z katalogu, bez drugiej rundy wyszukiwania AI na każdą pozycję —
+                // po „15/15” okno stało kolejne minuty, aż przeglądarka zerwała żądanie
+                $this->battlecards->forItem($item, true, false);
             }
         }
 

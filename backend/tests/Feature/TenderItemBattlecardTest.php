@@ -4,15 +4,19 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\AiSetting;
 use App\Models\Client;
 use App\Models\Product;
 use App\Models\ProductSubstitute;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
+use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\BattlecardService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
+use Mockery\MockInterface;
 use Tests\TestCase;
 
 final class TenderItemBattlecardTest extends TestCase
@@ -204,6 +208,76 @@ final class TenderItemBattlecardTest extends TestCase
         $item->refresh();
         $this->assertSame($cheap->id, $item->main_product_id);
         $this->assertEquals(5.9, (float) $item->offer_price);
+    }
+
+    public function test_batch_refresh_builds_battlecard_without_second_ai_search(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+        ]);
+        // model jest „gotowy”, ale odświeżenie po dopasowaniu oferty nie może go pytać
+        $this->mock(OpenAiCompatibleClient::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('chat')->never();
+            $mock->shouldReceive('chatJson')->never();
+            $mock->shouldReceive('chatMany')->never();
+        });
+
+        $ours = Product::query()->create([
+            'sku' => 'RNITZ-M',
+            'name' => 'Rękawice nitrylowe ze ściągaczem',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe RNITZ ze ściągaczem',
+            'catalog_price_net' => 3,
+            'purchase_price' => 2,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+        Product::query()->create([
+            'sku' => 'RNIT-B',
+            'name' => 'Rękawice nitrylowe robocze ze ściągaczem, żółte',
+            'manufacturer' => 'ARDON',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem, dzianina bawełniana',
+            'catalog_price_net' => 2.5,
+            'purchase_price' => 1.8,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'enriched_at' => now(),
+        ]);
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/BC/NOAI',
+            'title' => 'Batch BC',
+            'client_id' => Client::query()->create(['name' => 'Klient N'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 0,
+            'last_activity_at' => now(),
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'Rękawice robocze nitrylowe ze ściągaczem',
+            'main_product_id' => $ours->id,
+            'ai_match_percent' => 90,
+            'quantity' => 10,
+            'status' => 'ok',
+        ]);
+
+        $card = app(BattlecardService::class)->forItem($item, true, false);
+
+        $this->assertSame('RNITZ-M', $card['ours']['sku'] ?? null);
+        $this->assertIsArray($item->fresh()->battlecard_substitutes, 'odświeżenie ma zapisać zamienniki');
     }
 
     public function test_match_item_includes_battlecard(): void

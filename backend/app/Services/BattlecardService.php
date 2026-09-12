@@ -42,14 +42,20 @@ final class BattlecardService
      *     highlights: list<string>
      * }
      */
-    public function forItem(TenderItem $item, bool $refresh = false): array
+    /**
+     * $allowAi domyślnie = $refresh (odświeżenie po ręcznym dopasowaniu pyta model
+     * o zamienniki). Dopasowanie całej oferty przekazuje false: druga runda
+     * wyszukiwania AI na każdą pozycję trwała dłużej niż samo dopasowanie, bez
+     * paska postępu, i przeglądarka zrywała żądanie.
+     */
+    public function forItem(TenderItem $item, bool $refresh = false, ?bool $allowAi = null): array
     {
         $item->loadMissing(['mainProduct', 'tender']);
         if (! $refresh && is_array($item->battlecard_substitutes)) {
             return $this->cardFromStored($item);
         }
 
-        $card = $this->buildCard($item, $refresh);
+        $card = $this->buildCard($item, $allowAi ?? $refresh);
         $this->persistSubstitutes($item, $card['substitutes']);
 
         return $card;
