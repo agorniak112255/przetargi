@@ -984,6 +984,24 @@ final class CatalogIndexTest extends TestCase
         $this->assertContains('https://bpbhp.pl/kombinezon-ansell-alphatec-4000-model-121', $urls);
     }
 
+    public function test_finds_ansell_3000_boot_coverall_by_series_model(): void
+    {
+        $this->seedPage('https://bpbhp.pl/kombinezon-ansell-alphatec-3000-model-111');
+        $this->seedPage('https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192');
+
+        $product = new Product([
+            'sku' => 'YE30T-00192-09-G01',
+            'name' => '3000-YE CVRL HOOD PVC BOOT 192-G01.5XL',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $urls = array_column($hits, 'url');
+
+        $this->assertContains('https://optimumbhp.pl/kombinezon-ansell-alphatec-3000-model-192', $urls);
+        $this->assertNotContains('https://bpbhp.pl/kombinezon-ansell-alphatec-3000-model-111', $urls);
+    }
+
     public function test_finds_card_behind_first_candidate_batch(): void
     {
         // 45 stron innego producenta trafia w więcej kodów niż właściwa karta —
