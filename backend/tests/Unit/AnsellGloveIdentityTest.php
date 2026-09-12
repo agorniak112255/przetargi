@@ -88,6 +88,44 @@ final class AnsellGloveIdentityTest extends TestCase
         $this->assertFalse($identity->pageAgreesWithBrandAndName($url, $url, $product));
     }
 
+    public function test_reads_model_of_a_line_missing_from_the_map(): void
+    {
+        // Model wychodził tylko dla ośmiu znanych linii, więc EDGE, DERMASHIELD, FiberTuf
+        // i AccuTech szły w zapytanie sklejone („EDGE 48128”) i nie trafiały w kartę,
+        // choć karta była w indeksie. Potwierdzeniem jest teraz sam kod cennika.
+        $identity = app(ProductSearchIdentity::class);
+
+        $this->assertSame('48-128', $identity->ansellGloveModel($this->glove('48128110', 'EDGE 48128 Size 11.0')));
+        $this->assertSame('73-721', $identity->ansellGloveModel($this->glove('73721090', 'DERMASHIELD 73721 SIZE 9,0')));
+        $this->assertSame('76-501', $identity->ansellGloveModel($this->glove('76501100', 'FiberTuf 76501 Size 10,0')));
+        $this->assertSame('91-225', $identity->ansellGloveModel($this->glove('91225090', 'AccuTech 91225 Size 9.0')));
+        // cennik gubi wiodące zero w SKU
+        $this->assertSame('09-430', $identity->ansellGloveModel($this->glove('9430100', 'AlphaTec 09430 Size 10,0')));
+    }
+
+    public function test_number_in_the_name_alone_is_not_a_model(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+
+        // kod z nazwy musi być początkiem SKU — inaczej to przypadkowa liczba
+        $this->assertNull($identity->ansellGloveModel($this->glove('99999999', 'EDGE 48128 Size 11.0')));
+        // cudza marka nie dostaje modelu w konwencji Ansella
+        $this->assertNull($identity->ansellGloveModel(new Product([
+            'sku' => '48128110',
+            'name' => 'EDGE 48128 Size 11.0',
+            'manufacturer' => 'uvex',
+        ])));
+    }
+
+    public function test_builds_official_card_url_for_a_line_missing_from_the_map(): void
+    {
+        $urls = app(ProductSearchIdentity::class)->ansellOfficialProductUrls(
+            $this->glove('48128110', 'EDGE 48128 Size 11.0')
+        );
+
+        $this->assertContains('https://www.ansell.com/pl/pl/products/edge-48-128', $urls);
+    }
+
     private function glove(string $sku, string $name): Product
     {
         return new Product(['sku' => $sku, 'name' => $name, 'manufacturer' => 'Ansell']);

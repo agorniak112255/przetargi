@@ -799,6 +799,36 @@ final class ProductSearchIdentity
             return $m[1].'-'.$m[2];
         }
 
+        return $this->nameModelConfirmedByCatalogSku($product);
+    }
+
+    /**
+     * Kod modelu z nazwy potwierdzony kodem cennika: „EDGE 48128 Size 11.0” + SKU 48128110
+     * → 48-128. Cennik skleja model z rozmiarem, więc SKU zaczyna się od kodu modelu i sam
+     * za niego ręczy — nowa linia działa bez dopisywania jej nazwy do mapy. Wcześniej model
+     * wychodził tylko dla ośmiu znanych linii, a EDGE, DERMASHIELD, FiberTuf i AccuTech szły
+     * w zapytanie sklejone („EDGE 48128”) i nie trafiały w kartę, choć karta była w indeksie.
+     */
+    private function nameModelConfirmedByCatalogSku(Product $product): ?string
+    {
+        $skuDigits = preg_replace('/\D+/u', '', (string) $product->sku) ?? '';
+        if (mb_strlen($skuDigits) < 5) {
+            return null;
+        }
+        $name = mb_strtoupper(trim((string) $product->name));
+        if (preg_match_all('/(?<!\d)(\d{2})[\s\-]?(\d{3})(?!\d)/u', $name, $hits, PREG_SET_ORDER) < 1) {
+            return null;
+        }
+        foreach ($hits as $hit) {
+            $code = $hit[1].$hit[2];
+            // „AlphaTec 09430” przy SKU 9430100 — cennik gubi wiodące zero
+            foreach ([$code, ltrim($code, '0')] as $variant) {
+                if ($variant !== '' && str_starts_with($skuDigits, $variant)) {
+                    return $hit[1].'-'.$hit[2];
+                }
+            }
+        }
+
         return null;
     }
 
@@ -819,6 +849,17 @@ final class ProductSearchIdentity
             if (str_contains($name, $needle)) {
                 return $slug;
             }
+        }
+
+        // Linia spoza mapy („EDGE 48128 Size 11.0”): nazwa cennika zaczyna się od linii,
+        // a kod modelu potwierdza SKU — to wystarczy na slug adresu karty. Zgadujemy tylko
+        // dla Ansella, żeby kod modelu nie zaczął powstawać dla cudzych wyrobów.
+        if (! str_contains(mb_strtolower($this->shortBrand((string) $product->manufacturer)), 'ansell')) {
+            return null;
+        }
+        if ($this->nameModelConfirmedByCatalogSku($product) !== null
+            && preg_match('/^([A-Za-z][A-Za-z\-]{2,19})(?=\s)/u', trim((string) $product->name), $m) === 1) {
+            return mb_strtolower($m[1]);
         }
 
         return null;
