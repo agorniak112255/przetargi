@@ -110,6 +110,12 @@ final class ProductSearchIdentity
             $out[] = $alias;
         }
         foreach ($this->shopIdentityPhrases($product) as $phrase) {
+            // „LENGTH”, „BCKL”, „150CM” z „GREY PES BLT & YKK BCKL LENGTH 150CM” — każde
+            // z osobna potwierdzało przez str_contains kartę sznurowadeł „150cm length”.
+            // Słaba fraza i sam wymiar nie mogą być tokenem tożsamości.
+            if ($this->isWeakShopIndexPhrase($phrase, $product) || $this->isBareMeasurement($phrase)) {
+                continue;
+            }
             $out[] = mb_strtolower($phrase);
             $compact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($phrase)) ?? '';
             if ($compact !== '' && $compact !== mb_strtolower($phrase)) {
@@ -119,11 +125,17 @@ final class ProductSearchIdentity
 
         $out = array_values(array_unique(array_filter(
             $out,
-            static fn (string $t): bool => $t !== '' && mb_strlen($t) >= 3
+            fn (string $t): bool => $t !== '' && mb_strlen($t) >= 3 && ! $this->isBareMeasurement($t)
         )));
 
         // za krótkie same „100” itd. — zostaw tylko gdy nie ma lepszych
         return $out !== [] ? $out : array_values(array_filter([mb_strtolower($sku), mb_strtolower($name)]));
+    }
+
+    /** „150cm”, „85 cm”, „500ml” — wymiar z jednostką nie identyfikuje produktu. */
+    public function isBareMeasurement(string $token): bool
+    {
+        return preg_match('/^\d+(?:[.,]\d+)?\s?(?:cm|mm|m|km|kg|g|mg|l|ml|szt|pcs|pair|pairs|mb)$/iu', trim($token)) === 1;
     }
 
     /**
@@ -2664,7 +2676,9 @@ final class ProductSearchIdentity
             if (mb_strlen($phrase) < 4 || ! $this->tokenInHay($hay, $hayCompact, $phrase)) {
                 continue;
             }
-            if (! $this->isStrongShopPhrase($phrase)) {
+            // „150cm” ma cyfre i litere jak model C500, ale to wymiar — sam potwierdzal
+            // pasowi 150 cm karte sznurowadel 150 cm
+            if (! $this->isStrongShopPhrase($phrase) || $this->isBareMeasurement($phrase)) {
                 continue;
             }
             $words = preg_split('/[\s\-]+/u', $phrase) ?: [];

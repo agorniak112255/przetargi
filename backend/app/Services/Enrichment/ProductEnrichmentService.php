@@ -50,6 +50,9 @@ final class ProductEnrichmentService
      */
     private const STALE_RUNNING_AFTER_MINUTES = 15;
 
+    /** Tyle roznych norm wyciagnietych z surowego tekstu strony to slowniczek sklepu, nie karta. */
+    private const NORMS_GLOSSARY_THRESHOLD = 5;
+
     private const GENERIC_NAME_TOKENS = [
         'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
         'ubranie', 'odziez', 'odzież', 'buty', 'obuwie', 'trzewiki', 'polbuty', 'półbuty', 'sandaly',
@@ -60,6 +63,9 @@ final class ProductEnrichmentService
         'rozmiar', 'komplet', 'zestaw', 'para', 'sztuka', 'sztuk', 'model', 'seria', 'linia', 'wersja',
         'guma', 'gumowe', 'skora', 'skóra', 'skorzane', 'skórzane', 'lateks', 'nitryl', 'bawelna',
         'bawełna', 'poliester', 'pary',
+        // cennik Ansella pisze po angielsku: „GREY PES BLT & YKK BCKL LENGTH 150CM”
+        'length', 'width', 'size', 'pair', 'pairs', 'pack', 'grey', 'gray', 'black', 'white',
+        'blue', 'green', 'yellow', 'orange', 'red',
     ];
 
     public function __construct(
@@ -2409,7 +2415,12 @@ final class ProductEnrichmentService
 
         $norms = $this->stringList($extracted['norms'] ?? null);
         if ($norms === []) {
-            $extracted['norms'] = $this->extractNormsFromText($hay);
+            // Sklep obuwniczy trzyma na kazdej karcie slowniczek klas (S1, S3, EN 20345,
+            // EN 13832…) — z takiej strony pas 150 cm dostal siedem norm obuwniczych.
+            // Kilka roznych norm naraz z surowego tekstu to lista standardow sklepu,
+            // nie normy tego produktu; bez modelu nie umiemy ich rozdzielic.
+            $fromText = $this->extractNormsFromText($hay);
+            $extracted['norms'] = count($fromText) >= self::NORMS_GLOSSARY_THRESHOLD ? [] : $fromText;
         }
 
         $materials = $this->stringList($extracted['materials'] ?? null);
@@ -3099,6 +3110,11 @@ final class ProductEnrichmentService
         foreach (preg_split('/[\s\-®™\/_,.()]+/u', mb_strtolower((string) $product->name)) ?: [] as $token) {
             $token = trim($token);
             if ($token === '' || in_array($token, self::GENERIC_NAME_TOKENS, true)) {
+                continue;
+            }
+            // „150cm” wyglada jak kod (cyfry + litery), a jest wymiarem — pas 150 cm
+            // dostal przez to karte sznurowadel 150 cm i jej normy obuwnicze
+            if ($this->identity->isBareMeasurement($token)) {
                 continue;
             }
             if (preg_match('/^\d{2,}$/u', $token) === 1

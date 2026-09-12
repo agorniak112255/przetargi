@@ -2184,6 +2184,44 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    public function test_bare_measurement_never_confirms_a_card(): void
+    {
+        $id = new ProductSearchIdentity;
+        // pas 150 cm dostal na produkcji karte sznurowadel 150 cm — jedyne, co je laczylo,
+        // to wymiar „150cm” i slowo „length”
+        $belt = new Product([
+            'sku' => 'AC01P-00014-00',
+            'name' => 'GREY PES BLT & YKK BCKL LENGTH 150CM',
+            'manufacturer' => 'Ansell',
+        ]);
+        $laces = 'https://www.thesafetysupplycompany.co.uk/p/4341823/'
+            .'safety-flame-retardant-laces---150cm-length---one-pair---lc-w1650012.html'
+            .' Safety Flame Retardant Laces - 150cm Length - One Pair - [LC-W1650012]';
+        $hay = mb_strtolower($laces);
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+
+        foreach (['150cm', '85 cm', '500ml', '2,5 kg', '12 pairs'] as $measurement) {
+            $this->assertTrue($id->isBareMeasurement($measurement), $measurement);
+        }
+        foreach (['c500', 'nb27', '11-840', 'ac01p', '96ks'] as $code) {
+            $this->assertFalse($id->isBareMeasurement($code), $code);
+        }
+
+        $tokens = $id->matchTokens($belt);
+        $this->assertNotContains('length', $tokens);
+        $this->assertNotContains('150cm', $tokens);
+        $this->assertNotContains('bckl', $tokens);
+
+        $this->assertFalse($id->hayHasShopIdentity($hay, $hayCompact, $belt));
+        $this->assertFalse($id->hayMentionsProduct($hay, $belt));
+
+        // karta z kodem pasa w adresie nadal przechodzi
+        $this->assertTrue($id->hayMentionsProduct(
+            mb_strtolower('https://example-shop.pl/pas-ansell-grey-pes-belt-ac01p-00014-00.html'),
+            $belt
+        ));
+    }
+
     public function test_ansell_part_family_page_matches_expanded_part_type_in_slug(): void
     {
         $id = new ProductSearchIdentity;

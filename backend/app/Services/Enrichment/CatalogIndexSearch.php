@@ -577,6 +577,10 @@ final class CatalogIndexSearch
             if (mb_strlen($compact) < 5 || mb_strlen($compact) > 64) {
                 continue;
             }
+            // „150cm” to token kazdej maty, sznurowki i pasa — nie odroznia niczego
+            if ($this->identity->isBareMeasurement($compact)) {
+                continue;
+            }
             // marka i jej linie (Ansell, AlphaTec) stoją w adresie każdej karty producenta
             if ($brand !== '' && $this->identity->hayHasBrand($compact, $product)) {
                 continue;

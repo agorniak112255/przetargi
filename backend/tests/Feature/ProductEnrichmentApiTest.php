@@ -1129,6 +1129,39 @@ final class ProductEnrichmentApiTest extends TestCase
         $search->shouldHaveReceived('searchWebWithoutLocalIndex');
     }
 
+    public function test_measurement_is_not_a_code_and_glossary_norms_are_dropped(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $belt = $this->makeProduct([
+            'sku' => 'AC01P-00014-00',
+            'name' => 'GREY PES BLT & YKK BCKL LENGTH 150CM',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        // „150cm” wygladalo jak kod (cyfry + litery) i wazylo 2 — razem z „length”
+        // wystarczalo, zeby tekst o sznurowkach „wymienial” pas
+        $tokens = new ReflectionMethod($service, 'discriminativeNameTokens');
+        $tokens->setAccessible(true);
+        $weights = $tokens->invoke($service, $belt);
+        $this->assertArrayNotHasKey('150cm', $weights);
+        $this->assertArrayNotHasKey('length', $weights);
+
+        // slowniczek klas obuwia sklepu — siedem norm z surowego tekstu to lista
+        // standardow sklepu, nie normy produktu
+        $enrich = new ReflectionMethod($service, 'enrichStructuredFieldsFromPages');
+        $enrich->setAccessible(true);
+        $glossary = 'S1 - All SB + Antistatic EN 20345 Footwear Properties S1, EN 20347 Occupational Footwear O1,'
+            .' EN 13832 Chemical Protective Footwear, EN 13832-2 Limited Contact, EN 13832-3 Prolonged Contact,'
+            .' EN 17249 Chainsaw Cut Resistant Footwear, EN 15090 Firefighter Footwear';
+        $out = $enrich->invoke($service, ['norms' => []], [['url' => 'https://shop.example/x', 'text' => $glossary]]);
+        $this->assertSame([], $out['norms']);
+
+        // dwie normy z tresci karty zostaja
+        $card = 'Rekawice antyprzecieciowe, EN 388:2016 4X43C, EN 407 X1XXXX.';
+        $out = $enrich->invoke($service, ['norms' => []], [['url' => 'https://shop.example/y', 'text' => $card]]);
+        $this->assertCount(2, $out['norms']);
+    }
+
     public function test_open_web_keeps_exact_name_hits_next_to_sibling_code_hits(): void
     {
         // Adresy z przebiegu AC01P-00022-00-N0C na produkcji: hahn-kolb niesie kod
