@@ -149,6 +149,10 @@ HTML;
         $this->assertTrue(ProductPageFetcher::looksLikeCompanyImprint(
             'INFIELD Safety GmbH Nordstraße 10a Telefon: +49 212 23234 0'
         ));
+        $this->assertTrue(ProductPageFetcher::looksLikeCompanyImprint(
+            'Prowadzenie świata ku bezpieczniejszej przyszłości. 1893 Dunlop UK '
+            .'zakłada fabrykę opon. Do Not Sell My Personal Information'
+        ));
         $this->assertStringNotContainsString('Nordstraße', $text);
         $this->assertStringNotContainsString('Telefax', $text);
     }

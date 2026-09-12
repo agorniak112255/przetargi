@@ -159,6 +159,32 @@ final class AnsellOfficialCatalogTest extends TestCase
         $this->assertSame($us, $hits[0]['url'] ?? null);
     }
 
+    public function test_finds_alphatec_glove_link_and_skips_about_us(): void
+    {
+        $url = 'https://www.ansell.com/pl/pl/products/alphatec-glove-link';
+        Http::fake([
+            'https://r.jina.ai/'.$url => Http::response(
+                "# AlphaTec Glove Link\n\n"
+                .'AlphaTec Glove Link 070 connects chemical protective gloves to the suit. '
+                .str_repeat('opis ', 40),
+                200
+            ),
+            '*' => Http::response(
+                "# About us\n\nProwadzenie świata ku bezpieczniejszej przyszłości. 1893 Dunlop UK. "
+                .'Do Not Sell My Personal Information',
+                200
+            ),
+        ]);
+
+        $hits = app(AnsellOfficialCatalog::class)->find(new Product([
+            'sku' => 'AC01P-00070-00',
+            'name' => 'AlphaTec Glove Link 070',
+            'manufacturer' => 'Ansell',
+        ]));
+
+        $this->assertSame($url, $hits[0]['url'] ?? null);
+    }
+
     public function test_finds_kleenguard_g10_comfort_plus_on_labpro(): void
     {
         $url = 'https://labproinc.com/products/kg-g10-comfort-plus-ntrl-glv-lt-blue-xl-54189';

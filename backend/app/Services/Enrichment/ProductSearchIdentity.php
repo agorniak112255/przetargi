@@ -566,14 +566,15 @@ final class ProductSearchIdentity
         }
 
         if (preg_match('/^([A-Z]{2})(\d{2})[A-Z]?-0*(\d{3,5})(?:-\d{2})?(?:-G\d{2})?$/', $sku, $m) === 1) {
-            $bits['color'] = $m[1];
-            $bits['prefix'] = explode('-', $sku)[0] ?? null;
             $decade = (int) $m[2];
+            // AC01P-00070-00 to część / akcesorium, nie kolor AC + model 70 kombinezonu.
             if ($decade >= 15 && $decade <= 59) {
+                $bits['color'] = $m[1];
+                $bits['prefix'] = explode('-', $sku)[0] ?? null;
                 $bits['series'] = (string) ($decade * 100);
+                $model = ltrim($m[3], '0');
+                $bits['model'] = $model !== '' ? $model : null;
             }
-            $model = ltrim($m[3], '0');
-            $bits['model'] = $model !== '' ? $model : null;
         }
         if (preg_match('/\b([1-6]\d{3})-([A-Z]{2})\b/', $name, $m) === 1) {
             $bits['series'] ??= $m[1];
@@ -743,6 +744,19 @@ final class ProductSearchIdentity
         return array_values(array_unique(array_merge($head, $tail)));
     }
 
+    /** AC01P-00070-00 — część z cennika, nie „Ansell -AC 00070”. */
+    private function ansellPartShopPhrase(Product $product): string
+    {
+        $sku = strtoupper(trim((string) $product->sku));
+        if (preg_match('/^[A-Z]{2}(\d{2})[A-Z]?-\d{5}(?:-\d{2})?(?:-[A-Z0-9]+)?$/', $sku, $m) !== 1
+            || (int) $m[1] >= 15) {
+            return '';
+        }
+        $name = trim((string) $product->name);
+
+        return $name !== '' && mb_strlen($name) >= 8 ? $name : $sku;
+    }
+
     /** AlphaTec 3000 192 — nie G02 ani magazynowe YE30T-00192-09-G01. */
     public function ansellSeriesModelPhrase(Product $product): string
     {
@@ -888,7 +902,10 @@ final class ProductSearchIdentity
         $series = $bits['series'];
         $model = $bits['model'];
         if ($series === null || $model === null) {
-            return $this->ansellGloveOfficialUrls($product);
+            return array_values(array_unique(array_merge(
+                $this->ansellNamedProductOfficialUrls($product),
+                $this->ansellGloveOfficialUrls($product),
+            )));
         }
         $series = mb_strtolower($series);
         $model = mb_strtolower($model);
@@ -993,6 +1010,33 @@ final class ProductSearchIdentity
     /**
      * @return list<string>
      */
+    /**
+     * AlphaTec Glove Link 070 — nazwa z cennika, nie seria 1500/4000.
+     *
+     * @return list<string>
+     */
+    private function ansellNamedProductOfficialUrls(Product $product): array
+    {
+        if ($this->ansellCatalogBits($product)['series'] !== null
+            || $this->ansellGloveModel($product) !== null) {
+            return [];
+        }
+        $name = trim((string) $product->name);
+        if (preg_match('/^alphatec\s+((?:[a-z]{3,}(?:\s+[a-z]{3,}){0,3}))(?:\s+\d{2,4})?$/iu', $name, $m) !== 1) {
+            return [];
+        }
+        $rest = trim((string) preg_replace('/[^a-z0-9]+/iu', '-', mb_strtolower($m[1])), '-');
+        if ($rest === '' || mb_strlen($rest) < 4) {
+            return [];
+        }
+        $out = [];
+        foreach (self::ANSELL_CARD_LOCALES as $locale) {
+            $out[] = 'https://www.ansell.com/'.$locale.'/products/alphatec-'.$rest;
+        }
+
+        return $out;
+    }
+
     private function ansellGloveOfficialUrls(Product $product): array
     {
         $model = $this->ansellGloveModel($product);
@@ -2213,6 +2257,9 @@ final class ProductSearchIdentity
                 return true;
             }
         }
+        if (preg_match('#/(?:about-us|about|o-nas|o-firmie|contact-us|press-releases)(/|$)#', $path) === 1) {
+            return true;
+        }
 
         return false;
     }
@@ -2997,6 +3044,10 @@ final class ProductSearchIdentity
         if ($ansellPhrase !== '') {
             $out[] = $ansellPhrase;
         }
+        $part = $this->ansellPartShopPhrase($product);
+        if ($part !== '') {
+            $out[] = $part;
+        }
         $kleen = $this->kleenGuardShopPhrase($product);
         if ($kleen !== '') {
             $out[] = $kleen;
@@ -3360,6 +3411,10 @@ final class ProductSearchIdentity
         $ansellPhrase = $this->ansellSeriesModelPhrase($product);
         if ($ansellPhrase !== '') {
             return $ansellPhrase;
+        }
+        $part = $this->ansellPartShopPhrase($product);
+        if ($part !== '') {
+            return $part;
         }
         $kleen = $this->kleenGuardShopPhrase($product);
         if ($kleen !== '') {

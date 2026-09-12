@@ -1246,8 +1246,12 @@ final class ProductPageFetcher
             || str_contains($low, 'so finden sie uns')
             || str_contains($low, 'impressum')
             || str_contains($low, 'herausgeber');
+        $about = (str_contains($low, 'do not sell my personal information')
+                || str_contains($low, 'prowadzenie świata ku bezpieczniejszej')
+                || str_contains($low, 'leading the world to a safer future'))
+            && (str_contains($low, '1893') || str_contains($low, 'dunlop'));
 
-        return ($company && $street) || ($company && $phone) || ($street && $phone) || ($company && $maps);
+        return $about || ($company && $street) || ($company && $phone) || ($street && $phone) || ($company && $maps);
     }
 
     /** CSS zmiennych motywu / JS widgetu wklejony w „opis”. */

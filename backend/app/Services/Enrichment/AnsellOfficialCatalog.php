@@ -40,13 +40,17 @@ final class AnsellOfficialCatalog
      */
     private function hitIfOurCard(string $url, Product $product): ?array
     {
+        if ($this->identity->looksLikeNonProductCardUrl($url)) {
+            return null;
+        }
         $page = $this->reader->fetch($url);
         if ($page === null) {
             return null;
         }
         $text = $page['text'];
         $head = mb_strtolower(mb_substr($text, 0, 400));
-        if (str_contains($head, 'product not found') || str_contains($head, 'nie znaleziono produktu')) {
+        if (str_contains($head, 'product not found') || str_contains($head, 'nie znaleziono produktu')
+            || ProductPageFetcher::looksLikeCompanyImprint($text)) {
             return null;
         }
         $title = $this->titleFrom($text, $url);

@@ -182,6 +182,40 @@ final class AnsellGloveIdentityTest extends TestCase
         $this->assertNotContains('111', $identity->ansellStyleCodes($suit));
     }
 
+    public function test_ac01p_part_uses_name_not_fake_garment_model(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $link = $this->glove('AC01P-00070-00', 'AlphaTec Glove Link 070');
+        $belt = $this->glove('AC01P-00014-00', 'GREY PES BLT & YKK BCKL LENGTH 150CM');
+        $pass = $this->glove('AC01P-00022-00-N0C', 'AVNT PASSTHRU WHSTL & RECTUS 96KS');
+        $about = 'https://www.ansell.com/pl/pl/about-us';
+
+        $this->assertSame([
+            'color' => null,
+            'series' => null,
+            'model' => null,
+            'prefix' => null,
+        ], $identity->ansellCatalogBits($link));
+        $this->assertSame('AlphaTec Glove Link 070', $identity->firstStrongShopPhrase($link));
+        $this->assertSame('GREY PES BLT & YKK BCKL LENGTH 150CM', $identity->firstStrongShopPhrase($belt));
+        $this->assertSame('AVNT PASSTHRU WHSTL & RECTUS 96KS', $identity->firstStrongShopPhrase($pass));
+        $this->assertStringNotContainsString('Ansell -AC', $identity->firstStrongShopPhrase($link));
+        $joined = implode(' | ', $identity->searchQueries($link, 'manufacturer'));
+        $this->assertStringContainsString('AlphaTec Glove Link 070', $joined);
+        $this->assertStringNotContainsString('Ansell -AC 00070', $joined);
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-glove-link',
+            $identity->ansellOfficialProductUrls($link)
+        );
+        $this->assertTrue($identity->looksLikeNonProductCardUrl($about));
+        $this->assertFalse($identity->isConfirmedProductCard(
+            $about,
+            'About us',
+            'Prowadzenie świata ku bezpieczniejszej przyszłości. 1893 Dunlop UK. AlphaTec gloves.',
+            $link
+        ));
+    }
+
     public function test_klngd_price_name_is_searched_as_kleenguard_model(): void
     {
         $identity = app(ProductSearchIdentity::class);
