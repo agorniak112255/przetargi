@@ -1113,6 +1113,14 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertFalse($indexed->invoke($hybrid, 'pusty-sklep.pl'));
         $this->assertFalse($indexed->invoke($hybrid, ''));
 
+        // log przebiegu musi umiec nazwac sklepy, o ktore nie pytalismy
+        $among = new ReflectionMethod($hybrid, 'indexedHostsAmong');
+        $among->setAccessible(true);
+        $this->assertSame(
+            ['icd.pl', 'bhp-gabi.pl'],
+            $among->invoke($hybrid, ['www.icd.pl', 'BHP-Gabi.pl', 'pusty-sklep.pl', 'nieznany-sklep.pl'])
+        );
+
         // czyszczenie cache musi widziec pelna drabinke, tez wyciete site:
         $full = implode(' | ', $build->invoke($hybrid, $product, $queries, false));
         $this->assertStringContainsString('site:icd.pl', $full);

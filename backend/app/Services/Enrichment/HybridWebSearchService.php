@@ -1131,6 +1131,22 @@ class HybridWebSearchService
         if ($this->localSearchOnly) {
             return [];
         }
+        $exceptHosts = $this->nonManufacturerHosts($product, $this->hostsFromUrls($exceptUrls));
+        // Log ma mówić, co naprawdę się stało. Gdy wszystkie sklepy z mapy mamy
+        // zaindeksowane u siebie, nie idzie stąd ani jedno zapytanie i zapowiedź
+        // „potem duże sklepy” byłaby nieprawdą.
+        if ($this->fallbackSiteQueries($product, $exceptHosts) === []) {
+            $skipped = $this->indexedHostsAmong($this->mappedRetailerHosts($product, $exceptHosts));
+            $this->attemptLog()->add(
+                'search',
+                $skipped === []
+                    ? 'brak sklepów do sprawdzenia poza indeksem'
+                    : 'sklepy z mapy mamy w indeksie lokalnym ('.implode(', ', array_slice($skipped, 0, 4))
+                        .(count($skipped) > 4 ? ', …' : '').') — wyszukiwarki nie pytamy'
+            );
+
+            return [];
+        }
         $this->attemptLog()->add('search', 'producent /products, potem duże sklepy');
         $profile = $this->settings->tavilySearchProfile();
         $errors = [];
@@ -1140,10 +1156,29 @@ class HybridWebSearchService
             $profile->mode,
             'industry',
             $errors,
-            $this->nonManufacturerHosts($product, $this->hostsFromUrls($exceptUrls))
+            $exceptHosts
         );
 
         return $found['results'];
+    }
+
+    /**
+     * Które z tych hostów mamy u siebie — do komunikatu w logu przebiegu.
+     *
+     * @param  list<string>  $hosts
+     * @return list<string>
+     */
+    private function indexedHostsAmong(array $hosts): array
+    {
+        $out = [];
+        foreach ($hosts as $host) {
+            $bare = preg_replace('/^www\./', '', mb_strtolower(trim($host))) ?? '';
+            if ($bare !== '' && $this->hostIsIndexedLocally($bare)) {
+                $out[$bare] = true;
+            }
+        }
+
+        return array_keys($out);
     }
 
     /**
