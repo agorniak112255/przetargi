@@ -9,6 +9,39 @@ use Tests\TestCase;
 
 final class ProductDescriptionTextTest extends TestCase
 {
+    /** Batch #312: tytuł strony sklepu powtórzony jako opis to zrzut strony, nie opis produktu. */
+    public function test_shop_page_title_repeated_as_description_is_a_page_dump(): void
+    {
+        $this->assertTrue(ProductDescriptionText::looksLikeForeignOrPartsTableDump(
+            "Kurtka polar CANIS CXS 4ENVI SOLIS szaro-czarna - BLUZY\nKurtka polar CANIS CXS 4ENVI SOLIS szaro-czarna\nKurtka polar CANIS CXS 4ENVI SOLIS szaro-czarna"
+        ));
+        $this->assertTrue(ProductDescriptionText::looksLikeForeignOrPartsTableDump(
+            "Spodnie CANIS STRETCH do pasa ciemnoniebiesko-czarne\nSpodnie CANIS STRETCH do pasa ciemnoniebiesko-czarne - Sklep Market BHP\nSpodnie CANIS STRETCH do pasa [1020-027-441-00]"
+        ));
+        $this->assertTrue(ProductDescriptionText::looksLikeForeignOrPartsTableDump(
+            "Spodnie Pas Canis Cxs Orion Teodor 1020 004 710 00 Ocieplana BHP\nSPODNIE PAS CANIS CXS ORION TEODOR 1020 004 710 00 OCIEPLANA BHP"
+        ));
+        $this->assertTrue(ProductDescriptionText::looksLikeForeignOrPartsTableDump(
+            "Centrum Elektronarzedzi - elektronarzędzia, narzędzia ręczne, spawalnicze, pneumatyczne, metalowe, BHP, śruby - Milwaukee, DeWALT, Makita...\n\nPodaj e-mail"
+        ));
+
+        $this->assertFalse(ProductDescriptionText::looksLikeForeignOrPartsTableDump(
+            "Kurtka robocza CXS SOLIS FLEX\nKurtka robocza CXS SOLIS FLEX to lekka kurtka z tkaniny softshell 65% poliester, 35% bawełna, z kieszeniami na zamek i odblaskowymi lamówkami.\n\nZastosowanie: budownictwo, magazyny, prace na zewnątrz."
+        ), 'nagłówek z nazwą nad akapitem to zwykły opis');
+        $this->assertFalse(ProductDescriptionText::looksLikeForeignOrPartsTableDump(
+            "Półmaska filtrująca 3M 9322+ FFP2 z zaworem wydechowym - chroni przed pyłami i aerozolami.\nNorma EN 149:2001+A1:2009."
+        ), 'myślnik w pierwszym zdaniu to nie tytuł strony');
+        $this->assertFalse(ProductDescriptionText::looksLikeForeignOrPartsTableDump(
+            'Kurtka robocza CXS SOLIS FLEX
+Kurtka robocza CXS SOLIS FLEX - lekka kurtka softshell z odpinanym kapturem i odblaskami.
+Materiał: 94% poliester, 6% elastan.'
+        ), 'nagłówek i zdanie „Nazwa - opis” to zwykły opis');
+        $this->assertTrue(ProductDescriptionText::looksLikeForeignOrPartsTableDump(
+            'Mata gumowa Bubblemat Czarny 0.9m x 1.2m (14mm) COBA (BF010702) - b2b.rkmpro.tools
+Mata gumowa Bubblemat Czarny 0.9m x 1.2m (14mm) COBA (BF010702)'
+        ), 'tytuł z domeną sklepu to też zrzut strony');
+    }
+
     public function test_strips_html_and_css_wall(): void
     {
         $raw = '<div class="product-description" style="white-space:nowrap;width:2400px">'
@@ -41,7 +74,7 @@ final class ProductDescriptionTextTest extends TestCase
     public function test_keeps_argon_card_and_strips_shop_chrome(): void
     {
         $plain = ProductDescriptionText::plain(
-            "ARTRABiałe półbuty robocze S2. zoom_out_map chevron_left −20% "
+            'ARTRABiałe półbuty robocze S2. zoom_out_map chevron_left −20% '
             ."Czas wysyłki od 5 do 8 dni roboczych. Indywidualna wycena dla firm.\n\n"
             ."PÓŁBUTY ROBOCZE ARGON 8229 1010 S2 ARTRA to obuwie bezpieczne klasy S2.\n\n"
             ."Specyfikacja:\n"
@@ -49,7 +82,7 @@ final class ProductDescriptionTextTest extends TestCase
             ."- BRAK WKŁADKI ANTYPRZEBICIOWEJ\n\n"
             ."Cechy produktu:\n- Cholewka PURYA SKINYUM\n\n"
             ."Piktogramy\nP HRO — legenda wszystkich klas\n"
-            ."BUTY ROBOCZE PÓŁBUTY ARICA 6207 1010 S2 227,19 zł"
+            .'BUTY ROBOCZE PÓŁBUTY ARICA 6207 1010 S2 227,19 zł'
         );
 
         $this->assertStringContainsString('ARTRA Białe', $plain);
@@ -65,14 +98,14 @@ final class ProductDescriptionTextTest extends TestCase
     public function test_strips_shopify_size_price_dump_and_keeps_bhp_facts(): void
     {
         $raw = "ARMEN 9003 6660 S1 ESD\n"
-            ."EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 złEU 39 - 309 zł"
+            .'EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 złEU 39 - 309 zł'
             ."EU 40 - 309 złEU 41 - 309 złEU 42 - 309 zł Wariant\n"
-            ."Konstrukcja obuwia ARELAX zapewnia przestrzeń dla palców. "
+            .'Konstrukcja obuwia ARELAX zapewnia przestrzeń dla palców. '
             ."Podeszwa LYFTOR PU.2D z podnoskiem LIBERYUM.\n"
             ."Rozmiar EU Długość stopy --- --- **35** 21,8 **36** 22,4\n"
             ."### Jak dobrać rozmiar?\n"
             ."Jeśli obuwie nie będzie Państwu odpowiadać, mogą je Państwo zwrócić w ciągu 30 dni od otrzymania.\n"
-            ."Natychmiast do wysyłki • Darmowa dostawa";
+            .'Natychmiast do wysyłki • Darmowa dostawa';
 
         $plain = ProductDescriptionText::plain($raw);
 
@@ -133,7 +166,7 @@ final class ProductDescriptionTextTest extends TestCase
             ."Overall Width (Imperial)4 in, 12 in, 24 in, 36 in\n"
             ."Total Tape Thickness without Liner (Metric)424.2 mm\n\n"
             .'Suitable for both indoor and outdoor use, our thick backing and specially formulated '
-            ."rubber adhesive provide a strong bond and clean removal to safeguard various surfaces."
+            .'rubber adhesive provide a strong bond and clean removal to safeguard various surfaces.'
         );
 
         $this->assertStringNotContainsString('Adhesion Strength', $plain);

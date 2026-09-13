@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\Product;
 use App\Models\ProductEnrichmentCache;
+use App\Models\ProductImage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -52,7 +53,7 @@ final class ResetForeignDescriptionsCommandTest extends TestCase
             'source_urls' => ['https://example.com/joki'],
         ]);
 
-        $this->artisan('products:reset-foreign-descriptions', ['--apply' => true])
+        $this->artisan('products:reset-foreign-descriptions', ['--apply' => true, '--backup' => $this->backupPath()])
             ->expectsOutputToContain('Wyczyszczono 1 kart')
             ->assertSuccessful();
 
@@ -94,7 +95,7 @@ final class ResetForeignDescriptionsCommandTest extends TestCase
         $this->artisan('products:audit-descriptions', ['--only' => 'page_dump'])
             ->expectsOutputToContain('DS0106')
             ->assertSuccessful();
-        $this->artisan('products:reset-foreign-descriptions', ['--apply' => true])
+        $this->artisan('products:reset-foreign-descriptions', ['--apply' => true, '--backup' => $this->backupPath()])
             ->expectsOutputToContain('Wyczyszczono 1 kart')
             ->assertSuccessful();
 
@@ -103,6 +104,68 @@ final class ResetForeignDescriptionsCommandTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_NONE, $dump->enrichment_status);
         $this->assertSame(0, ProductEnrichmentCache::query()->count(), 'zrzut w cache SKU kopiowałby się dalej');
         $this->assertNotNull($own->fresh()->description);
+    }
+
+    /**
+     * Batch #312 (audyt z drugim agentem): tytuł strony sklepu jako opis — tylko page_dump, z kopią
+     * zapasową, zdjęciem z sieci usuniętym i przywróceniem 1:1.
+     */
+    public function test_only_page_dump_with_backup_and_restore(): void
+    {
+        $titleDump = Product::query()->create([
+            'sku' => '1010-130-260-00',
+            'name' => 'Men´s jacket CXS SOLIS FLEX, red-black',
+            'manufacturer' => 'Canis',
+            'description' => "Kurtka polar CANIS CXS 4ENVI SOLIS szaro-czarna - BLUZY\nKurtka polar CANIS CXS 4ENVI SOLIS szaro-czarna\nKurtka polar CANIS CXS 4ENVI SOLIS szaro-czarna",
+            'shop_source_url' => 'https://sklep.example.pl/kurtka-4envi-solis',
+            'catalog_price_net' => 50,
+            'purchase_price' => 40,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        ProductImage::query()->create([
+            'product_id' => $titleDump->id, 'path' => 'products/'.$titleDump->id.'/4envi.jpg',
+            'source_url' => 'https://sklep.example.pl/4envi.jpg', 'is_primary' => true, 'sort_order' => 0,
+            'checksum' => str_repeat('d', 64),
+        ]);
+        // opis obcego wyrobu bez tytułu sklepu — powód „unrelated”, nie „page_dump”
+        $foreign = Product::query()->create([
+            'sku' => '3410-141-410-00',
+            'name' => 'Rukavice CERRO, máčené v nitrilu BLISTR, modro-šedé',
+            'manufacturer' => 'Canis',
+            'description' => 'Rękawice JOKI powlekane w 3/4 nitrylem, dziane z poliestru, do prac montażowych.',
+            'catalog_price_net' => 5,
+            'purchase_price' => 3,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $backup = $this->backupPath();
+
+        $this->artisan('products:reset-foreign-descriptions', ['--only' => 'page_dump', '--apply' => true, '--backup' => $backup])
+            ->expectsOutputToContain('Wyczyszczono 1 kart')
+            ->assertSuccessful();
+
+        $this->assertNull($titleDump->fresh()->description);
+        $this->assertSame(Product::ENRICHMENT_NONE, $titleDump->fresh()->enrichment_status);
+        $this->assertSame(0, ProductImage::query()->count(), 'zdjęcie z tej samej złej karty');
+        $this->assertNotNull($foreign->fresh()->description, '--only=page_dump nie rusza opisów „unrelated”');
+
+        $this->artisan('products:reset-foreign-descriptions', ['--restore' => $backup])
+            ->expectsOutputToContain('Przywrócono 1 kart')
+            ->assertSuccessful();
+
+        $titleDump->refresh();
+        $this->assertStringStartsWith('Kurtka polar CANIS CXS 4ENVI SOLIS', (string) $titleDump->description);
+        $this->assertSame(Product::ENRICHMENT_DONE, $titleDump->enrichment_status);
+        $this->assertSame(1, ProductImage::query()->count());
+        @unlink($backup);
+    }
+
+    private function backupPath(): string
+    {
+        return sys_get_temp_dir().DIRECTORY_SEPARATOR.'reset-foreign-'.uniqid('', true).'.json';
     }
 
     private function foreignCard(): Product

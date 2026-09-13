@@ -164,10 +164,8 @@ final class CatalogIndexSearch
         // marki towaru stoi w nazwie. Trzyznakowe „gh4” odpadało na progu 4 znaków i miejsca zajmowały
         // kaski X5000 „z paskiem podbródkowym” (batch #312).
         if ($this->identity->goodsBrandKeys($product) !== []) {
-            foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower(Str::ascii((string) $product->name))) ?: [] as $word) {
-                if (preg_match('/^(?=.*\d)(?=.*[a-z])[a-z0-9]{3,10}$/u', $word) === 1 || preg_match('/^\d{3,6}$/u', $word) === 1) {
-                    $out[] = $word;
-                }
+            foreach ($this->goodsBrandNameCodes($product) as $word) {
+                $out[] = $word;
             }
         }
 
@@ -177,6 +175,36 @@ final class CatalogIndexSearch
             $out,
             fn (string $code): bool => ! $this->identity->isAnsellGloveWarehouseRemnant($code, $product)
         ));
+    }
+
+    /**
+     * Numer towaru z nazwy („GH4”, „6051”, „2890a”) bez klas ochrony i ilości: „FFP2”, „ABEK1”,
+     * „A1P1D”, „GEN3” są na setkach kart, „250 pairs”, „190 g/m2”, „EN 166” nie identyfikują wyrobu.
+     *
+     * @return list<string>
+     */
+    private function goodsBrandNameCodes(Product $product): array
+    {
+        $words = preg_split('/[^a-z0-9]+/u', mb_strtolower(Str::ascii((string) $product->name)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $out = [];
+        foreach ($words as $i => $word) {
+            $numeric = preg_match('/^\d{3,6}$/u', $word) === 1;
+            if (! $numeric && preg_match('/^(?=.*\d)(?=.*[a-z])[a-z0-9]{3,10}$/u', $word) !== 1) {
+                continue;
+            }
+            if (preg_match('/^(?:ffp\d|p\d|gen\d|(?:a|b|e|k|hg|ax|abe|abek)\d(?:p\d)?[dr]?)$/u', $word) === 1) {
+                continue;
+            }
+            $next = $words[$i + 1] ?? '';
+            $previous = $words[$i - 1] ?? '';
+            if ($numeric && (preg_match('/^(?:pcs|pc|pairs?|prs|ml|g|gsm|cm|mm|db|kg|szt|par)$/u', $next) === 1
+                || in_array($previous, ['en', 'iso', 'size', 'snr', 'din'], true))) {
+                continue;
+            }
+            $out[] = $word;
+        }
+
+        return $out;
     }
 
     /**

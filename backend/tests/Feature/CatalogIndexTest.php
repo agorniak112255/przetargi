@@ -2833,6 +2833,15 @@ final class CatalogIndexTest extends TestCase
         $strap->model_name = '3M';
         $this->assertSame($gh4Page, $search->findFor($strap)[0]['url'] ?? null, 'numer GH4 z nazwy wyprzedza kaski z paskiem');
 
+        $respirator = new Product(['sku' => '4510-010-000-00', 'name' => 'Respirator 3M 9322+ FFP2 with valve, 10 pcs', 'manufacturer' => 'Canis']);
+        $respirator->model_name = '3M';
+        $this->assertContains('9322', $search->codes($respirator));
+        $nameCodes = (new \ReflectionMethod(CatalogIndexSearch::class, 'goodsBrandNameCodes'))->invoke($search, $respirator);
+        $this->assertSame(['9322'], $nameCodes, 'klasa ochrony (FFP2) i ilość (10 pcs) nie są numerem towaru');
+        $halfMask = new Product(['sku' => '4520-020-000-00', 'name' => 'Half mask 3M 6300 L', 'manufacturer' => 'Canis']);
+        $halfMask->model_name = '3M';
+        $this->assertSame(['6300'], (new \ReflectionMethod(CatalogIndexSearch::class, 'goodsBrandNameCodes'))->invoke($search, $halfMask), 'rozmiar L po numerze nie zjada numeru');
+
         $visor = new Product(['sku' => '4190-001-000-00', 'name' => 'Visor for 3M helmet G3000', 'manufacturer' => 'Canis']);
         $this->assertNotContains($visorPage, array_column($search->findFor($visor), 'url'), 'przyłbica innego producenta nie dostaje karty 3M');
     }

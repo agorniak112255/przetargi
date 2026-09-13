@@ -4,20 +4,14 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\Product;
-use App\Models\ProductAccessory;
-use App\Models\ProductDocument;
-use App\Models\ProductEnrichmentCache;
-use App\Models\ProductImage;
+use App\Services\Enrichment\ProductEnrichmentResetter;
 use App\Services\PriceListImportService;
 use App\Services\SpreadsheetColumnMapper;
 use App\Services\SpreadsheetMappingHeuristic;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use JsonException;
 
 /**
  * Import cennika Canis 2026 zapisał setkom produktów nazwę z wcześniejszego wiersza (polo DOVER
@@ -28,12 +22,6 @@ use JsonException;
  */
 final class RepairPriceListNamesCommand extends Command
 {
-    /** Kolumny produktu zapisywane w kopii i przywracane 1:1. */
-    private const PRODUCT_COLUMNS = [
-        'id', 'sku', 'name', 'description', 'norms', 'packaging', 'shop_source_url', 'enrichment_status',
-        'enriched_at', 'enrichment_error', 'enrichment_trace', 'enrichment_payload',
-    ];
-
     protected $signature = 'products:repair-price-list-names
                             {file? : Plik cennika XLSX, z którego importowano produkty}
                             {--manufacturer= : Producent w bazie, np. Canis}
@@ -48,10 +36,19 @@ final class RepairPriceListNamesCommand extends Command
         SpreadsheetMappingHeuristic $heuristic,
         SpreadsheetColumnMapper $columns,
         PriceListImportService $importer,
+        ProductEnrichmentResetter $resetter,
     ): int {
         $restore = trim((string) $this->option('restore'));
         if ($restore !== '') {
-            return $this->restore($restore);
+            $result = $resetter->restore($restore);
+            if (is_string($result)) {
+                $this->error('Nie przywrócono: '.$result);
+
+                return self::FAILURE;
+            }
+            $this->info("Przywrócono {$result} produktów z kopii {$restore}. Zdjęcia, dokumenty i cache pobrane po naprawie zastąpił stan z kopii.");
+
+            return self::SUCCESS;
         }
 
         $path = (string) $this->argument('file');
@@ -151,12 +148,20 @@ final class RepairPriceListNamesCommand extends Command
         if ($backup === '') {
             $backup = storage_path('app/repair-backups/'.Str::slug($manufacturer).'-names-'.now()->format('Ymd-His').'.json');
         }
-        if (! $this->writeBackup($backup, $manufacturer, $changes)) {
+        $error = $resetter->writeBackup($backup, $manufacturer.' names', array_column($changes, 'product'));
+        if ($error !== null) {
+            $this->error("Kopia zapasowa nie powstała ({$error}) — nic nie zmieniam.");
+
             return self::FAILURE;
         }
 
         foreach ($changes as $change) {
-            $this->repair($change['product'], $change['name'], $change['packaging'], $change['reset']);
+            if ($change['reset']) {
+                // rozmiary dopisało wzbogacanie z cudzej karty; zostaje to, co podaje cennik
+                $resetter->reset($change['product'], ['name' => $change['name'], 'packaging' => $change['packaging']]);
+            } else {
+                $change['product']->update(['name' => $change['name']]);
+            }
         }
         $this->info("Poprawiono {$count} nazw; {$resets} kart wraca do kolejki wzbogacania (status none).");
         $this->info("Kopia zapasowa: {$backup} (przywrócenie: --restore=\"{$backup}\").");
@@ -176,162 +181,6 @@ final class RepairPriceListNamesCommand extends Command
         }
 
         return $status === Product::ENRICHMENT_NONE && $product->enrichment_payload !== null;
-    }
-
-    /**
-     * @param  list<array{product: Product, name: string, packaging: ?string, reset: bool}>  $changes
-     */
-    private function writeBackup(string $path, string $manufacturer, array $changes): bool
-    {
-        $entries = [];
-        foreach ($changes as $change) {
-            $entries[] = $this->snapshot($change['product']);
-        }
-        $dir = dirname($path);
-        if (! is_dir($dir) && ! mkdir($dir, 0775, true) && ! is_dir($dir)) {
-            $this->error("Nie można utworzyć katalogu kopii: {$dir}");
-
-            return false;
-        }
-        try {
-            $json = json_encode(
-                ['manufacturer' => $manufacturer, 'created_at' => now()->toIso8601String(), 'products' => $entries],
-                JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
-            );
-            if (file_put_contents($path, $json) === false) {
-                throw new JsonException('zapis pliku nie powiódł się');
-            }
-            // kontrola przed pierwszym UPDATE: kopia musi dać się odczytać w całości
-            $read = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
-        } catch (JsonException $e) {
-            $this->error("Kopia zapasowa nie powstała ({$e->getMessage()}) — nic nie zmieniam.");
-
-            return false;
-        }
-        if (count($read['products'] ?? []) !== count($changes)) {
-            $this->error('Kopia zapasowa jest niekompletna — nic nie zmieniam.');
-
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function snapshot(Product $product): array
-    {
-        $key = ProductEnrichmentCache::normalizeKey((string) $product->manufacturer, (string) $product->sku);
-        $rows = static fn (string $table, callable $scope): array => $scope(DB::table($table))
-            ->get()
-            ->map(static fn (object $row): array => (array) $row)
-            ->all();
-
-        return [
-            'product' => (array) DB::table((new Product)->getTable())->where('id', $product->id)->first(self::PRODUCT_COLUMNS),
-            'images' => $rows((new ProductImage)->getTable(), static fn ($q) => $q->where('product_id', $product->id)),
-            'documents' => $rows((new ProductDocument)->getTable(), static fn ($q) => $q->where('product_id', $product->id)),
-            'accessories' => $rows((new ProductAccessory)->getTable(), static fn ($q) => $q->where('product_id', $product->id)
-                ->where('source', ProductAccessory::SOURCE_ENRICHMENT)),
-            'caches' => $rows((new ProductEnrichmentCache)->getTable(), static fn ($q) => $q
-                ->where('manufacturer', $key['manufacturer'])
-                ->where('sku', $key['sku'])),
-        ];
-    }
-
-    private function repair(Product $product, string $name, ?string $packaging, bool $reset): void
-    {
-        DB::transaction(function () use ($product, $name, $packaging, $reset): void {
-            $updates = ['name' => $name];
-            if ($reset) {
-                // cache SKU→karta, zdjęcia, dokumenty i akcesoria pochodzą z wyszukiwania pod cudzą nazwą;
-                // wgrane ręcznie (bez adresu źródła) i akcesoria z Presty/ręczne zostają. Pliki na dysku
-                // zostają — kopia zapasowa może przywrócić wiersze.
-                $key = ProductEnrichmentCache::normalizeKey((string) $product->manufacturer, (string) $product->sku);
-                ProductEnrichmentCache::query()
-                    ->where('manufacturer', $key['manufacturer'])
-                    ->where('sku', $key['sku'])
-                    ->delete();
-                ProductImage::query()
-                    ->where('product_id', $product->id)
-                    ->whereNotNull('source_url')
-                    ->where('source_url', '!=', '')
-                    ->delete();
-                ProductDocument::query()
-                    ->where('product_id', $product->id)
-                    ->whereNotNull('source_url')
-                    ->where('source_url', '!=', '')
-                    ->delete();
-                ProductAccessory::query()
-                    ->where('product_id', $product->id)
-                    ->where('source', ProductAccessory::SOURCE_ENRICHMENT)
-                    ->delete();
-
-                $updates += [
-                    'description' => null,
-                    'norms' => null,
-                    'enrichment_payload' => null,
-                    'enrichment_status' => Product::ENRICHMENT_NONE,
-                    'enriched_at' => null,
-                    'enrichment_error' => null,
-                    'enrichment_trace' => null,
-                    'shop_source_url' => null,
-                    // rozmiary dopisało wzbogacanie z cudzej karty; zostaje to, co podaje cennik
-                    'packaging' => $packaging,
-                ];
-            }
-            // hak Product::updated wysyła reindeks, gdy zmienia się nazwa lub opis
-            $product->update($updates);
-        });
-    }
-
-    private function restore(string $path): int
-    {
-        if (! is_file($path)) {
-            $this->error("Brak kopii zapasowej: {$path}");
-
-            return self::FAILURE;
-        }
-        try {
-            $data = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
-        } catch (JsonException $e) {
-            $this->error("Kopia zapasowa jest uszkodzona: {$e->getMessage()}");
-
-            return self::FAILURE;
-        }
-
-        $tables = [
-            'images' => (new ProductImage)->getTable(),
-            'documents' => (new ProductDocument)->getTable(),
-            'accessories' => (new ProductAccessory)->getTable(),
-            'caches' => (new ProductEnrichmentCache)->getTable(),
-        ];
-        $restored = 0;
-        foreach ((array) ($data['products'] ?? []) as $entry) {
-            $columns = (array) ($entry['product'] ?? []);
-            $id = (int) ($columns['id'] ?? 0);
-            if ($id <= 0 || ! DB::table((new Product)->getTable())->where('id', $id)->exists()) {
-                continue;
-            }
-            unset($columns['id']);
-            DB::transaction(function () use ($id, $columns, $entry, $tables): void {
-                DB::table((new Product)->getTable())->where('id', $id)->update($columns);
-                foreach ($tables as $section => $table) {
-                    foreach ((array) ($entry[$section] ?? []) as $row) {
-                        $row = (array) $row;
-                        if (! DB::table($table)->where('id', $row['id'] ?? 0)->exists()) {
-                            DB::table($table)->insert($row);
-                        }
-                    }
-                }
-            });
-            ReindexProductEmbeddingJob::dispatch($id);
-            $restored++;
-        }
-        $this->info("Przywrócono {$restored} produktów z kopii {$path}. Wiersze dodane po naprawie (nowe zdjęcia) zostają.");
-
-        return self::SUCCESS;
     }
 
     /** Nazwy różnią się tylko końcówką (ucięty rozmiar, kolor, przecinek) — nie cudzy wyrób. */

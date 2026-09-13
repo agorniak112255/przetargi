@@ -65,7 +65,7 @@ final class ProductSearchIdentity
      *
      * @var list<string>
      */
-    private const CHINSTRAP_STEMS = ['chin strap', 'chinstrap', 'podbrod', 'podbradn', 'kinnriemen', 'barbuquejo'];
+    private const CHINSTRAP_STEMS = ['chin strap', 'chinstrap', 'podbrod', 'kinnriemen', 'barbuquejo'];
 
     /**
      * Marka towaru u dystrybutora: Canis sprzedaje filtry i paski 3M oraz MSA (w cenniku model „3M”).

@@ -99,6 +99,18 @@ final class RepairPriceListNamesCommandTest extends TestCase
         $this->assertSame('Men´s shorts CXS LEONIS, black with blue/red accessories', $handWritten->fresh()->name);
         $this->assertSame('Opis wpisany ręcznie przez handlowca.', $handWritten->fresh()->description, '„Wpisz ręcznie” z opisem człowieka nie jest kasowany');
 
+        // ponowne pobranie po naprawie: cache i zdjęcie o tych samych kluczach unikalnych co w kopii
+        ProductEnrichmentCache::query()->create([
+            ...ProductEnrichmentCache::normalizeKey('Canis', '1113-001-000-00'),
+            'description' => 'Koszulka polo ostrzegawcza CXS DOVER',
+            'source_urls' => ['https://cxs.net.pl/koszulka-polo-dover.html'],
+        ]);
+        ProductImage::query()->create([
+            'product_id' => $dover->id, 'path' => 'products/'.$dover->id.'/polo.jpg',
+            'source_url' => 'https://cxs.net.pl/media/polo.jpg', 'is_primary' => true, 'sort_order' => 0,
+            'checksum' => str_repeat('a', 64),
+        ]);
+
         $this->artisan('products:repair-price-list-names', ['--restore' => $this->backup])
             ->expectsOutputToContain('Przywrócono 3 produktów')
             ->assertSuccessful();
@@ -112,7 +124,9 @@ final class RepairPriceListNamesCommandTest extends TestCase
         $this->assertSame(2, ProductImage::query()->where('product_id', $dover->id)->count());
         $this->assertSame(1, ProductDocument::query()->count());
         $this->assertSame(2, ProductAccessory::query()->count());
-        $this->assertSame(1, ProductEnrichmentCache::query()->count());
+        $this->assertSame('Spodnie ostrzegawcze ocieplane', ProductEnrichmentCache::query()->value('description'), 'cache z kopii, nie z ponownego pobrania');
+        $this->assertSame(['products/'.$dover->id.'/spodnie.jpg', 'products/'.$dover->id.'/wgrane-recznie.jpg'], ProductImage::query()->where('product_id', $dover->id)->orderBy('sort_order')->pluck('path')->all());
+        $this->assertStringContainsString('high visible trousers', (string) $dover->search_blob, 'indeks tekstowy liczony z przywróconej nazwy');
     }
 
     private function attachWebData(Product $product): void

@@ -41,6 +41,9 @@ final class ProductDescriptionText
      */
     public static function looksLikeForeignOrPartsTableDump(string $text): bool
     {
+        if (self::looksLikeShopTitleDump($text)) {
+            return true;
+        }
         $low = mb_strtolower($text);
         // Tylko elementy wiersza tabeli i przycisków ceny. Nagłówki sekcji („Specyfikacja
         // techniczna”, „Numer części: NP060003”) pisze też model w poprawnym polskim opisie —
@@ -72,6 +75,46 @@ final class ProductDescriptionText
         $diacritics = preg_match_all('/[ąćęłńóśźż]/u', $low);
 
         return 100 * $diacritics / $words < 8;
+    }
+
+    /**
+     * Tytuł strony sklepu zamiast opisu. Batch #312 (audyt z drugim agentem): 57 kart Canis i 2 SECURA
+     * miały „Centrum Elektronarzedzi - elektronarzędzia, narzędzia…” albo „Kurtka polar CANIS CXS 4ENVI
+     * SOLIS szaro-czarna - BLUZY” powtórzone w następnej linii jako cały opis — i to innego modelu.
+     */
+    public static function looksLikeShopTitleDump(string $text): bool
+    {
+        $trimmed = ltrim($text);
+        if (preg_match('/^centrum elektronarz/iu', $trimmed) === 1) {
+            return true;
+        }
+        $lines = [];
+        foreach (preg_split('/\R/u', $trimmed) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            $lines[] = $line;
+            if (count($lines) >= 4) {
+                break;
+            }
+        }
+        $key = static fn (string $value): string => mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', $value)));
+        $keys = array_map($key, $lines);
+        foreach ($lines as $i => $line) {
+            // „Tytuł - Kategoria sklepu” (albo „- b2b.rkmpro.tools”) obok samego „Tytułu”; krótka końcówka
+            // bez kończącej kropki — „Nazwa - lekka kurtka softshell z kapturem.” w dobrym opisie to zdanie
+            $base = preg_match('/^(.{10,160}?) - (.{1,40})$/u', $line, $m) === 1
+                && ! str_ends_with(trim($m[2]), '.') && ! str_contains($m[2], '. ')
+                ? $key($m[1]) : null;
+            foreach ($keys as $j => $other) {
+                if ($i !== $j && mb_strlen($other) >= 10 && ($keys[$i] === $other || $base === $other)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /** Ikony Presty, wysyłka, wycena — nie fakty o modelu. */
