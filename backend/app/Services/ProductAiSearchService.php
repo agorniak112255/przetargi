@@ -72,6 +72,9 @@ final class ProductAiSearchService
     /** Etapy searchMany dla paska postępu: model czyta opisy, katalog, ranking modelu, przepisanie pustych. */
     public const PROGRESS_STAGE_UNDERSTAND = 'understand';
 
+    /** Karta z niepustym `missing_key` w rankingu: kod egzekwuje limit z promptu (model dawał 70 mimo „kluczowy warunek”). */
+    private const MISSING_KEY_SCORE_CAP = 50;
+
     public const PROGRESS_STAGE_CATALOG = 'catalog';
 
     public const PROGRESS_STAGE_RANK = 'rank';
@@ -327,7 +330,10 @@ final class ProductAiSearchService
             );
             $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
             $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $clean[$i]);
-            if ($ranked === []) {
+            if ($ranked === [] && ($pending[$i]['products'] ?? []) !== []) {
+                // model nic nie ocenił — wiersze skrótu (źródło rule), nie lista katalogowa
+                $ranked = $pending[$i]['products'];
+            } elseif ($ranked === []) {
                 $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
             } else {
                 $ranked = $this->mergeRequirementCatalogRows($clean[$i], $ranked, $limit, $retrieveIntent);
@@ -411,10 +417,18 @@ final class ProductAiSearchService
         }
         $classRows = $this->rowsFromFootwearClassMatches($query, $candidates, $limit);
         if ($classRows !== []) {
+            // Klasa na karcie to warunek konieczny, nie werdykt: sandał vs trzewik, ESD, FO ocenia model.
+            // Przetarg 1: poz. 3/5/12 dostawały płaskie 92 z reguły, przetarg ich nie ufał i model nie był
+            // pytany. Wiersze reguły zostają zapasem, gdy model nic nie zwróci (`products` przy `rank_cards`).
+            $classIds = array_map(static fn (array $row): int => (int) ($row['id'] ?? 0), $classRows);
+            $classCards = $candidates->filter(
+                static fn (Product $p): bool => in_array((int) $p->id, $classIds, true)
+            )->values();
+
             return [
                 'products' => $this->orderEyeWearSetRows($query, $classRows, $candidates),
                 'note' => null,
-                'rank_cards' => null,
+                'rank_cards' => $this->cardsForRanking($query, $classCards, $intent['constraints']),
                 'candidates' => $candidates,
             ];
         }
@@ -831,6 +845,11 @@ final class ProductAiSearchService
             $rankedIntent = $this->withCatalogAliases($rankedIntent, $query);
             $catalogQ = $this->catalogSearchQuery($query, $intent);
             $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $query);
+            if ($ranked === [] && $prepared['products'] !== []) {
+                // Skrót klasy obuwia: model nic nie ocenił — wiersze reguły (źródło rule), jak przed zmianą,
+                // bez dokładania listy katalogowej.
+                return [$rankedIntent, $this->orderApparelSetRows($query, $prepared['products'], $prepared['candidates'])];
+            }
             // Model padł, a wymaganie ma warunek (substancja, norma, klasa) — podstawienie
             // czegokolwiek z katalogu byłoby udawaniem oceny, której nikt nie zrobił.
             // Użytkownik dostaje pustą listę i informację, że to błąd modelu.
@@ -1095,7 +1114,9 @@ final class ProductAiSearchService
             );
             $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
             $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $clean[$i]);
-            if ($ranked === []) {
+            if ($ranked === [] && ($pending[$i]['products'] ?? []) !== []) {
+                $ranked = $pending[$i]['products'];
+            } elseif ($ranked === []) {
                 $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
             } else {
                 $ranked = $this->mergeRequirementCatalogRows($clean[$i], $ranked, $limit, $retrieveIntent);
@@ -4375,11 +4396,11 @@ final class ProductAiSearchService
     ): array {
         $messages = $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task, $retrieveIntent);
         $messages[0]['content'] = str_replace(
-            'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}.',
+            'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}]}.',
             'needed: krótka nazwa (rzeczownik); search_phrases: 2-8, pierwsze 2 = nazwa; constraints: 0-6. '
             .'Popraw literówki (podnie→spodnie, rekawice→rękawice, kamizelaka→kamizelka, TEPM-ICE→TEMP-ICE). '
             .'JSON: {"needed":"nazwa","search_phrases":["najpierw nazwa"],"constraints":[],'
-            .'"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}.',
+            .'"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}]}.',
             $messages[0]['content'],
         );
 
@@ -4536,8 +4557,9 @@ final class ProductAiSearchService
                     .'Literówka w wymaganiu nie dyskwalifikuje karty — nazwę czytaj z linii "Szukany produkt (z analizy)" '
                     .'(podnie = spodnie, rekawice = rękawice). '
                     .'Brak zgodnej nazwy albo sprzeczność / brak dowodu kluczowego warunku na każdej karcie: {"matches":[]}. '
-                    .'W matches TYLKO id, score, reason — bez sku, name, specs, opisu i karty. '
-                    .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}. '
+                    .'W matches TYLKO id, score, reason, missing_key — bez sku, name, specs, opisu i karty. '
+                    .'missing_key: lista KLUCZOWYCH warunków bez dowodu na karcie (pusta, gdy brakuje tylko drugorzędnych). '
+                    .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}]}. '
                     .$reasonHint
                     .'score>=40 tylko przy zgodnej nazwie i bez sprzeczności z warunkiem. Max '.$maxMatches.'. '
                     .'Zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
@@ -4607,9 +4629,17 @@ final class ProductAiSearchService
             if (! $this->matchesSlangEvidence($query, $product)) {
                 continue;
             }
+            $reason = is_string($m['reason'] ?? null) ? $m['reason'] : null;
+            $missingKey = $this->stringList($m['missing_key'] ?? null);
+            if ($missingKey !== []) {
+                // Model sam nazwał kluczowy warunek bez dowodu — limit z promptu egzekwuje kod
+                // (poz. 8: 9312+ bez węgla aktywnego dostała 70 z uzasadnieniem „kluczowy warunek”).
+                $score = min($score, self::MISSING_KEY_SCORE_CAP);
+                $reason = trim(($reason ?? '').' Brak dowodu kluczowego warunku: '.implode(', ', $missingKey).'.');
+            }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(0, $score));
-            $row['ai_match_reason'] = is_string($m['reason'] ?? null) ? $m['reason'] : null;
+            $row['ai_match_reason'] = $reason;
             $out[] = $row;
         }
 

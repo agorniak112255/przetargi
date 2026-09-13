@@ -13,6 +13,7 @@ use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
+use Tests\Support\FakeSearchLlm;
 use Tests\Support\Opisowy15Fixture;
 use Tests\TestCase;
 
@@ -92,6 +93,95 @@ final class ProductAiSearchUnratedCatalogTest extends TestCase
             // Płaskie 92 z klasy na karcie to kolejność z puli, nie ocena — przetarg traktuje je jak `catalog`.
             $this->assertSame(ProductAiSearchService::MATCH_SOURCE_RULE, $row['ai_match_source'] ?? null, (string) $row['sku']);
         }
+    }
+
+    /**
+     * Przetarg 1, poz. 3: reguła klasy znalazła sandały ARSO 701 S1 P ESD, ale dawała płaskie 92
+     * bez modelu — przetarg takim wierszom nie ufa i zapisał „Brak produktu”. Karty spełniające
+     * klasę mają trafić do rankingu modelu, a wynik mieć źródło modelu.
+     */
+    public function test_footwear_class_cards_are_ranked_by_model(): void
+    {
+        $base = [
+            'category' => 'Obuwie',
+            'stock' => 4,
+            'ppe_family' => PpeAssortment::FAMILY_FOOTWEAR,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now()->subYear(),
+            'catalog_price_net' => 200,
+            'purchase_price' => 150,
+            'manufacturer' => 'ARTRA',
+        ];
+        $sandal = Product::query()->create($base + [
+            'sku' => 'ARSO 701 616560 S1 P ESD',
+            'name' => 'ARSO 701 616560 S1 P ESD',
+            'description' => 'Sandały bezpieczne ARSO 701 S1 P ESD z zabudowaną piętą i podnoskiem, właściwości antyelektrostatyczne ESD.',
+            'norms' => 'EN ISO 20345 S1 P, EN 61340-4-3 ESD',
+        ]);
+        $sandalId = (int) $sandal->id;
+        $rankedIds = [];
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $answer = static function (array $messages) use ($sandalId, &$rankedIds): array {
+            if (FakeSearchLlm::kind($messages) !== FakeSearchLlm::KIND_RANK) {
+                return ['matches' => []];
+            }
+            if (str_contains((string) ($messages[1]['content'] ?? ''), '"id":'.$sandalId)) {
+                $rankedIds[] = $sandalId;
+            }
+
+            return ['matches' => [['id' => $sandalId, 'score' => 93, 'reason' => 'Sandał S1 P z ESD', 'missing_key' => []]]];
+        };
+        $llm->shouldReceive('chatJson')->andReturnUsing(static fn (array $messages): array => $answer($messages));
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(
+            static fn (array $sets): array => array_map($answer, $sets)
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $json = $this->postJson('/api/products/ai-search', [
+            'query' => 'Sandały ochronne kategorii S1 P ESD z zabudowaną piętą',
+            'limit' => 10,
+        ])->assertOk()->json();
+
+        $this->assertContains($sandalId, $rankedIds, 'karta spełniająca klasę trafia do rankingu modelu');
+        $this->assertSame('ARSO 701 616560 S1 P ESD', $json['products'][0]['sku'] ?? null);
+        $this->assertSame(93, (int) ($json['products'][0]['ai_match_percent'] ?? 0));
+        $this->assertNotSame(ProductAiSearchService::MATCH_SOURCE_RULE, $json['products'][0]['ai_match_source'] ?? null);
+    }
+
+    /** Poz. 8: model nazwał brak węgla aktywnego kluczowym warunkiem, a dał 70 — kod obcina do 50. */
+    public function test_missing_key_condition_caps_model_score_at_fifty(): void
+    {
+        $glove = Product::query()->create([
+            'sku' => 'RNITZ-M',
+            'name' => 'Rękawice nitrylowe ze ściągaczem',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem, dzianina bawełniana, do prac montażowych.',
+            'catalog_price_net' => 3,
+            'purchase_price' => 2,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $gloveId = (int) $glove->id;
+        $answer = static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => [['id' => $gloveId, 'score' => 85, 'reason' => 'Rękawice nitrylowe', 'missing_key' => ['EN 407 ciepło kontaktowe']]]]
+            : ['matches' => []];
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(static fn (array $messages): array => $answer($messages));
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $json = $this->postJson('/api/products/ai-search', [
+            'query' => 'Rękawice robocze nitrylowe ze ściągaczem do prac przy gorących elementach, EN 407',
+            'limit' => 10,
+        ])->assertOk()->json();
+
+        $row = collect($json['products'])->firstWhere('sku', 'RNITZ-M');
+        $this->assertNotNull($row, 'karta z oceną modelu jest w wynikach');
+        $this->assertSame(50, (int) $row['ai_match_percent']);
+        $this->assertStringContainsString('EN 407 ciepło kontaktowe', (string) $row['ai_match_reason']);
     }
 
     public function test_named_model_rows_keep_model_source(): void

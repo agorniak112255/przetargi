@@ -288,6 +288,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertStringContainsString('NIE odrzucaj', $prompt);
         $this->assertStringContainsString('spodniobuty=wodery', $prompt);
         $this->assertStringContainsString('2: 17 kV', $prompt);
+        $this->assertStringContainsString('missing_key', $prompt);
         $this->assertStringNotContainsString('Brak potwierdzenia → nie zwracaj', $prompt);
     }
 
