@@ -1112,6 +1112,9 @@ final class ProductPageFetcher
         $html = preg_replace('#<\s*br\s*/?\s*>#i', "\n", $html) ?? $html;
         $html = preg_replace('#</(?:p|div|h[1-6]|section|article|table)>#i', "\n\n", $html) ?? $html;
         $html = preg_replace('#</(?:li|tr|ul|ol)>#i', "\n", $html) ?? $html;
+        // komórki tabeli części: „<td>AB010008C</td><td>2 m</td>” sklejało się w „AB010008C2 m”
+        // i kod wariantu nie potwierdzał karty
+        $html = preg_replace('#</(?:td|th)>#i', ' ', $html) ?? $html;
         $text = strip_tags($html);
         $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;

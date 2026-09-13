@@ -51,6 +51,17 @@ final class CatalogSitemapIndexer
     /** Karty bez kodu w adresie — ile stron produktu czytamy pod SKU/nazwę. */
     private const HTML_PRODUCT_FETCH_MAX = 400;
 
+    /**
+     * Strona rodziny na domenie producenta („coba.com/pl/produkt/alba”) trzyma kody
+     * wariantów (AB010008C, AB020008C…) w tabeli części, nie w adresie. Bez nich indeks
+     * znał kartę, ale 533 z 869 produktów Coba szło do wyszukiwarki — a ta leżała.
+     * Po sitemapie czytamy takie karty i dopisujemy kody z treści do tokenów.
+     */
+    private const VARIANT_PAGE_FETCH_MAX = 400;
+
+    /** Tytuł karty mieści 500 znaków — tyle kodów wariantów zmieści się obok nazwy rodziny. */
+    private const VARIANT_CODES_PER_PAGE = 45;
+
     /** Krótki probe zanim wydłużymy timeout — serwer często w ogóle nie widzi hosta. */
     private const HTML_PROBE_TIMEOUT = 6;
 
@@ -76,6 +87,12 @@ final class CatalogSitemapIndexer
 
     /** Slug karty plus tytuł mieszczą się w 32 tokenach; przy 24 ginęła końcówka adresu. */
     private const MAX_TOKENS_PER_PAGE = 32;
+
+    /**
+     * Tytuł z kodami wariantów (45 kodów × „ab010008c”, „ab”, „010008”, „c”) nie mieści
+     * się w limicie adresu — ma własny, żeby żaden kod z tabeli części nie wypadł.
+     */
+    private const MAX_TITLE_TOKENS = 240;
 
     /**
      * Zgadywane ścieżki map — pogrupowane po platformie. Gdy robots.txt zdradza
@@ -370,6 +387,10 @@ final class CatalogSitemapIndexer
 
         if ($rows !== []) {
             $saved += $this->store($rows);
+        }
+
+        if (! $timedOut && $this->pageManufacturer->officialHostBrand($host) !== null) {
+            $this->deepenManufacturerVariantPages($host, array_keys($seen), $deadline);
         }
 
         $this->note($host, 'Koniec zbierania: '.$saved.' kart, map: '.count($used).($timedOut ? ', limit czasu' : '').'.');
@@ -1212,6 +1233,152 @@ final class CatalogSitemapIndexer
         return $rows;
     }
 
+    /**
+     * Karty rodzin na domenie producenta: czytamy treść i dopisujemy kody wariantów
+     * z tabeli części do tytułu strony — stamtąd trafiają do tokenów i haystacka,
+     * więc „AB010008C” znajduje „/pl/produkt/alba” bez pytania wyszukiwarki.
+     *
+     * @param  list<string>  $urls
+     * @return int ile kart dostało kody
+     */
+    private function deepenManufacturerVariantPages(string $host, array $urls, float $deadline): int
+    {
+        $candidates = $this->variantPageCandidates($host, $urls);
+        if ($candidates === []) {
+            return 0;
+        }
+        // karty już przeczytane (mają tytuł) na koniec — przy limicie 400 na przebieg
+        // kolejne indeksowanie dochodzi do reszty, zamiast czytać wciąż te same
+        $titled = [];
+        foreach (array_chunk($candidates, 500) as $chunk) {
+            $hashes = array_map(static fn (string $url): string => CatalogPage::hashFor($url), $chunk);
+            foreach (CatalogPage::query()->whereIn('url_hash', $hashes)->whereNotNull('title')->pluck('url') as $url) {
+                $titled[(string) $url] = true;
+            }
+        }
+        usort($candidates, static fn (string $a, string $b): int => (int) isset($titled[$a]) <=> (int) isset($titled[$b]));
+        $this->note($host, 'Domena producenta: czytam '.count($candidates).' kart pod kody wariantów z treści…');
+
+        $rows = [];
+        $fetched = 0;
+        $withCodes = 0;
+        $cut = false;
+        foreach ($candidates as $url) {
+            if ($fetched >= self::VARIANT_PAGE_FETCH_MAX || microtime(true) >= $deadline) {
+                $cut = true;
+                break;
+            }
+            $html = $this->fetchHtml($url);
+            $fetched++;
+            if ($html === null) {
+                continue;
+            }
+            $codes = $this->variantCodesFromHtml($html);
+            if ($codes === []) {
+                continue;
+            }
+            $withCodes++;
+            $identity = $this->identityFromHtml($html);
+            $rows[] = $this->rowFor($host, $url, $identity['title'], implode(' ', $codes));
+            if (count($rows) >= 100) {
+                $this->store($rows);
+                $rows = [];
+            }
+        }
+        if ($rows !== []) {
+            $this->store($rows);
+        }
+        $this->note($host, 'Kody wariantów z treści: '.$withCodes.' z '.$fetched.' przeczytanych kart'
+            .($cut ? ' (limit czasu/liczby kart — reszta przy następnym indeksowaniu)' : '').'.');
+
+        return $withCodes;
+    }
+
+    /**
+     * Karty produktu z tej domeny bez kodu w adresie; przy wielu wersjach językowych
+     * tylko polska — kody są te same, a enrichment i tak woli „/pl/”.
+     *
+     * @param  list<string>  $urls
+     * @return list<string>
+     */
+    private function variantPageCandidates(string $host, array $urls): array
+    {
+        $out = [];
+        $polish = [];
+        foreach ($urls as $url) {
+            $url = (string) $url;
+            if (! $this->belongsToHost($url, $host) || $this->urlHasIdentityToken($url)) {
+                continue;
+            }
+            $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+            $segments = array_values(array_filter(explode('/', $path), static fn (string $s): bool => $s !== ''));
+            if (count($segments) < 2) {
+                continue;
+            }
+            $parent = (string) $segments[count($segments) - 2];
+            if (! in_array($parent, [
+                'produkt', 'produkty', 'product', 'products', 'produkte', 'produit', 'produits',
+                'prodotto', 'prodotti', 'producto', 'productos', 'p',
+            ], true)) {
+                continue;
+            }
+            $out[] = $url;
+            if ($segments[0] === 'pl') {
+                $polish[] = $url;
+            }
+        }
+
+        return $polish !== [] ? $polish : $out;
+    }
+
+    /**
+     * Kody wariantów z treści karty: wielkie litery i cyfry („AB010008C”, „ALURAMP-YE”).
+     * Tagi zamieniamy na spacje — strip_tags sklejał komórki tabeli w „AB010008C2 m”.
+     *
+     * @return list<string>
+     */
+    public function variantCodesFromHtml(string $html): array
+    {
+        $html = preg_replace('#<(script|style|noscript|svg|template)\b[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+        $text = html_entity_decode(preg_replace('/<[^>]+>/', ' ', $html) ?? '', ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+        $out = [];
+        foreach (preg_split('/[\s,;()\[\]|]+/u', $text) ?: [] as $raw) {
+            $token = trim($raw, ".:\"'„”«»*");
+            if (! $this->looksLikeVariantCode($token)) {
+                continue;
+            }
+            $out[$token] = $token;
+            if (count($out) >= self::VARIANT_CODES_PER_PAGE) {
+                break;
+            }
+        }
+
+        return array_values($out);
+    }
+
+    private function looksLikeVariantCode(string $token): bool
+    {
+        $len = strlen($token);
+        if ($len < 5 || $len > 24 || preg_match('/^[A-Z0-9][A-Z0-9\-\/.]*[A-Z0-9]$/', $token) !== 1) {
+            return false;
+        }
+        if (preg_match('/[A-Z]/', $token) !== 1) {
+            // sama liczba: telefon, rok, waga
+            return false;
+        }
+        // identyfikatory Google Tag Manager/Analytics i numery norm to nie kody wyrobu
+        if (preg_match('/^(?:GTM|UA|G|AW|DC)-|^(?:EN|ISO|DIN|PN|CE)[-\s]?\d/', $token) === 1) {
+            return false;
+        }
+        if (preg_match('/\d/', $token) === 1) {
+            return true;
+        }
+
+        // ALURAMP-YE: bez cyfry, ale dwa człony wielkimi literami
+        return preg_match('/^[A-Z]{3,}-[A-Z]{2,}$/', $token) === 1;
+    }
+
     /** Adres już niesie SKU (litery+cyfry) — nie ma po co czytać karty pod kod. */
     private function urlHasIdentityToken(string $url): bool
     {
@@ -1822,7 +1989,12 @@ final class CatalogSitemapIndexer
         ];
 
         $out = [];
-        foreach ($sources as $source) {
+        $extraFrom = null;
+        foreach ($sources as $index => $source) {
+            if ($index === 3) {
+                // od tego miejsca tokeny tytułu — liczone własnym limitem
+                $extraFrom = count($out);
+            }
             $source = mb_strtolower(Str::ascii(urldecode(trim($source))));
             if ($source === '') {
                 continue;
@@ -1853,13 +2025,22 @@ final class CatalogSitemapIndexer
         }
 
         $unique = [];
-        foreach ($out as $token) {
+        $limit = self::MAX_TOKENS_PER_PAGE;
+        foreach ($out as $i => $token) {
+            if ($extraFrom !== null && $i === $extraFrom) {
+                // adres wyczerpał swój limit albo nie — tytuł i tak dostaje własny
+                $limit = count($unique) + self::MAX_TITLE_TOKENS;
+            }
+            if (count($unique) >= $limit) {
+                if ($extraFrom === null || $i >= $extraFrom) {
+                    break;
+                }
+
+                continue;
+            }
             if (mb_strlen($token) >= 2 && mb_strlen($token) <= self::MAX_TOKEN_LENGTH) {
                 // klucz numeryczny PHP zrzuca do int — wartość zostaje stringiem
                 $unique[$token] = $token;
-            }
-            if (count($unique) >= self::MAX_TOKENS_PER_PAGE) {
-                break;
             }
         }
 

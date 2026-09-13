@@ -79,4 +79,23 @@ final class CatalogTokenizerTest extends TestCase
         $this->assertContains('7003', $indexTokens);
         $this->assertNotEmpty(array_intersect($codes, $indexTokens));
     }
+
+    public function test_title_with_many_variant_codes_keeps_every_code(): void
+    {
+        // strona rodziny producenta: 40 kodów wariantów w tytule — limit 32 tokenów adresu
+        // nie może uciąć kodów z tabeli części
+        $codes = [];
+        for ($i = 1; $i <= 40; $i++) {
+            $codes[] = sprintf('AB%03d008C', $i);
+        }
+        $tokens = app(CatalogSitemapIndexer::class)->tokensFor(
+            'https://www.coba.com/pl/produkt/alba',
+            'Alba '.implode(' ', $codes)
+        );
+
+        $this->assertContains('alba', $tokens);
+        foreach ($codes as $code) {
+            $this->assertContains(mb_strtolower($code), $tokens, $code);
+        }
+    }
 }

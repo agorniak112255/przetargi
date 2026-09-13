@@ -101,6 +101,12 @@ final class CatalogPageManufacturer
         return $this->fromHost($host) ?? $this->fromUrl($url);
     }
 
+    /** Marka, gdy cała domena należy do jednego producenta (coba.com); sklep → null. */
+    public function officialHostBrand(string $host): ?string
+    {
+        return $this->fromHost($host);
+    }
+
     public function conflictsWithProduct(?string $pageManufacturer, Product $product): bool
     {
         $pageKey = $this->knownKey((string) $pageManufacturer);

@@ -2666,6 +2666,106 @@ final class CatalogIndexTest extends TestCase
         }
     }
 
+    /**
+     * Batch #292: coba.com/pl/produkt/alba trzyma kody wariantów w tabeli części, nie w adresie.
+     * Indeks znał kartę, ale AB010008C jej nie znajdował — 533 produkty szły do leżącej wyszukiwarki.
+     */
+    public function test_official_host_reads_family_page_for_variant_codes(): void
+    {
+        $albaHtml = '<!DOCTYPE html><html><head><title>Alba | COBA Europe</title>'
+            .'<script>var gtm="GTM-PLPPC6J";</script></head><body><h1>Alba</h1>'
+            .'<table><tr><th>Numer części</th><th>Rozmiar</th><th>Kolor</th></tr>'
+            .'<tr><td>AB060008C</td><td>2 m x metr bieżący</td><td>Szary</td></tr>'
+            .'<tr><td>AB050008C</td><td>2 m x metr bieżący</td><td>Brązowy</td></tr>'
+            .'<tr><td>AB020008C</td><td>2 m x metr bieżący</td><td>Niebieski</td></tr>'
+            .'<tr><td>AB010008C</td><td>2 m x metr bieżący</td><td>Antracyt</td></tr>'
+            .'</table><p>Norma EN 13501, telefon 41352. Anti-fatigue.</p></body></html>';
+        $this->fakeHttp([
+            'https://coba.com/robots.txt' => Http::response("Sitemap: https://coba.com/sitemap.xml\n", 200),
+            'https://coba.com/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.coba.com/pl/produkt/alba</loc></url>'
+                .'<url><loc>https://www.coba.com/de/produkt/alba</loc></url>'
+                .'<url><loc>https://www.coba.com/product/alba</loc></url>'
+                .'<url><loc>https://www.coba.com/pl/produkt/alba-anti-fatigue</loc></url>'
+                .'<url><loc>https://www.coba.com/pl/case-studies/alba-bank</loc></url>'
+                .'</urlset>',
+                200
+            ),
+            'https://www.coba.com/pl/produkt/alba' => Http::response($albaHtml, 200, ['Content-Type' => 'text/html']),
+            'https://www.coba.com/pl/produkt/alba-anti-fatigue' => Http::response(
+                '<html><body><h1>Alba Anti-Fatigue</h1><p>Mata bez tabeli części.</p></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('coba.com');
+
+        // tylko polska wersja i tylko karty produktu — nie DE/EN ani case studies
+        Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), '/de/produkt/')
+            || $r->url() === 'https://www.coba.com/product/alba'
+            || str_contains($r->url(), '/case-studies/'));
+        Http::assertSent(static fn (Request $r): bool => $r->url() === 'https://www.coba.com/pl/produkt/alba');
+
+        $page = CatalogPage::query()->where('url', 'https://www.coba.com/pl/produkt/alba')->first();
+        $this->assertNotNull($page);
+        $this->assertStringContainsString('Alba', (string) $page->title);
+        $this->assertStringContainsString('AB010008C', (string) $page->title);
+        $this->assertStringNotContainsString('GTM-', (string) $page->title);
+        $this->assertStringNotContainsString('13501', (string) $page->title);
+        $tokens = DB::table('catalog_page_tokens')->where('catalog_page_id', $page->id)->pluck('token')->all();
+        $this->assertContains('ab010008c', $tokens);
+        $this->assertContains('ab060008c', $tokens);
+
+        $product = Product::query()->create([
+            'sku' => 'AB010008C',
+            'name' => 'Alba Antracyt 2m x mb. / krawędź dodatkowo płatna P317-DRUM',
+            'manufacturer' => 'Coba',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        $hits = app(CatalogIndexSearch::class)->findFor($product);
+        $this->assertSame('https://www.coba.com/pl/produkt/alba', $hits[0]['url'] ?? null);
+
+        $pack = app(HybridWebSearchService::class)->searchProduct($product, 'manufacturer');
+        $this->assertSame('catalog_index', $pack['provider']);
+        $this->assertSame('https://www.coba.com/pl/produkt/alba', $pack['results'][0]['url'] ?? null);
+        // żadnej wyszukiwarki — ani scrapowanej, ani s.jina.ai (r.jina.ai to reader sondy strony głównej)
+        Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), 'google.')
+            || str_contains($r->url(), 'duckduckgo.') || str_contains($r->url(), 's.jina.ai'));
+    }
+
+    public function test_shop_host_does_not_read_pages_for_variant_codes(): void
+    {
+        $this->fakeHttp([
+            'https://optimumbhp.pl/robots.txt' => Http::response("Sitemap: https://optimumbhp.pl/sitemap.xml\n", 200),
+            'https://optimumbhp.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://optimumbhp.pl/produkt/rekawice-robocze</loc></url>'
+                .'</urlset>',
+                200
+            ),
+        ]);
+
+        app(CatalogSitemapIndexer::class)->index('optimumbhp.pl');
+
+        Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), '/produkt/rekawice-robocze'));
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://optimumbhp.pl/produkt/rekawice-robocze']);
+    }
+
+    public function test_variant_codes_are_not_glued_with_neighbouring_cells(): void
+    {
+        $codes = app(CatalogSitemapIndexer::class)->variantCodesFromHtml(
+            '<table><tr><td>AB010008C</td><td>2 m x metr bieżący</td></tr>'
+            .'<tr><td>ALURAMP-YE</td><td>83mm</td></tr></table>'
+            .'<p>ISO 9001, EN388, GTM-ABC123, 12345678, D-41352, Nylon, PVC.</p>'
+        );
+
+        $this->assertSame(['AB010008C', 'ALURAMP-YE', 'D-41352'], $codes);
+    }
+
     private function seedPage(string $url, ?string $manufacturer = null, string $title = ''): void
     {
         $page = CatalogPage::query()->create([
