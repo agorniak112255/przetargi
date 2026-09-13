@@ -102,6 +102,153 @@ final class ProductMatchPickTest extends TestCase
         $this->assertSame(['A', 'C', 'B'], array_column($this->invoke($matcher, 'mapAiSearchRows', $rows, 3, 'ai'), 'sku'));
     }
 
+    // ------------------------------------------------------------------- dowody przed ceną
+
+    /**
+     * Poz. 12: wyszukiwarka dała 92% półbutom elektroizolacyjnym T5912100 i zwykłym półbutom
+     * OB ART 702 (płaskie 92 skrótu klasy obuwia). Przetarg brał tańsze ART 702, bo przy równym
+     * procencie rozstrzygała cena, a persistableScore ufał modelowi mimo explain 35 vs 99.
+     * Źródła (ai / ai_substitute) nie asertujemy — po W1 zmieni się z zamiennika na ai.
+     */
+    #[Test]
+    public function insulating_shoes_beat_cheaper_ob_shoes_at_equal_percent(): void
+    {
+        $this->settings();
+        $matcher = app(ProductMatchService::class);
+        $requirement = Opisowy15Fixture::requirement(12);
+        $ids = Opisowy15Fixture::seed(['T5912100', 'ART 702 Air 6660 OB A E FO']);
+        $insulating = Product::query()->findOrFail($ids['T5912100']);
+        $ob = Product::query()->findOrFail($ids['ART 702 Air 6660 OB A E FO']);
+        $this->assertLessThan(
+            $this->invoke($matcher, 'purchasePln', $insulating),
+            $this->invoke($matcher, 'purchasePln', $ob),
+            'test ma sens tylko, gdy zła karta jest tańsza',
+        );
+
+        $pick = $this->invoke($matcher, 'resolveBestPick', $requirement, collect([$insulating, $ob]), [
+            $this->candidate($insulating, 92),
+            $this->candidate($ob, 92),
+        ]);
+
+        $this->assertNotNull($pick);
+        $this->assertSame('T5912100', $pick['product']->sku);
+        $this->assertSame(92, $pick['score']);
+    }
+
+    /**
+     * Dawna klauzula „każdy kandydat ≥ min” wpuszczała do okna ceny 65% obok 96% — wygrywał
+     * tańszy. Przy równych dowodach o wyborze decyduje procent modelu, cena tylko w oknie 8 pkt.
+     */
+    #[Test]
+    public function higher_percent_wins_over_cheaper_card_when_gap_exceeds_price_window(): void
+    {
+        $this->settings();
+        $matcher = app(ProductMatchService::class);
+        $pricey = $this->apparel('KAL-P', 'Kalesony bawełniane męskie', 30.0);
+        $cheap = $this->apparel('KAL-C', 'Kalesony bawełniane męskie', 10.0);
+
+        $pick = $this->invoke($matcher, 'pickAuto', self::LONG_JOHNS, null, [
+            $this->candidate($pricey, 96),
+            $this->candidate($cheap, 65),
+        ], collect([$pricey, $cheap]));
+
+        $this->assertNotNull($pick);
+        $this->assertSame('KAL-P', $pick['product']->sku);
+        $this->assertSame(96, $pick['score']);
+    }
+
+    /**
+     * Ten sam procent modelu, obie karty z explain ≥ apply i bez twardych dowodów (bez SKU,
+     * modelu, klasy), ale karta dowodząca wymagania (nitryl, ściągacz) wygrywa z tańszą, ogólną
+     * kartą tej samej rodziny — cena rozstrzyga dopiero w oknie EVIDENCE_TIE_MARGIN.
+     * Procent modelu celowo bliski explain ogólnej karty, żeby o wyniku nie decydowało
+     * okno procentu (8 pkt), tylko okno dowodów.
+     */
+    #[Test]
+    public function better_proven_card_beats_cheaper_vaguer_card_at_equal_percent(): void
+    {
+        $this->settings();
+        $matcher = app(ProductMatchService::class);
+        $requirement = 'Rękawice nitrylowe ze ściągaczem';
+        $proven = $this->glove('NIT-FULL', 3.0);
+        $vague = Product::query()->findOrFail(Product::query()->create([
+            'sku' => 'RB-1',
+            'name' => 'Rękawice robocze',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze wzmacniane, dzianina bawełniana, rozmiary 7-11.',
+            'catalog_price_net' => 2.5,
+            'purchase_price' => 2.0,
+            'currency' => 'PLN',
+            'stock' => 50,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ])->id);
+        $margin = (new \ReflectionClassConstant(ProductMatchService::class, 'EVIDENCE_TIE_MARGIN'))->getValue();
+        $provenExplained = $matcher->explainMatch($requirement, $proven);
+        $vagueExplained = $matcher->explainMatch($requirement, $vague);
+        $this->assertGreaterThanOrEqual($matcher->applyMatchScore(), $vagueExplained['score'], 'ogólna karta ma przejść próg apply — test bada okno dowodów, nie odcięcie');
+        $this->assertGreaterThan($margin, $provenExplained['score'] - $vagueExplained['score'], 'różnica dowodów musi przekraczać margines remisu');
+        $this->assertSame(
+            $this->invoke($matcher, 'hardEvidenceLevel', $requirement, $proven, $provenExplained),
+            $this->invoke($matcher, 'hardEvidenceLevel', $requirement, $vague, $vagueExplained),
+            'karty mają różnić się tylko dowodami miękkimi',
+        );
+
+        $pick = $this->invoke($matcher, 'pickAuto', $requirement, null, [
+            $this->candidate($proven, 78),
+            $this->candidate($vague, 78),
+        ], collect([$proven, $vague]));
+
+        $this->assertNotNull($pick);
+        $this->assertSame('NIT-FULL', $pick['product']->sku);
+    }
+
+    /** Identyczne karty, równe dowody i równy procent → tańsza (intencja 976aefb zostaje). */
+    #[Test]
+    public function equal_evidence_and_percent_prefer_cheaper_card(): void
+    {
+        $this->settings();
+        $matcher = app(ProductMatchService::class);
+        $pricey = $this->apparel('KAL-P', 'Kalesony bawełniane męskie', 30.0);
+        $cheap = $this->apparel('KAL-C', 'Kalesony bawełniane męskie', 10.0);
+
+        $pick = $this->invoke($matcher, 'pickAuto', self::LONG_JOHNS, null, [
+            $this->candidate($pricey, 92),
+            $this->candidate($cheap, 92),
+        ], collect([$pricey, $cheap]));
+
+        $this->assertNotNull($pick);
+        $this->assertSame('KAL-C', $pick['product']->sku);
+    }
+
+    /**
+     * Twardy dowód (kod RNITZ z SIWZ trafia w SKU) rozstrzyga przed ceną nawet wtedy, gdy obie
+     * karty saturują explainMatch — bliźniak bez kodu jest tańszy, ale nie jest tym, o co proszono.
+     */
+    #[Test]
+    public function sku_hit_beats_cheaper_twin_at_equal_percent(): void
+    {
+        $this->settings();
+        $matcher = app(ProductMatchService::class);
+        $requirement = 'Rękawice robocze nitrylowe REJS RNITZ kat. 2 ze ściągaczem';
+        $coded = $this->glove('RNITZ-9', 3.0);
+        $twin = $this->glove('NIT-2', 2.0);
+        $this->assertGreaterThanOrEqual(
+            $matcher->minMatchScore(),
+            $matcher->explainMatch($requirement, $twin)['score'],
+            'bliźniak bez kodu ma być równie „udowodniony” — inaczej test nie sprawdza twardych dowodów',
+        );
+
+        $pick = $this->invoke($matcher, 'pickAuto', $requirement, null, [
+            $this->candidate($coded, 92),
+            $this->candidate($twin, 92),
+        ], collect([$coded, $twin]));
+
+        $this->assertNotNull($pick);
+        $this->assertSame('RNITZ-9', $pick['product']->sku);
+    }
+
     // ------------------------------------------------------ twarda bramka wierszy katalogowych
 
     /**
@@ -230,6 +377,27 @@ final class ProductMatchPickTest extends TestCase
             'purchase_price' => $purchase,
             'currency' => 'PLN',
             'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        return Product::query()->findOrFail($product->id);
+    }
+
+    /** Rękawice nitrylowe REJS kat. 2 — ta sama karta pod różnym SKU (z kodem z SIWZ albo bez). */
+    private function glove(string $sku, float $purchase): Product
+    {
+        $product = Product::query()->create([
+            'sku' => $sku,
+            'name' => 'Rękawice nitrylowe ze ściągaczem',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze nitrylowe kat. 2 ze ściągaczem. Materiał: nitryl.',
+            'enrichment_payload' => ['materials' => ['nitryl']],
+            'catalog_price_net' => $purchase * 1.25,
+            'purchase_price' => $purchase,
+            'currency' => 'PLN',
+            'stock' => 50,
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);

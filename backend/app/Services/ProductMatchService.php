@@ -52,6 +52,9 @@ final class ProductMatchService
      */
     private const CATALOG_ROW_SOURCES = [ProductAiSearchService::MATCH_SOURCE_CATALOG, 'rule'];
 
+    /** Różnica explainMatch, do której dwie karty uznajemy za równo udowodnione. */
+    private const EVIDENCE_TIE_MARGIN = 5;
+
     /** Progi z ustawień czytamy raz na żądanie — resolve() chodzi do bazy. */
     /** @var array<string, int> */
     private array $matchScores = [];
@@ -531,7 +534,15 @@ final class ProductMatchService
     }
 
     /**
-     * @param  list<array{product: Product, score: int, source: string}>  $options
+     * Rozstrzyga między kandydatami AI po dowodach z karty, nie po procencie i cenie (D5).
+     * Kolejność: explainMatch (w oknie EVIDENCE_TIE_MARGIN od najlepszej karty uznajemy remis),
+     * w remisie różnica twardych dowodów (SKU / model z cyframi / klasa ochrony), potem procent
+     * modelu (okno 8 pkt jak dotąd) i dopiero wtedy cena. Bez dawnej klauzuli „każdy ≥ min”:
+     * przez nią ART 702 (explain 35) wygrywał ceną z T5912100 (explain 99) przy równych 92%,
+     * a 65% pokonywało 96%. Równe dowody i bliski procent → nadal najtańszy (976aefb: nie
+     * przepłacamy za identyczne karty).
+     *
+     * @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int}>  $options
      * @return array{product: Product, score: int, source: string}|null
      */
     private function preferCheapestAmongCloseScores(array $options): ?array
@@ -539,26 +550,38 @@ final class ProductMatchService
         if ($options === []) {
             return null;
         }
-        $top = 0;
-        foreach ($options as $option) {
-            $top = max($top, $option['score']);
-        }
-        $minScore = $this->minMatchScore();
+        $topEvidence = max(array_column($options, 'evidence'));
         $near = array_values(array_filter(
             $options,
-            static fn (array $option): bool => $option['score'] >= $top - 8
-                || $option['score'] >= $minScore
+            static fn (array $option): bool => $option['evidence'] >= $topEvidence - self::EVIDENCE_TIE_MARGIN
+        ));
+        $topHard = max(array_column($near, 'hard'));
+        $near = array_values(array_filter(
+            $near,
+            static fn (array $option): bool => $option['hard'] === $topHard
+        ));
+        $topScore = max(array_column($near, 'score'));
+        $near = array_values(array_filter(
+            $near,
+            static fn (array $option): bool => $option['score'] >= $topScore - 8
         ));
         usort($near, function (array $a, array $b): int {
             $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
             if ($byPrice !== 0) {
                 return $byPrice;
             }
+            if ($a['score'] !== $b['score']) {
+                return $b['score'] <=> $a['score'];
+            }
 
-            return $b['score'] <=> $a['score'];
+            return $b['evidence'] <=> $a['evidence'];
         });
 
-        return $near[0] ?? null;
+        return [
+            'product' => $near[0]['product'],
+            'score' => $near[0]['score'],
+            'source' => $near[0]['source'],
+        ];
     }
 
     /** Wiersz listy katalogowej albo skrótu deterministycznego — nie ocena modelu. */
@@ -575,6 +598,36 @@ final class ProductMatchService
     {
         return in_array($source, ['ai', 'vector', 'ai_substitute'], true)
             || ($this->isCatalogRowSource($source) && $this->aiSettings->matchAllowsCatalogRows());
+    }
+
+    /**
+     * Twarde dowody na karcie: trafienie SKU/kodu (4), model z SIWZ z cyframi (2), klasa ochrony
+     * z atrybutów (1). Różnica w nich wyklucza rozstrzyganie ceną między bliskimi wynikami explain.
+     *
+     * @param  array{score: int, reasons: list<array{code: string, label: string, points: int}>}  $explained
+     */
+    private function hardEvidenceLevel(string $requirement, Product $product, array $explained): int
+    {
+        $level = 0;
+        if ($this->skuMatchScore($this->normalize($requirement), $this->codeCandidates($requirement), $product) >= 70) {
+            $level |= 4;
+        }
+        if ($this->modelFuzzy->score($requirement, $product) >= 80) {
+            foreach ($this->modelFuzzy->catalogModelNeedles($requirement) as $needle) {
+                if (preg_match('/\d/', $needle) === 1) {
+                    $level |= 2;
+                    break;
+                }
+            }
+        }
+        foreach ($explained['reasons'] as $reason) {
+            if (($reason['code'] ?? '') === 'attr_klasa') {
+                $level |= 1;
+                break;
+            }
+        }
+
+        return $level;
     }
 
     private function purchasePln(Product $product): float
@@ -1499,6 +1552,7 @@ final class ProductMatchService
                 continue;
             }
 
+            $explained = $this->explainMatch($requirement, $product);
             $options[] = [
                 'product' => $product,
                 'score' => $honest,
@@ -1506,10 +1560,24 @@ final class ProductMatchService
                 // pochodzenie (nie ocena modelu); progi i zaufanie czytają je po źródle.
                 'source' => $exact || $this->isCatalogRowSource($source) ? $source : 'ai_substitute',
                 'exact' => $exact,
+                'evidence' => $explained['score'],
+                'hard' => $this->hardEvidenceLevel($requirement, $product, $explained),
             ];
         }
 
         if ($options !== []) {
+            // Gdy choć jedna karta ma dowody ≥ min, karty z explain < apply (przeszły wyłącznie
+            // obejściem trustModel w persistableScore) nie mają czego bronić — także w roli
+            // „dokładnego” trafienia przed zamiennikami.
+            $minScore = $this->minMatchScore();
+            $applyScore = $this->applyMatchScore();
+            $anyProven = array_filter($options, static fn (array $row): bool => $row['evidence'] >= $minScore) !== [];
+            if ($anyProven) {
+                $options = array_values(array_filter(
+                    $options,
+                    static fn (array $row): bool => $row['evidence'] >= $applyScore
+                ));
+            }
             $exact = array_values(array_filter(
                 $options,
                 static fn (array $row): bool => $row['exact']
