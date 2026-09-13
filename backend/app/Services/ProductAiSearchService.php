@@ -3873,6 +3873,24 @@ final class ProductAiSearchService
      * @param  list<string>  $needles
      */
     /**
+     * Diagnostyka `tenders:debug-match`: które igły z warunków rankingu potwierdza tekst karty — te same igły i ten sam
+     * tekst karty, po których wybierane są karty do rankingu (cardsForRanking).
+     *
+     * @param  list<string>  $constraints
+     * @return array{needles: list<string>, matched: list<string>}
+     */
+    public function debugConstraintEvidence(Product $product, array $constraints): array
+    {
+        $needles = $this->constraintNeedles($constraints);
+        $haystack = $this->rankingHaystack($product);
+
+        return [
+            'needles' => $needles,
+            'matched' => array_values(array_filter($needles, static fn (string $needle): bool => str_contains($haystack, $needle))),
+        ];
+    }
+
+    /**
      * Ile igieł z warunków występuje w tekście karty.
      *
      * @param  list<string>  $needles

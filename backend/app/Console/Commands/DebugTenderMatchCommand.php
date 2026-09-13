@@ -82,6 +82,46 @@ final class DebugTenderMatchCommand extends Command
     }
 
     /**
+     * Dlaczego karta (nie) weszła do 24 kart rankingu: ile igieł z warunków rankingu potwierdza na tle najsłabszej
+     * karty w rankingu i czy ma opis i normy. Przetarg 1 poz. 7: ATG 44-304 była w kandydatach, a poza kartami
+     * rankingu na produkcji, choć na kopii katalogu potwierdzała wszystkie igły.
+     *
+     * @param  list<int>  $cardIds
+     * @param  array<string, mixed>  $trace
+     */
+    private function constraintEvidenceLine(string $sku, int $skuId, array $cardIds, array $trace): string
+    {
+        $sets = is_array($trace['rank_constraints'] ?? null) ? $trace['rank_constraints'] : [];
+        $last = $sets === [] ? [] : $sets[array_key_last($sets)];
+        $constraints = array_values(array_filter(is_array($last) ? $last : [], 'is_string'));
+        $product = Product::query()->find($skuId);
+        if (! $product instanceof Product) {
+            return 'dowód warunków karty '.$sku.': brak karty';
+        }
+        $search = app(ProductAiSearchService::class);
+        $own = $search->debugConstraintEvidence($product, $constraints);
+        $weakest = null;
+        foreach (Product::query()->whereIn('id', $cardIds)->get() as $card) {
+            $hits = count($search->debugConstraintEvidence($card, $constraints)['matched']);
+            if ($weakest === null || $hits < $weakest['hits']) {
+                $weakest = ['sku' => (string) $card->sku, 'hits' => $hits];
+            }
+        }
+        $total = count($own['needles']);
+
+        return sprintf(
+            'dowód warunków karty %s: %d/%d igieł %s · najsłabsza karta w rankingu: %s · opis: %d znaków · normy: %s',
+            $sku,
+            count($own['matched']),
+            $total,
+            json_encode($own['matched'], JSON_UNESCAPED_UNICODE),
+            $weakest === null ? 'brak' : $weakest['sku'].' ('.$weakest['hits'].'/'.$total.')',
+            mb_strlen((string) ($product->description ?? '')),
+            json_encode(mb_substr((string) ($product->norms ?? ''), 0, 80), JSON_UNESCAPED_UNICODE),
+        );
+    }
+
+    /**
      * @param  array<string, mixed>  $result
      * @param  array<string, mixed>  $trace
      */
@@ -140,6 +180,9 @@ final class DebugTenderMatchCommand extends Command
                 in_array($skuId, $cardIds, true) ? 'tak' : 'nie',
                 $score === null ? 'brak' : (string) $score,
             ));
+            if ($skuId > 0) {
+                $this->line($this->constraintEvidenceLine($sku, $skuId, $cardIds, $trace));
+            }
         }
 
         $products = is_array($result['products'] ?? null) ? array_slice($result['products'], 0, 10) : [];
