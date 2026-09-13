@@ -600,6 +600,38 @@ final class ProductMatchService
             || ($this->isCatalogRowSource($source) && $this->aiSettings->matchAllowsCatalogRows());
     }
 
+    /** Trafienie SKU/kodu albo modelu z SIWZ — to samo, co waży persistableScore. */
+    private function skuishScore(string $requirement, Product $product): int
+    {
+        return max(
+            $this->skuMatchScore(
+                $this->normalize($requirement),
+                $this->codeCandidates($requirement),
+                $product
+            ),
+            $this->modelFuzzy->score($requirement, $product)
+        );
+    }
+
+    /**
+     * Próg zapisu (D1): trafienie zapisujemy od minMatchScore. Poniżej tylko wyjątkowo —
+     * trafienie SKU/kodu (skuish ≥ 70, także bez cyfr: RNITZ) albo wiersz katalogowy przy jawnym
+     * match_allow_catalog_rows=true (próg apply — świadoma decyzja admina). Inaczej pozycja zostaje
+     * „brak”: 58% to nie dopasowanie, a brak informacji nie może wyglądać jak fakt. Liczone
+     * po persistableScore, którego semantyka (pinowane 45 i 94) zostaje bez zmian.
+     */
+    private function meetsPersistThreshold(string $requirement, Product $product, int $honest, string $source): bool
+    {
+        if ($honest >= $this->minMatchScore()) {
+            return true;
+        }
+        if ($this->skuishScore($requirement, $product) >= 70) {
+            return true;
+        }
+
+        return $this->isCatalogRowSource($source) && $this->aiSettings->matchAllowsCatalogRows();
+    }
+
     /**
      * Twarde dowody na karcie: trafienie SKU/kodu (4), model z SIWZ z cyframi (2), klasa ochrony
      * z atrybutów (1). Różnica w nich wyklucza rozstrzyganie ceną między bliskimi wynikami explain.
@@ -1256,6 +1288,9 @@ final class ProductMatchService
         if ($honest === null) {
             return null;
         }
+        if (! $this->meetsPersistThreshold($requirement, $picked['product'], $honest, $source)) {
+            return null;
+        }
         $picked['score'] = $honest;
 
         return $picked;
@@ -1551,6 +1586,9 @@ final class ProductMatchService
                 && $topAi['score'] < $this->substituteMatchScore()) {
                 continue;
             }
+            if (! $this->meetsPersistThreshold($requirement, $product, $honest, $source)) {
+                continue;
+            }
 
             $explained = $this->explainMatch($requirement, $product);
             $options[] = [
@@ -1588,7 +1626,8 @@ final class ProductMatchService
 
         if ($heuristic !== null && $heuristic['score'] >= $this->applyMatchScore()) {
             $honest = $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']);
-            if ($honest !== null) {
+            if ($honest !== null
+                && $this->meetsPersistThreshold($requirement, $heuristic['product'], $honest, 'heuristic')) {
                 return [
                     'product' => $heuristic['product'],
                     'score' => $honest,

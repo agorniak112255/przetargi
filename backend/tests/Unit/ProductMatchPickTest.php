@@ -249,6 +249,93 @@ final class ProductMatchPickTest extends TestCase
         $this->assertSame('RNITZ-9', $pick['product']->sku);
     }
 
+    // ------------------------------------------------------------------ próg zapisu (D1)
+
+    /**
+     * 58% nie jest dopasowaniem: bez trafienia SKU/kodu zapis dopiero od minMatchScore (65),
+     * a nie od apply (40) czy substitute (55). Dotąd pozycje z 58/62/63% wyglądały jak
+     * dopasowane, a „Dopasuj puste” przeliczał je w kółko (AUDYT_A, przyczyna 9).
+     */
+    #[Test]
+    public function ai_percent_below_min_without_sku_hit_is_not_persisted(): void
+    {
+        $this->settings();
+        $matcher = app(ProductMatchService::class);
+        $requirement = 'Rękawice robocze nitrylowe kat. 2 ze ściągaczem';
+        $glove = $this->glove('NIT-2', 2.0);
+        $this->assertGreaterThanOrEqual($matcher->minMatchScore(), $matcher->explainMatch($requirement, $glove)['score'], 'karta pasuje — odcina wyłącznie procent modelu');
+
+        $weak = $this->invoke($matcher, 'pickAuto', $requirement, null, [$this->candidate($glove, 58)], collect([$glove]));
+        $this->assertNull($weak, '58% bez kodu → „brak”, nie zapis');
+
+        $enough = $this->invoke($matcher, 'pickAuto', $requirement, null, [$this->candidate($glove, $matcher->minMatchScore())], collect([$glove]));
+        $this->assertNotNull($enough);
+        $this->assertSame($matcher->minMatchScore(), $enough['score']);
+    }
+
+    /** Ten sam próg dla heurystyki bez mocnego SKU (gałąź po pustej liście kandydatów AI). */
+    #[Test]
+    public function heuristic_below_min_without_sku_hit_is_not_persisted(): void
+    {
+        $this->settings();
+        $matcher = app(ProductMatchService::class);
+        $requirement = 'Rękawice nitrylowe ze ściągaczem';
+        $vague = Product::query()->findOrFail(Product::query()->create([
+            'sku' => 'RB-1',
+            'name' => 'Rękawice robocze',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze wzmacniane, dzianina bawełniana, rozmiary 7-11.',
+            'catalog_price_net' => 2.5,
+            'purchase_price' => 2.0,
+            'currency' => 'PLN',
+            'stock' => 50,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ])->id);
+
+        $pick = $this->invoke($matcher, 'pickAuto', $requirement, ['product' => $vague, 'score' => 50], [], collect([$vague]));
+
+        $this->assertNull($pick, 'heurystyka 50% bez kodu → „brak”');
+    }
+
+    /**
+     * Wyjątek D1(a): trafienie SKU/kodu z SIWZ (skuish ≥ 70, także bez cyfr — RNITZ) zapisuje
+     * się od progu apply, tak jak pinowane persistableScore(…, 45) === 45.
+     */
+    #[Test]
+    public function sku_hit_is_persisted_from_apply_threshold(): void
+    {
+        $this->settings();
+        $matcher = app(ProductMatchService::class);
+        $requirement = 'Rękawice robocze nitrylowe REJS RNITZ kat. 2 ze ściągaczem';
+        $coded = $this->glove('RNITZ-9', 3.0);
+
+        $pick = $this->invoke($matcher, 'pickAuto', $requirement, null, [$this->candidate($coded, 45)], collect([$coded]));
+
+        $this->assertNotNull($pick);
+        $this->assertSame('RNITZ-9', $pick['product']->sku);
+        $this->assertSame(45, $pick['score']);
+    }
+
+    /**
+     * Wyjątek D1(b): wiersz katalogowy przy jawnym match_allow_catalog_rows=true zachowuje próg
+     * apply — świadoma decyzja admina (po W4 zapasowa lista daje ≤ 50%).
+     */
+    #[Test]
+    public function catalog_row_keeps_apply_threshold_with_explicit_admin_consent(): void
+    {
+        $this->settings(['match_allow_catalog_rows' => true]);
+        $matcher = app(ProductMatchService::class);
+        $product = $this->apparel('KAL-1', 'Kalesony bawełniane męskie');
+
+        $pick = $this->invoke($matcher, 'pickAuto', self::LONG_JOHNS, null, [$this->candidate($product, 50, 'catalog')], collect([$product]));
+
+        $this->assertNotNull($pick);
+        $this->assertSame('catalog', $pick['source']);
+        $this->assertSame(50, $pick['score']);
+    }
+
     // ------------------------------------------------------ twarda bramka wierszy katalogowych
 
     /**
