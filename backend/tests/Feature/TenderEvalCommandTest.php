@@ -89,6 +89,7 @@ final class TenderEvalCommandTest extends TestCase
             ->expectsOutputToContain('test-03-sandaly')
             ->expectsOutputToContain('Podsumowanie')
             ->expectsOutputToContain('Stabilne między przebiegami')
+            ->expectsOutputToContain('razem (2 przebiegi)')
             ->expectsOutputToContain('Raport:')
             ->assertSuccessful();
 
@@ -99,15 +100,19 @@ final class TenderEvalCommandTest extends TestCase
         $this->assertCount(2, $report['cases'][0]['runs']);
         $verdict = $report['cases'][0]['runs'][0]['verdict'];
         $this->assertContains($verdict, ['trafna', 'zakazana', 'inna', 'pusta']);
-        $this->assertSame('ARSO 701 616560 S1 P ESD=95', $report['cases'][0]['runs'][0]['top_model']);
+        $this->assertSame('ARSO 701 616560 S1 P ESD=95 (model)', $report['cases'][0]['runs'][0]['top_model']);
 
-        // baza z innym werdyktem → tabela zmian
-        $report['cases'][0]['runs'][0]['verdict'] = $verdict === 'trafna' ? 'pusta' : 'trafna';
+        // baza z innymi werdyktami w obu przebiegach → tabela zmian liczona ze wszystkich przebiegów
+        $other = $verdict === 'trafna' ? 'pusta' : 'trafna';
+        $report['cases'][0]['runs'][0]['verdict'] = $other;
+        $report['cases'][0]['runs'][1]['verdict'] = $other;
         $baseline = storage_path('framework/testing/tender-eval-baseline-'.uniqid().'.json');
         file_put_contents($baseline, json_encode($report, JSON_UNESCAPED_UNICODE));
         try {
             $this->artisan('tenders:eval', ['--file' => $this->golden, '--filter' => '', '--baseline' => $baseline])
-                ->expectsOutputToContain('Zmiana względem')
+                // jedna linia nagłówka — jedno oczekiwanie (expectsOutputToContain rozlicza po linii)
+                ->expectsOutputToContain('.json (wszystkie przebiegi)')
+                ->expectsOutputToContain('średnio trafnych na przebieg')
                 ->assertSuccessful();
         } finally {
             @unlink($baseline);

@@ -150,7 +150,9 @@ final class TenderEvalCommand extends Command
         $top = null;
         $first = is_array($row['products'][0] ?? null) ? $row['products'][0] : null;
         if ($first !== null) {
-            $top = (string) ($first['sku'] ?? '').'='.(int) ($first['ai_match_percent'] ?? 0);
+            // źródło: płaskie 92 z reguły klasy obuwia (rule) wyglądało jak ocena modelu (poz. 12)
+            $top = (string) ($first['sku'] ?? '').'='.(int) ($first['ai_match_percent'] ?? 0)
+                .' ('.(string) ($first['ai_match_source'] ?? 'model').')';
         }
         if ($pick === null) {
             return ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => $top, 'reason' => $decision['reason']];
@@ -236,6 +238,21 @@ final class TenderEvalCommand extends Command
                 (string) $counts[self::VERDICT_EMPTY],
             ];
         }
+        if (count($summary['per_run']) > 1) {
+            $total = array_fill_keys(self::VERDICTS, 0);
+            foreach ($summary['per_run'] as $counts) {
+                foreach (self::VERDICTS as $verdict) {
+                    $total[$verdict] += $counts[$verdict];
+                }
+            }
+            $rows[] = [
+                'razem ('.count($summary['per_run']).' przebiegi)',
+                $total[self::VERDICT_HIT].'/'.($cases * count($summary['per_run'])),
+                (string) $total[self::VERDICT_FORBIDDEN],
+                (string) $total[self::VERDICT_OTHER],
+                (string) $total[self::VERDICT_EMPTY],
+            ];
+        }
         $this->table(['', 'trafne', 'zakazane', 'inne (złe)', 'puste'], $rows);
         $this->line(sprintf('Stabilne między przebiegami: %d/%d%s', $summary['stable'], $cases, $summary['unstable'] === []
             ? ''
@@ -243,7 +260,12 @@ final class TenderEvalCommand extends Command
         $this->line('Próg akceptacji zmiany (AUDYT_4): zakazane = 0; złe karty (zakazane + inne) nie więcej niż w bazie; dziś trafne dalej trafne; trafnych ≥ 10/15.');
     }
 
-    /** @param list<array{id: string, runs: list<array<string, mixed>>}> $results */
+    /**
+     * Porównanie z bazą po udziale werdyktów ze wszystkich przebiegów. Przebieg 1 osobno mylił
+     * niestabilność modelu ze skutkiem zmiany (poz. 8: trafna 1/2 przed i po, a raport pisał „regres”).
+     *
+     * @param  list<array{id: string, runs: list<array<string, mixed>>}>  $results
+     */
     private function renderBaseline(string $path, array $results): void
     {
         if (! is_file($path)) {
@@ -260,33 +282,67 @@ final class TenderEvalCommand extends Command
         }
         $base = [];
         foreach ($baseCases as $case) {
-            if (is_array($case) && is_string($case['id'] ?? null)) {
-                $base[$case['id']] = (string) ($case['runs'][0]['verdict'] ?? self::VERDICT_EMPTY);
+            if (is_array($case) && is_string($case['id'] ?? null) && is_array($case['runs'] ?? null)) {
+                $base[$case['id']] = $this->verdictShares($case['runs']);
             }
         }
 
-        $this->line('<options=bold>Zmiana względem '.basename($path).' (przebieg 1)</>');
+        $this->line('<options=bold>Zmiana względem '.basename($path).' (wszystkie przebiegi)</>');
         $changes = [];
         $better = 0;
         $worse = 0;
+        $totals = ['before_hit' => 0.0, 'after_hit' => 0.0, 'before_bad' => 0.0, 'after_bad' => 0.0];
         foreach ($results as $result) {
-            $before = $base[$result['id']] ?? null;
-            $after = (string) ($result['runs'][0]['verdict'] ?? self::VERDICT_EMPTY);
-            if ($before === null || $before === $after) {
+            if (! isset($base[$result['id']])) {
                 continue;
             }
-            $rank = [self::VERDICT_HIT => 3, self::VERDICT_EMPTY => 2, self::VERDICT_OTHER => 1, self::VERDICT_FORBIDDEN => 0];
-            $label = $rank[$after] > $rank[$before] ? 'poprawa' : 'regres';
+            $before = $base[$result['id']];
+            $after = $this->verdictShares($result['runs']);
+            $totals['before_hit'] += $before['hit'];
+            $totals['after_hit'] += $after['hit'];
+            $totals['before_bad'] += $before['bad'];
+            $totals['after_bad'] += $after['bad'];
+            // lepiej: więcej trafnych albo mniej złych kart (zła karta gorsza niż pusta)
+            $delta = ($after['hit'] - $before['hit']) - ($after['bad'] - $before['bad']);
+            if (abs($delta) < 0.001) {
+                continue;
+            }
+            $label = $delta > 0 ? 'poprawa' : 'regres';
             $label === 'poprawa' ? $better++ : $worse++;
-            $changes[] = [mb_substr($result['id'], 0, 34), $before, $after, $label];
+            $changes[] = [mb_substr($result['id'], 0, 34), $before['label'], $after['label'], $label];
         }
         if ($changes === []) {
-            $this->line('Bez zmian werdyktów.');
-
-            return;
+            $this->line('Bez zmian udziału trafnych i złych kart.');
+        } else {
+            $this->table(['przypadek', 'przed (trafne/złe)', 'po (trafne/złe)', 'ocena'], $changes);
         }
-        $this->table(['przypadek', 'przed', 'po', 'ocena'], $changes);
-        $this->line("Poprawy: {$better} · regresy: {$worse}");
+        $this->line(sprintf(
+            'Poprawy: %d · regresy: %d · średnio trafnych na przebieg: %.1f → %.1f · złych kart (zakazane + inne): %.1f → %.1f',
+            $better,
+            $worse,
+            $totals['before_hit'],
+            $totals['after_hit'],
+            $totals['before_bad'],
+            $totals['after_bad'],
+        ));
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $runs
+     * @return array{hit: float, bad: float, label: string}
+     */
+    private function verdictShares(array $runs): array
+    {
+        $count = max(1, count($runs));
+        $hit = 0;
+        $bad = 0;
+        foreach ($runs as $run) {
+            $verdict = (string) ($run['verdict'] ?? self::VERDICT_EMPTY);
+            $hit += $verdict === self::VERDICT_HIT ? 1 : 0;
+            $bad += in_array($verdict, [self::VERDICT_FORBIDDEN, self::VERDICT_OTHER], true) ? 1 : 0;
+        }
+
+        return ['hit' => $hit / $count, 'bad' => $bad / $count, 'label' => "{$hit}/{$count} · {$bad}/{$count}"];
     }
 
     /** @param array<string, mixed> $report */
