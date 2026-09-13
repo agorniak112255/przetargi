@@ -125,6 +125,7 @@ final class TenderEvalCommand extends Command
         $results = array_values($results);
         $summary = $this->summarize($results, $runs);
         $this->renderCases($results, $runs);
+        $this->renderBadPicks($results);
         $this->renderSummary($summary, $runs, count($cases));
 
         $baseline = trim((string) $this->option('baseline'));
@@ -237,6 +238,37 @@ final class TenderEvalCommand extends Command
                 ];
             }, $results),
         );
+    }
+
+    /**
+     * Złe wybory (zakazana / inna) ze wszystkich przebiegów — tabela przypadków pokazuje tylko przebieg 1,
+     * a poz. 15 dała kartę zakazaną wyłącznie w przebiegu 2 i nie było widać, jaką ani skąd.
+     *
+     * @param  list<array{id: string, runs: list<array<string, mixed>>}>  $results
+     */
+    private function renderBadPicks(array $results): void
+    {
+        $rows = [];
+        foreach ($results as $result) {
+            foreach ($result['runs'] as $i => $run) {
+                if (! in_array($run['verdict'] ?? null, [self::VERDICT_FORBIDDEN, self::VERDICT_OTHER], true)) {
+                    continue;
+                }
+                $rows[] = [
+                    mb_substr($result['id'], 0, 34),
+                    (string) ($i + 1),
+                    (string) $run['verdict'],
+                    mb_substr((string) ($run['sku'] ?? ''), 0, 34),
+                    ($run['score'] ?? null) === null ? '—' : $run['score'].'%',
+                    (string) ($run['source'] ?? ''),
+                ];
+            }
+        }
+        if ($rows === []) {
+            return;
+        }
+        $this->line('<options=bold>Złe wybory (wszystkie przebiegi)</>');
+        $this->table(['przypadek', 'przebieg', 'werdykt', 'karta', 'zapis', 'źródło'], $rows);
     }
 
     /** @param array{per_run: list<array<string, int>>, stable: int, unstable: list<string>, model_states: array<string, int>} $summary */
