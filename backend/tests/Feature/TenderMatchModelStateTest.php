@@ -151,6 +151,76 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertSame($reasons, $item->ai_match_reasons);
     }
 
+    /**
+     * Przetarg 1, poz. 8 i 10: karta wybrana wcześniej przez model została wyparta przez wybór po
+     * słowach karty, gdy model w kolejnym przebiegu nic nie wskazał. Karta modelu ma zostać.
+     */
+    public function test_word_only_pick_does_not_replace_card_chosen_earlier_by_model(): void
+    {
+        $this->glove('RNITZ-M');
+        $modelCard = $this->plainGlove();
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+        $item->forceFill([
+            'main_product_id' => $modelCard->id,
+            'status' => 'matched',
+            'match_source' => 'ai',
+            'ai_match_percent' => 90,
+            'ai_match_reasons' => [['code' => 'ai', 'label' => 'Model: rękawice nitrylowe', 'points' => 90]],
+            'offer_price' => 5,
+        ])->save();
+
+        app(ProductMatchService::class)->matchTender($tender, false);
+        $item->refresh();
+
+        $this->assertSame((int) $modelCard->id, (int) $item->main_product_id, 'wybór po słowach nie wypiera karty modelu');
+        $this->assertSame('not_reconfirmed', $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertLessThanOrEqual(70, (int) $item->ai_match_percent);
+    }
+
+    /** Kontrola: karta dobrana wcześniej po słowach może zostać zastąpiona lepszym wyborem po słowach. */
+    public function test_word_only_pick_still_replaces_earlier_word_only_card(): void
+    {
+        $better = $this->glove('RNITZ-M');
+        $wordCard = $this->plainGlove();
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+        $item->forceFill([
+            'main_product_id' => $wordCard->id,
+            'status' => 'matched',
+            'match_source' => 'heuristic',
+            'ai_match_percent' => 70,
+            'ai_match_reasons' => [['code' => 'heuristic_only', 'label' => 'po słowach', 'points' => 70]],
+            'offer_price' => 5,
+        ])->save();
+
+        app(ProductMatchService::class)->matchTender($tender, false);
+        $item->refresh();
+
+        $this->assertSame((int) $better->id, (int) $item->main_product_id, 'fixture: słowa karty wskazują lepszą kartę');
+        $this->assertSame('heuristic_only', $item->ai_match_reasons[0]['code'] ?? null);
+    }
+
+    private function plainGlove(): Product
+    {
+        return Product::query()->create([
+            'sku' => 'NITRO-1',
+            'name' => 'Rękawice nitrylowe',
+            'manufacturer' => 'INNY',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice nitrylowe.',
+            'catalog_price_net' => 4,
+            'purchase_price' => 3,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+    }
+
     private function glove(string $sku): Product
     {
         return Product::query()->create([

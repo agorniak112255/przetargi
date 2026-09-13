@@ -85,6 +85,9 @@ final class ProductMatchService
     /** Wybór człowieka (ręczna karta, tańszy zamiennik z porównania) — przebieg go nie tnie. */
     private const USER_DECIDED_SOURCES = ['manual', 'battlecard'];
 
+    /** Karta wskazana kiedyś przez model — wybór po samych słowach karty jej nie wypiera. */
+    private const MODEL_PICK_SOURCES = ['ai', 'vector', 'ai_substitute'];
+
     /** Etap paczki przed modelem: kody z SIWZ i pula kart. */
     public const PROGRESS_STAGE_PREPARE = 'prepare';
 
@@ -255,7 +258,7 @@ final class ProductMatchService
                 $this->lastExternalHint = null;
                 $this->lastNoMatchReason = null;
                 $pick = $this->resolveBestPick($item->requirement, $products);
-                $applied = $pick !== null && $this->applyProduct(
+                $applied = $pick !== null && ! $this->heuristicWouldReplaceModelPick($item, $pick) && $this->applyProduct(
                     $item,
                     $pick['product'],
                     $pick['score'],
@@ -1315,7 +1318,8 @@ final class ProductMatchService
                 }
             }
         }
-        if (! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason, (bool) ($pick['heuristic_only'] ?? false))) {
+        if ($this->heuristicWouldReplaceModelPick($item, $pick)
+            || ! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason, (bool) ($pick['heuristic_only'] ?? false))) {
             $this->applyNoCatalogMatch($item, $products);
             $item->refresh();
 
@@ -2270,6 +2274,28 @@ final class ProductMatchService
         ];
         $item->save();
         $this->pricing->recalculateItemMargin($item);
+    }
+
+    /**
+     * Przetarg 1: poz. 8 (3M 9914 od modelu, 95%) i poz. 10 (apteczka Cederroth od modelu) zostały
+     * wyparte w kolejnym przebiegu przez wybór po słowach karty (SPIRO P1, plastry), bo model tym razem
+     * nic nie wskazał. Taki wybór nie jest nowym dowodem — poprzednia karta modelu zostaje
+     * (applyNoCatalogMatch: sufit 70% i etykieta „nie potwierdzono”), o ile nadal przechodzi bramki.
+     *
+     * @param  array{product: Product, score: int, source: string, heuristic_only?: bool}  $pick
+     */
+    private function heuristicWouldReplaceModelPick(TenderItem $item, array $pick): bool
+    {
+        if (! ($pick['heuristic_only'] ?? false) || $item->main_product_id === null
+            || (int) $item->main_product_id === (int) $pick['product']->id
+            || ! in_array($item->match_source, self::MODEL_PICK_SOURCES, true)) {
+            return false;
+        }
+        $item->loadMissing('mainProduct');
+        $existing = $item->mainProduct;
+
+        return $existing instanceof Product
+            && $this->persistableScore($item->requirement, $existing, 100) !== null;
     }
 
     /**
