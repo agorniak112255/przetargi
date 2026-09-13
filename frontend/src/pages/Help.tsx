@@ -1587,176 +1587,197 @@ function InquiriesHelp() {
       slides={[
         {
           action: 'Wklejenie maila klienta',
-          does: 'Z treści maila system wyciągnie produkty z katalogu i przygotuje szkic odpowiedzi. Nic nie wysyła pocztą.',
-          click: 'Menu „Zapytania”, wklej całą treść w pole „Treść maila”.',
+          does: 'Z treści maila system wyciąga pozycje, dobiera towary z katalogu i od razu pisze list. Nic nie wysyła pocztą. Ton, tryb cen i marża są jak w Twoim ostatnim zapytaniu.',
+          click: 'Menu „Zapytania”, wklej całą treść w pole „Treść maila”, potem „Przygotuj odpowiedź” (albo Ctrl+Enter). Temat, klient i ton są pod „Więcej”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Zapytania">
               <h1 className="mb-1 text-xl font-semibold">Zapytania</h1>
               <p className="mb-4 text-sm text-slate-500">
-                Wklej mail klienta. System dopyta tylko o niuanse, potem otworzy okno z listem do skopiowania.
+                Wklej mail klienta. Dostaniesz gotowy list i listę pozycji, które warto sprawdzić przed wysłaniem.
               </p>
               <Card>
-                <div className="grid gap-3 lg:grid-cols-[1fr_12rem]">
-                  <label className="block text-xs">
-                    Treść maila *
-                    <Mark>
-                      <div className="mt-1 min-h-[120px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
-                        Potrzebuję rękawice do pracy przy piecu szkła, ok. 500°C…
-                      </div>
-                    </Mark>
-                  </label>
-                  <div className="space-y-3">
-                    <Field label="Temat (opcjonalnie)" />
-                    <Field label="Ton" value="Formalny" />
-                    <Btn label="Przygotuj odpowiedź" />
-                  </div>
+                <label className="block text-xs">
+                  Treść maila *
+                  <Mark>
+                    <div className="mt-1 min-h-[110px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+                      Proszę o ofertę: 30szt rękawice chemoodporne rozmiar 10, 4szt kalosze chemoodporne rozmiar 43…
+                    </div>
+                  </Mark>
+                </label>
+                <div className="mt-3 flex items-center gap-3">
+                  <Btn label="Przygotuj odpowiedź" />
+                  <span className="text-[11px] text-slate-400">Ctrl+Enter wysyła</span>
+                  <span className="text-xs text-blue-600">Więcej</span>
                 </div>
               </Card>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Analiza zapytania',
-          does: 'Model czyta mail i szuka w katalogu. Przycisk pokazuje spinner i sekundy — nie odświeżaj strony.',
-          click: '„Przygotuj odpowiedź”.',
-          tone: 'violet',
-          screen: (
-            <AppFrame nav="Zapytania">
-              <h1 className="mb-4 text-xl font-semibold">Zapytania</h1>
-              <Card>
-                <Mark>
-                  <span className="inline-flex w-full items-center justify-center gap-2 rounded bg-violet-600 px-3 py-2 text-xs font-medium text-white">
-                    <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    Analizuję zapytanie · 9s
-                  </span>
-                </Mark>
+              <Card className="mt-3">
+                <p className="mb-2 text-sm font-semibold">Ostatnie</p>
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b bg-slate-50">
+                      <Th>Temat</Th>
+                      <Th>Klient</Th>
+                      <Th>Status</Th>
+                      <Th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b">
+                      <td className="p-2">Oferta — Rękawice i kalosze</td>
+                      <td className="p-2">Firma Test</td>
+                      <td className="p-2">
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                          Do sprawdzenia (1)
+                        </span>
+                      </td>
+                      <td className="p-2 text-blue-600">Otwórz</td>
+                    </tr>
+                    <tr className="border-b">
+                      <td className="p-2">Oferta — Okulary</td>
+                      <td className="p-2">—</td>
+                      <td className="p-2">
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                          Wysłano
+                        </span>
+                      </td>
+                      <td className="p-2 text-blue-600">Otwórz</td>
+                    </tr>
+                  </tbody>
+                </table>
               </Card>
             </AppFrame>
           ),
         },
         {
-          action: 'Doprecyzowanie niuansów',
-          does: 'Każda pozycja ma cytat, towar i zamienniki. Przy SKU jest Opis. Na końcu cena katalogowa albo katalog + marża (18%).',
-          click: 'Chipy przy pozycji, potem „Napisz odpowiedź”.',
+          action: 'List od razu, pozycje do sprawdzenia oflagowane',
+          does: 'Po lewej gotowy temat i treść. Po prawej każda pozycja z cytatem klienta, dobranym towarem i plakietką: zielona „pewne”, żółta „sprawdź”, czerwona „brak w katalogu”. Baner u góry mówi, ile pozycji wymaga sprawdzenia.',
+          click: 'Przejrzyj tylko pozycje z żółtą lub czerwoną plakietką. Pozycje „pewne” nie wymagają nic.',
+          tone: 'amber',
+          screen: (
+            <AppFrame nav="Zapytania">
+              <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
+                1 z 2 pozycji wymaga sprawdzenia
+              </p>
+              <div className="grid gap-3 lg:grid-cols-2">
+                <Card>
+                  <p className="text-xs font-medium text-slate-600">Temat</p>
+                  <p className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm">Oferta — Rękawice i kalosze</p>
+                  <p className="mt-3 text-xs font-medium text-slate-600">Treść</p>
+                  <p className="mt-1 min-h-[72px] rounded border border-slate-300 px-2 py-1.5 text-xs text-slate-700">
+                    Dzień dobry, dziękujemy za zapytanie. 1. Rękawice chemoodporne — AlphaTec 37900VP (Ansell), 30 szt., 22,15 zł
+                    netto / szt. 2. Kalosze chemoodporne — pozycję potwierdzimy po weryfikacji dostępności…
+                  </p>
+                </Card>
+                <Card>
+                  <p className="mb-2 text-sm font-semibold">Pozycje</p>
+                  <div className="text-xs">
+                    <p>
+                      <span className="rounded bg-slate-800 px-1.5 py-0.5 font-semibold text-white">1</span>{' '}
+                      <span className="font-medium">30 szt.</span> · rozm. 10{' '}
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                        pewne
+                      </span>
+                    </p>
+                    <p className="mt-1 border-l-4 border-amber-400 bg-amber-50 px-2 py-1">30szt Rękawice chemoodporne rozmiar 10</p>
+                    <p className="mt-1">
+                      <span className="font-semibold">37900VP</span> · AlphaTec 37900VP · Ansell · 22,15 zł
+                    </p>
+                  </div>
+                  <div className="mt-3 border-t border-slate-100 pt-2 text-xs">
+                    <p>
+                      <span className="rounded bg-slate-800 px-1.5 py-0.5 font-semibold text-white">2</span>{' '}
+                      <span className="font-medium">4 szt.</span> · rozm. 43{' '}
+                      <Mark>
+                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-800">
+                          brak w katalogu
+                        </span>
+                      </Mark>
+                    </p>
+                    <p className="mt-1 border-l-4 border-amber-400 bg-amber-50 px-2 py-1">4szt Kalosze chemoodporne rozmiar 43</p>
+                    <p className="mt-1 text-slate-600">W liście: sprawdzimy i wrócimy z propozycją — bez SKU.</p>
+                  </div>
+                </Card>
+              </div>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Kliknięcie alternatywy przepisuje list',
+          does: 'Pod każdą pozycją są chipy: kandydaci z katalogu (SKU · nazwa · % dopasowania) i „Sprawdzimy i wrócimy”. Kliknięcie od razu przepisuje list. „Opis” pokazuje kartę towaru. Niżej: ceny dla całej oferty, dopisek do listu i lista pytań klienta.',
+          click: 'Chip z towarem albo „Sprawdzimy i wrócimy”. Jeśli ręcznie zmieniłeś treść, system zapyta, czy ją nadpisać.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Zapytania">
-              <div className="mx-auto max-w-4xl rounded-2xl bg-white shadow-sm">
-                <div className="border-b border-slate-100 px-6 py-4">
-                  <p className="text-base font-semibold">Doprecyzowanie</p>
-                  <p className="text-sm text-slate-500">2 pozycje z zapytania — przy każdej widać cytat klienta.</p>
-                </div>
-                <div className="space-y-3 px-6 py-4">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <p className="mb-2 text-sm font-semibold">1 · 30 szt. · rozm. 10</p>
-                    <p className="mb-2 border-l-4 border-amber-400 bg-amber-50 px-2 py-1.5 text-sm">
-                      30szt Rękawice chemoodporne… rozmiar 10
-                    </p>
-                    <p className="mb-1 text-xs font-semibold">Towar z katalogu</p>
+              <Card>
+                <p className="mb-2 text-sm font-semibold">Pozycje</p>
+                <div className="text-xs">
+                  <p>
+                    <span className="rounded bg-slate-800 px-1.5 py-0.5 font-semibold text-white">2</span>{' '}
+                    <span className="font-medium">4 szt.</span> · rozm. 43{' '}
+                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-800">
+                      brak w katalogu
+                    </span>
+                  </p>
+                  <p className="mt-1 border-l-4 border-amber-400 bg-amber-50 px-2 py-1">4szt Kalosze chemoodporne rozmiar 43</p>
+                  <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Alternatywy</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <Mark>
-                      <span className="rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-sm text-white">
-                        A611
-                      </span>
+                      <span className="rounded-full border border-slate-300 bg-white px-2.5 py-1">FW94 · Kalosze S4 · 46%</span>
                     </Mark>
-                    <span className="ml-1 rounded-full border border-violet-300 px-2 py-0.5 text-xs text-violet-800">
+                    <span className="rounded-full border border-violet-300 px-2 py-0.5 text-[11px] font-medium text-violet-800">
                       Opis
                     </span>
-                    <p className="mb-1 mt-2 text-xs font-semibold">Zamienniki</p>
-                    <span className="rounded-full border border-slate-300 px-3 py-1 text-sm">Tylko wskazany towar</span>
+                    <span className="rounded-full border border-blue-600 bg-blue-600 px-2.5 py-1 text-white">
+                      Sprawdzimy i wrócimy
+                    </span>
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <p className="mb-1 text-sm font-semibold">2 · 4 szt. · rozm. 43</p>
-                    <p className="border-l-4 border-amber-400 bg-amber-50 px-2 py-1.5 text-sm">
-                      4szt Kalosze chemoodporne… rozmiar 43
-                    </p>
-                  </div>
-                  <p className="text-sm font-semibold">Ceny</p>
-                  <span className="rounded-full border border-slate-300 px-3 py-1 text-sm">Bez ceny</span>
-                  <span className="ml-1 rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-sm text-white">
-                    Cena katalogowa + marża
-                  </span>
-                  <span className="ml-2 text-sm text-slate-600">18%</span>
-                  <span className="mt-2 block w-full rounded-lg bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white">
-                    Napisz odpowiedź
-                  </span>
                 </div>
-              </div>
+                <div className="mt-3 border-t border-slate-100 pt-2 text-xs">
+                  <p className="font-semibold text-slate-700">Ceny w liście</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-full border border-slate-300 bg-white px-2.5 py-1">Bez cen</span>
+                    <span className="rounded-full border border-slate-300 bg-white px-2.5 py-1">Cena katalogowa</span>
+                    <span className="rounded-full border border-blue-600 bg-blue-600 px-2.5 py-1 text-white">
+                      Katalog + marża
+                    </span>
+                    <span className="text-slate-700">Marża 18 %</span>
+                  </div>
+                  <p className="mt-2 font-semibold text-slate-700">Dopisek do listu (klient go zobaczy)</p>
+                  <div className="mt-1 min-h-[32px] rounded border border-slate-300 px-2 py-1 text-slate-400">
+                    np. termin realizacji, warunki dostawy…
+                  </div>
+                </div>
+              </Card>
             </AppFrame>
           ),
         },
         {
-          action: 'Pisanie listu',
-          does: 'Model składa treść z katalogu i Twoich chipów. Okno pokazuje „Model pisze list…” z licznikiem sekund.',
-          click: 'Nic — czekaj, nie zamykaj okna.',
-          tone: 'violet',
-          screen: (
-            <AppFrame nav="Zapytania">
-              <div className="relative mx-auto max-w-md rounded-xl bg-white p-8 shadow-sm">
-                <div className="flex flex-col items-center">
-                  <span className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-violet-600 border-t-transparent" />
-                  <p className="mt-3 text-sm font-semibold text-violet-900">Model pisze list…</p>
-                  <p className="mt-1 text-xs text-slate-500">6s — nie zamykaj okna</p>
-                </div>
-              </div>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Skopiowanie odpowiedzi',
-          does: 'Otwiera się okno z tematem i treścią. Możesz poprawić, potem kopiujesz do swojej poczty. System nie wysyła maila.',
-          click: '„Kopiuj całość” (temat + treść) albo „Kopiuj treść”.',
+          action: 'Kopiowanie i oznaczenie jako wysłane',
+          does: 'Ręczne poprawki w temacie i treści zapisują się same po opuszczeniu pola. „Kopiuj i oznacz jako wysłane” kopiuje temat + treść do schowka i oznacza zapytanie zielonym „Wysłano” na liście. System nie wysyła maila — wklej treść do swojej poczty.',
+          click: '„Kopiuj i oznacz jako wysłane”. Pomyłka? „Cofnij oznaczenie”.',
           tone: 'green',
           screen: (
-            <div className="pointer-events-none overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm">
-              <div className="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-2">
-                <span className="text-sm font-semibold text-slate-800">Przetargi Supon · odpowiedź</span>
-                <div className="flex gap-2">
-                  <span className="rounded border border-slate-300 px-3 py-1.5 text-xs">Powrót</span>
-                  <span className="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-white">Zamknij</span>
-                </div>
-              </div>
-              <div className="p-5">
-                <div className="mb-3 flex justify-between">
-                  <h1 className="text-lg font-semibold">Odpowiedź do skopiowania</h1>
+            <AppFrame nav="Zapytania">
+              <p className="mb-3 rounded bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+                Wszystkie pozycje pewne — list gotowy do skopiowania
+              </p>
+              <Card>
+                <p className="text-xs font-medium text-slate-600">Temat</p>
+                <p className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm">Oferta — Rękawice i kalosze</p>
+                <p className="mt-3 text-xs font-medium text-slate-600">Treść</p>
+                <p className="mt-1 min-h-[72px] rounded border border-slate-300 px-2 py-1.5 text-xs text-slate-700">
+                  Dzień dobry, dziękujemy za zapytanie…
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Mark>
-                    <span className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white">
-                      Kopiuj całość
-                    </span>
+                    <Btn label="Kopiuj i oznacz jako wysłane" />
                   </Mark>
+                  <Btn label="Kopiuj treść" color="border" />
+                  <Btn label="Wróć do zapytań" color="border" />
                 </div>
-                <Card>
-                  <p className="text-xs font-medium text-slate-600">Temat</p>
-                  <p className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm">Oferta rękawic do pieców</p>
-                  <p className="mt-3 text-xs font-medium text-slate-600">Treść</p>
-                  <p className="mt-1 min-h-[72px] rounded border border-slate-300 px-2 py-1.5 text-sm text-slate-700">
-                    Dzień dobry, potwierdzamy dostępność A611…
-                  </p>
-                </Card>
-              </div>
-            </div>
-          ),
-        },
-        {
-          action: 'Powrót albo zamknięcie okna',
-          does: '„Powrót” wraca do listy zapytań. „Zamknij” zamyka dodatkowe okno (albo wraca, gdy nie było popup).',
-          click: '„Powrót” albo „Zamknij” na górnym pasku.',
-          tone: 'slate',
-          screen: (
-            <div className="pointer-events-none overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-2">
-                <span className="text-sm font-semibold text-slate-800">Przetargi Supon · odpowiedź</span>
-                <div className="flex gap-2">
-                  <Mark>
-                    <span className="rounded border border-slate-300 px-3 py-1.5 text-xs">Powrót</span>
-                  </Mark>
-                  <Mark>
-                    <span className="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-white">Zamknij</span>
-                  </Mark>
-                </div>
-              </div>
-              <p className="p-5 text-xs text-slate-500">Lista zapytań albo zamknięte okno.</p>
-            </div>
+              </Card>
+            </AppFrame>
           ),
         },
       ]}
