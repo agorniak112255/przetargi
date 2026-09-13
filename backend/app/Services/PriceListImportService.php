@@ -271,17 +271,31 @@ final class PriceListImportService
      */
     public function productNamesFromMapping(string $path, array $mapping, string $manufacturer): array
     {
-        $names = [];
+        return array_map(
+            static fn (array $row): string => $row['name'],
+            $this->productRowsFromMapping($path, $mapping, $manufacturer)
+        );
+    }
+
+    /**
+     * @param  array{sheets: list<array<string, mixed>>}  $mapping
+     * @return array<string, array{name: string, packaging: ?string}> SKU → nazwa i opakowanie z cennika
+     */
+    public function productRowsFromMapping(string $path, array $mapping, string $manufacturer): array
+    {
+        $rows = [];
         foreach ($this->collectFromMapping($path, $mapping, null, $manufacturer)['products'] as $product) {
             $sku = (string) ($product['sku'] ?? '');
             unset($product['sku'], $product['_purchase_from_file']);
-            $name = trim((string) ($this->clampProductFields($product)['name'] ?? ''));
+            $clamped = $this->clampProductFields($product);
+            $name = trim((string) ($clamped['name'] ?? ''));
+            $packaging = trim((string) ($clamped['packaging'] ?? ''));
             if ($sku !== '' && $name !== '') {
-                $names[$sku] = $name;
+                $rows[$sku] = ['name' => $name, 'packaging' => $packaging !== '' ? $packaging : null];
             }
         }
 
-        return $names;
+        return $rows;
     }
 
     /**

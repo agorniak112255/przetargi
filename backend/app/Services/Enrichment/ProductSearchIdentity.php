@@ -60,6 +60,32 @@ final class ProductSearchIdentity
     ];
 
     /**
+     * „Chin strap Peltor GH4” to pasek podbródkowy do hełmu. Stem „chin strap” w kombinezonie zostaje
+     * dla „4000-GR C/W HOOD, CHIN STRAP” (Ansell); ten rodzaj działa tylko, gdy nazwa od niego się zaczyna.
+     *
+     * @var list<string>
+     */
+    private const CHINSTRAP_STEMS = ['chin strap', 'chinstrap', 'podbrod', 'podbradn', 'kinnriemen', 'barbuquejo'];
+
+    /**
+     * Marka towaru u dystrybutora: Canis sprzedaje filtry i paski 3M oraz MSA (w cenniku model „3M”).
+     * Biała lista zamiast wszystkich kluczy z config — „mat”, „kask”, „sir” to zwykłe słowa.
+     *
+     * @var array<string, list<string>>
+     */
+    private const GOODS_BRAND_PATTERNS = [
+        '3m' => [
+            '/(?<![\p{L}\p{N}])3M(?![\p{L}\p{N}])/u',
+            '/(?<![\p{L}\p{N}])Peltor(?![\p{L}\p{N}])/iu',
+            '/(?<![\p{L}\p{N}])E\.A\.R\b/u',
+        ],
+        'msa' => ['/(?<![\p{L}\p{N}])MSA(?![\p{L}\p{N}])/u'],
+    ];
+
+    /** „Visor for 3M helmet”, „pasuje do hełmu MSA” — marka urządzenia, nie tego towaru. */
+    private const GOODS_BRAND_COMPATIBILITY_WORD = '/^(?:for|fits?|compatible|with|do|na|z|pro|k|f[uü]r|kompatybiln\p{L}*|pasuj\p{L}*|ur[cč]en\p{L}*)$/iu';
+
+    /**
      * Polska karta nazywa kurtkę roboczą „bluzą roboczą” (Canis/CXS: „Men´s jacket SIRIUS” →
      * „Bluza robocza CXS Sirius Lucius”). Liczone tylko przy sprawdzaniu strony, nie przy
      * odczycie typu z nazwy produktu.
@@ -3866,6 +3892,10 @@ final class ProductSearchIdentity
         if ($this->compactCode($value) === $this->compactCode((string) $product->sku)) {
             return '';
         }
+        // „3M” w kolumnie modelu Canis to marka towaru — zapytanie „3M Canis” dawało przypadkowe karty
+        if (in_array(mb_strtolower($value), $this->goodsBrandKeys($product), true)) {
+            return '';
+        }
 
         return $value;
     }
@@ -4727,6 +4757,10 @@ final class ProductSearchIdentity
     private function typeStemsInText(string $text): array
     {
         $normalized = $this->normalizeTypeText($text);
+        // „Chin strap Peltor GH4, for helmet Peltor” — pasek do hełmu, nie kombinezon ani hełm
+        if (preg_match('/^\s*chin ?strap/u', $normalized) === 1) {
+            return [self::CHINSTRAP_STEMS];
+        }
         $required = [];
         $keys = [];
         foreach (self::TYPE_STEMS as $key => $stems) {
@@ -5114,6 +5148,9 @@ final class ProductSearchIdentity
             return 'buty ochronne';
         }
 
+        if (preg_match('#^\s*chin\s*strap#u', $nameSku) === 1) {
+            return 'pasek podbródkowy';
+        }
         // CVRL / AlphaTec 4000 to kombinezon — tylko z nazwy/SKU, nie z „Kombinezony / akcesoria”
         if (preg_match('#(cvrl|coverall|kombinezon|overall|alphatec|chin\\s*strap|c/w\\s*hood)#u', $nameSku) === 1) {
             return 'kombinezon';
@@ -5522,6 +5559,13 @@ final class ProductSearchIdentity
         foreach ($this->nameBrandKeys($product) as $key) {
             $out[] = str_replace('-', ' ', $key);
             $out[] = $key;
+        }
+        // filtr 3M 6051 u Canis: karta i zdjęcie „3m-6051” to ten towar, nie cudza marka
+        foreach ($this->goodsBrandKeys($product) as $key) {
+            $out[] = $key;
+            if ($key === '3m') {
+                $out[] = 'peltor';
+            }
         }
         foreach ($this->brandFamilyOf($this->shortBrand((string) $product->manufacturer)) as $alias) {
             $out[] = $alias;
@@ -6362,6 +6406,62 @@ final class ProductSearchIdentity
     /**
      * @return list<string>
      */
+    /**
+     * Marka towaru innej rodziny niż producent w bazie: model z cennika równy marce („3M”, „MSA”)
+     * albo marka w nazwie, przed którą nie stoi „for / do / pasuje”. Nie trafia do domen oficjalnych —
+     * 3m.com nie staje się stroną producenta Canis.
+     *
+     * @return list<string>
+     */
+    public function goodsBrandKeys(Product $product): array
+    {
+        $own = array_fill_keys($this->brandFamilyOf($this->shortBrand((string) $product->manufacturer)), true);
+        $model = mb_strtolower(trim((string) ($product->model_name ?? '')));
+        $name = (string) $product->name;
+        $out = [];
+        foreach (self::GOODS_BRAND_PATTERNS as $key => $patterns) {
+            if (isset($own[$key])) {
+                continue;
+            }
+            if ($model === $key) {
+                $out[] = $key;
+
+                continue;
+            }
+            foreach ($patterns as $pattern) {
+                if ($this->nameNamesGoodsBrand($name, $pattern)) {
+                    $out[] = $key;
+
+                    continue 2;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    private function nameNamesGoodsBrand(string $name, string $pattern): bool
+    {
+        if (preg_match_all($pattern, $name, $hits, PREG_OFFSET_CAPTURE) === false) {
+            return false;
+        }
+        foreach ($hits[0] as [, $offset]) {
+            $before = preg_split('/[^\p{L}\p{N}]+/u', substr($name, 0, (int) $offset), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            $compatible = false;
+            foreach (array_slice($before, -3) as $word) {
+                if (preg_match(self::GOODS_BRAND_COMPATIBILITY_WORD, (string) $word) === 1) {
+                    $compatible = true;
+                    break;
+                }
+            }
+            if (! $compatible) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Marki z nazwy, które mają stronę w config (Showa przy Eider, C500 → uvex).
      *

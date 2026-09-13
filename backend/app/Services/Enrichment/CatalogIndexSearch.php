@@ -160,6 +160,17 @@ final class CatalogIndexSearch
             }
         }
 
+        // „Chin strap Peltor GH4” u dystrybutora Canis: kodu Canis nie ma w adresach kart 3M, a numer
+        // marki towaru stoi w nazwie. Trzyznakowe „gh4” odpadało na progu 4 znaków i miejsca zajmowały
+        // kaski X5000 „z paskiem podbródkowym” (batch #312).
+        if ($this->identity->goodsBrandKeys($product) !== []) {
+            foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower(Str::ascii((string) $product->name))) ?: [] as $word) {
+                if (preg_match('/^(?=.*\d)(?=.*[a-z])[a-z0-9]{3,10}$/u', $word) === 1 || preg_match('/^\d{3,6}$/u', $word) === 1) {
+                    $out[] = $word;
+                }
+            }
+        }
+
         $out = array_values(array_unique($out));
 
         return array_values(array_filter(
@@ -439,7 +450,8 @@ final class CatalogIndexSearch
                     continue;
                 }
                 if ($this->pageManufacturer->conflictsWithProduct($pageManufacturer, $product)
-                    && ! $this->inferredBrandMatchesPage($pageManufacturer, $product)) {
+                    && ! $this->inferredBrandMatchesPage($pageManufacturer, $product)
+                    && ! $this->goodsBrandMatchesPage($pageManufacturer, $product)) {
                     $this->reject($url, CandidateRejection::MANUFACTURER_CONFLICT);
 
                     continue;
@@ -466,7 +478,8 @@ final class CatalogIndexSearch
                 }
                 $hay = (string) $page->haystack;
                 $matchesManufacturer = $this->pageManufacturer->matchesProduct($pageManufacturer, $product)
-                    || $this->inferredBrandMatchesPage($pageManufacturer, $product);
+                    || $this->inferredBrandMatchesPage($pageManufacturer, $product)
+                    || $this->goodsBrandMatchesPage($pageManufacturer, $product);
                 $hasBrand = $matchesManufacturer
                     || $this->identity->hayHasBrand($hay, $product)
                     || ($brand !== '' && str_contains($hay, $brand));
@@ -524,6 +537,27 @@ final class CatalogIndexSearch
 
         return $pageKey !== null && $hintKey !== null
             && $this->pageManufacturer->familyOf($pageKey) === $this->pageManufacturer->familyOf($hintKey);
+    }
+
+    /** Filtr „6051” z modelem „3M” u dystrybutora Canis — karta 3M (icd.pl, shop-sks) to karta tego towaru. */
+    private function goodsBrandMatchesPage(?string $pageManufacturer, Product $product): bool
+    {
+        if ($pageManufacturer === null || $pageManufacturer === '') {
+            return false;
+        }
+        $pageKey = $this->pageManufacturer->knownKey($pageManufacturer);
+        if ($pageKey === null) {
+            return false;
+        }
+        foreach ($this->identity->goodsBrandKeys($product) as $brand) {
+            $brandKey = $this->pageManufacturer->knownKey($brand);
+            if ($brandKey !== null
+                && $this->pageManufacturer->familyOf($brandKey) === $this->pageManufacturer->familyOf($pageKey)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function isCatalogNoiseUrl(string $url): bool

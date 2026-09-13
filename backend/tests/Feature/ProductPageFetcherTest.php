@@ -201,6 +201,31 @@ final class ProductPageFetcherTest extends TestCase
         $this->assertSame([$right], array_column($fetched['pages'], 'url'), 'kod z mikrodanych potwierdza kartę, inny kolor odpada');
     }
 
+    /**
+     * Batch #312: TOM „1660-001-000-00” to wszystkie kolory; karta cxs.net.pl ma kod koloru
+     * „1660-001-411-00” w itemprop sku i szła do kosza jako „inny kod”. Inny model nadal odpada.
+     */
+    public function test_all_colours_code_accepts_colour_card_of_same_model(): void
+    {
+        $tom = 'https://cxs.net.pl/koszula-flanelowa-cxs-tom.html';
+        Http::fake([
+            $tom => Http::response($this->magentoCard('Koszula flanelowa CXS Tom', '1660-001-411-00'), 200),
+            '*' => Http::response('', 404),
+        ]);
+        $product = new Product(['sku' => '1660-001-000-00', 'name' => 'Flannel shirt, blue, green, flannel, 100% cotton', 'manufacturer' => 'Canis']);
+        $product->model_name = 'TOM';
+
+        $fetched = app(ProductPageFetcher::class)->fetch([['url' => $tom, 'title' => '', 'snippet' => '']], (string) $product->sku, 3, [], $product);
+
+        $this->assertNotContains(CandidateRejection::CLAIMS_OTHER_CODE, array_column($fetched['rejected'], 'reason'));
+
+        $otherModel = new Product(['sku' => '1660-002-000-00', 'name' => 'Flannel shirt, red, flannel, 100% cotton', 'manufacturer' => 'Canis']);
+        $otherModel->model_name = 'TOM';
+        $fetchedOther = app(ProductPageFetcher::class)->fetch([['url' => $tom, 'title' => '', 'snippet' => '']], (string) $otherModel->sku, 3, [], $otherModel);
+        $this->assertSame([], $fetchedOther['pages']);
+        $this->assertContains(CandidateRejection::CLAIMS_OTHER_CODE, array_column($fetchedOther['rejected'], 'reason'));
+    }
+
     private function magentoCard(string $heading, string $sku): string
     {
         return '<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>'.$heading.'</title></head>'

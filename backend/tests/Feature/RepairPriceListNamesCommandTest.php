@@ -6,18 +6,20 @@ namespace Tests\Feature;
 
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\Product;
+use App\Models\ProductAccessory;
+use App\Models\ProductDocument;
 use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
-use Illuminate\Support\Facades\Storage;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
 
 /**
- * Batch #308: polo DOVER zapisane jako „High visible trousers, padded” (nazwa z wiersza wyżej)
- * dostało opis i zdjęcia spodni. Naprawa bierze nazwę z tego samego pliku poprawionym importem.
+ * Batch #308/#312: polo DOVER zapisane jako „High visible trousers, padded” (nazwa z wiersza wyżej)
+ * dostało opis, zdjęcia i dokumenty spodni. Naprawa bierze nazwę z tego samego pliku poprawionym
+ * importem, robi kopię zapasową i pozwala ją przywrócić.
  */
 final class RepairPriceListNamesCommandTest extends TestCase
 {
@@ -25,15 +27,19 @@ final class RepairPriceListNamesCommandTest extends TestCase
 
     private string $path;
 
+    private string $backup;
+
     protected function setUp(): void
     {
         parent::setUp();
         $this->path = $this->makeCanisLikeSpreadsheet();
+        $this->backup = sys_get_temp_dir().DIRECTORY_SEPARATOR.'repair-names-'.uniqid('', true).'.json';
     }
 
     protected function tearDown(): void
     {
         @unlink($this->path);
+        @unlink($this->backup);
         parent::tearDown();
     }
 
@@ -49,71 +55,102 @@ final class RepairPriceListNamesCommandTest extends TestCase
         $this->assertSame('High visible trousers, padded, colour yellow-blue, orange-blue, size M-3XL, EN 20471', $dover->fresh()->name);
         $this->assertNotNull($dover->fresh()->description);
         Queue::assertNothingPushed();
+        $this->assertFileDoesNotExist($this->backup);
     }
 
-    public function test_apply_fixes_name_and_returns_card_to_enrichment(): void
+    public function test_apply_resets_web_data_keeps_manual_work_and_restore_brings_state_back(): void
     {
-        Storage::fake('public');
         $dover = $this->wronglyNamedDover();
-        Storage::disk('public')->put('products/'.$dover->id.'/spodnie.jpg', 'jpg');
+        $this->attachWebData($dover);
         ProductImage::query()->create([
-            'product_id' => $dover->id,
-            'path' => 'products/'.$dover->id.'/spodnie.jpg',
-            'source_url' => 'https://sklep.example.pl/spodnie-ocieplane.jpg',
-            'is_primary' => true,
-            'sort_order' => 0,
-            'checksum' => str_repeat('a', 64),
+            'product_id' => $dover->id, 'path' => 'products/'.$dover->id.'/wgrane-recznie.jpg',
+            'source_url' => null, 'is_primary' => false, 'sort_order' => 1, 'checksum' => str_repeat('b', 64),
         ]);
-        ProductImage::query()->create([
-            'product_id' => $dover->id,
-            'path' => 'products/'.$dover->id.'/wgrane-recznie.jpg',
-            'source_url' => null,
-            'is_primary' => false,
-            'sort_order' => 1,
-            'checksum' => str_repeat('b', 64),
-        ]);
-        ProductEnrichmentCache::query()->create([
-            ...ProductEnrichmentCache::normalizeKey('Canis', '1113-001-000-00'),
-            'description' => 'Spodnie ostrzegawcze ocieplane',
-            'source_urls' => ['https://sklep.example.pl/spodnie-ocieplane'],
+        ProductAccessory::query()->create([
+            'product_id' => $dover->id, 'source' => ProductAccessory::SOURCE_MANUAL, 'link_key' => 'manual:1', 'related_sku' => 'X-1',
         ]);
         $solis = $this->product('1010-130-260-00', 'Men´s jacket CXS SOLIS FLEX, red-black', 'Kurtka robocza CXS SOLIS FLEX.');
         $cutSize = $this->product('1010-130-270-00', 'Men´s jacket CXS SOLIS FLEX, blue-black, size 46 -', 'Kurtka robocza CXS SOLIS FLEX, niebiesko-czarna.');
+        $handWritten = $this->product('1112-001-000-00', 'Filter type 6055 A2 against gases', 'Opis wpisany ręcznie przez handlowca.', Product::ENRICHMENT_MANUAL);
         Queue::fake(); // po zapisie produktów — sam zapis też reindeksuje
 
-        $this->artisan('products:repair-price-list-names', ['file' => $this->path, '--manufacturer' => 'Canis', '--apply' => true])
-            ->expectsOutputToContain('Poprawiono 2 nazw; 1 kart wraca')
+        $this->artisan('products:repair-price-list-names', [
+            'file' => $this->path, '--manufacturer' => 'Canis', '--apply' => true, '--backup' => $this->backup,
+        ])
+            ->expectsOutputToContain('Poprawiono 3 nazw; 1 kart wraca')
             ->assertSuccessful();
 
+        $this->assertFileExists($this->backup);
         $dover->refresh();
         $this->assertStringContainsString('polo shirt', $dover->name);
         $this->assertNull($dover->description);
         $this->assertNull($dover->shop_source_url);
+        $this->assertNull($dover->packaging, 'rozmiary z cudzej karty znikają — cennik ich nie podaje');
         $this->assertSame(Product::ENRICHMENT_NONE, $dover->enrichment_status);
         $this->assertSame(0, ProductEnrichmentCache::query()->count(), 'cache SKU→karta spodni');
         $this->assertSame(['products/'.$dover->id.'/wgrane-recznie.jpg'], ProductImage::query()->pluck('path')->all(), 'zostaje tylko zdjęcie wgrane ręcznie');
-        Storage::disk('public')->assertMissing('products/'.$dover->id.'/spodnie.jpg');
+        $this->assertSame(0, ProductDocument::query()->count(), 'karta charakterystyki spodni');
+        $this->assertSame([ProductAccessory::SOURCE_MANUAL], ProductAccessory::query()->pluck('source')->all());
         Queue::assertPushed(ReindexProductEmbeddingJob::class);
 
         $this->assertSame('Kurtka robocza CXS SOLIS FLEX.', $solis->fresh()->description, 'karta z poprawną nazwą nietknięta');
-        $this->assertSame(Product::ENRICHMENT_DONE, $solis->fresh()->enrichment_status);
+        $this->assertSame('Men´s jacket CXS SOLIS FLEX, blue-black', $cutSize->fresh()->name, 'ucięty rozmiar poprawiony');
+        $this->assertSame('Kurtka robocza CXS SOLIS FLEX, niebiesko-czarna.', $cutSize->fresh()->description, 'ten sam wyrób — opis zostaje');
+        $this->assertSame('Men´s shorts CXS LEONIS, black with blue/red accessories', $handWritten->fresh()->name);
+        $this->assertSame('Opis wpisany ręcznie przez handlowca.', $handWritten->fresh()->description, '„Wpisz ręcznie” z opisem człowieka nie jest kasowany');
 
-        $cutSize->refresh();
-        $this->assertSame('Men´s jacket CXS SOLIS FLEX, blue-black', $cutSize->name, 'ucięty rozmiar poprawiony');
-        $this->assertSame('Kurtka robocza CXS SOLIS FLEX, niebiesko-czarna.', $cutSize->description, 'ten sam wyrób — opis zostaje');
-        $this->assertSame(Product::ENRICHMENT_DONE, $cutSize->enrichment_status);
+        $this->artisan('products:repair-price-list-names', ['--restore' => $this->backup])
+            ->expectsOutputToContain('Przywrócono 3 produktów')
+            ->assertSuccessful();
+
+        $dover->refresh();
+        $this->assertSame('High visible trousers, padded, colour yellow-blue, orange-blue, size M-3XL, EN 20471', $dover->name);
+        $this->assertSame('Spodnie ostrzegawcze ocieplane CXS.', $dover->description);
+        $this->assertSame('M, L, XL', $dover->packaging);
+        $this->assertSame(Product::ENRICHMENT_DONE, $dover->enrichment_status);
+        $this->assertSame(['priority' => 'x'], $dover->enrichment_payload);
+        $this->assertSame(2, ProductImage::query()->where('product_id', $dover->id)->count());
+        $this->assertSame(1, ProductDocument::query()->count());
+        $this->assertSame(2, ProductAccessory::query()->count());
+        $this->assertSame(1, ProductEnrichmentCache::query()->count());
+    }
+
+    private function attachWebData(Product $product): void
+    {
+        ProductImage::query()->create([
+            'product_id' => $product->id, 'path' => 'products/'.$product->id.'/spodnie.jpg',
+            'source_url' => 'https://sklep.example.pl/spodnie-ocieplane.jpg', 'is_primary' => true, 'sort_order' => 0,
+            'checksum' => str_repeat('a', 64),
+        ]);
+        ProductDocument::query()->create([
+            'product_id' => $product->id, 'path' => 'products/'.$product->id.'/karta.pdf',
+            'source_url' => 'https://sklep.example.pl/karta-spodni.pdf', 'title' => 'Karta spodni', 'kind' => 'datasheet',
+            'sort_order' => 0, 'checksum' => str_repeat('c', 64), 'size_bytes' => 10,
+        ]);
+        ProductAccessory::query()->create([
+            'product_id' => $product->id, 'source' => ProductAccessory::SOURCE_ENRICHMENT, 'link_key' => 'enrichment:pas',
+            'related_sku' => 'PAS-1', 'related_name' => 'Pas do spodni',
+        ]);
+        ProductEnrichmentCache::query()->create([
+            ...ProductEnrichmentCache::normalizeKey('Canis', (string) $product->sku),
+            'description' => 'Spodnie ostrzegawcze ocieplane',
+            'source_urls' => ['https://sklep.example.pl/spodnie-ocieplane'],
+        ]);
     }
 
     private function wronglyNamedDover(): Product
     {
-        return $this->product(
+        $product = $this->product(
             '1113-001-000-00',
             'High visible trousers, padded, colour yellow-blue, orange-blue, size M-3XL, EN 20471',
             'Spodnie ostrzegawcze ocieplane CXS.',
         );
+        $product->forceFill(['packaging' => 'M, L, XL', 'enrichment_payload' => ['priority' => 'x']])->save();
+
+        return $product->fresh();
     }
 
-    private function product(string $sku, string $name, string $description): Product
+    private function product(string $sku, string $name, string $description, string $status = Product::ENRICHMENT_DONE): Product
     {
         return Product::query()->create([
             'sku' => $sku,
@@ -124,8 +161,8 @@ final class RepairPriceListNamesCommandTest extends TestCase
             'catalog_price_net' => 30,
             'purchase_price' => 30,
             'stock' => 1,
-            'enrichment_status' => Product::ENRICHMENT_DONE,
-            'enriched_at' => now(),
+            'enrichment_status' => $status,
+            'enriched_at' => $status === Product::ENRICHMENT_DONE ? now() : null,
         ]);
     }
 

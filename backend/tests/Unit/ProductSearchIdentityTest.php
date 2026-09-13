@@ -1599,6 +1599,65 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    /** Batch #312: Canis sprzedaje 3M i MSA — marka towaru z kolumny modelu albo z nazwy, bez „for 3M helmet”. */
+    public function test_goods_brand_of_distributor_comes_from_model_or_name_without_compatibility_context(): void
+    {
+        $id = new ProductSearchIdentity;
+        $canis = static function (string $sku, string $name, ?string $model = null): Product {
+            $product = new Product(['sku' => $sku, 'name' => $name, 'manufacturer' => 'Canis']);
+            $product->model_name = $model;
+
+            return $product;
+        };
+
+        $filter = $canis('4520-011-000-01', 'Filter type 6051 A1 against gases and organic vapours, 1 pair', '3M');
+        $this->assertSame(['3m'], $id->goodsBrandKeys($filter));
+        $this->assertSame('', $id->modelNamePhrase($filter), '„3M” w kolumnie modelu to marka, nie model');
+        $this->assertSame(['3m'], $id->goodsBrandKeys($canis('4310-006-000-00', 'Chin strap Peltor GH4, 3-pointed, for helmet Peltor')));
+        $this->assertSame(['3m'], $id->goodsBrandKeys($canis('4410-007-000-00', 'E.A.R. CAP earplugs')));
+        $this->assertSame(['msa'], $id->goodsBrandKeys($canis('4310-164-000-00', 'Chinstrap MSA, textile, 2-point')));
+
+        $this->assertSame([], $id->goodsBrandKeys($canis('4190-001-000-00', 'Visor for 3M helmet G3000')), 'marka urządzenia, do którego pasuje');
+        $this->assertSame([], $id->goodsBrandKeys($canis('5000-001-000-00', 'Anti-fatigue mat, black, 60x90 cm')));
+        $this->assertSame([], $id->goodsBrandKeys($canis('4300-001-000-00', 'Kask ochronny biały', 'KASK')));
+
+        $threeM = new Product(['sku' => '6051', 'name' => '3M 6051 pochłaniacz A1', 'manufacturer' => '3M']);
+        $threeM->model_name = '3M';
+        $this->assertSame([], $id->goodsBrandKeys($threeM), 'u samego producenta marka nie jest „obca”');
+        $this->assertSame('3M', $id->modelNamePhrase($threeM));
+
+        $kleenguard = new Product(['sku' => '44325', 'name' => 'KleenGuard A40 kombinezon', 'manufacturer' => 'Ansell']);
+        $kleenguard->model_name = 'KleenGuard';
+        $this->assertSame('KleenGuard', $id->modelNamePhrase($kleenguard));
+    }
+
+    /** Batch #312: zdjęcie „3m-6051.jpg” to zdjęcie filtra 3M u Canis, a przy zwykłym wyrobie Canis — cudza marka. */
+    public function test_goods_brand_image_is_own_brand_only_for_that_goods(): void
+    {
+        $id = new ProductSearchIdentity;
+        $filter = new Product(['sku' => '4520-011-000-01', 'name' => 'Filter type 6051 A1 against gases and organic vapours', 'manufacturer' => 'Canis']);
+        $filter->model_name = '3M';
+        $shirt = new Product(['sku' => '1660-001-000-00', 'name' => 'Flannel shirt, blue, green, flannel, 100% cotton', 'manufacturer' => 'Canis']);
+        $shirt->model_name = 'TOM';
+
+        $this->assertFalse($id->imageUrlMentionsForeignBrand('https://icd.pl/media/catalog/3m-6051-pochlaniacz.jpg', $filter));
+        $this->assertTrue($id->imageUrlMentionsForeignBrand('https://icd.pl/media/catalog/3m-6051-pochlaniacz.jpg', $shirt));
+    }
+
+    /** Batch #312: „Chin strap Peltor GH4, for helmet Peltor” to pasek podbródkowy, nie kombinezon ani hełm. */
+    public function test_chin_strap_name_requires_chin_strap_type_not_coverall(): void
+    {
+        $id = new ProductSearchIdentity;
+        $strap = new Product(['sku' => '4310-006-000-00', 'name' => 'Chin strap Peltor GH4, 3-pointed, for helmet Peltor', 'manufacturer' => 'Canis']);
+
+        $this->assertTrue($id->hayHasRequiredTypeFromName('Pasek podbródkowy 3M GH4 3-punktowy do hełmów G3000', $strap));
+        $this->assertTrue($id->hayHasRequiredTypeFromName('3M Kinnriemen GH4 3-Punkt für Schutzhelm', $strap));
+        $this->assertFalse($id->hayHasRequiredTypeFromName('Hełm ochronny 3M G3000 biały', $strap), 'sam hełm to nie pasek');
+
+        $coverall = new Product(['sku' => 'GR40-T-00-181-09', 'name' => '4000-GR C/W HOOD, CHIN STRAP 181.5XL', 'manufacturer' => 'ANSELL']);
+        $this->assertTrue($id->hayHasRequiredTypeFromName('Kombinezon Ansell AlphaTec 4000 model 111', $coverall), 'kombinezon z paskiem nadal jest kombinezonem');
+    }
+
     /** Batch #307: taśma odblaskowa w nazwie odzieży to cecha, nie drugi rodzaj wyrobu. */
     public function test_reflective_tape_in_garment_name_is_a_feature_not_a_product_type(): void
     {

@@ -2804,6 +2804,39 @@ final class CatalogIndexTest extends TestCase
         );
     }
 
+    /**
+     * Batch #312: filtr 3M 6051 u dystrybutora Canis (model „3M”) — karty 3M z icd.pl odpadały jako
+     * „strona innego producenta”. Zwykły wyrób Canis i akcesorium „for 3M helmet” nadal ich nie dostają.
+     */
+    public function test_goods_brand_pages_are_not_manufacturer_conflict_for_distributor(): void
+    {
+        $filterPage = 'https://icd.pl/pochlaniacz-a1-3m-6051.html';
+        $this->seedPage($filterPage, '3m');
+        $visorPage = 'https://icd.pl/oslona-twarzy-3m-g3000-przylbica.html';
+        $this->seedPage($visorPage, '3m');
+        $search = app(CatalogIndexSearch::class);
+
+        $filter = new Product(['sku' => '4520-011-000-01', 'name' => 'Filter type 6051 A1 against gases and organic vapours, 1 pair', 'manufacturer' => 'Canis']);
+        $filter->model_name = '3M';
+        $this->assertContains($filterPage, array_column($search->findFor($filter), 'url'));
+
+        $plain = new Product(['sku' => '4520-099-000-01', 'name' => 'Filter type 6051 A1 against gases and organic vapours, 1 pair', 'manufacturer' => 'Canis']);
+        $this->assertNotContains($filterPage, array_column($search->findFor($plain), 'url'));
+        $this->assertContains(CandidateRejection::MANUFACTURER_CONFLICT, array_column($search->lastRejections(), 'reason'));
+
+        $gh4Page = 'https://icd.pl/pasek-podbrodkowy-3m-gh4.html';
+        $this->seedPage($gh4Page, '3m');
+        foreach (['x5005v', 'x5005ve', 'x5004ve', 'x5003v', 'x5003ve', 'x5007ve', 'x5001v', 'x5001ve', 'x5002ve'] as $helmet) {
+            $this->seedPage('https://sklep.example.co.uk/p/3m-x5000-safety-helmet-6-point-ratchet-4-point-chin-strap-3m-'.$helmet.'.html', '3m');
+        }
+        $strap = new Product(['sku' => '4310-006-000-00', 'name' => 'Chin strap Peltor GH4, 3-pointed, for helmet Peltor', 'manufacturer' => 'Canis']);
+        $strap->model_name = '3M';
+        $this->assertSame($gh4Page, $search->findFor($strap)[0]['url'] ?? null, 'numer GH4 z nazwy wyprzedza kaski z paskiem');
+
+        $visor = new Product(['sku' => '4190-001-000-00', 'name' => 'Visor for 3M helmet G3000', 'manufacturer' => 'Canis']);
+        $this->assertNotContains($visorPage, array_column($search->findFor($visor), 'url'), 'przyłbica innego producenta nie dostaje karty 3M');
+    }
+
     /** Batch #306: karty cxs.net.pl (marka CXS) odpadały dla produktów Canis jako „strona innego producenta”. */
     public function test_cxs_brand_pages_match_canis_products(): void
     {

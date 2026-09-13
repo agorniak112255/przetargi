@@ -1078,7 +1078,13 @@ final class ProductPageFetcher
             return false;
         }
         $comparable = 0;
+        // Canis „1660-001-000-00” to wszystkie kolory, karta koloru ma „1660-001-411-00” — ten sam wyrób.
+        // Tylko w tę stronę: nasz konkretny kolor przy innym kolorze na karcie nadal jest sprzecznością.
+        $allColours = preg_match('/^(\d{4}-\d{3})-000-\d{2}$/', trim($sku), $family) === 1 ? $family[1] : null;
         foreach ($this->markupSkus($html) as $code) {
+            if ($allColours !== null && preg_match('/^'.preg_quote($allColours, '/').'-\d{3}-\d{2}$/', trim($code)) === 1) {
+                return false;
+            }
             $theirs = $this->skuIdentityKey($code);
             // wewnętrzny numer sklepu („8156”) ma inny format — nie świadczy o innym produkcie
             if ($theirs === '' || abs(strlen($theirs) - strlen($ours)) > 3
