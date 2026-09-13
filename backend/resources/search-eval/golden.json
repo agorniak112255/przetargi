@@ -417,6 +417,172 @@
             ],
             "forbidden_skus": [],
             "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+        },
+        {
+            "id": "opisowy15-01-rekaw-antyprzecieciowy-475",
+            "query": "Ochraniacz przedramienia (rękaw) chroniący przed przecięciem, długość ok. 475 mm (19''), w kolorze fluorescencyjnym żółtym o wysokiej widzialności. Konstrukcja bezszwowa, dzianina z przędzy nylon/poliester/włókno szklane; regulowane zapięcie na rzep; wyrób antystatyczny, bez lateksu i bez silikonu; dopuszczony do kontaktu z żywnością (zgodność z wymaganiami FDA). Zastosowanie: obróbka blach i szkła, montaż i naprawa elementów karoserii, przemysł motoryzacyjny, metalowy, maszynowy. Wymagane: ŚOI kategorii III; EN 420:2003+A1:2009; EN 388 z poziomami min. 2.X.4.2.C (odporność na przecięcie poziom C, na rozdzieranie 4, na przekłucie 2); EN 407 – odporność na ciepło kontaktowe poziom 1 (do 100°C).",
+            "expected_skus": [
+                "11202000"
+            ],
+            "forbidden_skus": [
+                "48130110",
+                "3440-003-100-00"
+            ],
+            "note": "Z opisu: rękaw antyprzecięciowy 475 mm, hi-vis fluo żółty, rzep, bezszwowy, nylon/poliester/włókno szklane, antystatyczny, bez lateksu i silikonu, FDA, kat. III, EN 420:2003+A1:2009, EN 388 (2.X.4.2.C), EN 407 (X.1.X.X.X), ciepło kontaktowe do 100°C. Pominięto marketingowe 'cut level 5' (niespójne z oznaczeniem EN 388 X w teście coupe)."
+        },
+        {
+            "id": "opisowy15-02-rekawice-antyprzecieciowe-en388",
+            "query": "Rękawice ochronne odporne na przecięcie, przeznaczone do prac z narzędziami tnącymi, ostrymi elementami i szkłem – m.in. w budownictwie, przemyśle szklarskim, chemicznym i motoryzacyjnym oraz przy pracach ze skalpelem lub nożem drukarskim. Wymagane: ochrona dłoni przed przecięciem i ścieraniem potwierdzona oznakowaniem zgodnie z EN 388; konstrukcja zapewniająca elastyczność, wygodę i precyzję pracy.",
+            "expected_skus": [
+                "34837018"
+            ],
+            "forbidden_skus": [
+                "56-426"
+            ],
+            "note": "Opis źródłowy to ogólny tekst kategorii 'rękawice antyprzecięciowe' (zastosowania, odniesienie do EN 388) bez parametrów tego modelu – brak poziomów EN 388, materiału, rozmiarów i grubości; opis celowo krótki, nic nie dodano."
+        },
+        {
+            "id": "opisowy15-03-sandaly-s1p-esd",
+            "query": "Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, do prac w suchych pomieszczeniach – przemysł elektroniczny, logistyka, montaż. Wymagane: zabudowana pięta; podnosek ochronny; właściwości antyelektrostatyczne (ESD) umożliwiające kontrolę ładunków elektrostatycznych; podeszwa odporna na oleje i paliwa (FO) oraz antypoślizgowa; cholewka z materiałów przewiewnych; lekka konstrukcja odpowiednia do prac wymagających częstego przemieszczania się. Rozmiary: 35–48.",
+            "expected_skus": [
+                "ARMEN 9007 6660 S1 P"
+            ],
+            "forbidden_skus": [
+                "AROX 733 641460 S1 ESD",
+                "ARDEUS 350 Air 618080 S1 PL ESD"
+            ],
+            "note": "Z opisu: sandały, EN ISO 20345 klasa S1, zabudowana pięta, podnosek, ESD, podeszwa FO, antypoślizgowa, przewiewna cholewka, suche pomieszczenia, rozmiary 35–48. Oznaczenie 'P' pochodzi wyłącznie z nazwy/SKU – opis nie wspomina wprost o wkładce antyprzebiciowej."
+        },
+        {
+            "id": "opisowy15-04-fartuch-wodoochronny-120x75",
+            "query": "Fartuch przedni wodoochronny, wymiary 120 × 75 cm, z lekkiej tkaniny poliestrowej powlekanej poliuretanem, we wzór w pionowe pasy. Wymagane: regulacja na pasku szyjnym; szeroka szelka i wiązanie z tyłu; ochrona przed wilgocią; zwiększona odporność na tłuszcze, enzymy, soki trawienne oraz słabe kwasy i zasady; materiał zachowujący właściwości również w niskich temperaturach; zgodność z EN ISO 13688 i EN 343. Zastosowanie: przetwórstwo spożywcze (owocowo-warzywne, mięsne, rybne), gastronomia, rolnictwo, ogrodnictwo, weterynaria, segregacja odpadów.",
+            "expected_skus": [
+                "202"
+            ],
+            "forbidden_skus": [
+                "3112"
+            ],
+            "note": "Z opisu: poliester powlekany PU, pionowe pasy, regulacja paska szyjnego, szeroka szelka, wiązanie z tyłu, odporność na tłuszcze/enzymy/soki trawienne/słabe kwasy i zasady, niskie temperatury, EN ISO 13688, EN 343, branże. Wymiar 120/75 wzięto z nazwy (opis wymienia warianty 75x75 i 100x75)."
+        },
+        {
+            "id": "opisowy15-05-spodniobuty-s5-src",
+            "query": "Spodniobuty wodoochronne z wgrzanymi na stałe kaloszami – obuwie bezpieczne typu S5 SRC wg EN ISO 20345, z wkładką antyprzebiciową. Wymagane: tkanina na podkładzie poliestrowym, jednostronnie powlekana PVC, o zwiększonej widzialności (kolor fluorescencyjny) i odporności na rozdzieranie, spełniająca wymagania EN 343; szwy zgrzewane obustronnie (szczelność i wytrzymałość); wzmocnienia na kolanach; regulacja w pasie sznurkiem; wymienne szelki z szerokiej elastycznej gumy; materiał odporny na zginanie bez pękania w temperaturze do -50°C; przeznaczenie do pracy w warunkach ograniczonej widoczności. Rozmiary: 39–48.",
+            "expected_skus": [
+                "SB04 AIR"
+            ],
+            "forbidden_skus": [
+                "AB178"
+            ],
+            "note": "Z opisu: kalosze S5 z wkładką antyprzebiciową, EN ISO 20345 S5 SRC, tkanina poliestrowa powlekana PVC, fluo/zwiększona widzialność, odporność na rozdarcie, EN 343, zgrzewane szwy, wzmocnienia kolan, sznurek w pasie, wymienne szelki, -50°C, rozmiary 39–48 (z pola packaging). Określenie 'oddychające' z nazwy pominięto – opis go nie potwierdza."
+        },
+        {
+            "id": "opisowy15-06-okulary-smoke-pc-tpr",
+            "query": "Okulary ochronne z przyciemnianymi (smoke) soczewkami poliwęglanowymi do pracy na zewnątrz w pełnym słońcu – ochrona mechaniczna oczu połączona z redukcją odblasków i ochroną przed promieniowaniem UV. Wymagane: soczewki z poliwęglanu o grubości 2,3 mm; powłoka przeciwmgielna i odporna na zarysowania; panoramiczna, silnie zakrzywiona konstrukcja osłaniająca oczy przed pyłem, odpryskami ciał stałych i wiatrem; bi-materiałowe zauszniki PC+TPR w kolorze czerwono-czarnym; konstrukcja lekka, bez elementów metalowych. Zgodność z EN 166, EN 172 oraz EN ISO 16321-1; oznaczenie soczewek: filtr przeciwsłoneczny o stopniu zaciemnienia 3, klasa optyczna 1, odporność na uderzenia cząstek o niskiej energii, odporność w temperaturach ekstremalnych od -5°C do +55°C (T). Środek ochrony indywidualnej kategorii II, oznakowanie CE.",
+            "expected_skus": [
+                "RUSHPTWI"
+            ],
+            "forbidden_skus": [
+                "71347-00004M"
+            ],
+            "note": "Z opisu: soczewki PC 2,3 mm smoke, powłoka antyfog/anti-scratch (opisana funkcjonalnie zamiast nazwy własnej), zakrzywiona konstrukcja panoramiczna, zauszniki PC+TPR czerwono-czarne, brak metalu, normy EN166/EN172/EN ISO 16321-1, oznaczenie GL3 CT 1 (zaciemnienie 3, klasa optyczna 1, niska energia, -5/+55°C), ŚOI kat. II. Pominięto nazwę producenta, modelu, powłoki i konstrukcji (Curve 8)."
+        },
+        {
+            "id": "opisowy15-07-rekawice-cut-nbr-olej-100c",
+            "query": "Rękawice ochronne antyprzecięciowe powlekane, do prac w środowisku zaolejonym i wilgotnym z ryzykiem przecięcia oraz kontaktu z gorącymi przedmiotami (ochrona przed ciepłem kontaktowym do 100°C przez 15 s). Wymagane: dzianina z przędzy UHMWPE, włókna szklanego, nylonu, poliestru i elastanu (spandex); powłoka ze spienionej gumy nitrylowo-butadienowej (NBR) na części chwytnej, o wykończeniu mikroporowatym zapewniającym pewny chwyt, odporna na ciecze i oleje; dodatkowe wzmocnienie między kciukiem a palcem wskazującym; mankiet ze ściągaczem; bez silikonu i substancji SVHC; rękawice wstępnie prane, z akredytacją dermatologiczną. EN 388:2016 – ścieranie 4, przecięcie (Coup Test) 3, rozdzieranie 4, przekłucie 1, przecięcie wg metody ISO – poziom B; EN 407:2004 – ciepło kontaktowe poziom 1 (pozostałe parametry nietestowane). Nie do kontaktu z otwartym ogniem.",
+            "expected_skus": [
+                "44-304"
+            ],
+            "forbidden_skus": [
+                "34557048",
+                "34380358"
+            ],
+            "note": "Z opisu: środowisko zaolejone/wilgotne, ciepło kontaktowe 100°C/15 s, skład przędzy (UHMWPE, włókno szklane, nylon, poliester, spandex), powłoka spieniona NBR micro-foam/micro-cup (opisana funkcjonalnie), wzmocnienie kciuk-palec wskazujący, ściągacz, brak silikonu/SVHC, wstępne pranie, akredytacja dermatologiczna, EN 388:2016 4341B (źródło podaje 'ISO 13977'), EN 407:2004 X1XXXX. Pominięto nazwy technologii własnych, certyfikat Oeko-Tex (nazwa własna) i rozmiary (tylko w polu packaging)."
+        },
+        {
+            "id": "opisowy15-08-polmaska-ffp1-zawor-pary-org",
+            "query": "Półmaska filtrująca klasy FFP1 z zaworem wydechowym, specjalistyczna – do ochrony dróg oddechowych przed pyłami, mgłami oraz uciążliwym poziomem par organicznych. Wymagane: warstwa węgla aktywowanego eliminująca drażniące zapachy par organicznych poniżej NDS; zawór wydechowy odprowadzający nagromadzone ciepło i wydychane powietrze, ograniczający parowanie okularów; mocna konstrukcja kopułkowa dopasowująca się do większości kształtów i rozmiarów twarzy, nieodkształcająca się i niezapadająca; lekka, kompatybilna ze środkami ochrony wzroku i słuchu. Zakres stosowania: do 4 x NDS dla cząstek; poniżej NDS dla par organicznych. Zgodność z EN 149. Opakowanie: 10 szt., karton 100 szt.",
+            "expected_skus": [
+                "9914"
+            ],
+            "forbidden_skus": [
+                "9310+",
+                "7100329384"
+            ],
+            "note": "Z nazwy i opisu: FFP1, zawór (funkcja opisana bez nazwy własnej), pyły/mgły/pary organiczne, węgiel aktywowany, konstrukcja kopułkowa, zakres 4 x NDS cząstki i < NDS pary organiczne, EN 149, pakowanie 10/100 szt. Pominięto producenta i numer modelu."
+        },
+        {
+            "id": "opisowy15-09-gogle-spawalnicze-5",
+            "query": "Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0 – do ochrony oczu podczas spawania gazowego i cięcia metalu oraz przed pyłem, odpryskami i chemikaliami. Wymagane: soczewka poliwęglanowa o odporności na uderzenia do 120 m/s; powłoka przeciwmgielna oraz powłoka odporna na zarysowania; wentylacja szczelna chroniąca przed drobnymi cząstkami pyłu i gazem, ograniczająca zamglenie; cylindryczna, zakrzywiona soczewka o polu widzenia 180° bez zniekształceń optycznych; wysoki profil umożliwiający noszenie na okularach korekcyjnych; szeroki, regulowany pasek nylonowy; miękka uszczelka z elastomeru; możliwość stosowania łącznie z półmaskami oddechowymi. Zgodność z EN 166, oznakowanie CE.",
+            "expected_skus": [
+                "34340"
+            ],
+            "forbidden_skus": [
+                "9310+",
+                "9312+"
+            ],
+            "note": "Z nazwy i opisu: gogle szczelne spawalnicze, zaciemnienie 5.0, spawanie gazowe/cięcie metalu, soczewka PC do 120 m/s, powłoki anti-fog i anti-scratch (bez nazwy własnej), wentylacja szczelna, pole widzenia 180°, miejsce na okulary korekcyjne, pasek nylonowy, uszczelka elastomerowa, kompatybilność z półmaskami, EN 166, CE. Pominięto producenta, serię i numery modelu."
+        },
+        {
+            "id": "opisowy15-10-apteczka-scienna-mini",
+            "query": "Apteczka ścienna pierwszej pomocy (panel) w wersji mini, do mniejszych pomieszczeń (np. biura) lub jako uzupełnienie innych zestawów pierwszej pomocy. Wymagane: konstrukcja otwarta, niezamykana – natychmiastowa gotowość do użycia; stałe miejsce dla każdego elementu, każdy element opatrzony czytelną instrukcją użycia; dozownik na plastry wydający plaster częściowo odklejony (przyklejenie jedną ręką), z wkładem blokowanym w dozowniku i wyjmowanym wyłącznie dołączonym kluczem; możliwość uzupełniania poszczególnych wkładów. Wyposażenie: 1 szt. zestaw opatrunkowy 4-w-1 do tamowania krwi; 3 szt. zestaw opatrunkowy 4-w-1 mini do tamowania krwi; 1 dozownik z dwoma wkładami plastrów (tekstylne i plastikowe); 1 klucz do wkładów. Wyroby medyczne oznakowane CE. Kolor zielony; masa 1,981 kg.",
+            "expected_skus": [
+                "191400"
+            ],
+            "forbidden_skus": [],
+            "note": "Z opisu: apteczka ścienna mini, niezamykana, stałe miejsca i instrukcje, dozownik plastrów z częściowym odklejaniem i blokadą na klucz, uzupełnialne wkłady, wyposażenie (1 zestaw 4-w-1, 3 zestawy 4-w-1 mini, dozownik z 2 wkładami tekstylne/plastikowe, klucz), CE, kolor zielony, waga 1,981 kg. Pominięto producenta, nazwy linii i numery katalogowe wkładów."
+        },
+        {
+            "id": "opisowy15-11-plukanka-500ml",
+            "query": "Płukanka do oczu – sterylny, izotoniczny roztwór soli fizjologicznej bez konserwantów, do jednorazowego płukania oczu w razie zaprószenia lub ochlapania substancjami niebezpiecznymi; roztwór neutralizujący kwasy i zasady (silniejsze działanie wobec zasad). Wymagane: butelka o pojemności 500 ml z końcówką w kształcie wanienki kierującą strumień roztworu do oka i pomagającą utrzymać powiekę otwartą; otwieranie jednym ruchem przez przekręcenie; zintegrowany korek chroniący wanienkę przed zanieczyszczeniem; możliwość montażu na stanowisku pracy, w tym w uchwycie ściennym; wymiary ok. Ø 6,6 x 23,5 cm; okres przydatności 5 lat; wyrób medyczny oznakowany znakiem CE. Zastosowanie: laboratoria, magazyny chemiczne, zakłady przemysłowe; także jako uzupełnienie oczomyjek zasilanych bieżącą wodą.",
+            "expected_skus": [
+                "7251"
+            ],
+            "forbidden_skus": [
+                "7251-7200"
+            ],
+            "note": "Z opisu źródłowego: sterylny izotoniczny roztwór NaCl bez konserwantów, neutralizacja kwasów i zasad, butelka 500 ml z wanienką, otwieranie przez przekręcenie, korek, montaż w uchwycie ściennym, wymiary Ø 6,6 x 23,5 cm, przydatność 5 lat, wyrób medyczny CE, obszary zastosowania."
+        },
+        {
+            "id": "opisowy15-12-polbuty-elektroizolacyjne-20kv",
+            "query": "Półbuty elektroizolacyjne do prac przy urządzeniach i instalacjach elektroenergetycznych o napięciu przemiennym do 17 kV, przeznaczone do nakładania na inne obuwie robocze i stosowania wyłącznie w strefach zagrożeń elektrycznych jako dodatkowy środek ochrony przed porażeniem prądem. Wymagane: klasa 2 AC zgodnie z normą EN 50321-1; wykonanie z gumy naturalnej z dodatkiem antystarzeniowym o podwyższonej odporności elektroizolacyjnej; produkcja metodą konfekcjonowania ręcznego i wulkanizacji; każda para oznaczona numerem seryjnym i datą produkcji umożliwiającymi kontrolę i badania okresowe; zgodność z normą EN 20347:2012 dla obuwia zawodowego kategorii OB; odporność na poślizg SRA. Rozmiary 41–45. Badania okresowe w laboratorium nie rzadziej niż co 12 miesięcy; oględziny przed każdym użyciem.",
+            "expected_skus": [
+                "T5912100"
+            ],
+            "forbidden_skus": [
+                "ART 702 Air 6660 OB A E FO"
+            ],
+            "note": "Z opisu źródłowego: napięcie do 17 kV AC, klasa 2 AC wg EN 50321-1, guma naturalna z dodatkiem antystarzeniowym, konfekcjonowanie ręczne i wulkanizacja, numer seryjny i data produkcji, EN 20347:2012 kat. OB, SRA, rozmiary 41-45, badania co 12 miesięcy, stosowanie jako overboot."
+        },
+        {
+            "id": "opisowy15-13-polmaska-wielorazowa-en140",
+            "query": "Półmaska wielokrotnego użytku do ochrony układu oddechowego – po skompletowaniu z odpowiednimi elementami oczyszczającymi chroni przed aerozolami (pyły, dymy, mgły), parami i gazami oraz obiema postaciami łącznie. Wymagane: korpus z dwoma zaworami wdechowymi wyposażonymi w łączniki bagnetowe do montażu elementów oczyszczających; zawór wydechowy z pokrywą; jednoczęściowe nagłowie tekstylne łączone z półmaską za pomocą zapinek i zaczepów pierścienia; możliwość rozłożenia do czyszczenia i odkażania ciepłą wodą z mydłem (poniżej 50°C); trwałość 5 lat przechowywania w opakowaniu fabrycznym, min. 3 lata bezpiecznego użytkowania po rozpakowaniu; zgodność z rozporządzeniem (UE) 2016/425; zgodność z normą PN-EN 140:2004 (EN 140:1998); oznakowanie CE.",
+            "expected_skus": [
+                "S56T0SM0"
+            ],
+            "forbidden_skus": [
+                "9310+"
+            ],
+            "note": "Z opisu źródłowego: ochrona przed aerozolami, parami i gazami po skompletowaniu, budowa (korpus, 2 zawory wdechowe z łącznikami bagnetowymi, zawór wydechowy, nagłowie jednoczęściowe tekstylne z zapinkami i pierścieniem), czyszczenie wodą z mydłem <50°C, trwałość 5/3 lat, rozporządzenie 2016/425, PN-EN 140:2004, CE."
+        },
+        {
+            "id": "opisowy15-14-pochlaniacz-a2",
+            "query": "Pochłaniacz gazów i par klasy A2 – element oczyszczający do sprzętu ochrony układu oddechowego, chroniący przed gazami i parami substancji organicznych o temperaturze wrzenia powyżej 65°C (m.in. alkohole, aldehydy, estry, etery, ketony, kwasy organiczne, styren) przy łącznym stężeniu objętościowym w powietrzu do 0,5% (5000 ppm). Wymagane: klasa A2 zgodnie z normą EN 14387; obudowa z tworzywa sztucznego; bagnetowy system mocowania zapewniający dokładne i bezpieczne osadzenie na półmaskach i maskach pełnotwarzowych ze złączem bagnetowym; możliwość łączenia z filtrami cząstek tej samej serii; stosowany w komplecie po 2 sztuki na maskę lub półmaskę. Zastosowanie: przemysł chemiczny, lakierniczy, prace z rozpuszczalnikami organicznymi.",
+            "expected_skus": [
+                "S565A202"
+            ],
+            "forbidden_skus": [],
+            "note": "Z opisu źródłowego: klasa A2 wg EN 14387, gazy i pary organiczne o temp. wrzenia >65°C, lista związków, stężenie do 0,5% (5000 ppm), obudowa z tworzywa, złącze bagnetowe, łączenie z filtrami cząstek, 2 szt. na komplet, obszary zastosowania."
+        },
+        {
+            "id": "opisowy15-15-rekawice-lateks-flok-87-320",
+            "query": "Rękawice ochronne z lateksu naturalnego, flokowane, do lekkich prac o niskim stopniu zagrożenia oraz do kontaktu z żywnością (przetwórstwo spożywcze, owoce i warzywa, sprzątanie laboratoriów, prace porządkowe). Wymagane: powłoka z lateksu naturalnego w kolorze pomarańczowym, chlorowana; wyściółka (podszewka) w 100% z bawełny, flokowana; budowa bez usztywnienia; mankiet zawinięty (rolowany) ułatwiający zakładanie i zdejmowanie oraz zapewniający odporność na rozdarcia; chwytność w układzie rombowym; długość 300 mm; grubość w części dłoniowej 0,45 mm; poziom AQL 1,5; zgodność z przepisami dotyczącymi kontaktu z żywnością; odporność na ścieranie; rozmiary 7, 8, 9, 10. Opakowanie zbiorcze: 12 par w woreczku, 12 woreczków w kartonie.",
+            "expected_skus": [
+                "87320100-BULK"
+            ],
+            "forbidden_skus": [
+                "87063100BP"
+            ],
+            "note": "Z opisu źródłowego: lateks naturalny, kolor pomarańczowy, chlorowane, podszewka 100% bawełna (flok), bez usztywnienia, mankiet zawinięty, chwytność romb, długość 300 mm, grubość dłoni 0,45 mm, AQL 1,5, kontakt z żywnością, odporność na ścieranie i rozdarcia, rozmiary 7-10, pakowanie 12 par w woreczku / 12 woreczków w kartonie."
         }
     ]
 }
