@@ -195,8 +195,12 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::middleware('permission:inquiries.use')->group(function (): void {
         Route::get('/inquiries', [ClientInquiryController::class, 'index']);
         Route::post('/inquiries', [ClientInquiryController::class, 'store']);
+        // przed „{inquiry}”, żeby „preferences” nie zostało wzięte za id
+        Route::get('/inquiries/preferences', [ClientInquiryController::class, 'preferences']);
         Route::get('/inquiries/{inquiry}', [ClientInquiryController::class, 'show']);
+        Route::patch('/inquiries/{inquiry}', [ClientInquiryController::class, 'update']);
         Route::post('/inquiries/{inquiry}/compose', [ClientInquiryController::class, 'compose']);
+        Route::post('/inquiries/{inquiry}/replied', [ClientInquiryController::class, 'replied']);
     });
 
     Route::get('/price-lists', [PriceListController::class, 'index'])->middleware('permission:price_lists.view');

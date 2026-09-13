@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Models\Client;
 use App\Models\ClientInquiry;
 use App\Models\ProductSubstitute;
 use App\Models\User;
-use App\Support\OfferPricing;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Support\OfferPricing;
 use RuntimeException;
 use Throwable;
 
@@ -23,10 +25,24 @@ final class ClientInquiryService
 
     private const MAX_CARDS = 28;
 
+    /** Od tego wyniku najlepszy kandydat jest „pewny” (jeśli drugi nie depcze mu po piętach). */
+    private const CONFIDENT_SCORE = 80;
+
+    /** Drugi kandydat bliżej niż tyle punktów = pozycja niejednoznaczna. */
+    private const AMBIGUOUS_GAP = 11;
+
+    private const PRICE_MODES = ['none', 'catalog', 'catalog_margin'];
+
+    /** Jednostki z maila, które umiemy oddzielić od liczby („30szt”, „4 pary”, „2 op.”). */
+    private const UNIT_PATTERN = '(?:szt\.?|sztuk|pcs\.?|par[ay]?|op\.?|opak\.?|opakowa[nń][a-z]*|kpl\.?|komplet[a-zóy]*|zest\.?|zestaw[a-zóy]*)';
+
+    private ?int $minMatchScore = null;
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductInquirySearch $search,
         private readonly NbpExchangeRateService $fx,
+        private readonly AiSettingsService $aiSettings,
     ) {}
 
     public function analyze(
@@ -40,9 +56,11 @@ final class ClientInquiryService
         $lineItems = $this->resolveLineItems($body, $extracted['line_items']);
         $queries = $this->uniqueQueries($lineItems, $extracted['product_queries']);
         $matches = $this->matchProducts($queries);
-        $cards = $this->buildCards($extracted['cards'], $matches, $lineItems, $this->loadSubstitutes($matches));
+        $substitutes = $this->loadSubstitutes($matches);
+        $cards = $this->buildCards($extracted['cards'], $matches, $lineItems, $substitutes);
+        $preferences = $this->lastPreferences($user);
 
-        return ClientInquiry::query()->create([
+        $inquiry = ClientInquiry::query()->create([
             'user_id' => $user->id,
             'client_id' => $clientId,
             'tone' => $tone,
@@ -54,20 +72,52 @@ final class ClientInquiryService
                 'product_queries' => $queries,
                 'line_items' => $lineItems,
                 'matches' => $matches,
+                'substitutes' => $substitutes,
                 'cards' => $cards,
+                'margin_used' => $preferences['margin'],
             ],
-        ])->load('client');
+        ]);
+
+        // Pracownik ma od razu zobaczyć gotowy list: domyślne decyzje + szkic.
+        $answers = $this->defaultAnswers($inquiry, $preferences['price_mode'], $preferences['margin']);
+
+        return $this->saveReply($inquiry, $answers, null);
+    }
+
+    /**
+     * Przysłane odpowiedzi nadpisują zapisane; brak klucza = decyzja domyślna.
+     * `extraNote` false = nie ruszaj zapisanego dopisku (klucza nie było w żądaniu).
+     *
+     * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
+     */
+    public function compose(ClientInquiry $inquiry, array $answers, string|false|null $extraNote): ClientInquiry
+    {
+        $saved = is_array($inquiry->answers) ? $inquiry->answers : [];
+        $merged = array_merge($saved, $answers);
+        foreach ($this->defaultAnswers($inquiry, $this->priceModeOf($merged), $this->marginPercent($merged)) as $key => $answer) {
+            $merged[$key] ??= $answer;
+        }
+
+        return $this->saveReply(
+            $inquiry,
+            $merged,
+            $extraNote === false ? $this->nullable($inquiry->extra_note) : $this->nullable($extraNote),
+        );
     }
 
     /**
      * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
      */
-    public function compose(ClientInquiry $inquiry, array $answers, ?string $extraNote): ClientInquiry
+    private function saveReply(ClientInquiry $inquiry, array $answers, ?string $extraNote): ClientInquiry
     {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $analysis['margin_used'] = $this->marginPercent($answers);
+
         $inquiry->forceFill([
+            'analysis' => $analysis,
             'answers' => $answers,
-            'extra_note' => $this->nullable($extraNote),
-        ])->save();
+            'extra_note' => $extraNote,
+        ]);
 
         $draft = $this->writeReply($inquiry, $answers, $extraNote);
 
@@ -77,6 +127,584 @@ final class ClientInquiryService
         ])->save();
 
         return $inquiry->fresh(['client']) ?? $inquiry;
+    }
+
+    /**
+     * Ton, tryb ceny i marża z ostatniego zapytania użytkownika (bez osobnej tabeli ustawień).
+     *
+     * @return array{tone: string, price_mode: string, margin: float}
+     */
+    public function lastPreferences(User $user): array
+    {
+        $last = ClientInquiry::query()
+            ->where('user_id', $user->id)
+            ->latest('id')
+            ->first();
+        $answers = $last !== null && is_array($last->answers) ? $last->answers : [];
+        $tone = $last !== null && in_array($last->tone, ['formal', 'handlowy'], true) ? (string) $last->tone : 'formal';
+
+        return [
+            'tone' => $tone,
+            'price_mode' => $this->priceModeOf($answers),
+            'margin' => $this->marginPercent($answers),
+        ];
+    }
+
+    /**
+     * Pełny payload API zapytania (kontrakt GET /inquiries/{id}).
+     *
+     * @return array<string, mixed>
+     */
+    public function present(ClientInquiry $inquiry): array
+    {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $answers = is_array($inquiry->answers) ? $inquiry->answers : [];
+        $client = $inquiry->relationLoaded('client') ? $inquiry->client : null;
+        $items = $this->itemsView($inquiry);
+
+        return [
+            'id' => $inquiry->id,
+            'client_id' => $inquiry->client_id,
+            'client' => $client instanceof Client
+                ? ['id' => $client->id, 'name' => $client->name]
+                : null,
+            'tone' => (string) $inquiry->tone,
+            'source_subject' => $inquiry->source_subject,
+            'source_body' => (string) $inquiry->source_body,
+            'questions' => $this->stringList($analysis['questions'] ?? null),
+            'attention_count' => $this->countAttention($items),
+            'replied_at' => $inquiry->replied_at?->toIso8601String(),
+            'price' => [
+                'answer_key' => 'price',
+                'mode' => $this->priceModeOf($answers),
+                'margin' => $this->marginPercent($answers),
+            ],
+            'items' => $items,
+            'global_cards' => $this->globalCards($analysis),
+            'cards' => $this->storedCards($analysis),
+            'answers' => $answers,
+            'extra_note' => $inquiry->extra_note,
+            'reply_subject' => $inquiry->reply_subject,
+            'reply_body' => $inquiry->reply_body,
+            'created_at' => $inquiry->created_at?->toIso8601String(),
+        ];
+    }
+
+    /** Liczba pozycji do sprawdzenia — liczona w PHP z zapisanego analysis + answers. */
+    public function attentionCount(ClientInquiry $inquiry): int
+    {
+        return $this->countAttention($this->itemsView($inquiry));
+    }
+
+    /**
+     * Widok pozycji nad kluczami `answers` (product:item_N, substitutes:item_N) — nie nowy model.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function itemsView(ClientInquiry $inquiry): array
+    {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $answers = is_array($inquiry->answers) ? $inquiry->answers : [];
+        $matches = $this->matchGroups($analysis);
+        $priceMode = $this->priceModeOf($answers);
+        $margin = $this->marginPercent($answers);
+
+        $out = [];
+        foreach ($this->lineItemsOf($analysis) as $item) {
+            $itemId = (string) $item['id'];
+            $candidates = $this->candidatesForItem($matches, $item);
+            $substitutes = $this->substitutesForItem($analysis, $candidates);
+            $confidence = $this->confidenceFor($candidates, $item);
+            $chosen = $this->chosenOptionFor($item, $candidates, $answers);
+            $cards = $this->itemCards($analysis, $itemId);
+            $qtyUnit = $this->qtyUnit($item);
+
+            $flags = [];
+            if ($confidence === 'none' && $candidates !== []) {
+                $flags[] = 'low_score';
+            }
+            if ($this->isAmbiguous($candidates, $item)) {
+                $flags[] = 'ambiguous';
+            }
+            $product = $this->candidateById($candidates, $chosen);
+            if ($product !== null && $priceMode !== 'none' && $this->letterPrice($product, $priceMode, $margin) === null) {
+                $flags[] = 'no_price';
+            }
+            foreach ($cards as $card) {
+                // karta AI bez odpowiedzi — list jej nie uwzględnia, pracownik powinien zerknąć
+                if (! isset($answers[(string) $card['id']])) {
+                    $flags[] = 'card_default';
+                    break;
+                }
+            }
+
+            $out[] = [
+                'id' => $itemId,
+                'quote' => $this->nullable($item['quote'] ?? null),
+                'qty' => $qtyUnit['qty'],
+                'unit' => $qtyUnit['unit'],
+                'size' => $this->nullable($item['size'] ?? null),
+                'answer_key' => 'product:'.$itemId,
+                'substitute_key' => $substitutes !== [] ? 'substitutes:'.$itemId : null,
+                'confidence' => $confidence,
+                'chosen' => $chosen,
+                'flags' => $flags,
+                'candidates' => array_map(fn (array $p): array => $this->candidateView($p), $candidates),
+                'substitutes' => array_map(
+                    fn (array $p): array => array_merge($this->candidateView($p), ['score' => null, 'reason' => null]),
+                    $substitutes
+                ),
+                'cards' => $cards,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Jedna funkcja domyślnego wyboru: dla analyze() (zapis answers) i compose() (brak odpowiedzi).
+     *
+     * @param  array<string, mixed>  $item
+     * @param  list<array<string, mixed>>  $candidates  posortowani malejąco po score
+     */
+    public function defaultOptionFor(array $item, array $candidates): string
+    {
+        if ($this->confidenceFor($candidates, $item) === 'none') {
+            return 'check';
+        }
+
+        return 'p:'.(int) $candidates[0]['id'];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $candidates  posortowani malejąco po score (kod z maila na czele)
+     * @param  array<string, mixed>  $item
+     * @return 'high'|'medium'|'none'
+     */
+    public function confidenceFor(array $candidates, array $item = []): string
+    {
+        $best = $candidates[0] ?? null;
+        if ($best === null) {
+            return 'none';
+        }
+        // Klient wpisał dokładny kod z katalogu — to nie jest zgadywanie modelu.
+        if ($this->skuQuotedIndex($item, $candidates) === 0) {
+            return 'high';
+        }
+        $score = (int) ($best['score'] ?? 0);
+        if ($score >= self::CONFIDENT_SCORE && ! $this->isAmbiguous($candidates, $item)) {
+            return 'high';
+        }
+
+        return $score >= $this->minMatchScore() ? 'medium' : 'none';
+    }
+
+    /**
+     * Indeks kandydata, którego SKU stoi dosłownie w cytacie z maila (osobny token, min. 4 znaki).
+     *
+     * @param  array<string, mixed>  $item
+     * @param  list<array<string, mixed>>  $candidates
+     */
+    private function skuQuotedIndex(array $item, array $candidates): ?int
+    {
+        $quote = mb_strtolower(trim((string) ($item['quote'] ?? '')));
+        if ($quote === '') {
+            return null;
+        }
+        foreach ($candidates as $i => $candidate) {
+            $sku = mb_strtolower(trim((string) ($candidate['sku'] ?? '')));
+            if (mb_strlen($sku) < 4) {
+                continue;
+            }
+            if (preg_match('/(?<![a-z0-9])'.preg_quote($sku, '/').'(?![a-z0-9])/u', $quote) === 1) {
+                return $i;
+            }
+        }
+
+        return null;
+    }
+
+    /** Próg z panelu Strojenie AI — raz na instancję, żeby lista zapytań nie odpytywała ustawień per pozycja. */
+    private function minMatchScore(): int
+    {
+        return $this->minMatchScore ??= $this->aiSettings->matchMinScore();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $candidates
+     * @param  array<string, mixed>  $item
+     */
+    private function isAmbiguous(array $candidates, array $item = []): bool
+    {
+        if (count($candidates) < 2 || $this->skuQuotedIndex($item, $candidates) === 0) {
+            return false;
+        }
+        $best = (int) ($candidates[0]['score'] ?? 0);
+        $second = (int) ($candidates[1]['score'] ?? 0);
+
+        return $best >= self::CONFIDENT_SCORE && $best - $second < self::AMBIGUOUS_GAP;
+    }
+
+    /**
+     * Domyślne `answers`: towar per pozycja, zamienniki „no” tam, gdzie są zatwierdzone, tryb ceny.
+     *
+     * @return array<string, array{option_id: string, custom?: string|null}>
+     */
+    public function defaultAnswers(ClientInquiry $inquiry, string $priceMode, float $margin): array
+    {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $matches = $this->matchGroups($analysis);
+        $answers = [];
+        foreach ($this->lineItemsOf($analysis) as $item) {
+            $itemId = (string) $item['id'];
+            $candidates = $this->candidatesForItem($matches, $item);
+            $answers['product:'.$itemId] = ['option_id' => $this->defaultOptionFor($item, $candidates)];
+            if ($this->substitutesForItem($analysis, $candidates) !== []) {
+                $answers['substitutes:'.$itemId] = ['option_id' => 'no'];
+            }
+        }
+        $answers['price'] = [
+            'option_id' => in_array($priceMode, self::PRICE_MODES, true) ? $priceMode : 'none',
+            'custom' => $this->formatMargin($margin),
+        ];
+
+        return $answers;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $items
+     */
+    private function countAttention(array $items): int
+    {
+        $n = 0;
+        foreach ($items as $item) {
+            if (($item['confidence'] ?? 'none') !== 'high' || ($item['flags'] ?? []) !== []) {
+                $n++;
+            }
+        }
+
+        return $n;
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @return list<array{query: string, products: list<array<string, mixed>>}>
+     */
+    private function matchGroups(array $analysis): array
+    {
+        $out = [];
+        foreach (is_array($analysis['matches'] ?? null) ? $analysis['matches'] : [] as $group) {
+            if (! is_array($group)) {
+                continue;
+            }
+            $products = [];
+            foreach (is_array($group['products'] ?? null) ? $group['products'] : [] as $product) {
+                if (is_array($product) && (int) ($product['id'] ?? 0) > 0) {
+                    $products[] = $product;
+                }
+            }
+            $out[] = ['query' => (string) ($group['query'] ?? ''), 'products' => $products];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Pozycje z analizy; mail opisowy (bez line_items) dostaje jedną pseudo-pozycję item_1
+     * z pierwszym zapytaniem produktowym — bez cytatu, bo to parafraza modelu, nie tekst klienta.
+     *
+     * @param  array<string, mixed>  $analysis
+     * @return list<array<string, mixed>>
+     */
+    private function lineItemsOf(array $analysis): array
+    {
+        $items = [];
+        foreach (is_array($analysis['line_items'] ?? null) ? $analysis['line_items'] : [] as $item) {
+            if (is_array($item) && trim((string) ($item['id'] ?? '')) !== '') {
+                $items[] = $item;
+            }
+        }
+        if ($items !== []) {
+            return $items;
+        }
+
+        $query = $this->stringList($analysis['product_queries'] ?? null)[0]
+            ?? $this->nullable($this->matchGroups($analysis)[0]['query'] ?? null);
+        if ($query === null) {
+            return [];
+        }
+
+        return [[
+            'id' => 'item_1',
+            'quote' => null,
+            'qty' => null,
+            'unit' => null,
+            'query' => $query,
+            'size' => null,
+        ]];
+    }
+
+    /**
+     * Kandydaci pozycji malejąco po score (także poniżej progu — do ręcznego wyboru).
+     *
+     * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
+     * @param  array<string, mixed>  $item
+     * @return list<array<string, mixed>>
+     */
+    private function candidatesForItem(array $matches, array $item): array
+    {
+        $products = $this->productsForItem($matches, $item);
+        usort($products, static fn (array $a, array $b): int => ((int) ($b['score'] ?? 0)) <=> ((int) ($a['score'] ?? 0)));
+        $products = array_values($products);
+
+        // kod z maila na czoło — przy równych wynikach wariantów to on jest domyślny
+        $quoted = $this->skuQuotedIndex($item, $products);
+        if ($quoted !== null && $quoted > 0) {
+            [$hit] = array_splice($products, $quoted, 1);
+            array_unshift($products, $hit);
+        }
+
+        return $products;
+    }
+
+    /**
+     * Zatwierdzone zamienniki kandydatów pozycji (zapisane w analysis.substitutes przy analizie).
+     *
+     * @param  array<string, mixed>  $analysis
+     * @param  list<array<string, mixed>>  $candidates
+     * @return list<array<string, mixed>>
+     */
+    private function substitutesForItem(array $analysis, array $candidates): array
+    {
+        $byMain = is_array($analysis['substitutes'] ?? null) ? $analysis['substitutes'] : [];
+        $seen = [];
+        $out = [];
+        foreach ($candidates as $product) {
+            $pid = (int) ($product['id'] ?? 0);
+            foreach (is_array($byMain[$pid] ?? null) ? $byMain[$pid] : [] as $sub) {
+                $sid = is_array($sub) ? (int) ($sub['id'] ?? 0) : 0;
+                if ($sid <= 0 || isset($seen[$sid])) {
+                    continue;
+                }
+                $seen[$sid] = true;
+                $out[] = $sub;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Wybór pozycji z `answers` albo domyślny. Tylko „p:<id>” z listy kandydatów/zamienników
+     * albo „check”; stare „category” liczy się jak „check”.
+     *
+     * @param  array<string, mixed>  $item
+     * @param  list<array<string, mixed>>  $candidates
+     * @param  array<string, mixed>  $answers
+     */
+    private function chosenOptionFor(array $item, array $candidates, array $answers): string
+    {
+        $itemId = (string) ($item['id'] ?? '');
+        // „product” = stara karta ogólna maila opisowego (rekordy sprzed pseudo-pozycji)
+        foreach (['product:'.$itemId, 'product'] as $key) {
+            $option = trim((string) ($answers[$key]['option_id'] ?? ''));
+            if ($option === 'check' || $option === 'category') {
+                return 'check';
+            }
+            if (str_starts_with($option, 'p:') && $this->candidateById($candidates, $option) !== null) {
+                return $option;
+            }
+        }
+
+        return $this->defaultOptionFor($item, $candidates);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $products
+     * @return array<string, mixed>|null
+     */
+    private function candidateById(array $products, string $option): ?array
+    {
+        if (! str_starts_with($option, 'p:')) {
+            return null;
+        }
+        $id = (int) substr($option, 2);
+        foreach ($products as $product) {
+            if ((int) ($product['id'] ?? 0) === $id) {
+                return $product;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     * @return array<string, mixed>
+     */
+    private function candidateView(array $product): array
+    {
+        return [
+            'id' => (int) $product['id'],
+            'sku' => (string) ($product['sku'] ?? ''),
+            'name' => (string) ($product['name'] ?? ''),
+            'manufacturer' => (string) ($product['manufacturer'] ?? ''),
+            'norms' => (string) ($product['norms'] ?? ''),
+            'catalog_pln' => is_numeric($product['catalog_pln'] ?? null) ? (float) $product['catalog_pln'] : null,
+            'offer_pln' => is_numeric($product['offer_pln'] ?? null) ? (float) $product['offer_pln'] : null,
+            'stock' => isset($product['stock']) && is_numeric($product['stock']) ? (int) $product['stock'] : null,
+            'score' => (int) ($product['score'] ?? 0),
+            'reason' => $this->nullable($product['reason'] ?? null),
+        ];
+    }
+
+    /**
+     * Karty AI przypięte do pozycji (bez kart towaru/zamienników — te są widokiem `items`).
+     *
+     * @param  array<string, mixed>  $analysis
+     * @return list<array<string, mixed>>
+     */
+    private function itemCards(array $analysis, string $itemId): array
+    {
+        $out = [];
+        foreach ($this->storedCards($analysis) as $card) {
+            $id = (string) $card['id'];
+            if (str_starts_with($id, 'product:') || str_starts_with($id, 'substitutes:')) {
+                continue;
+            }
+            if (($card['kind'] ?? null) === 'item' && (string) ($card['item_id'] ?? '') === $itemId) {
+                $out[] = $this->cardView($card);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Karty AI bez pozycji (ogólne niejasności) — bez kart handlowych i starych kart towaru.
+     *
+     * @param  array<string, mixed>  $analysis
+     * @return list<array<string, mixed>>
+     */
+    private function globalCards(array $analysis): array
+    {
+        $out = [];
+        foreach ($this->storedCards($analysis) as $card) {
+            $id = (string) $card['id'];
+            if (in_array($id, ['price', 'substitutes', 'product', 'missing'], true)) {
+                continue;
+            }
+            if (($card['kind'] ?? 'global') !== 'item') {
+                $out[] = $this->cardView($card);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, mixed>  $card
+     * @return array{id: string, title: string, prompt: string, options: list<array{id: string, label: string}>, allow_custom: bool}
+     */
+    private function cardView(array $card): array
+    {
+        $options = [];
+        foreach (is_array($card['options'] ?? null) ? $card['options'] : [] as $option) {
+            if (is_array($option) && isset($option['id'], $option['label'])) {
+                $options[] = ['id' => (string) $option['id'], 'label' => (string) $option['label']];
+            }
+        }
+
+        return [
+            'id' => (string) $card['id'],
+            'title' => (string) ($card['title'] ?? ''),
+            'prompt' => (string) ($card['prompt'] ?? ''),
+            'options' => $options,
+            'allow_custom' => (bool) ($card['allow_custom'] ?? false),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @return list<array<string, mixed>>
+     */
+    private function storedCards(array $analysis): array
+    {
+        $out = [];
+        foreach (is_array($analysis['cards'] ?? null) ? $analysis['cards'] : [] as $card) {
+            if (is_array($card) && isset($card['id'])) {
+                $out[] = $card;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, mixed>  $answers
+     */
+    private function priceModeOf(array $answers): string
+    {
+        $mode = trim((string) ($answers['price']['option_id'] ?? 'none'));
+
+        return in_array($mode, self::PRICE_MODES, true) ? $mode : 'none';
+    }
+
+    private function formatMargin(float $margin): string
+    {
+        return rtrim(rtrim(number_format($margin, 2, '.', ''), '0'), '.');
+    }
+
+    /**
+     * Ilość i jednostka pozycji. Stare rekordy mają `qty` = „30 szt.” — rozbijamy je tak samo.
+     *
+     * @param  array<string, mixed>  $item
+     * @return array{qty: string|null, unit: string|null}
+     */
+    private function qtyUnit(array $item): array
+    {
+        $unit = $this->nullable($item['unit'] ?? null);
+        $raw = $item['qty'] ?? null;
+        if (is_int($raw) || is_float($raw)) {
+            return ['qty' => $this->formatQty((string) $raw), 'unit' => $unit];
+        }
+        $raw = $this->nullable(is_string($raw) ? $raw : null);
+        if ($raw === null) {
+            return ['qty' => null, 'unit' => $unit];
+        }
+        if (preg_match('/^(\d+(?:[.,]\d+)?)\s*(.*)$/u', $raw, $m) !== 1) {
+            return ['qty' => null, 'unit' => $unit];
+        }
+
+        return [
+            'qty' => $this->formatQty($m[1]),
+            'unit' => $unit ?? $this->nullable($m[2]),
+        ];
+    }
+
+    private function formatQty(string $number): string
+    {
+        $number = str_replace(',', '.', $number);
+        if (str_contains($number, '.')) {
+            $number = rtrim(rtrim($number, '0'), '.');
+        }
+
+        return $number === '' ? '0' : $number;
+    }
+
+    /**
+     * „30 szt.” / „30” / null — do kart i nagłówka pozycji w liście.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private function qtyLabel(array $item): ?string
+    {
+        $qu = $this->qtyUnit($item);
+        if ($qu['qty'] === null) {
+            return null;
+        }
+
+        return $qu['unit'] === null ? $qu['qty'] : $qu['qty'].' '.$qu['unit'];
     }
 
     /**
@@ -101,7 +729,8 @@ final class ClientInquiryService
                         .'line_items: KAŻDA osobna pozycja (osobny wiersz, ilość albo rozmiar = osobna pozycja). '
                         .'Nie łącz „rękawice 9” i „rękawice 10” w jedną. Max 8. '
                         .'Każda pozycja: id (item_1…), quote (DOKŁADNY cytat wiersza z maila), '
-                        .'qty (np. „30 szt.”), query (fraza do katalogu BEZ rozmiaru, Z warunkiem: substancja, norma, typ), size (lub null). '
+                        .'qty (SAMA liczba jako string, np. „30”; brak → null), unit (jednostka DOKŁADNIE jak w mailu: „szt.”, „par”, „op.”; brak → null), '
+                        .'query (fraza do katalogu BEZ rozmiaru, Z warunkiem: substancja, norma, typ), size (lub null). '
                         .'product_queries: unikalne query z line_items. '
                         .'cards: max 4 — TYLKO prawdziwe niejasności (rozmiar, wariant, termin). '
                         .'Nie pytaj o oczywistości. item_id jeśli karta dotyczy jednej pozycji. '
@@ -215,7 +844,8 @@ final class ClientInquiryService
                     $used[] = (string) $card['id'];
                 }
 
-                if ($products !== []) {
+                // karta zamienników tylko, gdy kandydaci mają zatwierdzone zamienniki
+                if ($this->hasSubstitutes($products, $subsByProductId)) {
                     $subCard = $this->substituteCardForItem($item, $products, $subsByProductId);
                     $cards[] = $subCard;
                     $used[] = (string) $subCard['id'];
@@ -254,7 +884,6 @@ final class ClientInquiryService
                 'prompt' => 'Nie znaleziono produktu w katalogu. Jak odpowiedzieć?',
                 'options' => [
                     ['id' => 'check', 'label' => 'Sprawdzimy i wrócimy'],
-                    ['id' => 'category', 'label' => 'Ogólnie o kategorii, bez SKU'],
                 ],
                 'allow_custom' => true,
                 'kind' => 'global',
@@ -354,10 +983,10 @@ final class ClientInquiryService
             if ($line === '') {
                 continue;
             }
-            if (preg_match('/^(\d+)\s*(?:szt\.?|sztuk|pcs\.?)?[\s.,:–-]+(.+)$/iu', $line, $m) !== 1) {
+            if (preg_match('/^(\d+)\s*('.self::UNIT_PATTERN.')?[\s.,:–-]+(.+)$/iu', $line, $m) !== 1) {
                 continue;
             }
-            $rest = trim($m[2]);
+            $rest = trim($m[3]);
             $size = null;
             if (preg_match('/\b(?:rozmiar|rozm\.?)\s+([a-z0-9\/,.\-]+)/iu', $rest, $sizeMatch) === 1) {
                 $size = trim($sizeMatch[1]);
@@ -365,7 +994,9 @@ final class ClientInquiryService
             $items[] = [
                 'id' => 'item_'.$index,
                 'quote' => $line,
-                'qty' => $m[1].' szt.',
+                'qty' => $m[1],
+                // jednostka tylko taka, jaka stoi w mailu — nie dopisujemy „szt.”
+                'unit' => $this->nullable($m[2] ?? null),
                 'query' => $this->queryFromLine($rest),
                 'size' => $size,
             ];
@@ -381,7 +1012,7 @@ final class ClientInquiryService
     private function queryFromLine(string $rest): string
     {
         $q = preg_replace('/\b(?:rozmiar|rozm\.?)\s+[a-z0-9\/,.\-]+/iu', '', $rest) ?? $rest;
-        $q = preg_replace('/^\d+\s*(?:szt\.?|sztuk|pcs\.?)?[\s.,:–-]+/iu', '', $q) ?? $q;
+        $q = preg_replace('/^\d+\s*'.self::UNIT_PATTERN.'?[\s.,:–-]+/iu', '', $q) ?? $q;
         $q = preg_replace('/\s+/u', ' ', $q) ?? $q;
 
         return mb_substr(trim($q), 0, 140);
@@ -444,12 +1075,11 @@ final class ClientInquiryService
      */
     private function productCardForItem(array $item, array $products): array
     {
-        $qty = trim((string) ($item['qty'] ?? ''));
+        $qty = $this->qtyLabel($item);
         $size = trim((string) ($item['size'] ?? ''));
         if ($products === []) {
             $options = [
                 ['id' => 'check', 'label' => 'Sprawdzimy i wrócimy'],
-                ['id' => 'category', 'label' => 'Ogólnie o kategorii, bez SKU'],
             ];
             $prompt = 'Nie znaleziono produktu w katalogu. Jak odpowiedzieć na tę pozycję?';
             $allowCustom = true;
@@ -475,9 +1105,24 @@ final class ClientInquiryService
             'kind' => 'item',
             'item_id' => (string) $item['id'],
             'quote' => (string) $item['quote'],
-            'qty' => $qty !== '' ? $qty : null,
+            'qty' => $qty,
             'size' => $size !== '' ? $size : null,
         ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $products
+     * @param  array<int, list<array<string, mixed>>>  $subsByProductId
+     */
+    private function hasSubstitutes(array $products, array $subsByProductId): bool
+    {
+        foreach ($products as $product) {
+            if (($subsByProductId[(int) ($product['id'] ?? 0)] ?? []) !== []) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -511,7 +1156,6 @@ final class ClientInquiryService
         }
         $options[] = ['id' => 'yes', 'label' => 'Zaproponuj zamienniki jeśli są'];
 
-        $qty = trim((string) ($item['qty'] ?? ''));
         $size = trim((string) ($item['size'] ?? ''));
 
         return [
@@ -525,7 +1169,7 @@ final class ClientInquiryService
             'kind' => 'item',
             'item_id' => (string) $item['id'],
             'quote' => (string) $item['quote'],
-            'qty' => $qty !== '' ? $qty : null,
+            'qty' => $this->qtyLabel($item),
             'size' => $size !== '' ? $size : null,
         ];
     }
@@ -551,6 +1195,7 @@ final class ClientInquiryService
                 }
                 $card['kind'] = 'global';
                 $out[] = $card;
+
                 continue;
             }
             if ($resolved !== $itemId) {
@@ -561,7 +1206,7 @@ final class ClientInquiryService
             $item = $this->lineItemById($lineItems, $itemId);
             if ($item !== null) {
                 $card['quote'] = $item['quote'];
-                $card['qty'] = $item['qty'];
+                $card['qty'] = $this->qtyLabel($item);
                 $card['size'] = $item['size'] ?? null;
             }
             $out[] = $card;
@@ -721,10 +1366,19 @@ final class ClientInquiryService
             $id = 'item_'.$index;
         }
 
+        // model może oddać „30 szt.” w qty albo liczbę — rozbijamy tak samo jak stare rekordy
+        $qtyUnit = $this->qtyUnit([
+            'qty' => is_int($item['qty'] ?? null) || is_float($item['qty'] ?? null)
+                ? (string) $item['qty']
+                : $this->nullable(is_string($item['qty'] ?? null) ? $item['qty'] : null),
+            'unit' => $this->nullable(is_string($item['unit'] ?? null) ? $item['unit'] : null),
+        ]);
+
         return [
             'id' => $id,
             'quote' => $quote !== '' ? $quote : $query,
-            'qty' => $this->nullable($item['qty'] ?? null),
+            'qty' => $qtyUnit['qty'],
+            'unit' => $qtyUnit['unit'],
             'query' => $query !== '' ? $query : $quote,
             'size' => $this->nullable($item['size'] ?? null),
         ];
@@ -736,7 +1390,7 @@ final class ClientInquiryService
      */
     private function writeReply(ClientInquiry $inquiry, array $answers, ?string $extraNote): array
     {
-        $priceMode = trim((string) ($answers['price']['option_id'] ?? 'none'));
+        $priceMode = $this->priceModeOf($answers);
         $margin = $this->marginPercent($answers);
         $intro = $inquiry->tone === 'handlowy'
             ? "Dzień dobry,\n\nprzesyłamy ofertę do zapytania."
@@ -786,76 +1440,67 @@ final class ClientInquiryService
     private function offerPositionBlocks(ClientInquiry $inquiry, array $answers, string $priceMode, float $margin): string
     {
         $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
-        $items = is_array($analysis['line_items'] ?? null) ? $analysis['line_items'] : [];
-        $matches = is_array($analysis['matches'] ?? null) ? $analysis['matches'] : [];
-        $flat = $this->flatProducts($matches);
+        $matches = $this->matchGroups($analysis);
+        $items = $this->lineItemsOf($analysis);
 
-        if ($items !== []) {
-            $out = [];
-            foreach ($items as $index => $item) {
-                if (! is_array($item)) {
-                    continue;
-                }
-                $product = $this->chosenProductForItem($item, $matches, $flat, $answers);
-                $out[] = $this->formatProductBlock($index + 1, $item, $product, $priceMode, $margin);
-            }
-
-            return implode("\n\n", $out);
-        }
-
-        $selected = $this->selectedProducts($flat, $answers);
-        if ($selected === []) {
+        if ($items === []) {
             return 'Nie dobraliśmy produktu z katalogu — uzupełnimy ofertę po weryfikacji.';
         }
+
         $out = [];
-        foreach ($selected as $i => $product) {
-            $out[] = $this->formatProductBlock($i + 1, null, $product, $priceMode, $margin);
+        foreach ($items as $index => $item) {
+            $candidates = $this->candidatesForItem($matches, $item);
+            $product = $this->chosenProductForItem($item, $candidates, $answers);
+            $substitute = $product === null
+                ? null
+                : $this->chosenSubstituteForItem($item, $this->substitutesForItem($analysis, $candidates), $answers);
+            $out[] = $this->formatProductBlock($index + 1, $item, $product, $substitute, $priceMode, $margin);
         }
 
         return implode("\n\n", $out);
     }
 
     /**
+     * Towar z odpowiedzi pracownika albo domyślny (defaultOptionFor) — bez „pierwszego z brzegu”.
+     *
      * @param  array<string, mixed>  $item
-     * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
-     * @param  list<array<string, mixed>>  $flat
+     * @param  list<array<string, mixed>>  $candidates
      * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
      * @return array<string, mixed>|null
      */
-    private function chosenProductForItem(array $item, array $matches, array $flat, array $answers): ?array
+    private function chosenProductForItem(array $item, array $candidates, array $answers): ?array
     {
-        $itemId = (string) ($item['id'] ?? '');
-        foreach (['substitutes:'.$itemId, 'product:'.$itemId, 'product'] as $cardId) {
-            $option = trim((string) ($answers[$cardId]['option_id'] ?? ''));
-            if (str_starts_with($option, 'p:')) {
-                $pid = (int) substr($option, 2);
-                foreach ($flat as $product) {
-                    if ((int) ($product['id'] ?? 0) === $pid) {
-                        return $product;
-                    }
-                }
-            }
-            if (in_array($option, ['check', 'category'], true)) {
-                return null;
-            }
-        }
-        $forItem = $this->productsForItem($matches, $item);
-
-        return $forItem[0] ?? null;
+        return $this->candidateById($candidates, $this->chosenOptionFor($item, $candidates, $answers));
     }
 
     /**
-     * @param  array<string, mixed>|null  $item
-     * @param  array<string, mixed>|null  $product
+     * Zatwierdzony zamiennik wskazany przy pozycji („p:<id>” w substitutes:item_N); „no”/„yes”/brak = nic.
+     *
+     * @param  array<string, mixed>  $item
+     * @param  list<array<string, mixed>>  $substitutes
+     * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
+     * @return array<string, mixed>|null
      */
-    private function formatProductBlock(int $n, ?array $item, ?array $product, string $priceMode, float $margin): string
+    private function chosenSubstituteForItem(array $item, array $substitutes, array $answers): ?array
     {
-        $qty = trim((string) ($item['qty'] ?? ''));
+        $option = trim((string) ($answers['substitutes:'.(string) ($item['id'] ?? '')]['option_id'] ?? ''));
+
+        return $this->candidateById($substitutes, $option);
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @param  array<string, mixed>|null  $product
+     * @param  array<string, mixed>|null  $substitute
+     */
+    private function formatProductBlock(int $n, array $item, ?array $product, ?array $substitute, string $priceMode, float $margin): string
+    {
+        $qtyUnit = $this->qtyUnit($item);
         $size = trim((string) ($item['size'] ?? ''));
         $quote = trim((string) ($item['quote'] ?? ''));
         $head = (string) $n.'.';
         $meta = array_values(array_filter([
-            $qty !== '' ? $qty : null,
+            $this->qtyLabel($item),
             $size !== '' ? 'rozmiar '.$size : null,
         ]));
         if ($meta !== []) {
@@ -866,27 +1511,46 @@ final class ClientInquiryService
             $lines[] = $quote;
         }
         if ($product === null) {
-            $lines[] = 'Produkt: do potwierdzenia.';
+            // bez SKU: nic nie zmyślamy, pozycja czeka na weryfikację pracownika
+            $lines[] = 'Pozycję potwierdzimy po weryfikacji dostępności i wrócimy z propozycją.';
 
             return implode("\n", $lines);
         }
+        $lines = array_merge($lines, $this->productLines('Produkt', $product, $priceMode, $margin, $qtyUnit['unit']));
+        if ($substitute !== null) {
+            $lines = array_merge($lines, $this->productLines('Zamiennik', $substitute, $priceMode, $margin, $qtyUnit['unit']));
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     * @return list<string>
+     */
+    private function productLines(string $label, array $product, string $priceMode, float $margin, ?string $unit): array
+    {
         $maker = trim((string) ($product['manufacturer'] ?? ''));
-        $lines[] = sprintf(
-            'Produkt: %s (SKU %s)%s',
+        $lines = [sprintf(
+            '%s: %s (SKU %s)%s',
+            $label,
             $product['name'],
             $product['sku'],
             $maker !== '' ? ', '.$maker : ''
-        );
+        )];
         $norms = trim((string) ($product['norms'] ?? ''));
         if ($norms !== '') {
             $lines[] = 'Normy: '.$norms;
         }
-        $price = $this->letterPrice($product, $priceMode, $margin);
-        if ($price !== null) {
-            $lines[] = 'Cena: '.$price.' netto / szt.';
+        if ($priceMode !== '' && $priceMode !== 'none') {
+            $price = $this->letterPrice($product, $priceMode, $margin);
+            // jednostka tylko z maila — bez niej samo „netto”
+            $lines[] = $price === null
+                ? 'Cena: do potwierdzenia'
+                : 'Cena: '.$price.' netto'.($unit !== null ? ' / '.$unit : '');
         }
 
-        return implode("\n", $lines);
+        return $lines;
     }
 
     /**
@@ -1022,20 +1686,24 @@ final class ClientInquiryService
                 foreach ($flat as $product) {
                     if ((int) $product['id'] === $pid) {
                         $lines[] = '- '.$prefix.' → '.$this->productFactLine($product);
+
                         continue 2;
                     }
                 }
             }
             if (in_array($option, ['check', 'category'], true)) {
                 $lines[] = '- '.$prefix.' → bez SKU (sprawdzimy / ogólnie o kategorii)';
+
                 continue;
             }
             if ($option === 'no') {
                 $lines[] = '- '.$prefix.' → bez zamiennika, tylko wskazany towar';
+
                 continue;
             }
             if ($option === 'yes') {
                 $lines[] = '- '.$prefix.' → zaproponuj zamienniki jeśli są w katalogu';
+
                 continue;
             }
             if ($quote !== '' && str_starts_with($id, 'product')) {
@@ -1092,6 +1760,7 @@ final class ClientInquiryService
                     '- %s: brak ceny zakupu → [DO UZUPEŁNIENIA: cena oferty]',
                     $product['sku']
                 );
+
                 continue;
             }
             $catalog = $this->catalogPln($product);
@@ -1277,6 +1946,7 @@ final class ClientInquiryService
             'offer_pln' => $offerPln,
             'stock' => isset($row['stock']) ? (int) $row['stock'] : null,
             'score' => (int) ($row['ai_match_percent'] ?? $row['score'] ?? 0),
+            'reason' => $this->nullable(is_string($row['ai_match_reason'] ?? null) ? $row['ai_match_reason'] : ($row['reason'] ?? null)),
         ];
     }
 

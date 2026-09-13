@@ -1,8 +1,280 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { BusyLabel, InquiryClarifyModal, useBusySeconds, type InquiryAnswer } from '../components/InquiryClarifyModal'
-import { api, appHref } from '../lib/api'
-import type { InquiryPayload } from './Inquiries'
+import { BusyLabel, useBusySeconds } from '../components/Busy'
+import { ProductVerifyModal } from '../components/ProductVerifyModal'
+import { api } from '../lib/api'
+import type {
+  InquiryAnswer,
+  InquiryCard,
+  InquiryConfidence,
+  InquiryFlag,
+  InquiryItem,
+  InquiryPayload,
+  InquiryPriceMode,
+} from '../types/inquiry'
+
+type Draft = { subject: string; body: string }
+type Answers = Record<string, InquiryAnswer>
+
+const PLN = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' })
+
+function priceByMode(
+  p: { catalog_pln: number | null; offer_pln: number | null },
+  mode: InquiryPriceMode,
+): string | null {
+  const v = mode === 'catalog' ? p.catalog_pln : mode === 'catalog_margin' ? p.offer_pln : null
+  return v == null ? null : PLN.format(v)
+}
+
+const confidenceBadge: Record<InquiryConfidence, { label: string; cls: string }> = {
+  high: { label: 'pewne', cls: 'bg-emerald-100 text-emerald-800' },
+  medium: { label: 'sprawdź', cls: 'bg-amber-100 text-amber-800' },
+  none: { label: 'brak w katalogu', cls: 'bg-red-100 text-red-800' },
+}
+
+const flagLabel: Record<InquiryFlag, string> = {
+  low_score: 'niski wynik dopasowania',
+  ambiguous: 'kilku podobnych kandydatów',
+  no_price: 'brak ceny',
+  card_default: 'pytanie AI z domyślną odpowiedzią',
+}
+
+const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
+  { id: 'none', label: 'Bez cen' },
+  { id: 'catalog', label: 'Cena katalogowa' },
+  { id: 'catalog_margin', label: 'Katalog + marża' },
+]
+
+function Chip({
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
+  active: boolean
+  disabled: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`max-w-full rounded-full border px-2.5 py-1 text-left text-xs leading-snug ${
+        active
+          ? 'border-blue-600 bg-blue-600 text-white'
+          : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+      } disabled:opacity-50`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function CardChips({
+  card,
+  answers,
+  busy,
+  customDraft,
+  onCustomDraft,
+  onAnswer,
+}: {
+  card: InquiryCard
+  answers: Answers
+  busy: boolean
+  customDraft: string
+  onCustomDraft: (value: string) => void
+  onAnswer: (key: string, answer: InquiryAnswer) => void
+}) {
+  const current = answers[card.id]
+  return (
+    <div>
+      <p className="text-xs font-semibold text-slate-700">{card.title}</p>
+      {card.prompt && <p className="text-[11px] text-slate-500">{card.prompt}</p>}
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {card.options.map((opt) => (
+          <Chip
+            key={opt.id}
+            active={current?.option_id === opt.id}
+            disabled={busy}
+            onClick={() => onAnswer(card.id, { option_id: opt.id, custom: current?.custom ?? null })}
+          >
+            {opt.label}
+          </Chip>
+        ))}
+      </div>
+      {card.allow_custom && (
+        <input
+          className="mt-1.5 w-full rounded border border-slate-300 px-2 py-1 text-xs"
+          disabled={busy}
+          placeholder="Własna uwaga do tego pytania"
+          value={customDraft}
+          onChange={(e) => onCustomDraft(e.target.value)}
+          onBlur={() => {
+            if (customDraft === (current?.custom ?? '')) return
+            onAnswer(card.id, {
+              option_id: current?.option_id ?? card.options[0]?.id ?? '',
+              custom: customDraft.trim() || null,
+            })
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function ItemRow({
+  item,
+  index,
+  priceMode,
+  answers,
+  busy,
+  customDrafts,
+  onCustomDraft,
+  onAnswer,
+  onPreview,
+}: {
+  item: InquiryItem
+  index: number
+  priceMode: InquiryPriceMode
+  answers: Answers
+  busy: boolean
+  customDrafts: Record<string, string>
+  onCustomDraft: (cardId: string, value: string) => void
+  onAnswer: (key: string, answer: InquiryAnswer) => void
+  onPreview: (productId: number, query: string) => void
+}) {
+  const badge = confidenceBadge[item.confidence]
+  const chosenId = item.chosen.startsWith('p:') ? Number(item.chosen.slice(2)) : null
+  const chosen = chosenId != null ? item.candidates.find((c) => c.id === chosenId) ?? null : null
+  const chosenPrice = chosen ? priceByMode(chosen, priceMode) : null
+  const subAnswer = item.substitute_key ? answers[item.substitute_key]?.option_id ?? 'no' : null
+  const meta = [item.qty, item.unit].filter(Boolean).join(' ')
+
+  return (
+    <div className="border-t border-slate-100 pt-3 first:border-t-0 first:pt-0">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded bg-slate-800 px-1.5 text-xs font-semibold text-white">
+          {index + 1}
+        </span>
+        {meta && <span className="text-xs font-medium text-slate-800">{meta}</span>}
+        {item.size && <span className="text-xs text-slate-600">rozm. {item.size}</span>}
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${badge.cls}`}>{badge.label}</span>
+        {item.flags.length > 0 && (
+          <span className="text-[11px] text-slate-500">
+            {item.flags.map((f) => flagLabel[f]).join(' · ')}
+          </span>
+        )}
+      </div>
+
+      {item.quote && (
+        <blockquote className="mt-2 border-l-4 border-amber-400 bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-800">
+          {item.quote}
+        </blockquote>
+      )}
+
+      <div className="mt-2 text-xs">
+        {chosen ? (
+          <>
+            <p className="text-slate-800">
+              <span className="font-semibold">{chosen.sku}</span> · {chosen.name}
+              {chosen.manufacturer ? ` · ${chosen.manufacturer}` : ''}
+              {chosenPrice ? ` · ${chosenPrice}` : priceMode !== 'none' ? ' · cena do potwierdzenia' : ''}
+            </p>
+            {chosen.reason && <p className="text-[11px] text-slate-500">{chosen.reason}</p>}
+          </>
+        ) : chosenId != null ? (
+          <p className="text-slate-800">Towar #{chosenId} (spoza listy kandydatów)</p>
+        ) : (
+          <p className="text-slate-600">W liście: sprawdzimy i wrócimy z propozycją — bez SKU.</p>
+        )}
+      </div>
+
+      <div className="mt-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Alternatywy</p>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          {item.candidates.map((c) => (
+            <span key={c.id} className="inline-flex items-center gap-1">
+              <Chip
+                active={item.chosen === `p:${c.id}`}
+                disabled={busy}
+                onClick={() => onAnswer(item.answer_key, { option_id: `p:${c.id}` })}
+              >
+                {c.sku} · {c.name} · {c.score}%
+              </Chip>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onPreview(c.id, item.quote ?? '')}
+                className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
+              >
+                Opis
+              </button>
+            </span>
+          ))}
+          <Chip
+            active={item.chosen === 'check'}
+            disabled={busy}
+            onClick={() => onAnswer(item.answer_key, { option_id: 'check' })}
+          >
+            Sprawdzimy i wrócimy
+          </Chip>
+        </div>
+      </div>
+
+      {item.substitute_key && (
+        <div className="mt-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Zamienniki</p>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            <Chip
+              active={subAnswer === 'no'}
+              disabled={busy}
+              onClick={() => onAnswer(item.substitute_key!, { option_id: 'no' })}
+            >
+              Tylko wskazany
+            </Chip>
+            {item.substitutes.map((s) => (
+              <Chip
+                key={s.id}
+                active={subAnswer === `p:${s.id}`}
+                disabled={busy}
+                onClick={() => onAnswer(item.substitute_key!, { option_id: `p:${s.id}` })}
+              >
+                Zamiennik: {s.sku} · {s.name}
+              </Chip>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {item.cards.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {item.cards.map((card) => (
+            <CardChips
+              key={card.id}
+              card={card}
+              answers={answers}
+              busy={busy}
+              customDraft={customDrafts[card.id] ?? ''}
+              onCustomDraft={(v) => onCustomDraft(card.id, v)}
+              onAnswer={onAnswer}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function customDraftsFrom(p: InquiryPayload): Record<string, string> {
+  const out: Record<string, string> = {}
+  const cards = [...p.items.flatMap((i) => i.cards), ...p.global_cards]
+  for (const card of cards) {
+    if (card.allow_custom) out[card.id] = p.answers[card.id]?.custom ?? ''
+  }
+  return out
+}
 
 export function InquiryReply() {
   const { id } = useParams()
@@ -13,203 +285,426 @@ export function InquiryReply() {
   const [msg, setMsg] = useState('')
   const [loading, setLoading] = useState(true)
   const [composeBusy, setComposeBusy] = useState(false)
-  const [modalOpen, setModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [marginDraft, setMarginDraft] = useState('')
+  const [noteDraft, setNoteDraft] = useState('')
+  const [customDrafts, setCustomDrafts] = useState<Record<string, string>>({})
+  const [checked, setChecked] = useState<Record<number, boolean>>({})
+  const [previewId, setPreviewId] = useState<number | null>(null)
+  const [previewQuery, setPreviewQuery] = useState('')
   const composeSec = useBusySeconds(composeBusy)
+
+  // Treść zapisana na serwerze (PATCH) — do wykrywania niezapisanych edycji.
+  const serverRef = useRef<Draft>({ subject: '', body: '' })
+  // Treść ostatnio wygenerowana przez compose/wczytana — do ochrony ręcznych zmian przed regeneracją.
+  const composedRef = useRef<Draft>({ subject: '', body: '' })
+  const pendingSave = useRef<Promise<unknown> | null>(null)
+
+  function resetDrafts(p: InquiryPayload) {
+    setMarginDraft(String(p.price.margin))
+    setNoteDraft(p.extra_note ?? '')
+    setCustomDrafts(customDraftsFrom(p))
+  }
+
+  function applyComposed(p: InquiryPayload) {
+    const draft = { subject: p.reply_subject ?? '', body: p.reply_body ?? '' }
+    serverRef.current = draft
+    composedRef.current = draft
+    setInquiry(p)
+    setSubject(draft.subject)
+    setBody(draft.body)
+    resetDrafts(p)
+  }
 
   useEffect(() => {
     if (!id) return
     setLoading(true)
     setErr('')
+    setMsg('')
     api<InquiryPayload>(`/inquiries/${id}`)
       .then((row) => {
-        setInquiry(row)
-        setSubject(row.reply_subject ?? '')
-        setBody(row.reply_body ?? '')
-        if (!row.reply_body && row.cards.length > 0) {
-          setModalOpen(true)
-        }
+        applyComposed(row)
+        setChecked({})
       })
       .catch((ex) => setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać'))
       .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  async function compose(answers: Record<string, InquiryAnswer>, extraNote: string) {
+  async function saveEdits(): Promise<void> {
     if (!inquiry) return
+    const next: Draft = { subject, body }
+    const prev = serverRef.current
+    if (next.subject === prev.subject && next.body === prev.body) return
+    serverRef.current = next
+    setSaving(true)
+    const p = api<InquiryPayload>(`/inquiries/${inquiry.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reply_subject: next.subject, reply_body: next.body }),
+    })
+      .then((res) => setInquiry(res))
+      .catch((ex: unknown) => {
+        serverRef.current = prev
+        setErr(ex instanceof Error ? ex.message : 'Nie udało się zapisać zmian')
+        throw ex
+      })
+      .finally(() => setSaving(false))
+    pendingSave.current = p
+    await p
+  }
+
+  async function compose(partial: Answers): Promise<boolean> {
+    if (!inquiry || composeBusy) return false
+    const edited = subject !== composedRef.current.subject || body !== composedRef.current.body
+    if (edited && !window.confirm('Nadpisać ręczne zmiany w treści listu?')) {
+      resetDrafts(inquiry)
+      return false
+    }
     setComposeBusy(true)
     setErr('')
+    setMsg('')
     try {
+      if (pendingSave.current) await pendingSave.current.catch(() => undefined)
       const done = await api<InquiryPayload>(`/inquiries/${inquiry.id}/compose`, {
         method: 'POST',
-        body: JSON.stringify({ answers, extra_note: extraNote || null }),
+        body: JSON.stringify({ answers: partial, extra_note: noteDraft.trim() || null }),
       })
-      setInquiry(done)
-      setSubject(done.reply_subject ?? '')
-      setBody(done.reply_body ?? '')
-      setModalOpen(false)
-      setMsg('Odpowiedź zaktualizowana.')
+      applyComposed(done)
+      setMsg('List przepisany.')
+      return true
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd pisania odpowiedzi')
+      return false
     } finally {
       setComposeBusy(false)
     }
   }
 
-  async function copyAll() {
-    const text = [subject.trim(), '', body].filter(Boolean).join('\n')
-    await navigator.clipboard.writeText(text)
-    setMsg('Skopiowano temat i treść.')
+  function onAnswer(key: string, answer: InquiryAnswer) {
+    void compose({ [key]: answer })
+  }
+
+  function onPriceMode(mode: InquiryPriceMode) {
+    if (!inquiry || mode === inquiry.price.mode) return
+    const custom = mode === 'catalog_margin' ? marginDraft.trim() || String(inquiry.price.margin) : null
+    void compose({ price: { option_id: mode, custom } })
+  }
+
+  function onMarginBlur() {
+    if (!inquiry) return
+    const value = marginDraft.trim()
+    if (value === '' || value === String(inquiry.price.margin)) {
+      setMarginDraft(String(inquiry.price.margin))
+      return
+    }
+    void compose({ price: { option_id: 'catalog_margin', custom: value } })
+  }
+
+  function onNoteBlur() {
+    if (!inquiry) return
+    if (noteDraft.trim() === (inquiry.extra_note ?? '').trim()) return
+    void compose({})
+  }
+
+  async function copyText(text: string): Promise<boolean> {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      setErr('Nie udało się skopiować do schowka.')
+      return false
+    }
   }
 
   async function copyBody() {
-    await navigator.clipboard.writeText(body)
-    setMsg('Skopiowano treść.')
+    setMsg('')
+    try {
+      await saveEdits()
+    } catch {
+      return
+    }
+    if (await copyText(body)) setMsg('Skopiowano treść.')
+  }
+
+  async function copyAndMarkSent() {
+    if (!inquiry) return
+    setMsg('')
+    try {
+      await saveEdits()
+    } catch {
+      return
+    }
+    const text = [subject.trim(), '', body].filter(Boolean).join('\n')
+    if (!(await copyText(text))) return
+    try {
+      const res = await api<InquiryPayload>(`/inquiries/${inquiry.id}/replied`, {
+        method: 'POST',
+        body: JSON.stringify({ replied: true }),
+      })
+      setInquiry(res)
+      setMsg('Skopiowano temat i treść. Zapytanie oznaczone jako wysłane.')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Skopiowano, ale nie udało się oznaczyć jako wysłane.')
+    }
+  }
+
+  async function unmarkSent() {
+    if (!inquiry) return
+    setMsg('')
+    try {
+      const res = await api<InquiryPayload>(`/inquiries/${inquiry.id}/replied`, {
+        method: 'POST',
+        body: JSON.stringify({ replied: false }),
+      })
+      setInquiry(res)
+      setMsg('Oznaczenie cofnięte.')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się cofnąć oznaczenia')
+    }
   }
 
   if (loading) return <p className="text-sm text-slate-500">Ładowanie…</p>
   if (!inquiry) return <p className="text-sm text-red-600">{err || 'Brak zapytania.'}</p>
 
-  const sources = inquiry.matches.flatMap((g) => g.products)
+  const total = inquiry.items.length
+  const busy = composeBusy
+  const banner = inquiry.replied_at
+    ? {
+        cls: 'bg-emerald-50 text-emerald-800',
+        text: `Wysłano ${new Date(inquiry.replied_at).toLocaleString('pl-PL')}`,
+      }
+    : inquiry.attention_count > 0
+      ? {
+          cls: 'bg-amber-50 text-amber-800',
+          text: `${inquiry.attention_count} z ${total} pozycji wymaga sprawdzenia`,
+        }
+      : {
+          cls: 'bg-emerald-50 text-emerald-800',
+          text: 'Wszystkie pozycje pewne — list gotowy do skopiowania',
+        }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
+    <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold">Odpowiedź do skopiowania</h1>
+          <h1 className="text-lg font-semibold">Odpowiedź na zapytanie</h1>
           <p className="text-xs text-slate-500">
             {inquiry.client?.name ? `${inquiry.client.name} · ` : ''}
-            edytuj jeśli trzeba, potem Kopiuj.
+            {inquiry.source_subject || `Zapytanie #${inquiry.id}`}
           </p>
-          <Link
-            to="/inquiries"
-            className="mt-1 inline-block text-xs text-blue-600 hover:underline"
-          >
-            ← Powrót do zapytań
-          </Link>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={composeBusy}
-            onClick={() => setModalOpen(true)}
-            className={`rounded px-3 py-1.5 text-xs ${
-              composeBusy
-                ? 'cursor-wait bg-violet-600 text-white'
-                : 'border border-slate-300 hover:bg-slate-50'
-            }`}
-          >
-            {composeBusy ? <BusyLabel label="Piszę" seconds={composeSec} /> : 'Doprecyzuj'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void copyBody()}
-            className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
-          >
-            Kopiuj treść
-          </button>
-          <button
-            type="button"
-            onClick={() => void copyAll()}
-            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
-          >
-            Kopiuj całość
-          </button>
-        </div>
+        <Link to="/inquiries" className="text-xs text-blue-600 hover:underline">
+          ← Wróć do zapytań
+        </Link>
       </div>
+
+      <p className={`rounded px-3 py-2 text-sm font-medium ${banner.cls}`}>{banner.text}</p>
 
       {msg && <p className="rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
 
-      <div className="rounded-xl bg-white p-4 shadow-sm">
-        <label className="block text-xs font-medium text-slate-600">
-          Temat
-          <input
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-          />
-        </label>
-        <label className="mt-3 block text-xs font-medium text-slate-600">
-          Treść
-          <textarea
-            className="mt-1 min-h-[280px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm leading-relaxed"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-          />
-        </label>
-      </div>
-
-      <details className="rounded-xl bg-white p-4 text-xs shadow-sm">
-        <summary className="cursor-pointer font-semibold text-slate-800">Zapytanie klienta</summary>
-        {inquiry.source_subject && (
-          <p className="mt-2 font-medium text-slate-700">{inquiry.source_subject}</p>
-        )}
-        <pre className="mt-2 whitespace-pre-wrap font-sans text-slate-600">{inquiry.source_body}</pre>
-      </details>
-
-      {sources.length > 0 && (
-        <div className="rounded-xl bg-white p-4 text-xs shadow-sm">
-          <p className="mb-2 font-semibold text-slate-800">Źródła z katalogu</p>
-          <ul className="space-y-1.5">
-            {sources.map((p) => (
-              <li key={p.id}>
-                <a
-                  className="text-blue-600 hover:underline"
-                  href={appHref(`/products/${p.id}`)}
-                  target="_blank"
-                  rel="noreferrer"
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        <div className="space-y-4">
+          <div className="rounded-xl bg-white p-4 shadow-sm">
+            <label className="block text-xs font-medium text-slate-600">
+              Temat
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                value={subject}
+                disabled={busy}
+                onChange={(e) => setSubject(e.target.value)}
+                onBlur={() => void saveEdits().catch(() => undefined)}
+              />
+            </label>
+            <label className="mt-3 block text-xs font-medium text-slate-600">
+              Treść
+              <textarea
+                className="mt-1 min-h-[420px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm leading-relaxed"
+                value={body}
+                disabled={busy}
+                onChange={(e) => setBody(e.target.value)}
+                onBlur={() => void saveEdits().catch(() => undefined)}
+              />
+            </label>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={busy || saving}
+                onClick={() => void copyAndMarkSent()}
+                className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                Kopiuj i oznacz jako wysłane
+              </button>
+              <button
+                type="button"
+                disabled={busy || saving}
+                onClick={() => void copyBody()}
+                className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+              >
+                Kopiuj treść
+              </button>
+              {inquiry.replied_at && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void unmarkSent()}
+                  className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
                 >
-                  {p.sku} · {p.name}
-                </a>
-                <span className="text-slate-500">
-                  {' '}
-                  · {p.manufacturer || '—'}
-                  {p.norms ? ` · ${p.norms}` : ''}
-                  {p.catalog_price_net
-                    ? ` · kat. ${p.catalog_price_net} zł`
-                    : ''}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-[11px] text-slate-400">
-            Ceny w liście są w złotych. Zakupu i stanu magazynu nie wklejamy do maila.
-          </p>
-        </div>
-      )}
+                  Cofnij oznaczenie
+                </button>
+              )}
+              <Link
+                to="/inquiries"
+                className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
+              >
+                Wróć do zapytań
+              </Link>
+              {saving && <span className="text-[11px] text-slate-400">Zapisuję…</span>}
+            </div>
+            <p className="mt-2 text-[11px] text-slate-400">
+              Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.
+            </p>
+          </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Link
-          to="/inquiries"
-          className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
-        >
-          Powrót
-        </Link>
-        <button
-          type="button"
-          onClick={() => {
-            if (window.opener) {
-              window.close()
-              return
-            }
-            window.location.assign(appHref('/inquiries'))
-          }}
-          className="rounded bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700"
-        >
-          Zamknij
-        </button>
+          <details className="rounded-xl bg-white p-4 text-xs shadow-sm">
+            <summary className="cursor-pointer font-semibold text-slate-800">Zapytanie klienta</summary>
+            {inquiry.source_subject && (
+              <p className="mt-2 font-medium text-slate-700">{inquiry.source_subject}</p>
+            )}
+            <pre className="mt-2 whitespace-pre-wrap font-sans text-slate-600">{inquiry.source_body}</pre>
+          </details>
+        </div>
+
+        <div className="space-y-4">
+          <div className="rounded-xl bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Pozycje</h2>
+              {busy ? (
+                <span className="text-xs text-violet-800">
+                  <BusyLabel label="Piszę list" seconds={composeSec} />
+                </span>
+              ) : (
+                <span className="text-[11px] text-slate-400">Kliknięcie alternatywy od razu przepisuje list.</span>
+              )}
+            </div>
+            {inquiry.items.length === 0 ? (
+              <p className="text-xs text-slate-500">Brak pozycji.</p>
+            ) : (
+              <div className="space-y-3">
+                {inquiry.items.map((item, i) => (
+                  <ItemRow
+                    key={item.id}
+                    item={item}
+                    index={i}
+                    priceMode={inquiry.price.mode}
+                    answers={inquiry.answers}
+                    busy={busy}
+                    customDrafts={customDrafts}
+                    onCustomDraft={(cardId, v) => setCustomDrafts((d) => ({ ...d, [cardId]: v }))}
+                    onAnswer={onAnswer}
+                    onPreview={(pid, q) => {
+                      setPreviewId(pid)
+                      setPreviewQuery(q.trim())
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl bg-white p-4 shadow-sm">
+            <h2 className="mb-2 text-sm font-semibold">Dla całej oferty</h2>
+            <p className="text-xs font-semibold text-slate-700">Ceny w liście</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {priceModeOptions.map((opt) => (
+                <Chip
+                  key={opt.id}
+                  active={inquiry.price.mode === opt.id}
+                  disabled={busy}
+                  onClick={() => onPriceMode(opt.id)}
+                >
+                  {opt.label}
+                </Chip>
+              ))}
+              {inquiry.price.mode === 'catalog_margin' && (
+                <label className="ml-1 inline-flex items-center gap-1 text-xs text-slate-700">
+                  Marża
+                  <input
+                    type="number"
+                    min={0}
+                    max={99}
+                    step={0.5}
+                    disabled={busy}
+                    className="w-20 rounded border border-slate-300 px-2 py-1 text-xs"
+                    value={marginDraft}
+                    onChange={(e) => setMarginDraft(e.target.value)}
+                    onBlur={onMarginBlur}
+                  />
+                  %
+                </label>
+              )}
+            </div>
+            {inquiry.global_cards.length > 0 && (
+              <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+                {inquiry.global_cards.map((card) => (
+                  <CardChips
+                    key={card.id}
+                    card={card}
+                    answers={inquiry.answers}
+                    busy={busy}
+                    customDraft={customDrafts[card.id] ?? ''}
+                    onCustomDraft={(v) => setCustomDrafts((d) => ({ ...d, [card.id]: v }))}
+                    onAnswer={onAnswer}
+                  />
+                ))}
+              </div>
+            )}
+            <label className="mt-3 block border-t border-slate-100 pt-3 text-xs font-semibold text-slate-700">
+              Dopisek do listu (klient go zobaczy)
+              <textarea
+                className="mt-1 min-h-[56px] w-full rounded border border-slate-300 px-2 py-1 text-xs font-normal"
+                disabled={busy}
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                onBlur={onNoteBlur}
+                placeholder="np. termin realizacji, warunki dostawy…"
+              />
+            </label>
+          </div>
+
+          {inquiry.questions.length > 0 && (
+            <div className="rounded-xl bg-white p-4 shadow-sm">
+              <h2 className="mb-1 text-sm font-semibold">Klient pyta o…</h2>
+              <p className="mb-2 text-[11px] text-slate-500">
+                Lista kontrolna dla Ciebie — nie trafia do listu. Odpowiedz w mailu albo w dopisku.
+              </p>
+              <ul className="space-y-1">
+                {inquiry.questions.map((q, i) => (
+                  <li key={i}>
+                    <label className="flex items-start gap-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={Boolean(checked[i])}
+                        onChange={(e) => setChecked((c) => ({ ...c, [i]: e.target.checked }))}
+                      />
+                      <span className={checked[i] ? 'text-slate-400 line-through' : ''}>{q}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       </div>
 
-      <InquiryClarifyModal
-        open={modalOpen}
-        cards={inquiry.cards}
-        initialAnswers={inquiry.answers}
-        initialNote={inquiry.extra_note ?? ''}
-        busy={composeBusy}
-        error={err}
+      <ProductVerifyModal
+        productId={previewId}
+        query={previewQuery}
         onClose={() => {
-          if (!composeBusy) setModalOpen(false)
+          setPreviewId(null)
+          setPreviewQuery('')
         }}
-        onSubmit={(answers, extraNote) => void compose(answers, extraNote)}
       />
     </div>
   )

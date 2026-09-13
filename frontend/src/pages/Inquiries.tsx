@@ -1,85 +1,72 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
-import {
-  BusyLabel,
-  InquiryClarifyModal,
-  useBusySeconds,
-  type InquiryAnswer,
-  type InquiryCard,
-} from '../components/InquiryClarifyModal'
+import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { BusyLabel, useBusySeconds } from '../components/Busy'
 import { useAuth } from '../auth'
-import { api, appHref, can } from '../lib/api'
+import { api, can } from '../lib/api'
+import type {
+  InquiryListItem,
+  InquiryPayload,
+  InquiryPreferences,
+  InquiryTone,
+} from '../types/inquiry'
 
 type ClientRow = { id: number; name: string }
 
-type InquiryListItem = {
-  id: number
-  source_subject: string | null
-  reply_subject: string | null
-  client: { id: number; name: string } | null
-  created_at: string | null
-  has_reply: boolean
+const priceModeLabel: Record<InquiryPreferences['price_mode'], string> = {
+  none: 'bez cen',
+  catalog: 'cena katalogowa',
+  catalog_margin: 'katalog + marża',
 }
 
-export type InquiryPayload = {
-  id: number
-  client_id: number | null
-  client: { id: number; name: string } | null
-  tone: 'formal' | 'handlowy'
-  source_subject: string | null
-  source_body: string
-  questions: string[]
-  matches: {
-    query: string
-    products: {
-      id: number
-      sku: string
-      name: string
-      manufacturer: string
-      norms: string
-      catalog_price_net: string | null
-      currency: string
-      stock: number | null
-      score: number
-    }[]
-  }[]
-  cards: InquiryCard[]
-  answers: Record<string, InquiryAnswer>
-  extra_note: string | null
-  reply_subject: string | null
-  reply_body: string | null
-}
-
-function openReplyWindow(id: number): void {
-  const href = appHref(`/inquiries/${id}`)
-  const win = window.open(href, 'inquiry-reply')
-  if (!win) {
-    window.location.assign(href)
+function StatusChip({ row }: { row: InquiryListItem }) {
+  if (row.replied_at) {
+    return (
+      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+        Wysłano
+      </span>
+    )
   }
+  if (row.attention_count > 0) {
+    return (
+      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+        Do sprawdzenia ({row.attention_count})
+      </span>
+    )
+  }
+  return (
+    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+      Szkic
+    </span>
+  )
 }
 
 export function Inquiries() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [clients, setClients] = useState<ClientRow[]>([])
   const [recent, setRecent] = useState<InquiryListItem[]>([])
+  const [prefs, setPrefs] = useState<InquiryPreferences | null>(null)
   const [body, setBody] = useState('')
   const [subject, setSubject] = useState('')
   const [clientId, setClientId] = useState('')
-  const [tone, setTone] = useState<'formal' | 'handlowy'>('formal')
+  const [tone, setTone] = useState<InquiryTone>('formal')
+  const [more, setMore] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [composeBusy, setComposeBusy] = useState(false)
   const [err, setErr] = useState('')
   const prepareSec = useBusySeconds(busy)
-  const composeSec = useBusySeconds(composeBusy)
-  const [inquiry, setInquiry] = useState<InquiryPayload | null>(null)
-  const [modalOpen, setModalOpen] = useState(false)
-
-  async function loadRecent() {
-    setRecent(await api<InquiryListItem[]>('/inquiries'))
-  }
 
   useEffect(() => {
-    void loadRecent()
+    void api<InquiryListItem[]>('/inquiries')
+      .then(setRecent)
+      .catch((ex) => setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać listy'))
+    void api<InquiryPreferences>('/inquiries/preferences')
+      .then((p) => {
+        setPrefs(p)
+        setTone(p.tone)
+      })
+      .catch(() => {
+        // brak preferencji — zostają domyślne
+      })
     if (can(user, 'clients.view')) {
       void api<ClientRow[]>('/clients').then((rows) =>
         setClients(rows.map((c) => ({ id: c.id, name: c.name }))),
@@ -87,34 +74,13 @@ export function Inquiries() {
     }
   }, [user])
 
-  async function composeAndOpen(
-    current: InquiryPayload,
-    answers: Record<string, InquiryAnswer>,
-    extraNote: string,
-  ) {
-    setComposeBusy(true)
-    setErr('')
-    try {
-      const done = await api<InquiryPayload>(`/inquiries/${current.id}/compose`, {
-        method: 'POST',
-        body: JSON.stringify({ answers, extra_note: extraNote || null }),
-      })
-      setInquiry(done)
-      setModalOpen(false)
-      openReplyWindow(done.id)
-      await loadRecent()
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Błąd pisania odpowiedzi')
-    } finally {
-      setComposeBusy(false)
-    }
-  }
+  const canSubmit = !busy && body.trim().length >= 20
 
-  async function onPrepare(e: FormEvent) {
-    e.preventDefault()
+  async function onPrepare(e?: FormEvent) {
+    e?.preventDefault()
+    if (!canSubmit) return
     setBusy(true)
     setErr('')
-    setInquiry(null)
     try {
       const created = await api<InquiryPayload>('/inquiries', {
         method: 'POST',
@@ -125,16 +91,17 @@ export function Inquiries() {
           tone,
         }),
       })
-      setInquiry(created)
-      if (created.cards.length > 0) {
-        setModalOpen(true)
-      } else {
-        await composeAndOpen(created, {}, '')
-      }
+      navigate(`/inquiries/${created.id}`)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd analizy')
-    } finally {
       setBusy(false)
+    }
+  }
+
+  function onBodyKey(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      void onPrepare()
     }
   }
 
@@ -142,32 +109,59 @@ export function Inquiries() {
     <div>
       <h1 className="mb-1 text-xl font-semibold">Zapytania</h1>
       <p className="mb-4 text-sm text-slate-500">
-        Wklej mail klienta. System dopyta tylko o niuanse, potem otworzy okno z listem do skopiowania.
+        Wklej mail klienta. Dostaniesz gotowy list i listę pozycji, które warto sprawdzić przed
+        wysłaniem.
       </p>
 
       {err && <p className="mb-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
 
       <form onSubmit={(e) => void onPrepare(e)} className="mb-6 rounded-xl bg-white p-4 shadow-sm">
-        <div className="grid gap-3 lg:grid-cols-[1fr_16rem]">
-          <label className="block text-xs">
-            Treść maila *
-            <textarea
-              required
-              minLength={20}
-              className="mt-1 min-h-[220px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-              value={body}
-              disabled={busy || composeBusy}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="Wklej całą treść zapytania od klienta…"
-            />
-          </label>
-          <div className="space-y-3">
+        <label className="block text-xs">
+          Treść maila *
+          <textarea
+            required
+            minLength={20}
+            className="mt-1 min-h-[220px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+            value={body}
+            disabled={busy}
+            onChange={(e) => setBody(e.target.value)}
+            onKeyDown={onBodyKey}
+            placeholder="Wklej całą treść zapytania od klienta…"
+          />
+        </label>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className={`rounded px-4 py-2 text-xs font-medium text-white ${
+              busy ? 'cursor-wait bg-violet-600' : 'bg-blue-600 hover:bg-blue-700 disabled:opacity-50'
+            }`}
+          >
+            {busy ? <BusyLabel label="Analizuję zapytanie" seconds={prepareSec} /> : 'Przygotuj odpowiedź'}
+          </button>
+          <span className="text-[11px] text-slate-400">Ctrl+Enter wysyła</span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setMore((v) => !v)}
+            className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+          >
+            {more ? 'Mniej' : 'Więcej'}
+          </button>
+          {busy && (
+            <span className="text-[11px] text-violet-800">Model liczy — poczekaj, nie odświeżaj strony.</span>
+          )}
+        </div>
+
+        {more && (
+          <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-3">
             <label className="block text-xs">
               Temat (opcjonalnie)
               <input
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
                 value={subject}
-                disabled={busy || composeBusy}
+                disabled={busy}
                 onChange={(e) => setSubject(e.target.value)}
               />
             </label>
@@ -177,7 +171,7 @@ export function Inquiries() {
                 <select
                   className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
                   value={clientId}
-                  disabled={busy || composeBusy}
+                  disabled={busy}
                   onChange={(e) => setClientId(e.target.value)}
                 >
                   <option value="">— bez klienta —</option>
@@ -194,37 +188,22 @@ export function Inquiries() {
               <select
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
                 value={tone}
-                disabled={busy || composeBusy}
-                onChange={(e) => setTone(e.target.value as 'formal' | 'handlowy')}
+                disabled={busy}
+                onChange={(e) => setTone(e.target.value as InquiryTone)}
               >
                 <option value="formal">Formalny</option>
                 <option value="handlowy">Handlowy</option>
               </select>
             </label>
-            <button
-              type="submit"
-              disabled={busy || composeBusy || body.trim().length < 20}
-              className={`w-full rounded px-3 py-2 text-xs font-medium text-white ${
-                busy || composeBusy
-                  ? 'cursor-wait bg-violet-600'
-                  : 'bg-blue-600 hover:bg-blue-700 disabled:opacity-50'
-              }`}
-            >
-              {busy ? (
-                <BusyLabel label="Analizuję zapytanie" seconds={prepareSec} />
-              ) : composeBusy ? (
-                <BusyLabel label="Piszę odpowiedź" seconds={composeSec} />
-              ) : (
-                'Przygotuj odpowiedź'
-              )}
-            </button>
-            {(busy || composeBusy) && (
-              <p className="text-center text-[11px] text-violet-800">
-                Model liczy — poczekaj, nie odświeżaj strony.
+            {prefs && (
+              <p className="text-[11px] text-slate-500 sm:col-span-3">
+                Ceny jak ostatnio: {priceModeLabel[prefs.price_mode]}
+                {prefs.price_mode === 'catalog_margin' ? ` ${prefs.margin}%` : ''} — zmienisz na stronie
+                odpowiedzi.
               </p>
             )}
           </div>
-        </div>
+        )}
       </form>
 
       {recent.length > 0 && (
@@ -236,6 +215,7 @@ export function Inquiries() {
                 <th className="p-2">Temat</th>
                 <th className="p-2">Klient</th>
                 <th className="p-2">Data</th>
+                <th className="p-2">Status</th>
                 <th className="p-2" />
               </tr>
             </thead>
@@ -244,12 +224,15 @@ export function Inquiries() {
                 <tr key={row.id} className="border-b">
                   <td className="p-2">{row.reply_subject || row.source_subject || `Zapytanie #${row.id}`}</td>
                   <td className="p-2">{row.client?.name ?? '—'}</td>
-                  <td className="p-2">
+                  <td className="p-2 whitespace-nowrap">
                     {row.created_at ? new Date(row.created_at).toLocaleString('pl-PL') : '—'}
+                  </td>
+                  <td className="p-2">
+                    <StatusChip row={row} />
                   </td>
                   <td className="p-2 text-right">
                     <Link className="text-blue-600 hover:underline" to={`/inquiries/${row.id}`}>
-                      {row.has_reply ? 'Otwórz' : 'Dokończ'}
+                      Otwórz
                     </Link>
                   </td>
                 </tr>
@@ -258,19 +241,6 @@ export function Inquiries() {
           </table>
         </div>
       )}
-
-      <InquiryClarifyModal
-        open={modalOpen}
-        cards={inquiry?.cards ?? []}
-        busy={composeBusy}
-        error={err}
-        onClose={() => {
-          if (!composeBusy) setModalOpen(false)
-        }}
-        onSubmit={(answers, extraNote) => {
-          if (inquiry) void composeAndOpen(inquiry, answers, extraNote)
-        }}
-      />
     </div>
   )
 }

@@ -8,6 +8,7 @@ use App\Models\Client;
 use App\Models\ClientInquiry;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductInquirySearch;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -106,9 +107,23 @@ final class ClientInquiryApiTest extends TestCase
 
         $res->assertCreated()
             ->assertJsonPath('client.name', 'Firma Test')
-            ->assertJsonPath('cards.0.id', 'product');
+            ->assertJsonPath('cards.0.id', 'product')
+            // mail opisowy: jedna pseudo-pozycja bez cytatu, list gotowy od razu
+            ->assertJsonPath('items.0.id', 'item_1')
+            ->assertJsonPath('items.0.quote', null)
+            ->assertJsonPath('items.0.answer_key', 'product:item_1')
+            ->assertJsonPath('items.0.confidence', 'high')
+            ->assertJsonPath('items.0.chosen', 'p:'.$product->id)
+            ->assertJsonPath('items.0.candidates.0.sku', 'RNITZ-100')
+            ->assertJsonPath('items.0.substitute_key', null)
+            ->assertJsonPath('global_cards.0.id', 'sizes')
+            ->assertJsonPath('answers.product:item_1.option_id', 'p:'.$product->id)
+            ->assertJsonPath('price.mode', 'none')
+            ->assertJsonPath('attention_count', 0)
+            ->assertJsonPath('replied_at', null);
 
         $json = $res->json();
+        $this->assertStringContainsString('SKU RNITZ-100', (string) $json['reply_body']);
         $this->assertStringNotContainsString('purchase_price', json_encode($json, JSON_THROW_ON_ERROR));
         $this->assertStringNotContainsString('1.10', json_encode($json, JSON_THROW_ON_ERROR));
         $this->assertDatabaseHas('client_inquiries', [
@@ -117,7 +132,7 @@ final class ClientInquiryApiTest extends TestCase
         ]);
     }
 
-    public function test_analyze_keeps_product_and_substitutes_on_each_line(): void
+    public function test_analyze_keeps_product_on_each_line_without_substitute_card(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();
         $product = Product::query()->create([
@@ -166,13 +181,275 @@ final class ClientInquiryApiTest extends TestCase
             'tone' => 'formal',
         ]);
 
+        // bez zatwierdzonych zamienników nie ma kart zamienników ani substitute_key
         $res->assertCreated()
             ->assertJsonPath('cards.0.id', 'product:item_1')
-            ->assertJsonPath('cards.1.id', 'substitutes:item_1')
-            ->assertJsonPath('cards.2.id', 'product:item_2')
-            ->assertJsonPath('cards.3.id', 'substitutes:item_2')
+            ->assertJsonPath('cards.1.id', 'product:item_2')
             ->assertJsonPath('cards.0.quote', '30szt Rękawice chemoodporne rozmiar 10')
-            ->assertJsonPath('cards.2.quote', '30szt Rękawice chemoodporne rozmiar 9');
+            ->assertJsonPath('cards.1.quote', '30szt Rękawice chemoodporne rozmiar 9')
+            ->assertJsonPath('items.0.quote', '30szt Rękawice chemoodporne rozmiar 10')
+            ->assertJsonPath('items.0.qty', '30')
+            ->assertJsonPath('items.0.unit', 'szt')
+            ->assertJsonPath('items.0.size', '10')
+            ->assertJsonPath('items.0.substitute_key', null)
+            ->assertJsonPath('items.1.id', 'item_2')
+            ->assertJsonPath('items.1.chosen', 'p:'.$product->id)
+            ->assertJsonPath('answers.product:item_2.option_id', 'p:'.$product->id)
+            ->assertJsonPath('attention_count', 0);
+
+        $body = (string) $res->json('reply_body');
+        $this->assertStringContainsString("1. 30 szt, rozmiar 10\n30szt Rękawice chemoodporne rozmiar 10\nProdukt: Rękawice chemoodporne (SKU G10), Supon", $body);
+        $this->assertStringNotContainsString('Cena:', $body);
+    }
+
+    public function test_store_uses_price_preferences_from_last_inquiry(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'handlowy',
+            'source_body' => 'Poprzednie zapytanie o rękawice.',
+            'analysis' => [],
+            'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => '25']],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/inquiries/preferences')
+            ->assertOk()
+            ->assertExactJson(['tone' => 'handlowy', 'price_mode' => 'catalog_margin', 'margin' => 25]);
+
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Kalosze',
+                'questions' => ['Jaki termin dostawy?'],
+                'product_queries' => [],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock): void {
+            $mock->shouldReceive('findMany')->once()->andReturnUsing(
+                fn (array $queries): array => array_map(
+                    fn (string $q): array => ['query' => $q, 'products' => [[
+                        'id' => 22,
+                        'sku' => 'FW94',
+                        'name' => 'Kalosze S4',
+                        'manufacturer' => 'Portwest',
+                        'norms' => 'S4',
+                        'catalog_price_net' => '55.46',
+                        'purchase_price' => '40.00',
+                        'currency' => 'PLN',
+                        'stock' => 0,
+                        'ai_match_percent' => 46,
+                        'ai_match_reason' => 'Ten sam rodzaj w katalogu (nieoceniony)',
+                    ]]],
+                    $queries
+                )
+            );
+        });
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n4szt Kalosze chemoodporne rozmiar 43",
+            'tone' => 'formal',
+        ]);
+
+        $res->assertCreated()
+            ->assertJsonPath('price.mode', 'catalog_margin')
+            ->assertJsonPath('price.margin', 25)
+            ->assertJsonPath('answers.price.option_id', 'catalog_margin')
+            ->assertJsonPath('answers.price.custom', '25')
+            ->assertJsonPath('questions.0', 'Jaki termin dostawy?')
+            ->assertJsonPath('items.0.confidence', 'none')
+            ->assertJsonPath('items.0.chosen', 'check')
+            ->assertJsonPath('items.0.flags', ['low_score'])
+            ->assertJsonPath('items.0.candidates.0.score', 46)
+            ->assertJsonPath('items.0.candidates.0.reason', 'Ten sam rodzaj w katalogu (nieoceniony)')
+            ->assertJsonPath('attention_count', 1);
+
+        // pozycja „none”: bez SKU i bez ceny; pytania klienta nie wchodzą do listu
+        $body = (string) $res->json('reply_body');
+        $this->assertStringContainsString('Pozycję potwierdzimy po weryfikacji dostępności i wrócimy z propozycją.', $body);
+        $this->assertStringNotContainsString('FW94', $body);
+        $this->assertStringNotContainsString('Cena:', $body);
+        $this->assertStringNotContainsString('termin dostawy', $body);
+        $this->assertSame(25.0, (float) $res->json('answers.price.custom'));
+    }
+
+    public function test_compose_merges_partial_answers_and_marks_missing_price(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_subject' => 'Rękawice i kalosze',
+            'source_body' => "30szt Rękawice chemoodporne rozmiar 10\n4 pary Kalosze chemoodporne rozmiar 43",
+            'analysis' => [
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => '30szt Rękawice chemoodporne rozmiar 10', 'qty' => '30', 'unit' => 'szt', 'size' => '10', 'query' => 'Rękawice chemoodporne'],
+                    ['id' => 'item_2', 'quote' => '4 pary Kalosze chemoodporne rozmiar 43', 'qty' => '4', 'unit' => 'pary', 'size' => '43', 'query' => 'Kalosze chemoodporne'],
+                ],
+                'matches' => [
+                    ['query' => 'Rękawice chemoodporne', 'products' => [
+                        ['id' => 11, 'sku' => '37900VP', 'name' => 'AlphaTec 37900VP', 'manufacturer' => 'Ansell', 'norms' => 'EN ISO 374-1', 'catalog_price_net' => '19.85', 'currency' => 'PLN', 'catalog_pln' => 19.85, 'offer_pln' => 22.15, 'stock' => 0, 'score' => 90],
+                        ['id' => 12, 'sku' => '37675', 'name' => 'AlphaTec 37675', 'manufacturer' => 'Ansell', 'norms' => 'EN ISO 374-1', 'catalog_price_net' => '15.00', 'currency' => 'PLN', 'catalog_pln' => 15.0, 'offer_pln' => 17.7, 'stock' => 5, 'score' => 70],
+                    ]],
+                    ['query' => 'Kalosze chemoodporne', 'products' => [
+                        // brak ceny zakupu → brak ceny oferty
+                        ['id' => 22, 'sku' => 'FW94', 'name' => 'Kalosze S4', 'manufacturer' => 'Portwest', 'norms' => 'S4', 'catalog_price_net' => '55.46', 'currency' => 'PLN', 'catalog_pln' => 55.46, 'offer_pln' => null, 'stock' => 0, 'score' => 88],
+                    ]],
+                ],
+                'substitutes' => [
+                    11 => [['id' => 13, 'sku' => 'SUB1', 'name' => 'Zamiennik AlphaTec', 'manufacturer' => 'Ansell', 'norms' => '', 'catalog_price_net' => '18.00', 'currency' => 'PLN', 'catalog_pln' => 18.0, 'offer_pln' => 20.0, 'stock' => 9, 'score' => 0]],
+                ],
+                'cards' => [],
+            ],
+            'answers' => [
+                'product:item_1' => ['option_id' => 'p:11'],
+                'substitutes:item_1' => ['option_id' => 'no'],
+                'product:item_2' => ['option_id' => 'p:22'],
+                'price' => ['option_id' => 'none', 'custom' => '18'],
+            ],
+            'extra_note' => 'Dopisek zostaje',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        // częściowe answers: tylko tryb ceny — reszta z zapisanych; extra_note nie przysłany → zostaje
+        $res = $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => '18']],
+        ]);
+
+        $res->assertOk()
+            ->assertJsonPath('answers.product:item_1.option_id', 'p:11')
+            ->assertJsonPath('answers.substitutes:item_1.option_id', 'no')
+            ->assertJsonPath('answers.price.option_id', 'catalog_margin')
+            ->assertJsonPath('extra_note', 'Dopisek zostaje')
+            ->assertJsonPath('price.mode', 'catalog_margin')
+            ->assertJsonPath('items.0.substitute_key', 'substitutes:item_1')
+            ->assertJsonPath('items.0.substitutes.0.sku', 'SUB1')
+            ->assertJsonPath('items.0.substitutes.0.score', null)
+            ->assertJsonPath('items.0.flags', [])
+            ->assertJsonPath('items.1.confidence', 'high')
+            ->assertJsonPath('items.1.flags', ['no_price'])
+            ->assertJsonPath('attention_count', 1);
+
+        $body = (string) $res->json('reply_body');
+        $this->assertStringContainsString("1. 30 szt, rozmiar 10\n", $body);
+        $this->assertStringContainsString('Cena: 22,15 zł netto / szt', $body);
+        $this->assertStringContainsString("2. 4 pary, rozmiar 43\n", $body);
+        $this->assertStringContainsString("SKU FW94), Portwest\nNormy: S4\nCena: do potwierdzenia", $body);
+        $this->assertStringContainsString("\nDopisek zostaje\n", $body);
+        $this->assertStringNotContainsString('SUB1', $body);
+
+        // zmiana towaru na drugiego kandydata i zamiennik przy pozycji
+        $res = $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => [
+                'product:item_1' => ['option_id' => 'p:12'],
+                'substitutes:item_1' => ['option_id' => 'p:13'],
+            ],
+            'extra_note' => '',
+        ]);
+
+        $res->assertOk()
+            ->assertJsonPath('items.0.chosen', 'p:12')
+            ->assertJsonPath('extra_note', null)
+            ->assertJsonPath('price.mode', 'catalog_margin');
+        $body = (string) $res->json('reply_body');
+        $this->assertStringContainsString('SKU 37675', $body);
+        $this->assertStringContainsString("Zamiennik: Zamiennik AlphaTec (SKU SUB1), Ansell\nCena: 20,00 zł netto / szt", $body);
+        $this->assertStringNotContainsString('37900VP', $body);
+        $this->assertStringNotContainsString('Dopisek zostaje', $body);
+    }
+
+    public function test_patch_saves_manual_reply_edits(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_body' => 'Proszę o informację o rękawicach nitrylowych XL.',
+            'analysis' => [],
+            'reply_subject' => 'Oferta',
+            'reply_body' => 'Stara treść',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->patchJson("/api/inquiries/{$inquiry->id}", ['reply_body' => 'Nowa treść'])
+            ->assertOk()
+            ->assertJsonPath('reply_subject', 'Oferta')
+            ->assertJsonPath('reply_body', 'Nowa treść')
+            ->assertJsonPath('items', []);
+
+        $this->patchJson("/api/inquiries/{$inquiry->id}", ['reply_subject' => str_repeat('x', 256)])
+            ->assertUnprocessable();
+
+        $this->assertSame('Nowa treść', $inquiry->fresh()->reply_body);
+        $this->assertSame('Oferta', $inquiry->fresh()->reply_subject);
+    }
+
+    public function test_replied_flag_is_idempotent_and_reversible(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_body' => 'Proszę o informację o rękawicach nitrylowych XL.',
+            'analysis' => [],
+            'reply_body' => 'Treść',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $first = $this->postJson("/api/inquiries/{$inquiry->id}/replied", ['replied' => true])
+            ->assertOk()
+            ->json('replied_at');
+        $this->assertNotNull($first);
+
+        $second = $this->postJson("/api/inquiries/{$inquiry->id}/replied", ['replied' => true])
+            ->assertOk()
+            ->json('replied_at');
+        $this->assertSame($first, $second);
+
+        $this->getJson('/api/inquiries')
+            ->assertOk()
+            ->assertJsonPath('0.id', $inquiry->id)
+            ->assertJsonPath('0.replied_at', $first)
+            ->assertJsonPath('0.has_reply', true)
+            ->assertJsonPath('0.attention_count', 0);
+
+        $this->postJson("/api/inquiries/{$inquiry->id}/replied", ['replied' => false])
+            ->assertOk()
+            ->assertJsonPath('replied_at', null);
+        $this->postJson("/api/inquiries/{$inquiry->id}/replied", ['replied' => 'tak'])
+            ->assertUnprocessable();
+    }
+
+    public function test_preferences_default_without_history(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+
+        $this->getJson('/api/inquiries/preferences')
+            ->assertOk()
+            ->assertExactJson(['tone' => 'formal', 'price_mode' => 'none', 'margin' => 18]);
+    }
+
+    public function test_other_user_cannot_edit_or_mark_inquiry(): void
+    {
+        $owner = User::factory()->withRole('handlowiec')->create();
+        $other = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $owner->id,
+            'tone' => 'formal',
+            'source_body' => 'Proszę o informację o rękawicach nitrylowych XL.',
+        ]);
+
+        Sanctum::actingAs($other);
+
+        $this->patchJson("/api/inquiries/{$inquiry->id}", ['reply_body' => 'x'])->assertForbidden();
+        $this->postJson("/api/inquiries/{$inquiry->id}/replied", ['replied' => true])->assertForbidden();
+        $this->assertNull($inquiry->fresh()->replied_at);
     }
 
     public function test_compose_saves_reply_from_answers(): void
@@ -346,7 +623,7 @@ final class ClientInquiryApiTest extends TestCase
 
     public function test_ai_task_catalog_includes_client_inquiry(): void
     {
-        $keys = \App\Services\Ai\AiTask::keys();
+        $keys = AiTask::keys();
         $this->assertContains('client_inquiry', $keys);
     }
 }
