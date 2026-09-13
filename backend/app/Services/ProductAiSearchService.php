@@ -100,6 +100,9 @@ final class ProductAiSearchService
         'rank_card_ids' => [],
         'llm_matches' => [],
         'passes' => 0,
+        // Powód awarii kroku „zrozum” (wyjątek/timeout) — trafia do `search_events`,
+        // żeby intent lokalny z całym tekstem dało się odróżnić od decyzji modelu.
+        'intent_error' => null,
     ];
 
     public function __construct(
@@ -1158,9 +1161,76 @@ final class ProductAiSearchService
             $raw = $this->llm->chatJson($this->understandMessages($query), null, 900, null, $task);
 
             return $this->withCatalogAliases($this->parseIntent($raw, $query), $query);
-        } catch (Throwable) {
-            return $this->localIntent($query);
+        } catch (Throwable $first) {
+            // Jedna ponowna próba krótszym promptem — tylko przy wyjątku/timeoucie,
+            // nie przy pustej odpowiedzi (tę obsługuje parseIntent). Pusta odpowiedź
+            // to decyzja modelu, wyjątek to awaria transportu albo limitu czasu.
+            $this->noteIntentFailure($first, 'understand');
+            try {
+                $raw = $this->llm->chatJson($this->understandMessagesShort($query), null, 600, null, $task);
+
+                return $this->withCatalogAliases($this->parseIntent($raw, $query), $query);
+            } catch (Throwable $retry) {
+                $this->noteIntentFailure($retry, 'understand-retry');
+
+                return $this->localIntentAfterModelFailure($query);
+            }
         }
+    }
+
+    /**
+     * Krótszy prompt na ponowną próbę: bez listy producentów i przykładów żargonu,
+     * sam kontrakt JSON — mniejsza szansa na drugi timeout. Zaczyna się tym samym
+     * zdaniem („Najpierw ZROZUM”), po którym stuby testowe rozpoznają krok „zrozum”.
+     *
+     * @return list<array{role: string, content: string}>
+     */
+    private function understandMessagesShort(string $query): array
+    {
+        return [
+            [
+                'role' => 'system',
+                'content' => 'Jesteś ekspertem BHP i katalogów. Najpierw ZROZUM wymaganie, potem podaj kroki wyszukiwania. '
+                    .'needed: rodzaj produktu (rzeczownik + typ katalogowy), bez normy i bez cytatu SIWZ. '
+                    .'search_steps: 2-6 warunków AND od najważniejszego; krok 1 = rodzaj. '
+                    .'manufacturer: null, jeśli w wymaganiu nie ma nazwy producenta; skróty norm i klas (EN, ISO, SRC, FFP, ESD) NIE są producentem. '
+                    .'search_phrases: 3-6 synonimów sklepowych. constraints: 0-6 twardych dowodów. '
+                    .'JSON: {"needed":"...","search_steps":["..."],"manufacturer":null,"model_name":null,"size_note":null,'
+                    .'"search_phrases":["..."],"constraints":[]}.',
+            ],
+            [
+                'role' => 'user',
+                'content' => "Wymaganie:\n".$query,
+            ],
+        ];
+    }
+
+    private function noteIntentFailure(Throwable $e, string $stage): void
+    {
+        $reason = mb_substr($stage.': '.get_class($e).': '.trim($e->getMessage()), 0, 300);
+        $this->trace['intent_error'] = $reason;
+        Log::warning('product-ai-search.understand-failed', ['stage' => $stage, 'error' => $e->getMessage()]);
+    }
+
+    /**
+     * Intent lokalny po awarii modelu: `needed` z nagłówka wymagania (pierwsze
+     * zdanie), nie z całego tekstu. Całe wymaganie jako `needed` włącza tryb
+     * „marka+model” na igłach z opisu (klasy, karton 100) i zabija retrieval.
+     * `localIntent` bez zmian — używa go retrieval i dopasowanie przetargu.
+     *
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
+     */
+    private function localIntentAfterModelFailure(string $query): array
+    {
+        $intent = $this->localIntent($query);
+        $head = CatalogSlangDictionary::requirementHead($this->correctQueryNouns($query));
+        if ($head === '' || $head === trim($intent['needed'])) {
+            return $intent;
+        }
+        $intent['needed'] = $head;
+        $intent['search_phrases'] = array_values(array_unique([$head, ...$intent['search_phrases']]));
+
+        return $intent;
     }
 
     /**

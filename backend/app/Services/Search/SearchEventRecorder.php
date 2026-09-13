@@ -56,6 +56,11 @@ final class SearchEventRecorder
                         0,
                         12
                     ),
+                    // Awaria kroku „zrozum” — bez niej intent lokalny (cały tekst
+                    // jako `needed`) wygląda w telemetrii jak decyzja modelu.
+                    ...(is_string($trace['intent_error'] ?? null) && $trace['intent_error'] !== ''
+                        ? ['model_error' => mb_substr($trace['intent_error'], 0, 300)]
+                        : []),
                 ],
                 'candidate_ids' => $candidates,
                 'rank_card_ids' => $this->ids($trace['rank_card_ids'] ?? []),
