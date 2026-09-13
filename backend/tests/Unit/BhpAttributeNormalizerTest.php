@@ -308,6 +308,16 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertFalse($n->footwearClassMeets('S1P', 'S1'));
         $this->assertTrue($n->footwearClassMeets('S1P', 'S1P'));
         $this->assertTrue($n->footwearClassMeets('S1', 'S1P'));
+        // klasa wyższa spełnia niższą: S3 ma wkładkę antyprzebiciową (S1P) i wodoodporność (S2)
+        $this->assertTrue($n->footwearClassMeets('S1P', 'S3'));
+        $this->assertTrue($n->footwearClassMeets('S1P', 'S3L'));
+        $this->assertTrue($n->footwearClassMeets('S2', 'S3'));
+        $this->assertTrue($n->footwearClassMeets('SB', 'S1'));
+        $this->assertFalse($n->footwearClassMeets('S1P', 'S2'));
+        $this->assertFalse($n->footwearClassMeets('S2', 'S1P'));
+        $this->assertTrue($n->footwearClassMeets('O1', 'O2'));
+        $this->assertFalse($n->footwearClassMeets('O2', 'O1'));
+        $this->assertFalse($n->footwearClassMeets('O1', 'S1'));
 
         $attrs = $n->normalize(['kategoria_bhp' => 'obuwie'], [
             'name' => 'ARMEN 9007 6660 S1 P',

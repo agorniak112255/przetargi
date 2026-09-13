@@ -385,7 +385,11 @@ final class BhpAttributeNormalizer
         return $this->extractFootwearClass($text);
     }
 
-    /** S3L spełnia S3; S1P nie spełnia S3. */
+    /**
+     * S3L spełnia S3; S1P nie spełnia S3. Klasa wyższa w tej samej rodzinie spełnia niższą:
+     * S3 ⊇ S2 ⊇ S1 ⊇ SB oraz S3 ⊇ S1P (S3 ma wkładkę antyprzebiciową), O3 ⊇ O2 ⊇ O1 ⊇ OB.
+     * S4/S5 (obuwie całogumowe) i klasy S/O nie są wymienne.
+     */
     public function footwearClassMeets(string $required, string $have): bool
     {
         $required = mb_strtoupper($required);
@@ -393,8 +397,21 @@ final class BhpAttributeNormalizer
         if ($have === $required) {
             return true;
         }
+        if (preg_match('/^'.preg_quote($required, '/').'[A-Z]$/u', $have) === 1) {
+            return true;
+        }
+        $base = static fn (string $class): string => preg_replace('/^(S1P|S[B1-3]|O[B1-3])[A-Z]?$/u', '$1', $class) ?? $class;
+        $satisfiedBy = [
+            'SB' => ['S1', 'S1P', 'S2', 'S3'],
+            'S1' => ['S1P', 'S2', 'S3'],
+            'S1P' => ['S3'],
+            'S2' => ['S3'],
+            'OB' => ['O1', 'O2', 'O3'],
+            'O1' => ['O2', 'O3'],
+            'O2' => ['O3'],
+        ];
 
-        return preg_match('/^'.preg_quote($required, '/').'[A-Z]$/u', $have) === 1;
+        return in_array($base($have), $satisfiedBy[$base($required)] ?? [], true);
     }
 
     /** Próg SNR z wymagania („SNR minimum 30 dB”, „tłumienie min. 31 dB”). */

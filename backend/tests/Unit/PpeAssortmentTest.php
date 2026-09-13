@@ -344,6 +344,56 @@ final class PpeAssortmentTest extends TestCase
         $this->assertSame(PpeAssortment::FAMILY_FALL, $this->assortment->family('Szelki wg EN 358'));
     }
 
+    /**
+     * Poz. 3 przetargu opisowego: sandały S1 P dostawały AROX „S1 ESD” (klasa niższa) —
+     * klasa z nazwy karty niższa niż wymagana to sprzeczność, wyższa (S3) spełnia S1 P.
+     */
+    #[Test]
+    public function footwear_class_lower_than_required_is_rejected(): void
+    {
+        $req = 'Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, ESD';
+        $s1 = new Product;
+        $s1->forceFill(['name' => 'AROX 733 641460 S1 ESD', 'sku' => 'AROX 733 641460 S1 ESD', 'category' => 'Obuwie', 'description' => 'Sandały ochronne ESD klasy S1.']);
+        $s1p = new Product;
+        $s1p->forceFill(['name' => 'ARMEN 9007 6660 S1 P', 'sku' => 'ARMEN 9007 6660 S1 P', 'category' => 'Obuwie', 'description' => 'Sandały ochronne S1 P ESD z wkładką antyprzebiciową.']);
+        $s3 = new Product;
+        $s3->forceFill(['name' => 'Sandały ochronne ESD S3 SRC', 'sku' => 'S3-ESD', 'category' => 'Obuwie']);
+        $unknown = new Product;
+        $unknown->forceFill(['name' => 'Sandały ochronne ESD', 'sku' => 'X-1', 'category' => 'Obuwie']);
+
+        $this->assertFalse($this->assortment->compatibleProduct($req, $s1));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $s1p));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $s3));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $unknown), 'brak klasy na karcie = brak wiedzy');
+    }
+
+    /**
+     * Poz. 14: pochłaniacz gazów klasy A2 dostawał filtr cząstek stałych P1 R — inna klasa
+     * elementu oczyszczającego (EN 14387 vs EN 143); karta bez klas nadal przechodzi.
+     */
+    #[Test]
+    public function gas_absorber_requirement_rejects_particle_filter(): void
+    {
+        $req = 'Pochłaniacz gazów i par klasy A2 – element oczyszczający do sprzętu ochrony układu oddechowego, złącze bagnetowe';
+        $p1 = new Product;
+        $p1->forceFill(['name' => 'Filtr cząstek stałych 3M™, P1 R, 5911', 'sku' => '5911B', 'category' => 'Środki ochrony indywidualnej']);
+        $a2 = new Product;
+        $a2->forceFill(['name' => 'Pochłaniacz 3031 A2', 'sku' => 'S565A202', 'category' => 'Pochłaniacze']);
+        $a1 = new Product;
+        $a1->forceFill(['name' => 'Pochłaniacz 3021 A1', 'sku' => 'S565A102', 'category' => 'Pochłaniacze']);
+        $abek = new Product;
+        $abek->forceFill(['name' => 'Pochłaniacz 3M 6059 A2B2E2K2', 'sku' => '6059', 'category' => 'Pochłaniacze']);
+        $bare = new Product;
+        $bare->forceFill(['name' => 'Pochłaniacz do półmaski, złącze bagnetowe', 'sku' => 'PX-1', 'category' => 'Pochłaniacze']);
+
+        $this->assertFalse($this->assortment->compatibleProduct($req, $p1));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $a1), 'A1 nie spełnia A2');
+        $this->assertTrue($this->assortment->compatibleProduct($req, $a2));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $abek), 'A2B2E2K2 obejmuje A2');
+        $this->assertTrue($this->assortment->compatibleProduct($req, $bare), 'brak klas na karcie = brak wiedzy');
+        $this->assertFalse($this->assortment->compatibleProduct('Filtr cząstek stałych P3 R do półmaski', $a2), 'pochłaniacz gazów to nie filtr P3');
+    }
+
     #[Test]
     public function under_helmet_liner_accepts_cap_and_rejects_jacket(): void
     {
@@ -906,16 +956,18 @@ final class PpeAssortmentTest extends TestCase
             'description' => 'Trzewik bezpieczny ARDEUS 350 Air 618080 S1 PL ESD to lekkie obuwie ochronne. '
                 .'W odróżnieniu od sandałów zabudowany. Dodatkowa ochrona ESD.',
         ]);
-        $typeless = $this->card('AROX 733 641460 S1 ESD', 'AROX 733 641460 S1 ESD', [
+        // Klasa w nazwach = wymagana (S1 P): ten test pilnuje typu z opisu, nie klasy — klasę niższą
+        // (AROX „S1 ESD” przy S1 P) odrzuca osobna bramka, patrz footwear_class_lower_than_required_is_rejected.
+        $typeless = $this->card('AROX 733 641460 S1 P ESD', 'AROX 733 641460 S1 P ESD', [
             'manufacturer' => 'ARTRA',
             'category' => 'Obuwie',
-            'description' => 'Obuwie ochronne AROX 733 641460 S1 ESD marki ARTRA do kontroli wyładowań elektrostatycznych. Podnosek stalowy.',
+            'description' => 'Obuwie ochronne AROX 733 641460 S1 P ESD marki ARTRA do kontroli wyładowań elektrostatycznych. Podnosek stalowy.',
         ]);
-        $foreignDescription = $this->card('X-1', 'X-1 S1 ESD', [
+        $foreignDescription = $this->card('X-1', 'X-1 S1 P ESD', [
             'manufacturer' => null,
             'description' => 'Trzewiki robocze innego modelu. ESD.',
         ]);
-        $laterSentence = $this->card('Y-1', 'Y-1 S1 ESD', [
+        $laterSentence = $this->card('Y-1', 'Y-1 S1 P ESD', [
             'manufacturer' => 'ARTRA',
             'description' => 'Obuwie ochronne ARTRA Y-1 ESD. Lżejsze niż trzewiki tej serii.',
         ]);

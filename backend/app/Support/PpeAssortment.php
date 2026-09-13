@@ -928,8 +928,70 @@ final class PpeAssortment
         if (! $attrs->ffpClassMeets($requirement, $identity)) {
             return false;
         }
+        // Pochłaniacz gazów (A2) to nie filtr cząstek (P1 R) — klasy elementu oczyszczającego obu stron znane.
+        if ($this->filterClassesConflict($requirement, $identity)) {
+            return false;
+        }
 
         return true;
+    }
+
+    /**
+     * Klasy elementu oczyszczającego wg EN 14387 / EN 143: gazowe (A1‑A3, B, E, K, AX, SX, Hg)
+     * i cząstek (P1‑P3). Wymagana klasa gazowa, a karta ma tylko klasę cząstek (albo odwrotnie),
+     * lub klasa tej samej litery niższa — sprzeczność. Brak klas na karcie = brak wiedzy.
+     */
+    private function filterClassesConflict(string $requirement, string $productIdentity): bool
+    {
+        [$needGas, $needParticle] = $this->filterClasses($requirement);
+        if ($needGas === [] && $needParticle === null) {
+            return false;
+        }
+        [$haveGas, $haveParticle] = $this->filterClasses($productIdentity);
+        if ($haveGas === [] && $haveParticle === null) {
+            return false;
+        }
+        if ($needGas !== [] && $haveGas === []) {
+            return true;
+        }
+        foreach ($needGas as $letter => $level) {
+            if (! isset($haveGas[$letter]) || $haveGas[$letter] < $level) {
+                return true;
+            }
+        }
+        if ($needParticle !== null && $haveParticle === null && $haveGas !== []) {
+            return true;
+        }
+        if ($needParticle !== null && $haveParticle !== null && $haveParticle < $needParticle) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array{0: array<string, int>, 1: int|null} klasy gazowe (litera => poziom) i klasa cząstek
+     */
+    private function filterClasses(string $text): array
+    {
+        $t = $this->normalize($text);
+        $gas = [];
+        if (preg_match_all('/\b(?:a[1-3]?b[1-3]?e[1-3]?k[1-3]?|a[1-3]|b[1-3]|e[1-3]|k[1-3]|ax|sx|hg)\b(?![\s-]*(?:mm|cm|m\b))/u', $t, $m) > 0) {
+            foreach ($m[0] as $code) {
+                if (preg_match_all('/(a|b|e|k|ax|sx|hg)([1-3])?/u', $code, $parts, PREG_SET_ORDER) > 0) {
+                    foreach ($parts as $part) {
+                        $level = isset($part[2]) && $part[2] !== '' ? (int) $part[2] : 1;
+                        $gas[$part[1]] = max($gas[$part[1]] ?? 0, $level);
+                    }
+                }
+            }
+        }
+        $particle = null;
+        if (preg_match_all('/\bp([1-3])\b(?![\s-]*(?:mm|cm|m\b))/u', $t, $pm) > 0) {
+            $particle = max(array_map('intval', $pm[1]));
+        }
+
+        return [$gas, $particle];
     }
 
     /**
@@ -1105,6 +1167,15 @@ final class PpeAssortment
         // Półbuty OB z ESD to nie półbuty elektroizolacyjne 20 kV — brak dowodu = odrzuć, jak przy antystatyce.
         if ($this->requiresElectricalInsulation($requirement) && ! $this->productShowsElectricalInsulation($evidence)) {
             return false;
+        }
+        // Klasa z nazwy niższa niż wymagana (AROX „S1 ESD” przy sandałach S1 P) — obie strony znane.
+        // Dotąd pilnowała tego tylko wyszukiwarka, przetarg brał tańszą kartę niższej klasy.
+        $wantClass = $this->attributes()->footwearClass($requirement);
+        if ($wantClass !== null) {
+            $haveClass = $this->attributes()->footwearClass($productText);
+            if ($haveClass !== null && ! $this->attributes()->footwearClassMeets($wantClass, $haveClass)) {
+                return false;
+            }
         }
         $reqType = $this->articleType($requirement, self::FAMILY_FOOTWEAR);
         if ($reqType === null) {
