@@ -31,6 +31,8 @@ final class ProductModelFuzzy
         'rozm', 'gumowe', 'gumowa', 'gumowy', 'damskie', 'meskie', 'antyelektrostatyczne',
         'antyelektrostatyczna', 'prod', 'jednorazowy', 'jednorazowa', 'jednorazowe',
         'opakowanie', 'opakowaniu',
+        // akronimy materiałów pisane KAPITALIKAMI (przędza UHMWPE) — nie model
+        'uhmwpe', 'hppe', 'hdpe',
     ];
 
     public function hasNamedModel(string $requirement): bool
@@ -85,8 +87,10 @@ final class ProductModelFuzzy
                 || mb_strlen($aWord) < 3
                 || $this->isStop($aWord)
                 || $this->isSizeLabelWord($aWord)
+                || $this->isModelPairStop($aWord)
                 || ! ctype_digit($num)
                 || $this->isSizeRangeDigits($num, $tokens[$i + 1] ?? '')
+                || $this->isMeasureValue($tokens[$i + 1], $tokens[$i + 2] ?? null)
                 || mb_strlen($num) < 3
                 || mb_strlen($num) > 5
             ) {
@@ -108,6 +112,10 @@ final class ProductModelFuzzy
 
         if (preg_match_all('/\b[a-z]{2,14}(?:-[a-z0-9]{1,12}){1,4}\b/u', $text, $m, PREG_OFFSET_CAPTURE)) {
             foreach ($m[0] as [$raw, $offset]) {
+                // „owocowo-warzywne”, „czerwono-czarnym”, „bi-materiałowe” — przymiotnik złożony, nie TEPM-ICE
+                if ($this->isCompoundAdjective($raw)) {
+                    continue;
+                }
                 $this->pushNeedle($out, $raw);
                 if ($this->isShortHyphenModel($raw)) {
                     $compact = $this->compact($raw);
@@ -129,13 +137,17 @@ final class ProductModelFuzzy
             if (isset($tokens[$i + 1])) {
                 $aWord = $this->lettersOnly($tokens[$i]);
                 $num = $this->compact($tokens[$i + 1]);
+                // „norma 2012”, „karton 100 szt.”, „pojemności 500 ml” — miara/klasa, nie PERSPECTA 010
                 if (
                     $aWord !== ''
                     && mb_strlen($aWord) >= 3
                     && ! $this->isStop($aWord)
                     && ! $this->isSizeLabelWord($aWord)
+                    && ! $this->isModelPairStop($aWord)
                     && $this->isNumberedModelToken($num)
+                    && ! $this->isClassOrLevelMarking($num)
                     && ! $this->isSizeRangeDigits($num, $tokens[$i + 1] ?? '')
+                    && ! $this->isMeasureValue($tokens[$i + 1], $tokens[$i + 2] ?? null)
                 ) {
                     $this->pushNeedle($out, $aWord.$num);
                 }
@@ -160,6 +172,10 @@ final class ProductModelFuzzy
                 continue;
             }
             if (mb_strlen($a) < 3 || mb_strlen($b) < 3 || (mb_strlen($a) + mb_strlen($b)) < 6) {
+                continue;
+            }
+            // „polu widzenia 180”, „rombowym długość 300” — rzeczownik miary nie tworzy pary modelu
+            if ($this->isModelPairStop($a) || $this->isModelPairStop($b)) {
                 continue;
             }
             $pair = $a.$b;
@@ -391,7 +407,64 @@ final class ProductModelFuzzy
 
     public function score(string $requirement, Product $product): int
     {
+        return $this->scoreNeedles($this->needles($requirement), $requirement, $product);
+    }
+
+    /**
+     * Fuzzy liczony wyłącznie na mocnych igłach — dla heurystyki „mocny SKU” w przetargu,
+     * która rozstrzyga pozycję bez oceny modelu.
+     */
+    public function strongSkuScore(string $requirement, Product $product): int
+    {
+        return $this->scoreNeedles($this->strongSkuNeedles($requirement), $requirement, $product);
+    }
+
+    /**
+     * Igły, którym wolno rozstrzygać jak trafieniu SKU: z cyfrą (TEPM-ICE 700, HY51, P3E,
+     * Peltor X2), model z myślnikiem (URG-A) albo linia po znanej marce (uvex phynomic).
+     * Goły wyraz (TRONCHETTO) zostaje igłą wyszukiwania, ale sam nie blokuje pozycji przed AI.
+     *
+     * @return list<string>
+     */
+    public function strongSkuNeedles(string $requirement): array
+    {
         $needles = $this->needles($requirement);
+        if ($needles === []) {
+            return [];
+        }
+        $text = $this->stripNorms($requirement);
+        $allowed = [];
+        if (preg_match_all('/\b[a-z]{2,14}(?:-[a-z0-9]{1,12}){1,4}\b/u', $text, $m)) {
+            foreach ($m[0] as $raw) {
+                if ($this->isShortHyphenModel($raw)) {
+                    $allowed[$this->compact($raw)] = true;
+                }
+            }
+        }
+        $tokens = preg_split('/[\s,;:·•\/|+]+/u', $text) ?: [];
+        $tokens = array_values(array_filter($tokens, static fn (string $t): bool => $t !== ''));
+        $known = $this->knownCatalogBrandTokens();
+        $count = count($tokens);
+        for ($i = 0; $i < $count - 1; $i++) {
+            if (isset($known[$this->compact($tokens[$i])])) {
+                $line = $this->lettersOnly($tokens[$i + 1]);
+                if ($line !== '') {
+                    $allowed[$line] = true;
+                }
+            }
+        }
+
+        return array_values(array_filter(
+            $needles,
+            static fn (string $needle): bool => preg_match('/\d/u', $needle) === 1 || isset($allowed[$needle])
+        ));
+    }
+
+    /**
+     * @param  list<string>  $needles
+     */
+    private function scoreNeedles(array $needles, string $requirement, Product $product): int
+    {
         if ($needles === []) {
             return 0;
         }
@@ -476,13 +549,63 @@ final class ProductModelFuzzy
         $out[] = $c;
     }
 
-    /** Peltor + X2 — nie „klasa S3” i nie „filtr A2”. */
+    /** Peltor + X2 — nie „klasa S3”, „filtr A2”, „norma 2012”, „pojemności 500”, „karton 100”. */
     private function isModelPairStop(string $word): bool
     {
-        return in_array($word, [
-            'klasa', 'filtr', 'typ', 'kategoria', 'poziom', 'wersja', 'norma',
+        if (in_array($word, [
+            'klasa', 'klasy', 'klasie', 'filtr', 'typ', 'typu', 'kategoria', 'kategorii',
+            'poziom', 'poziomu', 'wersja', 'wersji', 'norma', 'normy', 'normie',
             'ochrona', 'ochrony', 'przeciwhalasowe', 'naglowne', 'nahelmowe',
-        ], true);
+            'waga', 'masa', 'karton', 'pole', 'polu', 'polem', 'widzenia', 'zakres', 'zakresu',
+        ], true)) {
+            return true;
+        }
+
+        // odmiany rzeczowników miary: pojemności, wymiary, długość, grubość, opakowanie, temperaturze, napięciu, akredytacją
+        return preg_match(
+            '/^(?:pojemnosc|wymiar|dlugosc|szerokosc|wysokosc|grubosc|opakowan|temperatur|napieci|akredytacj)/u',
+            $word
+        ) === 1;
+    }
+
+    /**
+     * FFP1 / S1P / OB / A2 / 4X42C / -50°C / 4-w-1 — oznaczenia klas, poziomów, temperatur,
+     * nie kody modeli (P3E, HY51, X2, 2047W dalej przechodzą).
+     */
+    private function isClassOrLevelMarking(string $compact): bool
+    {
+        if (preg_match(
+            '/^(?:ffp[1-3]|s[1-7]p?l?|sb|ob|o[1-7]|p[1-3]|a[1-3]|b[1-3]|e[1-2]|k[1-2]|abek\d?|hg|ax|sx|nr|r|d)$/u',
+            $compact
+        ) === 1) {
+            return true;
+        }
+        // poziomy EN 388 (4X42C, 2X42C, 4343B) — tylko z literą; sama liczba (4000, 3131) może być modelem
+        if (preg_match('/^\d[x\d]{3}[a-f]?$/u', $compact) === 1 && preg_match('/[a-z]/u', $compact) === 1) {
+            return true;
+        }
+
+        // temperatury (-50°C → 50c, 100c) i „N w 1” (4-w-1 → 4w1)
+        return preg_match('/^\d{1,3}c$/u', $compact) === 1 || preg_match('/^\d+w\d+$/u', $compact) === 1;
+    }
+
+    /** „500 ml”, „100 szt.”, „(100% bawełny)”, „180°”, „300mm” — liczba z jednostką to miara, nie numer modelu. */
+    private function isMeasureValue(string $rawNumber, ?string $nextRaw): bool
+    {
+        $num = mb_strtolower(trim($rawNumber));
+        if (preg_match('/\d\s*(?:%|°)/u', $num) === 1) {
+            return true;
+        }
+        $units = 'ml|mm|cm|m|g|kg|l|szt|par|kv|v|db|min|mies|lat|%|°c|c|m\/s';
+        if (preg_match('/^\(?[+-]?\d+(?:[.,]\d+)?(?:'.$units.')\)?[.,;:]?$/u', $num) === 1) {
+            return true;
+        }
+        if ($nextRaw === null) {
+            return false;
+        }
+        $next = mb_strtolower(trim($nextRaw, " \t.,;:()[]"));
+
+        return preg_match('/^(?:'.$units.')$/u', $next) === 1;
     }
 
     /** 010 / 2047W — numer modelu, także z literą na końcu. */
@@ -500,11 +623,34 @@ final class ProductModelFuzzy
     private function isShortAlnumModel(string $compact): bool
     {
         $len = mb_strlen($compact);
-        if ($len < 2 || $len > 6 || $this->isJunkCatalogModelNeedle($compact)) {
+        if ($len < 2 || $len > 6 || $this->isJunkCatalogModelNeedle($compact) || $this->isClassOrLevelMarking($compact)) {
             return false;
         }
 
         return preg_match('/^[a-z]{1,3}\d[a-z0-9]{0,3}$/u', $compact) === 1;
+    }
+
+    /**
+     * Polski przymiotnik złożony z myślnikiem: pierwsza część przysłówkowa (owocowo-, czerwono-,
+     * nitrylowo-, anty-) albo krótki przedrostek (bi-), druga to przymiotnik (≥ 5 liter, -owe/-ne/-nym/-skie…).
+     * Modele (TEPM-ICE, URG-A, Cool-Flow, Kleen-Guard) nie mają takiej końcówki. Końcówka „-a”
+     * celowo poza listą: „elano-bawełna” (skład tkaniny w nazwie karty) ma zostać igłą wyszukiwania.
+     */
+    private function isCompoundAdjective(string $raw): bool
+    {
+        $parts = explode('-', mb_strtolower(trim($raw)));
+        if (count($parts) !== 2) {
+            return false;
+        }
+        [$first, $second] = $parts;
+        if (preg_match('/^[a-z]+$/u', $first) !== 1 || preg_match('/^[a-z]{5,}$/u', $second) !== 1) {
+            return false;
+        }
+        if (mb_strlen($first) > 3 && preg_match('/[oyiu]$/u', $first) !== 1) {
+            return false;
+        }
+
+        return preg_match('/(?:ow|n|sk|ck|cz|rn|ln|st)(?:y|e|ej|ych|ym|ymi|ego|emu|ie|i|ich|im|imi)$/u', $second) === 1;
     }
 
     /** URG-A / TX-12 — po sklejeniu 4 znaki, za krótkie na zwykły pushNeedle. */
@@ -525,6 +671,9 @@ final class ProductModelFuzzy
         if (preg_match('/[a-z]/', $compact) !== 1 || preg_match('/\d/', $compact) !== 1) {
             return false;
         }
+        if ($this->isClassOrLevelMarking($compact)) {
+            return false;
+        }
 
         return ! $this->isStop($this->lettersOnly($compact));
     }
@@ -538,7 +687,7 @@ final class ProductModelFuzzy
             return null;
         }
         $raw = $tokens[$index];
-        if ($this->isSizeRangeToken($raw)) {
+        if ($this->isSizeRangeToken($raw) || $this->isMeasureValue($raw, $tokens[$index + 1] ?? null)) {
             return null;
         }
         $n = $this->compact($raw);
@@ -605,8 +754,14 @@ final class ProductModelFuzzy
         $t = mb_strtolower($text);
         $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z'];
         $t = strtr($t, $map);
-        $t = preg_replace('/\ben(?:\s*iso)?\s*\d+(?:\s+\d+)*/u', ' ', $t) ?? $t;
-        $t = preg_replace('/\biso\s*\d+/u', ' ', $t) ?? $t;
+        // Numer normy razem z rokiem, poprawką i częścią (EN 20347:2012, EN 420:2003+A1:2009,
+        // EN ISO 20345:2011, PN-EN 140:2004, EN 50321-1) — inaczej „2012” zostaje numerem modelu.
+        $t = preg_replace(
+            '/\b(?:pn-?)?en(?:\s*iso)?\s*\d+(?:[\s\-:]+\d+\b)*(?:\s*\+\s*a\d+(?::\s*\d+\b)?)*/u',
+            ' ',
+            $t
+        ) ?? $t;
+        $t = preg_replace('/\biso\s*\d+(?:[\s\-:]+\d+\b)*/u', ' ', $t) ?? $t;
 
         return trim(preg_replace('/\s+/u', ' ', $t) ?? $t);
     }
