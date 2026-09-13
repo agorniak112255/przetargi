@@ -383,8 +383,17 @@ final class ProductAiSearchService
             $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent, $report);
         }
         foreach ($modelStates as $i => $state) {
-            // po przepisaniu zapytania model mógł jednak coś ocenić
-            $done[$i]['model_state'] = ($done[$i]['products'] ?? []) !== [] && $state !== self::MODEL_STATE_UNAVAILABLE
+            // Po przepisaniu zapytania model mógł jednak coś ocenić — ale wiersze zapasu (reguła, lista katalogowa)
+            // to nie ocena modelu; dotąd dawały stan „ranked” i pomiar nie widział pustych odpowiedzi (błąd E).
+            $rated = array_filter(
+                is_array($done[$i]['products'] ?? null) ? $done[$i]['products'] : [],
+                static fn (array $row): bool => ! in_array(
+                    $row['ai_match_source'] ?? null,
+                    [self::MATCH_SOURCE_CATALOG, self::MATCH_SOURCE_RULE],
+                    true
+                )
+            );
+            $done[$i]['model_state'] = $rated !== [] && $state !== self::MODEL_STATE_UNAVAILABLE
                 ? self::MODEL_STATE_RANKED
                 : $state;
         }
@@ -4737,10 +4746,9 @@ final class ProductAiSearchService
                 continue;
             }
             $id = (int) ($m['id'] ?? 0);
+            // Bez oceny nie ma procentu modelu: dotąd trafienie bez `score` z polem sku/name dostawało 70
+            // (recenzja dopasowania 13.09, błąd B — zmyślona pewność). Taki wiersz odpada progiem 40.
             $score = (int) ($m['score'] ?? 0);
-            if ($score <= 0 && $id > 0 && (isset($m['sku']) || isset($m['name']))) {
-                $score = 70;
-            }
             if ($id <= 0 || $score < 40 || ! $byId->has($id)) {
                 continue;
             }

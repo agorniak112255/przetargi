@@ -99,6 +99,23 @@ final class ProductAiSearchWeldedBootsCoverallTest extends TestCase
         }
     }
 
+    /** Recenzja dopasowania (13.09), błąd E: model nic nie ocenił, a wynik z samych wierszy reguły miał stan „ranked”. */
+    public function test_rule_rows_alone_do_not_report_model_as_ranked(): void
+    {
+        $this->seedCoverallCatalog();
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(
+            static fn (array $sets): array => array_fill(0, count($sets), ['matches' => []])
+        );
+        $llm->shouldReceive('chatJson')->andReturn(['matches' => []]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $result = $this->app->make(ProductAiSearchService::class)->searchMany([self::QUERY], 10)[0] ?? [];
+
+        $this->assertNotSame([], $result['products'] ?? [], 'zapas reguły zostaje w wyniku');
+        $this->assertSame('empty', $result['model_state'] ?? null, 'wiersze reguły to nie ocena modelu');
+    }
+
     private function seedCoverallCatalog(): void
     {
         $base = [

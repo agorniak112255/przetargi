@@ -220,7 +220,13 @@ final class ProductMatchService
                         $q->whereNull('main_product_id')
                             ->orWhere(function ($w) {
                                 $w->whereNotNull('ai_match_percent')
-                                    ->where('ai_match_percent', '<', $this->minMatchScore());
+                                    ->where('ai_match_percent', '<', $this->minMatchScore())
+                                    // Wybór ręczny i z battlecard to decyzja użytkownika — „Dopasuj AI (puste)” obiecuje,
+                                    // że zapisanych nie rusza (recenzja dopasowania 13.09, błąd C).
+                                    ->where(function ($source) {
+                                        $source->whereNull('match_source')
+                                            ->orWhereNotIn('match_source', self::USER_DECIDED_SOURCES);
+                                    });
                             });
                     });
                 })

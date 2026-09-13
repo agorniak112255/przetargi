@@ -213,6 +213,37 @@ final class ProductAiSearchUnratedCatalogTest extends TestCase
         }
     }
 
+    /** Recenzja dopasowania (13.09), błąd B: trafienie modelu bez oceny z polem sku/name dostawało 70 — zmyślona pewność. */
+    public function test_model_match_without_score_gets_no_made_up_percent(): void
+    {
+        $card = Product::query()->create([
+            'sku' => 'RNITZ-M',
+            'name' => 'Rękawice nitrylowe ze ściągaczem',
+            'manufacturer' => 'REJS',
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'description' => 'Rękawice robocze nitrylowe ze ściągaczem, dzianina bawełniana, do prac montażowych.',
+            'catalog_price_net' => 3,
+            'purchase_price' => 2,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $service = app(ProductAiSearchService::class);
+
+        $rows = (new \ReflectionMethod($service, 'rowsFromLlmMatches'))->invoke(
+            $service,
+            'Rękawice nitrylowe ze ściągaczem',
+            collect([$card]),
+            ['matches' => [['id' => (int) $card->id, 'sku' => (string) $card->sku, 'name' => (string) $card->name]]],
+            10,
+            'rękawice nitrylowe',
+            null,
+        );
+
+        $this->assertSame([], $rows, 'bez oceny modelu nie ma procentu modelu');
+    }
+
     private function emptyRankLlm(): OpenAiCompatibleClient
     {
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
