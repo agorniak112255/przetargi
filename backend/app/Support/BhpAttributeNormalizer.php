@@ -538,8 +538,44 @@ final class BhpAttributeNormalizer
 
     private function extractFootwearClass(string $text): ?string
     {
-        if (preg_match('/\b(S7|S5|S4|S3|S2|S1P|S1|SB|OB|O5|O4|O3|O2|O1)\b/iu', $text, $m) === 1) {
-            return mb_strtoupper($m[1]);
+        // „S1 P” ze spacją (ARMEN 9007 6660 S1 P) to nadal S1P — bez tego sandały
+        // antyprzebiciowe udawały S1 i przegrywały z kartą bez wkładki.
+        if (preg_match('/\b(S7|S5|S4|S3|S2|S1\s?P|S1|SB|OB|O5|O4|O3|O2|O1)\b/iu', $text, $m) === 1) {
+            return mb_strtoupper(preg_replace('/\s+/u', '', $m[1]) ?? $m[1]);
+        }
+
+        return null;
+    }
+
+    public function ffpClass(string $text): ?string
+    {
+        return $this->extractFfpClass($text);
+    }
+
+    /** FFP3 spełnia FFP2; FFP1 nie spełnia FFP2. */
+    public function ffpClassMeets(string $required, string $have): bool
+    {
+        $req = $this->extractFfpClass($required);
+        $has = $this->extractFfpClass($have);
+        if ($req === null || $has === null) {
+            return true;
+        }
+
+        return (int) substr($has, 3) >= (int) substr($req, 3);
+    }
+
+    /**
+     * Zawór wydechowy: 1 = z zaworem, 0 = jawnie „bez zaworu”, null = karta milczy.
+     * Wspólne dla porównywarki (ProductCrossRefFilters) i bramki asortymentu.
+     */
+    public function valveState(string $text): ?int
+    {
+        $hay = $this->normalizeText($text);
+        if (preg_match('/\bbez\s+zawor/u', $hay) === 1) {
+            return 0;
+        }
+        if (preg_match('/\b(zawor|valve|cool\s*flow)\w*/u', $hay) === 1) {
+            return 1;
         }
 
         return null;

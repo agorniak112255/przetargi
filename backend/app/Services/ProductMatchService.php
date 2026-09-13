@@ -773,8 +773,9 @@ final class ProductMatchService
         }
 
         $klasa = is_string($attrs['klasa_ochrony'] ?? null) ? mb_strtolower((string) $attrs['klasa_ochrony']) : '';
-        if ($klasa !== '' && (str_contains($req, $this->normalize($klasa))
-            || preg_match('/\b'.preg_quote($klasa, '/').'\b/u', $req) === 1)) {
+        if ($klasa !== '' && $this->classMatchesRequirement($req, $klasa)
+            // Klasa OB przy „półbuty elektroizolacyjne 20 kV” nic nie dowodzi, gdy karta nie pokazuje elektroizolacji.
+            && $this->assortment->productMeetsElectricalInsulationRequirement($req, $product)) {
             $reasons[] = ['code' => 'attr_klasa', 'label' => 'Klasa ochrony ('.$attrs['klasa_ochrony'].')', 'points' => 18];
             $points += 18;
         }
@@ -800,6 +801,22 @@ final class ProductMatchService
         }
 
         return ['points' => min(60, $points), 'reasons' => $reasons];
+    }
+
+    /**
+     * Klasa karty trafia w SIWZ. Dla klas obuwia liczy się klasa z wymagania („S1 P” = S1P),
+     * a klasa niższa niż wymagana (S1 przy S1P) nie jest dowodem.
+     */
+    private function classMatchesRequirement(string $req, string $klasa): bool
+    {
+        $reqClass = $this->bhpAttributes->footwearClass($req);
+        $haveClass = $this->bhpAttributes->footwearClass($klasa);
+        if ($reqClass !== null && $haveClass !== null) {
+            return $this->bhpAttributes->footwearClassMeets($reqClass, $haveClass);
+        }
+
+        return str_contains($req, $this->normalize($klasa))
+            || preg_match('/\b'.preg_quote($klasa, '/').'\b/u', $req) === 1;
     }
 
     /**
@@ -1042,6 +1059,10 @@ final class ProductMatchService
         }
         $name = $this->normalize((string) $product->name);
         if ($name === '' || $this->detectAssortmentFamily($name) !== $reqFamily) {
+            return 0;
+        }
+        // Ta sama rodzina to za mało: półmaska wielorazowa ≠ FFP1, gogle ≠ okulary, spodniobuty ≠ spodnie.
+        if ($this->assortment->subtypesConflict($req, $product)) {
             return 0;
         }
 

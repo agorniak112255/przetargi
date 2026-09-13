@@ -82,6 +82,26 @@ final class PpeAssortment
     /** Grube kategorie — tekst produktu może być dokładniejszy. */
     private const COARSE_FAMILIES = [self::FAMILY_HEAD];
 
+    /**
+     * Słowa z nazwy, które nie identyfikują karty w opisie (jak w AuditProductDescriptionsCommand).
+     *
+     * @var list<string>
+     */
+    private const DESCRIPTION_STOP_TOKENS = [
+        'robocze', 'ochronne', 'ochronna', 'ochronny', 'meskie', 'damskie', 'czarne', 'czarny',
+        'granatowe', 'granatowy', 'niebieskie', 'zielone', 'szare', 'biale', 'guma', 'skora',
+        'rozmiar', 'komplet', 'zestaw', 'para', 'sztuka', 'linia', 'seria', 'model', 'size',
+    ];
+
+    /** Zawór i klasa FFP liczone tą samą regułą co w porównywarce. */
+    private ?BhpAttributeNormalizer $attributes = null;
+
+    /**
+     * Goła „półmaska” bez słów o wielorazowości — półmaska nieznanej konstrukcji (FFP albo
+     * elastomerowa). Zgodna z `ffp` i `reusable_half`, sprzeczna z pochłaniaczem i maską pełnotwarzową.
+     */
+    private const RESPIRATORY_HALF_UNKNOWN = 'half';
+
     /** @var list<string> */
     private const SPECIFIC_HEAD_SPLIT = [
         self::FAMILY_FACE,
@@ -99,81 +119,62 @@ final class PpeAssortment
         return preg_replace('/[^a-z0-9\s]/', ' ', $s) ?? $s;
     }
 
+    /**
+     * Rzeczowniki rodzin w kolejności rozstrzygającej remisy (ta sama pozycja w tekście).
+     * Spodniobuty i wodery to odzież wodoochronna, nie obuwie — „kalosz” w ich nazwie
+     * nie może przerzucić ich do obuwia.
+     *
+     * @var array<string, string>
+     */
+    private const FAMILY_PATTERNS = [
+        self::FAMILY_GLOVES => '/\b(rekawic|glove|handschuh)\w*/u',
+        self::FAMILY_RESPIRATORY => '/\b(polmask|respirator|aparat\w*\s+oddech|drog[iy]\s+oddech|filtrow?\w*\s+oddech'
+            .'|maska\s+(twarzow|pelnotwarz|filtruj|przeciwpyl)|czesc\s+twarzow'
+            .'|pochlaniacz|filtropochlaniacz|ffp[123]?)\w*/u',
+        self::FAMILY_FACE => '/\b(przylbic|oslon\w{0,10}\s+\w{0,16}twarz|twarz\w{0,8}\s+\w{0,12}oslon'
+            .'|oslona\s+twarzy|face\s*shield|siatk\w*\s+(na\s+)?twarz|maska\s+spawal)\w*/u',
+        self::FAMILY_EYES => '/\b(okular|gogl|szyba\s+ochronn)\w*/u',
+        self::FAMILY_HEARING => '/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|wkladk\w*\s+sluch'
+            .'|stoper\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron)\w*/u',
+        self::FAMILY_FALL => '/\b(szelk|linka\s+bezpieczen|amortyzator|asekurac|urzadzeni\w*\s+samoham|lonza'
+            .'|ewakuac|podnoszac|opuszczaj|wciagark)\w*/u',
+        self::FAMILY_KNEE => '/\b(nakolann|ochrona\s+kolan|knee\s*pad)\w*/u',
+        self::FAMILY_APPAREL => '/\b(odziez|kurtk|spodn|podnie|kombinezon|kamizelk|kamizelak|softshell|fartuch|kitel|bluza'
+            .'|kaleson|ogrodniczk|park[ae]|peleryn|spodniobut|woder|wader)\w*/u',
+        self::FAMILY_HEAD => '/\b(kominiark|czapk|helm|kask|czepek|balaclava|liner)\w*'
+            .'|(wkladk\w*.{0,24}(helm|kask))/u',
+        // Rzeczowniki obuwia bez kotwicy na końcu („trzewiki”, „półbuty”, „sandały”);
+        // „buty” zostaje całym słowem, bo inaczej łapie „butylowe”.
+        self::FAMILY_FOOTWEAR => '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwi|kalosz|gumowc|gumiak|wellington'
+            .'|footwear|podeszw|podnosek)\w*|\b(buty|butow)\b|\bs1p?\b|\bs[2-5]\b|\bo[1-5]\b/u',
+    ];
+
+    /**
+     * Rodzinę wskazuje rzeczownik główny — pierwszy w tekście, nie pierwszy na liście.
+     * Opis SIWZ wymienia dalej akcesoria i kompatybilności („wymienne szelki” przy
+     * spodniobutach, „łącznie z półmaskami” przy goglach), które nie zmieniają wyrobu.
+     * Remis pozycji rozstrzyga kolejność FAMILY_PATTERNS.
+     */
     public function family(string $text): ?string
     {
         $t = $this->normalize($text);
-
-        if (preg_match('/\b(rekawic|glove|handschuh)\w*/u', $t) === 1) {
-            return self::FAMILY_GLOVES;
-        }
-
-        if (preg_match(
-            '/\b(polmask|respirator|aparat\w*\s+oddech|drog[iy]\s+oddech|filtrow?\w*\s+oddech'
-            .'|maska\s+(twarzow|pelnotwarz|filtruj|przeciwpyl)|czesc\s+twarzow'
-            .'|pochlaniacz|filtropochlaniacz|ffp[123]?)\w*/u',
-            $t
-        ) === 1) {
-            return self::FAMILY_RESPIRATORY;
-        }
-
         $hasHelm = preg_match('/\b(helm|kask)\w*/u', $t) === 1;
-        if (! $hasHelm && preg_match(
-            '/\b(przylbic|oslon\w{0,10}\s+\w{0,16}twarz|twarz\w{0,8}\s+\w{0,12}oslon'
-            .'|oslona\s+twarzy|face\s*shield|siatk\w*\s+(na\s+)?twarz|maska\s+spawal)\w*/u',
-            $t
-        ) === 1) {
-            return self::FAMILY_FACE;
+
+        $best = null;
+        $bestAt = PHP_INT_MAX;
+        foreach (self::FAMILY_PATTERNS as $family => $pattern) {
+            // „Osłona twarzy do hełmu” to akcesorium hełmu — twarz pomijamy, gdy w tekście jest hełm.
+            if ($family === self::FAMILY_FACE && $hasHelm) {
+                continue;
+            }
+            $at = $this->firstWordOffset($pattern, $t);
+            if ($at !== null && $at < $bestAt) {
+                $best = $family;
+                $bestAt = $at;
+            }
         }
 
-        if (preg_match('/\b(okular|gogl|szyba\s+ochronn)\w*/u', $t) === 1) {
-            return self::FAMILY_EYES;
-        }
-
-        if (preg_match(
-            '/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|wkladk\w*\s+sluch'
-            .'|stoper\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron)\w*/u',
-            $t
-        ) === 1) {
-            return self::FAMILY_HEARING;
-        }
-
-        if (preg_match(
-            '/\b(szelk|linka\s+bezpieczen|amortyzator|asekurac|urzadzeni\w*\s+samoham|lonza'
-            .'|ewakuac|podnoszac|opuszczaj|wciagark)\w*/u',
-            $t
-        ) === 1) {
-            return self::FAMILY_FALL;
-        }
-
-        if (preg_match('/\b(nakolann|ochrona\s+kolan|knee\s*pad)\w*/u', $t) === 1) {
-            return self::FAMILY_KNEE;
-        }
-
-        if (preg_match(
-            '/\b(odziez|kurtk|spodn|podnie|kombinezon|kamizelk|kamizelak|softshell|fartuch|kitel|bluza'
-            .'|kaleson|ogrodniczk|park[ae]|peleryn)\w*/u',
-            $t
-        ) === 1) {
-            return self::FAMILY_APPAREL;
-        }
-
-        if (preg_match(
-            '/\b(kominiark|czapk|helm|kask|czepek|balaclava|liner)\w*'
-            .'|(wkladk\w*.{0,24}(helm|kask))/u',
-            $t
-        ) === 1) {
-            return self::FAMILY_HEAD;
-        }
-
-        if (preg_match(
-            '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwie|buty|butow|footwear|podeszw|podnosek'
-            .'|\bs1p?\b|\bs[2-5]\b|\bo[1-5]\b)\b/u',
-            $t
-        ) === 1) {
-            return self::FAMILY_FOOTWEAR;
-        }
-
-        return $this->familyFromNorms($t);
+        return $best ?? $this->familyFromNorms($t);
     }
 
     private function familyFromNorms(string $normalized): ?string
@@ -260,6 +261,10 @@ final class PpeAssortment
         if ($this->isApparelSet($text)) {
             return 'set';
         }
+        // Spodniobuty / wodery przed „spodn” — spodnie do pasa z szelkami to inny wyrób.
+        if (preg_match('/\b(spodniobut|woder|wader)\w*/u', $t) === 1) {
+            return 'waders';
+        }
         if (preg_match('/\b(spodn|ogrodniczk)\w*/u', $t) === 1) {
             return 'pants';
         }
@@ -342,14 +347,17 @@ final class PpeAssortment
 
     private function respiratoryType(string $t): ?string
     {
-        $isFilterNoun = preg_match(
-            '/\b(pochlaniacz|filtropochlaniacz|wklad\w*|element\w*\s+oczyszcz)\w*/u',
+        $filterAt = $this->firstWordOffset(
+            '/\b(pochlaniacz|filtropochlaniacz|wklad\w*|element\w*\s+oczyszcz)\w*|\bfiltr(y|a|u|ow|em|ami|ach)?\b/u',
             $t
-        ) === 1;
-        $isMaskNoun = preg_match('/\b(polmask|maska|ffp|pelnotwarz|respirator)\w*/u', $t) === 1;
-        if ($isFilterNoun && ! $isMaskNoun) {
+        );
+        $maskAt = $this->firstWordOffset('/\b(polmask|maska|ffp|pelnotwarz|respirator)\w*/u', $t);
+        // Rzeczownik na początku mówi, czym wyrób jest: „Pochłaniacz … na półmaskach i maskach
+        // pełnotwarzowych” to filtr, „Półmaska … z filtrami” to półmaska.
+        if ($filterAt !== null && ($maskAt === null || $filterAt < $maskAt)) {
             return 'filter';
         }
+        $isFilterNoun = $filterAt !== null;
 
         if (preg_match('/\b(pelnotwarz|full\s*face)\w*/u', $t) === 1) {
             return 'fullface';
@@ -658,6 +666,7 @@ final class PpeAssortment
     public function isApparelSet(string $text): bool
     {
         $t = $this->normalize($text);
+
         return preg_match(
             '/\b(bluza|kurtk).{0,32}(spodn|ogrodniczk)|(spodn|ogrodniczk).{0,32}(bluza|kurtk)/u',
             $t
@@ -841,9 +850,14 @@ final class PpeAssortment
 
             return $this->apparelCompatible($requirement, $roleText, $identity);
         }
-        if ($reqFamily === self::FAMILY_GLOVES && ! $this->isArmSleeve($requirement)
-            && $this->isArmSleeve($this->productIdentityText($product))) {
-            return false;
+        if ($reqFamily === self::FAMILY_GLOVES) {
+            // Rękaw (ochraniacz przedramienia) ≠ rękawica — w obie strony.
+            if ($this->isArmSleeve($requirement) !== $this->productIsArmSleeve($product)) {
+                return false;
+            }
+            if (! $this->productMeetsElectricalInsulationRequirement($requirement, $product)) {
+                return false;
+            }
         }
         if ($reqFamily === self::FAMILY_HEAD) {
             return $helmetMount || $this->headCompatible($requirement, $this->productIdentityText($product));
@@ -856,6 +870,7 @@ final class PpeAssortment
                 $requirement,
                 $this->productNameText($product),
                 $this->productIdentityText($product),
+                $this->productFullText($product),
             );
         }
         if ($reqFamily === self::FAMILY_FOOTWEAR) {
@@ -863,10 +878,165 @@ final class PpeAssortment
                 $requirement,
                 $this->productIdentityText($product),
                 $this->productFullText($product),
+                $this->productDescriptionFootwearType($product),
             );
+        }
+        if ($reqFamily === self::FAMILY_RESPIRATORY) {
+            return $this->respiratoryCompatible($requirement, $product);
         }
 
         return true;
+    }
+
+    /**
+     * Drogi oddechowe: półmaska wielorazowa ≠ FFP ≠ maska pełnotwarzowa ≠ pochłaniacz.
+     * Odrzucamy tylko pewną sprzeczność — obie strony znane i różne; nieznany podtyp,
+     * zawór czy klasa po którejkolwiek stronie to brak wiedzy, nie niezgodność.
+     */
+    private function respiratoryCompatible(string $requirement, Product $product): bool
+    {
+        $identity = $this->productIdentityText($product);
+        if ($this->respiratoryTypesConflict($this->knownRespiratoryType($requirement), $this->productRespiratoryType($product))) {
+            return false;
+        }
+
+        $attrs = $this->attributes();
+        // Wymagany zawór wydechowy, a nazwa/identyfikator mówi wprost „bez zaworu”.
+        if ($attrs->valveState($requirement) === 1 && $attrs->valveState($identity) === 0) {
+            return false;
+        }
+        // Klasa FFP niższa niż wymagana (FFP1 przy wymaganej FFP2).
+        if (! $attrs->ffpClassMeets($requirement, $identity)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Podtyp dróg oddechowych „znany” na potrzeby bramki. Samo „półmaska” obejmuje też
+     * FFP („3M Aura 9322+ półmaska”), więc `reusable_half` liczy się tylko przy jawnych
+     * słowach o wielorazowości / konstrukcji elastomerowej.
+     */
+    private function knownRespiratoryType(string $text): ?string
+    {
+        $t = $this->normalize($text);
+        $type = $this->respiratoryType($t);
+        if ($type === 'reusable_half' && ! $this->showsReusableHalfMask($t)) {
+            return self::RESPIRATORY_HALF_UNKNOWN;
+        }
+
+        return $type;
+    }
+
+    /** Obie strony znane i różne → sprzeczność; półmaska nieznanej konstrukcji pasuje do FFP i do wielorazowej. */
+    private function respiratoryTypesConflict(?string $required, ?string $have): bool
+    {
+        if ($required === null || $have === null || $required === $have) {
+            return false;
+        }
+        $half = ['ffp', 'reusable_half', self::RESPIRATORY_HALF_UNKNOWN];
+        if (in_array($required, $half, true) && in_array($have, $half, true)
+            && ($required === self::RESPIRATORY_HALF_UNKNOWN || $have === self::RESPIRATORY_HALF_UNKNOWN)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function showsReusableHalfMask(string $normalized): bool
+    {
+        return preg_match(
+            '/\b(wielokrotn|wieloraz|elastomer|silikon|bagnet|czesc\w*\s+twarzow|wymienn\w*\s+(pochlaniacz|filtr))\w*/u',
+            $normalized
+        ) === 1;
+    }
+
+    /**
+     * Podtyp karty z nazwy, potem z identyfikatora (kategoria „Półmaski wielokrotnego użytku”
+     * doprecyzowuje gołą „półmaskę”) — opisu nie czytamy, bo wymienia kompatybilne maski.
+     */
+    private function productRespiratoryType(Product $product): ?string
+    {
+        $fromName = $this->knownRespiratoryType($this->productNameText($product));
+        if ($fromName !== null && $fromName !== self::RESPIRATORY_HALF_UNKNOWN) {
+            return $fromName;
+        }
+
+        return $this->knownRespiratoryType($this->productIdentityText($product)) ?? $fromName;
+    }
+
+    /**
+     * Sprzeczność podtypów w tej samej rodzinie (FFP vs półmaska wielorazowa, gogle vs
+     * okulary, spodniobuty vs spodnie) — dla punktacji „ten sam typ”. Typy rękawic to
+     * cechy (nitryl, powlekane, antyprzecięciowe), które się nakładają — nie porównujemy.
+     */
+    public function subtypesConflict(string $requirement, Product $product): bool
+    {
+        $family = $this->family($requirement);
+        if ($family === null || $family === self::FAMILY_GLOVES) {
+            return false;
+        }
+        if ($family === self::FAMILY_RESPIRATORY) {
+            return $this->respiratoryTypesConflict($this->knownRespiratoryType($requirement), $this->productRespiratoryType($product));
+        }
+        $reqType = $this->articleType($requirement, $family);
+        $prodType = $this->articleTypePreferIdentity(
+            $this->productNameText($product),
+            $this->productIdentityText($product),
+            $family
+        );
+        if ($reqType === null || $prodType === null || $reqType === $prodType) {
+            return false;
+        }
+        if ($family === self::FAMILY_APPAREL && $reqType === 'set' && in_array($prodType, ['jacket', 'pants'], true)) {
+            return false;
+        }
+        if ($family === self::FAMILY_HEAD && $this->isUnderHelmetType($reqType) && $this->isUnderHelmetType($prodType)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /** SIWZ na obuwie / rękawice elektroizolacyjne (EN 50321, EN 60903, kV, klasa 0–4 AC). */
+    public function requiresElectricalInsulation(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match(
+            '/\b(elektroizolac\w*|dielektr\w*|en\s*50321|en\s*60903|\d+\s*kv\b|klasa\s*[0-4]\s*ac\b)/u',
+            $t
+        ) === 1;
+    }
+
+    /** Karta pokazuje elektroizolację (nazwa+SKU+kategoria+normy+opis). „Elektrostatyczne” / ESD to nie to. */
+    public function productShowsElectricalInsulation(string $text): bool
+    {
+        $t = $this->normalize($text);
+
+        return preg_match(
+            '/\b(elektroizolac\w*|dielektr\w*|50321|60903|\d+\s*kv\b|antyamper)/u',
+            $t
+        ) === 1;
+    }
+
+    /**
+     * Elektroizolacja to cecha bezpieczeństwa: wymagana, a niepokazana na karcie = odrzuć
+     * (jak antystatyka). Zwykłe OB przy „półbuty elektroizolacyjne 20 kV” nie przechodzi.
+     */
+    public function productMeetsElectricalInsulationRequirement(string $requirement, Product $product): bool
+    {
+        if (! $this->requiresElectricalInsulation($requirement)) {
+            return true;
+        }
+
+        return $this->productShowsElectricalInsulation($this->productFullText($product));
+    }
+
+    private function attributes(): BhpAttributeNormalizer
+    {
+        return $this->attributes ??= new BhpAttributeNormalizer;
     }
 
     /** Getry / nogawki — nie buty ani kalosze. */
@@ -877,8 +1047,29 @@ final class PpeAssortment
         return preg_match('/\b(getry|gaiter|nogawki|chaps|stirrup)\w*/u', $t) === 1;
     }
 
-    private function footwearCompatible(string $requirement, string $productText, ?string $productEvidenceText = null): bool
+    /**
+     * Typ obuwia z opisu karty — tylko gdy opis nazywa ten model (SKU, marka albo słowo z nazwy)
+     * i typ stoi w pierwszym zdaniu („Trzewik bezpieczny ARDEUS 350 Air…”). Dalsze zdania
+     * porównują z innymi modelami, więc ich nie czytamy. Wynik liczy się dopiero, gdy nazwa
+     * karty to goły kod bez typu (W3‑10).
+     */
+    private function productDescriptionFootwearType(Product $product): ?string
     {
+        if (! $this->descriptionNamesProduct($product)) {
+            return null;
+        }
+        $description = trim((string) ($product->description ?? ''));
+        $lead = preg_split('/(?<=[.!?])\s+/u', $description, 2)[0] ?? $description;
+
+        return $this->footwearType($this->normalize(mb_substr($lead, 0, 200)));
+    }
+
+    private function footwearCompatible(
+        string $requirement,
+        string $productText,
+        ?string $productEvidenceText = null,
+        ?string $descriptionType = null,
+    ): bool {
         $evidence = $productEvidenceText ?? $productText;
         if ($this->isFootwearLegwear($productText) && ! $this->isFootwearLegwear($requirement)) {
             $reqShoe = preg_match(
@@ -892,6 +1083,10 @@ final class PpeAssortment
         if ($this->requiresAntistatic($requirement) && ! $this->productShowsAntistatic($evidence)) {
             return false;
         }
+        // Półbuty OB z ESD to nie półbuty elektroizolacyjne 20 kV — brak dowodu = odrzuć, jak przy antystatyce.
+        if ($this->requiresElectricalInsulation($requirement) && ! $this->productShowsElectricalInsulation($evidence)) {
+            return false;
+        }
         $reqType = $this->articleType($requirement, self::FAMILY_FOOTWEAR);
         if ($reqType === null) {
             return true;
@@ -899,6 +1094,12 @@ final class PpeAssortment
         $prodType = $this->articleType($productText, self::FAMILY_FOOTWEAR);
         if ($prodType === null) {
             if ($reqType !== null) {
+                // Nazwa to goły kod („ARDEUS 350 Air 618080 S1 PL ESD”), a własny opis karty nazywa
+                // inny typ („Trzewik bezpieczny…”) — to nie sandały. Brak typu w opisie = brak wiedzy.
+                if ($descriptionType !== null && $descriptionType !== $reqType
+                    && ! $this->rubberBootMeetsAntistaticAsOtherType($requirement, $reqType, $descriptionType, $evidence)) {
+                    return false;
+                }
                 $t = $this->normalize($productText);
                 if ($reqType === self::TYPE_KALOSZ) {
                     if (preg_match(
@@ -921,17 +1122,19 @@ final class PpeAssortment
         }
 
         if ($reqType !== $prodType) {
-            if ($this->requiresAntistatic($requirement)
-                && $reqType === self::TYPE_KALOSZ
-                && preg_match('/\b(gumow\w*|guma)\b/u', $this->normalize($evidence)) === 1
-                && in_array($prodType, [self::TYPE_TRZEWIK, self::TYPE_POLBUT, self::TYPE_SZTYBLET], true)) {
-                return true;
-            }
-
-            return false;
+            return $this->rubberBootMeetsAntistaticAsOtherType($requirement, $reqType, $prodType, $evidence);
         }
 
         return true;
+    }
+
+    /** Antystatyczne „buty gumowe” z SIWZ mogą być trzewikiem / półbutem z gumy — jedyny wyjątek od „typ vs typ”. */
+    private function rubberBootMeetsAntistaticAsOtherType(string $requirement, string $reqType, string $prodType, string $evidence): bool
+    {
+        return $this->requiresAntistatic($requirement)
+            && $reqType === self::TYPE_KALOSZ
+            && preg_match('/\b(gumow\w*|guma)\b/u', $this->normalize($evidence)) === 1
+            && in_array($prodType, [self::TYPE_TRZEWIK, self::TYPE_POLBUT, self::TYPE_SZTYBLET], true);
     }
 
     /** Obuwie w katalogu bez typu w nazwie — S1/S3, „obuwie”, kalosz itd. */
@@ -998,11 +1201,16 @@ final class PpeAssortment
             return true;
         }
         $desc = $this->normalize((string) ($product->description ?? ''));
-        if (preg_match('/\b(esd|antyelektrostat)\b/u', $desc) !== 1) {
+        // Opis mówi wprost „ESD” / „antyelektrostatyczne” — to dowód (sandały ARMEN S1 P ESD bez ESD w nazwie).
+        if (preg_match('/\b(esd|antyelektrostat)\w*/u', $desc) === 1) {
+            return true;
+        }
+        // Sama „antystatyczna podeszwa” w opisie wystarcza tylko kaloszom / obuwiu gumowemu.
+        if (preg_match('/\bantystatyczn\w*/u', $desc) !== 1) {
             return false;
         }
 
-        return preg_match('/\b(gumow|guma|kalosz|wellington|gumowc|gumiak|esd)\b/u', $idN) === 1;
+        return preg_match('/\b(gumow|guma|kalosz|wellington|gumowc|gumiak)\w*/u', $idN) === 1;
     }
 
     private function productCatalogEvidenceText(Product $product): string
@@ -1026,8 +1234,12 @@ final class PpeAssortment
         ) === 1;
     }
 
-    private function eyeCompatible(string $requirement, string $productText, ?string $fullText = null): bool
-    {
+    private function eyeCompatible(
+        string $requirement,
+        string $productText,
+        ?string $fullText = null,
+        ?string $descriptionText = null,
+    ): bool {
         $nameText = $productText;
         $hay = $fullText ?? $productText;
         if ($this->isEyeWearSet($requirement)) {
@@ -1043,7 +1255,14 @@ final class PpeAssortment
         }
         $prodType = $this->articleTypePreferIdentity($nameText, $hay, self::FAMILY_EYES);
         if ($prodType === null) {
-            return false;
+            // Nazwa handlowa bez rzeczownika („Przyciemnione (smoke) soczewki PC…”): typ z opisu,
+            // ale tylko gdy identyfikator nie nazywa żadnej rodziny. Nieznany typ ≠ sprzeczność.
+            if ($descriptionText !== null && $this->family($hay) === null) {
+                $prodType = $this->articleType($descriptionText, self::FAMILY_EYES);
+            }
+            if ($prodType === null) {
+                return true;
+            }
         }
 
         return $reqType === $prodType;
@@ -1170,15 +1389,76 @@ final class PpeAssortment
         return in_array($prodFamily, [self::FAMILY_FACE, self::FAMILY_HEARING], true);
     }
 
-    /** Naramiennik / zarękawek — nie jest rękawicą (dłoń zostaje odkryta). */
+    /**
+     * Naramiennik / zarękawek / ochraniacz przedramienia („rękaw”) — nie jest rękawicą
+     * (dłoń zostaje odkryta). Rękawica „z rękawem 40 cm” to nadal rękawica, a rękawy
+     * kurtki czy fartucha to odzież — tam rzeczownik „rękaw” nic nie znaczy.
+     */
     public function isArmSleeve(string $text): bool
     {
         $t = $this->normalize($text);
-
-        return preg_match(
-            '/\b(naramiennik|zarekawk|arm\s*sleeves?|armguards?|arm\s*guards?|manchon)\w*|primacuff|\bcuffs\b/u',
+        $sleeveAt = $this->firstWordOffset(
+            '/\b(naramiennik|zarekaw|arm\s*sleeves?|armguards?|arm\s*guards?|arm\s*protectors?|manchon'
+            .'|ochraniacz\w*\s+(przed)?ramien|cut[\s-]*resistant\s+sleeves?)\w*'
+            .'|\brekaw(y|a|u|ow|em|ie|ach|om|ami)?\b|primacuff|\bcuffs\b/u',
             $t
-        ) === 1;
+        );
+        if ($sleeveAt === null) {
+            return false;
+        }
+        // „Rękawice … z rękawem” — rzeczownik główny stoi pierwszy; folder „Rękawice” za nazwą zarękawka nie liczy się.
+        $gloveAt = $this->firstWordOffset('/\brekawic\w*/u', $t);
+        if ($gloveAt !== null && $gloveAt < $sleeveAt) {
+            return false;
+        }
+
+        return $this->family($t) !== self::FAMILY_APPAREL;
+    }
+
+    /**
+     * Rękaw po stronie karty: z identyfikatora; z opisu tylko gdy identyfikator to goły kod
+     * bez rzeczownika rodziny („HyFlex 11202 SIZE 19''”) i opis nazywa ten model.
+     */
+    private function productIsArmSleeve(Product $product): bool
+    {
+        $identity = $this->productIdentityText($product);
+        if ($this->isArmSleeve($identity)) {
+            return true;
+        }
+        if ($this->family($identity) !== null || ! $this->descriptionNamesProduct($product)) {
+            return false;
+        }
+
+        return $this->isArmSleeve((string) ($product->description ?? ''));
+    }
+
+    /**
+     * Opis nazywa kartę po imieniu (SKU, marka albo słowo z nazwy ≥ 4 znaki) — inaczej to
+     * cudzy opis i nie może świadczyć o typie. Wzór: AuditProductDescriptionsCommand::descriptionSharesToken.
+     */
+    private function descriptionNamesProduct(Product $product): bool
+    {
+        $hay = mb_strtolower((string) ($product->description ?? ''));
+        if (trim($hay) === '') {
+            return false;
+        }
+        foreach ([(string) $product->sku, (string) ($product->manufacturer ?? '')] as $value) {
+            $value = mb_strtolower(trim($value));
+            if ($value !== '' && str_contains($hay, $value)) {
+                return true;
+            }
+        }
+        foreach (preg_split('/[\s\-®™\/_,.]+/u', mb_strtolower((string) $product->name)) ?: [] as $token) {
+            $token = trim($token);
+            if (mb_strlen($token) < 4 || in_array($token, self::DESCRIPTION_STOP_TOKENS, true)) {
+                continue;
+            }
+            if (str_contains($hay, $token)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function productNameText(Product $product): string
