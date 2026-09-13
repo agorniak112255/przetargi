@@ -89,6 +89,13 @@
             "AROX 733 641460 S1 ESD",
             "ARDEUS 350 Air 618080 S1 PL ESD"
         ],
+        "eval_extra_expected_skus": [
+            "ARSO 701 616560 S1 P ESD"
+        ],
+        "eval_extra_forbidden_skus": [
+            "AROSIO 730 Air 618080 S1 P ESD",
+            "ARDESIO 731 Air 618080 S1 P ESD"
+        ],
         "prod_search": {
             "needed": "sandały ochronne",
             "rank_of_expected": null,

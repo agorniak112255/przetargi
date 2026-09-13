@@ -2335,5 +2335,95 @@
                 }
             ]
         }
+    },
+    {
+        "sku": "ARSO 701 616560 S1 P ESD",
+        "name": "ARSO 701 616560 S1 P ESD",
+        "model_name": null,
+        "manufacturer": "ARTRA",
+        "ean": null,
+        "category": "Obuwie",
+        "description": "Sandały bezpieczne ARSO 701 616560 S1 P ESD to lekkie obuwie ochronne przeznaczone do pracy w warunkach wymagających ochrony palców oraz kontroli ładunków elektrostatycznych. Model łączy funkcję sandała z pełną ochroną podnoska, co zapewnia komfort w cieplejszym środowisku pracy, jednocześnie spełniając wymagania normy EN ISO 20345 dla klasy S1 P ESD.\n\nCholewka wykonana z materiałów przewiewnych, z wkładką antyprzebiciową (P) oraz podnoskiem chroniącym palce. Podeszwa odporna na poślizg, a właściwości ESD (Electrostatic Discharge) umożliwiają bezpieczne rozpraszanie ładunków elektrostatycznych, co jest kluczowe w strefach zagrożonych wybuchem lub przy pracy z elektroniką.\n\nSandały sprawdzą się w przemyśle elektronicznym, logistyce, montażu oraz wszędzie tam, gdzie wymagana jest ochrona stóp przy jednoczesnym zachowaniu przewiewności i higieny. Dzięki klasie S1 P ESD zapewniają podstawową ochronę mechaniczną i antyelektrostatyczną, a także ochronę przed przekłuciem podeszwy.",
+        "enrichment_status": "done",
+        "enrichment_payload": null,
+        "norms": null,
+        "catalog_price_net": "46.26",
+        "discount_percent": "0.00",
+        "purchase_price": "46.26",
+        "currency": "EUR",
+        "stock": 0,
+        "pack_qty": 58,
+        "packaging": null,
+        "_meta": {
+            "source": "prod_api",
+            "local_id": 9490,
+            "note": "AUDYT_4: karta z /api/products (bez enrichment_payload) — explain lokalny może różnić się od produkcji",
+            "roles": [
+                {
+                    "role": "expected",
+                    "line": 3
+                }
+            ]
+        }
+    },
+    {
+        "sku": "AROSIO 730 Air 618080 S1 P ESD",
+        "name": "AROSIO 730 Air 618080 S1 P ESD",
+        "model_name": null,
+        "manufacturer": "ARTRA",
+        "ean": null,
+        "category": "Obuwie",
+        "description": "Obuwie ochronne AROSIO 730 Air 618080 S1 P ESD to lekkie i oddychające buty robocze, zaprojektowane z myślą o komforcie podczas całodniowej pracy. Cholewka wykonana z wegańskiego materiału NUVYA SKINYUM™ zapewnia miękkość i przewiewność, a podszewka AEROLYUM™ gwarantuje delikatny, powietrzny dotyk. Dzięki konstrukcji ARELAX® obuwie daje przestrzeń dla wszystkich palców, redukując nacisk i zmęczenie stóp.\n\nButy wyposażono w stalowy podnosek LIBERYUM™, który chroni palce, oraz wkładkę FLEXYUM™ umożliwiającą naturalny ruch. Podeszwa RAPTOR PU.2D z technologią LEVITARYUM™ zapewnia uczucie lekkości i aktywną rekuperację energii przy każdym kroku. Model spełnia normę EN ISO 20345:2011 w klasie S1 P SRC oraz wymagania ESD według EN IEC 61340-4-3:2018, dzięki czemu nadaje się do pracy w strefach wrażliwych na wyładowania elektrostatyczne.\n\nObuwie sprawdzi się w przemyśle, logistyce, montażu oraz wszędzie tam, gdzie wymagana jest ochrona palców i właściwości antyelektrostatyczne. Lekka konstrukcja (580 g w rozmiarze\n42) i oddychające materiały zwiększają komfort użytkowania przez wiele godzin.",
+        "enrichment_status": "done",
+        "enrichment_payload": null,
+        "norms": null,
+        "catalog_price_net": "41.40",
+        "discount_percent": "0.00",
+        "purchase_price": "41.40",
+        "currency": "EUR",
+        "stock": 0,
+        "pack_qty": 54,
+        "packaging": "42",
+        "_meta": {
+            "source": "prod_api",
+            "local_id": 9486,
+            "note": "AUDYT_4: karta z /api/products (bez enrichment_payload) — explain lokalny może różnić się od produkcji",
+            "roles": [
+                {
+                    "role": "forbidden",
+                    "line": 3
+                }
+            ]
+        }
+    },
+    {
+        "sku": "ARDESIO 731 Air 618080 S1 P ESD",
+        "name": "ARDESIO 731 Air 618080 S1 P ESD",
+        "model_name": null,
+        "manufacturer": "ARTRA",
+        "ean": null,
+        "category": "Obuwie",
+        "description": "Obuwie ochronne ARDESIO 731 Air 618080 S1 P ESD to lekkie i oddychające buty robocze przeznaczone do pracy w środowiskach wymagających ochrony palców oraz kontroli ładunków elektrostatycznych. Spełniają normę EN ISO 20345:2011 w klasie S1 P SRC oraz wymagania ESD zgodnie z EN IEC 61340-4-3:2018, dzięki czemu sprawdzą się m.in. w elektronice, przemyśle precyzyjnym i logistyce.\n\nCholewka wykonana z wegańskiego materiału NUVYA SKINYUM™ zapewnia miękkość i oddychalność, a podszewka AEROLYUM™ dodatkowo poprawia cyrkulację powietrza. Stalowy podnosek LIBERYUM™ chroni palce, a wkładka SOFTYUM™ 3D oraz podeszwa środkowa FLEXYUM™ gwarantują komfort i swobodę ruchu. Podeszwa RAPTOR PU.2D z technologią LEVITARYUM™ zapewnia lekkie „unoszenie” i dobrą przyczepność (SRC).\n\nWaga buta to zaledwie 570 g (rozmiar 42), co zmniejsza zmęczenie podczas długotrwałej pracy. Konstrukcja ARELAX® daje przestrzeń dla palców, a technologie YUM™ wspierają aktywną regenerację energii. Produkt wytwarzany w ARTRA FACTORY 100™ na Słowacji.",
+        "enrichment_status": "done",
+        "enrichment_payload": null,
+        "norms": null,
+        "catalog_price_net": "43.51",
+        "discount_percent": "0.00",
+        "purchase_price": "43.51",
+        "currency": "EUR",
+        "stock": 0,
+        "pack_qty": 52,
+        "packaging": "42",
+        "_meta": {
+            "source": "prod_api",
+            "local_id": 9484,
+            "note": "AUDYT_4: karta z /api/products (bez enrichment_payload) — explain lokalny może różnić się od produkcji",
+            "roles": [
+                {
+                    "role": "forbidden",
+                    "line": 3
+                }
+            ]
+        }
     }
 ]

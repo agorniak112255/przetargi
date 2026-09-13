@@ -64,8 +64,16 @@ final class SearchEvalRunnerTest extends TestCase
         foreach (Opisowy15Fixture::items() as $line) {
             $case = $byLine[(int) $line['line_no']];
             $this->assertSame($line['requirement'], $case['query']);
-            $this->assertSame([$line['expected_sku']], $case['expected_skus']);
-            $this->assertSame(array_values($line['forbidden_skus']), $case['forbidden_skus']);
+            // eval_extra_*: karty tylko dla pomiaru (AUDYT_4, poz. 3: ARSO to też sandały S1 P ESD,
+            // AROSIO/ARDESIO to zakryte buty) — bez dopisywania ich do list bramki asortymentu.
+            $this->assertSame(
+                [$line['expected_sku'], ...array_values($line['eval_extra_expected_skus'] ?? [])],
+                $case['expected_skus'],
+            );
+            $this->assertSame(
+                [...array_values($line['forbidden_skus']), ...array_values($line['eval_extra_forbidden_skus'] ?? [])],
+                $case['forbidden_skus'],
+            );
             $this->assertSame(trim((string) $line['source_facts']), $case['note']);
         }
     }

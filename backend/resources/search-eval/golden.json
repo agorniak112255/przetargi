@@ -445,11 +445,14 @@
             "id": "opisowy15-03-sandaly-s1p-esd",
             "query": "Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, do prac w suchych pomieszczeniach – przemysł elektroniczny, logistyka, montaż. Wymagane: zabudowana pięta; podnosek ochronny; właściwości antyelektrostatyczne (ESD) umożliwiające kontrolę ładunków elektrostatycznych; podeszwa odporna na oleje i paliwa (FO) oraz antypoślizgowa; cholewka z materiałów przewiewnych; lekka konstrukcja odpowiednia do prac wymagających częstego przemieszczania się. Rozmiary: 35–48.",
             "expected_skus": [
-                "ARMEN 9007 6660 S1 P"
+                "ARMEN 9007 6660 S1 P",
+                "ARSO 701 616560 S1 P ESD"
             ],
             "forbidden_skus": [
                 "AROX 733 641460 S1 ESD",
-                "ARDEUS 350 Air 618080 S1 PL ESD"
+                "ARDEUS 350 Air 618080 S1 PL ESD",
+                "AROSIO 730 Air 618080 S1 P ESD",
+                "ARDESIO 731 Air 618080 S1 P ESD"
             ],
             "note": "Z opisu: sandały, EN ISO 20345 klasa S1, zabudowana pięta, podnosek, ESD, podeszwa FO, antypoślizgowa, przewiewna cholewka, suche pomieszczenia, rozmiary 35–48. Oznaczenie 'P' pochodzi wyłącznie z nazwy/SKU – opis nie wspomina wprost o wkładce antyprzebiciowej."
         },
