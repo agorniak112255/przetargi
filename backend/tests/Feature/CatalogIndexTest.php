@@ -2766,6 +2766,44 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame(['AB010008C', 'ALURAMP-YE', 'D-41352'], $codes);
     }
 
+    /**
+     * Batch #307: „Chef´s jacket, two-lined, white colour, 100% cotton” z modelem RADIM — karta
+     * „bluza-kucharska-radim” niosła tylko rzadkie słowo modelu i przegrywała z kartami, które
+     * zbierały pospolite tokeny z angielskiej nazwy. Model z cennika idzie pierwszy, zgodnego rodzaju.
+     */
+    public function test_model_name_pages_of_matching_type_come_first(): void
+    {
+        for ($i = 1; $i <= 9; $i++) {
+            $this->seedPage('https://sklep.example.pl/chef-jacket-cotton-lined-1150-white-'.$i);
+        }
+        $radimPage = 'https://sklep.example.pl/bluza-kucharska-radim-meska-bialy';
+        $this->seedPage($radimPage);
+        $radim = new Product([
+            'sku' => '1150-001-100-00',
+            'name' => 'Chef´s jacket, two-lined, white colour, 100% cotton 190 g/m², .',
+            'manufacturer' => 'Canis',
+        ]);
+        $radim->model_name = 'RADIM';
+
+        $this->assertSame($radimPage, app(CatalogIndexSearch::class)->findFor($radim)[0]['url'] ?? null);
+
+        $trousersPage = 'https://sklep.example.pl/spodnie-softshell-ostrzegawcze-cxs-bedford-zolte';
+        $this->seedPage('https://sklep.example.pl/kurtka-softshell-ostrzegawcza-cxs-bedford-zolta');
+        $this->seedPage($trousersPage);
+        $bedford = new Product([
+            'sku' => '1111-124-180-00',
+            'name' => 'High visible, softshell trousers, segmented tapes, EN 20471',
+            'manufacturer' => 'Canis',
+        ]);
+        $bedford->model_name = 'BEDFORD';
+
+        $this->assertSame(
+            $trousersPage,
+            app(CatalogIndexSearch::class)->findFor($bedford)[0]['url'] ?? null,
+            'kurtka z tej samej kolekcji nie wyprzedza spodni'
+        );
+    }
+
     /** Batch #306: karty cxs.net.pl (marka CXS) odpadały dla produktów Canis jako „strona innego producenta”. */
     public function test_cxs_brand_pages_match_canis_products(): void
     {

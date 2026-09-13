@@ -72,6 +72,8 @@ final class ProductSearchIdentity
         'bluza ochronn', 'bluzy ochronn', 'bluze ochronn',
         'bluza spawalnicz', 'bluzy spawalnicz', 'bluze spawalnicz',
         'bluza ostrzegawcz', 'bluzy ostrzegawcz', 'bluze ostrzegawcz',
+        // „Chef´s jacket” (RADIM, RAVI) → „Bluza kucharska CXS Radim” (batch #307)
+        'bluza kucharsk', 'bluzy kucharsk', 'bluze kucharsk',
     ];
 
     /**
@@ -4739,6 +4741,19 @@ final class ProductSearchIdentity
             && array_intersect($keys, $setPieces) !== []
             && count($required) > 1) {
             return [self::TYPE_STEMS['clothing']];
+        }
+        // „High visible softshell trousers, segmented tapes”, „Men´s jacket …, reflective tape” —
+        // taśma odblaskowa to cecha odzieży, nie drugi rodzaj wyrobu. Wymóg „taśma” na stronie
+        // odrzucał wszystkie karty spodni BEDFORD i bluz WorkTech (batch #307).
+        if (in_array('tape', $keys, true) && count($keys) > 1) {
+            $withoutTape = [];
+            foreach ($keys as $i => $key) {
+                if ($key !== 'tape') {
+                    $withoutTape[$key] = $required[$i];
+                }
+            }
+            $keys = array_keys($withoutTape);
+            $required = array_values($withoutTape);
         }
         // PVC BOOT / sock przy CVRL to kombinezon z butami, nie obuwie
         if (in_array('coverall', $keys, true) && in_array('footwear', $keys, true)) {

@@ -1599,6 +1599,34 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    /** Batch #307: taśma odblaskowa w nazwie odzieży to cecha, nie drugi rodzaj wyrobu. */
+    public function test_reflective_tape_in_garment_name_is_a_feature_not_a_product_type(): void
+    {
+        $id = new ProductSearchIdentity;
+        $bedford = new Product([
+            'sku' => '1111-124-180-00',
+            'name' => 'High visible, softshell trousers, segmented tapes, EN 20471',
+            'manufacturer' => 'Canis',
+        ]);
+        $worktech = new Product([
+            'sku' => '1120-200-710-00',
+            'name' => 'Men´s jacket CXS WorkTech-Multi, multifunctional, grey-black, reflective tape',
+            'manufacturer' => 'Canis',
+        ]);
+        $chef = new Product([
+            'sku' => '1150-001-100-00',
+            'name' => 'Chef´s jacket, two-lined, white colour, 100% cotton 190 g/m², .',
+            'manufacturer' => 'Canis',
+        ]);
+
+        $this->assertTrue($id->hayHasRequiredTypeFromName('Spodnie softshell ostrzegawcze CXS Bedford żółte', $bedford));
+        $this->assertTrue($id->hayHasRequiredTypeFromName('Bluza ochronna CXS WorkTech Multi szaro-czarna', $worktech));
+        $this->assertTrue($id->hayHasRequiredTypeFromName('Bluza kucharska Radim CXS biała', $chef));
+        // sama taśma w nazwie nadal jest rodzajem wyrobu
+        $tape = new Product(['sku' => 'T-1', 'name' => 'Taśma ostrzegawcza żółto-czarna 100 m', 'manufacturer' => 'Test']);
+        $this->assertFalse($id->hayHasRequiredTypeFromName('Spodnie robocze', $tape));
+    }
+
     /** Batch #305: „Men´s jacket SIRIUS” (Canis) na polskiej karcie to „Bluza robocza CXS Sirius Lucius”. */
     public function test_polish_work_sweatshirt_page_matches_english_jacket_name(): void
     {

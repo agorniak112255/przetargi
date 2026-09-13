@@ -59,7 +59,13 @@ final class CatalogIndexSearch
             }
         }
 
-        $hits = $this->mergeHits($this->byCode($product), $this->byBrandAndName($product));
+        // Model z kolumny cennika („RADIM”, „BEDFORD”) idzie pierwszy: karta „bluza-kucharska-radim”
+        // niesie tylko to jedno rzadkie słowo i przegrywała ranking z kartami, które zbierały
+        // pospolite tokeny z angielskiej nazwy („chef”, „cotton”, „1150”) — batch #307, Canis.
+        $hits = $this->mergeHits(
+            $this->byModelName($product),
+            $this->mergeHits($this->byCode($product), $this->byBrandAndName($product))
+        );
         if ($hits !== []) {
             return $hits;
         }
@@ -188,6 +194,51 @@ final class CatalogIndexSearch
         }
 
         return $this->pages($this->rankedIds($scores), $product);
+    }
+
+    /**
+     * Karty niosące wszystkie słowa modelu z kolumny cennika (≥ 4 znaki). Bez kolumny modelu
+     * albo przy słabej frazie („STANDARD”) nic nie zwraca — reszta wyszukiwania bez zmian.
+     * Tożsamość karty (producent, typ, inny kod) sprawdza dalej pages() i filtr wyszukiwarki.
+     *
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function byModelName(Product $product): array
+    {
+        $model = $this->identity->modelNamePhrase($product);
+        if ($model === '' || $this->identity->isWeakShopIndexPhrase($model, $product)) {
+            return [];
+        }
+        $words = [];
+        foreach (preg_split('/[\s\-\/]+/u', mb_strtolower(Str::ascii($model))) ?: [] as $word) {
+            $word = preg_replace('/[^a-z0-9]+/u', '', $word) ?? '';
+            if (mb_strlen($word) >= 4) {
+                $words[] = $word;
+            }
+        }
+        $words = array_values(array_unique($words));
+        if ($words === []) {
+            return [];
+        }
+
+        $query = DB::table('catalog_page_tokens as t')->whereIn('t.token', $words);
+        $hits = $this->pages(
+            $this->rankedIds($this->scoredPageIds($query, $this->tokenWeights($words), count($words))),
+            $product
+        );
+        if (! $this->identity->nameRequiresArticleType($product)) {
+            return $hits;
+        }
+
+        // Model obejmuje całą kolekcję (BEDFORD: kurtki, spodnie, strona kolekcji). Pierwsze miejsca
+        // dostają tylko karty zgodnego rodzaju — inaczej kurtki wypychały spodnie z limitu kart.
+        return array_values(array_filter(
+            $hits,
+            fn (array $hit): bool => $this->identity->hayHasRequiredTypeFromName(
+                $hit['url'].' '.$hit['title'].' '.$hit['snippet'],
+                $product
+            )
+        ));
     }
 
     /**
