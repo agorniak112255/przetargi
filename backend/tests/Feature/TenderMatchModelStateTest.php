@@ -289,6 +289,9 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertStringContainsString('spodniobuty=wodery', $prompt);
         $this->assertStringContainsString('2: 17 kV', $prompt);
         $this->assertStringContainsString('missing_key', $prompt);
+        // przetarg 1, poz. 5: SBM01B w zwykłym kolorze dostało 95% przy wymaganym kolorze fluorescencyjnym
+        $this->assertStringContainsString('fluorescencyjny / odblaskowy (zwiększona widzialność) to funkcja ochronna → KLUCZOWY', $prompt);
+        $this->assertStringContainsString('zwykły kolor', $prompt);
         $this->assertStringNotContainsString('Brak potwierdzenia → nie zwracaj', $prompt);
     }
 
