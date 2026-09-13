@@ -3908,6 +3908,40 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertNotSame(Product::ENRICHMENT_QUEUED, $product->fresh()?->enrichment_status);
     }
 
+    /**
+     * Batch #293: prefetch trafił na zablokowany SearXNG, wyszukiwarka na żywo już odpowiedziała
+     * i karty nie potwierdziły produktu — a stary komunikat prefetchu wysyłał go „do ponowienia”.
+     */
+    public function test_replayed_prefetch_outage_does_not_mark_live_miss_as_failed(): void
+    {
+        $product = $this->makeProduct(['sku' => 'AS060003', 'name' => 'COBAstat Szary', 'manufacturer' => 'Coba']);
+        $blocked = '„AS060003 Coba”: SearXNG: silniki zablokowane (429/CAPTCHA). Poczekaj albo zmień wyszukiwarkę w Ustawieniach AI.';
+        $steps = [['t' => 'catalog', 'm' => 'indeks sitemap: brak potwierdzonej karty']];
+        for ($i = 0; $i < 18; $i++) {
+            $steps[] = ['t' => 'err', 'm' => $blocked];
+        }
+        Cache::put('enrich_prefetch_pack:v3:'.$product->id, ['results' => [], 'errors' => [$blocked], 'steps' => $steps], now()->addHour());
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => ['manufacturer: Brak stron produktu (SKU AS060003). Jina: brak wyników']]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        try {
+            app(ProductEnrichmentService::class)->enrichProduct($product, false);
+            $this->fail('Oczekiwano ProductSourcesNotFoundException.');
+        } catch (ProductSourcesNotFoundException $e) {
+            $this->assertStringStartsWith('Nie znaleziono karty', $e->getMessage());
+        }
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status, 'brak karty przy żywej wyszukiwarce to „wpisz ręcznie”');
+        $replayed = array_values(array_filter($product->enrichment_trace['steps'] ?? [], static fn (array $s): bool => ! empty($s['pf'])));
+        $this->assertCount(2, $replayed, 'osiemnaście identycznych błędów prefetchu to jeden krok');
+        $this->assertSame($blocked, $replayed[1]['m']);
+    }
+
     /** Pominięty po blokadzie SearXNG ma być widoczny w komunikacie, nie znikać po cichu. */
     public function test_searxng_skip_after_block_is_visible_in_message(): void
     {

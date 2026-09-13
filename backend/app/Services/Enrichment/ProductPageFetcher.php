@@ -509,7 +509,11 @@ final class ProductPageFetcher
             $title = strtok($identityText, "\n") ?: $identityText;
         }
         $hinted = $this->matchingProduct !== null && $this->matchingProduct->isHintedShopUrl($url);
-        if (! $hinted && $this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)) {
+        // Karta rodziny producenta (coba.com/pl/produkt/cobastat) wymienia w tabeli części
+        // „AS060003C” (na metr bieżący) i osobno „AS060003” (rolka) — dokładny numer obok
+        // dłuższego to nasz produkt, nie cudzy. Batch #293: 65 takich kart poszło do kosza.
+        if (! $hinted && $this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)
+            && ! $this->hayHasExactAlphanumericSku($title.' '.$text, $skuNorm)) {
             $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::LONGER_VARIANT];
 
             return;
@@ -711,7 +715,8 @@ final class ProductPageFetcher
         }
         $hay = mb_strtolower($url.' '.$title.' '.$text);
         $hayCompact = preg_replace('/[^a-z0-9]+/i', '', $hay) ?? $hay;
-        if ($this->hayHasLongerAlphanumericSkuVariant($hay, $skuNorm)) {
+        if ($this->hayHasLongerAlphanumericSkuVariant($hay, $skuNorm)
+            && ! $this->hayHasExactAlphanumericSku($title.' '.$text, $skuNorm)) {
             return false;
         }
         foreach ($variants as $variant) {
@@ -2010,6 +2015,28 @@ final class ProductPageFetcher
             '/(?<![a-z0-9])'.preg_quote($skuCompact, '/').'[a-z0-9]+/iu',
             mb_strtolower($hay)
         ) === 1;
+    }
+
+    /**
+     * Dokładny kod jako osobny token w treści karty (nie w adresie — slug rodziny go nie niesie):
+     * „AS060003” obok „AS060003C” w tabeli części. Dopiero brak dokładnego kodu przy dłuższym
+     * wariancie oznacza cudzą kartę (NB27 ≠ NB27B).
+     */
+    private function hayHasExactAlphanumericSku(string $hay, string $skuNorm): bool
+    {
+        $sku = mb_strtolower(trim($skuNorm));
+        $skuCompact = preg_replace('/[^a-z0-9]+/iu', '', $sku) ?? '';
+        if ($skuCompact === '' || ! $this->isAlphanumericSkuCode($skuCompact)) {
+            return false;
+        }
+        $hay = mb_strtolower($hay);
+        foreach (array_unique([$sku, $skuCompact]) as $needle) {
+            if (preg_match('/(?<![a-z0-9])'.preg_quote($needle, '/').'(?![a-z0-9])/iu', $hay) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function isAlphanumericSkuCode(string $token): bool

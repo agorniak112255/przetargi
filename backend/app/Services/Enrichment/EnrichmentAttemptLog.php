@@ -13,7 +13,13 @@ final class EnrichmentAttemptLog
 {
     private const MAX_STEPS = 40;
 
-    /** @var list<array{t: string, m: string, url?: string, urls?: list<string>, why?: list<string>}> */
+    /**
+     * Kroki odtworzone z prefetchu — tyle, żeby było widać, czego szukano, a przebieg
+     * na żywo (limit 40 kroków) nie ginął pod dwunastoma identycznymi błędami SearXNG.
+     */
+    public const MAX_REPLAYED_STEPS = 12;
+
+    /** @var list<array{t: string, m: string, url?: string, urls?: list<string>, why?: list<string>, pf?: bool}> */
     private array $steps = [];
 
     public function reset(): void
@@ -24,8 +30,9 @@ final class EnrichmentAttemptLog
     /**
      * @param  list<string>  $urls
      * @param  list<string>  $why  powód przy adresie o tym samym indeksie
+     * @param  bool  $replayed  krok odtworzony z prefetchu — nie z tej próby
      */
-    public function add(string $type, string $message, ?string $url = null, array $urls = [], array $why = []): void
+    public function add(string $type, string $message, ?string $url = null, array $urls = [], array $why = [], bool $replayed = false): void
     {
         if (count($this->steps) >= self::MAX_STEPS) {
             return;
@@ -34,6 +41,9 @@ final class EnrichmentAttemptLog
             't' => mb_substr($type, 0, 16),
             'm' => mb_substr(trim($message), 0, 400),
         ];
+        if ($replayed) {
+            $row['pf'] = true;
+        }
         if (is_string($url) && $url !== '') {
             $row['url'] = mb_substr($url, 0, 300);
         }
@@ -83,15 +93,19 @@ final class EnrichmentAttemptLog
      * Treść kroków jednego rodzaju — np. wszystkie „err”, żeby rozpoznać
      * awarię wyszukiwarki, a nie realny brak karty produktu.
      *
+     * @param  bool  $includeReplayed  także kroki odtworzone z prefetchu; awarię
+     *                                 ocenia się tylko po tej próbie — prefetch sprzed
+     *                                 godziny mógł trafić na blokadę, której już nie ma
      * @return list<string>
      */
-    public function messagesOfType(string $type): array
+    public function messagesOfType(string $type, bool $includeReplayed = true): array
     {
         $out = [];
         foreach ($this->steps as $step) {
-            if ($step['t'] === $type) {
-                $out[] = $step['m'];
+            if ($step['t'] !== $type || (! $includeReplayed && ! empty($step['pf']))) {
+                continue;
             }
+            $out[] = $step['m'];
         }
 
         return $out;

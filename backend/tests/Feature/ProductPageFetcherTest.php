@@ -72,6 +72,64 @@ final class ProductPageFetcherTest extends TestCase
     }
 
     /**
+     * Batch #293: coba.com/pl/produkt/cobastat wymienia „AS060003C” (na metr bieżący) i osobno
+     * „AS060003” (rolka). Reguła „dłuższy wariant SKU” odrzucała kartę mimo dokładnego numeru.
+     */
+    public function test_exact_part_number_next_to_longer_variant_confirms_family_card(): void
+    {
+        $family = 'https://www.coba.com/pl/produkt/cobastat';
+        $other = 'https://www.coba.com/pl/produkt/cobastat-metr';
+        Http::fake([
+            $family => Http::response($this->cobaFamilyCard(['AS060003C', 'AS060003', 'AS060001']), 200),
+            $other => Http::response($this->cobaFamilyCard(['AS060003C', 'AS060001']), 200),
+            '*' => Http::response('', 404),
+        ]);
+        $product = new Product([
+            'sku' => 'AS060003',
+            'name' => 'COBAstat Szary 0.9m x 18.3m (9mm)',
+            'manufacturer' => 'Coba',
+        ]);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [
+                ['url' => $family, 'title' => 'COBAstat | COBA Europe', 'snippet' => ''],
+                ['url' => $other, 'title' => 'COBAstat | COBA Europe', 'snippet' => ''],
+            ],
+            (string) $product->sku,
+            3,
+            [],
+            $product
+        );
+
+        $urls = array_column($fetched['pages'], 'url');
+        $this->assertContains($family, $urls, 'dokładny numer części obok dłuższego wariantu to nasza karta');
+        $this->assertNotContains($other, $urls);
+        $this->assertContains(
+            ['url' => $other, 'reason' => CandidateRejection::LONGER_VARIANT],
+            $fetched['rejected'],
+            'sam dłuższy wariant bez dokładnego numeru nadal odpada'
+        );
+    }
+
+    /**
+     * @param  list<string>  $partNumbers
+     */
+    private function cobaFamilyCard(array $partNumbers): string
+    {
+        $rows = '';
+        foreach ($partNumbers as $code) {
+            $rows .= '<tr><td data-label="Numer części">'.$code.'</td><td>0,9 m x 18,3 m</td><td>Szary</td></tr>';
+        }
+
+        return '<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>COBAstat | COBA Europe</title></head>'
+            .'<body><main><h1>COBAstat®</h1>'
+            .'<p>Mata antystatyczna COBA Europe COBAstat rozprasza ładunki elektrostatyczne w strefach EPA. '
+            .str_repeat('Warstwa wierzchnia z kauczuku o dużej odporności na ścieranie i chemikalia, spód antypoślizgowy. ', 12)
+            .'</p><table><tr><th>Numer części</th><th>Rozmiar</th><th>Kolor</th></tr>'.$rows.'</table>'
+            .'</main></body></html>';
+    }
+
+    /**
      * @param  callable(string): string  $html
      */
     private function assertExactCardFound(callable $html): void

@@ -447,15 +447,28 @@ final class ProductEnrichmentService
         if (! is_array($steps)) {
             return;
         }
+        $seen = [];
+        $added = 0;
         foreach ($steps as $step) {
             if (! is_array($step) || ! is_string($step['m'] ?? null)) {
                 continue;
+            }
+            // dwie fazy × dziewięć zapytań z tym samym „SearXNG: silniki zablokowane” zjadały
+            // 26 z 40 kroków przebiegu — powtórki nic nie mówią, a zasłaniały część na żywo
+            $key = (string) ($step['t'] ?? 'search').'|'.$step['m'];
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            if (++$added > EnrichmentAttemptLog::MAX_REPLAYED_STEPS) {
+                break;
             }
             $this->attemptLog()->add(
                 (string) ($step['t'] ?? 'search'),
                 (string) $step['m'],
                 urls: is_array($step['urls'] ?? null) ? $step['urls'] : [],
                 why: is_array($step['why'] ?? null) ? $step['why'] : [],
+                replayed: true,
             );
         }
     }
@@ -1243,7 +1256,9 @@ final class ProductEnrichmentService
         if ($this->searchFailedDueToEngineOutage($searchDetail)) {
             return $searchDetail;
         }
-        foreach ($this->attemptLog()->messagesOfType('err') as $message) {
+        // tylko błędy z tej próby: batch #293 brał komunikat prefetchu o zablokowanym SearXNG,
+        // choć wyszukiwarka na żywo odpowiedziała — produkt szedł „do ponowienia” zamiast do ręki
+        foreach ($this->attemptLog()->messagesOfType('err', includeReplayed: false) as $message) {
             if ($this->searchFailedDueToEngineOutage($message)) {
                 return $message;
             }
