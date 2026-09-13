@@ -70,6 +70,38 @@ final class ProductAiSearchCutResistanceTest extends TestCase
         $this->assertNotContains('NITRYL-MONT-0', $skus);
     }
 
+    /**
+     * tenders:eval, poz. 7 przetargu 1: reguła odporności na przecięcie dawała płaskie 80–99 bez modelu
+     * (stan rankingu „skipped”), przetarg nie ufał tym wierszom i brał kartę po słowach. Karty spełniające
+     * regułę idą do rankingu modelu; bez odpowiedzi modelu zostają wiersze reguły (test wyżej).
+     */
+    public function test_cut_resistance_cards_are_ranked_by_model(): void
+    {
+        $this->seedCutCatalog();
+        $nocutId = (int) Product::query()->where('sku', 'EOS NOCUT VV910')->value('id');
+        $ranked = [];
+        $answer = static function (array $messages) use ($nocutId, &$ranked): array {
+            $user = (string) ($messages[1]['content'] ?? '');
+            if (! str_contains((string) ($messages[0]['content'] ?? ''), 'Ranking w dwóch krokach')) {
+                return ['matches' => []];
+            }
+            $ranked[] = str_contains($user, '"id":'.$nocutId);
+
+            return ['matches' => [['id' => $nocutId, 'score' => 90, 'reason' => 'Antyprzecięciowe, nitryl', 'missing_key' => []]]];
+        };
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(static fn (array $messages): array => $answer($messages));
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $products = $this->app->make(ProductAiSearchService::class)->search(self::QUERY, 10)['products'] ?? [];
+
+        $this->assertContains(true, $ranked, 'karta z regułą odporności na przecięcie trafia do rankingu modelu');
+        $this->assertSame('EOS NOCUT VV910', $products[0]['sku'] ?? null);
+        $this->assertSame(90, (int) ($products[0]['ai_match_percent'] ?? 0));
+        $this->assertNotSame(ProductAiSearchService::MATCH_SOURCE_RULE, $products[0]['ai_match_source'] ?? null);
+    }
+
     private function seedCutCatalog(): void
     {
         $base = [

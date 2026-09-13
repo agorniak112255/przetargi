@@ -334,15 +334,19 @@ final class ProductAiSearchService
             );
             $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
             $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $clean[$i]);
+            $ruleFallback = false;
             if ($ranked === [] && ($pending[$i]['products'] ?? []) !== []) {
-                // model nic nie ocenił — wiersze skrótu (źródło rule), nie lista katalogowa
+                // model nic nie ocenił — wiersze skrótu (źródło rule) w kolejności reguły, nie lista katalogowa
                 $ranked = $pending[$i]['products'];
+                $ruleFallback = true;
             } elseif ($ranked === []) {
                 $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
             } else {
                 $ranked = $this->mergeRequirementCatalogRows($clean[$i], $ranked, $limit, $retrieveIntent);
             }
-            $ranked = $this->orderApparelSetRows($clean[$i], $ranked, $pending[$i]['candidates']);
+            if (! $ruleFallback) {
+                $ranked = $this->orderApparelSetRows($clean[$i], $ranked, $pending[$i]['candidates']);
+            }
             $done[$i] = $this->searchResult(
                 $clean[$i],
                 $this->applySlangIntent($clean[$i], $retrieveIntent),
@@ -441,10 +445,20 @@ final class ProductAiSearchService
         }
         $cutRows = $this->rowsFromCutResistanceMatches($query, $candidates, $limit);
         if ($cutRows !== []) {
+            // Jak reguła klasy obuwia (poz. 3): „odporność na przecięcie na nazwie” to warunek konieczny, nie
+            // werdykt — powłoka (NBR vs PU), EN 407, poziom ISO ocenia model. tenders:eval: poz. 7 miała ranking
+            // „skipped” w każdym przebiegu, przetarg nie ufał wierszom reguły (80) i brał KRYTECH 578 po słowach.
+            $cutIds = array_map(static fn (array $row): int => (int) ($row['id'] ?? 0), $cutRows);
+            $cutCards = $candidates->filter(
+                static fn (Product $p): bool => in_array((int) $p->id, $cutIds, true)
+            )->sortBy(static fn (Product $p): int|false => array_search((int) $p->id, $cutIds, true))->values();
+            $cutRankCards = $this->cardsForRanking($query, $cutCards, $intent['constraints']);
+            $this->traceProducts('rank_card_ids', $cutRankCards);
+
             return [
                 'products' => $this->orderEyeWearSetRows($query, $cutRows, $candidates),
                 'note' => null,
-                'rank_cards' => null,
+                'rank_cards' => $cutRankCards,
                 'candidates' => $candidates,
             ];
         }
@@ -855,7 +869,9 @@ final class ProductAiSearchService
             if ($ranked === [] && $prepared['products'] !== []) {
                 // Skrót klasy obuwia: model nic nie ocenił — wiersze reguły (źródło rule), jak przed zmianą,
                 // bez dokładania listy katalogowej.
-                return [$rankedIntent, $this->orderApparelSetRows($query, $prepared['products'], $prepared['candidates'])];
+                // Kolejność reguły bez przestawiania (orderApparelSetRows sortuje po procencie i cenie — tanie
+                // HPPE-PU z 99 wypychały XTREMCUT/NOCUT poza okno wyniku).
+                return [$rankedIntent, $prepared['products']];
             }
             // Model padł, a wymaganie ma warunek (substancja, norma, klasa) — podstawienie
             // czegokolwiek z katalogu byłoby udawaniem oceny, której nikt nie zrobił.
@@ -1121,14 +1137,18 @@ final class ProductAiSearchService
             );
             $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
             $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $clean[$i]);
+            $ruleFallback = false;
             if ($ranked === [] && ($pending[$i]['products'] ?? []) !== []) {
                 $ranked = $pending[$i]['products'];
+                $ruleFallback = true;
             } elseif ($ranked === []) {
                 $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
             } else {
                 $ranked = $this->mergeRequirementCatalogRows($clean[$i], $ranked, $limit, $retrieveIntent);
             }
-            $ranked = $this->orderApparelSetRows($clean[$i], $ranked, $pending[$i]['candidates']);
+            if (! $ruleFallback) {
+                $ranked = $this->orderApparelSetRows($clean[$i], $ranked, $pending[$i]['candidates']);
+            }
             $done[$i] = $this->searchResult(
                 $clean[$i],
                 $this->applySlangIntent($clean[$i], $retrieveIntent),
