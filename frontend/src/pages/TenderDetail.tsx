@@ -327,6 +327,10 @@ type MatchReport = {
   cleared: number
   skipped_custom: number
   no_match: number
+  /** tryb „tylko puste”: pozycje z produktem ≥ progu lub własne — nie wysłane do modelu */
+  left_as_is?: number
+  /** paczki, których wynik dokończył serwer po zerwaniu żądania — liczby wyżej ich nie obejmują */
+  finished_in_background?: number
   avg_score: number
   changes: MatchChange[]
   at: string
@@ -373,6 +377,39 @@ function matchTargetIds(
       return i.ai_match_percent < minScore
     })
     .map((i) => i.id)
+}
+
+/** Limit czasu paczki: model odpowiada do 240 s na zapytanie, pozycje w paczce idą równolegle. */
+function matchAbortMs(chunkSize: number): number {
+  return 600_000 + Math.max(0, chunkSize) * 30_000
+}
+
+/**
+ * Po zerwaniu żądania serwer dokańcza paczkę (ignore_user_abort) — czekamy, aż /match/progress
+ * przestanie zgłaszać „running” dla tego przebiegu, żeby kolejna paczka nie ruszyła równolegle
+ * i żeby końcowe odświeżenie listy zobaczyło już zapisane wyniki.
+ */
+async function waitForServerChunk(
+  tenderId: string,
+  startedAt: number,
+  expectedDone: number,
+  maxWaitMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + maxWaitMs
+  while (Date.now() < deadline) {
+    try {
+      const p = await api<MatchProgress>(`/tenders/${tenderId}/match/progress`)
+      const ours = p.started_at == null || p.started_at >= startedAt - 5
+      // paczka pośrednia kończy się statusem „running” z done = offset + rozmiar paczki
+      if (!ours || p.status !== 'running' || (p.done ?? 0) >= expectedDone) {
+        return true
+      }
+    } catch {
+      /* postęp jest pomocniczy — próbujemy dalej */
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 2000))
+  }
+  return false
 }
 
 function formatMatchEta(seconds: number): string {
@@ -1230,6 +1267,9 @@ export function TenderDetail() {
     setShowAiChanges(false)
     matchStartedAtRef.current = Math.floor(Date.now() / 1000)
     matchDoneRef.current = 0
+    const scopedItems = itemIds
+      ? (data?.tender.items ?? []).filter((i) => itemIds.includes(i.id))
+      : (data?.tender.items ?? [])
     const targets = matchTargetIds(
       data?.tender.items ?? [],
       onlyEmpty,
@@ -1237,6 +1277,7 @@ export function TenderDetail() {
       data?.coverage?.thresholds.min_match_score ?? 65,
     )
     const estimated = targets.length
+    const leftAsIs = Math.max(0, scopedItems.length - targets.length)
     setMatchProgress({
       status: 'running',
       done: 0,
@@ -1277,10 +1318,11 @@ export function TenderDetail() {
       chunks.push(targets.slice(i, i + batchSize))
     }
     const errors: string[] = []
+    let finishedInBackground = 0
     try {
       await mapPool(chunks, 1, async (chunk) => {
         const ac = new AbortController()
-        const abortMs = 180_000 + Math.max(0, chunk.length - 1) * 12_000
+        const abortMs = matchAbortMs(chunk.length)
         const abortTimer = window.setTimeout(() => ac.abort(), abortMs)
         try {
           const res = await api<MatchApiRes>(`/tenders/${id}/match`, {
@@ -1309,13 +1351,24 @@ export function TenderDetail() {
           const aborted =
             (e instanceof DOMException && e.name === 'AbortError') ||
             (e instanceof Error && /abort/i.test(e.message))
-          errors.push(
-            aborted
-              ? 'Pozycja przekroczyła 180 s (model / wyszukiwarka). Reszta poszła dalej.'
-              : e instanceof Error
-                ? e.message
-                : 'Błąd dopasowania',
-          )
+          if (aborted && id) {
+            // serwer dokańcza paczkę mimo zerwania — czekamy na jej koniec, zamiast zostawić
+            // pozycje ze starym wynikiem i ruszyć następną paczkę równolegle
+            const finished = await waitForServerChunk(
+              id,
+              matchStartedAtRef.current,
+              matchDoneRef.current + chunk.length,
+              abortMs,
+            )
+            finishedInBackground += 1
+            errors.push(
+              finished
+                ? `Paczka przekroczyła ${Math.round(abortMs / 60_000)} min — serwer dokończył ją w tle; jej liczby nie weszły do raportu.`
+                : `Paczka przekroczyła ${Math.round(abortMs / 60_000)} min i serwer nadal ją liczy — odśwież stronę za chwilę.`,
+            )
+          } else {
+            errors.push(e instanceof Error ? e.message : 'Błąd dopasowania')
+          }
         } finally {
           window.clearTimeout(abortTimer)
         }
@@ -1342,6 +1395,8 @@ export function TenderDetail() {
         cleared: merged.cleared ?? 0,
         skipped_custom: merged.skipped_custom ?? 0,
         no_match: merged.no_match ?? 0,
+        left_as_is: onlyEmpty ? leftAsIs : 0,
+        finished_in_background: finishedInBackground,
         avg_score: merged.avg_score,
         changes: merged.changes ?? [],
         at: new Date().toISOString(),
@@ -1625,7 +1680,20 @@ export function TenderDetail() {
                 Przerobiono {matchReport.processed} · zmieniono {matchReport.changed} · bez zmiany{' '}
                 {matchReport.unchanged} · zdjęto produkt {matchReport.cleared} · własne pominięte{' '}
                 {matchReport.skipped_custom} · bez produktu {matchReport.no_match}
+                {(matchReport.left_as_is ?? 0) > 0 && (
+                  <>
+                    {' '}
+                    · pozostawiono {matchReport.left_as_is} (tryb „tylko puste”: produkt ≥ progu albo
+                    własna nazwa — nie wysłano do modelu)
+                  </>
+                )}
               </p>
+              {(matchReport.finished_in_background ?? 0) > 0 && (
+                <p className="mt-1 text-amber-800">
+                  {matchReport.finished_in_background} paczek dokończył serwer po zerwaniu żądania — ich
+                  pozycje są już zapisane, ale liczby wyżej ich nie obejmują.
+                </p>
+              )}
               <p className="mt-1 text-violet-800/80">
                 AI zapisuje produkt od razu. <strong>Zapisz</strong> / <strong>Zapisz całość</strong> jest
                 tylko do ręcznych poprawek (cena, ilość).

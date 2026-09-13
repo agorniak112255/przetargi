@@ -43,6 +43,9 @@ class TenderMatchController extends Controller
         if (function_exists('set_time_limit')) {
             @set_time_limit(3600);
         }
+        // Przeglądarka zrywa żądanie po limicie czasu paczki; pozycje z tej paczki mają dostać
+        // wynik mimo to — frontend czeka na koniec po /match/progress i wtedy odświeża listę.
+        ignore_user_abort(true);
 
         $result = $this->matcher->matchTender(
             $tender,
