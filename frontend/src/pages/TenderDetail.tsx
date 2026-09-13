@@ -643,6 +643,8 @@ export function TenderDetail() {
   const matchStageKeyRef = useRef('')
   const matchStartedAtRef = useRef(0)
   const matchDoneRef = useRef(0)
+  /** najwyższy pokazany procent w tym przebiegu — procent w oknie nigdy się nie cofa */
+  const matchPctRef = useRef(0)
   const [matchReport, setMatchReport] = useState<MatchReport | null>(null)
   const [showAiChanges, setShowAiChanges] = useState(false)
   const [focusItemId, setFocusItemId] = useState<number | null>(null)
@@ -1342,6 +1344,7 @@ export function TenderDetail() {
     setShowAiChanges(false)
     matchStartedAtRef.current = Math.floor(Date.now() / 1000)
     matchDoneRef.current = 0
+    matchPctRef.current = 0
     const scopedItems = itemIds
       ? (data?.tender.items ?? []).filter((i) => itemIds.includes(i.id))
       : (data?.tender.items ?? [])
@@ -1711,12 +1714,14 @@ export function TenderDetail() {
               const total = Math.max(matchProgress?.total ?? 0, 0)
               const done = Math.min(matchProgress?.done ?? 0, total || (matchProgress?.done ?? 0))
               const batch = matchBatchSize(clampAiConcurrency(coverage?.thresholds.match_concurrency))
-              const pct = Math.round(matchProgressFraction(matchProgress, batch) * 100)
+              // Etapy mają własne liczniki (14/15 w katalogu, potem 0/15 w modelu) — na górze tylko procent
+              // całości, a między paczkami i etapami nie może się cofnąć.
+              const pct = Math.max(matchPctRef.current, Math.round(matchProgressFraction(matchProgress, batch) * 100))
+              matchPctRef.current = pct
               const stage = matchProgress?.stage ? MATCH_STAGES[matchProgress.stage] : undefined
               const stageDone = matchProgress?.stage_done ?? 0
               const stageTotal = matchProgress?.stage_total ?? 0
-              // duży licznik = postęp bieżącego etapu (rośnie z każdą odpowiedzią modelu / pozycją z katalogu);
-              // bez etapu (stary serwer, przerwa między paczkami) — pozycje zapisane w ofercie
+              // bieżący etap i jego licznik tylko jako mały opis pod procentem
               const shown = stage && stageTotal > 0 ? stage : undefined
               const stageSeconds =
                 matchStageSince > 0 ? Math.max(0, Math.floor((Date.now() - matchStageSince) / 1000)) : 0
@@ -1726,28 +1731,23 @@ export function TenderDetail() {
                   : null
               return (
                 <>
-                  {shown && (
-                    <p className="mt-3 text-xs font-medium text-slate-700">
-                      {shown.label}
-                      {shown.model ? ' · czeka na odpowiedzi modelu' : ''}
-                    </p>
-                  )}
-                  <p className={`${shown ? 'mt-1' : 'mt-3'} font-mono text-2xl font-semibold text-violet-800`}>
-                    {shown ? `${stageDone} / ${stageTotal}` : `${done} / ${total || '…'}`}
+                  <p className="mt-3 font-mono text-2xl font-semibold text-violet-800">{pct}%</p>
+                  <p className="text-xs text-slate-600">
+                    {shown
+                      ? `${shown.label}${shown.model ? ' · czeka na odpowiedzi modelu' : ''} · ${stageDone} z ${stageTotal}`
+                      : 'postęp dopasowania'}
                   </p>
-                  <p className="text-xs text-slate-500">{shown ? shown.unit : 'pozycji zapisanych w ofercie'}</p>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
                     <div
                       className={`h-full rounded-full bg-violet-600 transition-all${stage?.model ? ' animate-pulse' : ''}`}
                       style={{ width: `${Math.max(pct, stage ? 2 : 0)}%` }}
                     />
                   </div>
-                  {shown && (
-                    <p className="mt-2 text-xs text-slate-600">
-                      Zapisane w ofercie: {done} / {total || '…'} · etap trwa {stageSeconds} s
-                      <span className="text-slate-400"> · pasek całości szacunkowy ({pct}%)</span>
-                    </p>
-                  )}
+                  <p className="mt-2 text-xs text-slate-600">
+                    Zapisane w ofercie: {done} / {total || '…'}
+                    {shown ? ` · etap trwa ${stageSeconds} s` : ''}
+                    <span className="text-slate-400"> · procent szacunkowy</span>
+                  </p>
                   {matchProgress?.line_no != null && (
                     <p className="mt-2 truncate text-xs text-slate-600">
                       Teraz: poz. {matchProgress.line_no}
