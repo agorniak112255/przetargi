@@ -126,6 +126,10 @@ final class ProductAiSearchService
         'rank_card_ids' => [],
         'llm_matches' => [],
         'passes' => 0,
+        // Co ranking dostał od analizy: linia „Szukany produkt” i warunki — ścieżka „Dopasuj wszystkie”
+        // (searchMany) i wyszukiwarka (search) różnią się tu, a bez tego nie da się tego porównać.
+        'rank_needed' => [],
+        'rank_constraints' => [],
         // Powód awarii kroku „zrozum” (wyjątek/timeout) — trafia do `search_events`,
         // żeby intent lokalny z całym tekstem dało się odróżnić od decyzji modelu.
         'intent_error' => null,
@@ -425,10 +429,13 @@ final class ProductAiSearchService
                 static fn (Product $p): bool => in_array((int) $p->id, $classIds, true)
             )->values();
 
+            $classRankCards = $this->cardsForRanking($query, $classCards, $intent['constraints']);
+            $this->traceProducts('rank_card_ids', $classRankCards);
+
             return [
                 'products' => $this->orderEyeWearSetRows($query, $classRows, $candidates),
                 'note' => null,
-                'rank_cards' => $this->cardsForRanking($query, $classCards, $intent['constraints']),
+                'rank_cards' => $classRankCards,
                 'candidates' => $candidates,
             ];
         }
@@ -4394,6 +4401,12 @@ final class ProductAiSearchService
         AiTask $task,
         array $retrieveIntent = [],
     ): array {
+        $this->trace['rank_needed'][] = is_string($needed) ? mb_substr(trim($needed), 0, 200) : null;
+        $this->trace['rank_constraints'][] = array_slice(
+            array_map(static fn (mixed $c): string => mb_substr((string) $c, 0, 120), array_values($constraints)),
+            0,
+            8,
+        );
         $messages = $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task, $retrieveIntent);
         $messages[0]['content'] = str_replace(
             'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}]}.',
