@@ -55,6 +55,19 @@ final class ProductAiSearchService
      */
     public const MATCH_SOURCE_RULE = 'rule';
 
+    /**
+     * Co zrobił model w fali rankingu (`searchMany`): ocenił karty, odpowiedział „nic nie
+     * pasuje”, nie odpowiedział (timeout, 5xx, zły JSON) albo nie był pytany (skrót
+     * deterministyczny / brak kandydatów). Przetarg rozróżnia „brak” od „poczekaj”.
+     */
+    public const MODEL_STATE_RANKED = 'ranked';
+
+    public const MODEL_STATE_EMPTY = 'empty';
+
+    public const MODEL_STATE_UNAVAILABLE = 'unavailable';
+
+    public const MODEL_STATE_SKIPPED = 'skipped';
+
     /** Powód wierszy zapasowych (`catalog`): ten sam rodzaj w katalogu, ale bez oceny modelu. */
     public const UNRATED_CATALOG_REASON = 'Nieocenione przez model — ten sam rodzaj w katalogu';
 
@@ -245,6 +258,7 @@ final class ProductAiSearchService
         $intents = $this->analyzeQueriesForRetrieve($clean, $task, $maxConcurrent);
         $this->prefetchVectorQueries($clean, $intents);
         $retrieveIntents = [];
+        $modelStates = [];
         foreach ($clean as $i => $query) {
             $retrieveIntents[$i] = $intents[$i];
             $prepared = $this->prepareSearch($query, $intents[$i], $limit);
@@ -253,6 +267,7 @@ final class ProductAiSearchService
             }
             if ($prepared['rank_cards'] === null) {
                 $done[$i] = $this->searchResult($query, $intents[$i], $prepared['products'], $prepared['note'], $withExternalHint);
+                $done[$i]['model_state'] = self::MODEL_STATE_SKIPPED;
             } else {
                 $pending[$i] = $prepared;
             }
@@ -299,9 +314,22 @@ final class ProductAiSearchService
                 $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
                 $withExternalHint,
             );
+            // Kontrakt klienta: pusta tablica = wywołanie padło (timeout, 5xx, niepoprawny JSON);
+            // model, który odpowiedział „nic nie pasuje”, oddaje obiekt z pustym `matches`.
+            $modelStates[$i] = $raw === []
+                ? self::MODEL_STATE_UNAVAILABLE
+                : ((is_array($raw['matches'] ?? null) && $raw['matches'] !== [])
+                    ? self::MODEL_STATE_RANKED
+                    : self::MODEL_STATE_EMPTY);
         }
         if ($task !== AiTask::TenderMatch) {
             $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent);
+        }
+        foreach ($modelStates as $i => $state) {
+            // po przepisaniu zapytania model mógł jednak coś ocenić
+            $done[$i]['model_state'] = ($done[$i]['products'] ?? []) !== [] && $state !== self::MODEL_STATE_UNAVAILABLE
+                ? self::MODEL_STATE_RANKED
+                : $state;
         }
         ksort($done);
 

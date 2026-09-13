@@ -62,6 +62,22 @@ final class ProductMatchService
     /** @var array<string, list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>> */
     private array $aiCandidatesCache = [];
 
+    /**
+     * Stan modelu z fali `searchMany` per wymaganie (ProductAiSearchService::MODEL_STATE_*).
+     * Opis bez kodu nie może dostać karty „po słowach” z 99%, gdy model nie odpowiedział.
+     *
+     * @var array<string, string>
+     */
+    private array $aiModelState = [];
+
+    /** Powód, dla którego bieżąca pozycja zostaje bez produktu (poza „nic nie pasuje”). */
+    private ?string $lastNoMatchReason = null;
+
+    /** Wybór heurystyczny bez potwierdzenia modelu przy opisie bez kodu — tyle najwyżej. */
+    private const HEURISTIC_ONLY_CAP = 70;
+
+    private const NO_MATCH_MODEL_UNAVAILABLE = 'model_unavailable';
+
     /** @var array{url: string, title: string}|null */
     private ?array $lastExternalHint = null;
 
@@ -214,6 +230,7 @@ final class ProductMatchService
         );
 
         $changes = [];
+        $modelUnavailable = 0;
         foreach ($items as $item) {
             $beforeId = $item->main_product_id !== null ? (int) $item->main_product_id : null;
             $beforeSku = $item->mainProduct?->sku;
@@ -222,14 +239,20 @@ final class ProductMatchService
                 $changes[] = $this->matchChangeRow($item, 'skipped_custom', $beforeSku, $beforeSku);
             } else {
                 $this->lastExternalHint = null;
+                $this->lastNoMatchReason = null;
                 $pick = $this->resolveBestPick($item->requirement, $products);
                 $applied = $pick !== null && $this->applyProduct(
                     $item,
                     $pick['product'],
                     $pick['score'],
-                    $pick['source'] ?? 'heuristic'
+                    $pick['source'] ?? 'heuristic',
+                    null,
+                    (bool) ($pick['heuristic_only'] ?? false),
                 );
                 if (! $applied) {
+                    if ($this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE) {
+                        $modelUnavailable++;
+                    }
                     $this->applyNoCatalogMatch($item, $products);
                     $item->refresh();
                     if ($item->hasCustomOffer()) {
@@ -312,6 +335,8 @@ final class ProductMatchService
             'cleared' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'cleared')),
             'skipped_custom' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'skipped_custom')),
             'no_match' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'no_match')),
+            // pozycje bez produktu, bo model nie odpowiedział — do ponowienia, nie „brak w katalogu”
+            'model_unavailable' => $modelUnavailable,
             'changes' => $changedRows,
             'processed_item_ids' => $processedIds,
         ];
@@ -1202,6 +1227,7 @@ final class ProductMatchService
 
         $candidates = $this->mergeCandidates($heuristic, $aiCandidates);
         $this->lastExternalHint = null;
+        $this->lastNoMatchReason = null;
         $pick = $this->resolveBestPick($item->requirement, $products, $aiCandidates);
 
         if ($pick === null) {
@@ -1243,7 +1269,7 @@ final class ProductMatchService
                 }
             }
         }
-        if (! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason)) {
+        if (! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason, (bool) ($pick['heuristic_only'] ?? false))) {
             $this->applyNoCatalogMatch($item, $products);
             $item->refresh();
 
@@ -1674,18 +1700,41 @@ final class ProductMatchService
         }
 
         if ($heuristic !== null && $heuristic['score'] >= $this->applyMatchScore()) {
+            // Opis bez kodu: o wyborze ma decydować model. Gdy nie odpowiedział (timeout, błąd),
+            // pozycja czeka na ponowienie zamiast dostać kartę „po słowach” z 99%; gdy odpowiedział
+            // „nic nie pasuje” albo nie był pytany — heurystyka zostaje propozycją z sufitem 70%.
+            $descriptive = $this->isDescriptiveRequirement($requirement);
+            if ($descriptive && $this->modelStateFor($requirement) === ProductAiSearchService::MODEL_STATE_UNAVAILABLE) {
+                $this->lastNoMatchReason = self::NO_MATCH_MODEL_UNAVAILABLE;
+
+                return null;
+            }
             $honest = $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']);
-            if ($honest !== null
-                && $this->meetsPersistThreshold($requirement, $heuristic['product'], $honest, 'heuristic')) {
-                return [
-                    'product' => $heuristic['product'],
-                    'score' => $honest,
-                    'source' => 'heuristic',
-                ];
+            if ($honest !== null) {
+                $score = $descriptive ? min($honest, self::HEURISTIC_ONLY_CAP) : $honest;
+                if ($this->meetsPersistThreshold($requirement, $heuristic['product'], $score, 'heuristic')) {
+                    return [
+                        'product' => $heuristic['product'],
+                        'score' => $score,
+                        'source' => 'heuristic',
+                        'heuristic_only' => $descriptive,
+                    ];
+                }
             }
         }
 
         return null;
+    }
+
+    /** Wymaganie bez kodu SKU i bez nazwanego modelu — same cechy wyrobu; tu słowa karty nie wystarczą. */
+    private function isDescriptiveRequirement(string $requirement): bool
+    {
+        return $this->codeCandidates($requirement) === [] && ! $this->modelFuzzy->hasNamedModel($requirement);
+    }
+
+    private function modelStateFor(string $requirement): string
+    {
+        return $this->aiModelState[$this->aiCandidatesCacheKey($requirement)] ?? 'unknown';
     }
 
     /** Marka/model z SIWZ, ale inny producent / inny model w katalogu — zamiennik merytoryczny. */
@@ -1803,6 +1852,7 @@ final class ProductMatchService
     private function rememberAiCandidates(string $requirement, array $result, int $limit, string $source): array
     {
         $cacheKey = $this->aiCandidatesCacheKey($requirement);
+        $this->aiModelState[$cacheKey] = is_string($result['model_state'] ?? null) ? $result['model_state'] : 'unknown';
         $hint = $result['external_hint'] ?? null;
         if (is_array($hint) && isset($hint['url'], $hint['title'])) {
             $this->lastExternalHint = [
@@ -2040,6 +2090,7 @@ final class ProductMatchService
         int $score,
         ?string $source = 'heuristic',
         ?string $aiReason = null,
+        bool $heuristicOnly = false,
     ): bool {
         $honest = $this->persistableScore(
             $item->requirement,
@@ -2061,6 +2112,14 @@ final class ProductMatchService
             array_unshift($reasons, [
                 'code' => 'brand_substitute',
                 'label' => $label,
+                'points' => $honest,
+            ]);
+        }
+        if ($heuristicOnly) {
+            $honest = min($honest, self::HEURISTIC_ONLY_CAP);
+            array_unshift($reasons, [
+                'code' => 'heuristic_only',
+                'label' => 'Bez oceny modelu — wybór po słowach karty (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.',
                 'points' => $honest,
             ]);
         }
@@ -2144,11 +2203,17 @@ final class ProductMatchService
         $item->ai_match_percent = null;
         $item->match_source = null;
         $item->ai_match_reasons = [
-            [
-                'code' => 'no_match',
-                'label' => 'Brak produktu w katalogu (szukano w opisach).',
-                'points' => 0,
-            ],
+            $this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE
+                ? [
+                    'code' => self::NO_MATCH_MODEL_UNAVAILABLE,
+                    'label' => 'Model nie odpowiedział — pozycja czeka na ponowne dopasowanie (opis bez kodu nie jest dobierany po samych słowach karty).',
+                    'points' => 0,
+                ]
+                : [
+                    'code' => 'no_match',
+                    'label' => 'Brak produktu w katalogu (szukano w opisach).',
+                    'points' => 0,
+                ],
         ];
         $item->save();
         $this->pricing->recalculateItemMargin($item);

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Models\Product;
-use App\Support\PpeAssortment;
+use App\Support\ProductDescriptionAudit;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 
@@ -22,13 +22,7 @@ final class AuditProductDescriptionsCommand extends Command
 
     protected $description = 'Raport produktów z podejrzanie rozjechanym opisem (bez zapisu)';
 
-    private const STOP_TOKENS = [
-        'robocze', 'ochronne', 'ochronna', 'ochronny', 'meskie', 'damskie', 'czarne', 'czarny',
-        'granatowe', 'granatowy', 'niebieskie', 'zielone', 'szare', 'biale', 'guma', 'skora',
-        'rozmiar', 'komplet', 'zestaw', 'para', 'sztuka', 'linia', 'seria', 'model',
-    ];
-
-    public function handle(PpeAssortment $ppe): int
+    public function handle(ProductDescriptionAudit $audit): int
     {
         $only = (string) ($this->option('only') ?? '');
         $limit = max(0, (int) $this->option('limit'));
@@ -39,11 +33,11 @@ final class AuditProductDescriptionsCommand extends Command
             ->whereNotNull('description')
             ->where('description', '!=', '')
             ->orderBy('id')
-            ->chunkById(200, function (Collection $products) use ($ppe, $only, &$findings, &$scanned): void {
+            ->chunkById(200, function (Collection $products) use ($audit, $only, &$findings, &$scanned): void {
                 foreach ($products as $product) {
                     /** @var Product $product */
                     $scanned++;
-                    $finding = $this->inspect($ppe, $product);
+                    $finding = $audit->inspect($product);
                     if ($finding === null) {
                         continue;
                     }
@@ -55,71 +49,6 @@ final class AuditProductDescriptionsCommand extends Command
             });
 
         return $this->report($findings, $scanned, $limit);
-    }
-
-    /** @return array{id: int, sku: string, name: string, reason: string, detail: string}|null */
-    private function inspect(PpeAssortment $ppe, Product $product): ?array
-    {
-        $description = (string) $product->description;
-        $productText = trim($product->name.' '.$product->sku.' '.(string) $product->category);
-
-        $nameFamily = $ppe->family($productText);
-        $descFamily = $ppe->family($description);
-
-        if ($nameFamily !== null && $descFamily !== null && $nameFamily !== $descFamily) {
-            return $this->finding($product, 'family', "nazwa={$nameFamily} opis={$descFamily}");
-        }
-
-        if ($nameFamily === PpeAssortment::FAMILY_APPAREL && $descFamily === PpeAssortment::FAMILY_APPAREL) {
-            $nameGarment = $ppe->garment($productText);
-            $descGarment = $ppe->garment($description);
-            if ($nameGarment !== null && $descGarment !== null && $nameGarment !== $descGarment) {
-                return $this->finding($product, 'garment', "nazwa={$nameGarment} opis={$descGarment}");
-            }
-        }
-
-        if (! $this->descriptionSharesToken($product, $description)) {
-            return $this->finding($product, 'unrelated', 'opis nie zawiera SKU, modelu ani marki');
-        }
-
-        return null;
-    }
-
-    /** @return array{id: int, sku: string, name: string, reason: string, detail: string} */
-    private function finding(Product $product, string $reason, string $detail): array
-    {
-        return [
-            'id' => (int) $product->id,
-            'sku' => (string) $product->sku,
-            'name' => mb_substr((string) $product->name, 0, 60),
-            'reason' => $reason,
-            'detail' => $detail,
-        ];
-    }
-
-    /** Opis powinien nazwać po imieniu model, kod albo markę — inaczej to cudza karta. */
-    private function descriptionSharesToken(Product $product, string $description): bool
-    {
-        $hay = mb_strtolower($description);
-
-        foreach ([(string) $product->sku, (string) $product->manufacturer] as $value) {
-            $value = mb_strtolower(trim($value));
-            if ($value !== '' && str_contains($hay, $value)) {
-                return true;
-            }
-        }
-
-        foreach (preg_split('/[\s\-®™\/_,.]+/u', mb_strtolower((string) $product->name)) ?: [] as $token) {
-            $token = trim($token);
-            if (mb_strlen($token) < 4 || in_array($token, self::STOP_TOKENS, true)) {
-                continue;
-            }
-            if (str_contains($hay, $token)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /** @param  list<array{id: int, sku: string, name: string, reason: string, detail: string}>  $findings */
