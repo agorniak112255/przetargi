@@ -122,6 +122,17 @@ class Product extends Model
         return $this->hasMany(ProductDocument::class)->orderBy('sort_order');
     }
 
+    /**
+     * Karta ma tekst opisu (co najmniej 24 znaki). Status „done” bez tekstu nie wystarcza — w katalogu jest takich kart
+     * kilkanaście, a model i dowody ze słów nie mają wtedy czego potwierdzić.
+     */
+    public function hasDescriptionText(): bool
+    {
+        $d = trim((string) ($this->description ?? ''));
+
+        return $d !== '' && mb_strlen($d) >= 24;
+    }
+
     public function hasUsableDescription(): bool
     {
         if ($this->enrichment_status === self::ENRICHMENT_DONE) {

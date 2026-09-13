@@ -78,10 +78,19 @@ final class ProductMatchService
     /** @var array{sku: string, score: int}|null karta oceniona przez model poniżej progu, której słowa karty nie zapisały */
     private ?array $lastModelLowScore = null;
 
+    /** SKU pierwszej karty pominiętej w propozycji, bo nie ma opisu — trafia do powodu braku karty. */
+    private ?string $lastUndescribedSku = null;
+
+    /** Karta wskazana kodem z SIWZ, pominięta, bo nie ma opisu — inna karta automatyczna jej nie zastępuje. */
+    private ?int $lastUndescribedCodePickId = null;
+
     /** Wybór heurystyczny bez potwierdzenia modelu przy opisie bez kodu — tyle najwyżej. */
     private const HEURISTIC_ONLY_CAP = 70;
 
     private const NO_MATCH_MODEL_UNAVAILABLE = 'model_unavailable';
+
+    /** Najlepsza karta nie ma opisu — decyzja użytkownika (13.09): karta bez opisu nie trafia do propozycji. */
+    public const NO_MATCH_NO_DESCRIPTION = 'no_description';
 
     /** Poprzednia karta zostaje, ale ten przebieg jej nie potwierdził (powód na górze listy). */
     private const NOT_RECONFIRMED = 'not_reconfirmed';
@@ -262,6 +271,8 @@ final class ProductMatchService
                 $this->lastExternalHint = null;
                 $this->lastNoMatchReason = null;
                 $this->lastModelLowScore = null;
+                $this->lastUndescribedSku = null;
+                $this->lastUndescribedCodePickId = null;
                 $pick = $this->resolveBestPick($item->requirement, $products);
                 $applied = $pick !== null && ! $this->heuristicWouldReplaceModelPick($item, $pick) && $this->applyProduct(
                     $item,
@@ -1283,6 +1294,8 @@ final class ProductMatchService
         $this->lastExternalHint = null;
         $this->lastNoMatchReason = null;
         $this->lastModelLowScore = null;
+        $this->lastUndescribedSku = null;
+        $this->lastUndescribedCodePickId = null;
         $pick = $this->resolveBestPick($item->requirement, $products, $aiCandidates);
 
         if ($pick === null) {
@@ -1375,6 +1388,13 @@ final class ProductMatchService
         if ($skuPick !== null) {
             $honest = $this->persistableScore($requirement, $skuPick['product'], $skuPick['score']);
             if ($honest !== null) {
+                // Kod z SIWZ wskazał kartę bez opisu: pozycja czeka na opis tej karty — bez podstawiania zamiennika.
+                if (! $skuPick['product']->hasDescriptionText()) {
+                    $this->lastUndescribedSku ??= (string) $skuPick['product']->sku;
+                    $this->lastUndescribedCodePickId = (int) $skuPick['product']->id;
+
+                    return null;
+                }
                 $skuPick['score'] = $honest;
 
                 return $skuPick;
@@ -1420,7 +1440,7 @@ final class ProductMatchService
      */
     private function withDescriptions(Collection $products): Collection
     {
-        return $products->filter(static fn (Product $p): bool => $p->hasUsableDescription())->values();
+        return $products->filter(static fn (Product $p): bool => $p->hasDescriptionText())->values();
     }
 
     /**
@@ -1694,6 +1714,12 @@ final class ProductMatchService
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
+            // Karta bez opisu nie trafia do propozycji — nawet z wysoką oceną modelu (ocena z samej nazwy).
+            if (! $product->hasDescriptionText()) {
+                $this->lastUndescribedSku ??= (string) $product->sku;
+
+                continue;
+            }
             $source = (string) ($topAi['source'] ?? 'ai');
             // Twarda bramka: wiersz listy katalogowej / skrótu nie jest oceną modelu, więc bez
             // zgody admina odpada ZANIM persistableScore zważy go samym explainMatch (explain ≥ 40
@@ -1848,6 +1874,9 @@ final class ProductMatchService
     {
         if (! $this->assortment->compatibleProduct($requirement, $product)) {
             return 'odrzucona: bramka asortymentu';
+        }
+        if (! $product->hasDescriptionText()) {
+            return 'odrzucona: karta bez opisu';
         }
         if ($this->isCatalogRowSource($source) && ! $this->aiSettings->matchAllowsCatalogRows()) {
             return 'odrzucona: wiersz katalogowy/reguły bez zgody admina';
@@ -2370,6 +2399,15 @@ final class ProductMatchService
         if ($existing instanceof Product) {
             $proposed = max((int) ($item->ai_match_percent ?? 0), 100);
             $honest = $this->persistableScore($item->requirement, $existing, $proposed);
+            $userDecided = in_array($item->match_source, self::USER_DECIDED_SOURCES, true);
+            // Automatyczna karta bez opisu nie zostaje w propozycji; wybór ręczny i z battlecard — tak. Nie zostaje też
+            // inna karta automatyczna, gdy kod z SIWZ wskazał kartę bez opisu (HF-803 przy „Półmaska 3M 6503”).
+            $codeCardElsewhere = $this->lastUndescribedCodePickId !== null
+                && $this->lastUndescribedCodePickId !== (int) $existing->id;
+            if ($honest !== null && ! $userDecided && (! $existing->hasDescriptionText() || $codeCardElsewhere)) {
+                $this->lastUndescribedSku ??= (string) $existing->sku;
+                $honest = null;
+            }
             if ($honest !== null) {
                 if (! in_array($item->match_source, self::USER_DECIDED_SOURCES, true)) {
                     $this->markExistingNotReconfirmed($item, $existing, $honest);
@@ -2392,7 +2430,13 @@ final class ProductMatchService
                     'label' => 'Model nie odpowiedział — pozycja czeka na ponowne dopasowanie (opis bez kodu nie jest dobierany po samych słowach karty).',
                     'points' => 0,
                 ]
-                : ($this->lastModelLowScore !== null
+                : ($this->lastUndescribedSku !== null
+                    ? [
+                        'code' => self::NO_MATCH_NO_DESCRIPTION,
+                        'label' => 'Karta '.$this->lastUndescribedSku.' nie ma opisu — karty bez opisu nie trafiają do propozycji. Pobierz opis karty i dopasuj ponownie.',
+                        'points' => 0,
+                    ]
+                    : ($this->lastModelLowScore !== null
                     ? [
                         // karta jest w katalogu, ale model nie znalazł na niej dowodu kluczowego warunku —
                         // „brak produktu w katalogu” byłoby nieprawdą
@@ -2405,7 +2449,7 @@ final class ProductMatchService
                         'code' => 'no_match',
                         'label' => 'Brak produktu w katalogu (szukano w opisach).',
                         'points' => 0,
-                    ]),
+                    ])),
         ];
         $item->save();
         $this->pricing->recalculateItemMargin($item);
@@ -2430,6 +2474,7 @@ final class ProductMatchService
         $existing = $item->mainProduct;
 
         return $existing instanceof Product
+            && $existing->hasDescriptionText()
             && $this->persistableScore($item->requirement, $existing, 100) !== null;
     }
 

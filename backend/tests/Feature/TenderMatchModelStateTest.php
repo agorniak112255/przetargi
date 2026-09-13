@@ -302,7 +302,8 @@ final class TenderMatchModelStateTest extends TestCase
             'name' => 'Rękawice nitrylowe',
             'manufacturer' => 'INNY',
             'category' => 'Rękawice',
-            'description' => 'Rękawice nitrylowe.',
+            // co najmniej 24 znaki: karta bez tekstu opisu nie zostaje w propozycji (TenderMatchUndescribedProductTest)
+            'description' => 'Rękawice nitrylowe, rozmiary 7–10.',
             'catalog_price_net' => 4,
             'purchase_price' => 3,
             'stock' => 10,

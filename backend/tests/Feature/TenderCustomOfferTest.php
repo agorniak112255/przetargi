@@ -11,6 +11,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductMatchService;
 use App\Services\TenderOfferExportService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -322,7 +323,12 @@ final class TenderCustomOfferTest extends TestCase
         $this->assertSame($keep->id, $other->main_product_id);
     }
 
-    public function test_rematch_binds_model_code_to_sku_without_description(): void
+    /**
+     * Dotąd kod z SIWZ („Półmaska 3M 6503”) wiązał kartę 6503-EN bez opisu. Decyzja użytkownika (13.09.2026): karta
+     * bez opisu nie trafia do propozycji. Zła karta modelu (HF-803) też nie zostaje — kod wskazał inny produkt —
+     * a pozycja podaje, której karcie trzeba pobrać opis.
+     */
+    public function test_rematch_with_model_code_card_without_description_clears_wrong_card_and_asks_for_description(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $wrong = Product::query()->create([
@@ -365,12 +371,14 @@ final class TenderCustomOfferTest extends TestCase
         ])
             ->assertOk()
             ->assertJsonPath('changed', 1)
-            ->assertJsonPath('changes.0.to_sku', '6503-EN')
-            ->assertJsonPath('changes.0.from_sku', 'HF-803');
+            ->assertJsonPath('changes.0.from_sku', 'HF-803')
+            ->assertJsonPath('changes.0.to_sku', null);
 
         $item->refresh();
-        $this->assertSame($right->id, $item->main_product_id);
-        $this->assertSame('6503-EN', $item->mainProduct?->sku);
+        $this->assertNull($item->main_product_id, 'ani karta bez opisu, ani zła karta modelu');
+        $this->assertNotSame($right->id, $item->main_product_id);
+        $this->assertSame(ProductMatchService::NO_MATCH_NO_DESCRIPTION, $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertStringContainsString('6503-EN', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
     }
 
     public function test_catalog_product_clears_custom_offer(): void
