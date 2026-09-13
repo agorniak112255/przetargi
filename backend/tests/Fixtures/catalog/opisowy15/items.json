@@ -58,6 +58,10 @@
         "forbidden_skus": [
             "56-426"
         ],
+        "eval_extra_expected_skus": [
+            "34-8743",
+            "3630-020-000-00"
+        ],
         "prod_search": {
             "needed": null,
             "rank_of_expected": null,
@@ -197,6 +201,9 @@
         "expected_sku": "SB04 AIR",
         "forbidden_skus": [
             "AB178"
+        ],
+        "eval_extra_expected_skus": [
+            "SBM01 FLUO"
         ],
         "prod_search": {
             "needed": "Spodniobuty wodoochronne z kaloszami",
@@ -404,6 +411,9 @@
         "forbidden_skus": [
             "9310+",
             "9312+"
+        ],
+        "eval_extra_expected_skus": [
+            "7100010665"
         ],
         "prod_search": {
             "needed": "gogle ochronne spawalnicze",
@@ -700,6 +710,9 @@
         "expected_sku": "87320100-BULK",
         "forbidden_skus": [
             "87063100BP"
+        ],
+        "eval_extra_expected_skus": [
+            "87320100-PAIR"
         ],
         "prod_search": {
             "needed": "Rękawice ochronne z lateksu naturalnego flokowane",

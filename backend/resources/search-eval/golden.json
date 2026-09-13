@@ -434,7 +434,9 @@
             "id": "opisowy15-02-rekawice-antyprzecieciowe-en388",
             "query": "Rękawice ochronne odporne na przecięcie, przeznaczone do prac z narzędziami tnącymi, ostrymi elementami i szkłem – m.in. w budownictwie, przemyśle szklarskim, chemicznym i motoryzacyjnym oraz przy pracach ze skalpelem lub nożem drukarskim. Wymagane: ochrona dłoni przed przecięciem i ścieraniem potwierdzona oznakowaniem zgodnie z EN 388; konstrukcja zapewniająca elastyczność, wygodę i precyzję pracy.",
             "expected_skus": [
-                "34837018"
+                "34837018",
+                "34-8743",
+                "3630-020-000-00"
             ],
             "forbidden_skus": [
                 "56-426"
@@ -471,7 +473,8 @@
             "id": "opisowy15-05-spodniobuty-s5-src",
             "query": "Spodniobuty wodoochronne z wgrzanymi na stałe kaloszami – obuwie bezpieczne typu S5 SRC wg EN ISO 20345, z wkładką antyprzebiciową. Wymagane: tkanina na podkładzie poliestrowym, jednostronnie powlekana PVC, o zwiększonej widzialności (kolor fluorescencyjny) i odporności na rozdzieranie, spełniająca wymagania EN 343; szwy zgrzewane obustronnie (szczelność i wytrzymałość); wzmocnienia na kolanach; regulacja w pasie sznurkiem; wymienne szelki z szerokiej elastycznej gumy; materiał odporny na zginanie bez pękania w temperaturze do -50°C; przeznaczenie do pracy w warunkach ograniczonej widoczności. Rozmiary: 39–48.",
             "expected_skus": [
-                "SB04 AIR"
+                "SB04 AIR",
+                "SBM01 FLUO"
             ],
             "forbidden_skus": [
                 "AB178"
@@ -517,7 +520,8 @@
             "id": "opisowy15-09-gogle-spawalnicze-5",
             "query": "Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0 – do ochrony oczu podczas spawania gazowego i cięcia metalu oraz przed pyłem, odpryskami i chemikaliami. Wymagane: soczewka poliwęglanowa o odporności na uderzenia do 120 m/s; powłoka przeciwmgielna oraz powłoka odporna na zarysowania; wentylacja szczelna chroniąca przed drobnymi cząstkami pyłu i gazem, ograniczająca zamglenie; cylindryczna, zakrzywiona soczewka o polu widzenia 180° bez zniekształceń optycznych; wysoki profil umożliwiający noszenie na okularach korekcyjnych; szeroki, regulowany pasek nylonowy; miękka uszczelka z elastomeru; możliwość stosowania łącznie z półmaskami oddechowymi. Zgodność z EN 166, oznakowanie CE.",
             "expected_skus": [
-                "34340"
+                "34340",
+                "7100010665"
             ],
             "forbidden_skus": [
                 "9310+",
@@ -580,7 +584,8 @@
             "id": "opisowy15-15-rekawice-lateks-flok-87-320",
             "query": "Rękawice ochronne z lateksu naturalnego, flokowane, do lekkich prac o niskim stopniu zagrożenia oraz do kontaktu z żywnością (przetwórstwo spożywcze, owoce i warzywa, sprzątanie laboratoriów, prace porządkowe). Wymagane: powłoka z lateksu naturalnego w kolorze pomarańczowym, chlorowana; wyściółka (podszewka) w 100% z bawełny, flokowana; budowa bez usztywnienia; mankiet zawinięty (rolowany) ułatwiający zakładanie i zdejmowanie oraz zapewniający odporność na rozdarcia; chwytność w układzie rombowym; długość 300 mm; grubość w części dłoniowej 0,45 mm; poziom AQL 1,5; zgodność z przepisami dotyczącymi kontaktu z żywnością; odporność na ścieranie; rozmiary 7, 8, 9, 10. Opakowanie zbiorcze: 12 par w woreczku, 12 woreczków w kartonie.",
             "expected_skus": [
-                "87320100-BULK"
+                "87320100-BULK",
+                "87320100-PAIR"
             ],
             "forbidden_skus": [
                 "87063100BP"
