@@ -2425,5 +2425,125 @@
                 }
             ]
         }
+    },
+    {
+        "sku": "7501B",
+        "name": "Półmaska wielokrotnego użytku 3M™, rozmiar mały, 7501",
+        "model_name": null,
+        "manufacturer": "3M",
+        "ean": null,
+        "category": "Środki ochrony indywidualnej",
+        "description": null,
+        "enrichment_status": "none",
+        "enrichment_payload": null,
+        "norms": null,
+        "catalog_price_net": "48.65",
+        "discount_percent": "0.00",
+        "purchase_price": "24.33",
+        "currency": "EUR",
+        "stock": 0,
+        "pack_qty": null,
+        "packaging": null,
+        "_meta": {
+            "source": "prod_api",
+            "local_id": 2535,
+            "note": "AUDYT_4 §15: pula kandydatów poz. 13 na produkcji — SKU z „1998”/„2004” trafiały jako kod modelu z lat norm",
+            "roles": [
+                {
+                    "role": "competitor",
+                    "line": 13
+                }
+            ]
+        }
+    },
+    {
+        "sku": "7502B",
+        "name": "Półmaska wielokrotnego użytku 3M™, rozmiar średni, 7502",
+        "model_name": null,
+        "manufacturer": "3M",
+        "ean": null,
+        "category": "Środki ochrony indywidualnej",
+        "description": null,
+        "enrichment_status": "none",
+        "enrichment_payload": null,
+        "norms": null,
+        "catalog_price_net": "48.65",
+        "discount_percent": "0.00",
+        "purchase_price": "24.33",
+        "currency": "EUR",
+        "stock": 0,
+        "pack_qty": null,
+        "packaging": null,
+        "_meta": {
+            "source": "prod_api",
+            "local_id": 2536,
+            "note": "AUDYT_4 §15: pula kandydatów poz. 13 na produkcji — SKU z „1998”/„2004” trafiały jako kod modelu z lat norm",
+            "roles": [
+                {
+                    "role": "competitor",
+                    "line": 13
+                }
+            ]
+        }
+    },
+    {
+        "sku": "1998467",
+        "name": "Materiał odblaskowy 3M™ Scotchlite™ 9925 NS 50,8 mm x 200m",
+        "model_name": null,
+        "manufacturer": "3M",
+        "ean": null,
+        "category": "Środki ochrony indywidualnej",
+        "description": null,
+        "enrichment_status": "none",
+        "enrichment_payload": null,
+        "norms": null,
+        "catalog_price_net": "564.00",
+        "discount_percent": "0.00",
+        "purchase_price": "366.60",
+        "currency": "EUR",
+        "stock": 0,
+        "pack_qty": null,
+        "packaging": null,
+        "_meta": {
+            "source": "prod_api",
+            "local_id": 4115,
+            "note": "AUDYT_4 §15: pula kandydatów poz. 13 na produkcji — SKU z „1998”/„2004” trafiały jako kod modelu z lat norm",
+            "roles": [
+                {
+                    "role": "noise",
+                    "line": 13
+                }
+            ]
+        }
+    },
+    {
+        "sku": "7100200484",
+        "name": "Klej epoksydowy 3M™ Scotch-Weld™ DP100, przezroczysty, 48.5 ml",
+        "model_name": null,
+        "manufacturer": "3M",
+        "ean": null,
+        "category": "Kleje, uszczelniacze i podkłady",
+        "description": null,
+        "enrichment_status": "none",
+        "enrichment_payload": null,
+        "norms": null,
+        "catalog_price_net": "29.03",
+        "discount_percent": "0.00",
+        "purchase_price": "18.87",
+        "currency": "EUR",
+        "stock": 0,
+        "pack_qty": null,
+        "packaging": null,
+        "_meta": {
+            "source": "prod_api",
+            "local_id": 5072,
+            "note": "AUDYT_4 §15: pula kandydatów poz. 13 na produkcji — SKU z „1998”/„2004” trafiały jako kod modelu z lat norm",
+            "roles": [
+                {
+                    "role": "noise",
+                    "line": 13
+                }
+            ]
+        }
     }
 ]

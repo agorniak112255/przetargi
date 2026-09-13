@@ -16,6 +16,7 @@ use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
 use App\Support\ProductModelFuzzy;
 use App\Support\ProductSizeVariant;
+use App\Support\RequirementCodeNoise;
 use App\Support\TechnicalAbbreviations;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -1174,7 +1175,7 @@ final class ProductMatchService
 
         // pełne wyrażenia norm (EN 420:2003+A1:2009, EN ISO 20345:2011) zna fuzzy; po normalizacji
         // dwukropki i plusy znikają, więc resztę (ue 2016 425, 5000 ppm) zdejmuje stripNormNumbers
-        $stripped = $this->stripNormNumbers($this->normalize($this->modelFuzzy->stripNorms($req)));
+        $stripped = $this->stripNormNumbers($this->normalize(RequirementCodeNoise::strip($req)));
         if (preg_match_all('/\b[A-Za-z]{0,6}\d[A-Za-z0-9\-\/]{1,}\b/', $stripped, $m)) {
             foreach ($m[0] as $raw) {
                 $c = preg_replace('/\s+/', '', $this->normalize($raw)) ?? '';

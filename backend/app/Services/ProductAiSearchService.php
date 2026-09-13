@@ -18,6 +18,7 @@ use App\Support\CatalogSlangDictionary;
 use App\Support\PpeAssortment;
 use App\Support\PpeFilterType;
 use App\Support\ProductModelFuzzy;
+use App\Support\RequirementCodeNoise;
 use App\Support\RrfFusion;
 use App\Support\TechnicalAbbreviations;
 use Illuminate\Database\Eloquent\Builder;
@@ -4144,9 +4145,9 @@ final class ProductAiSearchService
      */
     private function modelCodePhrases(string $query): array
     {
-        $norm = mb_strtolower($query);
-        $norm = preg_replace('/\ben(?:\s*iso)?\s*\d+(?:\s+\d+)*/u', ' ', $norm) ?? $norm;
-        $norm = preg_replace('/\biso\s*\d+/u', ' ', $norm) ?? $norm;
+        // Normy z rokiem („PN-EN 140:2004”), rozporządzenia i miary to nie kody — dotąd zostawał rok po
+        // dwukropku i SKU z „2004”/„1998” (klej, materiał odblaskowy 3M) wchodziły do puli półmaski.
+        $norm = RequirementCodeNoise::strip($query);
         $out = [];
         if (preg_match_all('/\b[a-z]{0,6}\d[a-z0-9\-\/]{1,}\b/u', $norm, $m)) {
             foreach ($m[0] as $raw) {
