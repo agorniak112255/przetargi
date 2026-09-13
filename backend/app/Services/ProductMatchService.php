@@ -37,6 +37,24 @@ final class ProductMatchService
     /** Inna marka/model niż w SIWZ — zapis zamiennika od tego progu (po zgodności rodzaju). */
     public const SUBSTITUTE_MATCH_SCORE = AiSettingsService::MATCH_SUBSTITUTE_SCORE_DEFAULT;
 
+    /**
+     * Okno kandydatów AI na pozycję — tyle pierwszych wierszy odpowiedzi wyszukiwarki rozważa
+     * dopasowanie (przetarg i pojedyncza pozycja). Przy 5 właściwa karta bywała 8. w rankingu
+     * i nigdy nie trafiała pod explainMatch.
+     */
+    private const AI_CANDIDATE_WINDOW = 10;
+
+    /**
+     * Źródła wierszy, które nie są oceną modelu: zapasowa lista katalogowa oraz skróty
+     * deterministyczne (klasa obuwia, cut) — wyszukiwarka oznacza je literałem 'rule'
+     * (kontrakt W2↔W4: literał, nie stała — pakiety równoległe). Oba traktujemy jednakowo:
+     * do pozycji tylko za jawną zgodą admina (match_allow_catalog_rows).
+     */
+    private const CATALOG_ROW_SOURCES = [ProductAiSearchService::MATCH_SOURCE_CATALOG, 'rule'];
+
+    /** Różnica explainMatch, do której dwie karty uznajemy za równo udowodnione. */
+    private const EVIDENCE_TIE_MARGIN = 5;
+
     /** Progi z ustawień czytamy raz na żądanie — resolve() chodzi do bazy. */
     /** @var array<string, int> */
     private array $matchScores = [];
@@ -524,7 +542,15 @@ final class ProductMatchService
     }
 
     /**
-     * @param  list<array{product: Product, score: int, source: string}>  $options
+     * Rozstrzyga między kandydatami AI po dowodach z karty, nie po procencie i cenie (D5).
+     * Kolejność: explainMatch (w oknie EVIDENCE_TIE_MARGIN od najlepszej karty uznajemy remis),
+     * w remisie różnica twardych dowodów (SKU / model z cyframi / klasa ochrony), potem procent
+     * modelu (okno 8 pkt jak dotąd) i dopiero wtedy cena. Bez dawnej klauzuli „każdy ≥ min”:
+     * przez nią ART 702 (explain 35) wygrywał ceną z T5912100 (explain 99) przy równych 92%,
+     * a 65% pokonywało 96%. Równe dowody i bliski procent → nadal najtańszy (976aefb: nie
+     * przepłacamy za identyczne karty).
+     *
+     * @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int}>  $options
      * @return array{product: Product, score: int, source: string}|null
      */
     private function preferCheapestAmongCloseScores(array $options): ?array
@@ -532,26 +558,116 @@ final class ProductMatchService
         if ($options === []) {
             return null;
         }
-        $top = 0;
-        foreach ($options as $option) {
-            $top = max($top, $option['score']);
-        }
-        $minScore = $this->minMatchScore();
+        $topEvidence = max(array_column($options, 'evidence'));
         $near = array_values(array_filter(
             $options,
-            static fn (array $option): bool => $option['score'] >= $top - 8
-                || $option['score'] >= $minScore
+            static fn (array $option): bool => $option['evidence'] >= $topEvidence - self::EVIDENCE_TIE_MARGIN
+        ));
+        $topHard = max(array_column($near, 'hard'));
+        $near = array_values(array_filter(
+            $near,
+            static fn (array $option): bool => $option['hard'] === $topHard
+        ));
+        $topScore = max(array_column($near, 'score'));
+        $near = array_values(array_filter(
+            $near,
+            static fn (array $option): bool => $option['score'] >= $topScore - 8
         ));
         usort($near, function (array $a, array $b): int {
             $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
             if ($byPrice !== 0) {
                 return $byPrice;
             }
+            if ($a['score'] !== $b['score']) {
+                return $b['score'] <=> $a['score'];
+            }
 
-            return $b['score'] <=> $a['score'];
+            return $b['evidence'] <=> $a['evidence'];
         });
 
-        return $near[0] ?? null;
+        return [
+            'product' => $near[0]['product'],
+            'score' => $near[0]['score'],
+            'source' => $near[0]['source'],
+        ];
+    }
+
+    /** Wiersz listy katalogowej albo skrótu deterministycznego — nie ocena modelu. */
+    private function isCatalogRowSource(string $source): bool
+    {
+        return in_array($source, self::CATALOG_ROW_SOURCES, true);
+    }
+
+    /**
+     * Czy procentowi wiersza wolno ufać jak ocenie modelu w persistableScore: ocena modelu
+     * (ai/vector, także zamiennik) — tak; wiersz katalogowy/skrótu — tylko za jawną zgodą admina.
+     */
+    private function trustsRowScore(string $source): bool
+    {
+        return in_array($source, ['ai', 'vector', 'ai_substitute'], true)
+            || ($this->isCatalogRowSource($source) && $this->aiSettings->matchAllowsCatalogRows());
+    }
+
+    /** Trafienie SKU/kodu albo modelu z SIWZ — to samo, co waży persistableScore. */
+    private function skuishScore(string $requirement, Product $product): int
+    {
+        return max(
+            $this->skuMatchScore(
+                $this->normalize($requirement),
+                $this->codeCandidates($requirement),
+                $product
+            ),
+            $this->modelFuzzy->score($requirement, $product)
+        );
+    }
+
+    /**
+     * Próg zapisu (D1): trafienie zapisujemy od minMatchScore. Poniżej tylko wyjątkowo —
+     * trafienie SKU/kodu (skuish ≥ 70, także bez cyfr: RNITZ) albo wiersz katalogowy przy jawnym
+     * match_allow_catalog_rows=true (próg apply — świadoma decyzja admina). Inaczej pozycja zostaje
+     * „brak”: 58% to nie dopasowanie, a brak informacji nie może wyglądać jak fakt. Liczone
+     * po persistableScore, którego semantyka (pinowane 45 i 94) zostaje bez zmian.
+     */
+    private function meetsPersistThreshold(string $requirement, Product $product, int $honest, string $source): bool
+    {
+        if ($honest >= $this->minMatchScore()) {
+            return true;
+        }
+        if ($this->skuishScore($requirement, $product) >= 70) {
+            return true;
+        }
+
+        return $this->isCatalogRowSource($source) && $this->aiSettings->matchAllowsCatalogRows();
+    }
+
+    /**
+     * Twarde dowody na karcie: trafienie SKU/kodu (4), model z SIWZ z cyframi (2), klasa ochrony
+     * z atrybutów (1). Różnica w nich wyklucza rozstrzyganie ceną między bliskimi wynikami explain.
+     *
+     * @param  array{score: int, reasons: list<array{code: string, label: string, points: int}>}  $explained
+     */
+    private function hardEvidenceLevel(string $requirement, Product $product, array $explained): int
+    {
+        $level = 0;
+        if ($this->skuMatchScore($this->normalize($requirement), $this->codeCandidates($requirement), $product) >= 70) {
+            $level |= 4;
+        }
+        if ($this->modelFuzzy->score($requirement, $product) >= 80) {
+            foreach ($this->modelFuzzy->catalogModelNeedles($requirement) as $needle) {
+                if (preg_match('/\d/', $needle) === 1) {
+                    $level |= 2;
+                    break;
+                }
+            }
+        }
+        foreach ($explained['reasons'] as $reason) {
+            if (($reason['code'] ?? '') === 'attr_klasa') {
+                $level |= 1;
+                break;
+            }
+        }
+
+        return $level;
     }
 
     private function purchasePln(Product $product): float
@@ -1067,7 +1183,7 @@ final class ProductMatchService
         }
 
         $products = $this->productsForRequirement($item->requirement);
-        $aiCandidates = $this->aiTopCandidates($item->requirement, 5);
+        $aiCandidates = $this->aiTopCandidates($item->requirement);
         $pool = $this->heuristicCandidatePool($item->requirement, $products, $aiCandidates, null);
         $described = $this->withDescriptions($pool);
         $heuristic = $described->isEmpty() ? null : $this->bestMatch($item->requirement, $described);
@@ -1183,7 +1299,7 @@ final class ProductMatchService
             }
         }
 
-        $aiCandidates ??= $this->aiTopCandidates($requirement, 5);
+        $aiCandidates ??= $this->aiTopCandidates($requirement);
         $pool = $this->heuristicCandidatePool($requirement, $products, $aiCandidates, $skuPick);
         $described = $this->withDescriptions($pool);
         $heuristic = $described->isEmpty() ? null : $this->bestMatch($requirement, $described);
@@ -1192,14 +1308,23 @@ final class ProductMatchService
             return null;
         }
 
+        $source = (string) ($picked['source'] ?? 'heuristic');
+        // Ta sama bramka co w pickAuto — wiersz katalogowy/skrótu bez zgody admina nie dochodzi
+        // do persistableScore; za jawną zgodą jego procentowi ufamy jak ocenie modelu (D8).
+        if ($this->isCatalogRowSource($source) && ! $this->aiSettings->matchAllowsCatalogRows()) {
+            return null;
+        }
         $picked['product'] = $this->resolveCatalogBySku($picked['product'], $products);
         $honest = $this->persistableScore(
             $requirement,
             $picked['product'],
             $picked['score'],
-            in_array($picked['source'] ?? '', ['ai', 'vector', 'ai_substitute'], true)
+            $this->trustsRowScore($source)
         );
         if ($honest === null) {
+            return null;
+        }
+        if (! $this->meetsPersistThreshold($requirement, $picked['product'], $honest, $source)) {
             return null;
         }
         $picked['score'] = $honest;
@@ -1487,17 +1612,22 @@ final class ProductMatchService
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
+            $source = (string) ($topAi['source'] ?? 'ai');
+            // Twarda bramka: wiersz listy katalogowej / skrótu nie jest oceną modelu, więc bez
+            // zgody admina odpada ZANIM persistableScore zważy go samym explainMatch (explain ≥ 40
+            // przepuszczał wiersz „catalog” mimo wyłączonego ustawienia). Trzeba to robić tu,
+            // bo prefetch przetargu idzie jako AiTask::ProductSearch (prefetchAiCandidates), więc
+            // wyłącznik z ProductAiSearchService::finishSearch nie działa na tej ścieżce,
+            // a searchMany zawsze dokłada rowsFromGenericCatalog.
+            if ($this->isCatalogRowSource($source) && ! $this->aiSettings->matchAllowsCatalogRows()) {
+                continue;
+            }
             $exact = $this->honorsSpecificModelCodes($requirement, $product);
             $minScore = $exact ? $this->applyMatchScore() : $this->substituteMatchScore();
             if ($topAi['score'] < $minScore) {
                 continue;
             }
-            // Wiersz z listy katalogowej nie jest oceną modelu — ufamy mu tylko wtedy,
-            // gdy panel „Strojenie AI” na to pozwala.
-            $trustModel = in_array($topAi['source'] ?? '', ['ai', 'vector'], true)
-                || (($topAi['source'] ?? '') === ProductAiSearchService::MATCH_SOURCE_CATALOG
-                    && $this->aiSettings->matchAllowsCatalogRows());
-            $honest = $this->persistableScore($requirement, $product, $topAi['score'], $trustModel);
+            $honest = $this->persistableScore($requirement, $product, $topAi['score'], $this->trustsRowScore($source));
             if ($honest === null) {
                 continue;
             }
@@ -1505,18 +1635,39 @@ final class ProductMatchService
                 && $topAi['score'] < $this->substituteMatchScore()) {
                 continue;
             }
+            if (! $this->meetsPersistThreshold($requirement, $product, $honest, $source)) {
+                continue;
+            }
 
+            $explained = $this->explainMatch($requirement, $product);
             $options[] = [
                 'product' => $product,
                 'score' => $honest,
-                'source' => $exact ? (string) ($topAi['source'] ?? 'ai') : 'ai_substitute',
+                // Wiersz katalogowy/skrótu zachowuje swoje źródło także jako zamiennik — to jego
+                // pochodzenie (nie ocena modelu); progi i zaufanie czytają je po źródle.
+                'source' => $exact || $this->isCatalogRowSource($source) ? $source : 'ai_substitute',
+                'exact' => $exact,
+                'evidence' => $explained['score'],
+                'hard' => $this->hardEvidenceLevel($requirement, $product, $explained),
             ];
         }
 
         if ($options !== []) {
+            // Gdy choć jedna karta ma dowody ≥ min, karty z explain < apply (przeszły wyłącznie
+            // obejściem trustModel w persistableScore) nie mają czego bronić — także w roli
+            // „dokładnego” trafienia przed zamiennikami.
+            $minScore = $this->minMatchScore();
+            $applyScore = $this->applyMatchScore();
+            $anyProven = array_filter($options, static fn (array $row): bool => $row['evidence'] >= $minScore) !== [];
+            if ($anyProven) {
+                $options = array_values(array_filter(
+                    $options,
+                    static fn (array $row): bool => $row['evidence'] >= $applyScore
+                ));
+            }
             $exact = array_values(array_filter(
                 $options,
-                static fn (array $row): bool => ($row['source'] ?? '') !== 'ai_substitute'
+                static fn (array $row): bool => $row['exact']
             ));
 
             return $this->preferCheapestAmongCloseScores($exact !== [] ? $exact : $options);
@@ -1524,7 +1675,8 @@ final class ProductMatchService
 
         if ($heuristic !== null && $heuristic['score'] >= $this->applyMatchScore()) {
             $honest = $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']);
-            if ($honest !== null) {
+            if ($honest !== null
+                && $this->meetsPersistThreshold($requirement, $heuristic['product'], $honest, 'heuristic')) {
                 return [
                     'product' => $heuristic['product'],
                     'score' => $honest,
@@ -1626,8 +1778,22 @@ final class ProductMatchService
 
         $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
         foreach ($queries as $i => $requirement) {
-            $this->rememberAiCandidates($requirement, is_array($rows[$i] ?? null) ? $rows[$i] : [], 5, $source);
+            $this->rememberAiCandidates(
+                $requirement,
+                is_array($rows[$i] ?? null) ? $rows[$i] : [],
+                self::AI_CANDIDATE_WINDOW,
+                $source
+            );
         }
+    }
+
+    /**
+     * Klucz cache tylko z wymagania — okno jest jedno (AI_CANDIDATE_WINDOW), a chybienie
+     * między prefetch a aiTopCandidates oznaczałoby drugie, płatne wywołanie modelu na pozycję.
+     */
+    private function aiCandidatesCacheKey(string $requirement): string
+    {
+        return md5($requirement);
     }
 
     /**
@@ -1636,7 +1802,7 @@ final class ProductMatchService
      */
     private function rememberAiCandidates(string $requirement, array $result, int $limit, string $source): array
     {
-        $cacheKey = md5($requirement.'|'.$limit);
+        $cacheKey = $this->aiCandidatesCacheKey($requirement);
         $hint = $result['external_hint'] ?? null;
         if (is_array($hint) && isset($hint['url'], $hint['title'])) {
             $this->lastExternalHint = [
@@ -1677,9 +1843,9 @@ final class ProductMatchService
     /**
      * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
      */
-    private function aiTopCandidates(string $requirement, int $limit = 5): array
+    private function aiTopCandidates(string $requirement, int $limit = self::AI_CANDIDATE_WINDOW): array
     {
-        $cacheKey = md5($requirement.'|'.$limit);
+        $cacheKey = $this->aiCandidatesCacheKey($requirement);
         if (isset($this->aiCandidatesCache[$cacheKey])) {
             return $this->aiCandidatesCache[$cacheKey];
         }
@@ -1705,22 +1871,31 @@ final class ProductMatchService
      */
     private function mergeCatalogCandidatesForTender(string $requirement, array $mapped, int $limit): array
     {
+        // Bez zgody admina wiersz katalogowy i tak odpada w pickAuto — nie ma po co zajmować
+        // nim okna kandydatów ani liczyć zapasowej listy.
+        if (! $this->aiSettings->matchAllowsCatalogRows()) {
+            return $mapped;
+        }
         $catalogRows = $this->aiSearch->requirementCatalogRows($requirement, $limit);
         if ($catalogRows === []) {
             return $mapped;
         }
 
-        $byId = [];
+        // Kolejność odpowiedzi wyszukiwarki zostaje (bez sortowania po cenie — o wyborze
+        // decydują dowody w pickAuto), wiersze katalogowe idą za wierszami modelu i nigdy
+        // nie nadpisują oceny modelu wyższym procentem z listy.
+        $seen = [];
         foreach ($mapped as $row) {
-            $byId[$row['id']] = $row;
+            $seen[$row['id']] = true;
         }
-        foreach ($this->mapAiSearchRows($catalogRows, $limit, 'catalog') as $row) {
-            $id = $row['id'];
-            if (! isset($byId[$id]) || $row['score'] > $byId[$id]['score']) {
-                $byId[$id] = $row;
+        $merged = $mapped;
+        foreach ($this->mapAiSearchRows($catalogRows, $limit, ProductAiSearchService::MATCH_SOURCE_CATALOG) as $row) {
+            if (isset($seen[$row['id']])) {
+                continue;
             }
+            $seen[$row['id']] = true;
+            $merged[] = $row;
         }
-        $merged = $this->sortCandidatesByPurchase(array_values($byId));
 
         return array_slice($merged, 0, $limit);
     }
@@ -1759,30 +1934,36 @@ final class ProductMatchService
      */
     private function mapAiSearchRows(array $rows, int $limit, string $source): array
     {
-        $out = [];
+        $model = [];
+        $catalog = [];
         foreach ($rows as $row) {
             $id = (int) ($row['id'] ?? 0);
             if ($id <= 0) {
                 continue;
             }
-            $out[] = [
+            // Wiersz z zapasowej listy katalogowej albo skrótu deterministycznego ('rule')
+            // zostaje takim nawet w fali AI — model go nie wskazał, więc nie wolno mu ufać
+            // jak ocenie modelu.
+            $rowSource = $row['ai_match_source'] ?? null;
+            $isCatalog = is_string($rowSource) && $this->isCatalogRowSource($rowSource);
+            $mapped = [
                 'id' => $id,
                 'sku' => (string) ($row['sku'] ?? ''),
                 'name' => (string) ($row['name'] ?? ''),
                 'score' => (int) ($row['ai_match_percent'] ?? 0),
                 'reason' => is_string($row['ai_match_reason'] ?? null) ? $row['ai_match_reason'] : null,
-                // Wiersz z zapasowej listy katalogowej zostaje katalogowy nawet w fali AI —
-                // model go nie wskazał, więc nie wolno mu ufać jak ocenie modelu.
-                'source' => ($row['ai_match_source'] ?? null) === ProductAiSearchService::MATCH_SOURCE_CATALOG
-                    ? ProductAiSearchService::MATCH_SOURCE_CATALOG
-                    : $source,
+                'source' => $isCatalog ? $rowSource : $source,
             ];
-            if (count($out) >= $limit) {
-                break;
+            if ($isCatalog) {
+                $catalog[] = $mapped;
+            } else {
+                $model[] = $mapped;
             }
         }
 
-        return $out;
+        // Okno kandydatów najpierw obejmuje oceny modelu w kolejności odpowiedzi; wiersze
+        // katalogowe idą za nimi, żeby nie wypchnęły z okna karty wskazanej przez model.
+        return array_slice([...$model, ...$catalog], 0, max(0, $limit));
     }
 
     /**
@@ -1864,7 +2045,7 @@ final class ProductMatchService
             $item->requirement,
             $product,
             $score,
-            in_array($source, ['ai', 'vector', 'ai_substitute'], true)
+            $this->trustsRowScore((string) $source)
         );
         if ($honest === null) {
             return false;

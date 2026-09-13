@@ -11,6 +11,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductMatchService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -49,7 +50,7 @@ final class TenderMatchThresholdsTest extends TestCase
         ]);
     }
 
-    private function item(): TenderItem
+    private function item(string $requirement = 'KALESONY bawełniane (100% bawełny) męskie rozmiar od S do XXXXL'): TenderItem
     {
         $tender = Tender::query()->create([
             'number' => 'PRZ/PROG/1',
@@ -78,7 +79,7 @@ final class TenderMatchThresholdsTest extends TestCase
         return TenderItem::query()->create([
             'tender_id' => $tender->id,
             'line_no' => 1,
-            'requirement' => 'KALESONY bawełniane (100% bawełny) męskie rozmiar od S do XXXXL',
+            'requirement' => $requirement,
             'quantity' => 1,
             'status' => 'nowa',
         ]);
@@ -115,5 +116,38 @@ final class TenderMatchThresholdsTest extends TestCase
         $this->postJson("/api/tenders/{$item->tender_id}/match", ['only_empty' => false])->assertOk();
 
         $this->assertNotNull($item->refresh()->main_product_id);
+    }
+
+    /**
+     * Wymaganie bez liczb: nie ma igły „modelu” z liczby (bawelniane100), która przy wariancie
+     * z „100% bawełny” robiła z wiersza katalogowego zamiennik „ai_substitute” i tylko dlatego
+     * przepuszczała go przez zapis. Wiersz katalogowy ma się zachowywać tak samo bez tej igły:
+     * domyślnie pusto, za jawną zgodą admina wypełnia pozycję jako wiersz katalogowy (D8).
+     */
+    public function test_by_default_catalog_row_does_not_fill_the_line_without_numbers_in_requirement(): void
+    {
+        $this->settings();
+        $item = $this->item('Kalesony bawełniane męskie');
+        $this->mockEmptyRanking();
+
+        $this->postJson("/api/tenders/{$item->tender_id}/match", ['only_empty' => false])->assertOk();
+
+        $item->refresh();
+        $this->assertNull($item->main_product_id);
+        $this->assertSame('brak', $item->status);
+    }
+
+    public function test_enabling_catalog_rows_fills_the_line_without_numbers_in_requirement(): void
+    {
+        $this->settings(['match_allow_catalog_rows' => true]);
+        $item = $this->item('Kalesony bawełniane męskie');
+        $this->mockEmptyRanking();
+
+        $this->postJson("/api/tenders/{$item->tender_id}/match", ['only_empty' => false])->assertOk();
+
+        $item->refresh();
+        $this->assertNotNull($item->main_product_id);
+        $this->assertSame('catalog', $item->match_source);
+        $this->assertGreaterThanOrEqual(app(ProductMatchService::class)->applyMatchScore(), (int) $item->ai_match_percent);
     }
 }
