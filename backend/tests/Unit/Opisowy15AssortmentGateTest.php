@@ -41,20 +41,20 @@ final class Opisowy15AssortmentGateTest extends TestCase
      * @var array<string, list<int>>
      */
     private const ENABLED_LINES = [
-        // A1 — właściwa karta przechodzi bramkę (czeka: 4, 5, 6, 9 → W3)
-        'gate_expected' => [1, 2, 3, 7, 8, 10, 11, 12, 13, 14, 15],
-        // A1 — karta innego rodzaju odrzucona (czeka: 1, 3, 4, 5, 6, 8, 9, 12, 13 → W3)
-        'gate_wrong' => [],
-        // A1 — rodzina wymagania (czeka: 4, 5, 9 → W3)
-        'family' => [1, 2, 3, 6, 7, 8, 10, 11, 12, 13, 14, 15],
-        // A2 — explain właściwej > błędnej (czeka: 1, 4, 5, 6, 9, 13 → W3; 2 → W3/Fala 2; 8 → W1 + W3)
-        'explain_order' => [3, 7, 11, 12, 15],
-        // A2 — brak fuzzy_model (czeka: 8 → W1)
-        'no_fuzzy_model' => [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15],
-        // A2 — catalogModelNeedles() === [] (czeka: wszystkie poza 2 → W1)
-        'needles' => [2],
-        // A2 — requestedManufacturerFromSiwz() === null (czeka: 12 → W1)
-        'manufacturer' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15],
+        // A1 — właściwa karta przechodzi bramkę
+        'gate_expected' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        // A1 — karta innego rodzaju odrzucona. Wyłączone: 3 — AROX 733 bez rzeczownika typu w nazwie i pierwszym zdaniu opisu (D6, krucho), 6 — okulary nakładkowe bezbarwne vs smoke: kolor soczewki (lensTint) odłożony do Fali 2
+        'gate_wrong' => [1, 4, 5, 8, 9, 12, 13],
+        // A1 — rodzina wymagania po rzeczowniku głównym
+        'family' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        // A2 — explain właściwej > błędnej. Wyłączone: 2 — karta 34837018 ma opis kategorii sklepu (dane), 56‑426 legalnie punktuje EN 388
+        'explain_order' => [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        // A2 — brak fuzzy_model dla opisu bez kodu
+        'no_fuzzy_model' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        // A2 — catalogModelNeedles() === []
+        'needles' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        // A2 — requestedManufacturerFromSiwz() === null
+        'manufacturer' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     ];
 
     private const ALL_LINES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];

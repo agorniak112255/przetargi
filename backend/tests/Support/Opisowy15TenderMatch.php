@@ -30,15 +30,12 @@ trait Opisowy15TenderMatch
      * @var array<string, list<int>>
      */
     private const ENABLED_LINES = [
-        // wybór: main_product_id ∈ {oczekiwany, null}, nic z forbidden_skus, przy null status „brak”
-        // (czeka: 1, 4, 5, 6, 9, 13 → W3; 2 → W2/W3; 3 → W3‑10 (D6); 7 → D6/Fala 2; 8 → W1 + W3; 12 → W2 + W3)
-        'pick' => [10, 11, 14, 15],
+        // wybór: main_product_id ∈ {oczekiwany, null}, nic z forbidden_skus, przy null status „brak”. Wyłączone: 2 — karta 34837018 ma opis kategorii sklepu, nie produktu (dane; products:audit-descriptions), 7 — właściwa karta 44‑304 nie wchodzi do puli (retrieval, D6/Fala 2), 8 — wybierana 9312+ (FFP1 z zaworem) bez potwierdzenia węgla aktywnego z wymagania (cecha miękka, Fala 2 P7)
+        'pick' => [1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15],
         // próg zapisu D1: trafienie zapisane tylko z ai_match_percent ≥ minMatchScore
-        // (czeka: 15 → W2 — dziś właściwa karta zapisana z 51%)
-        'threshold' => [10, 11, 14],
+        'threshold' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         // uzasadnienie: bez fuzzy_model, bez „model: …”/„wymagano: …” w etykiecie zamiennika, bez wiersza catalog/rule
-        // (czeka: wszystkie → W1 (igły z liczb w opisie); 2 → W2 (wiersz catalog); 8 → W1 (fuzzy_model))
-        'reasons' => [],
+        'reasons' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     ];
 
     private ProductMatchService $matcher;
