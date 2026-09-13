@@ -48,6 +48,16 @@ final class ProductAiSearchService
      */
     public const MATCH_SOURCE_CATALOG = 'catalog';
 
+    /**
+     * Wiersz ze skrótu deterministycznego (klasa obuwia, odporność na przecięcie):
+     * procent jest kolejnością z puli, nie oceną karty — dopasowanie przetargu
+     * traktuje go jak `catalog` (bez zaufania do procentu), nie jak werdykt modelu.
+     */
+    public const MATCH_SOURCE_RULE = 'rule';
+
+    /** Powód wierszy zapasowych (`catalog`): ten sam rodzaj w katalogu, ale bez oceny modelu. */
+    public const UNRATED_CATALOG_REASON = 'Nieocenione przez model — ten sam rodzaj w katalogu';
+
     /** Limit listy /products „Szukaj w katalogu” — ranking zawsze do tego progu. */
     public const CATALOG_LIMIT = 40;
 
@@ -1329,9 +1339,13 @@ final class ProductAiSearchService
     {
         $extra = [];
         foreach ($this->fallbackPhrases($query) as $token) {
+            // Surowy token z SIWZ niesie interpunkcję („cholewką)”, „(smoke)”) —
+            // do fraz idzie samo słowo.
+            $token = trim($token, " \t\n\r\0\x0B.,;:!?()[]{}\"'„”“«»");
             $norm = $this->lexicalNormalize($token);
             if (
-                $norm === ''
+                $token === ''
+                || trim($norm) === ''
                 || $this->isNonTechnicalToken($norm)
                 || $this->isGenericAssortmentToken($norm)
                 || $this->isAbsentManufacturerToken($query, $token)
@@ -1414,9 +1428,15 @@ final class ProductAiSearchService
             if ($this->isWeakSearchStep($step)) {
                 continue;
             }
+            // Żargon (wampirki) nie jest krokiem — kaskada szuka po cenniku. Ale
+            // termin, który sam jest frazą cennika („narękawniki”), to rzeczownik
+            // katalogowy; cechy techniczne (S5, antyprzebiciowe) mają `jargon=false`
+            // i tu nie wpadają.
+            $norm = trim($this->lexicalNormalize($step));
             if (
-                $this->catalogSlang->isJargonNorm($this->lexicalNormalize($step))
+                $this->catalogSlang->isJargonNorm($norm)
                 && ! $this->assortment->isCatalogNounStep($step)
+                && ! $this->catalogSlang->isCatalogPhraseTerm($norm)
             ) {
                 continue;
             }
@@ -1522,10 +1542,17 @@ final class ProductAiSearchService
             if ($token === '') {
                 continue;
             }
+            // Klasa albo norma (S5, FFP2, A2, OB, EN 149) to mocny krok — karta ma
+            // to oznaczenie w nazwie lub kolumnie norm.
+            if ($this->isClassOrNormToken($token)) {
+                $meaningful++;
+
+                continue;
+            }
             if (mb_strlen($token) < 4 && ! $this->catalogSlang->isIndexedTerm($token)) {
                 continue;
             }
-            if ($this->catalogSlang->isJargonNorm($token)) {
+            if ($this->catalogSlang->isJargonNorm($token) && ! $this->catalogSlang->isCatalogPhraseTerm($token)) {
                 continue;
             }
             if (preg_match('/^(ochrona|przed|ciecz|olej|plyn|proste|uniwersaln|lekki|cienki)/u', $token) === 1) {
@@ -1535,6 +1562,16 @@ final class ProductAiSearchService
         }
 
         return $meaningful === 0;
+    }
+
+    /** Oznaczenie klasy/normy po `lexicalNormalize` (s5, s1p, ffp2, a2, ob, src, en, 149, 20345). */
+    private function isClassOrNormToken(string $normalizedToken): bool
+    {
+        return preg_match(
+            '/^(?:s[1-7]p?l?|sb|ob|o[1-7]|ffp[1-3]?|a[1-3]|b[1-3]|e[1-2]|k[1-2]|p[1-3]|abek\d?'
+            .'|src|sra|srb|hro|ci|hi|wr|wru|fo|esd|en|iso|\d{3,5})$/u',
+            trim($normalizedToken)
+        ) === 1;
     }
 
     /**
@@ -1662,20 +1699,28 @@ final class ProductAiSearchService
                 ->values()
         );
 
+        $wantType = $this->assortment->articleType($requirement);
+        $slang = $this->slangRewriteFor($query);
         $out = [];
         foreach ($products as $product) {
             if (! $product instanceof Product) {
                 continue;
             }
             $row = $this->productToRow($product);
-            $row['ai_match_percent'] = min(86, max(55, 48 + $this->articleTypeScore($query, $product)));
+            // Nikt tej karty nie ocenił — procent to tylko zgodność rodzaju, jawnie
+            // poniżej progu zapisu przetargu (65), żeby nie udawał werdyktu modelu.
+            // Remis rozstrzyga zgodny typ artykułu (sandały do sandałów) — +1 ponad
+            // kartę o nieznanym typie — a dopiero potem cena (wspólny sorter
+            // „procent → cena” zostaje bez zmian i nie odwraca tej kolejności).
+            $typeAgrees = $wantType !== null
+                && $this->assortment->articleType(
+                    $product->name.' '.$product->sku.' '.(string) ($product->category ?? '')
+                ) === $wantType;
+            $row['ai_match_percent'] = min(49, max(40, 30 + $this->articleTypeScore($query, $product)))
+                + ($typeAgrees ? 1 : 0);
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
-            $slang = $this->slangRewriteFor($query);
-            $row['ai_match_reason'] = $slang !== null
-                ? 'Żargon SIWZ → '.$slang['needed']
-                : ($this->isSpecificRequirement($query)
-                    ? 'Słabsze dopasowanie z zapytania — sprawdź, czy zostawić.'
-                    : 'Ten sam rodzaj w katalogu (np. czapka robocza / z daszkiem).');
+            $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON
+                .($slang !== null ? ' (żargon SIWZ → '.$slang['needed'].')' : '');
             $out[] = $row;
         }
 
@@ -1712,9 +1757,10 @@ final class ProductAiSearchService
                 continue;
             }
             $row = $this->productToRow($product);
-            $score = min(88, max(52, 50 + $this->requirementCatalogScore($query, $product)));
-            $row['ai_match_percent'] = $score;
-            $row['ai_match_reason'] = $reason;
+            // Lista zapasowa z cechy (ESD, klasa, °C) — nieoceniona przez model,
+            // więc procent zostaje poniżej progu zapisu przetargu, jak w rowsFromGenericCatalog.
+            $row['ai_match_percent'] = min(50, max(40, 30 + $this->requirementCatalogScore($query, $product)));
+            $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON.' ('.rtrim($reason, '.').')';
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $out[] = $row;
         }
@@ -3834,6 +3880,7 @@ final class ProductAiSearchService
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = 92;
             $row['ai_match_reason'] = 'Klasa ochrony obuwia na karcie spełnia wymaganie z SIWZ.';
+            $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }
 
@@ -3870,6 +3917,7 @@ final class ProductAiSearchService
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->cutRetrieveScore($query, $product), 20)));
             $row['ai_match_reason'] = 'Odporność na przecięcie na nazwie karty spełnia wymaganie z SIWZ.';
+            $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }
 
