@@ -98,6 +98,31 @@ final class PrestaShopSearchApiTest extends TestCase
         $this->assertTrue((bool) ($fresh->enrichment_payload['from_presta'] ?? false));
     }
 
+    /** SECURA 3000 (przetarg 1 poz. 13): cechy sklepu trafiały do norm karty, a EN 140 z opisu nie. */
+    public function test_apply_keeps_shop_features_out_of_norms_and_reads_norms_from_description(): void
+    {
+        Queue::fake();
+        Http::fake();
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->makeProduct(['sku' => 'S56T0SM0', 'manufacturer' => 'SECURA', 'name' => 'Półmaska SECURA 3000']);
+        $card = $this->card(297, 'S56T0SM0', 'Półmaska SECURA 3000', 'SECURA');
+        $card['features'] = '1 sztuka; Bagnetowe Secura; Półmaska; Silikon';
+        $card['description'] = '<p>Półmaska SECURA 3000 z łącznikami bagnetowymi.</p>'
+            .'<p>Wyrób spełnia wymagania normy zharmonizowanej: PN-EN 140:2004 (EN 140:1998)</p>';
+        $this->presta->rows = [$card];
+
+        $this->postJson("/api/products/{$product->id}/presta-apply", [
+            'presta_id' => 297,
+            'method' => 'reference',
+            'score' => 96,
+        ])->assertOk();
+
+        $fresh = $product->fresh();
+        $this->assertSame(['EN 140:2004', 'EN 140:1998'], $fresh->enrichment_payload['attributes']['normy_en']);
+        $this->assertSame('EN 140:2004, EN 140:1998', $fresh->norms);
+        $this->assertContains('Silikon', $fresh->enrichment_payload['features'], 'cechy sklepu zostają w cechach');
+    }
+
     public function test_apply_downloads_shop_image(): void
     {
         Queue::fake();

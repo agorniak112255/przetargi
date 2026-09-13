@@ -254,7 +254,7 @@ final class BhpAttributeNormalizer
     }
 
     /** @return list<string> */
-    private function detectNormsFromText(string $text): array
+    public function detectNormsFromText(string $text): array
     {
         if (trim($text) === '') {
             return [];
@@ -304,6 +304,27 @@ final class BhpAttributeNormalizer
             array_map(static fn ($v) => is_string($v) ? trim($v) : '', $parts),
             static fn (string $v): bool => $v !== ''
         )));
+    }
+
+    /**
+     * Wpisy listy, które zawierają kod normy (EN, EN ISO, PN-EN, ISO z numerem) — w brzmieniu źródła.
+     * Cechy z PrestaShop („1 sztuka”, „Silikon”, „Bagnetowe Secura”) to nie normy, a import wpisywał je
+     * do normy_en i do kolumny norms (SECURA 3000 S56T0SM0, przetarg 1 poz. 13).
+     *
+     * @param  array<mixed>  $values
+     * @return list<string>
+     */
+    public function normEntries(array $values): array
+    {
+        $out = [];
+        foreach ($values as $value) {
+            $value = trim(is_scalar($value) ? (string) $value : '');
+            if ($value !== '' && preg_match('/\b(?:EN|ISO)[\s-]*(?:ISO[\s-]*)?\d{3,5}/iu', $value) === 1) {
+                $out[] = $value;
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     private function normalizeKategoria(?string $value): ?string

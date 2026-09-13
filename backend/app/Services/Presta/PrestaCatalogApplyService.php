@@ -107,10 +107,20 @@ final class PrestaCatalogApplyService
         ])));
         $payload['from_presta'] = true;
         $payload['presta_id'] = $prestaId;
+        // Do norm idą tylko wpisy z kodem normy: cechy sklepu z numerem normy i normy wymienione w opisie.
+        // Cechy PrestaShop („1 sztuka”, „Silikon”) trafiały do normy_en i kolumny norms (SECURA 3000, przetarg 1
+        // poz. 13), a EN 140 z opisu nie. Cechy zostają w `features`.
+        $rawAttributes = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : null;
+        if (is_array($rawAttributes['normy_en'] ?? null)) {
+            $rawAttributes['normy_en'] = $this->bhpAttributes->normEntries($rawAttributes['normy_en']);
+        }
         $attrs = $this->bhpAttributes->normalize(
-            is_array($payload['attributes'] ?? null) ? $payload['attributes'] : null,
+            $rawAttributes,
             [
-                'norms' => $features,
+                'norms' => array_values(array_unique([
+                    ...$this->bhpAttributes->normEntries($features),
+                    ...$this->bhpAttributes->detectNormsFromText($description),
+                ])),
                 'description' => $description,
                 'name' => (string) ($card['name'] ?? $product->name),
                 'sku' => (string) ($card['reference'] ?? $product->sku),
