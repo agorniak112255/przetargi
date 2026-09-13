@@ -1091,8 +1091,10 @@ final class ProductAiSearchService
             .'Przykład: „Rękawice wampirki uniwersalne” → search_steps: ["rękawice","dzianinowe","dłoń powlekana"]. '
             .'Przykład: „Rękawice nitrylowe lekkie” → search_steps: ["rękawice","nitrylowe","jednorazowe"]. '
             .'Przykład: „Rękawice nitrylowe RTELA” → search_steps: ["rękawice","nitrylowe","RTELA"]. '
-            .'manufacturer: nazwa z wymagania. Jeśli jest na liście katalogu — dokładna nazwa z listy. '
-            .'Jeśli nie ma jej na liście — wpisz nazwę z SIWZ (nie null). '
+            .'manufacturer: nazwa producenta TYLKO gdy wymaganie ją podaje (po „prod.”/„producent”, w cudzysłowie albo jako marka obok modelu). '
+            .'Jeśli jest na liście katalogu — dokładna nazwa z listy; jeśli nie ma jej na liście — nazwa z SIWZ. '
+            .'Jeśli w wymaganiu nie ma nazwy producenta — null. '
+            .'Skróty norm, klas i materiałów (EN, ISO, PN-EN, SRC, S3, FFP2, ESD, PVC, NBR, AQL, FDA, ŚOI) NIE są producentem. '
             .'model_name: model/kolekcja (np. TRONCHETTO), nie producent. size_note: rozmiary, nie łącz z modelem. '
             .'search_phrases: 3-8 synonimów sklepowych. constraints: 0-6 twardych dowodów (EN 374), puste przy samej nazwie/kolorze. '
             .'Nie zmieniaj rodzaju. Popraw literówki (podnie→spodnie, TEPM-ICE→TEMP-ICE). '
@@ -2227,6 +2229,13 @@ final class ProductAiSearchService
                 if ($this->catalogHasIdentityToken($token)) {
                     continue;
                 }
+                // „Marka spoza katalogu” z samych wersalików tylko tam, gdzie SIWZ
+                // faktycznie nazywa markę: po „prod.”/„producent”/„marki”, w cudzysłowie,
+                // obok kodu modelu albo w krótkim zapytaniu. W długim opisie bez
+                // takiego sygnału wersaliki to skrót (SRC, AQL) albo akcent — nie marka.
+                if (! $this->absentBrandContext($query, $token)) {
+                    continue;
+                }
                 $intent['manufacturer'] = null;
                 $intent['manufacturer_requested'] = $token;
                 $intent['manufacturer_absent_in_catalog'] = true;
@@ -2235,6 +2244,39 @@ final class ProductAiSearchService
         }
 
         return $this->stripAbsentManufacturerNoise($intent);
+    }
+
+    private const ABSENT_BRAND_SHORT_QUERY_WORDS = 12;
+
+    private function absentBrandContext(string $query, string $token): bool
+    {
+        $words = preg_split('/\s+/u', trim($query)) ?: [];
+        if (count($words) <= self::ABSENT_BRAND_SHORT_QUERY_WORDS) {
+            return true;
+        }
+        if (in_array($token, $this->quotedIdentityTokens($query), true)) {
+            return true;
+        }
+        $quoted = preg_quote($token, '/');
+        if (preg_match('/(?:\bprod\.?|\bproducent\w*|\bmark[ai]|\bfirm[ay]|\bnp\.)\s*[:\-–]?\s*["„“«\']?'.$quoted.'/ui', $query) === 1) {
+            return true;
+        }
+        // Marka obok kodu modelu (litery + cyfry, nie klasa/norma): „HY51 UVEX”.
+        $tokens = preg_split('/[\s,;:·•\/|+()\[\]."”„“«»\']+/u', $query) ?: [];
+        foreach ($tokens as $i => $raw) {
+            if (trim((string) $raw) !== $token) {
+                continue;
+            }
+            foreach ([$tokens[$i - 1] ?? '', $tokens[$i + 1] ?? ''] as $neighbour) {
+                $neighbour = trim((string) $neighbour);
+                if (preg_match('/^(?=.*\d)(?=.*\p{L})[\p{L}\d][\p{L}\d\-]{1,}$/u', $neighbour) === 1
+                    && ! $this->isNormOrClassAbbreviation($neighbour)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -2313,7 +2355,9 @@ final class ProductAiSearchService
     private function manufacturerTokensFromQuery(string $query): array
     {
         $out = [];
-        foreach (preg_split('/[\s,;:·•\/|+]+/u', $query) ?: [] as $raw) {
+        // Nawiasy, kropki i cudzysłowy też dzielą: „FDA).”, „(ESD)”, „SRA.” to
+        // tokeny z interpunkcją, które nigdy nie trafią w nazwę z katalogu.
+        foreach (preg_split('/[\s,;:·•\/|+()\[\]."”„“«»\']+/u', $query) ?: [] as $raw) {
             $raw = trim((string) $raw);
             if ($raw === '') {
                 continue;
@@ -2372,8 +2416,44 @@ final class ProductAiSearchService
         if (mb_strlen($letters) < 3 || mb_strlen($letters) > 16) {
             return false;
         }
+        if ($this->isNormOrClassAbbreviation($token)) {
+            return false;
+        }
 
         return $letters === mb_strtoupper($letters, 'UTF-8');
+    }
+
+    /**
+     * Skróty norm, klas, materiałów i instytucji pisane wersalikami — nigdy producent.
+     *
+     * @var list<string>
+     */
+    private const NON_BRAND_ABBREVIATIONS = [
+        'EN', 'ISO', 'PN', 'PNEN', 'PNENISO', 'ENISO', 'DIN', 'ASTM', 'ANSI', 'IEC', 'CE', 'UV', 'IR', 'UKCA',
+        'FFP', 'SRA', 'SRB', 'SRC', 'HRO', 'CI', 'HI', 'WR', 'WRU', 'FO', 'ESD', 'AQL', 'NDS', 'NDSCH',
+        'PVC', 'PCV', 'PU', 'PA', 'PE', 'PP', 'PC', 'PES', 'NBR', 'HPPE', 'UHMWPE', 'TPR', 'TPU', 'TPE', 'EVA', 'SBR',
+        'SVHC', 'FDA', 'HACCP', 'REACH', 'ROHS', 'ATEX', 'OEKO', 'OEKOTEX',
+        'KV', 'SOI', 'ŚOI', 'BHP', 'PPE', 'RKO', 'AED', 'NRC', 'EU', 'UE', 'USA', 'PL',
+        'ABEK', 'ABEKP', 'SNR', 'KAT', 'OTG', 'HV', 'LED', 'RFID',
+    ];
+
+    private function isNormOrClassAbbreviation(string $token): bool
+    {
+        $compact = mb_strtoupper((string) preg_replace('/[^\p{L}\d]/u', '', $token), 'UTF-8');
+        if ($compact === '') {
+            return false;
+        }
+        if (in_array($compact, self::NON_BRAND_ABBREVIATIONS, true)) {
+            return true;
+        }
+
+        // Klasy i poziomy: FFP2, S1P, S3, OB, O2, A2B2E2K2NO, ABEK1P3, EN388, ISO20345, III.
+        return preg_match(
+            '/^(?:FFP[1-3]?|S[1-7]P?L?|SB|OB|O[1-7]|SR[ABC]|A[1-3]|B[1-3]|E[1-2]|K[1-2]|P[1-3]'
+            .'|(?:ABEK\d?|[ABEKP]\d(?:[ABEKP]\d){0,4})(?:HG|NO|CO|SX|AX|NR|R|D)?(?:P\d)?'
+            .'|EN\d{2,6}|ISO\d{2,6}|PNEN\d{2,6}|[IVX]{1,4}|\d+KV)$/u',
+            $compact
+        ) === 1;
     }
 
     private function isAbsentManufacturerToken(string $query, string $token): bool
