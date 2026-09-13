@@ -2240,6 +2240,15 @@ final class ProductMatchService
             $this->modelFuzzy->score($requirement, $product)
         );
         $honest = min(max(0, $proposed), max($explained['score'], $skuish));
+        // Ocena modelu ≥ progu zapisu dla karty, która przeszła bramki asortymentu: słowa karty nie
+        // ściągają jej pod próg. Przetarg 1, poz. 3: ARSO 701 616560 S1 P ESD (nazwa to goły kod)
+        // — model 95, explain 58 → zapis 58 < 65 i brak karty, a przy explain < apply model dostawał
+        // pełne zaufanie: lepsze dowody przegrywały z gorszymi. Dowody dalej rozstrzygają wybór między
+        // kartami (evidence/hard w pickAuto); heurystyka i wiersze katalogowe bez zgody admina
+        // nie przekraczają dowodów.
+        if ($trustModel && $proposed >= $this->minMatchScore() && $honest < $proposed) {
+            return min(96, $proposed);
+        }
         if ($honest >= $this->applyMatchScore()) {
             return $honest;
         }

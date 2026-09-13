@@ -107,7 +107,7 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-06';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-13';
 
     /** @var array<string, int> */
     private array $timingMs = [];
@@ -4520,8 +4520,8 @@ final class ProductAiSearchService
             $intentLine .= "\nModel z analizy: ".$intent['model_name'];
         }
         $proofFields = $short
-            ? 'norms/specs/payload_norms/use_cases/heat_celsius'
-            : 'norms/specs/payload_norms/features/use_cases/description';
+            ? 'name/norms/specs/payload_norms/use_cases/heat_celsius'
+            : 'name/norms/specs/payload_norms/features/use_cases/description';
         $constraintLine = $constraints === []
             ? ''
             : "\nWarunki z analizy (dowód z {$proofFields}, nie zgaduj; kluczowy bez dowodu → score najwyżej 50, "
@@ -4536,7 +4536,9 @@ final class ProductAiSearchService
                 'role' => 'system',
                 'content' => 'Jesteś ekspertem BHP. Ranking w dwóch krokach — nie mieszaj ich. '
                     .'1) NAZWA: rzeczownik z wymagania = ten sam produkt co w polu name karty '
-                    .'(synonimy: buty=obuwie=trzewiki; kurtka≈bluza ochronna; '
+                    .'(gdy name to sam kod bez rzeczownika — rodzaj i typ czytaj z description) '
+                    .'(synonimy: buty=obuwie; trzewik, półbut i sandał to RÓŻNE typy — sandał ma odkrytą cholewkę, '
+                    .'„buty robocze” ani „obuwie ochronne” bez słowa sandał to nie sandały; kurtka≈bluza ochronna; '
                     .'czapka drelichowa=czapka z daszkiem=czapka robocza — drelich to tkanina, nie asortyment; '
                     .'spodniobuty=wodery=spodniobuty z kaloszami). '
                     .'Inny rodzaj → nie zwracaj: kamizelka ≠ osłona twarzy; rękawice ≠ obuwie. '
@@ -4557,6 +4559,7 @@ final class ProductAiSearchService
                     .'Równoważny dowód = spełnione: synonim katalogowy, norma/klasa, materiał konstrukcyjny '
                     .'(metalowy nosek = podnosek stalowy/steel toe; chemoodporny = EN 374 / Typ 3/4 / Tychem; '
                     .'antystatyczny = EN 1149). Nie wymagaj dosłownego cytatu z SIWZ. '
+                    .'Klasa i oznaczenia w name (S1 P, O1, FFP1, A2) są dowodem — nie wpisuj ich do missing_key. '
                     .$this->slangWordProofRule($query)
                     .'Obuwie: antyelektrostatyczne/ESD z SIWZ to nie to samo co antystatyczna podeszwa '
                     .'ani klasa O1/S1/S1P bez ESD w dowodzie — zwracaj tylko przy ESD/antyelektrostat '
@@ -4651,6 +4654,11 @@ final class ProductAiSearchService
                 $score = min($score, self::MISSING_KEY_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Brak dowodu kluczowego warunku: '.implode(', ', $missingKey).'.');
             }
+            $typeGap = $this->missingRequiredFootwearTypeEvidence($requirement, $product);
+            if ($typeGap !== null) {
+                $score = min($score, self::MISSING_KEY_SCORE_CAP);
+                $reason = trim(($reason ?? '').' Brak dowodu typu obuwia: '.$typeGap.'.');
+            }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(0, $score));
             $row['ai_match_reason'] = $reason;
@@ -4658,6 +4666,31 @@ final class ProductAiSearchService
         }
 
         return array_slice($this->sortRankedByMatchPercent($out), 0, max(1, min(80, $limit)));
+    }
+
+    /**
+     * Wymagane sandały (odkryta cholewka), a karta nigdzie nie nazywa produktu sandałem — model nazwał
+     * „buty robocze” sandałami (AUDYT_4 W1: AROSIO 730 i ARDESIO 731 po 90% przy poz. 3). Deterministyczny
+     * limit zamiast wiary w uzasadnienie modelu; brak słowa „sandał” w nazwie, opisie i cechach = brak
+     * dowodu typu. Bramka asortymentu (brak typu w opisie = brak wiedzy) zostaje bez zmian.
+     */
+    private function missingRequiredFootwearTypeEvidence(string $requirement, Product $product): ?string
+    {
+        if ($this->assortment->articleType($requirement, PpeAssortment::FAMILY_FOOTWEAR) !== PpeAssortment::TYPE_SANDAL) {
+            return null;
+        }
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        if (($payload['attributes']['typ_wyrobu'] ?? null) === PpeAssortment::TYPE_SANDAL) {
+            return null;
+        }
+        $evidence = mb_strtolower(implode(' ', [
+            (string) $product->name,
+            (string) ($product->description ?? ''),
+            implode(' ', $this->stringList($payload['specs'] ?? null)),
+            implode(' ', $this->stringList($payload['features'] ?? null)),
+        ]));
+
+        return preg_match('/sand[aá][lł]/u', $evidence) === 1 ? null : 'sandały (karta nie nazywa produktu sandałem)';
     }
 
     private function filterHaystack(Product $product): string

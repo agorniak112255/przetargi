@@ -598,6 +598,33 @@ final class ProductMatchServiceTest extends TestCase
     }
 
     /**
+     * Przetarg 1, poz. 3: model dał 95 sandałom ARSO 701 616560 S1 P ESD (nazwa to goły kod), explain
+     * wyszedł między apply a min — zapis brał explain i karta odpadała, choć przy explain < apply model
+     * dostawał pełne zaufanie. Ocena modelu ≥ min nie jest ściągana pod próg; bez zaufania — jak dotąd.
+     */
+    #[Test]
+    public function persistable_score_trusts_model_above_save_threshold_when_card_words_are_weak(): void
+    {
+        $product = $this->fakeProduct([
+            'sku' => 'ARSO 701 616560 S1 P ESD',
+            'name' => 'ARSO 701 616560 S1 P ESD',
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'description' => 'Sandały bezpieczne ARSO 701 S1 P ESD, podnosek, lekka przewiewna konstrukcja.',
+        ]);
+        $req = 'Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, do prac w suchych pomieszczeniach. Wymagane: zabudowana pięta; podnosek ochronny; właściwości antyelektrostatyczne (ESD); podeszwa odporna na oleje i paliwa (FO); cholewka z materiałów przewiewnych.';
+        $explain = $this->matcher->explainMatch($req, $product)['score'];
+        $this->assertLessThan(95, $explain, 'fixture: słowa karty poniżej oceny modelu');
+        $method = new \ReflectionMethod(ProductMatchService::class, 'persistableScore');
+
+        $this->assertSame(95, $method->invoke($this->matcher, $req, $product, 95, true), 'ocena modelu ≥ min zostaje');
+        $withoutTrust = $method->invoke($this->matcher, $req, $product, 95, false);
+        $this->assertTrue($withoutTrust === null || $withoutTrust <= $explain, 'bez zaufania do modelu dowody karty dalej ograniczają procent');
+        $below = $method->invoke($this->matcher, $req, $product, 60, true);
+        $this->assertTrue($below === null || $below <= 60, 'ocena modelu poniżej progu zapisu nie jest podnoszona');
+    }
+
+    /**
      * @param  array<string, mixed>  $attrs
      */
     private function fakeProduct(array $attrs): Product
