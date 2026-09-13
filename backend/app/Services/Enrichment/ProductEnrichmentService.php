@@ -3227,15 +3227,23 @@ final class ProductEnrichmentService
             && $brandConfirmed) {
             return $this->identity->hayHasRequiredTypeFromName($hay, $product);
         }
-        // sklep bez SKU, ale z pełną nazwą („Dywanik elektroizolacyjny 20 KV”)
-        if ($this->identity->hayHasDistinctiveNamePhrase($description, $product)) {
+        // sklep bez SKU, ale z pełną nazwą („Dywanik elektroizolacyjny 20 KV”). Nazwę liczymy bez
+        // wymiarów: model dostaje ją w zapytaniu i przepisuje „Rib Mat Czarny 0.9m x 15.3m (12.5mm)”
+        // do opisu cudzej karty — sam przepisany wymiar robił z krótkiej nazwy „pełną frazę” (batch #301).
+        $withoutDimensions = clone $product;
+        $withoutDimensions->name = trim((string) preg_replace(
+            '/~?\d+(?:[.,]\d+)?\s*(?:mm|cm|m|kg|g|ml|l)\b|\(\s*\)|\s+x\s+(?=\s|$)/iu',
+            ' ',
+            (string) $product->name
+        ));
+        if ($this->identity->hayHasDistinctiveNamePhrase($description, $withoutDimensions)) {
             return $this->identity->hayHasRequiredTypeFromName($hay, $product);
         }
 
         $tokens = $this->discriminativeNameTokens($product);
         $score = 0;
         foreach ($tokens as $token => $weight) {
-            if ($this->hayHasToken($hay, (string) $token)) {
+            if ($this->hayHasNameToken($hay, (string) $token)) {
                 $score += $weight;
             }
         }
@@ -3266,7 +3274,11 @@ final class ProductEnrichmentService
     private function discriminativeNameTokens(Product $product): array
     {
         $tokens = [];
-        foreach (preg_split('/[\s\-®™\/_,.()]+/u', mb_strtolower((string) $product->name)) ?: [] as $token) {
+        // Wymiary z cennika („0.9m x 15.3m (12.5mm)”) nie odróżniają modelu: po podziale na
+        // kropce „15” i „12” ważyły jak kod, a model przepisuje nazwę z zapytania do opisu.
+        // Opis ReGen 100 z cudzej karty przechodził jako „Rib Mat” (batch #301).
+        $name = preg_replace('/~?\d+(?:[.,]\d+)?\s*(?:mm|cm|m|kg|g|ml|l)\b/iu', ' ', mb_strtolower((string) $product->name)) ?? '';
+        foreach (preg_split('/[\s\-®™\/_,.()]+/u', $name) ?: [] as $token) {
             $token = trim($token);
             if ($token === '' || in_array($token, self::GENERIC_NAME_TOKENS, true)) {
                 continue;
@@ -3309,6 +3321,25 @@ final class ProductEnrichmentService
         }
 
         return preg_match('/(^|[^\p{L}\d])'.preg_quote($token, '/').'([^\p{L}\d]|$)/iu', $hay) === 1;
+    }
+
+    /**
+     * Słowo z nazwy w opisie także w innej formie: „Guma nitrylowa” → „arkusz gumy nitrylowej”.
+     * Model pisze po polsku z odmianą; dokładna forma zerowała dobry opis NIS000 (batch #301).
+     * Rdzeń tylko dla długich słów z samych liter — kody i liczby muszą pasować dokładnie.
+     */
+    private function hayHasNameToken(string $hay, string $token): bool
+    {
+        if ($this->hayHasToken($hay, $token)) {
+            return true;
+        }
+        $token = mb_strtolower(trim($token));
+        if (mb_strlen($token) < 7 || preg_match('/^\p{L}+$/u', $token) !== 1) {
+            return false;
+        }
+        $stem = mb_substr($token, 0, mb_strlen($token) - 2);
+
+        return preg_match('/(^|[^\p{L}\d])'.preg_quote($stem, '/').'\p{L}{0,4}([^\p{L}\d]|$)/iu', $hay) === 1;
     }
 
     /**

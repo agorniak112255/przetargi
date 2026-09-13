@@ -98,6 +98,34 @@ final class EnrichmentDescriptionGuardTest extends TestCase
         ), 'kod w opisie i karta producenta');
     }
 
+    /**
+     * Batch #301: FA0100 „Rib Mat Czarny 0.9m x 15.3m (12.5mm)” dostał kartę Orthomat ReGen 100
+     * (części OR010001…). Model przepisał nazwę z zapytania, a „15” i „12” z wymiarów liczyły się
+     * jak kod — opis cudzej maty przechodził kontrolę nawet bez źródła.
+     */
+    public function test_dimensions_copied_from_the_name_do_not_confirm_a_foreign_card(): void
+    {
+        $ribMat = new Product(['sku' => 'FA0100', 'name' => 'Rib Mat Czarny 0.9m x 15.3m (12.5mm)', 'manufacturer' => 'Coba']);
+        $text = 'Mata antyzmęczeniowa Rib Mat Czarny 0.9m x 15.3m (12.5mm) to uniwersalne rozwiązanie poprawiające komfort '
+            .'pracy w pozycji stojącej. Wykonana w 100% z pianki PVC pochodzącej z recyklingu, skutecznie izoluje od zimnych, '
+            .'betonowych posadzek, zmniejszając obciążenie nóg i kręgosłupa.';
+
+        $this->assertFalse($this->usable($text, $ribMat));
+        $this->assertFalse($this->usable($text, $ribMat, ['https://www.coba.com/pl/produkt/orthomat-regen-100']));
+    }
+
+    public function test_inflected_name_word_confirms_model_description(): void
+    {
+        // „Guma nitrylowa” w cenniku, „arkusz gumy nitrylowej” w opisie modelu
+        $nitrile = new Product(['sku' => 'NIS000', 'name' => 'Guma nitrylowa 1.4m x 10m (6mm)', 'manufacturer' => 'Coba']);
+        $text = 'Arkusz gumy nitrylowej to uniwersalny materiał techniczny przeznaczony do zastosowań przemysłowych, w których '
+            .'wymagana jest wysoka odporność na oleje, smary, paliwa i rozpuszczalniki. Produkt sprawdza się jako wykładzina '
+            .'ochronna, uszczelka lub element tłumiący drgania.';
+
+        $this->assertTrue($this->usable($text, $nitrile, ['https://www.coba.com/pl/produkt/guma-nitrylowa']));
+        $this->assertFalse($this->usable($text, $nitrile, ['https://sklep-bhp.example.pl/guma']), 'ze sklepu bez marki nadal za mało');
+    }
+
     public function test_brand_prefixed_trade_names_are_not_split(): void
     {
         $plain = ProductDescriptionText::plain(
