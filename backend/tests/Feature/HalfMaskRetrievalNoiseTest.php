@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\AiSetting;
+use App\Models\Product;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductAiSearchService;
@@ -67,5 +68,64 @@ final class HalfMaskRetrievalNoiseTest extends TestCase
         $this->assertNotContains($ids['7100200484'], $candidates, 'klej epoksydowy z „2004” w SKU nie jest kandydatem na półmaskę');
         $this->assertNotContains($ids['1998467'], $candidates, 'materiał odblaskowy z „1998” w SKU nie jest kandydatem na półmaskę');
         $this->assertContains($ids['S56T0SM0'], $candidates, 'półmaska SECURA 3000 (karta oczekiwana) trafia do puli kandydatów');
+    }
+
+    /**
+     * Produkcja 13.09 (`tenders:debug-match 1 13`, linia „kaskada”): kroki modelu „półmaska”, „wielokrotnego użytku”,
+     * „zawory wdechowe”, „łączniki bagnetowe”, „zawór wydechowy”. Kaskada zdjęła trzy ostatnie kroki (steps_2),
+     * znalazła 45 półmasek z „wielokrotnego użytku” w nazwie i zakończyła wyszukiwanie. SECURA 3000 ma bagnety,
+     * zawory i nagłowie w opisie, ale nie ten zwrot — do puli nie wchodziła na żadnym poziomie kaskady.
+     */
+    public function test_cascade_that_dropped_steps_does_not_end_retrieval_before_text_search(): void
+    {
+        Http::fake();
+        Opisowy15Fixture::seed();
+        $service = app(ProductAiSearchService::class);
+        $retrieve = new \ReflectionMethod($service, 'retrieveCandidates');
+        $intent = [
+            'needed' => 'półmaska wielokrotnego użytku',
+            'search_steps' => ['półmaska', 'wielokrotnego użytku', 'zawory wdechowe', 'łączniki bagnetowe', 'zawór wydechowy'],
+            'manufacturer_requested' => 'PN-EN',
+            'manufacturer_absent_in_catalog' => true,
+            'search_phrases' => ['półmaska wielokrotnego użytku', 'półmaska z bagnetami', 'półmaska z zaworami wdechowymi'],
+            'constraints' => ['EN 140'],
+        ];
+
+        $candidates = $retrieve->invoke($service, Opisowy15Fixture::requirement(13), $intent, 80)->pluck('sku')->all();
+        $cascade = $service->lastTrace()['cascade'];
+        $last = end($cascade);
+
+        $this->assertSame('steps_2', $last['level']);
+        $this->assertSame(3, $last['dropped_steps'] ?? null, 'ślad mówi, ile kroków kaskada zdjęła');
+        $this->assertFalse($last['ended_retrieval'], 'kaskada bez trzech kroków nie kończy wyszukiwania');
+        $this->assertContains('S56T0SM0', $candidates, 'SECURA 3000 wchodzi do puli z wyszukiwania tekstowego');
+        $this->assertContains('7501B', $candidates, 'karty z kaskady zostają w puli');
+        $this->assertLessThan(
+            array_search('S56T0SM0', $candidates, true),
+            array_search('7501B', $candidates, true),
+            'karty kaskady (zgodne z pierwszymi krokami) zostają przed dołożonymi z wyszukiwania tekstowego'
+        );
+    }
+
+    /**
+     * EN 140 stoi na końcu opisu SECURA 3000 (ok. 2700 znaków). Model dostawał 360 pierwszych znaków opisu
+     * (karta krótka — wcale), a pole norm ma cechy z enrichmentu („1 sztuka, Bagnetowe Secura…”), więc ranking
+     * pisał „brak dowodu kluczowego warunku: EN 140” i obcinał ocenę do 50.
+     */
+    public function test_rank_card_carries_norms_from_the_whole_description(): void
+    {
+        $ids = Opisowy15Fixture::seed();
+        $service = app(ProductAiSearchService::class);
+        $rankCard = new \ReflectionMethod($service, 'rankCard');
+        $secura = Product::query()->findOrFail($ids['S56T0SM0']);
+
+        $this->assertStringNotContainsString('140', mb_substr((string) $secura->description, 0, 360));
+        foreach ([false, true] as $short) {
+            $card = $rankCard->invoke($service, $secura, $short);
+            $this->assertContains('EN 140', $card['description_norms'] ?? [], 'normy z całego opisu na karcie dla modelu');
+        }
+
+        $withoutDescription = Product::query()->findOrFail($ids['7501B']);
+        $this->assertSame([], $rankCard->invoke($service, $withoutDescription, false)['description_norms'] ?? null);
     }
 }

@@ -96,9 +96,10 @@ final class DebugTenderMatchCommand extends Command
         $this->line('warunki w rankingu: '.json_encode($trace['rank_constraints'] ?? [], JSON_UNESCAPED_UNICODE));
         foreach (is_array($trace['cascade'] ?? null) ? $trace['cascade'] : [] as $cascade) {
             $this->line(sprintf(
-                'kaskada: poziom=%s · kroki=%s · znalazła=%d · po bramce=%d · %s',
+                'kaskada: poziom=%s · kroki=%s · zdjęte kroki=%d · znalazła=%d · po bramce=%d · %s',
                 (string) ($cascade['level'] ?? 'brak'),
                 json_encode($cascade['steps'] ?? [], JSON_UNESCAPED_UNICODE),
+                (int) ($cascade['dropped_steps'] ?? 0),
                 (int) ($cascade['found'] ?? 0),
                 (int) ($cascade['kept'] ?? 0),
                 ($cascade['ended_retrieval'] ?? false) ? 'zakończyła wyszukiwanie (bez wyszukiwania tekstowego)' : 'wyszukiwanie szło dalej',

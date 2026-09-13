@@ -17,6 +17,7 @@ use App\Support\CatalogRequirementRecall;
 use App\Support\CatalogSlangDictionary;
 use App\Support\PpeAssortment;
 use App\Support\PpeFilterType;
+use App\Support\ProductFeatureMatch;
 use App\Support\ProductModelFuzzy;
 use App\Support\RequirementCodeNoise;
 use App\Support\RrfFusion;
@@ -108,7 +109,7 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-13';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-13b';
 
     /** @var array<string, int> */
     private array $timingMs = [];
@@ -155,6 +156,7 @@ final class ProductAiSearchService
         private readonly CatalogCascadeRecall $cascadeRecall,
         private readonly CatalogSlangDictionary $catalogSlang,
         private readonly NbpExchangeRateService $fx,
+        private readonly ProductFeatureMatch $featureMatch,
     ) {}
 
     /**
@@ -2955,9 +2957,11 @@ final class ProductAiSearchService
         });
         $cascaded = $recalled['products'];
         $cascadeLevel = $recalled['level'] ?? null;
+        $droppedSteps = (int) ($recalled['dropped_steps'] ?? 0);
         $this->trace['cascade'][] = [
             'level' => $cascadeLevel,
             'steps' => array_slice($intent['search_steps'], 0, 6),
+            'dropped_steps' => $droppedSteps,
             'found' => $cascaded->count(),
             'kept' => 0,
             'ended_retrieval' => false,
@@ -3005,7 +3009,13 @@ final class ProductAiSearchService
         // bramka zgodności zdjęła z niej wszystko (krok po „czapce” przy wymaganiu na
         // kominiarkę) albo gdy zeszła do samego rzeczownika rodzaju — wtedy z definicji
         // nie widzi kart bez tego słowa w nazwie („URG-A”).
-        if ($cascadeKept->isNotEmpty() && ! $this->cascadeSweptFamilyNoun($cascadeLevel, $intent)) {
+        // Kaskada, która musiała zdjąć kroki, też nie jest odpowiedzią: kroki zdejmuje od końca, więc cecha
+        // z pierwszych kroków, której poprawna karta nie ma w słowach, zamyka jej drogę na każdym poziomie.
+        // Przetarg 1 poz. 13: „półmaska” + „wielokrotnego użytku” (zdjęte bagnety, zawory) dawało 45 półmasek
+        // z tym zwrotem w nazwie, a SECURA 3000 — z bagnetami, zaworami i nagłowiem w opisie — nie wchodziła.
+        // Wtedy dokładamy wyszukiwanie tekstowe; karty kaskady zostają z przodu puli.
+        $cascadeSweptFamilyNoun = $this->cascadeSweptFamilyNoun($cascadeLevel, $intent);
+        if ($cascadeKept->isNotEmpty() && ! $cascadeSweptFamilyNoun && $droppedSteps === 0) {
             $this->traceCascadeOutcome($cascadeKept->count(), true);
 
             return $this->withModelCodeHits($requirement, $forcedHits, $cascadeKept, $limit);
@@ -3056,15 +3066,19 @@ final class ProductAiSearchService
                 : collect();
         });
 
-        $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $forcedHits, $cascadeKept, $fused, $recall, $brandHits, $limit): Collection {
+        $cascadeFirst = $cascadeKept->isNotEmpty() && ! $cascadeSweptFamilyNoun;
+        $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $forcedHits, $cascadeKept, $cascadeFirst, $fused, $recall, $brandHits, $limit): Collection {
             return $this->keepCompatible(
                 $requirement,
                 $this->uniqueProducts(
-                    // Tu docieramy tylko wtedy, gdy kaskada zeszła do samego rzeczownika
-                    // rodzaju: jej karty są równe co do wartości („SPODNIE MACH 1..60”)
-                    // i wypchnęłyby z puli trafienie wektorowe. Fuzja rang wie więcej, więc
-                    // idzie pierwsza, a kaskada uzupełnia resztę puli.
-                    $this->hydrate($fused)->concat($forcedHits)->concat($cascadeKept)->concat($recall)->concat($brandHits),
+                    // Kaskada zeszła do samego rzeczownika rodzaju: jej karty są równe co do
+                    // wartości („SPODNIE MACH 1..60”) i wypchnęłyby z puli trafienie wektorowe.
+                    // Fuzja rang wie więcej, więc idzie pierwsza, a kaskada uzupełnia resztę puli.
+                    // Kaskada ze zdjętymi krokami trafiła w pierwsze (najważniejsze) kroki — zostaje
+                    // z przodu, a wyszukiwanie tekstowe dokłada karty, których kroki nie widziały.
+                    $cascadeFirst
+                        ? $forcedHits->concat($cascadeKept)->concat($this->hydrate($fused))->concat($recall)->concat($brandHits)
+                        : $this->hydrate($fused)->concat($forcedHits)->concat($cascadeKept)->concat($recall)->concat($brandHits),
                     $limit * 3
                 )
             );
@@ -4496,6 +4510,13 @@ final class ProductAiSearchService
             'specs' => array_slice($this->stringList($payload['specs'] ?? null), 0, $short ? 2 : 8),
             'use_cases' => array_slice($this->stringList($payload['use_cases'] ?? null), 0, $short ? 2 : 4),
             'payload_norms' => array_slice($this->stringList($payload['norms'] ?? null), 0, 6),
+            // Normy z CAŁEGO opisu karty — opis idzie do modelu przycięty (karta krótka: wcale). Przetarg 1 poz. 13:
+            // „PN-EN 140:2004” stoi na końcu opisu SECURA 3000, a pole norm ma cechy z enrichmentu, więc ranking
+            // pisał „brak dowodu EN 140” i obcinał ocenę do 50. Nazwa pola mówi, skąd jest wartość.
+            'description_norms' => array_slice(array_map(
+                static fn (string $digits): string => 'EN '.$digits,
+                $this->featureMatch->norms((string) ($product->description ?? ''))
+            ), 0, 8),
         ];
         if (! $short) {
             $card['description'] = mb_substr((string) ($product->description ?? ''), 0, 360);
@@ -4567,8 +4588,8 @@ final class ProductAiSearchService
             $intentLine .= "\nModel z analizy: ".$intent['model_name'];
         }
         $proofFields = $short
-            ? 'name/norms/specs/payload_norms/use_cases/heat_celsius'
-            : 'name/norms/specs/payload_norms/features/use_cases/description';
+            ? 'name/norms/specs/payload_norms/description_norms/use_cases/heat_celsius'
+            : 'name/norms/specs/payload_norms/description_norms/features/use_cases/description';
         $constraintLine = $constraints === []
             ? ''
             : "\nWarunki z analizy (dowód z {$proofFields}, nie zgaduj; kluczowy bez dowodu → score najwyżej 50, "

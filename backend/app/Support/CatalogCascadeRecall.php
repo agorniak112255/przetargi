@@ -73,8 +73,10 @@ final class CatalogCascadeRecall
     }
 
     /**
+     * `dropped_steps`: ile kroków modelu kaskada zdjęła od końca, zanim coś znalazła (0 poza krokami).
+     *
      * @param  array<string, mixed>  $intent
-     * @return array{products: Collection<int, Product>, level: ?string}
+     * @return array{products: Collection<int, Product>, level: ?string, dropped_steps: int}
      */
     public function retrieve(string $query, array $intent, string $requirement, int $limit): array
     {
@@ -87,7 +89,7 @@ final class CatalogCascadeRecall
             }
         }
         if ($layers['family'] === null && $layers['features'] === [] && $layers['manufacturer'] === null) {
-            return ['products' => collect(), 'level' => null];
+            return ['products' => collect(), 'level' => null, 'dropped_steps' => 0];
         }
 
         foreach ($this->attempts($layers) as $attempt) {
@@ -113,11 +115,11 @@ final class CatalogCascadeRecall
                 ))
                 ->values();
             if ($rows->isNotEmpty()) {
-                return ['products' => $rows, 'level' => $attempt['name']];
+                return ['products' => $rows, 'level' => $attempt['name'], 'dropped_steps' => 0];
             }
         }
 
-        return ['products' => collect(), 'level' => null];
+        return ['products' => collect(), 'level' => null, 'dropped_steps' => 0];
     }
 
     /**
@@ -156,7 +158,7 @@ final class CatalogCascadeRecall
     /**
      * @param  array{family: ?string, family_nouns: list<string>}  $layers
      * @param  list<array{label: string, kind: 'text'|'brand', tokens: list<string>}>  $steps
-     * @return array{products: Collection<int, Product>, level: ?string}
+     * @return array{products: Collection<int, Product>, level: ?string, dropped_steps: int}
      */
     private function retrieveBySteps(
         string $query,
@@ -184,11 +186,11 @@ final class CatalogCascadeRecall
                 ))
                 ->values();
             if ($rows->isNotEmpty()) {
-                return ['products' => $rows, 'level' => 'steps_'.$n];
+                return ['products' => $rows, 'level' => 'steps_'.$n, 'dropped_steps' => count($steps) - $n];
             }
         }
 
-        return ['products' => collect(), 'level' => null];
+        return ['products' => collect(), 'level' => null, 'dropped_steps' => 0];
     }
 
     /**
