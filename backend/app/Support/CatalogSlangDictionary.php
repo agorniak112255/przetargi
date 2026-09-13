@@ -211,6 +211,12 @@ final class CatalogSlangDictionary
         if ($rewrite === null) {
             return false;
         }
+        // Poniższe wykluczenia (ESD, całkowicie powlekane, jednorazowe, mankiet, zimowe,
+        // antyprzecięciowe, aramid, końce palców) opisują rękawice. „Płyn do płukania oczu”
+        // też zawiera „płyn”, a płukanka „do jednorazowego płukania” nie jest jednorazową rękawicą.
+        if (($rewrite['family'] ?? null) !== PpeAssortment::FAMILY_GLOVES) {
+            return false;
+        }
         $note = $this->fold($rewrite['needed']);
         $wantsLiquid = preg_match('/\b(ciecz|olej|plyn)/u', $note) === 1;
         $vampire = preg_match('/dziani/', $note) === 1
@@ -257,49 +263,129 @@ final class CatalogSlangDictionary
      */
     public function evidenceNeedles(string $query): array
     {
+        [$base, $conditions] = $this->evidenceNeedleGroups($query);
+        $out = $base;
+        foreach ($conditions as $group) {
+            foreach ($group as $needle) {
+                $out[] = $needle;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Igły w dwóch rolach. Grupa bazowa (OR) — wszystkie igły ze wszystkich trafionych
+     * wpisów, jak dotąd: karta ma potwierdzić którymkolwiek słowem, że to ten wyrób
+     * (w komplecie „bluza + ogrodniczki” bluzę potwierdza „trudnopalna”, nie „ogrodniczki”).
+     * Dodatkowo osobne grupy warunków (AND): cecha techniczna z wpisu `jargon=false`
+     * stojąca w nagłówku wymagania (elektroizolacyjne, antyprzebiciowe) musi trafić
+     * sama — w samej grupie OR wystarczyłoby „półbuty”, a „elektroizolacyjne” nikt by
+     * nie sprawdził. Warunki tylko zawężają: karta bez nich odpada, żadna nie wchodzi
+     * dzięki nim.
+     *
+     * @return array{0: list<string>, 1: list<list<string>>}
+     */
+    private function evidenceNeedleGroups(string $query): array
+    {
         $rewrite = $this->searchRewrite($query);
         if ($rewrite === null) {
-            return [];
+            return [[], []];
         }
-        $stop = [
-            'proste', 'ochrona', 'przed', 'oraz', 'dla', 'przy', 'bez', 'jak', 'lub',
-            'typ', 'rodzaj', 'produkt', 'pracy', 'do', 'na', 'od', 'ze', 'za',
-        ];
+        $head = self::requirementHead($query);
         $jargonFolds = [];
-        $out = [];
+        $base = [];
+        $conditionEntries = [];
         foreach ($this->matchingEntries($query) as $entry) {
+            $inHead = false;
+            $nounHit = false;
             foreach ($entry['terms'] as $term) {
                 $fold = $this->fold((string) $term);
                 if ($fold === '' || ! $this->queryHasTerm($query, (string) $term)) {
                     continue;
                 }
                 $jargonFolds[] = $fold;
+                // Warunkiem jest cecha przy rzeczowniku głównym („Półbuty elektroizolacyjne”),
+                // nie wzmianka z dalszej części opisu („dozownik na plastry” w apteczce).
+                $inHead = $inHead || $this->queryHasTerm($head, (string) $term);
                 // Sam rzeczownik asortymentu nie jest dowodem: o przynależności
                 // rozstrzyga rodzina i bramka zgodności, a karta bywa opisana bez
                 // niego („URG-A”, kategoria „Odzież robocza”). Wymagamy tylko słów
                 // faktycznie żargonowych — tak samo jak w pętli po frazach niżej.
-                if ($this->assortment->isCatalogNounStep((string) $term)
-                    && ! $this->isGenericAssortmentNeedle($fold)) {
-                    $out[] = mb_substr($fold, 0, 5);
+                if ($this->assortment->isCatalogNounStep((string) $term)) {
+                    $nounHit = true;
+                    if (! $this->isGenericAssortmentNeedle($fold)) {
+                        $base[] = $this->needle($fold);
+                    }
                 }
+            }
+            if ($inHead && ! $nounHit && ! $entry['jargon']) {
+                $conditionEntries[] = $entry;
             }
         }
         foreach ($rewrite['search_phrases'] as $phrase) {
             if (in_array($this->fold($phrase), $jargonFolds, true)) {
                 continue;
             }
-            foreach (preg_split('/\s+/u', $this->fold($phrase)) ?: [] as $token) {
-                if ($token === '' || mb_strlen($token) < 5 || in_array($token, $stop, true)) {
-                    continue;
+            foreach ($this->phraseNeedles($phrase) as $needle) {
+                $base[] = $needle;
+            }
+        }
+        $conditions = [];
+        $queryFold = $this->fold($query);
+        foreach ($conditionEntries as $entry) {
+            $group = [];
+            foreach ([...$entry['phrases'], ...($entry['keywords'] ?? [])] as $phrase) {
+                foreach ($this->phraseNeedles((string) $phrase) as $needle) {
+                    // Warunkiem jest tylko to, co SIWZ pisze wprost („elektroizolacyjne”,
+                    // „podnosek”). Słowo dołożone przez słownik („obuwie z podnoskiem” przy
+                    // samym „obuwie bezpieczne”) to wnioskowanie — nie wolno nim odrzucać kart.
+                    if (str_contains($queryFold, $needle)) {
+                        $group[] = $needle;
+                    }
                 }
-                if ($this->isGenericAssortmentNeedle($token)) {
-                    continue;
-                }
-                $out[] = mb_substr($token, 0, 5);
+            }
+            $group = array_values(array_unique($group));
+            if ($group !== []) {
+                $conditions[] = $group;
             }
         }
 
-        return array_values(array_unique($out));
+        return [array_values(array_unique($base)), $conditions];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function phraseNeedles(string $phrase): array
+    {
+        $stop = [
+            'proste', 'ochrona', 'przed', 'oraz', 'dla', 'przy', 'bez', 'jak', 'lub',
+            'typ', 'rodzaj', 'produkt', 'pracy', 'do', 'na', 'od', 'ze', 'za',
+        ];
+        $out = [];
+        foreach (preg_split('/\s+/u', $this->fold($phrase)) ?: [] as $token) {
+            if ($token === '' || mb_strlen($token) < 5 || in_array($token, $stop, true)) {
+                continue;
+            }
+            if ($this->isGenericAssortmentNeedle($token)) {
+                continue;
+            }
+            $out[] = $this->needle($token);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Rdzeń dowodu. Słowa do 9 znaków („kalesony”) — 5 znaków, jak dotąd: łapią odmianę.
+     * Dłuższe — bez czterech ostatnich znaków (końcówka fleksyjna i ruchome „e”:
+     * „podnoskiem” → „podnos” trafia też „podnosek”), ale nie krócej: 5 znaków
+     * z „elektroizolacyjne” to „elekt”, które potwierdza karta „elektrostatyczne”.
+     */
+    private function needle(string $fold): string
+    {
+        return mb_substr($fold, 0, max(5, mb_strlen($fold) - 4));
     }
 
     /** Rzeczownik rodzaju („spodnie”, „kurtka”, „rękawice”) — nigdy nie jest dowodem cechy. */
@@ -318,10 +404,11 @@ final class CatalogSlangDictionary
      */
     public function evidenceGroups(string $query): array
     {
+        [$base, $conditions] = $this->evidenceNeedleGroups($query);
         $knit = [];
         $coat = [];
         $other = [];
-        foreach ($this->evidenceNeedles($query) as $needle) {
+        foreach ($base as $needle) {
             $needle = trim($needle);
             if ($needle === '' || preg_match('/^(ciecz|olej|plyn)/u', $needle) === 1) {
                 continue;
@@ -346,8 +433,11 @@ final class CatalogSlangDictionary
             array_push($coat, 'powlek', 'nakrap', 'nakrop', 'kropk', 'coat', 'dotted');
         }
         $groups = [];
-        foreach ([$knit, $coat, $other] as $group) {
-            $group = array_values(array_unique(array_filter($group)));
+        foreach ([$knit, $coat, $other, ...$conditions] as $group) {
+            $group = array_values(array_unique(array_filter(
+                $group,
+                static fn (string $needle): bool => $needle !== '' && preg_match('/^(ciecz|olej|plyn)/u', $needle) !== 1
+            )));
             if ($group !== []) {
                 $groups[] = $group;
             }
@@ -516,6 +606,11 @@ final class CatalogSlangDictionary
             return false;
         }
         foreach ($this->entries() as $entry) {
+            // Wpisy z `jargon=false` to cechy techniczne (klasa, norma, materiał) —
+            // słownik tylko dokłada im frazy cennika, nie zastępuje ich.
+            if (! $entry['jargon']) {
+                continue;
+            }
             foreach ($entry['terms'] as $term) {
                 if ($this->fold($term) === $token) {
                     return true;
@@ -524,6 +619,68 @@ final class CatalogSlangDictionary
         }
 
         return false;
+    }
+
+    /**
+     * Termin, który sam jest frazą cennika („narękawniki” → „narękawniki”,
+     * „kalosze” → „kalosze”): to nazwa katalogowa, nie żargon do przetłumaczenia,
+     * więc jako krok wyszukiwania ma zostać.
+     */
+    public function isCatalogPhraseTerm(string $normalizedToken): bool
+    {
+        $token = trim($normalizedToken);
+        if ($token === '' || mb_strlen($token) < 4) {
+            return false;
+        }
+        foreach ($this->entries() as $entry) {
+            $isTerm = false;
+            foreach ($entry['terms'] as $term) {
+                if ($this->fold($term) === $token) {
+                    $isTerm = true;
+                    break;
+                }
+            }
+            if (! $isTerm) {
+                continue;
+            }
+            foreach ($entry['phrases'] as $phrase) {
+                $words = preg_split('/\s+/u', $this->fold($phrase)) ?: [];
+                if (($words[0] ?? '') === $token) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Nagłówek wymagania: pierwsze zdanie (do kropki, średnika, myślnika albo
+     * nowej linii). Długie opisy SIWZ mają rzeczownik główny na początku, a dalej
+     * cechy i zastosowania („…łącznie z półmaskami”, „magazyny chemiczne”), które
+     * nie mogą przestawiać rodziny ani kategorii żargonu.
+     */
+    public static function requirementHead(string $query): string
+    {
+        $query = trim($query);
+        // Kropka po skrócie („ok. 475 mm”, „np. biura”, „rozm. 35-41”) nie kończy zdania.
+        $parts = preg_split('/(?:(?<!\bok|\bnp|\btj|\bwg|\btzn|\bok|\brozm|\bszt|\bkat|\bpoz|\bmin|\bmax)[.;!?]\s|\s[–—-]\s|\n)/u', $query, 2) ?: [$query];
+        $head = trim((string) ($parts[0] ?? ''), " \t,.;:–—-");
+        if ($head === '' || preg_match('/\p{L}/u', $head) !== 1) {
+            return $query;
+        }
+        $words = preg_split('/\s+/u', $head) ?: [];
+        if (count($words) > 12) {
+            $clause = trim((string) (preg_split('/,\s/u', $head, 2)[0] ?? ''));
+            $clauseWords = preg_split('/\s+/u', $clause) ?: [];
+            if (count($clauseWords) >= 2 && count($clauseWords) <= 16) {
+                return $clause;
+            }
+
+            return implode(' ', array_slice($words, 0, 12));
+        }
+
+        return $head;
     }
 
     public function promptHint(string $query): string
@@ -603,7 +760,10 @@ final class CatalogSlangDictionary
                 'terms' => $terms,
                 'phrases' => $phrases,
                 'note' => $note,
-                'jargon' => true,
+                // Flaga z config/admina: `false` to cecha techniczna (S5, chemiczne,
+                // antyprzebiciowe), której sanitizer kroków nie może wycinać jako żargonu.
+                // Wpis bez flagi (własny wpis admina) traktujemy jak żargon.
+                'jargon' => array_key_exists('jargon', $row) ? (bool) $row['jargon'] : true,
                 'keywords' => self::stringList($row['keywords'] ?? null, self::MAX_KEYWORDS, self::MAX_PHRASE_LEN),
                 'tags' => $tags,
             ];
@@ -653,8 +813,14 @@ final class CatalogSlangDictionary
      */
     private function contextCategories(string $query): array
     {
-        $norm = $this->fold($query);
-        $cats = self::familyCategories($this->assortment->family($query));
+        // Kontekst z nagłówka (rzeczownik na pozycji 0): „wymienne szelki” przy
+        // spodniobutach czy „z półmaskami” przy goglach nie mogą przełączyć
+        // słownika na asekurację / drogi oddechowe. Gdy nagłówek nie nazywa
+        // rodziny, zostaje rodzina z całego tekstu (krótkie zapytania bez zmian).
+        $head = self::requirementHead($query);
+        $norm = $this->fold($head);
+        $family = $this->assortment->family($head) ?? $this->assortment->family($query);
+        $cats = self::familyCategories($family);
         if (preg_match('/\bspawal/u', $norm) === 1) {
             $cats[] = 'spawanie';
         }
@@ -720,7 +886,11 @@ final class CatalogSlangDictionary
                 if (mb_strlen($qt) < 5) {
                     continue;
                 }
-                if (str_starts_with($n, $qt)) {
+                // Rdzeń, nie dowolny prefiks: „wampir” → „wampirki”, „rękaw” → „rękawy”
+                // (końcówka fleksyjna), ale nie „montaż” → „montażowe”, „mankiet” →
+                // „mankietówki”, „chwyt” → „chwytne” — to inne wyrazy, nie odmiana terminu.
+                if (str_starts_with($n, $qt)
+                    && preg_match('/^(?:[aeiouy]{1,2}|k[aio]|ek|ow|em|om)$/u', mb_substr($n, mb_strlen($qt))) === 1) {
                     $hit[] = $n;
                     break;
                 }

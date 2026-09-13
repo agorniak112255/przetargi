@@ -50,6 +50,29 @@ final class AdminCatalogSlangApiTest extends TestCase
             ->assertJsonPath('entries.0.keywords.0', 'dzianina');
     }
 
+    public function test_jargon_flag_false_survives_save_and_read(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        // Cecha techniczna (klasa obuwia) zapisana z `jargon=false` musi wrócić jako `false` —
+        // stare `normalize()` wymuszało `true` i sanitizer kroków wycinał S5 jak żargon.
+        $this->putJson('/api/admin/catalog-slang', [
+            'catalog_slang' => [
+                ['category' => 'stopy', 'terms' => ['S5'], 'phrases' => ['obuwie ochronne'], 'jargon' => false],
+                ['category' => 'rece', 'terms' => ['wampirki'], 'phrases' => ['rękawice powlekane'], 'jargon' => true],
+            ],
+        ])
+            ->assertOk()
+            ->assertJsonPath('entries.0.jargon', false)
+            ->assertJsonPath('entries.1.jargon', true);
+
+        $this->getJson('/api/admin/catalog-slang')
+            ->assertOk()
+            ->assertJsonPath('entries.0.terms.0', 'S5')
+            ->assertJsonPath('entries.0.jargon', false)
+            ->assertJsonPath('entries.1.jargon', true);
+    }
+
     public function test_catalog_slang_put_rejects_empty_terms(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
