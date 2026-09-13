@@ -56,6 +56,9 @@ final class ProductAiSearchManufacturerTokensTest extends TestCase
         $this->assertContains('CERVA', $this->invokePrivate($svc, 'manufacturerTokensFromQuery', self::CERVA_BOOTS));
         $this->assertSame(['RTELA'], $this->invokePrivate($svc, 'manufacturerTokensFromQuery', 'Rękawice nitrylowe RTELA'));
         $this->assertContains('Nortex', $this->invokePrivate($svc, 'manufacturerTokensFromQuery', 'Rękawice ocieplane pokryte gumą „Nortex”'));
+        // Marka w nawiasie: token to sama nazwa, nie „(UVEX)” — inaczej nie trafi w listę producentów katalogu.
+        $this->assertSame(['UVEX'], $this->invokePrivate($svc, 'manufacturerTokensFromQuery', 'Okulary ochronne (UVEX) z powłoką'));
+        $this->assertSame('UVEX', $this->invokePrivate($svc, 'localIntent', 'Okulary ochronne (UVEX) z powłoką')['manufacturer_requested']);
 
         // Krótkie zapytanie: wersaliki to marka spoza katalogu (zamienniki).
         $short = $this->invokePrivate($svc, 'localIntent', 'Rękawice nitrylowe RTELA');
