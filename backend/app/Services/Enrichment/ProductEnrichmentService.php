@@ -37,6 +37,8 @@ use Throwable;
 
 final class ProductEnrichmentService
 {
+    private const PACKAGING_MAX_LENGTH = 120;
+
     /** Słowa, które pasują do połowy katalogu BHP — same nie potwierdzają modelu. */
     /** Ile razy prosimy indeks o kolejną partię kart, zanim pójdziemy do wyszukiwarki. */
     private const CATALOG_EXTRA_ROUNDS = 3;
@@ -2618,7 +2620,7 @@ final class ProductEnrichmentService
                 $packaging = $label;
             }
 
-            return ['attributes' => $attributes, 'packaging' => $packaging];
+            return ['attributes' => $attributes, 'packaging' => $this->packagingThatFitsColumn($packaging)];
         }
         $blob = implode("\n", array_merge($specs, [$description]));
         $label = $sizes->labelFromTexts(
@@ -2636,7 +2638,16 @@ final class ProductEnrichmentService
             $packaging = $sizes->formatPackaging($found);
         }
 
-        return ['attributes' => $attributes, 'packaging' => $packaging];
+        return ['attributes' => $attributes, 'packaging' => $this->packagingThatFitsColumn($packaging)];
+    }
+
+    /**
+     * Kolumna products.packaging ma 120 znaków. Dłuższa lista rozmiarów (RADIM, MOFOS: rozmiary
+     * z kilku kart) wywracała zapis gotowego opisu błędem SQL — zostaje wtedy tylko w atrybucie „rozmiar”.
+     */
+    private function packagingThatFitsColumn(?string $packaging): ?string
+    {
+        return $packaging !== null && mb_strlen($packaging) <= self::PACKAGING_MAX_LENGTH ? $packaging : null;
     }
 
     /**

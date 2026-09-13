@@ -263,6 +263,28 @@ final class PriceListImportService
     }
 
     /**
+     * Nazwy, które import zapisałby z tego arkusza (po scaleniu rozmiarów i przycięciu pól), bez
+     * zapisu do bazy — dla naprawy nazw zapisanych wcześniej z sąsiedniego wiersza cennika.
+     *
+     * @param  array{sheets: list<array<string, mixed>>}  $mapping
+     * @return array<string, string> SKU → nazwa
+     */
+    public function productNamesFromMapping(string $path, array $mapping, string $manufacturer): array
+    {
+        $names = [];
+        foreach ($this->collectFromMapping($path, $mapping, null, $manufacturer)['products'] as $product) {
+            $sku = (string) ($product['sku'] ?? '');
+            unset($product['sku'], $product['_purchase_from_file']);
+            $name = trim((string) ($this->clampProductFields($product)['name'] ?? ''));
+            if ($sku !== '' && $name !== '') {
+                $names[$sku] = $name;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
      * @param  array{sheets: list<array<string, mixed>>}  $mapping
      * @return array{
      *     items: list<array<string, mixed>>,
@@ -595,7 +617,7 @@ final class PriceListImportService
         $headerSkips = 0;
 
         $defaultCurrency = $this->currencyDetector->normalize(null, 'PLN');
-        $carry = ['name' => null, 'category' => null, 'group' => null];
+        $carry = ['name' => null, 'category' => null, 'group' => null, 'name_group' => null];
         foreach ($dataRows as $index => $row) {
             $excelRow = $firstDataExcelRow + $index;
             $parsed = $this->parseRow(
@@ -708,7 +730,7 @@ final class PriceListImportService
                 );
             $dataRows = array_slice($all, $headerIdx + 1);
             $rowsTotal += count($dataRows);
-            $carry = ['name' => null, 'category' => null, 'group' => null];
+            $carry = ['name' => null, 'category' => null, 'group' => null, 'name_group' => null];
 
             foreach ($dataRows as $index => $row) {
                 $excelRow = $headerExcelRow + $index + 1;
@@ -1163,7 +1185,7 @@ final class PriceListImportService
     /**
      * @param  array<int, mixed>  $row
      * @param  array<string, int>  $map
-     * @param  array{name: ?string, category: ?string, group: ?string}  $carry
+     * @param  array{name: ?string, category: ?string, group: ?string, name_group?: ?string, row_name?: ?string, row_key?: ?string}  $carry
      * @return array{status: string, product?: array<string, mixed>, message?: string}
      */
     private function parseRow(
@@ -1177,7 +1199,7 @@ final class PriceListImportService
         ?array &$carry = null,
     ): array {
         if ($carry === null) {
-            $carry = ['name' => null, 'category' => null, 'group' => null];
+            $carry = ['name' => null, 'category' => null, 'group' => null, 'name_group' => null];
         }
 
         $prefix = $sheetName !== null ? "[{$sheetName}] " : '';
@@ -1206,16 +1228,37 @@ final class PriceListImportService
         if ($groupKey !== null) {
             $carry['group'] = $groupKey;
         }
+        // Model z kolumny nazwy modelu (Canis: „LESNÍK”) nie jest kodem grupy, ale mówi, czy wiersz
+        // bez nazwy to wariant wiersza wyżej, czy osobny wyrób.
+        $rowModelName = isset($map['model_name']) ? trim((string) ($row[$map['model_name']] ?? '')) : '';
+        $carryKey = $groupKey ?? ($rowModelName !== '' ? 'model_name:'.mb_strtolower($rowModelName) : null);
 
         $description = null;
         $name = $rawName;
         if ($rawName !== '' && $this->isDescriptionLike($rawName)) {
             $description = $rawName;
-            $name = ($carry['name'] ?? null) !== null
+            // Nazwa z wiersza wyżej tylko w obrębie tego samego modelu (DuPont: tytuł w 1. wierszu
+            // Reference, opis w kolejnych). Bez wspólnego klucza modelu każdy wiersz opisuje własny
+            // wyrób — w cenniku Canis „Men´s shorts CXS LEONIS” przechodziło na setki kolejnych
+            // pozycji (polo DOVER jako spodnie, koszulka NOME jako fartuch Ansell).
+            $sameModelTitle = ($carry['name'] ?? null) !== null
+                && $groupKey !== null
+                && ($carry['name_group'] ?? null) === $groupKey;
+            $name = $sameModelTitle
                 ? (string) $carry['name']
                 : $this->titleFromDescription($rawName);
             if (($carry['name'] ?? null) === null) {
                 $carry['name'] = $name;
+                $carry['name_group'] = $groupKey;
+            }
+        } elseif ($rawName === '' && $carryKey !== null) {
+            // wiersz bez nazwy dziedziczy ją tylko po wierszu tego samego modelu; inaczej nazwą jest model
+            if (($carry['row_name'] ?? null) !== null && ($carry['row_key'] ?? null) === $carryKey) {
+                $name = (string) $carry['row_name'];
+            } elseif (($carry['name'] ?? null) !== null && $groupKey !== null && ($carry['name_group'] ?? null) === $groupKey) {
+                $name = (string) $carry['name'];
+            } else {
+                $name = $rowModelName;
             }
         } elseif ($rawName === '' && ($carry['name'] ?? null) !== null) {
             $name = (string) $carry['name'];
@@ -1229,6 +1272,7 @@ final class PriceListImportService
         if ($priceRaw === null || $priceRaw === '') {
             if ($rawName !== '' && ! $this->isDescriptionLike($rawName)) {
                 $carry['name'] = $rawName;
+                $carry['name_group'] = $groupKey;
             } elseif ($sku !== '' && $name === '') {
                 $carry['category'] = $sku;
             }
@@ -1341,9 +1385,13 @@ final class PriceListImportService
 
         if ($rawName !== '' && ! $this->isDescriptionLike($rawName)) {
             $carry['name'] = $rawName;
+            $carry['name_group'] = $groupKey;
         } elseif (($carry['name'] ?? null) === null && $name !== '') {
             $carry['name'] = $name;
+            $carry['name_group'] = $groupKey;
         }
+        $carry['row_name'] = $name;
+        $carry['row_key'] = $carryKey;
 
         return [
             'status' => 'ok',
@@ -1422,7 +1470,7 @@ final class PriceListImportService
     /**
      * @param  array<int, mixed>  $row
      * @param  array<string, int>  $map
-     * @param  array{name: ?string, category: ?string, group: ?string}  $carry
+     * @param  array{name: ?string, category: ?string, group: ?string, name_group?: ?string, row_name?: ?string, row_key?: ?string}  $carry
      */
     private function resolveGroupKey(array $row, array $map, array $carry): ?string
     {

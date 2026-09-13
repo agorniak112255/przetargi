@@ -56,6 +56,39 @@ final class PriceListDescriptiveNameColumnTest extends TestCase
         }
     }
 
+    /**
+     * Cennik Canis 2026: długa nazwa w wierszu („High visible, polo shirt, …”) i wiersz bez nazwy
+     * („LESNÍK”) dostawały nazwę z wcześniejszego wiersza innego wyrobu — 459 produktów z cudzą nazwą.
+     */
+    public function test_row_name_is_not_taken_from_another_product_above(): void
+    {
+        $path = $this->makeCxsLikeSpreadsheet([
+            [287, '1112-001-000-00', 'LEONIS', null, 'Men´s shorts CXS LEONIS, black with blue/red accessories', 'pcs', '1/20', 40.0],
+            [156, '1113-001-000-00', 'DOVER', null, 'High visible, polo shirt, 100% polyester, colour orange, yellow, size M – 3XL, EN ISO 20471, EN 13688', 'pcs', '1/20', 26.36],
+            [165, '1130-135-000-00', 'NOME', null, 'T-shirt antistatic, ESD  with short sleeve,  material: jersey 96% cotton 4% carbon fibre, EN 1149-5, EN 61340-5-1', 'pcs', '1/60', 30.55],
+            [48, '1010-100-406-00', 'NAOS', null, 'Men´s jacket CXS NAOS, blue-blue colour with HV yellow accessories', 'pcs', '1/20', 90.0],
+            [53, '1020-100-406-00', 'NAOS', null, 'Men´s trousers CXS NAOS HV, blue-blue colour with HV yellow accessories, 65% polyester 35% cotton, 245 g/m2, size 46 - 64', 'pcs', '1/20', 80.0],
+            [163, '1120-022-503-00', 'LESNÍK', null, null, null, null, 158.56],
+            [258, '1820-157-000-00', 'LOKI', 'WINTER', 'Winter knitted beanie, doubled- inside with fleece, black colour, 100% acrylic, universal size for all', 'pcs', '1/10', 9.36],
+            [258, '1820-157-805-00', 'LOKI', 'SALE', null, null, null, 7.5],
+        ]);
+        try {
+            $mapping = app(SpreadsheetColumnMapper::class)->refineMapping($path, $this->mapping());
+            $names = app(PriceListImportService::class)->productNamesFromMapping($path, $mapping, 'Canis');
+
+            $this->assertStringContainsString('polo shirt', $names['1113-001-000-00'] ?? '');
+            $this->assertStringContainsString('T-shirt antistatic', $names['1130-135-000-00'] ?? '');
+            $this->assertStringContainsString('trousers CXS NAOS', $names['1020-100-406-00'] ?? '', 'spodnie tego samego modelu nie dziedziczą nazwy kurtki');
+            foreach (['1113-001-000-00', '1130-135-000-00'] as $sku) {
+                $this->assertStringNotContainsString('LEONIS', $names[$sku] ?? '');
+            }
+            $this->assertSame('LESNÍK', $names['1120-022-503-00'] ?? null, 'wiersz bez nazwy innego modelu nosi nazwę modelu');
+            $this->assertStringContainsString('knitted beanie', $names['1820-157-805-00'] ?? '', 'wariant tego samego modelu dziedziczy nazwę');
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_sparse_name_column_is_not_replaced(): void
     {
         // rozmiarówka: nazwa tylko w 1. wierszu modelu, opis EN w każdym — nazwa zostaje
@@ -114,7 +147,10 @@ final class PriceListDescriptiveNameColumnTest extends TestCase
         ];
     }
 
-    private function makeCxsLikeSpreadsheet(): string
+    /**
+     * @param  list<list<mixed>>  $extraRows
+     */
+    private function makeCxsLikeSpreadsheet(array $extraRows = []): string
     {
         $rows = [
             [null, null, 'Název', null, null, 'MJ', 'bal./kar.', 'Price PLN'],
@@ -132,6 +168,7 @@ final class PriceListDescriptiveNameColumnTest extends TestCase
         }
         // nowość: w kolumnie uwag stoi „NEW 6/2026”, kod jest w kolumnie kodu
         $rows[] = ['x', '1010-135-710-00', 'SOLIS FLEX', 'NEW 6/2026', 'Jacket CXS SOLIS FLEX, ladies, grey-black, size S - 3XL', 'pcs', '1/20', 78.18];
+        array_push($rows, ...$extraRows);
 
         return $this->saveRows($rows, 'Price list');
     }
