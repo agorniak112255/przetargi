@@ -77,6 +77,21 @@ final class CatalogSlangDictionary
     /** @var array<string, array{needed: string, search_phrases: list<string>, family: string|null}|null> */
     private array $rewriteCache = [];
 
+    /** Ile różnych zapytań trzymamy w pamięci wyników analizy zapytania (potem pamięć zaczyna się od nowa). */
+    private const QUERY_CACHE_LIMIT = 256;
+
+    /**
+     * Grupy dowodów i test nitrylu zależą tylko od zapytania, a bramki wołają je dla każdej sprawdzanej karty
+     * (setki kart na pozycję, kilka poziomów kaskady). Liczone od nowa kosztowały 5–6 ms na wywołanie —
+     * dziesiątki sekund na przetarg (pomiar na kopii katalogu, 13.09).
+     *
+     * @var array<string, list<list<string>>>
+     */
+    private array $evidenceGroupsCache = [];
+
+    /** @var array<string, bool> */
+    private array $nitrileQueryCache = [];
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly PpeAssortment $assortment,
@@ -404,6 +419,18 @@ final class CatalogSlangDictionary
      */
     public function evidenceGroups(string $query): array
     {
+        if (count($this->evidenceGroupsCache) >= self::QUERY_CACHE_LIMIT) {
+            $this->evidenceGroupsCache = [];
+        }
+
+        return $this->evidenceGroupsCache[$query] ??= $this->computeEvidenceGroups($query);
+    }
+
+    /**
+     * @return list<list<string>>
+     */
+    private function computeEvidenceGroups(string $query): array
+    {
         [$base, $conditions] = $this->evidenceNeedleGroups($query);
         $knit = [];
         $coat = [];
@@ -510,6 +537,15 @@ final class CatalogSlangDictionary
 
     /** Nitrylki = materiał z nitrylu, nie dzianina z nitrylem na dłoni. */
     public function isNitrileMaterialQuery(string $query): bool
+    {
+        if (count($this->nitrileQueryCache) >= self::QUERY_CACHE_LIMIT) {
+            $this->nitrileQueryCache = [];
+        }
+
+        return $this->nitrileQueryCache[$query] ??= $this->computeIsNitrileMaterialQuery($query);
+    }
+
+    private function computeIsNitrileMaterialQuery(string $query): bool
     {
         $q = $this->fold($query);
         if (preg_match('/(wampir|piank|nakrap|nakrop|kropk|powlek|dzian|knit)/u', $q) === 1) {

@@ -296,14 +296,14 @@ final class ProductAiSearchService
                 $onProgress($stage, $done, $total);
             }
         };
-        $intents = $this->analyzeQueriesForRetrieve($clean, $task, $maxConcurrent, $report);
+        $intents = $this->clock('understand', fn (): array => $this->analyzeQueriesForRetrieve($clean, $task, $maxConcurrent, $report));
         $report(self::PROGRESS_STAGE_CATALOG, 0, count($clean));
         $this->prefetchVectorQueries($clean, $intents);
         $retrieveIntents = [];
         $modelStates = [];
         foreach ($clean as $i => $query) {
             $retrieveIntents[$i] = $intents[$i];
-            $prepared = $this->prepareSearch($query, $intents[$i], $limit);
+            $prepared = $this->clock('catalog', fn (): array => $this->prepareSearch($query, $intents[$i], $limit));
             if ($task === AiTask::TenderMatch && $prepared['rank_cards'] !== null) {
                 $prepared['rank_cards'] = $prepared['rank_cards']->take(12)->values();
             }
@@ -1062,7 +1062,7 @@ final class ProductAiSearchService
         foreach ($empty as $i) {
             $current = $intents[$i];
             if ($this->intentChanged($retrieveIntents[$i], $current)) {
-                $prepared = $this->prepareSearch($clean[$i], $current, $limit);
+                $prepared = $this->clock('catalog', fn (): array => $this->prepareSearch($clean[$i], $current, $limit));
                 if ($prepared['rank_cards'] === null) {
                     $done[$i] = $this->searchResult(
                         $clean[$i],
@@ -1101,7 +1101,7 @@ final class ProductAiSearchService
                     continue;
                 }
                 $intents[$i] = $rewritten;
-                $prepared = $this->prepareSearch($clean[$i], $rewritten, $limit);
+                $prepared = $this->clock('catalog', fn (): array => $this->prepareSearch($clean[$i], $rewritten, $limit));
                 if ($prepared['rank_cards'] === null) {
                     $done[$i] = $this->searchResult(
                         $clean[$i],

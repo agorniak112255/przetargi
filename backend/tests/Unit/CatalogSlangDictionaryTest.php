@@ -12,6 +12,23 @@ final class CatalogSlangDictionaryTest extends TestCase
 {
     use RefreshDatabase;
 
+    /** Pamięć wyników analizy zapytania (wydajność bramek) nie miesza zapytań — wynik jak ze świeżego słownika. */
+    public function test_query_analysis_cache_returns_same_results_as_fresh_dictionary(): void
+    {
+        $cached = app()->make(CatalogSlangDictionary::class);
+        $queries = [
+            'Rękawice wampirki uniwersalne',
+            'Rękawice nitrylowe lekkie',
+            'Płukanka do oczu 500 ml w butelce z wanienką',
+            'Rękawice wampirki uniwersalne',
+        ];
+        foreach ($queries as $query) {
+            $fresh = app()->make(CatalogSlangDictionary::class);
+            $this->assertSame($fresh->evidenceGroups($query), $cached->evidenceGroups($query), $query);
+            $this->assertSame($fresh->isNitrileMaterialQuery($query), $cached->isNitrileMaterialQuery($query), $query);
+        }
+    }
+
     public function test_wampirki_expand_to_coated_knit_gloves(): void
     {
         $phrases = $this->dict()->phrasesFor('Rękawice wampirki uniwersalne');

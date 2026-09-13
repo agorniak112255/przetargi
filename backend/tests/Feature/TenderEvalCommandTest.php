@@ -87,6 +87,7 @@ final class TenderEvalCommandTest extends TestCase
 
         $this->artisan('tenders:eval', ['--file' => $this->golden, '--filter' => '', '--runs' => 2, '--save' => true])
             ->expectsOutputToContain('test-03-sandaly')
+            ->expectsOutputToContain('Czas przebiegu 1:')
             ->expectsOutputToContain('Podsumowanie')
             ->expectsOutputToContain('Stabilne między przebiegami')
             ->expectsOutputToContain('razem (2 przebiegi)')

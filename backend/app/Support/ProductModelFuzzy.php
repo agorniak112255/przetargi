@@ -11,6 +11,14 @@ use App\Models\Product;
  */
 final class ProductModelFuzzy
 {
+    /**
+     * Igły modelu zależą tylko od wymagania, a score()/matches() wołają je dla każdej sprawdzanej karty
+     * (ok. 1,3 ms na wywołanie przy opisie SIWZ). Pamięć na ostatnie wymagania, potem od nowa.
+     *
+     * @var array<string, list<string>>
+     */
+    private array $needlesCache = [];
+
     private const STOP = [
         'rekawice', 'rekawica', 'ochronne', 'ochronna', 'ochronny', 'robocze', 'robocza',
         'produkt', 'art', 'kat', 'para', 'par', 'szt', 'sztuk', 'the', 'and', 'for',
@@ -106,6 +114,18 @@ final class ProductModelFuzzy
      * @return list<string>
      */
     public function needles(string $requirement): array
+    {
+        if (count($this->needlesCache) >= 256) {
+            $this->needlesCache = [];
+        }
+
+        return $this->needlesCache[$requirement] ??= $this->computeNeedles($requirement);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function computeNeedles(string $requirement): array
     {
         $text = $this->stripNorms($requirement);
         $out = [];

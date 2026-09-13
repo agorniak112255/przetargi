@@ -19,6 +19,21 @@ final class ProductModelFuzzyTest extends TestCase
         $this->fuzzy = new ProductModelFuzzy;
     }
 
+    /** Pamięć igieł (wydajność: score() woła needles() dla każdej karty) nie miesza wymagań. */
+    #[Test]
+    public function needles_cache_does_not_mix_requirements(): void
+    {
+        $first = 'Rękawice MAPA TEPM-ICE 700 · EN 388 EN 511 EN ISO 21420';
+        $second = 'Okulary ochronne MSA PERSPECTA 010';
+        $expectedFirst = (new ProductModelFuzzy)->needles($first);
+        $expectedSecond = (new ProductModelFuzzy)->needles($second);
+
+        $this->assertSame($expectedFirst, $this->fuzzy->needles($first));
+        $this->assertSame($expectedSecond, $this->fuzzy->needles($second));
+        $this->assertSame($expectedFirst, $this->fuzzy->needles($first));
+        $this->assertNotSame($expectedFirst, $expectedSecond);
+    }
+
     #[Test]
     public function tepm_ice_matches_temp_ice_and_not_other_gloves(): void
     {

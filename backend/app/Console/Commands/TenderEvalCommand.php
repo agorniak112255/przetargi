@@ -99,8 +99,10 @@ final class TenderEvalCommand extends Command
         foreach ($cases as $case) {
             $results[$case['id']] = ['id' => $case['id'], 'expected_skus' => $case['expected_skus'], 'forbidden_skus' => $case['forbidden_skus'], 'runs' => []];
         }
+        $runTimings = [];
         for ($run = 1; $run <= $runs; $run++) {
             $this->line("Przebieg {$run}/{$runs}…");
+            $searchStarted = hrtime(true);
             $search = app()->make(ProductAiSearchService::class);
             $matcher = app()->make(ProductMatchService::class);
             $rows = $search->searchMany(
@@ -110,6 +112,9 @@ final class TenderEvalCommand extends Command
                 AiTask::ProductSearch,
                 $settings->matchConcurrency(),
             );
+            $searchMs = (int) round((hrtime(true) - $searchStarted) / 1e6);
+            $stages = is_array($search->lastTrace()['timings_ms'] ?? null) ? $search->lastTrace()['timings_ms'] : [];
+            $decisionStarted = hrtime(true);
             foreach ($cases as $i => $case) {
                 $row = is_array($rows[$i] ?? null) ? $rows[$i] : [];
                 $item = new TenderItem;
@@ -120,6 +125,20 @@ final class TenderEvalCommand extends Command
                     $results[$case['id']]['runs'][] = ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => null, 'model_state' => null, 'reason' => 'błąd: '.$e->getMessage()];
                 }
             }
+            // Gdzie idzie czas przebiegu (produkcja 13.09: pomiar trwał kilka razy dłużej po zmianach wyszukiwania).
+            $decisionMs = (int) round((hrtime(true) - $decisionStarted) / 1e6);
+            $understandMs = (int) ($stages['understand'] ?? 0);
+            $catalogMs = (int) ($stages['catalog'] ?? 0);
+            $this->line(sprintf(
+                'Czas przebiegu %d: %.1f s · zrozumienie %.1f s · katalog %.1f s · ranking modelu %.1f s · decyzja %.1f s',
+                $run,
+                ($searchMs + $decisionMs) / 1000,
+                $understandMs / 1000,
+                $catalogMs / 1000,
+                max(0, $searchMs - $understandMs - $catalogMs) / 1000,
+                $decisionMs / 1000,
+            ));
+            $runTimings[] = ['run' => $run, 'search_ms' => $searchMs, 'decision_ms' => $decisionMs, 'stages_ms' => $stages];
         }
 
         $results = array_values($results);
@@ -133,7 +152,7 @@ final class TenderEvalCommand extends Command
             $this->renderBaseline($baseline, $results);
         }
         if ($this->option('save')) {
-            $this->saveReport(['header' => $header, 'summary' => $summary, 'cases' => $results]);
+            $this->saveReport(['header' => $header, 'summary' => $summary, 'timings' => $runTimings, 'cases' => $results]);
         }
 
         return self::SUCCESS;
