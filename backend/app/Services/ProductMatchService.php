@@ -16,6 +16,7 @@ use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
 use App\Support\ProductModelFuzzy;
 use App\Support\ProductSizeVariant;
+use App\Support\TechnicalAbbreviations;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Throwable;
@@ -1075,16 +1076,25 @@ final class ProductMatchService
     }
 
     /**
-     * Kody z SIWZ: SKU z cyfrą oraz krótkie kody WIELKIMI literami (RNITZ, REJS).
-     * Pomija gołe 2–4 cyfry (rozmiary, „600”).
-     *
-     * @return list<string>
+     * Tekst znormalizowany bez numerów norm z rokiem i poprawką („en 388 2016 a1 2018”,
+     * „pn en 140 2004”, „iso 13997”), numerów rozporządzeń („ue 2016 425”) i liczb z jednostką
+     * („5000 ppm”, „500 ml”) — inaczej rok, numer rozporządzenia albo stężenie zostaje kodem produktu.
      */
     private function stripNormNumbers(string $text): string
     {
-        $t = preg_replace('/\ben(?:\s*iso)?\s*\d+(?:\s+\d+)*/u', ' ', $text) ?? $text;
+        $t = preg_replace(
+            '/\b(?:pn\s*)?en(?:\s*iso)?\s*\d+(?:\s+\d+)*(?:\s+a\d+(?:\s+\d+)?)*/u',
+            ' ',
+            $text
+        ) ?? $text;
+        $t = preg_replace('/\biso\s*\d+(?:\s+\d+)*/u', ' ', $t) ?? $t;
+        $t = preg_replace('/\b(?:ue|we|eu)\s+\d{4}\s+\d{2,4}\b/u', ' ', $t) ?? $t;
 
-        return preg_replace('/\biso\s*\d+/u', ' ', $t) ?? $t;
+        return preg_replace(
+            '/\b\d+\s+(?:ppm|ml|mm|cm|m|g|kg|l|szt|par|kv|v|db|min|mies|lat|c|m\s+s)\b/u',
+            ' ',
+            $t
+        ) ?? $t;
     }
 
     /** Ten sam typ w SIWZ i w nazwie produktu (kominiarka ↔ kominiarka). */
@@ -1106,22 +1116,30 @@ final class ProductMatchService
         return 40;
     }
 
+    /**
+     * Kody z SIWZ: SKU z cyfrą oraz krótkie kody WIELKIMI literami (RNITZ, REJS).
+     * Pomija gołe 2–4 cyfry (rozmiary, „600”), skróty norm/klas/materiałów (ESD, SRC, PVC, FDA, III)
+     * oraz lata i poprawki norm („EN 420:2003+A1:2009”) — opis bez marki i modelu ma nie mieć kodów.
+     *
+     * @return list<string>
+     */
     private function codeCandidates(string $req): array
     {
         $out = [];
-        $normSkip = ['en', 'iso', 'ce', 'ppe', 'kat'];
 
         if (preg_match_all('/\b[A-Z]{3,10}\b/u', $req, $m2)) {
             foreach ($m2[0] as $raw) {
                 $c = $this->normalize($raw);
-                if ($c !== '' && ! in_array($c, self::STOPWORDS, true) && ! in_array($c, $normSkip, true)
+                if ($c !== '' && ! in_array($c, self::STOPWORDS, true) && ! TechnicalAbbreviations::isNormOrClass($raw)
                     && ! $this->isGenericSiwzCode($c) && ! $this->isClothingSize($c)) {
                     $out[] = $c;
                 }
             }
         }
 
-        $stripped = $this->stripNormNumbers($this->normalize($req));
+        // pełne wyrażenia norm (EN 420:2003+A1:2009, EN ISO 20345:2011) zna fuzzy; po normalizacji
+        // dwukropki i plusy znikają, więc resztę (ue 2016 425, 5000 ppm) zdejmuje stripNormNumbers
+        $stripped = $this->stripNormNumbers($this->normalize($this->modelFuzzy->stripNorms($req)));
         if (preg_match_all('/\b[A-Za-z]{0,6}\d[A-Za-z0-9\-\/]{1,}\b/', $stripped, $m)) {
             foreach ($m[0] as $raw) {
                 $c = preg_replace('/\s+/', '', $this->normalize($raw)) ?? '';
@@ -1671,7 +1689,8 @@ final class ProductMatchService
                 'score' => $honest,
                 // Wiersz katalogowy/skrótu zachowuje swoje źródło także jako zamiennik — to jego
                 // pochodzenie (nie ocena modelu); progi i zaufanie czytają je po źródle.
-                'source' => $exact || $this->isCatalogRowSource($source) ? $source : 'ai_substitute',
+                'source' => $exact || $this->isCatalogRowSource($source) ? $source
+                    : ($this->qualifiesAsBrandSubstitute($requirement, $product) ? 'ai_substitute' : $source),
                 'exact' => $exact,
                 'evidence' => $explained['score'],
                 'hard' => $this->hardEvidenceLevel($requirement, $product, $explained),
@@ -1733,25 +1752,30 @@ final class ProductMatchService
         return $this->aiModelState[$this->aiCandidatesCacheKey($requirement)] ?? 'unknown';
     }
 
-    /** Marka/model z SIWZ, ale inny producent / inny model w katalogu — zamiennik merytoryczny. */
+    /**
+     * Zamiennik merytoryczny: SIWZ nazywa model, a karta go nie honoruje (także inny model tej samej
+     * marki), albo wskazuje producenta spoza katalogu / innego niż na karcie. Opis bez marki i modelu
+     * nie ma czego „zastępować” — trafienie modelu zostaje zwykłym „ai”, bez etykiety „Zamiennik”.
+     */
     private function qualifiesAsBrandSubstitute(string $requirement, Product $product): bool
     {
         if ($this->honorsSpecificModelCodes($requirement, $product)) {
             return false;
         }
-
-        $requestedMfg = $this->requestedManufacturerFromSiwz($requirement);
-        if ($requestedMfg !== null) {
-            $canonical = $this->manufacturerContext->matchManufacturer($requestedMfg);
-            if ($canonical !== null && $this->manufacturerContext->hasProductsForManufacturer($canonical)) {
-                return ! $this->productMatchesManufacturer($product, $canonical);
-            }
-
+        if ($this->modelFuzzy->hasNamedModel($requirement) && ! $this->modelFuzzy->matches($requirement, $product)) {
             return true;
         }
 
-        return $this->modelFuzzy->hasNamedModel($requirement)
-            && ! $this->modelFuzzy->matches($requirement, $product);
+        $requestedMfg = $this->requestedManufacturerFromSiwz($requirement);
+        if ($requestedMfg === null) {
+            return false;
+        }
+        $canonical = $this->manufacturerContext->matchManufacturer($requestedMfg);
+        if ($canonical !== null && $this->manufacturerContext->hasProductsForManufacturer($canonical)) {
+            return ! $this->productMatchesManufacturer($product, $canonical);
+        }
+
+        return true;
     }
 
     /**

@@ -596,7 +596,7 @@ final class ProductModelFuzzy
         if (preg_match('/\d\s*(?:%|°)/u', $num) === 1) {
             return true;
         }
-        $units = 'ml|mm|cm|m|g|kg|l|szt|par|kv|v|db|min|mies|lat|%|°c|c|m\/s';
+        $units = 'ml|mm|cm|m|g|kg|l|szt|par|kv|v|db|min|mies|lat|ppm|%|°c|c|m\/s';
         if (preg_match('/^\(?[+-]?\d+(?:[.,]\d+)?(?:'.$units.')\)?[.,;:]?$/u', $num) === 1) {
             return true;
         }
@@ -749,7 +749,8 @@ final class ProductModelFuzzy
         return 2;
     }
 
-    private function stripNorms(string $text): string
+    /** Tekst bez numerów norm — także dla ProductMatchService::codeCandidates (lata i poprawki norm to nie kody). */
+    public function stripNorms(string $text): string
     {
         $t = mb_strtolower($text);
         $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z'];

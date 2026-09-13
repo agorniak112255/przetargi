@@ -99,6 +99,73 @@ final class TenderMatchBrandSubstituteTest extends TestCase
         );
     }
 
+    /**
+     * Poz. 14 z produkcji: pochłaniacz A2 „(5000 ppm)” trafiał we właściwą kartę S565A202 jako
+     * `ai_substitute` 99% „Zamiennik — inna marka/model niż w SIWZ”, bo „5000” uchodziło za kod
+     * modelu. Opis bez marki i modelu nie ma czego zastępować — to zwykłe trafienie modelu.
+     */
+    public function test_descriptive_line_without_brand_or_model_is_plain_ai_match_not_substitute(): void
+    {
+        $absorber = Product::query()->create([
+            'sku' => 'S565A202',
+            'name' => 'Pochłaniacz gazów i par A2, bagnetowy',
+            'manufacturer' => 'SECURA',
+            'category' => 'Ochrona dróg oddechowych',
+            'ppe_family' => 'respiratory',
+            'norms' => 'EN 14387',
+            'description' => 'Pochłaniacz A2 do półmasek i masek pełnotwarzowych ze złączem bagnetowym; gazy i pary organiczne o temperaturze wrzenia powyżej 65°C; obudowa z tworzywa sztucznego; łączony z filtrami cząstek tej samej serii; 2 sztuki na maskę.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 30,
+            'stock' => 20,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $requirement = 'Pochłaniacz gazów i par klasy A2 – element oczyszczający do sprzętu ochrony układu oddechowego, chroniący przed gazami i parami substancji organicznych o temperaturze wrzenia powyżej 65°C (m.in. alkohole, aldehydy, estry, etery, ketony, kwasy organiczne, styren) przy łącznym stężeniu objętościowym w powietrzu do 0,5% (5000 ppm). Wymagane: klasa A2 zgodnie z normą EN 14387; obudowa z tworzywa sztucznego; bagnetowy system mocowania zapewniający dokładne i bezpieczne osadzenie na półmaskach i maskach pełnotwarzowych ze złączem bagnetowym; możliwość łączenia z filtrami cząstek tej samej serii; stosowany w komplecie po 2 sztuki na maskę lub półmaskę.';
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'pochłaniacz gazów i par A2 bagnetowy',
+            'search_phrases' => ['pochłaniacz A2', 'bagnetowy'],
+            'constraints' => ['klasa A2', 'EN 14387'],
+            'matches' => [
+                ['id' => $absorber->id, 'score' => 96, 'reason' => 'pochłaniacz A2 bagnetowy EN 14387'],
+            ],
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $item = $this->itemFor('PRZ/SUB/3', $requirement);
+
+        $this->postJson("/api/tenders/{$item->tender_id}/match", ['only_empty' => true])
+            ->assertOk()
+            ->assertJsonPath('matched', 1);
+
+        $item->refresh();
+        $this->assertSame($absorber->id, $item->main_product_id);
+        $this->assertSame('ai', $item->match_source, 'bez marki i modelu w SIWZ nie ma zamiennika');
+        $this->assertNotContains('brand_substitute', array_column($item->ai_match_reasons ?? [], 'code'));
+        $this->assertGreaterThanOrEqual(65, (int) $item->ai_match_percent);
+    }
+
+    private function itemFor(string $number, string $requirement): TenderItem
+    {
+        $tender = Tender::query()->create([
+            'number' => $number,
+            'title' => 'Test',
+            'client_id' => Client::query()->create(['name' => 'K'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 0,
+            'last_activity_at' => now(),
+        ]);
+
+        return TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => $requirement,
+            'quantity' => 1,
+            'status' => 'brak',
+        ]);
+    }
+
     public function test_named_model_with_number_picks_that_model_not_sibling(): void
     {
         $glasses = Product::query()->create([

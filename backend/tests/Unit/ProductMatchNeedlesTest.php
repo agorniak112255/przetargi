@@ -172,9 +172,85 @@ final class ProductMatchNeedlesTest extends TestCase
         $this->assertContains('brand', $this->reasonCodes('Półmaska SECURA 3000 z nagłowiem jednoczęściowym', $secura));
     }
 
+    /**
+     * Skróty norm/klas/materiałów (FDA, ESD, SRC, PVC, TPR, NBR, NDS, SRA, AQL, III), lata i poprawki
+     * norm (EN 420:2003+A1:2009, EN 388:2016), numer rozporządzenia ((UE) 2016/425) i stężenie
+     * (5000 ppm) nie są kodem produktu — inaczej właściwa karta bez tej liczby w SKU stawała się
+     * „zamiennikiem”, a SKU zaczynające się od roku trafiało jako kod.
+     */
+    #[Test]
+    #[DataProvider('descriptiveLines')]
+    public function descriptive_line_has_no_code_candidates(int $line): void
+    {
+        $codes = $this->codeCandidates(self::REQUIREMENTS[$line]);
+
+        $this->assertSame([], $codes, 'kody: '.implode(', ', $codes));
+        $this->assertNull($this->strongSkuPick(self::REQUIREMENTS[$line], new Collection([])), 'bez kodów pusta pula nie jest dobierana po LIKE');
+    }
+
+    #[Test]
+    public function real_codes_in_siwz_are_still_code_candidates(): void
+    {
+        $this->assertContains('6503', $this->codeCandidates('Półmaska 3M 6503 z zaworem'));
+        $this->assertContains('rnitz', $this->codeCandidates('Rękawice robocze RNITZ-M ze ściągaczem'));
+        $this->assertContains('hy51', $this->codeCandidates('Zestaw higieniczny do nauszników 3M OPTIME I HY51'));
+        $this->assertSame(['edge'], $this->codeCandidates('Rękawice EDGE 48-140 ESD, 1000 szt., EN 388:2016+A1:2018, (WE) 1907/2006'));
+    }
+
+    /** Poz. 7 („EN 388:2016”): SKU „2016-BLK” dostawało 70 pkt za kod „2016” — rok normy to nie SKU. */
+    #[Test]
+    public function norm_year_is_not_a_sku_match(): void
+    {
+        $req = self::REQUIREMENTS[7];
+        $card = $this->card('2016-BLK', 'Rękawice 2016-BLK', 'X');
+
+        $this->assertSame(0, $this->skuMatchScore($req, $card));
+        $this->assertFalse($this->hasStrongSku($req, $card));
+        $this->assertNotContains('sku', $this->reasonCodes($req, $card));
+    }
+
+    /**
+     * „Zamiennik — inna marka/model niż w SIWZ” tylko gdy SIWZ nazywa model, a karta go nie honoruje
+     * (także inny model tej samej marki), albo wskazuje innego producenta. Opis bez marki i modelu
+     * (poz. 14 „5000 ppm”) nie ma czego zastępować — właściwa karta nie dostaje tej etykiety.
+     */
+    #[Test]
+    public function brand_substitute_needs_named_model_or_manufacturer_in_siwz(): void
+    {
+        $absorber = $this->card('S565A202', 'Pochłaniacz gazów i par A2, bagnetowy', 'SECURA');
+        $this->assertFalse($this->qualifiesAsBrandSubstitute(self::REQUIREMENTS[14], $absorber));
+        foreach (self::WRONG_PICKS as $line => $cards) {
+            foreach ($cards as [$sku, $name, $manufacturer]) {
+                $this->assertFalse(
+                    $this->qualifiesAsBrandSubstitute(self::REQUIREMENTS[$line], $this->card($sku, $name, $manufacturer)),
+                    "poz. {$line} vs {$sku}: opis bez marki i modelu — zła karta to nie „zamiennik”, tylko brak trafienia"
+                );
+            }
+        }
+
+        $perspecta = 'OKULARY OCHRONNE MSA PERSPECTA 010';
+        $this->assertTrue($this->qualifiesAsBrandSubstitute($perspecta, $this->card('10045516', 'Okulary PERSPECTA 9000 (12szt), bezbarwne', 'MSA')));
+        $this->assertFalse($this->qualifiesAsBrandSubstitute($perspecta, $this->card('10045641', 'Okulary PERSPECTA 010 (12szt), bezbarwne', 'MSA')));
+
+        $cerva = 'BUTY gumowe DAMSKIE antyelektrostatyczne rozm. 35-41 TRONCHETTO OB. SRA prod.CERVA · EN ISO 20347';
+        $this->assertTrue($this->qualifiesAsBrandSubstitute($cerva, $this->card('ESD-SUB-1', 'Kalosze damskie gumowe ESD', 'KCL')));
+    }
+
     #[Test]
     public function manufacturer_from_siwz_needs_prod_dot_or_producent_before_a_name(): void
     {
+        // kody z SIWZ idą przez matchManufacturer (dopasowanie po podciągu) — katalog musi mieć producentów
+        foreach (['3M', 'MSA', 'Ansell', 'ATG', 'ARTRA', 'CERVA', 'Canis', 'MAPA', 'CEDERROTH', 'AJ GROUP', 'uvex', 'KCL', 'REJS', 'JSP', 'Portwest'] as $i => $manufacturer) {
+            Product::query()->create([
+                'sku' => 'MFG-'.$i,
+                'name' => 'Karta '.$manufacturer,
+                'manufacturer' => $manufacturer,
+                'catalog_price_net' => 10,
+                'purchase_price' => 8,
+                'stock' => 1,
+            ]);
+        }
+
         // poz. 12: „produkcja metodą konfekcjonowania” dawało „(wymagano: ukcja)”
         $this->assertNull($this->matcher->requestedManufacturerFromSiwz(self::REQUIREMENTS[12]));
         $this->assertNull($this->matcher->requestedManufacturerFromSiwz('Produkt spełnia normy EN 149'));
@@ -282,6 +358,34 @@ final class ProductMatchNeedlesTest extends TestCase
         $method = new \ReflectionMethod(ProductMatchService::class, 'hasStrongSkuInRequirement');
 
         return $method->invoke($this->matcher, $requirement, $product);
+    }
+
+    private function qualifiesAsBrandSubstitute(string $requirement, Product $product): bool
+    {
+        $method = new \ReflectionMethod(ProductMatchService::class, 'qualifiesAsBrandSubstitute');
+
+        return $method->invoke($this->matcher, $requirement, $product);
+    }
+
+    /** @return list<string> */
+    private function codeCandidates(string $requirement): array
+    {
+        $method = new \ReflectionMethod(ProductMatchService::class, 'codeCandidates');
+
+        return $method->invoke($this->matcher, $requirement);
+    }
+
+    private function skuMatchScore(string $requirement, Product $product): int
+    {
+        $normalize = new \ReflectionMethod(ProductMatchService::class, 'normalize');
+        $method = new \ReflectionMethod(ProductMatchService::class, 'skuMatchScore');
+
+        return $method->invoke(
+            $this->matcher,
+            $normalize->invoke($this->matcher, $requirement),
+            $this->codeCandidates($requirement),
+            $product
+        );
     }
 
     private function card(string $sku, string $name, string $manufacturer, float $purchase = 1.0): Product
