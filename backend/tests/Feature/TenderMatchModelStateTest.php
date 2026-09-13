@@ -98,6 +98,59 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertGreaterThan(70, (int) $item->ai_match_percent, 'kod SKU w wymaganiu to twardy dowód — bez sufitu');
     }
 
+    /**
+     * Przetarg 1 z produkcji: po „Dopasuj wszystkie” poz. 1 i 2 zostały z 81% i 79% sprzed poprawek,
+     * bez żadnej etykiety — nowy przebieg nic nie wybrał, a stara karta zostawała ze starym procentem.
+     */
+    public function test_previous_card_is_kept_but_not_presented_as_fresh_when_model_did_not_answer(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $this->stubModel(static fn (): array => []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+        $item->forceFill([
+            'main_product_id' => $glove->id,
+            'status' => 'matched',
+            'match_source' => 'heuristic',
+            'ai_match_percent' => 99,
+            'ai_match_reasons' => [['code' => 'overlap', 'label' => 'Wynik sprzed poprawek', 'points' => 99]],
+            'offer_price' => 5,
+        ])->save();
+
+        $result = app(ProductMatchService::class)->matchTender($tender, false);
+        $item->refresh();
+
+        $this->assertSame((int) $glove->id, (int) $item->main_product_id, 'oferta nie znika, gdy model nie odpowiedział');
+        $this->assertLessThanOrEqual(70, (int) $item->ai_match_percent, 'stary procent nie może udawać świeżej oceny');
+        $this->assertSame('not_reconfirmed', $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertStringContainsString('Model nie odpowiedział', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+        $this->assertNotContains('Wynik sprzed poprawek', array_column($item->ai_match_reasons, 'label'));
+        $this->assertSame(1, $result['model_unavailable']);
+    }
+
+    public function test_manual_pick_is_not_capped_when_run_does_not_confirm_it(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $this->stubModel(static fn (): array => []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+        $reasons = [['code' => 'overlap', 'label' => 'Wybrane ręcznie', 'points' => 88]];
+        $item->forceFill([
+            'main_product_id' => $glove->id,
+            'status' => 'matched',
+            'match_source' => 'manual',
+            'ai_match_percent' => 88,
+            'ai_match_reasons' => $reasons,
+            'offer_price' => 5,
+        ])->save();
+
+        app(ProductMatchService::class)->matchTender($tender, false);
+        $item->refresh();
+
+        $this->assertSame((int) $glove->id, (int) $item->main_product_id);
+        $this->assertSame(88, (int) $item->ai_match_percent, 'decyzji człowieka przebieg nie tnie');
+        $this->assertSame('manual', $item->match_source);
+        $this->assertSame($reasons, $item->ai_match_reasons);
+    }
+
     private function glove(string $sku): Product
     {
         return Product::query()->create([

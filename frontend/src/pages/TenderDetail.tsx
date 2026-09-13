@@ -327,6 +327,8 @@ type MatchReport = {
   cleared: number
   skipped_custom: number
   no_match: number
+  /** pozycje, dla których model nie odpowiedział — czekają albo zostały z poprzednią kartą (≤ 70%) */
+  model_unavailable?: number
   /** tryb „tylko puste”: pozycje z produktem ≥ progu lub własne — nie wysłane do modelu */
   left_as_is?: number
   /** paczki, których wynik dokończył serwer po zerwaniu żądania — liczby wyżej ich nie obejmują */
@@ -1296,6 +1298,7 @@ export function TenderDetail() {
       cleared?: number
       skipped_custom?: number
       no_match?: number
+      model_unavailable?: number
       changes?: MatchChange[]
     }
     const merged: MatchApiRes = {
@@ -1308,6 +1311,7 @@ export function TenderDetail() {
       cleared: 0,
       skipped_custom: 0,
       no_match: 0,
+      model_unavailable: 0,
       changes: [],
     }
     const scoreParts: number[] = []
@@ -1343,6 +1347,7 @@ export function TenderDetail() {
           merged.cleared = (merged.cleared ?? 0) + (res.cleared ?? 0)
           merged.skipped_custom = (merged.skipped_custom ?? 0) + (res.skipped_custom ?? 0)
           merged.no_match = (merged.no_match ?? 0) + (res.no_match ?? 0)
+          merged.model_unavailable = (merged.model_unavailable ?? 0) + (res.model_unavailable ?? 0)
           merged.changes = [...(merged.changes ?? []), ...(res.changes ?? [])]
           if (res.matched > 0) {
             scoreParts.push(res.avg_score)
@@ -1395,6 +1400,7 @@ export function TenderDetail() {
         cleared: merged.cleared ?? 0,
         skipped_custom: merged.skipped_custom ?? 0,
         no_match: merged.no_match ?? 0,
+        model_unavailable: merged.model_unavailable ?? 0,
         left_as_is: onlyEmpty ? leftAsIs : 0,
         finished_in_background: finishedInBackground,
         avg_score: merged.avg_score,
@@ -1680,6 +1686,13 @@ export function TenderDetail() {
                 Przerobiono {matchReport.processed} · zmieniono {matchReport.changed} · bez zmiany{' '}
                 {matchReport.unchanged} · zdjęto produkt {matchReport.cleared} · własne pominięte{' '}
                 {matchReport.skipped_custom} · bez produktu {matchReport.no_match}
+                {(matchReport.model_unavailable ?? 0) > 0 && (
+                  <>
+                    {' '}
+                    · <strong>model nie odpowiedział {matchReport.model_unavailable}</strong> (pozycja czeka
+                    albo została z poprzednią kartą, najwyżej 70% — uruchom dopasowanie ponownie)
+                  </>
+                )}
                 {(matchReport.left_as_is ?? 0) > 0 && (
                   <>
                     {' '}

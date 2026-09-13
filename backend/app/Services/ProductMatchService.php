@@ -79,6 +79,12 @@ final class ProductMatchService
 
     private const NO_MATCH_MODEL_UNAVAILABLE = 'model_unavailable';
 
+    /** Poprzednia karta zostaje, ale ten przebieg jej nie potwierdził (powód na górze listy). */
+    private const NOT_RECONFIRMED = 'not_reconfirmed';
+
+    /** Wybór człowieka (ręczna karta, tańszy zamiennik z porównania) — przebieg go nie tnie. */
+    private const USER_DECIDED_SOURCES = ['manual', 'battlecard'];
+
     /** @var array{url: string, title: string}|null */
     private ?array $lastExternalHint = null;
 
@@ -2210,7 +2216,11 @@ final class ProductMatchService
         $existing = $item->mainProduct;
         if ($existing instanceof Product) {
             $proposed = max((int) ($item->ai_match_percent ?? 0), 100);
-            if ($this->persistableScore($item->requirement, $existing, $proposed) !== null) {
+            $honest = $this->persistableScore($item->requirement, $existing, $proposed);
+            if ($honest !== null) {
+                if (! in_array($item->match_source, self::USER_DECIDED_SOURCES, true)) {
+                    $this->markExistingNotReconfirmed($item, $existing, $honest);
+                }
                 $item->save();
 
                 return;
@@ -2237,6 +2247,26 @@ final class ProductMatchService
         ];
         $item->save();
         $this->pricing->recalculateItemMargin($item);
+    }
+
+    /**
+     * Nowy przebieg nie potwierdził poprzedniej karty: model nie odpowiedział albo nic nie wskazał,
+     * a słowa karty nie wystarczyły. Karta zostaje (oferta i ceny nie znikają), ale procent i powody
+     * ze starego przebiegu nie mogą udawać świeżej oceny — sufit 70% i etykieta na górze listy.
+     */
+    private function markExistingNotReconfirmed(TenderItem $item, Product $existing, int $honest): void
+    {
+        $score = min($honest, (int) ($item->ai_match_percent ?? $honest), self::HEURISTIC_ONLY_CAP);
+        $reasons = $this->explainMatch($item->requirement, $existing)['reasons'];
+        array_unshift($reasons, [
+            'code' => self::NOT_RECONFIRMED,
+            'label' => $this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE
+                ? 'Model nie odpowiedział — zostawiono poprzednią kartę bez ponownej oceny (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.'
+                : 'Ten przebieg nie potwierdził poprzedniej karty — zostawiono ją (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.',
+            'points' => $score,
+        ]);
+        $item->ai_match_percent = $score;
+        $item->ai_match_reasons = $reasons;
     }
 
     /**
