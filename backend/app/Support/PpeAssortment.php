@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support;
 
 use App\Models\Product;
+use Illuminate\Support\Str;
 
 /**
  * Rodziny PPE + krój odzieży — kamizelka ≠ osłona twarzy, kurtka ≠ kalesony.
@@ -114,7 +115,8 @@ final class PpeAssortment
     {
         $s = mb_strtolower($s);
         $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z'];
-        $s = strtr($s, $map);
+        // czeskie/niemieckie znaki (ř, ý, ě, ů, ü…) rozpadały się na spacje: „brýle” → „br le”, „přilba” → „p ilba”
+        $s = Str::ascii(strtr($s, $map));
 
         return preg_replace('/[^a-z0-9\s]/', ' ', $s) ?? $s;
     }
@@ -126,27 +128,37 @@ final class PpeAssortment
      *
      * @var array<string, string>
      */
+    /**
+     * Cenniki Canis/CXS mają nazwy czeskie („Rukavice CERRO”, „Polobotka”) i angielskie
+     * („Men´s jacket”, „Low ankle shoe”, „Spectacles”); bez tych rzeczowników karta
+     * dostawała rodzinę z kategorii importu („Odzież” dla rękawic) albo z numeru w SKU.
+     */
     private const FAMILY_PATTERNS = [
-        self::FAMILY_GLOVES => '/\b(rekawic|glove|handschuh)\w*/u',
-        self::FAMILY_RESPIRATORY => '/\b(polmask|respirator|aparat\w*\s+oddech|drog[iy]\s+oddech|filtrow?\w*\s+oddech'
-            .'|maska\s+(twarzow|pelnotwarz|filtruj|przeciwpyl)|czesc\s+twarzow'
+        self::FAMILY_GLOVES => '/\b(rekawic|glove|handschuh|rukavic|mitten)\w*/u',
+        self::FAMILY_RESPIRATORY => '/\b(polmask|polomask|respirator|aparat\w*\s+oddech|drog[iy]\s+oddech|filtrow?\w*\s+oddech'
+            .'|maska\s+(twarzow|pelnotwarz|filtruj|przeciwpyl)|czesc\s+twarzow|semi-?mask|half\s*mask|dust\s*mask'
             .'|pochlaniacz|filtropochlaniacz|ffp[123]?)\w*/u',
         self::FAMILY_FACE => '/\b(przylbic|oslon\w{0,10}\s+\w{0,16}twarz|twarz\w{0,8}\s+\w{0,12}oslon'
             .'|oslona\s+twarzy|face\s*shield|siatk\w*\s+(na\s+)?twarz|maska\s+spawal)\w*/u',
-        self::FAMILY_EYES => '/\b(okular|gogl|szyba\s+ochronn)\w*/u',
+        self::FAMILY_EYES => '/\b(okular|gogl|szyba\s+ochronn|spectacle|eyewear|bryl)\w*|\bglasses\b/u',
         self::FAMILY_HEARING => '/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|wkladk\w*\s+sluch'
-            .'|stoper\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron)\w*/u',
+            .'|stoper\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron|ear\s*(muff|plug|defender)|earmuff|earplug'
+            .'|chranic\w*\s+sluchu|sluchatk)\w*/u',
         self::FAMILY_FALL => '/\b(szelk|linka\s+bezpieczen|amortyzator|asekurac|urzadzeni\w*\s+samoham|lonza'
-            .'|ewakuac|podnoszac|opuszczaj|wciagark)\w*/u',
+            .'|ewakuac|podnoszac|opuszczaj|wciagark|harness|lanyard|postroj)\w*/u',
         self::FAMILY_KNEE => '/\b(nakolann|ochrona\s+kolan|knee\s*pad)\w*/u',
         self::FAMILY_APPAREL => '/\b(odziez|kurtk|spodn|podnie|kombinezon|kamizelk|kamizelak|softshell|fartuch|kitel|bluza'
-            .'|kaleson|ogrodniczk|park[ae]|peleryn|spodniobut|woder|wader)\w*/u',
-        self::FAMILY_HEAD => '/\b(kominiark|czapk|helm|kask|czepek|balaclava|liner)\w*'
-            .'|(wkladk\w*.{0,24}(helm|kask))/u',
+            .'|kaleson|ogrodniczk|park[ae]|peleryn|spodniobut|woder|wader'
+            .'|jacket|trousers|coverall|overall|apron|sweatshirt|t-?shirt|fleece|waistcoat|hoodie|raincoat'
+            .'|kalhoty|bunda|vesta|kombinez|zaster|mikina|tricko|triko|monterk|kosile|svetr)\w*'
+            .'|\b(pants|vests?|shirts?)\b/u',
+        self::FAMILY_HEAD => '/\b(kominiark|czapk|helm|kask|czepek|balaclava|liner|prilb|cepic|kukl|beanie)\w*'
+            .'|\bcaps?\b|\bhard\s*hats?\b|(wkladk\w*.{0,24}(helm|kask))/u',
         // Rzeczowniki obuwia bez kotwicy na końcu („trzewiki”, „półbuty”, „sandały”);
         // „buty” zostaje całym słowem, bo inaczej łapie „butylowe”.
         self::FAMILY_FOOTWEAR => '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwi|kalosz|gumowc|gumiak|wellington'
-            .'|footwear|podeszw|podnosek)\w*|\b(buty|butow)\b|\bs1p?\b|\bs[2-5]\b|\bo[1-5]\b/u',
+            .'|footwear|podeszw|podnosek|polobotk|holink|kotnikov)\w*|\b(buty|butow|obuv|boty|bota|shoes?|boots?)\b'
+            .'|\bs1p?\b|\bs[2-5]\b|\bo[1-5]\b/u',
     ];
 
     /**
@@ -177,27 +189,32 @@ final class PpeAssortment
         return $best ?? $this->familyFromNorms($t);
     }
 
+    /**
+     * Numer normy liczy się tylko jako osobna liczba — „48-140” (Ansell EDGE) i SKU
+     * „3410-140-410-00” to nie EN 140, a robiły z rękawic ochronę dróg oddechowych.
+     */
     private function familyFromNorms(string $normalized): ?string
     {
-        if (preg_match('/\b(388|420|511|21420)\b/u', $normalized) === 1) {
+        $norm = static fn (string $numbers): string => '/(?<![\d\-.])\b(?:'.$numbers.')\b(?![\d\-.])/u';
+        if (preg_match($norm('388|420|511|21420'), $normalized) === 1) {
             return self::FAMILY_GLOVES;
         }
-        if (preg_match('/\b(20345|20347)\b/u', $normalized) === 1) {
+        if (preg_match($norm('20345|20347'), $normalized) === 1) {
             return self::FAMILY_FOOTWEAR;
         }
-        if (preg_match('/\b166\b/u', $normalized) === 1) {
+        if (preg_match($norm('166'), $normalized) === 1) {
             return self::FAMILY_EYES;
         }
-        if (preg_match('/\b352\b/u', $normalized) === 1) {
+        if (preg_match($norm('352'), $normalized) === 1) {
             return self::FAMILY_HEARING;
         }
-        if (preg_match('/\b(149|140|143)\b/u', $normalized) === 1) {
+        if (preg_match($norm('149|140|143'), $normalized) === 1) {
             return self::FAMILY_RESPIRATORY;
         }
-        if (preg_match('/\b(361|358)\b/u', $normalized) === 1) {
+        if (preg_match($norm('361|358'), $normalized) === 1) {
             return self::FAMILY_FALL;
         }
-        if (preg_match('/\b397\b/u', $normalized) === 1) {
+        if (preg_match($norm('397'), $normalized) === 1) {
             return self::FAMILY_HEAD;
         }
 

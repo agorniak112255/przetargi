@@ -1160,11 +1160,12 @@ final class ProductAiSearchApiTest extends TestCase
             ]);
         }
 
-        // Czeska nazwa producenta, brak opisu i kategorii — reguły rodziny milczą,
-        // a mimo to karta ma trafienie w tekst i musi dojść do modelu.
+        // Nazwa bez rzeczownika rodziny (sam model i cechy — „Rukavice” jest już rozpoznawane
+        // jak „rękawice”), brak opisu i kategorii — reguły rodziny milczą, a mimo to karta
+        // ma trafienie w tekst i musi dojść do modelu.
         $czech = Product::query()->create([
             'sku' => '341006400007',
-            'name' => 'Rukavice ABRAK, s blistrem, polyes.úpl.povrstvené nitrilem, vel.7',
+            'name' => 'ABRAK, s blistrem, polyes.úpl.povrstvené nitrilem, vel.7',
             'manufacturer' => 'Canis',
             'description' => null,
             'catalog_price_net' => 4,

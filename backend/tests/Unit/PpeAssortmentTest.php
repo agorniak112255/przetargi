@@ -62,6 +62,24 @@ final class PpeAssortmentTest extends TestCase
             ['Fartuch laboratoryjny', PpeAssortment::FAMILY_APPAREL],
             ['podnie gramatura 250 gr', PpeAssortment::FAMILY_APPAREL],
             ['kamizelaka odblaskowa', PpeAssortment::FAMILY_APPAREL],
+            // Canis/CXS: nazwy czeskie i angielskie — rzeczownik musi być znany, inaczej rodzina z kategorii importu
+            ['Rukavice CERRO, máčené v nitrilu BLISTR, modro-šedé', PpeAssortment::FAMILY_GLOVES],
+            ['Rukavice ANSELL EDGE ESD 48-140, blistr, vel. 8', PpeAssortment::FAMILY_GLOVES],
+            ['3410-140-410-00 Rukavice CERRO, máčené v nitrilu', PpeAssortment::FAMILY_GLOVES],
+            ['Gloves EDGE 48-140 ESD seamless polyester and carbon fiber, PU coating', PpeAssortment::FAMILY_GLOVES],
+            ['Men´s jacket CXS SOLIS FLEX, blue-black, size 46 - 68', PpeAssortment::FAMILY_APPAREL],
+            ['Men´s trousers CXS SOLIS FLEX, grey-black', PpeAssortment::FAMILY_APPAREL],
+            ['Kalhoty do pasu CXS ORION TEODOR', PpeAssortment::FAMILY_APPAREL],
+            ['Working T-shirt CXS DANIEL, white', PpeAssortment::FAMILY_APPAREL],
+            ['Low ankle shoe CXS ROCK PYRIT S1P', PpeAssortment::FAMILY_FOOTWEAR],
+            ['Polobotka CXS MARBLE O1', PpeAssortment::FAMILY_FOOTWEAR],
+            ['Spectacles CXS SPYDER, smoke lens', PpeAssortment::FAMILY_EYES],
+            ['Brýle ochranné CXS VISITOR', PpeAssortment::FAMILY_EYES],
+            ['Ear muffs CXS EP101, SNR 27 dB', PpeAssortment::FAMILY_HEARING],
+            ['Respirator FFP2 with valve, CXS', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Polomaska CXS 3000 s bajonetovým závitem', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Půlmaska EN 140', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Přilba ochranná CXS, bílá', PpeAssortment::FAMILY_HEAD],
         ];
     }
 
