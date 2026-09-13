@@ -379,6 +379,7 @@ class OpenAiCompatibleClient
 
         $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies, $onAnswered);
         $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses);
+        $responses = $this->retryChatManyEmptyTruncated($url, $apiKey, $timeout, $profile, $bodies, $responses);
 
         $out = [];
         foreach ($messageSets as $i => $_) {
@@ -494,6 +495,59 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * Model z trybem myślenia zjadł limit tokenów i oddał pustą treść (finish_reason=length) — jak
+     * pojedyncze zapytanie w chat(): jedno ponowienie z limitem DEFAULT_MAX_TOKENS, o ile kontekst
+     * ma miejsce. Wcześniej zapytania równoległe od razu zgłaszały „pustą odpowiedź”.
+     *
+     * @param  array<string, mixed>  $profile
+     * @param  array<int, array<string, mixed>>  $bodies
+     * @param  array<int, mixed>  $responses
+     * @return array<int, mixed>
+     */
+    private function retryChatManyEmptyTruncated(
+        string $url,
+        string $apiKey,
+        int $timeout,
+        array $profile,
+        array $bodies,
+        array $responses
+    ): array {
+        $retryBodies = [];
+        foreach ($bodies as $i => $body) {
+            $response = $responses[$i] ?? null;
+            if (! $response instanceof Response || ! $response->successful()) {
+                continue;
+            }
+            $payload = $response->json();
+            if ($this->contentReader->fromPayload(is_array($payload) ? $payload : []) !== ''
+                || $this->contentReader->finishReason($payload) !== 'length') {
+                continue;
+            }
+            $messages = is_array($body['messages'] ?? null) ? $body['messages'] : [];
+            $bumped = $this->fitMaxTokens(self::DEFAULT_MAX_TOKENS, $messages, $profile);
+            if ($bumped <= (int) ($body['max_tokens'] ?? 0)) {
+                continue;
+            }
+            $body['max_tokens'] = $bumped;
+            $retryBodies[$i] = $body;
+        }
+        if ($retryBodies === []) {
+            return $responses;
+        }
+
+        Log::info('AI chatMany: pusta odpowiedź ucięta limitem tokenów — ponawiam z większym limitem', [
+            'count' => count($retryBodies),
+            'max_tokens' => max(array_map(static fn (array $b): int => (int) ($b['max_tokens'] ?? 0), $retryBodies)),
+            'profile' => $profile['label'] ?? '',
+        ]);
+        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
+            $responses[$i] = $response;
+        }
+
+        return $responses;
+    }
+
+    /**
      * @param  array<string, mixed>  $profile
      * @return array{ok: bool, content?: string, model?: string, error?: string}
      */
@@ -510,7 +564,17 @@ class OpenAiCompatibleClient
         $payload = $response->json();
         $content = $this->contentReader->fromPayload(is_array($payload) ? $payload : []);
         if ($content === '') {
-            return ['ok' => false, 'error' => 'API AI zwróciło pustą odpowiedź.'];
+            // log produkcji mówił tylko „pustą odpowiedź” — bez powodu nie dało się odróżnić
+            // ucięcia limitem (myślenie modelu) od odmowy czy błędu dostawcy
+            $finish = $this->contentReader->finishReason($payload);
+            $completion = data_get($payload, 'usage.completion_tokens');
+
+            return ['ok' => false, 'error' => sprintf(
+                'API AI zwróciło pustą odpowiedź (finish_reason=%s, completion_tokens=%s, model=%s).',
+                $finish !== '' ? $finish : 'brak',
+                is_numeric($completion) ? (string) $completion : 'brak',
+                (string) data_get($payload, 'model', $profile['model'] ?? ''),
+            )];
         }
 
         return [
@@ -1814,7 +1878,15 @@ class OpenAiCompatibleClient
             return false;
         }
 
-        return preg_match('/qwen3|gemini/i', $model) === 1;
+        if (preg_match('/qwen3|gemini/i', $model) === 1) {
+            return true;
+        }
+
+        // Jawne „bez myślenia” w profilu: DeepSeek V4 Flash (i inne hybrydy) ignorują samo
+        // chat_template_kwargs.enable_thinking na OpenRouterze, myślą dalej i zjadają limit tokenów —
+        // log produkcji: seria „API AI zwróciło pustą odpowiedź” przy dopasowaniu przetargu.
+        // Endpoint, który wymaga myślenia, odrzuci to 400 i ponowienie zdejmie pole.
+        return $effort === ReasoningEffort::NONE && ! $this->isReasoningModel($model);
     }
 
     /**
