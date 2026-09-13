@@ -1,0 +1,86 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Models\Product;
+use App\Services\ProductAiSearchService;
+use App\Support\PpeAssortment;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Tests\Support\Opisowy15Fixture;
+use Tests\TestCase;
+
+/**
+ * Przetarg 1 (tenders:debug-match na produkcji, odtworzone na lokalnej kopii katalogu MySQL): karta oczekiwana
+ * nie docierała do modelu. Poz. 7 — ATG 44-304 z dowodem wszystkich warunków stała na 53. miejscu puli za kartami
+ * z jedną igłą; poz. 15 — kaskada z kompletem kroków kończyła wyszukiwanie, a AlphaTec 87320 nie ma słowa
+ * „rękawice” w nazwie.
+ */
+final class RankCardsConstraintEvidenceTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_cards_with_evidence_of_more_conditions_reach_ranking_first(): void
+    {
+        $base = [
+            'manufacturer' => 'MAPA',
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ];
+        $pool = collect();
+        for ($i = 1; $i <= 30; $i++) {
+            $pool->push(Product::query()->create($base + [
+                'sku' => 'ONE-'.$i,
+                'name' => 'Rękawice robocze powlekane '.$i,
+                'description' => 'Rękawice powlekane, pakowane po 100 par.',
+            ]));
+        }
+        $pool->push(Product::query()->create([
+            'sku' => '44-304',
+            'manufacturer' => 'ATG',
+            'name' => 'Ściągacz, oblanie części chwytnej',
+            'description' => 'Rękawice antyprzecięciowe ATG MaxiCut Oil do pracy w środowisku zaolejonym; ochrona przed ciepłem kontaktowym do 100°C przez 15 sekund; bez silikonu.',
+            'norms' => 'EN 388:2016 + A1:2018, EN 407:2004',
+        ] + $base));
+
+        $service = app(ProductAiSearchService::class);
+        $cards = (new \ReflectionMethod($service, 'cardsForRanking'))->invoke(
+            $service,
+            'Rękawice ochronne antyprzecięciowe powlekane, ochrona przed ciepłem kontaktowym do 100°C',
+            $pool,
+            ['EN 388:2016', 'EN 407:2004', 'ciepło kontaktowe 100°C', 'bez silikonu'],
+        )->pluck('sku')->all();
+
+        $this->assertCount(24, $cards);
+        $this->assertSame('44-304', $cards[0], 'karta z dowodem największej liczby warunków idzie do modelu pierwsza');
+    }
+
+    public function test_complete_cascade_does_not_end_retrieval_before_text_search(): void
+    {
+        Http::fake();
+        Opisowy15Fixture::seed();
+        $service = app(ProductAiSearchService::class);
+        $intent = [
+            'needed' => 'rękawice ochronne lateksowe flokowane',
+            'search_steps' => ['rękawice', 'lateks naturalny', 'flokowane', 'długość 300 mm'],
+            'search_phrases' => ['rękawice ochronne lateksowe flokowane', 'rękawice lateksowe flokowane do kontaktu z żywnością'],
+            'constraints' => ['kontakt z żywnością', 'AQL 1,5', 'odporność na ścieranie'],
+        ];
+
+        $candidates = (new \ReflectionMethod($service, 'retrieveCandidates'))
+            ->invoke($service, Opisowy15Fixture::requirement(15), $intent, 80)
+            ->pluck('sku')
+            ->all();
+        $cascade = $service->lastTrace()['cascade'];
+        $last = end($cascade);
+
+        $this->assertFalse($last['ended_retrieval'], 'kaskada nie kończy wyszukiwania — jej karty to jedna lista w fuzji rang');
+        $this->assertContains('87320100-BULK', $candidates, 'AlphaTec 87320 (bez „rękawice” w nazwie) wchodzi do puli z wyszukiwania tekstowego');
+    }
+}

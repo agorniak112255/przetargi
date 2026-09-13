@@ -106,6 +106,17 @@ final class ProductAiSearchService
     private const RRF_WEIGHT_UNCLASSIFIED = 0.6;
 
     /**
+     * Kaskada kroków nazwy to jedno ze źródeł fuzji, nie odpowiedź. Kończyła wyszukiwanie i odcinała karty,
+     * które kroków nie powtarzają dosłownie (przetarg 1: poz. 1 rękaw 11-202 z opisem po angielsku — pula 3;
+     * poz. 7 ATG 44-304 „Ściągacz, oblanie części chwytnej” zamiast „rękawice powlekane”; poz. 15 AlphaTec 87320
+     * bez słowa „rękawice” w nazwie). Waga między tekstem a priorytetem: kroki pochodzą ze zrozumienia wymagania.
+     */
+    private const RRF_WEIGHT_CASCADE = 2.0;
+
+    /** Kaskada zeszła do samego rzeczownika rodzaju („spodnie”) — słaby sygnał, tylko uzupełnia fuzję. */
+    private const RRF_WEIGHT_CASCADE_FAMILY_NOUN = 0.5;
+
+    /**
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
@@ -2960,14 +2971,6 @@ final class ProductAiSearchService
 
             $cascadeKept = $this->keepCompatible($requirement, $this->uniqueProducts($pool, $limit));
             $this->traceCascadeOutcome($cascadeKept->count(), false);
-            // Pełna pula kończy retrieval — dokładanie czegokolwiek i tak by z niej wypadło.
-            // Trafienie po kodzie modelu albo progu SNR zostaje z przodu: kaskada
-            // „nauszniki nagłowne” nie może zepchnąć X2A-EU poza limit.
-            if ($cascadeKept->count() >= $limit) {
-                $this->traceCascadeOutcome($cascadeKept->count(), true);
-
-                return $this->withModelCodeHits($requirement, $forcedHits, $cascadeKept, $limit);
-            }
         }
         if ($this->catalogSlang->requiresTightEvidence($query)) {
             // Żargon wymaga twardego dowodu na karcie, ale sprawdza go bramka zgodności,
@@ -2988,21 +2991,13 @@ final class ProductAiSearchService
                 )
             )->values();
         }
-        // Kaskada z trafieniem w konkret jest odpowiedzią. Dalej idziemy tylko wtedy, gdy
-        // bramka zgodności zdjęła z niej wszystko (krok po „czapce” przy wymaganiu na
-        // kominiarkę) albo gdy zeszła do samego rzeczownika rodzaju — wtedy z definicji
-        // nie widzi kart bez tego słowa w nazwie („URG-A”).
-        // Kaskada, która musiała zdjąć kroki, też nie jest odpowiedzią: kroki zdejmuje od końca, więc cecha
-        // z pierwszych kroków, której poprawna karta nie ma w słowach, zamyka jej drogę na każdym poziomie.
-        // Przetarg 1 poz. 13: „półmaska” + „wielokrotnego użytku” (zdjęte bagnety, zawory) dawało 45 półmasek
-        // z tym zwrotem w nazwie, a SECURA 3000 — z bagnetami, zaworami i nagłowiem w opisie — nie wchodziła.
-        // Wtedy dokładamy wyszukiwanie tekstowe; karty kaskady zostają z przodu puli.
-        $cascadeSweptFamilyNoun = $this->cascadeSweptFamilyNoun($cascadeLevel, $intent);
-        if ($cascadeKept->isNotEmpty() && ! $cascadeSweptFamilyNoun && $droppedSteps === 0) {
-            $this->traceCascadeOutcome($cascadeKept->count(), true);
-
-            return $this->withModelCodeHits($requirement, $forcedHits, $cascadeKept, $limit);
-        }
+        // Kaskada nie kończy wyszukiwania: jej karty to jedna lista w fuzji rang obok priorytetu (kody, SNR, filtr,
+        // marka) i wyszukiwania tekstowego. Kroki trafiają w słowa, nie w produkt — karta opisana innymi słowami
+        // (angielski opis, „oblanie” zamiast „powlekane”, sam model w nazwie) wypadała z puli na każdym poziomie.
+        // Kaskada zejściowa do samego rzeczownika rodzaju waży mniej: z definicji nie widzi kart bez tego słowa.
+        $cascadeWeight = $this->cascadeSweptFamilyNoun($cascadeLevel, $intent)
+            ? self::RRF_WEIGHT_CASCADE_FAMILY_NOUN
+            : self::RRF_WEIGHT_CASCADE;
 
         // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
         // bez trafienia we frazę, tylko niżej. Wcześniej wymagał tego skan całego katalogu
@@ -3010,6 +3005,7 @@ final class ProductAiSearchService
         $family = $this->searchFamily($query, $intent['needed']);
         $rankings = [
             'priority' => $priority->pluck('id')->map(intval(...))->all(),
+            'cascade' => $cascadeKept->pluck('id')->map(intval(...))->all(),
             'text' => $this->clock(
                 'retrieve_text',
                 fn (): array => $this->textSearch->search($intent['search_phrases'], $family, self::TEXT_POOL)
@@ -3033,6 +3029,7 @@ final class ProductAiSearchService
             $rankings,
             [
                 'priority' => self::RRF_WEIGHT_PRIORITY,
+                'cascade' => $cascadeWeight,
                 'text' => self::RRF_WEIGHT_TEXT,
                 'unclassified' => self::RRF_WEIGHT_UNCLASSIFIED,
                 'vector' => self::RRF_WEIGHT_VECTOR,
@@ -3049,19 +3046,12 @@ final class ProductAiSearchService
                 : collect();
         });
 
-        $cascadeFirst = $cascadeKept->isNotEmpty() && ! $cascadeSweptFamilyNoun;
-        $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $forcedHits, $cascadeKept, $cascadeFirst, $fused, $recall, $brandHits, $limit): Collection {
+        $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $forcedHits, $cascadeKept, $fused, $recall, $brandHits, $limit): Collection {
             return $this->keepCompatible(
                 $requirement,
                 $this->uniqueProducts(
-                    // Kaskada zeszła do samego rzeczownika rodzaju: jej karty są równe co do
-                    // wartości („SPODNIE MACH 1..60”) i wypchnęłyby z puli trafienie wektorowe.
-                    // Fuzja rang wie więcej, więc idzie pierwsza, a kaskada uzupełnia resztę puli.
-                    // Kaskada ze zdjętymi krokami trafiła w pierwsze (najważniejsze) kroki — zostaje
-                    // z przodu, a wyszukiwanie tekstowe dokłada karty, których kroki nie widziały.
-                    $cascadeFirst
-                        ? $forcedHits->concat($cascadeKept)->concat($this->hydrate($fused))->concat($recall)->concat($brandHits)
-                        : $this->hydrate($fused)->concat($forcedHits)->concat($cascadeKept)->concat($recall)->concat($brandHits),
+                    // Kolejność z fuzji rang (w niej kaskada, priorytet, tekst, wektor); reszta list tylko uzupełnia pulę.
+                    $this->hydrate($fused)->concat($forcedHits)->concat($cascadeKept)->concat($recall)->concat($brandHits),
                     $limit * 3
                 )
             );
@@ -3730,23 +3720,28 @@ final class ProductAiSearchService
             return $candidates->take(self::RANK_CARDS)->values();
         }
 
-        $with = collect();
+        $with = [];
         $without = collect();
-        foreach ($candidates as $product) {
+        foreach ($candidates->values() as $position => $product) {
             if (! $product instanceof Product) {
                 continue;
             }
             $meetsSnr = $minSnr !== null && $this->productMeetsSnr($product, $minSnr);
             $meetsClass = $wantClass !== null && $this->productMeetsFootwearClass($product, $wantClass);
-            $hasNeedle = $needles !== [] && $this->haystackHasNeedle($this->rankingHaystack($product), $needles);
-            if ($meetsSnr || $meetsClass || ($minSnr === null && $wantClass === null && $hasNeedle)) {
-                $with->push($product);
+            $needleHits = $needles === [] ? 0 : $this->haystackNeedleHits($this->rankingHaystack($product), $needles);
+            if ($meetsSnr || $meetsClass || ($minSnr === null && $wantClass === null && $needleHits > 0)) {
+                $with[] = ['product' => $product, 'hits' => $needleHits, 'position' => $position];
             } else {
                 $without->push($product);
             }
         }
+        // Najpierw karty z dowodem największej liczby warunków, w remisie kolejność puli. Dotąd liczyło się
+        // „ma jakąkolwiek igłę”: przetarg 1 poz. 7 — ATG 44-304 z dowodem wszystkich 8 igieł stała na 53. miejscu
+        // puli za kartami z jedną igłą („100”) i nie trafiała do 24 kart rankingu.
+        usort($with, static fn (array $a, array $b): int => [$b['hits'], $a['position']] <=> [$a['hits'], $b['position']]);
+        $withProducts = collect(array_map(static fn (array $row): Product => $row['product'], $with));
 
-        return $this->interleaveApparelSetProducts($query, $with->concat($without))->take(self::RANK_CARDS)->values();
+        return $this->interleaveApparelSetProducts($query, $withProducts->concat($without))->take(self::RANK_CARDS)->values();
     }
 
     /**
@@ -3872,6 +3867,26 @@ final class ProductAiSearchService
             implode(' ', $this->stringList($payload['features'] ?? null)),
             implode(' ', $this->stringList($payload['use_cases'] ?? null)),
         ]));
+    }
+
+    /**
+     * @param  list<string>  $needles
+     */
+    /**
+     * Ile igieł z warunków występuje w tekście karty.
+     *
+     * @param  list<string>  $needles
+     */
+    private function haystackNeedleHits(string $haystack, array $needles): int
+    {
+        $hits = 0;
+        foreach ($needles as $needle) {
+            if (str_contains($haystack, $needle)) {
+                $hits++;
+            }
+        }
+
+        return $hits;
     }
 
     /**

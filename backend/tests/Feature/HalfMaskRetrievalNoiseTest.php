@@ -65,8 +65,16 @@ final class HalfMaskRetrievalNoiseTest extends TestCase
             $this->assertArrayHasKey('ended_retrieval', $cascade);
         }
 
-        $this->assertNotContains($ids['7100200484'], $candidates, 'klej epoksydowy z „2004” w SKU nie jest kandydatem na półmaskę');
-        $this->assertNotContains($ids['1998467'], $candidates, 'materiał odblaskowy z „1998” w SKU nie jest kandydatem na półmaskę');
+        // Błąd dotyczył trafień po kodzie modelu (lata norm jako kody), które szły na przód puli. Pula po fuzji rang
+        // zawiera też trafienia tekstowe kart bez rodziny: w małym fixture materiał odblaskowy wchodzi tam po słowie
+        // „ochrony”, a na kopii katalogu produkcji (MySQL) pula 80 jest pełna półmasek i tych kart w niej nie ma.
+        $codeHits = (new \ReflectionMethod($service, 'retrieveByModelCode'))
+            ->invoke($service, Opisowy15Fixture::requirement(13), 80)
+            ->pluck('id')
+            ->map(intval(...))
+            ->all();
+        $this->assertNotContains($ids['7100200484'], $codeHits, 'klej epoksydowy z „2004” w SKU nie jest trafieniem po kodzie modelu');
+        $this->assertNotContains($ids['1998467'], $codeHits, 'materiał odblaskowy z „1998” w SKU nie jest trafieniem po kodzie modelu');
         $this->assertContains($ids['S56T0SM0'], $candidates, 'półmaska SECURA 3000 (karta oczekiwana) trafia do puli kandydatów');
     }
 
@@ -103,7 +111,7 @@ final class HalfMaskRetrievalNoiseTest extends TestCase
         $this->assertLessThan(
             array_search('S56T0SM0', $candidates, true),
             array_search('7501B', $candidates, true),
-            'karty kaskady (zgodne z pierwszymi krokami) zostają przed dołożonymi z wyszukiwania tekstowego'
+            'karta z kaskady i z wyszukiwania tekstowego stoi w fuzji rang przed kartą tylko z tekstu'
         );
     }
 
