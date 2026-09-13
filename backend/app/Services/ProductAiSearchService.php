@@ -412,6 +412,8 @@ final class ProductAiSearchService
         if ($named->isNotEmpty()) {
             $namedRows = $this->rowsFromNamedModels($modelQuery, $named, $limit);
             if ($namedRows !== []) {
+                // Nazwany model (marka + model z SIWZ na karcie) to trafienie jak kod produktu (D7), nie reguła —
+                // bez rankingu modelu; ProductAiSearchApiTest pilnuje, że taka pozycja nie zużywa wywołania modelu.
                 return [
                     'products' => $this->orderEyeWearSetRows($query, $namedRows, $candidates),
                     'note' => null,
@@ -422,12 +424,9 @@ final class ProductAiSearchService
         }
         $snrRows = $this->rowsFromSnrMatches($query, $candidates, $limit);
         if ($snrRows !== []) {
-            return [
-                'products' => $this->orderEyeWearSetRows($query, $snrRows, $candidates),
-                'note' => null,
-                'rank_cards' => null,
-                'candidates' => $candidates,
-            ];
+            // Próg SNR na karcie to warunek konieczny, nie ocena: nagłowne vs nahełmowe, wkładki, zestaw ocenia model.
+            // Dotąd wiersze reguły (80–99) szły do przetargu jako ocena modelu, choć model ich nie widział.
+            return $this->ruleRowsRankedByModel($query, $snrRows, $candidates, $intent['constraints']);
         }
         $classRows = $this->rowsFromFootwearClassMatches($query, $candidates, $limit);
         if ($classRows !== []) {
@@ -454,28 +453,12 @@ final class ProductAiSearchService
             // Jak reguła klasy obuwia (poz. 3): „odporność na przecięcie na nazwie” to warunek konieczny, nie
             // werdykt — powłoka (NBR vs PU), EN 407, poziom ISO ocenia model. tenders:eval: poz. 7 miała ranking
             // „skipped” w każdym przebiegu, przetarg nie ufał wierszom reguły (80) i brał KRYTECH 578 po słowach.
-            $cutIds = array_map(static fn (array $row): int => (int) ($row['id'] ?? 0), $cutRows);
-            $cutCards = $candidates->filter(
-                static fn (Product $p): bool => in_array((int) $p->id, $cutIds, true)
-            )->sortBy(static fn (Product $p): int|false => array_search((int) $p->id, $cutIds, true))->values();
-            $cutRankCards = $this->cardsForRanking($query, $cutCards, $intent['constraints']);
-            $this->traceProducts('rank_card_ids', $cutRankCards);
-
-            return [
-                'products' => $this->orderEyeWearSetRows($query, $cutRows, $candidates),
-                'note' => null,
-                'rank_cards' => $cutRankCards,
-                'candidates' => $candidates,
-            ];
+            return $this->ruleRowsRankedByModel($query, $cutRows, $candidates, $intent['constraints']);
         }
         $bootRows = $this->rowsFromWeldedBootsCoverallMatches($query, $candidates, $limit);
         if ($bootRows !== []) {
-            return [
-                'products' => $this->orderEyeWearSetRows($query, $bootRows, $candidates),
-                'note' => null,
-                'rank_cards' => null,
-                'candidates' => $candidates,
-            ];
+            // Kaloszy na nazwie karty to warunek konieczny: materiał, S5, EN 343 ocenia model; reguła jest zapasem.
+            return $this->ruleRowsRankedByModel($query, $bootRows, $candidates, $intent['constraints']);
         }
         if ($candidates->isEmpty()) {
             return [
@@ -3976,6 +3959,34 @@ final class ProductAiSearchService
     }
 
     /**
+     * Wynik reguły (próg SNR, odporność na przecięcie, kombinezon z kaloszami) to warunek konieczny,
+     * nie werdykt: karty reguły idą do rankingu modelu w kolejności reguły, a wiersze reguły zostają zapasem, gdy
+     * model nic nie oceni (`products` przy `rank_cards`). Jak reguła klasy obuwia (przetarg 1 poz. 3).
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @param  Collection<int, Product>  $candidates
+     * @param  list<string>  $constraints
+     * @return array{products: list<array<string, mixed>>, note: null, rank_cards: Collection<int, Product>, candidates: Collection<int, Product>}
+     */
+    private function ruleRowsRankedByModel(string $query, array $rows, Collection $candidates, array $constraints): array
+    {
+        $products = $this->orderEyeWearSetRows($query, $rows, $candidates);
+        $ids = array_map(static fn (array $row): int => (int) ($row['id'] ?? 0), $products);
+        $cards = $candidates->filter(
+            static fn (Product $p): bool => in_array((int) $p->id, $ids, true)
+        )->sortBy(static fn (Product $p): int|false => array_search((int) $p->id, $ids, true))->values();
+        $rankCards = $this->cardsForRanking($query, $cards, $constraints);
+        $this->traceProducts('rank_card_ids', $rankCards);
+
+        return [
+            'products' => $products,
+            'note' => null,
+            'rank_cards' => $rankCards,
+            'candidates' => $candidates,
+        ];
+    }
+
+    /**
      * @param  Collection<int, Product>  $products
      * @return list<array<string, mixed>>
      */
@@ -4056,6 +4067,7 @@ final class ProductAiSearchService
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->snrRetrieveScore($query, $product), 20)));
             $row['ai_match_reason'] = 'Tłumienie SNR na karcie spełnia próg z SIWZ.';
+            $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }
 
@@ -4167,6 +4179,7 @@ final class ProductAiSearchService
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->weldedBootsCoverallScore($product), 20)));
             $row['ai_match_reason'] = 'Kombinezon z kaloszami na nazwie karty spełnia wymaganie z SIWZ.';
+            $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }
 

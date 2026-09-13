@@ -11,6 +11,7 @@ use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
+use Tests\Support\FakeSearchLlm;
 use Tests\TestCase;
 
 /**
@@ -48,6 +49,54 @@ final class ProductAiSearchWeldedBootsCoverallTest extends TestCase
         $this->assertNotContains('0403', $skus);
         $this->assertNotContains('SB01', $skus);
         $this->assertNotContains('103', $skus);
+    }
+
+    /** Kalosze na nazwie karty to warunek konieczny: karty idą do rankingu modelu, a wiersze reguły są zapasem `rule`. */
+    public function test_welded_boots_cards_are_ranked_by_model(): void
+    {
+        $this->seedCoverallCatalog();
+        $cardId = (int) Product::query()->where('sku', '304/K')->value('id');
+        $ranked = false;
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $answer = static function (array $messages) use ($cardId, &$ranked): array {
+            if (FakeSearchLlm::kind($messages) !== FakeSearchLlm::KIND_RANK) {
+                return ['needed' => self::QUERY, 'search_phrases' => ['kombinezon wodoochronny'], 'matches' => []];
+            }
+            $ranked = $ranked || str_contains((string) ($messages[1]['content'] ?? ''), '"id":'.$cardId);
+
+            return ['matches' => [['id' => $cardId, 'score' => 87, 'reason' => 'Kombinezon z wgrzanymi kaloszami', 'missing_key' => []]]];
+        };
+        $llm->shouldReceive('chatJson')->andReturnUsing(static fn (array $messages): array => $answer($messages));
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(
+            static fn (array $sets): array => array_map($answer, $sets)
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $products = $this->app->make(ProductAiSearchService::class)->search(self::QUERY, 10)['products'] ?? [];
+        $row = collect($products)->firstWhere('sku', '304/K');
+
+        $this->assertTrue($ranked, 'karta z kaloszami trafia do rankingu modelu');
+        $this->assertSame(87, (int) ($row['ai_match_percent'] ?? 0));
+        $this->assertNotSame(ProductAiSearchService::MATCH_SOURCE_RULE, $row['ai_match_source'] ?? null);
+    }
+
+    public function test_welded_boots_rule_rows_are_marked_as_rule_when_model_rates_nothing(): void
+    {
+        $this->seedCoverallCatalog();
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => self::QUERY,
+            'search_phrases' => ['kombinezon wodoochronny'],
+            'matches' => [],
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $products = $this->app->make(ProductAiSearchService::class)->search(self::QUERY, 10)['products'] ?? [];
+
+        $this->assertSame(['104/K', '304/K', '0404'], array_column($products, 'sku'));
+        foreach ($products as $row) {
+            $this->assertSame(ProductAiSearchService::MATCH_SOURCE_RULE, $row['ai_match_source'] ?? null, (string) $row['sku']);
+        }
     }
 
     private function seedCoverallCatalog(): void
