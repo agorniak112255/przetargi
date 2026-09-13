@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use App\Services\Ai\AiSettingsService;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -184,8 +185,9 @@ final class BlockedPageReader
             'Accept' => 'text/plain,text/markdown,*/*',
             'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
         ];
-        $key = trim((string) config('enrichment.reader_api_key', ''));
-        if ($key !== '') {
+        // ten sam klucz co wyszukiwarka s.jina.ai: panel Ustawień AI albo JINA_API_KEY z .env
+        $key = app(AiSettingsService::class)->jinaApiKey();
+        if ($key !== null) {
             $headers['Authorization'] = 'Bearer '.$key;
         }
 

@@ -218,6 +218,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
     Route::get('/ai-settings', [AiSettingsController::class, 'show'])->middleware('permission:ai_settings.manage');
     Route::put('/ai-settings', [AiSettingsController::class, 'update'])->middleware('permission:ai_settings.manage');
+    Route::get('/ai-settings/jina-usage', [AiSettingsController::class, 'jinaUsage'])->middleware('permission:ai_settings.manage');
+    Route::post('/ai-settings/jina-usage/refresh', [AiSettingsController::class, 'refreshJinaUsage'])->middleware('permission:ai_settings.manage');
     Route::post('/ai-settings/test', [AiSettingsController::class, 'test'])->middleware('permission:ai_settings.manage');
     Route::post('/ai-settings/test-vector', [AiSettingsController::class, 'testVector'])->middleware('permission:ai_settings.manage');
 

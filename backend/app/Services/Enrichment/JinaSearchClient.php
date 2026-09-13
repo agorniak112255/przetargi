@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
+use App\Services\Ai\AiSettingsService;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 use Throwable;
@@ -95,6 +96,7 @@ final class JinaSearchClient
 
     private function apiKey(): string
     {
-        return trim((string) config('enrichment.reader_api_key', ''));
+        // panel Ustawień AI, a gdy pusty — JINA_API_KEY z .env
+        return (string) app(AiSettingsService::class)->jinaApiKey();
     }
 }

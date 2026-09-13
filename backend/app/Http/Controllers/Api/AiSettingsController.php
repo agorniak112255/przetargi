@@ -8,8 +8,9 @@ use App\Http\Controllers\Controller;
 use App\Services\Ai\AiModelProfiles;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
-use App\Services\Ai\ReasoningEffort;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Ai\ReasoningEffort;
+use App\Services\Enrichment\JinaAccountService;
 use App\Services\Vector\EmbeddingClient;
 use App\Services\Vector\QdrantClient;
 use App\Support\CatalogSlangDictionary;
@@ -31,6 +32,34 @@ class AiSettingsController extends Controller
         return response()->json($this->settings->publicView());
     }
 
+    /** Saldo Jina i szacunek wyczerpania; świeża próbka najwyżej co 10 min. */
+    public function jinaUsage(JinaAccountService $jina): JsonResponse
+    {
+        return response()->json($this->jinaUsagePayload($jina, false));
+    }
+
+    /** Przycisk „Odśwież saldo” — próbka od razu, niezależnie od odstępu. */
+    public function refreshJinaUsage(JinaAccountService $jina): JsonResponse
+    {
+        return response()->json($this->jinaUsagePayload($jina, true));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function jinaUsagePayload(JinaAccountService $jina, bool $force): array
+    {
+        $error = null;
+        try {
+            $jina->snapshot($force);
+        } catch (Throwable $e) {
+            // stare próbki nadal coś mówią — błąd idzie obok, nie zamiast danych
+            $error = $e->getMessage();
+        }
+
+        return $jina->usage() + ['error' => $error];
+    }
+
     public function update(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -46,6 +75,7 @@ class AiSettingsController extends Controller
             'reasoning_effort' => ['sometimes', 'string', 'in:'.implode(',', ReasoningEffort::ALL)],
             'web_search_enabled' => ['sometimes', 'boolean'],
             'tavily_api_key' => ['nullable', 'string', 'max:500'],
+            'jina_api_key' => ['nullable', 'string', 'max:500'],
             'search_engine' => ['sometimes', 'string', 'in:tavily,duckduckgo,searxng'],
             'searxng_url' => ['nullable', 'url', 'max:255'],
             'search_fallback' => ['sometimes', 'string', 'in:tavily,none'],

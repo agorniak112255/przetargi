@@ -2,10 +2,12 @@
 
 use App\Http\Middleware\EnsureTenderAccess;
 use App\Http\Middleware\LogApiActivity;
+use App\Services\Enrichment\JinaAccountService;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Support\Facades\Log;
 use Spatie\Permission\Exceptions\UnauthorizedException;
 use Spatie\Permission\Middleware\PermissionMiddleware;
 use Spatie\Permission\Middleware\RoleMiddleware;
@@ -31,6 +33,14 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('activity-logs:prune')->dailyAt('02:15');
         $schedule->command('search-events:prune')->dailyAt('02:25');
         $schedule->command('storage:prune')->hourly();
+        // próbka salda Jina co godzinę — z niej panel liczy zużycie na dobę i datę wyczerpania
+        $schedule->call(static function (): void {
+            try {
+                app(JinaAccountService::class)->snapshot();
+            } catch (Throwable $e) {
+                Log::info('Jina usage snapshot skipped', ['error' => $e->getMessage()]);
+            }
+        })->hourly()->name('jina-usage-snapshot')->withoutOverlapping();
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->render(function (UnauthorizedException $e, $request) {

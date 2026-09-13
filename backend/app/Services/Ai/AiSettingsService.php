@@ -105,6 +105,7 @@ final class AiSettingsService
      *     reasoning_effort: string,
      *     web_search_enabled: bool,
      *     tavily_api_key: ?string,
+     *     jina_api_key: ?string,
      *     search_engine: string,
      *     searxng_url: ?string,
      *     search_fallback: string,
@@ -153,6 +154,7 @@ final class AiSettingsService
             }
             $key = $this->safeEncrypted($row, 'api_key');
             $tavily = $this->safeEncrypted($row, 'tavily_api_key');
+            $jina = $this->safeEncrypted($row, 'jina_api_key');
             $qdrantKey = $this->safeEncrypted($row, 'qdrant_api_key');
             $embKey = $this->safeEncrypted($row, 'embedding_api_key');
             $cloudEmbKey = $this->safeEncrypted($row, 'embedding_cloud_api_key');
@@ -180,6 +182,7 @@ final class AiSettingsService
                 ),
                 'web_search_enabled' => (bool) ($row->web_search_enabled ?? true),
                 'tavily_api_key' => $tavily !== null && $tavily !== '' ? (string) $tavily : null,
+                'jina_api_key' => $jina !== null && $jina !== '' ? (string) $jina : null,
                 'search_engine' => $this->normalizeSearchEngine(
                     Schema::hasColumn('ai_settings', 'search_engine')
                         ? ($row->search_engine ?? null)
@@ -288,6 +291,7 @@ final class AiSettingsService
             'reasoning_effort' => $this->normalizeReasoningEffort(config('ai.reasoning_effort')),
             'web_search_enabled' => (bool) config('ai.web_search_enabled', true),
             'tavily_api_key' => $tavily,
+            'jina_api_key' => null,
             'search_engine' => $this->normalizeSearchEngine(config('ai.search_engine')),
             'searxng_url' => $this->nullableUrl(config('ai.searxng_url')),
             'search_fallback' => (string) config('ai.search_fallback', 'none'),
@@ -368,6 +372,8 @@ final class AiSettingsService
             'embedding_collection' => $this->embeddingCollection($cfg),
             'has_api_key' => $cfg['has_api_key'],
             'has_tavily_api_key' => $cfg['has_tavily_api_key'],
+            'has_jina_api_key' => $this->jinaApiKey() !== null,
+            'jina_key_source' => $this->jinaApiKey() !== null ? $this->jinaKeySource() : null,
             'has_qdrant_api_key' => $cfg['has_qdrant_api_key'],
             'has_embedding_api_key' => $cfg['has_embedding_api_key'],
             'has_embedding_cloud_api_key' => $cfg['has_embedding_cloud_api_key'],
@@ -379,6 +385,7 @@ final class AiSettingsService
             'source' => $cfg['source'],
             'api_key_masked' => $this->maskKey($cfg['api_key']),
             'tavily_api_key_masked' => $this->maskKey($cfg['tavily_api_key']),
+            'jina_api_key_masked' => $this->maskKey($this->jinaApiKey()),
             'qdrant_api_key_masked' => $this->maskKey($cfg['qdrant_api_key']),
             'embedding_api_key_masked' => $this->maskKey($cfg['embedding_api_key']),
             'embedding_cloud_api_key_masked' => $this->maskKey($cfg['embedding_cloud_api_key']),
@@ -519,6 +526,9 @@ final class AiSettingsService
 
         $this->applySecret($row, 'api_key', $data);
         $this->applySecret($row, 'tavily_api_key', $data);
+        if (Schema::hasColumn('ai_settings', 'jina_api_key')) {
+            $this->applySecret($row, 'jina_api_key', $data);
+        }
         $this->applySecret($row, 'qdrant_api_key', $data);
         $this->applySecret($row, 'embedding_api_key', $data);
         $this->applySecret($row, 'embedding_cloud_api_key', $data);
@@ -805,6 +815,33 @@ final class AiSettingsService
         }
 
         return $this->nullableUrl($this->resolve()['searxng_url'] ?? null);
+    }
+
+    /**
+     * Klucz Jina (wyszukiwarka s.jina.ai i reader r.jina.ai): z panelu, a gdy pusty —
+     * JINA_API_KEY z .env. Fallback poza cache resolve(), żeby zmiana konfiguracji
+     * (także w testach) działała od razu.
+     */
+    public function jinaApiKey(): ?string
+    {
+        $fromPanel = $this->resolve()['jina_api_key'] ?? null;
+        if (is_string($fromPanel) && trim($fromPanel) !== '') {
+            return trim($fromPanel);
+        }
+        $fromEnv = trim((string) config('enrichment.reader_api_key', ''));
+
+        return $fromEnv !== '' ? $fromEnv : null;
+    }
+
+    /** „panel” albo „env” — skąd pochodzi używany klucz Jina; null bez klucza. */
+    public function jinaKeySource(): ?string
+    {
+        $fromPanel = $this->resolve()['jina_api_key'] ?? null;
+        if (is_string($fromPanel) && trim($fromPanel) !== '') {
+            return 'panel';
+        }
+
+        return trim((string) config('enrichment.reader_api_key', '')) !== '' ? 'env' : null;
     }
 
     public function tavilySearchProfile(): TavilySearchProfile

@@ -103,15 +103,51 @@ type AiSettings = {
   ai_tasks: AiTaskInfo[]
   has_api_key: boolean
   has_tavily_api_key: boolean
+  has_jina_api_key: boolean
+  jina_key_source: 'panel' | 'env' | null
   has_qdrant_api_key: boolean
   has_embedding_api_key: boolean
   has_embedding_cloud_api_key: boolean
   source: string
   api_key_masked: string | null
   tavily_api_key_masked: string | null
+  jina_api_key_masked: string | null
   qdrant_api_key_masked: string | null
   embedding_api_key_masked: string | null
   embedding_cloud_api_key_masked: string | null
+}
+
+/** Saldo klucza Jina i szacunek wyczerpania z próbek zapisywanych co godzinę. */
+type JinaUsage = {
+  configured: boolean
+  key_source: 'panel' | 'env' | null
+  tokens_left: number | null
+  usd_left: number | null
+  searches_left: number | null
+  checked_at: string | null
+  tokens_per_day: number | null
+  days_left: number | null
+  runs_out_at: string | null
+  window_hours: number | null
+  snapshots: number
+  tokens_per_search: number
+  usd_per_million_tokens: number
+  error: string | null
+}
+
+const plNumber = new Intl.NumberFormat('pl-PL')
+
+function fmtTokens(n: number | null): string {
+  if (n === null) return '—'
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2).replace('.', ',')} mld`
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace('.', ',')} mln`
+  return plNumber.format(n)
+}
+
+function fmtDate(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })
 }
 
 export function AiSettingsPage() {
@@ -124,6 +160,10 @@ export function AiSettingsPage() {
   const [profileKeys, setProfileKeys] = useState<Record<string, string>>({})
   const [showApiKey, setShowApiKey] = useState(false)
   const [showTavilyKey, setShowTavilyKey] = useState(false)
+  const [jinaKey, setJinaKey] = useState('')
+  const [showJinaKey, setShowJinaKey] = useState(false)
+  const [jinaUsage, setJinaUsage] = useState<JinaUsage | null>(null)
+  const [jinaBusy, setJinaBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -134,6 +174,7 @@ export function AiSettingsPage() {
   function hydrateSecrets(next: AiSettings) {
     setApiKey('')
     setTavilyKey('')
+    setJinaKey('')
     setQdrantKey('')
     setEmbeddingKey('')
     setCloudEmbeddingKey('')
@@ -146,9 +187,43 @@ export function AiSettingsPage() {
       const next = withProfileDefaults(await api<AiSettings>('/ai-settings'))
       setCfg(next)
       hydrateSecrets(next)
+      void loadJinaUsage()
     } catch (ex) {
       setCfg(null)
       setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać ustawień AI')
+    }
+  }
+
+  /** Bez `refresh` backend bierze świeżą próbkę najwyżej co 10 min; przycisk wymusza od razu. */
+  async function loadJinaUsage(refresh = false) {
+    setJinaBusy(true)
+    try {
+      const usage = await api<JinaUsage>(
+        refresh ? '/ai-settings/jina-usage/refresh' : '/ai-settings/jina-usage',
+        refresh ? { method: 'POST' } : {}
+      )
+      setJinaUsage(usage)
+    } catch (ex) {
+      setJinaUsage((prev) => ({
+        ...(prev ?? {
+          configured: false,
+          key_source: null,
+          tokens_left: null,
+          usd_left: null,
+          searches_left: null,
+          checked_at: null,
+          tokens_per_day: null,
+          days_left: null,
+          runs_out_at: null,
+          window_hours: null,
+          snapshots: 0,
+          tokens_per_search: 10000,
+          usd_per_million_tokens: 0.05,
+        }),
+        error: ex instanceof Error ? ex.message : 'Nie udało się pobrać salda Jina',
+      }))
+    } finally {
+      setJinaBusy(false)
     }
   }
 
@@ -266,6 +341,9 @@ export function AiSettingsPage() {
       if (!isKeptSecret(tavilyKey)) {
         body.tavily_api_key = tavilyKey.trim()
       }
+      if (!isKeptSecret(jinaKey)) {
+        body.jina_api_key = jinaKey.trim()
+      }
       if (!isKeptSecret(qdrantKey)) {
         body.qdrant_api_key = qdrantKey.trim()
       }
@@ -283,6 +361,8 @@ export function AiSettingsPage() {
       )
       setCfg(saved)
       hydrateSecrets(saved)
+      // nowy klucz Jina = nowe saldo; wymuszona próbka od razu
+      void loadJinaUsage(true)
       setMsg('Zapisano konfigurację AI.')
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd zapisu')
@@ -370,9 +450,14 @@ export function AiSettingsPage() {
         Konfiguracja API zgodnego z OpenAI (OpenAI, Groq, Azure, vLLM, Ollama proxy). Źródło:{' '}
         <code>{cfg.source}</code>
         {cfg.has_api_key ? ` · klucz: ${cfg.api_key_masked}` : ' · brak klucza'}
-        {cfg.has_tavily_api_key
-          ? ` · Tavily: ${cfg.tavily_api_key_masked}`
-          : ' · brak klucza Tavily'}
+        {cfg.has_jina_api_key
+          ? ` · Jina: ${cfg.jina_api_key_masked}${cfg.jina_key_source === 'env' ? ' (z .env)' : ''}`
+          : ' · brak klucza Jina'}
+        {cfg.search_engine === 'tavily'
+          ? cfg.has_tavily_api_key
+            ? ` · Tavily: ${cfg.tavily_api_key_masked}`
+            : ' · brak klucza Tavily'
+          : ''}
         .
       </p>
 
@@ -700,8 +785,9 @@ export function AiSettingsPage() {
         <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-2">
           <p className="text-xs font-semibold text-slate-700">Wyszukiwanie opisów produktów</p>
           <p className="text-[11px] text-slate-500">
-            Szukanie stron produktu robi PHP (Tavily albo darmowo Google/Bing), potem model pisze
-            opis. Lokalny LLM nie ma internetu — plugin OpenRouter <code>web</code> nic nie robi.
+            Najpierw lokalny indeks kart (sitemapy producentów i sklepów, bez kosztów). Dopiero gdy
+            indeks nic nie ma, PHP pyta wyszukiwarki wg opcji poniżej, potem model pisze opis.
+            Lokalny LLM nie ma internetu — plugin OpenRouter <code>web</code> nic nie robi.
           </p>
           <label className="block text-xs">
             Szukanie w internecie
@@ -715,16 +801,16 @@ export function AiSettingsPage() {
                 })
               }
             >
-              <option value="tavily">Tavily (płatne, dokładniejsze)</option>
-              <option value="searxng">SearXNG — własna instancja (darmowe, zalecane)</option>
-              <option value="duckduckgo">Publiczne wyszukiwarki (darmowe, często blokowane)</option>
+              <option value="searxng">SearXNG + Jina (zalecane: własna instancja, klucz Jina jako zapas)</option>
+              <option value="duckduckgo">Jina + publiczne wyszukiwarki (bez SearXNG)</option>
+              <option value="tavily">Tavily (płatne, ok. 15× drożej niż Jina za zapytanie)</option>
             </select>
             <span className="mt-1 block text-[11px] text-slate-500">
               {cfg.search_engine === 'searxng'
-                ? 'PHP pyta Twój SearXNG (format json). Bez limitów i kredytów.'
+                ? 'PHP pyta Twój SearXNG (format json). Gdy jego silniki są zablokowane, pyta Jina (klucz niżej), na końcu publiczne wyszukiwarki.'
                 : cfg.search_engine === 'duckduckgo'
-                  ? 'Google, Bing i DuckDuckGo blokują ruch z serwera (captcha, 403) — wyniki bywają puste lub nietrafione.'
-                  : 'Tavily zużywa kredyty, ale nie da się zablokować przez captcha.'}
+                  ? 'Najpierw Jina (klucz niżej), potem Google/DuckDuckGo/Qwant — te blokują ruch z serwera (captcha, 403).'
+                  : 'Tavily zużywa kredyty (1 kredyt = 0,008 USD za zapytanie), ale nie da się zablokować przez captcha.'}
             </span>
           </label>
           {cfg.search_engine === 'searxng' && (
@@ -752,7 +838,7 @@ export function AiSettingsPage() {
             <span>
               Tylko duży model (główny) — opis modelem z góry
               <span className="mt-0.5 block text-[11px] text-slate-500">
-                Opis modelem z góry. Szukanie wg opcji powyżej (Tavily albo Google/Bing).
+                Opis modelem z góry. Szukanie wg opcji powyżej (indeks, SearXNG/Jina albo Tavily).
               </span>
             </span>
           </label>
@@ -772,52 +858,156 @@ export function AiSettingsPage() {
               <option value="meta-llama/llama-3.3-70b-instruct" />
             </datalist>
           </label>
-          <label className="block text-xs">
-            Klucz Tavily{' '}
-            {cfg.search_engine !== 'tavily'
-              ? '(nieużywany — Tavily jest wyłączone)'
-              : cfg.has_tavily_api_key
-                ? '(zostaw puste, by nie zmieniać)'
-                : '* (wymagany tylko przy silniku Tavily)'}
-            <input
-              type={showTavilyKey ? 'text' : 'password'}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono disabled:bg-slate-100"
-              disabled={cfg.search_engine !== 'tavily'}
-              value={tavilyKey}
-              onChange={(e) => setTavilyKey(e.target.value)}
-              placeholder={cfg.has_tavily_api_key ? '••••••••' : 'tvly-…'}
-              autoComplete="new-password"
-            />
-            <span className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
+          <div className="rounded border border-slate-200 bg-white p-3 space-y-2">
+            <p className="text-xs font-semibold text-slate-700">Jina — wyszukiwarka i reader stron za zaporą</p>
+            <p className="text-[11px] text-slate-500">
+              Jeden klucz do s.jina.ai (wyszukiwanie, stałe 10 tys. tokenów za zapytanie) i r.jina.ai
+              (czytanie kart, które blokują pobieranie). Doładowanie ok. 50 USD = 1 mld tokenów, czyli
+              ok. 100 tys. wyszukiwań. Po 402 (brak środków) batch czeka na doładowanie, zamiast liczyć błędy.
+            </p>
+            <label className="block text-xs">
+              Klucz Jina{' '}
+              {cfg.has_jina_api_key
+                ? cfg.jina_key_source === 'env'
+                  ? '(dziś z JINA_API_KEY w .env — wpisany tutaj ma pierwszeństwo)'
+                  : '(zostaw puste, by nie zmieniać)'
+                : '(bez klucza szukają tylko SearXNG i publiczne wyszukiwarki)'}
               <input
-                type="checkbox"
-                checked={showTavilyKey}
-                onChange={(e) => setShowTavilyKey(e.target.checked)}
+                type={showJinaKey ? 'text' : 'password'}
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
+                value={jinaKey}
+                onChange={(e) => setJinaKey(e.target.value)}
+                placeholder={cfg.has_jina_api_key ? '••••••••' : 'jina_…'}
+                autoComplete="new-password"
               />
-              Pokaż klucz
-            </span>
-          </label>
-          <label className="block text-xs">
-            Tryb wyszukiwania Tavily (zużycie kredytów)
-            <select
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 disabled:bg-slate-100"
-              disabled={cfg.search_engine !== 'tavily'}
-              value={cfg.tavily_search_mode || 'balanced'}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  tavily_search_mode: e.target.value as 'eco' | 'balanced' | 'full',
-                })
-              }
-            >
-              <option value="eco">Oszczędny — 1 zapytanie, 1 faza (najmniej kredytów)</option>
-              <option value="balanced">Zbalansowany — stop po 1 wyniku, dłuższy cache (domyślny)</option>
-              <option value="full">Pełny — agresywne szukanie (dużo kredytów)</option>
-            </select>
-            <span className="mt-1 block text-[11px] text-slate-500">
-              Przy limicie planu (HTTP 432) batch się zatrzymuje i nie ponawia zapytań.
-            </span>
-          </label>
+              <span className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
+                <input
+                  type="checkbox"
+                  checked={showJinaKey}
+                  onChange={(e) => setShowJinaKey(e.target.checked)}
+                />
+                Pokaż klucz
+              </span>
+            </label>
+            {jinaUsage && (jinaUsage.configured || jinaUsage.error) && (
+              <div className="rounded bg-slate-50 p-2 text-xs">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="font-semibold text-slate-700">Saldo klucza Jina</span>
+                  <button
+                    type="button"
+                    className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] hover:bg-slate-100 disabled:opacity-50"
+                    disabled={jinaBusy || !jinaUsage.configured}
+                    onClick={() => void loadJinaUsage(true)}
+                  >
+                    {jinaBusy ? 'Sprawdzam…' : 'Odśwież saldo'}
+                  </button>
+                </div>
+                {jinaUsage.error && (
+                  <p className="mt-1 rounded bg-red-50 px-2 py-1 text-[11px] text-red-700">{jinaUsage.error}</p>
+                )}
+                {jinaUsage.tokens_left !== null && (
+                  <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+                    <div>
+                      <dt className="text-[11px] text-slate-500">Zostało tokenów</dt>
+                      <dd className="font-semibold text-slate-800">{fmtTokens(jinaUsage.tokens_left)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] text-slate-500">W dolarach</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {jinaUsage.usd_left === null ? '—' : `${jinaUsage.usd_left.toFixed(2).replace('.', ',')} USD`}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] text-slate-500">≈ wyszukiwań</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {jinaUsage.searches_left === null ? '—' : plNumber.format(jinaUsage.searches_left)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] text-slate-500">Zużycie na dobę</dt>
+                      <dd className="font-semibold text-slate-800">
+                        {jinaUsage.tokens_per_day === null
+                          ? 'za mało próbek'
+                          : jinaUsage.tokens_per_day === 0
+                            ? 'brak zużycia'
+                            : fmtTokens(jinaUsage.tokens_per_day)}
+                      </dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-[11px] text-slate-500">Skończy się około</dt>
+                      <dd
+                        className={`font-semibold ${
+                          jinaUsage.days_left !== null && jinaUsage.days_left < 3
+                            ? 'text-red-700'
+                            : jinaUsage.days_left !== null && jinaUsage.days_left < 14
+                              ? 'text-amber-700'
+                              : 'text-slate-800'
+                        }`}
+                      >
+                        {jinaUsage.days_left === null
+                          ? jinaUsage.tokens_per_day === 0
+                            ? 'przy obecnym zużyciu nigdy'
+                            : 'po co najmniej godzinie zużycia'
+                          : `${fmtDate(jinaUsage.runs_out_at)} (za ${jinaUsage.days_left.toFixed(1).replace('.', ',')} dnia)`}
+                      </dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-[11px] text-slate-500">Ostatnie sprawdzenie</dt>
+                      <dd className="text-slate-700">
+                        {fmtDate(jinaUsage.checked_at)}
+                        {jinaUsage.window_hours !== null
+                          ? ` · tempo z ${jinaUsage.snapshots} próbek przez ${jinaUsage.window_hours.toFixed(0)} h`
+                          : ' · tempo policzy się po kolejnych próbkach (co godzinę)'}
+                      </dd>
+                    </div>
+                  </dl>
+                )}
+              </div>
+            )}
+          </div>
+          {cfg.search_engine === 'tavily' && (
+            <>
+              <label className="block text-xs">
+                Klucz Tavily {cfg.has_tavily_api_key ? '(zostaw puste, by nie zmieniać)' : '*'}
+                <input
+                  type={showTavilyKey ? 'text' : 'password'}
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono"
+                  value={tavilyKey}
+                  onChange={(e) => setTavilyKey(e.target.value)}
+                  placeholder={cfg.has_tavily_api_key ? '••••••••' : 'tvly-…'}
+                  autoComplete="new-password"
+                />
+                <span className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
+                  <input
+                    type="checkbox"
+                    checked={showTavilyKey}
+                    onChange={(e) => setShowTavilyKey(e.target.checked)}
+                  />
+                  Pokaż klucz
+                </span>
+              </label>
+              <label className="block text-xs">
+                Tryb wyszukiwania Tavily (zużycie kredytów)
+                <select
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                  value={cfg.tavily_search_mode || 'balanced'}
+                  onChange={(e) =>
+                    setCfg({
+                      ...cfg,
+                      tavily_search_mode: e.target.value as 'eco' | 'balanced' | 'full',
+                    })
+                  }
+                >
+                  <option value="eco">Oszczędny — 1 zapytanie, 1 faza (najmniej kredytów)</option>
+                  <option value="balanced">Zbalansowany — stop po 1 wyniku, dłuższy cache (domyślny)</option>
+                  <option value="full">Pełny — agresywne szukanie (dużo kredytów)</option>
+                </select>
+                <span className="mt-1 block text-[11px] text-slate-500">
+                  Przy limicie planu (HTTP 432) batch się zatrzymuje i nie ponawia zapytań.
+                </span>
+              </label>
+            </>
+          )}
           <label className="block text-xs">
             Max produktów w kolejce enrichmentu (min. 1)
             <input
