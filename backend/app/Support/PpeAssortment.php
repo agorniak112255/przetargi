@@ -348,16 +348,18 @@ final class PpeAssortment
             && preg_match('/\b(mata|arkusz|tasm|taśm)\w*/u', $t) !== 1) {
             return self::TYPE_KALOSZ;
         }
+        // Nazwy Canis/CXS są angielskie i czeskie: „Low perforated leather footwear” to półbut,
+        // „Ankle boot”/„kotníková obuv” to trzewik — bez tego sandały dostawały zimowe trzewiki.
         if (preg_match('/\b(sandal)\w*/u', $t) === 1) {
             return self::TYPE_SANDAL;
         }
         if (preg_match('/\b(sztyblet|chelsea)\w*/u', $t) === 1) {
             return self::TYPE_SZTYBLET;
         }
-        if (preg_match('/\b(trzewik|ankle\s*boot)\w*/u', $t) === 1) {
+        if (preg_match('/\b(trzewik|ankle\s*(boot|shoe|footwear)|kotnikov|high\s*(shoe|footwear|boot)|winter\s*(boot|footwear))\w*/u', $t) === 1) {
             return self::TYPE_TRZEWIK;
         }
-        if (preg_match('/\b(mokasyn|polbut|polbuty|low\s*shoe)\w*/u', $t) === 1) {
+        if (preg_match('/\b(mokasyn|polbut|polbuty|polobot|low\s*(?:\w+\s+){0,2}(shoe|footwear))\w*/u', $t) === 1) {
             return self::TYPE_POLBUT;
         }
 

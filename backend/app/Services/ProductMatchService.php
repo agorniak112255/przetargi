@@ -1700,36 +1700,32 @@ final class ProductMatchService
         }
 
         if ($heuristic !== null && $heuristic['score'] >= $this->applyMatchScore()) {
-            // Opis bez kodu: o wyborze ma decydować model. Gdy nie odpowiedział (timeout, błąd),
-            // pozycja czeka na ponowienie zamiast dostać kartę „po słowach” z 99%; gdy odpowiedział
-            // „nic nie pasuje” albo nie był pytany — heurystyka zostaje propozycją z sufitem 70%.
-            $descriptive = $this->isDescriptiveRequirement($requirement);
-            if ($descriptive && $this->modelStateFor($requirement) === ProductAiSearchService::MODEL_STATE_UNAVAILABLE) {
+            // Tu trafia wybór „po słowach karty”: kod z SIWZ rozstrzygnął by wcześniej (strongSkuPick,
+            // pierwsza gałąź), a model tej karty nie wskazał. O takim wyborze ma decydować model:
+            // gdy nie odpowiedział (timeout, błąd) — pozycja czeka na ponowienie zamiast dostać
+            // kartę z 99%; gdy odpowiedział „nic nie pasuje” albo nie był pytany — heurystyka
+            // zostaje propozycją z sufitem 70% i etykietą. Skróty norm i lata (ESD, SRC, 2016)
+            // w opisie nie są kodem produktu, więc nie zwalniają z tej zasady.
+            if ($this->modelStateFor($requirement) === ProductAiSearchService::MODEL_STATE_UNAVAILABLE) {
                 $this->lastNoMatchReason = self::NO_MATCH_MODEL_UNAVAILABLE;
 
                 return null;
             }
             $honest = $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']);
             if ($honest !== null) {
-                $score = $descriptive ? min($honest, self::HEURISTIC_ONLY_CAP) : $honest;
+                $score = min($honest, self::HEURISTIC_ONLY_CAP);
                 if ($this->meetsPersistThreshold($requirement, $heuristic['product'], $score, 'heuristic')) {
                     return [
                         'product' => $heuristic['product'],
                         'score' => $score,
                         'source' => 'heuristic',
-                        'heuristic_only' => $descriptive,
+                        'heuristic_only' => true,
                     ];
                 }
             }
         }
 
         return null;
-    }
-
-    /** Wymaganie bez kodu SKU i bez nazwanego modelu — same cechy wyrobu; tu słowa karty nie wystarczą. */
-    private function isDescriptiveRequirement(string $requirement): bool
-    {
-        return $this->codeCandidates($requirement) === [] && ! $this->modelFuzzy->hasNamedModel($requirement);
     }
 
     private function modelStateFor(string $requirement): string

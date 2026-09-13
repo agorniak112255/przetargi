@@ -227,6 +227,12 @@ final class PpeAssortmentTest extends TestCase
             PpeAssortment::TYPE_POLBUT,
             $this->assortment->articleType('mokasyny S2 non-metalic', PpeAssortment::FAMILY_FOOTWEAR)
         );
+        // angielskie i czeskie nazwy Canis/CXS
+        $this->assertSame(PpeAssortment::TYPE_POLBUT, $this->assortment->articleType('Low perforated leather footwear, PU-PU, oil resistant', PpeAssortment::FAMILY_FOOTWEAR));
+        $this->assertSame(PpeAssortment::TYPE_POLBUT, $this->assortment->articleType('Low shoe CXS ROCK PYRIT S1P', PpeAssortment::FAMILY_FOOTWEAR));
+        $this->assertSame(PpeAssortment::TYPE_POLBUT, $this->assortment->articleType('Polobotka CXS MARBLE O1', PpeAssortment::FAMILY_FOOTWEAR));
+        $this->assertSame(PpeAssortment::TYPE_TRZEWIK, $this->assortment->articleType('Ankle shoe CXS STONE TOPAZ S3 Winter', PpeAssortment::FAMILY_FOOTWEAR));
+        $this->assertSame(PpeAssortment::TYPE_TRZEWIK, $this->assortment->articleType('Kotníková obuv CXS SAFETY STEEL S1', PpeAssortment::FAMILY_FOOTWEAR));
         $this->assertSame('agriculture', $this->assortment->purpose('Kalosz do rolnictwa i gospodarstw'));
         $this->assertSame('welding', $this->assortment->purpose('Trzewiki spawalnicze HRO'));
         $this->assertSame('ffp', $this->assortment->articleType('Półmaska filtrująca 9914 FFP1', PpeAssortment::FAMILY_RESPIRATORY));
@@ -978,6 +984,14 @@ final class PpeAssortmentTest extends TestCase
         $this->assertTrue($this->assortment->compatibleProduct($req, $foreignDescription), 'opis nie nazywa modelu — nie świadczy o typie');
         $this->assertTrue($this->assortment->compatibleProduct($req, $laterSentence), 'typ liczy się tylko z pierwszego zdania');
         $this->assertTrue($this->assortment->compatibleProduct('Trzewiki ochronne S1 ESD', $boot));
+
+        // Canis: angielska nazwa niesie typ (półbut), a obcy opis mówi o trzewiku zimowym S3 — sandały to nie to
+        $lowShoe = $this->card('2340-002-800-00', 'Low perforated leather footwear, PU-PU, oil resistant, antistatic, antislippery outsole, sizes 35 -50', [
+            'manufacturer' => 'Canis',
+            'category' => 'Obuwie',
+            'description' => 'Zimowe, wodoodporne buty robocze CANIS Stone Topaz S3 Winter to obuwie ochronne do pracy w chłodnych warunkach.',
+        ]);
+        $this->assertFalse($this->assortment->compatibleProduct($req, $lowShoe), 'półbut (low shoe) to nie sandał');
     }
 
     #[Test]
