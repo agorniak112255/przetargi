@@ -134,9 +134,12 @@ final class ProductDescriptionText
     /** „ARTRABiałe półbuty” → „ARTRA Białe półbuty”. */
     public static function unglueBrandWords(string $text): string
     {
-        $text = (string) preg_replace('/\b([A-Z]{3,})(?=[A-Z][a-ząćęłńóśźż])/u', '$1 ', $text);
+        // Marka ma co najmniej 4 wielkie litery, a doklejony wyraz co najmniej 3 małe.
+        // Przy {3,} nazwy handlowe rozpadały się w zapisanym opisie: „COBAstat” → „COB Astat”,
+        // „COBAGRiP” → „COBAG RiP” — i przestawały pasować do nazwy z cennika (batch #300).
+        $text = (string) preg_replace('/\b([A-Z]{4,})(?=[A-Z][a-ząćęłńóśźż]{3,})/u', '$1 ', $text);
 
-        return (string) preg_replace('/\b([A-Z]{3,})(?=[a-ząćęłńóśźż])/u', '$1 ', $text);
+        return (string) preg_replace('/\b([A-Z]{5,})(?=[a-ząćęłńóśźż]{3,})/u', '$1 ', $text);
     }
 
     /**

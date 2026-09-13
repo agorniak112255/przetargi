@@ -425,7 +425,7 @@ final class ProductEnrichmentService
         }
         $extracted = $this->extractWithLlm($product, $cardSources, array_slice($clean, 0, 5));
         $description = ProductDescriptionText::plain($this->composeFullDescription($extracted));
-        if (! $this->isUsableProductDescription($description, $product)) {
+        if (! $this->isUsableProductDescription($description, $product, array_column($clean, 'url'))) {
             $description = '';
         }
         if ($description === '') {
@@ -776,7 +776,7 @@ final class ProductEnrichmentService
 
             $rawDescription = $this->composeFullDescription($extracted);
             $description = ProductDescriptionText::plain($rawDescription);
-            if (! $this->isUsableProductDescription($description, $product)) {
+            if (! $this->isUsableProductDescription($description, $product, array_column($pageSnippets, 'url'))) {
                 $description = '';
             }
             if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
@@ -2407,7 +2407,7 @@ final class ProductEnrichmentService
                 array_slice($pageSnippets, -3)
             );
             $extraDesc = $this->composeFullDescription($extraExtracted);
-            if (! $this->isUsableProductDescription($extraDesc, $product)) {
+            if (! $this->isUsableProductDescription($extraDesc, $product, array_column(array_slice($pageSnippets, -3), 'url'))) {
                 $extraDesc = '';
             }
             if ($this->isRicherDescription($extraDesc, $description)) {
@@ -3110,7 +3110,11 @@ final class ProductEnrichmentService
         return $headings >= 6 && count($families) >= 3;
     }
 
-    private function isUsableProductDescription(string $description, Product $product): bool
+    /**
+     * @param  list<string>  $sourceUrls  potwierdzone karty, z których model napisał opis — tylko dla
+     *                                    opisu modelu; tekst karty (fallbacki) sprawdzamy bez nich
+     */
+    private function isUsableProductDescription(string $description, Product $product, array $sourceUrls = []): bool
     {
         $d = trim($description);
         if ($d === '' || $this->looksLikeMissingCardMeta($d) || $this->looksLikeThinDescription($d)
@@ -3122,7 +3126,7 @@ final class ProductEnrichmentService
             return true;
         }
 
-        return $this->descriptionMentionsProduct($d, $product);
+        return $this->descriptionMentionsProduct($d, $product, $sourceUrls);
     }
 
     /**
@@ -3187,13 +3191,26 @@ final class ProductEnrichmentService
      * Opis wolno przypisać dopiero wtedy, gdy sam nazywa produkt po kodzie albo modelu.
      * Bez tego karta obcego produktu z tej samej branży przechodziła jako nasza.
      */
-    private function descriptionMentionsProduct(string $description, Product $product): bool
+    /**
+     * @param  list<string>  $sourceUrls  potwierdzone karty, z których model napisał opis. Karta
+     *                                    z domeny producenta potwierdza markę: model pisze
+     *                                    „Deckplate”, „COBAstat”, a nie osobne „Coba” (batch #300).
+     */
+    private function descriptionMentionsProduct(string $description, Product $product, array $sourceUrls = []): bool
     {
         $hay = mb_strtolower($description);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+        $officialSource = '';
+        foreach ($sourceUrls as $url) {
+            if (is_string($url) && $url !== '' && $this->identity->isOfficialCatalogUrl($url, $product)) {
+                $officialSource = $url;
+                break;
+            }
+        }
+        $brandConfirmed = $officialSource !== '' || $this->identity->hayHasBrand($hay, $product);
 
         if ($this->identity->hayHasProductCode($hay, $product)) {
-            if ($this->identity->pageAgreesWithBrandAndName($hay, '', $product)
+            if ($this->identity->pageAgreesWithBrandAndName($hay, $officialSource, $product)
                 && $this->identity->hayHasRequiredTypeFromName($hay, $product)) {
                 return true;
             }
@@ -3207,7 +3224,7 @@ final class ProductEnrichmentService
             return false;
         }
         if ($this->identity->hayHasShopIdentity($hay, $hayCompact, $product)
-            && $this->identity->hayHasBrand($hay, $product)) {
+            && $brandConfirmed) {
             return $this->identity->hayHasRequiredTypeFromName($hay, $product);
         }
         // sklep bez SKU, ale z pełną nazwą („Dywanik elektroizolacyjny 20 KV”)
@@ -3224,7 +3241,7 @@ final class ProductEnrichmentService
         }
         // Sama marka nie wystarcza — pod „Urgent” idzie pół katalogu — ale razem
         // ze słowem z nazwy domyka potwierdzenie.
-        if ($score > 0 && $this->identity->hayHasBrand($hay, $product)) {
+        if ($score > 0 && $brandConfirmed) {
             $score++;
         }
         if ($score >= 2) {

@@ -72,6 +72,50 @@ final class EnrichmentDescriptionGuardTest extends TestCase
         $this->assertTrue($this->usable(self::POLISH, $this->deckStep()));
     }
 
+    /**
+     * Batch #300: model napisał dobre polskie opisy z kart coba.com, ale bez kodu z cennika
+     * i bez osobnego słowa „Coba” — kontrola je zerowała i 29 produktów szło do ręki.
+     */
+    public function test_model_description_from_manufacturer_card_confirms_brand(): void
+    {
+        $official = ['https://www.coba.com/pl/produkt/deckplate'];
+        $shop = ['https://sklep-bhp.example.pl/deckplate'];
+        $deckplate = new Product(['sku' => 'DP0106', 'name' => 'Deckplate Czarny 0.6m x 0.9m (15mm)', 'manufacturer' => 'Coba']);
+        $text = 'Mata przemysłowa Deckplate to profesjonalne rozwiązanie redukujące zmęczenie podczas pracy na stojąco, '
+            .'przeznaczone do użytku wewnętrznego w suchym środowisku. Dwuwarstwowa konstrukcja łączy trwałą, ryflowaną '
+            .'powierzchnię z amortyzującym spodem, co zwiększa komfort pracowników.';
+
+        $this->assertTrue($this->usable($text, $deckplate, $official), 'karta producenta potwierdza markę');
+        $this->assertFalse($this->usable($text, $deckplate, $shop), 'ze sklepu bez marki w opisie nadal za mało');
+        $this->assertFalse($this->usable($text, $deckplate), 'bez źródła jak dotąd');
+
+        $aluramp = new Product(['sku' => 'ALURAMP-YE', 'name' => 'Krawędź Aluminiowa Żółty 83mm x 2.715m (17.5mm)', 'manufacturer' => 'Coba']);
+        $this->assertTrue($this->usable(
+            'Stała krawędź aluminiowa ALURAMP-YE to trwałe i bezpieczne obramowanie przeznaczone do systemów gumowych mat '
+                .'modułowych, w tym płyt antyzmęczeniowych. Jej głównym zadaniem jest wyeliminowanie ryzyka potknięć na krawędziach.',
+            $aluramp,
+            ['https://www.coba.com/pl/produkt/stala-krawedz-dla-gumowych-mat-modulowych']
+        ), 'kod w opisie i karta producenta');
+    }
+
+    public function test_brand_prefixed_trade_names_are_not_split(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            'COBAstat to mata antystatyczna. COBAscrape i COBAGRiP to linie COBA Europe. ARTRABiałe półbuty robocze S2.'
+        );
+
+        $this->assertStringContainsString('COBAstat', $plain);
+        $this->assertStringContainsString('COBAscrape', $plain);
+        $this->assertStringContainsString('COBAGRiP', $plain);
+        $this->assertStringContainsString('ARTRA Białe', $plain, 'sklejona marka ze słowem nadal się rozkleja');
+
+        $cobastat = new Product(['sku' => 'AS060003', 'name' => 'COBAstat Szary 0.9m x 18.3m (9mm)', 'manufacturer' => 'Coba']);
+        $this->assertTrue($this->usable(ProductDescriptionText::plain(
+            'COBAstat® to komfortowa mata antystatyczna (ESD) przeznaczona na suche stanowiska pracy, gdzie kluczowa jest '
+                .'ochrona przed gromadzeniem się ładunków elektrostatycznych. Wykonana z pianki PVC o zamkniętych komórkach.'
+        ), $cobastat, ['https://www.coba.com/pl/produkt/cobastat']));
+    }
+
     public function test_mat_type_needs_the_word_not_a_substring(): void
     {
         $identity = app(ProductSearchIdentity::class);
@@ -118,10 +162,13 @@ final class EnrichmentDescriptionGuardTest extends TestCase
         ]);
     }
 
-    private function usable(string $description, Product $product): bool
+    /**
+     * @param  list<string>  $sourceUrls
+     */
+    private function usable(string $description, Product $product, array $sourceUrls = []): bool
     {
         $method = new ReflectionMethod(ProductEnrichmentService::class, 'isUsableProductDescription');
 
-        return (bool) $method->invoke(app(ProductEnrichmentService::class), $description, $product);
+        return (bool) $method->invoke(app(ProductEnrichmentService::class), $description, $product, $sourceUrls);
     }
 }
