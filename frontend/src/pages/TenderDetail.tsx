@@ -389,13 +389,40 @@ function matchTargetIds(
  * Etapy paczki na serwerze i ich udział w czasie paczki (szacunek: ranking w modelu trwa najdłużej).
  * `model` = czekamy na odpowiedź modelu dla całej paczki naraz — pasek pulsuje, żeby było widać pracę.
  */
-const MATCH_STAGES: Record<string, { label: string; from: number; to: number; model: boolean }> = {
-  prepare: { label: 'Przygotowanie paczki (kody z SIWZ)', from: 0, to: 0.05, model: false },
-  understand: { label: 'Model czyta opisy pozycji', from: 0.05, to: 0.15, model: true },
-  catalog: { label: 'Szukanie kandydatów w katalogu', from: 0.15, to: 0.35, model: false },
-  rank: { label: 'Model ocenia karty kandydatów', from: 0.35, to: 0.85, model: true },
-  rewrite: { label: 'Model przepisuje zapytania bez wyników', from: 0.85, to: 0.92, model: true },
-  save: { label: 'Wybór i zapis pozycji', from: 0.92, to: 1, model: false },
+const MATCH_STAGES: Record<
+  string,
+  { label: string; unit: string; from: number; to: number; model: boolean }
+> = {
+  prepare: { label: 'Przygotowanie paczki (kody z SIWZ)', unit: 'pozycji w paczce', from: 0, to: 0.05, model: false },
+  understand: {
+    label: 'Model czyta opisy pozycji',
+    unit: 'opisów przeczytanych przez model',
+    from: 0.05,
+    to: 0.15,
+    model: true,
+  },
+  catalog: {
+    label: 'Szukanie kandydatów w katalogu',
+    unit: 'pozycji z kandydatami z katalogu',
+    from: 0.15,
+    to: 0.35,
+    model: false,
+  },
+  rank: {
+    label: 'Model ocenia karty kandydatów',
+    unit: 'pozycji ocenionych przez model',
+    from: 0.35,
+    to: 0.85,
+    model: true,
+  },
+  rewrite: {
+    label: 'Model przepisuje zapytania bez wyników',
+    unit: 'zapytań przepisanych przez model',
+    from: 0.85,
+    to: 0.92,
+    model: true,
+  },
+  save: { label: 'Wybór i zapis pozycji', unit: 'pozycji zapisanych w ofercie', from: 0.92, to: 1, model: false },
 }
 
 /** Szacunkowy postęp całości: pozycje z zamkniętych paczek + ułamek bieżącej paczki według etapu. */
@@ -611,6 +638,9 @@ export function TenderDetail() {
   const [matchBusy, setMatchBusy] = useState(false)
   const [matchElapsed, setMatchElapsed] = useState(0)
   const [matchProgress, setMatchProgress] = useState<MatchProgress | null>(null)
+  /** kiedy zaczął się bieżący etap paczki — „etap trwa N s” w oknie postępu */
+  const [matchStageSince, setMatchStageSince] = useState(0)
+  const matchStageKeyRef = useRef('')
   const matchStartedAtRef = useRef(0)
   const matchDoneRef = useRef(0)
   const [matchReport, setMatchReport] = useState<MatchReport | null>(null)
@@ -722,6 +752,11 @@ export function TenderDetail() {
         }
         if (p.started_at != null && p.started_at < started - 5) {
           return
+        }
+        const stageKey = `${p.stage ?? ''}|${p.started_at ?? ''}`
+        if (stageKey !== matchStageKeyRef.current) {
+          matchStageKeyRef.current = stageKey
+          setMatchStageSince(Date.now())
         }
         setMatchProgress((prev) => ({
           status: 'running',
@@ -1680,33 +1715,37 @@ export function TenderDetail() {
               const stage = matchProgress?.stage ? MATCH_STAGES[matchProgress.stage] : undefined
               const stageDone = matchProgress?.stage_done ?? 0
               const stageTotal = matchProgress?.stage_total ?? 0
-              let stageDetail = ''
-              if (stage && stageTotal > 0) {
-                stageDetail = stage.model
-                  ? ` · ${stageTotal} pozycji naraz${stageDone > 0 ? `, gotowe ${stageDone}` : ''}`
-                  : ` · ${stageDone}/${stageTotal}`
-              }
+              // duży licznik = postęp bieżącego etapu (rośnie z każdą odpowiedzią modelu / pozycją z katalogu);
+              // bez etapu (stary serwer, przerwa między paczkami) — pozycje zapisane w ofercie
+              const shown = stage && stageTotal > 0 ? stage : undefined
+              const stageSeconds =
+                matchStageSince > 0 ? Math.max(0, Math.floor((Date.now() - matchStageSince) / 1000)) : 0
               const eta =
                 done > 0 && total > done
                   ? formatMatchEta(Math.round((matchElapsed * (total - done)) / done))
                   : null
               return (
                 <>
-                  <p className="mt-3 font-mono text-2xl font-semibold text-violet-800">
-                    {done} / {total || '…'}
+                  {shown && (
+                    <p className="mt-3 text-xs font-medium text-slate-700">
+                      {shown.label}
+                      {shown.model ? ' · czeka na odpowiedzi modelu' : ''}
+                    </p>
+                  )}
+                  <p className={`${shown ? 'mt-1' : 'mt-3'} font-mono text-2xl font-semibold text-violet-800`}>
+                    {shown ? `${stageDone} / ${stageTotal}` : `${done} / ${total || '…'}`}
                   </p>
-                  <p className="text-xs text-slate-500">sprawdzonych pozycji</p>
+                  <p className="text-xs text-slate-500">{shown ? shown.unit : 'pozycji zapisanych w ofercie'}</p>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
                     <div
                       className={`h-full rounded-full bg-violet-600 transition-all${stage?.model ? ' animate-pulse' : ''}`}
                       style={{ width: `${Math.max(pct, stage ? 2 : 0)}%` }}
                     />
                   </div>
-                  {stage && (
-                    <p className="mt-2 text-xs text-slate-700">
-                      {stage.label}
-                      {stageDetail}
-                      <span className="text-slate-400"> · pasek szacunkowy</span>
+                  {shown && (
+                    <p className="mt-2 text-xs text-slate-600">
+                      Zapisane w ofercie: {done} / {total || '…'} · etap trwa {stageSeconds} s
+                      <span className="text-slate-400"> · pasek całości szacunkowy ({pct}%)</span>
                     </p>
                   )}
                   {matchProgress?.line_no != null && (

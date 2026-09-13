@@ -12,14 +12,14 @@ use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 /**
- * Pasek „Trwa dopasowanie AI” liczy odpowiedzi modelu po każdej podpaczce równoległych zapytań,
- * a nie dopiero po całej liście.
+ * Licznik „Trwa dopasowanie AI” rośnie z każdą odpowiedzią modelu z puli równoległych zapytań,
+ * a nie dopiero po całej paczce — okno stało na „0 / 15” do samego końca.
  */
 final class AiChatJsonManyProgressTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_callback_reports_answered_count_after_each_chunk(): void
+    public function test_callback_reports_each_answer_not_only_whole_chunk(): void
     {
         AiSetting::query()->create([
             'enabled' => true,
@@ -49,6 +49,8 @@ final class AiChatJsonManyProgressTest extends TestCase
         );
 
         $this->assertSame([['ok' => true], ['ok' => true], ['ok' => true]], $out);
-        $this->assertSame([[2, 3], [3, 3]], $calls);
+        // podpaczka 2 zapytań w puli: 1, potem 2; ostatnie pojedyncze zapytanie: 3
+        $this->assertSame([[1, 3], [2, 3], [3, 3]], $calls);
+        Http::assertSentCount(3);
     }
 }

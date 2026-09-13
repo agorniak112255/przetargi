@@ -151,7 +151,8 @@ class OpenAiCompatibleClient
         array $messageSets,
         bool $jsonMode = true,
         ?array $extra = null,
-        ?AiTask $task = null
+        ?AiTask $task = null,
+        ?callable $onAnswered = null,
     ): array {
         if ($messageSets === []) {
             return [];
@@ -168,7 +169,7 @@ class OpenAiCompatibleClient
 
         $profile = $this->settings->profileForTask($task);
         try {
-            return $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra);
+            return $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra, $onAnswered);
         } catch (RuntimeException $e) {
             if ($profile['is_default']) {
                 $failed = [];
@@ -181,7 +182,7 @@ class OpenAiCompatibleClient
 
             return $this->runOnMainOrRethrow(
                 $e,
-                fn (array $main): array => $this->chatManyWithProfile($main, $messageSets, $jsonMode, $extra),
+                fn (array $main): array => $this->chatManyWithProfile($main, $messageSets, $jsonMode, $extra, $onAnswered),
                 $task,
                 $profile['label']
             );
@@ -199,7 +200,7 @@ class OpenAiCompatibleClient
         ?int $maxTokens = null,
         ?AiTask $task = null,
         int $maxConcurrent = 10,
-        ?callable $onChunkDone = null,
+        ?callable $onProgress = null,
     ): array {
         if ($messageSets === []) {
             return [];
@@ -210,8 +211,26 @@ class OpenAiCompatibleClient
         }
         $maxConcurrent = max(1, min(AiSettingsService::CONCURRENCY_MAX, $maxConcurrent));
         $parsed = [];
+        // $onProgress(odpowiedzi, wszystkie) — okno „Trwa dopasowanie” liczy każdą odpowiedź modelu,
+        // nie całą paczkę naraz. Tylko w górę: ponowienie na profilu głównym nie cofa licznika.
+        $total = count($messageSets);
+        $reported = 0;
+        $report = static function (int $count) use ($onProgress, $total, &$reported): void {
+            $count = min($count, $total);
+            if ($onProgress !== null && $count > $reported) {
+                $reported = $count;
+                $onProgress($count, $total);
+            }
+        };
         foreach (array_chunk($messageSets, $maxConcurrent) as $chunk) {
-            foreach ($this->chatMany($chunk, true, $extra !== [] ? $extra : null, $task) as $row) {
+            $chunkStart = count($parsed);
+            $chunkSize = count($chunk);
+            $inChunk = 0;
+            $onAnswered = $onProgress === null ? null : static function () use (&$inChunk, $chunkStart, $chunkSize, $report): void {
+                $inChunk++;
+                $report($chunkStart + min($inChunk, $chunkSize));
+            };
+            foreach ($this->chatMany($chunk, true, $extra !== [] ? $extra : null, $task, $onAnswered) as $row) {
                 if (! ($row['ok'] ?? false)) {
                     Log::warning('AI chatJsonMany failed', [
                         'task' => $task?->value,
@@ -224,10 +243,8 @@ class OpenAiCompatibleClient
                 $json = $this->tryParseJson((string) ($row['content'] ?? ''));
                 $parsed[] = $json ?? [];
             }
-            // postęp dla okna „Trwa dopasowanie”: ile zapytań z całej listy ma już odpowiedź
-            if ($onChunkDone !== null) {
-                $onChunkDone(count($parsed), count($messageSets));
-            }
+            // pojedyncze zapytanie idzie bez puli, a ponowienia mogą nie wywołać licznika — wyrównanie
+            $report(count($parsed));
         }
 
         return $parsed;
@@ -338,7 +355,8 @@ class OpenAiCompatibleClient
         array $profile,
         array $messageSets,
         bool $jsonMode,
-        ?array $extra
+        ?array $extra,
+        ?callable $onAnswered = null,
     ): array {
         if (! $this->settings->resolve()['enabled']) {
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
@@ -359,7 +377,7 @@ class OpenAiCompatibleClient
             $bodies[] = $this->buildChatPayload($profile, $messages, null, $extra, $jsonMode);
         }
 
-        $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies);
+        $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies, $onAnswered);
         $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses);
 
         $out = [];
@@ -374,9 +392,9 @@ class OpenAiCompatibleClient
      * @param  array<int, array<string, mixed>>  $bodies
      * @return array<int, mixed>
      */
-    private function postChatPool(string $url, string $apiKey, int $timeout, array $bodies): array
+    private function postChatPool(string $url, string $apiKey, int $timeout, array $bodies, ?callable $onAnswered = null): array
     {
-        $responses = Http::pool(function (Pool $pool) use ($bodies, $url, $apiKey, $timeout) {
+        $responses = Http::pool(function (Pool $pool) use ($bodies, $url, $apiKey, $timeout, $onAnswered) {
             foreach ($bodies as $i => $body) {
                 $req = $pool->as((string) $i)
                     ->acceptJson()
@@ -392,7 +410,23 @@ class OpenAiCompatibleClient
                 if ($apiKey !== '') {
                     $req = $req->withToken($apiKey);
                 }
-                $req->post($url, $body);
+                $promise = $req->post($url, $body);
+                if ($onAnswered !== null) {
+                    // Guzzle woła to w pętli curl, gdy wróci TA odpowiedź (także błąd) — nie po całej puli.
+                    // Osobny łańcuch: wynik czekany przez Http::pool zostaje nietknięty.
+                    $promise->then(
+                        static function (mixed $response) use ($onAnswered): mixed {
+                            $onAnswered();
+
+                            return $response;
+                        },
+                        static function (mixed $reason) use ($onAnswered): null {
+                            $onAnswered();
+
+                            return null;
+                        },
+                    );
+                }
             }
         });
 
