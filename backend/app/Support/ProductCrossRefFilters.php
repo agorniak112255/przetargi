@@ -522,17 +522,10 @@ final class ProductCrossRefFilters
         return null;
     }
 
-    /** 1 = z zaworem, 0 = bez, null = nie wiadomo */
+    /** 1 = z zaworem, 0 = bez, null = nie wiadomo — jedna reguła z bramką asortymentu. */
     private function valveState(string $hay): ?int
     {
-        if (preg_match('/\bbez\s+zawor/u', $hay) === 1) {
-            return 0;
-        }
-        if (preg_match('/\b(zawor|valve|cool\s*flow)\w*/u', $hay) === 1) {
-            return 1;
-        }
-
-        return null;
+        return (new BhpAttributeNormalizer)->valveState($hay);
     }
 
     private function formLabel(string $hay): ?string

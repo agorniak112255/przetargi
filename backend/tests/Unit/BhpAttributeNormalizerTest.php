@@ -283,4 +283,51 @@ final class BhpAttributeNormalizerTest extends TestCase
 
         $this->assertSame('ARGON 8229 1010 S2', $attrs['kod_producenta']);
     }
+
+    public function test_valve_state_from_name(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame(1, $n->valveState('3M™ Aura™ półmaska filtrująca, FFP1, z zaworem, 9312+'));
+        $this->assertSame(1, $n->valveState('Półmaska FFP2 z zaworkiem Cool Flow'));
+        $this->assertSame(0, $n->valveState('3M™ Aura™ półmaska filtrująca, FFP1, bez zaworu, 9310+'));
+        $this->assertSame(0, $n->valveState('polmaska ffp1 bez zaworu 8710e'));
+        $this->assertNull($n->valveState('Półmaska filtrująca FFP1 X'));
+        $this->assertNull($n->valveState(''));
+    }
+
+    public function test_footwear_class_reads_s1_p_with_space(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame('S1P', $n->footwearClass('ARMEN 9007 6660 S1 P'));
+        $this->assertSame('S1P', $n->footwearClass('Sandały ochronne kategorii S1 P wg EN ISO 20345'));
+        $this->assertSame('S1P', $n->footwearClass('półbuty S1P ESD'));
+        $this->assertSame('S1', $n->footwearClass('AROX 733 641460 S1 ESD'));
+        $this->assertSame('S1', $n->footwearClass('półbuty S1 PU podeszwa'), 'S1 + inne słowo na P to nie S1P');
+        $this->assertFalse($n->footwearClassMeets('S1P', 'S1'));
+        $this->assertTrue($n->footwearClassMeets('S1P', 'S1P'));
+        $this->assertTrue($n->footwearClassMeets('S1', 'S1P'));
+
+        $attrs = $n->normalize(['kategoria_bhp' => 'obuwie'], [
+            'name' => 'ARMEN 9007 6660 S1 P',
+            'description' => 'Sandały robocze, klasa S1 P wg EN ISO 20345.',
+            'category' => 'Obuwie',
+        ]);
+        $this->assertSame('S1P', $attrs['klasa_ochrony']);
+    }
+
+    public function test_ffp_class_meets_reads_both_sides(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame('FFP2', $n->ffpClass('Półmaska filtrująca FFP2 NR D'));
+        $this->assertSame('FFP1', $n->ffpClass('3M Aura FFP-1 9310+'));
+        $this->assertNull($n->ffpClass('Półmaska SECURA 3000'));
+        $this->assertFalse($n->ffpClassMeets('Półmaska FFP2 z zaworem', '3M Aura półmaska filtrująca FFP1'));
+        $this->assertTrue($n->ffpClassMeets('Półmaska FFP2 z zaworem', '3M Aura FFP2 9322+'));
+        $this->assertTrue($n->ffpClassMeets('Półmaska FFP2 z zaworem', '3M Aura FFP3 9332+'));
+        $this->assertTrue($n->ffpClassMeets('Półmaska FFP2 z zaworem', 'Półmaska SECURA 3000'), 'brak klasy = brak wiedzy');
+        $this->assertTrue($n->ffpClassMeets('Półmaska wielorazowa', 'FFP1'));
+    }
 }
