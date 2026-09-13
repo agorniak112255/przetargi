@@ -624,4 +624,389 @@ final class PpeAssortmentTest extends TestCase
             '103 - Kurtka wodoochronna zapinana na zamek'
         ));
     }
+
+    /**
+     * Rodzinę wskazuje rzeczownik główny (pierwszy w tekście), nie pierwszy regex z listy:
+     * „wymienne szelki” przy spodniobutach i „łącznie z półmaskami” przy goglach to akcesoria.
+     */
+    #[Test]
+    #[DataProvider('leadingNounFamilyCases')]
+    public function detects_family_by_leading_noun(string $text, string $family): void
+    {
+        $this->assertSame($family, $this->assortment->family($text));
+    }
+
+    /**
+     * @return list<array{0: string, 1: string}>
+     */
+    public static function leadingNounFamilyCases(): array
+    {
+        return [
+            ['Fartuch przedni wodoochronny 120 × 75 cm. Wymagane: szeroka szelka i wiązanie z tyłu; EN 343.', PpeAssortment::FAMILY_APPAREL],
+            ['Spodniobuty wodoochronne z wgrzanymi na stałe kaloszami – obuwie bezpieczne typu S5 SRC; wymienne szelki z szerokiej elastycznej gumy', PpeAssortment::FAMILY_APPAREL],
+            ['Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0; możliwość stosowania łącznie z półmaskami oddechowymi', PpeAssortment::FAMILY_EYES],
+            ['Spodnie do pasa z szelkami Extreme', PpeAssortment::FAMILY_APPAREL],
+            ['Kurtka z odblaskowymi szelkami', PpeAssortment::FAMILY_APPAREL],
+            ['Kamizelka z szelkami odblaskowymi', PpeAssortment::FAMILY_APPAREL],
+            ['Gogle spawalnicze do stosowania z półmaską', PpeAssortment::FAMILY_EYES],
+            ['Okulary ochronne kompatybilne z półmaskami', PpeAssortment::FAMILY_EYES],
+            ['Szelki bezpieczeństwa typu kamizelka 3M', PpeAssortment::FAMILY_FALL],
+            ['Spodnie z kieszeniami na nakolanniki', PpeAssortment::FAMILY_APPAREL],
+            ['Trzewiki ocieplane', PpeAssortment::FAMILY_FOOTWEAR],
+            ['Półbuty robocze', PpeAssortment::FAMILY_FOOTWEAR],
+            ['Półbuty elektroizolacyjne 20 kV', PpeAssortment::FAMILY_FOOTWEAR],
+            ['Sandały ochronne', PpeAssortment::FAMILY_FOOTWEAR],
+            ['Kalosze gumowe', PpeAssortment::FAMILY_FOOTWEAR],
+            ['Rękawice butylowe', PpeAssortment::FAMILY_GLOVES],
+            ['Wodery z kaloszami', PpeAssortment::FAMILY_APPAREL],
+            ['Spodniobuty oddychające AIR', PpeAssortment::FAMILY_APPAREL],
+            ['Pochłaniacz gazów i par klasy A2 – bagnetowy system mocowania na półmaskach i maskach pełnotwarzowych', PpeAssortment::FAMILY_RESPIRATORY],
+        ];
+    }
+
+    #[Test]
+    public function waders_requirement_rejects_harness_and_bib_pants(): void
+    {
+        $req = 'Spodniobuty wodoochronne z wgrzanymi na stałe kaloszami – obuwie bezpieczne typu S5 SRC wg EN ISO 20345, '
+            .'z wkładką antyprzebiciową. Wymagane: tkanina powlekana PVC, EN 343; szwy zgrzewane; wzmocnienia na kolanach; '
+            .'regulacja w pasie sznurkiem; wymienne szelki z szerokiej elastycznej gumy; odporność do -50°C. Rozmiary: 39–48.';
+
+        $this->assertSame(PpeAssortment::FAMILY_APPAREL, $this->assortment->family($req));
+        $this->assertSame('waders', $this->assortment->garment($req));
+        $this->assertSame('waders', $this->assortment->garment('Spodniobuty oddychające AIR'));
+        $this->assertSame('pants', $this->assortment->garment('Spodnie do pasa z szelkami Extreme'));
+
+        $harness = $this->card('AB178', 'Szelki bezpieczeństwa typu kamizelka 3M™ Protecta® FIRST, kolor niebieski', [
+            'category' => 'Środki ochrony indywidualnej',
+            'description' => 'Szelki typu kamizelka zabezpieczające przed upadkiem z wysokości 3M Protecta E50.',
+        ]);
+        $bibs = $this->card('3112', 'Spodnie do pasa z szelkami Extreme', [
+            'category' => 'Asekuracja',
+            'description' => 'Spodnie do pasa z szelkami do pracy na morzu lub w porcie. Elastyczne szelki, wzmocnienia na kolanach.',
+        ]);
+        $waders = $this->card('SB04 AIR', 'Spodniobuty oddychające AIR', [
+            'category' => 'Odzież',
+            'description' => 'Wymienne szelki z elastycznej, szerokiej gumy. Wgrzane na stałe kalosze typu S5 z wkładką antyprzebiciową. EN ISO 20345, EN 343.',
+        ]);
+
+        $this->assertFalse($this->assortment->compatibleProduct($req, $harness));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $bibs));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $waders));
+        $this->assertSame(PpeAssortment::FAMILY_APPAREL, $this->assortment->productFamily($bibs));
+        $this->assertFalse($this->assortment->wantsWeldedBootsCoverall($req));
+    }
+
+    #[Test]
+    public function apron_requirement_rejects_bib_pants_and_harness(): void
+    {
+        $req = 'Fartuch przedni wodoochronny, wymiary 120 × 75 cm, z tkaniny poliestrowej powlekanej poliuretanem. '
+            .'Wymagane: regulacja na pasku szyjnym; szeroka szelka i wiązanie z tyłu; zgodność z EN ISO 13688 i EN 343.';
+
+        $this->assertSame(PpeAssortment::FAMILY_APPAREL, $this->assortment->family($req));
+        $this->assertSame('coat', $this->assortment->garment($req));
+
+        $bibs = $this->card('3112', 'Spodnie do pasa z szelkami Extreme', ['category' => 'Asekuracja']);
+        $harness = $this->card('AB178', 'Szelki bezpieczeństwa typu kamizelka 3M™ Protecta® FIRST');
+        $apron = $this->card('202', 'Fartuch wodoochronny 120/75 PU Poliester', [
+            'category' => 'Odzież',
+            'description' => 'Bardzo lekki fartuch. Wygodne zawieszanie na szerokiej szelce oraz możliwość wiązania z tyłu. EN ISO 13688 i EN 343.',
+        ]);
+
+        $this->assertFalse($this->assortment->compatibleProduct($req, $bibs));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $harness));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $apron));
+    }
+
+    #[Test]
+    public function welding_goggles_requirement_keeps_goggles_and_drops_ffp(): void
+    {
+        $req = 'Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0 – do ochrony oczu podczas spawania gazowego. '
+            .'Wymagane: soczewka poliwęglanowa; wysoki profil umożliwiający noszenie na okularach korekcyjnych; '
+            .'możliwość stosowania łącznie z półmaskami oddechowymi. Zgodność z EN 166.';
+
+        $this->assertSame(PpeAssortment::FAMILY_EYES, $this->assortment->family($req));
+        $this->assertSame('goggles', $this->assortment->articleType($req));
+
+        $goggles = $this->card('34340', '3M™ 2890 Gogle ochronne, szczelne, zaciemnienie spawalnicze 5.0, 2895S', [
+            'category' => 'Materiały ścierne',
+        ]);
+        $ffp = $this->card('9310+', '3M™ Aura™ półmaska filtrująca, FFP1, bez zaworu, 9310+');
+
+        $this->assertTrue($this->assortment->compatibleProduct($req, $goggles));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $ffp));
+    }
+
+    #[Test]
+    public function respiratory_type_reads_leading_noun(): void
+    {
+        $req = 'Pochłaniacz gazów i par klasy A2 – element oczyszczający do sprzętu ochrony układu oddechowego. '
+            .'Wymagane: bagnetowy system mocowania na półmaskach i maskach pełnotwarzowych ze złączem bagnetowym.';
+
+        $this->assertSame('filter', $this->assortment->articleType($req, PpeAssortment::FAMILY_RESPIRATORY));
+        $this->assertSame('filter', $this->assortment->articleType('Filtr P3 R do masek pełnotwarzowych', PpeAssortment::FAMILY_RESPIRATORY));
+        $this->assertSame('fullface', $this->assortment->articleType('Maska pełnotwarzowa 3M 6800 z filtrami', PpeAssortment::FAMILY_RESPIRATORY));
+        $this->assertSame('ffp', $this->assortment->articleType('Półmaska filtrująca FFP2 z filtrem węglowym', PpeAssortment::FAMILY_RESPIRATORY));
+    }
+
+    #[Test]
+    public function reusable_half_mask_requirement_rejects_disposable_ffp(): void
+    {
+        $req = 'Półmaska wielokrotnego użytku do ochrony układu oddechowego – po skompletowaniu z odpowiednimi elementami '
+            .'oczyszczającymi chroni przed aerozolami, parami i gazami. Wymagane: korpus z dwoma zaworami wdechowymi z łącznikami '
+            .'bagnetowymi; zawór wydechowy z pokrywą; jednoczęściowe nagłowie tekstylne; zgodność z PN-EN 140:2004.';
+
+        $this->assertSame('reusable_half', $this->assortment->articleType($req));
+
+        $secura = $this->card('S56T0SM0', 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)', [
+            'category' => 'PÓŁMASKA SECURA 3000',
+            'description' => 'Półmaska SECURA 3000 składa się z korpusu, dwóch zaworów wdechowych z łącznikami bagnetowymi, zaworu wydechowego oraz nagłowia.',
+        ]);
+        $ffp = $this->card('9310+', '3M™ Aura™ półmaska filtrująca, FFP1, bez zaworu, 9310+', [
+            'category' => 'Środki ochrony indywidualnej',
+            'description' => 'Półmaska filtrująca 3M Aura 9310+ to jednorazowa półmaska klasy FFP1.',
+        ]);
+        $maintenanceFree = $this->card('4279+', 'Niewymagająca konserwacji półmaska wielokrotnego użytku 3M™ 4279+, FFABEK1P3 R D');
+        $filter = $this->card('S565A202', 'Pochłaniacz 3031 A2', ['category' => 'Pochłaniacze']);
+
+        $this->assertTrue($this->assortment->compatibleProduct($req, $secura));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $ffp));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $maintenanceFree));
+
+        // Pochłaniacz (poz. 14) nie jest maską — to filtr do niej.
+        $filterReq = 'Pochłaniacz gazów i par klasy A2 – bagnetowy system mocowania na półmaskach i maskach pełnotwarzowych. EN 14387.';
+        $this->assertTrue($this->assortment->compatibleProduct($filterReq, $filter));
+        $this->assertFalse($this->assortment->compatibleProduct($filterReq, $secura));
+
+        // Samo „półmaska” obejmuje też FFP — bez jawnych słów o wielorazowości podtyp jest nieznany, nie sprzeczny.
+        $aura = $this->card('9322+', '3M Aura 9322+ półmaska');
+        $this->assertTrue($this->assortment->compatibleProduct('Półmaska FFP2', $aura));
+        $this->assertTrue($this->assortment->compatibleProduct('Półmaska filtrująca FFP1 z zaworem', $secura));
+    }
+
+    #[Test]
+    public function ffp_with_valve_rejects_explicit_no_valve_mask(): void
+    {
+        $req = 'Półmaska filtrująca klasy FFP1 z zaworem wydechowym, specjalistyczna – do ochrony dróg oddechowych przed pyłami, '
+            .'mgłami oraz uciążliwym poziomem par organicznych. Wymagane: warstwa węgla aktywowanego; zawór wydechowy. Zgodność z EN 149.';
+
+        $noValve = $this->card('9310+', '3M™ Aura™ półmaska filtrująca, FFP1, bez zaworu, 9310+');
+        $foreignDescription = $this->card('7100329384', '3M™ półmaska do cząstek stałych 8710E, FFP1, bez zaworu, 3 szt./opakowanie', [
+            'category' => 'Taśmy',
+            'description' => 'Taśma maskująca odporna na promieniowanie UV 3M™ 2814, Zielony, 30 mm x 50 m.',
+        ]);
+        $valve = $this->card('9312+', '3M™ Aura™ półmaska filtrująca, FFP1, z zaworem, 9312+ (LANG B)');
+        $carbon = $this->card('9914', '3M™ Półmaska filtrująca 9914, specjalistyczna, z zaworem, FFP1 (pyły i pary organiczne)');
+        $silent = $this->card('FFP1-X', 'Półmaska filtrująca FFP1 X');
+
+        $this->assertFalse($this->assortment->compatibleProduct($req, $noValve));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $foreignDescription));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $valve));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $carbon));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $silent), 'karta milczy o zaworze — brak wiedzy, nie sprzeczność');
+
+        // Klasa FFP niższa niż wymagana odpada, wyższa przechodzi.
+        $ffp2Req = 'Półmaska filtrująca FFP2 NR D do pyłów';
+        $this->assertFalse($this->assortment->compatibleProduct($ffp2Req, $valve));
+        $this->assertTrue($this->assortment->compatibleProduct($ffp2Req, $this->card('9332+', '3M Aura 9332+ półmaska filtrująca FFP3 z zaworem')));
+        $this->assertTrue($this->assortment->compatibleProduct($ffp2Req, $this->card('X-2', 'Półmaska filtrująca składana')));
+    }
+
+    #[Test]
+    public function electrical_insulation_requirement_rejects_plain_ob_shoe(): void
+    {
+        $req = 'Półbuty elektroizolacyjne do prac przy urządzeniach elektroenergetycznych o napięciu do 17 kV, do nakładania na inne '
+            .'obuwie robocze. Wymagane: klasa 2 AC zgodnie z normą EN 50321-1; wykonanie z gumy naturalnej z dodatkiem antystarzeniowym; '
+            .'zgodność z normą EN 20347:2012 dla obuwia kategorii OB; odporność na poślizg SRA. Rozmiary 41–45.';
+
+        $this->assertTrue($this->assortment->requiresElectricalInsulation($req));
+        $this->assertTrue($this->assortment->requiresElectricalInsulation('Rękawice dielektryczne EN 60903 klasa 0'));
+        $this->assertFalse($this->assortment->requiresElectricalInsulation('Półbuty robocze OB SRA'));
+        $this->assertFalse($this->assortment->requiresElectricalInsulation(
+            'Półbuty ESD S1 do stref zagrożonych porażeniem prądem elektrostatycznym'
+        ));
+
+        $insulating = $this->card('T5912100', 'Półbuty elektroizolacyjne 20 kV - ANTYAMPER', [
+            'category' => '11.1 OBUWIE ELEKTROIZOLACYJNE',
+            'description' => 'Półbuty elektroizolacyjne ANTYAMPER 20 kV. Produkt klasy 2 AC zgodnie z normą EN 50321-1. EN 20347:2012 kategorii OB, SRA.',
+        ]);
+        $plainOb = $this->card('ART 702 Air 6660 OB A E FO', 'ART 702 Air 6660 OB A E FO', [
+            'description' => 'Obuwie robocze ART 702 Air 6660 OB A E FO do kontroli ładunków elektrostatycznych. '
+                .'Spełnia normę EN ISO 20347:2012 w klasie OB A E FO SRC oraz wymagania ESD zgodnie z EN IEC 61340-4-3:2018.',
+        ]);
+        $silentOb = $this->card('OB-1', 'Półbuty robocze OB SRA');
+
+        $this->assertTrue($this->assortment->compatibleProduct($req, $insulating));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $plainOb));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $silentOb), 'brak dowodu elektroizolacji = odrzuć, jak przy antystatyce');
+        $this->assertTrue($this->assortment->compatibleProduct('Półbuty robocze OB SRA', $plainOb), 'zwykłe OB dalej przechodzi');
+
+        $gloveReq = 'Rękawice elektroizolacyjne klasa 0 EN 60903 do 1 kV';
+        $this->assertFalse($this->assortment->compatibleProduct($gloveReq, $this->card('RNITZ', 'Rękawice nitrylowe RNITZ')));
+        $this->assertTrue($this->assortment->compatibleProduct($gloveReq, $this->card('ELSEC-0', 'Rękawice elektroizolacyjne ELSEC klasa 0')));
+        $this->assertTrue($this->assortment->productMeetsElectricalInsulationRequirement(
+            $gloveReq,
+            $this->card('SECURA-D', 'Rękawice SECURA klasa 00', ['description' => 'Rękawice dielektryczne do 500 V wg EN 60903.'])
+        ));
+    }
+
+    /**
+     * W3‑10: nazwa karty to goły kod bez typu, a własny opis w pierwszym zdaniu nazywa inny typ
+     * („Trzewik bezpieczny ARDEUS 350…” przy wymaganych sandałach) → odrzuć. Opis bez typu albo
+     * opis, który nie nazywa modelu, nie jest dowodem.
+     */
+    #[Test]
+    public function sandal_requirement_rejects_code_named_card_whose_own_description_says_boot(): void
+    {
+        $req = 'Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, do prac w suchych '
+            .'pomieszczeniach. Wymagane: zabudowana pięta; podnosek ochronny; właściwości antyelektrostatyczne (ESD); podeszwa FO.';
+
+        $sandals = $this->card('ARMEN 9007 6660 S1 P', 'ARMEN 9007 6660 S1 P', [
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'description' => 'Sandały robocze ARTRA ARMEN 9007 6660 S1 P to lekkie obuwie ochronne. Właściwości antyelektrostatyczne (ESD).',
+        ]);
+        $boot = $this->card('ARDEUS 350 Air 618080 S1 PL ESD', 'ARDEUS 350 Air 618080 S1 PL ESD', [
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'description' => 'Trzewik bezpieczny ARDEUS 350 Air 618080 S1 PL ESD to lekkie obuwie ochronne. '
+                .'W odróżnieniu od sandałów zabudowany. Dodatkowa ochrona ESD.',
+        ]);
+        $typeless = $this->card('AROX 733 641460 S1 ESD', 'AROX 733 641460 S1 ESD', [
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'description' => 'Obuwie ochronne AROX 733 641460 S1 ESD marki ARTRA do kontroli wyładowań elektrostatycznych. Podnosek stalowy.',
+        ]);
+        $foreignDescription = $this->card('X-1', 'X-1 S1 ESD', [
+            'manufacturer' => null,
+            'description' => 'Trzewiki robocze innego modelu. ESD.',
+        ]);
+        $laterSentence = $this->card('Y-1', 'Y-1 S1 ESD', [
+            'manufacturer' => 'ARTRA',
+            'description' => 'Obuwie ochronne ARTRA Y-1 ESD. Lżejsze niż trzewiki tej serii.',
+        ]);
+
+        $this->assertTrue($this->assortment->compatibleProduct($req, $sandals));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $boot), 'opis nazywa trzewik, wymagane sandały');
+        $this->assertTrue($this->assortment->compatibleProduct($req, $typeless), 'opis bez typu = brak wiedzy');
+        $this->assertTrue($this->assortment->compatibleProduct($req, $foreignDescription), 'opis nie nazywa modelu — nie świadczy o typie');
+        $this->assertTrue($this->assortment->compatibleProduct($req, $laterSentence), 'typ liczy się tylko z pierwszego zdania');
+        $this->assertTrue($this->assortment->compatibleProduct('Trzewiki ochronne S1 ESD', $boot));
+    }
+
+    #[Test]
+    public function glasses_named_by_lens_are_not_rejected_for_missing_noun(): void
+    {
+        $req = 'Okulary ochronne z przyciemnianymi (smoke) soczewkami poliwęglanowymi do pracy na zewnątrz. Zgodność z EN 166, EN 172.';
+        $rush = $this->card('RUSHPTWI', 'Przyciemnione (smoke) soczewki PC - powłoki PLATINUM® - czerwono-czarne, bi-materiałowe zauszniki PC+TPR', [
+            'manufacturer' => 'Bolle',
+            'description' => 'Okulary ochronne Bolle Rush z przyciemnianymi (smoke) soczewkami poliwęglanowymi. Spełniają EN166 i EN172.',
+        ]);
+        $gogglesByDescription = $this->card('GG-1', 'Soczewka acetatowa bezbarwna', [
+            'description' => 'Gogle ochronne szczelne z soczewką acetatową.',
+        ]);
+        $unknown = $this->card('UNK-1', 'Szyba ochronna zapasowa 2C-1.2', ['category' => 'Ochrona oczu']);
+        $case = $this->card('ETUI-1', 'Etui na okulary', ['description' => 'Okulary ochronne pasują do etui.']);
+
+        $this->assertNull($this->assortment->family((string) $rush->name));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $rush));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $gogglesByDescription), 'opis nazywa inny typ (gogle)');
+        $this->assertTrue($this->assortment->compatibleProduct($req, $unknown), 'nieznany typ ≠ sprzeczność');
+        $this->assertFalse($this->assortment->compatibleProduct($req, $case), 'etui dalej odpada');
+    }
+
+    #[Test]
+    public function sleeve_requirement_rejects_gloves_and_accepts_sleeve(): void
+    {
+        $req = 'Ochraniacz przedramienia (rękaw) chroniący przed przecięciem, długość ok. 475 mm (19\'\'), w kolorze fluorescencyjnym '
+            .'żółtym. Konstrukcja bezszwowa, dzianina nylon/poliester/włókno szklane; regulowane zapięcie na rzep. '
+            .'Wymagane: ŚOI kategorii III; EN 420:2003+A1:2009; EN 388 z poziomami min. 2.X.4.2.C; EN 407 poziom 1.';
+
+        $this->assertSame(PpeAssortment::FAMILY_GLOVES, $this->assortment->family($req));
+        $this->assertTrue($this->assortment->isArmSleeve($req));
+        $this->assertTrue($this->assortment->isArmSleeve('Ochraniacz przedramienia (rękaw) antyprzecięciowy'));
+        $this->assertTrue($this->assortment->isArmSleeve('Zarękawek antyprzecięciowy 45 cm'));
+        $this->assertTrue($this->assortment->isArmSleeve('Rękaw antyprzecięciowy HPPE 45 cm'), 'goły rzeczownik „rękaw” poza odzieżą');
+        $this->assertTrue($this->assortment->isArmSleeve('Rękawy ochronne termoodporne, para'));
+        $this->assertTrue($this->assortment->isArmSleeve('Naramiennik z rękawem do rękawic spawalniczych'), 'rękawice wymienione po rękawie nie odbierają typu');
+        $this->assertFalse($this->assortment->isArmSleeve('Rękawice dzianinowe z mankietem safety cuff'));
+        $this->assertFalse($this->assortment->isArmSleeve('Rękawice antyprzecięciowe z rękawem 40 cm'));
+        $this->assertFalse($this->assortment->isArmSleeve('Kurtka robocza z długimi rękawami'));
+        $this->assertFalse($this->assortment->isArmSleeve('Fartuch laboratoryjny, rękawy wykończone zatrzaskami'));
+
+        $gloves = $this->card('48130110', 'HyFlex 48130', [
+            'manufacturer' => 'Ansell',
+            'description' => 'Rękawice ochronne Ansell HyFlex 48-130 to lekkie rękawice montażowe z powłoką poliuretanową. EN 388, EN 420.',
+        ]);
+        $esdGloves = $this->card('3440-003-100-00', 'Gloves EDGE 48-140 ESD seamless polyester and carbon fiber, PU coating', [
+            'category' => 'Rękawice',
+        ]);
+        $sleeve = $this->card('11202000', 'HyFlex 11202 SIZE 19\'\'/47,5 cm', [
+            'manufacturer' => 'Ansell',
+            'description' => 'The new HyFlex® 11-202 HI-VIZ™ arm protector offers optimum wearing comfort. '
+                .'Ansell HyFlex 11-202 Hi-Vis Cut-Resistant Sleeve with Velcro Fixing System - Gloves.co.uk',
+        ]);
+        $foreignDescription = $this->card('11202000', 'HyFlex 11202 SIZE 19\'\'/47,5 cm', [
+            'manufacturer' => null,
+            'description' => 'Cut-resistant arm sleeve for sheet metal handling.',
+        ]);
+
+        $this->assertFalse($this->assortment->compatibleProduct($req, $gloves));
+        $this->assertFalse($this->assortment->compatibleProduct($req, $esdGloves));
+        $this->assertTrue($this->assortment->compatibleProduct($req, $sleeve));
+        $this->assertFalse(
+            $this->assortment->compatibleProduct($req, $foreignDescription),
+            'opis, który nie nazywa modelu, nie świadczy o typie karty'
+        );
+        $this->assertFalse($this->assortment->compatibleProduct('Rękawice antyprzecięciowe HyFlex EN 388', $sleeve));
+    }
+
+    #[Test]
+    public function footwear_antistatic_accepts_esd_stated_in_description(): void
+    {
+        $req = 'Sandały ochronne kategorii S1 P wg EN ISO 20345; właściwości antyelektrostatyczne (ESD); podeszwa FO.';
+        $sandals = $this->card('ARMEN 9007 6660 S1 P', 'ARMEN 9007 6660 S1 P', [
+            'category' => 'Obuwie',
+            'description' => 'Sandały robocze ARTRA ARMEN 9007 6660 S1 P. Model spełnia klasę S1 według EN ISO 20345, '
+                .'co oznacza podnosek ochronny oraz właściwości antyelektrostatyczne (ESD).',
+        ]);
+        $fireman = $this->card('V262-0-02', 'FIREMAN (02 NAVY)', ['description' => 'Buty gumowe FIREMAN']);
+        $softClaim = $this->card('TRZ-1', 'Trzewiki robocze S1', ['description' => 'Antystatyczna podeszwa PU.']);
+        $rubberSoft = $this->card('KAL-1', 'Kalosze gumowe S5', ['description' => 'Antystatyczna podeszwa.']);
+
+        $this->assertTrue($this->assortment->productMeetsAntistaticRequirement($req, $sandals));
+        $this->assertFalse($this->assortment->productMeetsAntistaticRequirement($req, $fireman));
+        $this->assertFalse($this->assortment->productMeetsAntistaticRequirement($req, $softClaim));
+        $this->assertTrue($this->assortment->productMeetsAntistaticRequirement('Kalosze antyelektrostatyczne S5', $rubberSoft));
+    }
+
+    #[Test]
+    public function subtypes_conflict_only_when_both_known(): void
+    {
+        $reusable = 'Półmaska wielokrotnego użytku z łącznikami bagnetowymi PN-EN 140';
+        $ffp = $this->card('9310+', '3M™ Aura™ półmaska filtrująca, FFP1, bez zaworu, 9310+');
+        $secura = $this->card('S56T0SM0', 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)');
+
+        $this->assertTrue($this->assortment->subtypesConflict($reusable, $ffp));
+        $this->assertFalse($this->assortment->subtypesConflict($reusable, $secura), 'goła „półmaska” to nieznany podtyp');
+        $this->assertTrue($this->assortment->subtypesConflict('Szelki bezpieczeństwa', $this->card('L-1', 'Linka bezpieczeństwa z amortyzatorem')));
+        $this->assertFalse($this->assortment->subtypesConflict(
+            'Ubranie robocze bluza + spodnie',
+            $this->card('B-1', 'Bluza robocza KOLPEO')
+        ), 'komplet przyjmuje bluzę');
+        $this->assertFalse($this->assortment->subtypesConflict(
+            'Rękawice nitrylowe antyprzecięciowe',
+            $this->card('R-1', 'Rękawice powlekane poliuretanem')
+        ), 'typy rękawic to nakładające się cechy');
+    }
+
+    /**
+     * @param  array<string, mixed>  $attrs
+     */
+    private function card(string $sku, string $name, array $attrs = []): Product
+    {
+        $product = new Product;
+        $product->forceFill(array_merge(['sku' => $sku, 'name' => $name], $attrs));
+
+        return $product;
+    }
 }

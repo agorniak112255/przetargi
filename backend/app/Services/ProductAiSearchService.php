@@ -2870,6 +2870,7 @@ final class ProductAiSearchService
                 && $this->meetsRequiredSnr($query, $p)
                 && $this->meetsRequiredFootwearClass($query, $p)
                 && $this->meetsRequiredAntistatic($query, $p)
+                && $this->meetsRequiredElectricalInsulation($query, $p)
                 && $this->meetsRequiredWeldedBootsCoverall($query, $p)
                 && $this->assortment->helmetSpecAllows($query, (string) $p->name.' '.$p->sku))
             ->values();
@@ -2913,6 +2914,12 @@ final class ProductAiSearchService
         }
 
         return $this->assortment->productMeetsAntistaticRequirement($query, $product);
+    }
+
+    /** Elektroizolacja (EN 50321 / kV) jak antystatyka: wymagana, a karta jej nie pokazuje → odpada. */
+    private function meetsRequiredElectricalInsulation(string $query, Product $product): bool
+    {
+        return $this->assortment->productMeetsElectricalInsulationRequirement($query, $product);
     }
 
     /**
