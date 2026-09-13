@@ -307,6 +307,112 @@ final class ProductModelFuzzyTest extends TestCase
         )));
     }
 
+    /** Oznaczenia klas/poziomów, lata norm, temperatury i miary nie są kodami modeli (W1: poz. 1, 3, 5, 8, 10–14). */
+    #[Test]
+    public function class_markings_norm_years_temperatures_and_measures_are_not_needles(): void
+    {
+        $cases = [
+            'Półmaska filtrująca klasy FFP1 z zaworem' => 'klasa FFP1 (klasyffp1, ffp1)',
+            'Sandały S1P ESD kategorii S1 P' => 'klasa obuwia (sandalys1p, s1p, kategoriis1)',
+            'Pochłaniacz klasy A2 EN 14387' => 'klasa filtra (klasya2)',
+            'Rękawice EN 388:2016 4X42C' => 'poziomy EN 388 (4x42c)',
+            'Trzewiki S3 SRC EN ISO 20345:2011' => 'rok normy (src2011)',
+            'zgodność z normą EN 20347:2012 dla obuwia kategorii OB' => 'rok normy (norma2012)',
+            'Wymagane: ŚOI kategorii III; EN 420:2003+A1:2009' => 'poprawka normy (kategoriiiii2003)',
+            'materiał odporny na zginanie w temperaturze do -50°C' => 'temperatura (50c)',
+            'ciepło kontaktowe do 100°C przez 15 s' => 'temperatura (100c)',
+            'Opakowanie: 10 szt., karton 100 szt.' => 'karton + liczba (karton100)',
+            'butelka o pojemności 500 ml' => 'rzeczownik miary (pojemnosci500)',
+            'Płukanka do oczu butelka 500 ml' => 'liczba z jednostką (butelka500)',
+            'Fartuch wodoochronny, wymiary 120 × 75 cm' => 'wymiary (wymiary120)',
+            'soczewka o polu widzenia 180° bez zniekształceń' => 'pole widzenia (poluwidzenia180)',
+            'Gogle o polu widzenia 180 stopni' => 'pole widzenia bez symbolu stopnia',
+            'chwytność w układzie rombowym; długość 300 mm' => 'długość (rombowymdlugosc300)',
+            'zestaw opatrunkowy 4-w-1 do tamowania krwi; masa 1,981 kg' => 'N-w-1 (4w1)',
+            'z akredytacją dermatologiczną. EN 388:2016' => 'akredytacja + rok (akredytacjadermatologiczna2016)',
+            'dzianina z przędzy UHMWPE, włókna szklanego' => 'akronim materiału (uhmwpe)',
+            'KALESONY bawełniane (100% bawełny) męskie rozmiar od S do XXXXL' => 'procent (bawelniane100)',
+        ];
+        foreach ($cases as $req => $why) {
+            $this->assertSame([], $this->fuzzy->needles($req), $why.': '.implode(', ', $this->fuzzy->needles($req)));
+            $this->assertFalse($this->fuzzy->hasNamedModel($req), $why);
+        }
+    }
+
+    /** Klasa obok numeru modelu: zostaje wyłącznie igła z numerem (Aura 9322), nie „ffp2”. */
+    #[Test]
+    public function model_number_next_to_class_marking_keeps_only_the_model_needle(): void
+    {
+        $req = 'Półmaska FFP2 z zaworem 3M Aura 9322+';
+
+        $this->assertSame(['aura9322'], $this->fuzzy->needles($req));
+        $this->assertSame(['aura9322'], $this->fuzzy->catalogModelNeedles($req));
+        $this->assertNotContains('ffp2', $this->fuzzy->needles('Półmaska FFP2 z zaworem 3M 9322+'));
+        $this->assertNotContains('ffp2', $this->fuzzy->shortCodes('Półmaska FFP2 z zaworem 3M 9322+'));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($req, $this->product(
+            '9322+',
+            '3M™ Aura 9322+ półmaska filtrująca FFP2 z zaworem',
+            '3M',
+        )));
+        $this->assertLessThan(80, $this->fuzzy->score($req, $this->product(
+            '9320+',
+            '3M™ Aura 9320+ półmaska filtrująca FFP2 bez zaworu',
+            '3M',
+        )));
+    }
+
+    /** „owocowo-warzywne”, „czerwono-czarnym”, „bi-materiałowe” to przymiotniki złożone, nie TEPM-ICE (poz. 4, 6, 7). */
+    #[Test]
+    public function compound_adjectives_with_hyphen_are_not_hyphen_models(): void
+    {
+        foreach ([
+            'przetwórstwo spożywcze (owocowo-warzywne, mięsne, rybne)',
+            'bi-materiałowe zauszniki PC+TPR w kolorze czerwono-czarnym',
+            'powłoka ze spienionej gumy nitrylowo-butadienowej (NBR)',
+        ] as $req) {
+            $this->assertSame([], $this->fuzzy->needles($req), implode(', ', $this->fuzzy->needles($req)));
+        }
+
+        // skład tkaniny w nazwie karty zostaje igłą (pinowane w ProductAiSearchApiTest::test_lab_coat_*)
+        $this->assertContains('elanobawelna', $this->fuzzy->needles('FARTUCH LAB. ELANO-BAWEŁNA prosty, biały. EN ISO 13688'));
+        $this->assertContains('tepmice700', $this->fuzzy->needles('Rękawice MAPA TEPM-ICE 700'));
+        $this->assertContains('coolflow', $this->fuzzy->needles('Zawór Cool-Flow do półmaski'));
+    }
+
+    #[Test]
+    public function measure_nouns_and_units_do_not_form_word_digit_pairs(): void
+    {
+        $this->assertSame([], $this->fuzzy->catalogModelWordDigitPairs('butelka o pojemności 500 ml z końcówką'));
+        $this->assertSame([], $this->fuzzy->catalogModelWordDigitPairs('soczewka o polu widzenia 180° bez zniekształceń'));
+        $this->assertSame([], $this->fuzzy->catalogModelWordDigitPairs('Opakowanie: 10 szt., karton 100 szt.'));
+        $this->assertSame([], $this->fuzzy->catalogModelWordDigitPairs('Płukanka do oczu butelka 500 ml'));
+        $this->assertContains(['tychem', '4000'], $this->fuzzy->catalogModelWordDigitPairs('Kombinezon chemoodporny Tychem 4000 S biały'));
+        $this->assertContains(['perspecta', '010'], $this->fuzzy->catalogModelWordDigitPairs('OKULARY OCHRONNE MSA PERSPECTA 010'));
+    }
+
+    /** Mocne igły dla heurystyki „mocny SKU”: z cyfrą, model z myślnikiem, linia po znanej marce — nie goły wyraz. */
+    #[Test]
+    public function strong_sku_needles_need_digit_hyphen_model_or_brand_line(): void
+    {
+        $this->assertContains('tepmice700', $this->fuzzy->strongSkuNeedles('Rękawice MAPA TEPM-ICE 700 · EN 388 EN 511 EN ISO 21420'));
+        $this->assertContains('perspecta010', $this->fuzzy->strongSkuNeedles('OKULARY OCHRONNE MSA PERSPECTA 010'));
+        $this->assertContains('perspecta2047w', $this->fuzzy->strongSkuNeedles('Okulary ochronne MSA PERSPECTA 2047W'));
+        $this->assertContains('p3e', $this->fuzzy->strongSkuNeedles('Adapter P3E do hełmu 3M'));
+        $this->assertContains('hy51', $this->fuzzy->strongSkuNeedles('Zestaw higieniczny do nauszników 3M OPTIME I HY51'));
+        $this->assertContains('peltorx2', $this->fuzzy->strongSkuNeedles('Nauszniki 3M Peltor X2 nahełmowe'));
+        $this->assertContains('tychem4000', $this->fuzzy->strongSkuNeedles('Kombinezon chemoodporny Tychem 4000 S biały'));
+        $this->assertContains('g3000', $this->fuzzy->strongSkuNeedles('Pasek podbródkowy 3 punktowy do hełmu G3000'));
+        $this->assertContains('urga', $this->fuzzy->strongSkuNeedles('Półmaska URG-A z filtrami'));
+        $this->assertContains('phynomic', $this->fuzzy->strongSkuNeedles('Rękawice uvex phynomic lite'));
+
+        $cerva = 'BUTY gumowe DAMSKIE antyelektrostatyczne rozm. 35-41 TRONCHETTO OB. SRA prod.CERVA · EN ISO 20347';
+        $this->assertContains('tronchetto', $this->fuzzy->needles($cerva));
+        $this->assertSame([], $this->fuzzy->strongSkuNeedles($cerva));
+        $tronchetto = $this->product('0202001060', 'TRONCHETTO OB SRA buty gumowe damskie', 'CERVA');
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->score($cerva, $tronchetto));
+        $this->assertSame(0, $this->fuzzy->strongSkuScore($cerva, $tronchetto));
+    }
+
     private function product(string $sku, string $name, string $manufacturer): Product
     {
         $p = new Product;
