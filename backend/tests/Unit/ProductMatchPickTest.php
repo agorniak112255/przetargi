@@ -34,6 +34,9 @@ final class ProductMatchPickTest extends TestCase
     private const REUSABLE_HALF_MASK = 'Półmaska wielokrotnego użytku do ochrony układu oddechowego, korpus z dwoma '
         .'zaworami wdechowymi z łącznikami bagnetowymi, zawór wydechowy z pokrywą, jednoczęściowe nagłowie tekstylne';
 
+    /** Wymaganie bez liczb i kodów — żadna igła „modelu”, żaden kod SKU; liczy się tylko karta. */
+    private const LONG_JOHNS = 'Kalesony bawełniane męskie';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -88,13 +91,57 @@ final class ProductMatchPickTest extends TestCase
             ['id' => 2, 'sku' => 'B', 'ai_match_percent' => 90, 'ai_match_source' => ProductAiSearchService::MATCH_SOURCE_CATALOG],
             ['id' => 3, 'sku' => 'C', 'ai_match_percent' => 70],
             ['id' => 4, 'sku' => 'D', 'ai_match_percent' => 60, 'ai_match_source' => ProductAiSearchService::MATCH_SOURCE_CATALOG],
+            // skrót deterministyczny (klasa obuwia 92 / cut 80) — literał 'rule' z kontraktu W2↔W4
+            ['id' => 5, 'sku' => 'E', 'ai_match_percent' => 92, 'ai_match_source' => 'rule'],
         ];
 
         $mapped = $this->invoke($matcher, 'mapAiSearchRows', $rows, 10, 'ai');
 
-        $this->assertSame(['A', 'C', 'B', 'D'], array_column($mapped, 'sku'));
-        $this->assertSame(['ai', 'ai', 'catalog', 'catalog'], array_column($mapped, 'source'));
+        $this->assertSame(['A', 'C', 'B', 'D', 'E'], array_column($mapped, 'sku'));
+        $this->assertSame(['ai', 'ai', 'catalog', 'catalog', 'rule'], array_column($mapped, 'source'));
         $this->assertSame(['A', 'C', 'B'], array_column($this->invoke($matcher, 'mapAiSearchRows', $rows, 3, 'ai'), 'sku'));
+    }
+
+    // ------------------------------------------------------ twarda bramka wierszy katalogowych
+
+    /**
+     * Wiersz listy katalogowej („Żargon SIWZ → …”, stały procent 55–88) i skrótu ('rule') nie
+     * są oceną modelu. Dotąd przy explain ≥ apply przechodziły przez persistableScore mimo
+     * wyłączonego ustawienia — bramka match_allow_catalog_rows działała tylko dla kart
+     * o niskim explain (AUDYT_A 1.3c, przyczyna 8).
+     */
+    #[Test]
+    public function catalog_and_rule_rows_are_dropped_when_admin_did_not_allow_them(): void
+    {
+        $this->settings();
+        $matcher = app(ProductMatchService::class);
+        $product = $this->apparel('KAL-1', 'Kalesony bawełniane męskie');
+        $this->assertGreaterThanOrEqual(
+            $matcher->applyMatchScore(),
+            $matcher->explainMatch(self::LONG_JOHNS, $product)['score'],
+            'karta ma wysoki explain — inaczej test nie sprawdza bramki, tylko progu',
+        );
+
+        foreach (['catalog', 'rule'] as $source) {
+            $pick = $this->invoke($matcher, 'pickAuto', self::LONG_JOHNS, null, [$this->candidate($product, 66, $source)], collect([$product]));
+            $this->assertNull($pick, "wiersz '{$source}' bez zgody admina nie może wypełnić pozycji");
+        }
+    }
+
+    /** Za jawną zgodą admina wiersz katalogowy wypełnia pozycję jako wiersz katalogowy (D8). */
+    #[Test]
+    public function catalog_row_fills_the_line_with_explicit_admin_consent(): void
+    {
+        $this->settings(['match_allow_catalog_rows' => true]);
+        $matcher = app(ProductMatchService::class);
+        $product = $this->apparel('KAL-1', 'Kalesony bawełniane męskie');
+
+        $pick = $this->invoke($matcher, 'pickAuto', self::LONG_JOHNS, null, [$this->candidate($product, 66, 'catalog')], collect([$product]));
+
+        $this->assertNotNull($pick);
+        $this->assertSame('KAL-1', $pick['product']->sku);
+        $this->assertSame('catalog', $pick['source']);
+        $this->assertSame(66, $pick['score']);
     }
 
     // ------------------------------------------------------------------------- pomocnicze
@@ -168,6 +215,43 @@ final class ProductMatchPickTest extends TestCase
         }
 
         return $ids;
+    }
+
+    /** Karta odzieży z opisem — kandydat do pozycji „Kalesony bawełniane męskie”. */
+    private function apparel(string $sku, string $name, float $purchase = 20.0): Product
+    {
+        $product = Product::query()->create([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => 'Urgent',
+            'category' => 'Odzież robocza',
+            'description' => $name.' — wyrób dziewiarski z bawełny, rozmiary od S do XXXXL.',
+            'catalog_price_net' => $purchase * 1.25,
+            'purchase_price' => $purchase,
+            'currency' => 'PLN',
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        return Product::query()->findOrFail($product->id);
+    }
+
+    /**
+     * Wiersz kandydata AI w kształcie, jaki pickAuto dostaje z aiTopCandidates.
+     *
+     * @return array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}
+     */
+    private function candidate(Product $product, int $score, string $source = 'ai'): array
+    {
+        return [
+            'id' => (int) $product->id,
+            'sku' => (string) $product->sku,
+            'name' => (string) $product->name,
+            'score' => $score,
+            'reason' => null,
+            'source' => $source,
+        ];
     }
 
     private function invoke(ProductMatchService $matcher, string $method, mixed ...$args): mixed

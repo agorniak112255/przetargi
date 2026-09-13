@@ -44,6 +44,14 @@ final class ProductMatchService
      */
     private const AI_CANDIDATE_WINDOW = 10;
 
+    /**
+     * Źródła wierszy, które nie są oceną modelu: zapasowa lista katalogowa oraz skróty
+     * deterministyczne (klasa obuwia, cut) — wyszukiwarka oznacza je literałem 'rule'
+     * (kontrakt W2↔W4: literał, nie stała — pakiety równoległe). Oba traktujemy jednakowo:
+     * do pozycji tylko za jawną zgodą admina (match_allow_catalog_rows).
+     */
+    private const CATALOG_ROW_SOURCES = [ProductAiSearchService::MATCH_SOURCE_CATALOG, 'rule'];
+
     /** Progi z ustawień czytamy raz na żądanie — resolve() chodzi do bazy. */
     /** @var array<string, int> */
     private array $matchScores = [];
@@ -551,6 +559,22 @@ final class ProductMatchService
         });
 
         return $near[0] ?? null;
+    }
+
+    /** Wiersz listy katalogowej albo skrótu deterministycznego — nie ocena modelu. */
+    private function isCatalogRowSource(string $source): bool
+    {
+        return in_array($source, self::CATALOG_ROW_SOURCES, true);
+    }
+
+    /**
+     * Czy procentowi wiersza wolno ufać jak ocenie modelu w persistableScore: ocena modelu
+     * (ai/vector, także zamiennik) — tak; wiersz katalogowy/skrótu — tylko za jawną zgodą admina.
+     */
+    private function trustsRowScore(string $source): bool
+    {
+        return in_array($source, ['ai', 'vector', 'ai_substitute'], true)
+            || ($this->isCatalogRowSource($source) && $this->aiSettings->matchAllowsCatalogRows());
     }
 
     private function purchasePln(Product $product): float
@@ -1163,12 +1187,18 @@ final class ProductMatchService
             return null;
         }
 
+        $source = (string) ($picked['source'] ?? 'heuristic');
+        // Ta sama bramka co w pickAuto — wiersz katalogowy/skrótu bez zgody admina nie dochodzi
+        // do persistableScore; za jawną zgodą jego procentowi ufamy jak ocenie modelu (D8).
+        if ($this->isCatalogRowSource($source) && ! $this->aiSettings->matchAllowsCatalogRows()) {
+            return null;
+        }
         $picked['product'] = $this->resolveCatalogBySku($picked['product'], $products);
         $honest = $this->persistableScore(
             $requirement,
             $picked['product'],
             $picked['score'],
-            in_array($picked['source'] ?? '', ['ai', 'vector', 'ai_substitute'], true)
+            $this->trustsRowScore($source)
         );
         if ($honest === null) {
             return null;
@@ -1445,17 +1475,22 @@ final class ProductMatchService
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
+            $source = (string) ($topAi['source'] ?? 'ai');
+            // Twarda bramka: wiersz listy katalogowej / skrótu nie jest oceną modelu, więc bez
+            // zgody admina odpada ZANIM persistableScore zważy go samym explainMatch (explain ≥ 40
+            // przepuszczał wiersz „catalog” mimo wyłączonego ustawienia). Trzeba to robić tu,
+            // bo prefetch przetargu idzie jako AiTask::ProductSearch (prefetchAiCandidates), więc
+            // wyłącznik z ProductAiSearchService::finishSearch nie działa na tej ścieżce,
+            // a searchMany zawsze dokłada rowsFromGenericCatalog.
+            if ($this->isCatalogRowSource($source) && ! $this->aiSettings->matchAllowsCatalogRows()) {
+                continue;
+            }
             $exact = $this->honorsSpecificModelCodes($requirement, $product);
             $minScore = $exact ? $this->applyMatchScore() : $this->substituteMatchScore();
             if ($topAi['score'] < $minScore) {
                 continue;
             }
-            // Wiersz z listy katalogowej nie jest oceną modelu — ufamy mu tylko wtedy,
-            // gdy panel „Strojenie AI” na to pozwala.
-            $trustModel = in_array($topAi['source'] ?? '', ['ai', 'vector'], true)
-                || (($topAi['source'] ?? '') === ProductAiSearchService::MATCH_SOURCE_CATALOG
-                    && $this->aiSettings->matchAllowsCatalogRows());
-            $honest = $this->persistableScore($requirement, $product, $topAi['score'], $trustModel);
+            $honest = $this->persistableScore($requirement, $product, $topAi['score'], $this->trustsRowScore($source));
             if ($honest === null) {
                 continue;
             }
@@ -1467,14 +1502,17 @@ final class ProductMatchService
             $options[] = [
                 'product' => $product,
                 'score' => $honest,
-                'source' => $exact ? (string) ($topAi['source'] ?? 'ai') : 'ai_substitute',
+                // Wiersz katalogowy/skrótu zachowuje swoje źródło także jako zamiennik — to jego
+                // pochodzenie (nie ocena modelu); progi i zaufanie czytają je po źródle.
+                'source' => $exact || $this->isCatalogRowSource($source) ? $source : 'ai_substitute',
+                'exact' => $exact,
             ];
         }
 
         if ($options !== []) {
             $exact = array_values(array_filter(
                 $options,
-                static fn (array $row): bool => ($row['source'] ?? '') !== 'ai_substitute'
+                static fn (array $row): bool => $row['exact']
             ));
 
             return $this->preferCheapestAmongCloseScores($exact !== [] ? $exact : $options);
@@ -1673,6 +1711,11 @@ final class ProductMatchService
      */
     private function mergeCatalogCandidatesForTender(string $requirement, array $mapped, int $limit): array
     {
+        // Bez zgody admina wiersz katalogowy i tak odpada w pickAuto — nie ma po co zajmować
+        // nim okna kandydatów ani liczyć zapasowej listy.
+        if (! $this->aiSettings->matchAllowsCatalogRows()) {
+            return $mapped;
+        }
         $catalogRows = $this->aiSearch->requirementCatalogRows($requirement, $limit);
         if ($catalogRows === []) {
             return $mapped;
@@ -1738,16 +1781,18 @@ final class ProductMatchService
             if ($id <= 0) {
                 continue;
             }
-            // Wiersz z zapasowej listy katalogowej zostaje katalogowy nawet w fali AI —
-            // model go nie wskazał, więc nie wolno mu ufać jak ocenie modelu.
-            $isCatalog = ($row['ai_match_source'] ?? null) === ProductAiSearchService::MATCH_SOURCE_CATALOG;
+            // Wiersz z zapasowej listy katalogowej albo skrótu deterministycznego ('rule')
+            // zostaje takim nawet w fali AI — model go nie wskazał, więc nie wolno mu ufać
+            // jak ocenie modelu.
+            $rowSource = $row['ai_match_source'] ?? null;
+            $isCatalog = is_string($rowSource) && $this->isCatalogRowSource($rowSource);
             $mapped = [
                 'id' => $id,
                 'sku' => (string) ($row['sku'] ?? ''),
                 'name' => (string) ($row['name'] ?? ''),
                 'score' => (int) ($row['ai_match_percent'] ?? 0),
                 'reason' => is_string($row['ai_match_reason'] ?? null) ? $row['ai_match_reason'] : null,
-                'source' => $isCatalog ? ProductAiSearchService::MATCH_SOURCE_CATALOG : $source,
+                'source' => $isCatalog ? $rowSource : $source,
             ];
             if ($isCatalog) {
                 $catalog[] = $mapped;
@@ -1840,7 +1885,7 @@ final class ProductMatchService
             $item->requirement,
             $product,
             $score,
-            in_array($source, ['ai', 'vector', 'ai_substitute'], true)
+            $this->trustsRowScore((string) $source)
         );
         if ($honest === null) {
             return false;
