@@ -345,6 +345,10 @@ type MatchProgress = {
   line_no: number | null
   requirement: string | null
   started_at: number | null
+  /** etap bieżącej paczki na serwerze: prepare | understand | catalog | rank | rewrite | save */
+  stage?: string | null
+  stage_done?: number
+  stage_total?: number
 }
 
 function matchReportStorageKey(tenderId: string): string {
@@ -379,6 +383,37 @@ function matchTargetIds(
       return i.ai_match_percent < minScore
     })
     .map((i) => i.id)
+}
+
+/**
+ * Etapy paczki na serwerze i ich udział w czasie paczki (szacunek: ranking w modelu trwa najdłużej).
+ * `model` = czekamy na odpowiedź modelu dla całej paczki naraz — pasek pulsuje, żeby było widać pracę.
+ */
+const MATCH_STAGES: Record<string, { label: string; from: number; to: number; model: boolean }> = {
+  prepare: { label: 'Przygotowanie paczki (kody z SIWZ)', from: 0, to: 0.05, model: false },
+  understand: { label: 'Model czyta opisy pozycji', from: 0.05, to: 0.15, model: true },
+  catalog: { label: 'Szukanie kandydatów w katalogu', from: 0.15, to: 0.35, model: false },
+  rank: { label: 'Model ocenia karty kandydatów', from: 0.35, to: 0.85, model: true },
+  rewrite: { label: 'Model przepisuje zapytania bez wyników', from: 0.85, to: 0.92, model: true },
+  save: { label: 'Wybór i zapis pozycji', from: 0.92, to: 1, model: false },
+}
+
+/** Szacunkowy postęp całości: pozycje z zamkniętych paczek + ułamek bieżącej paczki według etapu. */
+function matchProgressFraction(p: MatchProgress | null, batchSize: number): number {
+  const total = Math.max(p?.total ?? 0, 0)
+  if (total === 0) {
+    return 0
+  }
+  const done = Math.min(p?.done ?? 0, total)
+  const stage = p?.stage ? MATCH_STAGES[p.stage] : undefined
+  if (!stage || done >= total) {
+    return done / total
+  }
+  const chunk = Math.min(Math.max(1, batchSize), total - done)
+  const stageTotal = p?.stage_total ?? 0
+  const inner = stageTotal > 0 ? Math.min(1, (p?.stage_done ?? 0) / stageTotal) : 0
+  const stageFraction = stage.from + (stage.to - stage.from) * inner
+  return Math.min(1, (done + chunk * stageFraction) / total)
 }
 
 /** Limit czasu paczki: model odpowiada do 240 s na zapytanie, pozycje w paczce idą równolegle. */
@@ -695,6 +730,9 @@ export function TenderDetail() {
           line_no: p.line_no,
           requirement: p.requirement,
           started_at: started,
+          stage: p.stage ?? null,
+          stage_done: p.stage_done ?? 0,
+          stage_total: p.stage_total ?? 0,
         }))
       } catch {
         /* postęp jest pomocniczy */
@@ -1637,7 +1675,17 @@ export function TenderDetail() {
             {(() => {
               const total = Math.max(matchProgress?.total ?? 0, 0)
               const done = Math.min(matchProgress?.done ?? 0, total || (matchProgress?.done ?? 0))
-              const pct = total > 0 ? Math.round((done / total) * 100) : 0
+              const batch = matchBatchSize(clampAiConcurrency(coverage?.thresholds.match_concurrency))
+              const pct = Math.round(matchProgressFraction(matchProgress, batch) * 100)
+              const stage = matchProgress?.stage ? MATCH_STAGES[matchProgress.stage] : undefined
+              const stageDone = matchProgress?.stage_done ?? 0
+              const stageTotal = matchProgress?.stage_total ?? 0
+              let stageDetail = ''
+              if (stage && stageTotal > 0) {
+                stageDetail = stage.model
+                  ? ` · ${stageTotal} pozycji naraz${stageDone > 0 ? `, gotowe ${stageDone}` : ''}`
+                  : ` · ${stageDone}/${stageTotal}`
+              }
               const eta =
                 done > 0 && total > done
                   ? formatMatchEta(Math.round((matchElapsed * (total - done)) / done))
@@ -1650,10 +1698,17 @@ export function TenderDetail() {
                   <p className="text-xs text-slate-500">sprawdzonych pozycji</p>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
                     <div
-                      className="h-full rounded-full bg-violet-600 transition-all"
-                      style={{ width: `${pct}%` }}
+                      className={`h-full rounded-full bg-violet-600 transition-all${stage?.model ? ' animate-pulse' : ''}`}
+                      style={{ width: `${Math.max(pct, stage ? 2 : 0)}%` }}
                     />
                   </div>
+                  {stage && (
+                    <p className="mt-2 text-xs text-slate-700">
+                      {stage.label}
+                      {stageDetail}
+                      <span className="text-slate-400"> · pasek szacunkowy</span>
+                    </p>
+                  )}
                   {matchProgress?.line_no != null && (
                     <p className="mt-2 truncate text-xs text-slate-600">
                       Teraz: poz. {matchProgress.line_no}

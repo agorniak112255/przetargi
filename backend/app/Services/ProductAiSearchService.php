@@ -69,6 +69,15 @@ final class ProductAiSearchService
 
     public const MODEL_STATE_SKIPPED = 'skipped';
 
+    /** Etapy searchMany dla paska postępu: model czyta opisy, katalog, ranking modelu, przepisanie pustych. */
+    public const PROGRESS_STAGE_UNDERSTAND = 'understand';
+
+    public const PROGRESS_STAGE_CATALOG = 'catalog';
+
+    public const PROGRESS_STAGE_RANK = 'rank';
+
+    public const PROGRESS_STAGE_REWRITE = 'rewrite';
+
     /** Powód wierszy zapasowych (`catalog`): ten sam rodzaj w katalogu, ale bez oceny modelu. */
     public const UNRATED_CATALOG_REASON = 'Nieocenione przez model — ten sam rodzaj w katalogu';
 
@@ -239,6 +248,7 @@ final class ProductAiSearchService
         bool $withExternalHint = false,
         AiTask $task = AiTask::ProductSearch,
         int $maxConcurrent = 10,
+        ?callable $onProgress = null,
     ): array {
         $clean = [];
         foreach ($queries as $query) {
@@ -256,7 +266,14 @@ final class ProductAiSearchService
 
         $pending = [];
         $done = [];
-        $intents = $this->analyzeQueriesForRetrieve($clean, $task, $maxConcurrent);
+        // $onProgress(etap, gotowe, wszystkie) — pasek postępu dopasowania przetargu
+        $report = static function (string $stage, int $done, int $total) use ($onProgress): void {
+            if ($onProgress !== null) {
+                $onProgress($stage, $done, $total);
+            }
+        };
+        $intents = $this->analyzeQueriesForRetrieve($clean, $task, $maxConcurrent, $report);
+        $report(self::PROGRESS_STAGE_CATALOG, 0, count($clean));
         $this->prefetchVectorQueries($clean, $intents);
         $retrieveIntents = [];
         $modelStates = [];
@@ -272,6 +289,7 @@ final class ProductAiSearchService
             } else {
                 $pending[$i] = $prepared;
             }
+            $report(self::PROGRESS_STAGE_CATALOG, $i + 1, count($clean));
         }
 
         $rankMessages = [];
@@ -287,7 +305,14 @@ final class ProductAiSearchService
                 $task,
             );
         }
-        $rankRaws = $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent);
+        $report(self::PROGRESS_STAGE_RANK, 0, count($rankMessages));
+        $rankRaws = $this->llm->chatJsonMany(
+            $rankMessages,
+            $this->rankMaxTokens($task),
+            $task,
+            $maxConcurrent,
+            static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_RANK, $done, $total),
+        );
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
             $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
@@ -324,7 +349,7 @@ final class ProductAiSearchService
                     : self::MODEL_STATE_EMPTY);
         }
         if ($task !== AiTask::TenderMatch) {
-            $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent);
+            $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent, $report);
         }
         foreach ($modelStates as $i => $state) {
             // po przepisaniu zapytania model mógł jednak coś ocenić
@@ -967,6 +992,7 @@ final class ProductAiSearchService
         bool $withExternalHint,
         AiTask $task,
         int $maxConcurrent,
+        ?callable $report = null,
     ): void {
         $empty = [];
         foreach ($done as $i => $row) {
@@ -1005,7 +1031,16 @@ final class ProductAiSearchService
             foreach ($needLlm as $i) {
                 $messages[] = $this->rewriteMessages($clean[$i]);
             }
-            $raws = $this->llm->chatJsonMany($messages, 900, $task, $maxConcurrent);
+            if ($report !== null) {
+                $report(self::PROGRESS_STAGE_REWRITE, 0, count($messages));
+            }
+            $raws = $this->llm->chatJsonMany(
+                $messages,
+                900,
+                $task,
+                $maxConcurrent,
+                $report === null ? null : static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_REWRITE, $done, $total),
+            );
             foreach ($needLlm as $pos => $i) {
                 $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
                 $rewritten = $this->intentFromRewrite($raw, $clean[$i]);
@@ -1287,7 +1322,7 @@ final class ProductAiSearchService
      * @param  list<string>  $queries
      * @return array<int, array{needed: string, search_phrases: list<string>, constraints: list<string>}>
      */
-    private function analyzeQueriesForRetrieve(array $queries, AiTask $task, int $maxConcurrent): array
+    private function analyzeQueriesForRetrieve(array $queries, AiTask $task, int $maxConcurrent, ?callable $report = null): array
     {
         $intents = [];
         $need = [];
@@ -1306,7 +1341,16 @@ final class ProductAiSearchService
         foreach ($need as $i) {
             $messages[] = $this->understandMessages($queries[$i]);
         }
-        $raws = $this->llm->chatJsonMany($messages, 900, $task, $maxConcurrent);
+        if ($report !== null) {
+            $report(self::PROGRESS_STAGE_UNDERSTAND, 0, count($messages));
+        }
+        $raws = $this->llm->chatJsonMany(
+            $messages,
+            900,
+            $task,
+            $maxConcurrent,
+            $report === null ? null : static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_UNDERSTAND, $done, $total),
+        );
         foreach ($need as $pos => $i) {
             $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
             $intents[$i] = $this->applySlangIntent(

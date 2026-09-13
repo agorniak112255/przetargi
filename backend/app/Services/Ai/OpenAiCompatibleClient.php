@@ -8,6 +8,7 @@ use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\EnrichmentLiveProgress;
 use App\Support\QueueWorkerIdentity;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -198,6 +199,7 @@ class OpenAiCompatibleClient
         ?int $maxTokens = null,
         ?AiTask $task = null,
         int $maxConcurrent = 10,
+        ?callable $onChunkDone = null,
     ): array {
         if ($messageSets === []) {
             return [];
@@ -221,6 +223,10 @@ class OpenAiCompatibleClient
                 }
                 $json = $this->tryParseJson((string) ($row['content'] ?? ''));
                 $parsed[] = $json ?? [];
+            }
+            // postęp dla okna „Trwa dopasowanie”: ile zapytań z całej listy ma już odpowiedź
+            if ($onChunkDone !== null) {
+                $onChunkDone(count($parsed), count($messageSets));
             }
         }
 
@@ -1689,7 +1695,7 @@ class OpenAiCompatibleClient
      * Guzzle przy ciele >1 MB dodaje Expect: 100-continue — llama-swap/vLLM
      * zapisuje wtedy status 100 i 0 tokenów, a klient urywa połączenie (~2 s).
      */
-    private function aiHttp(?string $apiKey, int $timeoutSeconds): \Illuminate\Http\Client\PendingRequest
+    private function aiHttp(?string $apiKey, int $timeoutSeconds): PendingRequest
     {
         $request = Http::acceptJson()
             ->withHeaders([

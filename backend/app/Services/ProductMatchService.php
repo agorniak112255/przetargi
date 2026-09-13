@@ -85,6 +85,12 @@ final class ProductMatchService
     /** Wybór człowieka (ręczna karta, tańszy zamiennik z porównania) — przebieg go nie tnie. */
     private const USER_DECIDED_SOURCES = ['manual', 'battlecard'];
 
+    /** Etap paczki przed modelem: kody z SIWZ i pula kart. */
+    public const PROGRESS_STAGE_PREPARE = 'prepare';
+
+    /** Etap paczki po modelu: wybór i zapis pozycji jedna po drugiej. */
+    public const PROGRESS_STAGE_SAVE = 'save';
+
     /** @var array{url: string, title: string}|null */
     private ?array $lastExternalHint = null;
 
@@ -201,6 +207,18 @@ final class ProductMatchService
                 })
             )->get();
 
+        // Postęp startuje przed modelem — ranking całej paczki trwa minuty i bez etapu okno
+        // stało na „0 / N”, a potem skakało od razu do końca.
+        $startedAt = time();
+        $batchCount = $items->count();
+        $displayTotal = $progressTotal ?? $batchCount;
+        $done = 0;
+        $tenderId = (int) $tender->id;
+        $stageProgress = function (string $stage, int $stageDone, int $stageTotal) use ($tenderId, $progressOffset, $displayTotal, $startedAt): void {
+            $this->writeMatchProgress($tenderId, $progressOffset, $displayTotal, 'running', null, null, $startedAt, $stage, $stageDone, $stageTotal);
+        };
+        $stageProgress(self::PROGRESS_STAGE_PREPARE, 0, $batchCount);
+
         $products = $this->productsForItems($items);
 
         $this->prefetchAiCandidates(
@@ -219,22 +237,11 @@ final class ProductMatchService
                     ) === null;
                 })
                 ->map(static fn (TenderItem $item): string => $item->requirement)
-                ->all()
+                ->all(),
+            $stageProgress,
         );
 
-        $startedAt = time();
-        $batchCount = $items->count();
-        $displayTotal = $progressTotal ?? $batchCount;
-        $done = 0;
-        $this->writeMatchProgress(
-            (int) $tender->id,
-            $progressOffset,
-            $displayTotal,
-            'running',
-            null,
-            null,
-            $startedAt
-        );
+        $stageProgress(self::PROGRESS_STAGE_SAVE, 0, $batchCount);
 
         $changes = [];
         $modelUnavailable = 0;
@@ -291,7 +298,10 @@ final class ProductMatchService
                 'running',
                 (int) $item->line_no,
                 (string) $item->requirement,
-                $startedAt
+                $startedAt,
+                self::PROGRESS_STAGE_SAVE,
+                $done,
+                $batchCount,
             );
         }
 
@@ -355,7 +365,7 @@ final class ProductMatchService
     }
 
     /**
-     * @return array{status: string, done: int, total: int, line_no: int|null, requirement: string|null, started_at: int|null}
+     * @return array{status: string, done: int, total: int, line_no: int|null, requirement: string|null, started_at: int|null, stage: string|null, stage_done: int, stage_total: int}
      */
     public static function readMatchProgress(int $tenderId): array
     {
@@ -368,6 +378,9 @@ final class ProductMatchService
                 'line_no' => null,
                 'requirement' => null,
                 'started_at' => null,
+                'stage' => null,
+                'stage_done' => 0,
+                'stage_total' => 0,
             ];
         }
 
@@ -378,6 +391,9 @@ final class ProductMatchService
             'line_no' => isset($raw['line_no']) && is_numeric($raw['line_no']) ? (int) $raw['line_no'] : null,
             'requirement' => is_string($raw['requirement'] ?? null) ? $raw['requirement'] : null,
             'started_at' => isset($raw['started_at']) && is_numeric($raw['started_at']) ? (int) $raw['started_at'] : null,
+            'stage' => is_string($raw['stage'] ?? null) ? $raw['stage'] : null,
+            'stage_done' => (int) ($raw['stage_done'] ?? 0),
+            'stage_total' => (int) ($raw['stage_total'] ?? 0),
         ];
     }
 
@@ -389,6 +405,9 @@ final class ProductMatchService
         ?int $lineNo,
         ?string $requirement,
         ?int $startedAt = null,
+        ?string $stage = null,
+        int $stageDone = 0,
+        int $stageTotal = 0,
     ): void {
         Cache::put(self::progressCacheKey($tenderId), [
             'status' => $status,
@@ -397,6 +416,9 @@ final class ProductMatchService
             'line_no' => $lineNo,
             'requirement' => $requirement !== null ? mb_substr($requirement, 0, 120) : null,
             'started_at' => $startedAt ?? time(),
+            'stage' => $stage,
+            'stage_done' => $stageDone,
+            'stage_total' => $stageTotal,
         ], 1800);
     }
 
@@ -1825,7 +1847,7 @@ final class ProductMatchService
     /**
      * @param  list<string>  $requirements
      */
-    private function prefetchAiCandidates(array $requirements): void
+    private function prefetchAiCandidates(array $requirements, ?callable $onProgress = null): void
     {
         $queries = [];
         foreach ($requirements as $requirement) {
@@ -1846,6 +1868,7 @@ final class ProductMatchService
                 false,
                 AiTask::ProductSearch,
                 $this->aiSettings->matchConcurrency(),
+                $onProgress,
             );
         } catch (Throwable) {
             return;
