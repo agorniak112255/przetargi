@@ -74,6 +74,9 @@ final class ProductMatchService
     /** Powód, dla którego bieżąca pozycja zostaje bez produktu (poza „nic nie pasuje”). */
     private ?string $lastNoMatchReason = null;
 
+    /** @var array{sku: string, score: int}|null karta oceniona przez model poniżej progu, której słowa karty nie zapisały */
+    private ?array $lastModelLowScore = null;
+
     /** Wybór heurystyczny bez potwierdzenia modelu przy opisie bez kodu — tyle najwyżej. */
     private const HEURISTIC_ONLY_CAP = 70;
 
@@ -257,6 +260,7 @@ final class ProductMatchService
             } else {
                 $this->lastExternalHint = null;
                 $this->lastNoMatchReason = null;
+                $this->lastModelLowScore = null;
                 $pick = $this->resolveBestPick($item->requirement, $products);
                 $applied = $pick !== null && ! $this->heuristicWouldReplaceModelPick($item, $pick) && $this->applyProduct(
                     $item,
@@ -1277,6 +1281,7 @@ final class ProductMatchService
         $candidates = $this->mergeCandidates($heuristic, $aiCandidates);
         $this->lastExternalHint = null;
         $this->lastNoMatchReason = null;
+        $this->lastModelLowScore = null;
         $pick = $this->resolveBestPick($item->requirement, $products, $aiCandidates);
 
         if ($pick === null) {
@@ -1762,6 +1767,15 @@ final class ProductMatchService
 
                 return null;
             }
+            // Model ocenił tę kartę poniżej progu (ranking: brak dowodu kluczowego warunku → najwyżej 50,
+            // np. 9312+ bez węgla aktywnego) — słowa karty nie odwracają tej oceny i nie dopisują
+            // „bez oceny modelu” z 70%.
+            $lowModelScore = $this->modelScoreBelowMin($aiCandidates, (int) $heuristic['product']->id);
+            if ($lowModelScore !== null) {
+                $this->lastModelLowScore = ['sku' => (string) $heuristic['product']->sku, 'score' => $lowModelScore];
+
+                return null;
+            }
             $honest = $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']);
             if ($honest !== null) {
                 $score = min($honest, self::HEURISTIC_ONLY_CAP);
@@ -1774,6 +1788,24 @@ final class ProductMatchService
                     ];
                 }
             }
+        }
+
+        return null;
+    }
+
+    /**
+     * Ocena modelu (nie wiersza z katalogu) dla karty, gdy jest poniżej progu zapisu; inaczej null.
+     *
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     */
+    private function modelScoreBelowMin(array $aiCandidates, int $productId): ?int
+    {
+        foreach ($aiCandidates as $row) {
+            if ((int) $row['id'] !== $productId || $this->isCatalogRowSource((string) $row['source'])) {
+                continue;
+            }
+
+            return (int) $row['score'] < $this->minMatchScore() ? (int) $row['score'] : null;
         }
 
         return null;
@@ -2266,11 +2298,20 @@ final class ProductMatchService
                     'label' => 'Model nie odpowiedział — pozycja czeka na ponowne dopasowanie (opis bez kodu nie jest dobierany po samych słowach karty).',
                     'points' => 0,
                 ]
-                : [
-                    'code' => 'no_match',
-                    'label' => 'Brak produktu w katalogu (szukano w opisach).',
-                    'points' => 0,
-                ],
+                : ($this->lastModelLowScore !== null
+                    ? [
+                        // karta jest w katalogu, ale model nie znalazł na niej dowodu kluczowego warunku —
+                        // „brak produktu w katalogu” byłoby nieprawdą
+                        'code' => 'model_low_score',
+                        'label' => 'Model ocenił najlepszą kartę ('.$this->lastModelLowScore['sku'].') na '
+                            .$this->lastModelLowScore['score'].'% — brak dowodu kluczowego warunku, karty nie zapisano; sprawdź ręcznie.',
+                        'points' => 0,
+                    ]
+                    : [
+                        'code' => 'no_match',
+                        'label' => 'Brak produktu w katalogu (szukano w opisach).',
+                        'points' => 0,
+                    ]),
         ];
         $item->save();
         $this->pricing->recalculateItemMargin($item);
@@ -2307,11 +2348,21 @@ final class ProductMatchService
     {
         $score = min($honest, (int) ($item->ai_match_percent ?? $honest), self::HEURISTIC_ONLY_CAP);
         $reasons = $this->explainMatch($item->requirement, $existing)['reasons'];
+        $modelScore = $this->modelScoreBelowMin(
+            $this->aiCandidatesCache[$this->aiCandidatesCacheKey($item->requirement)] ?? [],
+            (int) $existing->id,
+        );
+        if ($this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE) {
+            $label = 'Model nie odpowiedział — zostawiono poprzednią kartę bez ponownej oceny (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.';
+        } elseif ($modelScore !== null) {
+            $score = min($score, $modelScore);
+            $label = 'Model ocenił poprzednią kartę na '.$modelScore.'% (poniżej progu, zwykle brak dowodu kluczowego warunku) — zostawiono ją do sprawdzenia.';
+        } else {
+            $label = 'Ten przebieg nie potwierdził poprzedniej karty — zostawiono ją (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.';
+        }
         array_unshift($reasons, [
             'code' => self::NOT_RECONFIRMED,
-            'label' => $this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE
-                ? 'Model nie odpowiedział — zostawiono poprzednią kartę bez ponownej oceny (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.'
-                : 'Ten przebieg nie potwierdził poprzedniej karty — zostawiono ją (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.',
+            'label' => $label,
             'points' => $score,
         ]);
         $item->ai_match_percent = $score;

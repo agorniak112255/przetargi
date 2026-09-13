@@ -374,6 +374,35 @@ final class PpeAssortmentTest extends TestCase
     }
 
     /**
+     * Przetarg 1, poz. 3: sandały S1 P dostawały AROSERIO 750 618080 S3 ESD (trzewik bez typu w nazwie).
+     * S2+/O2+ wymagają cholewki odpornej na wodę — odkryty sandał tej klasy nie ma, więc karta z taką
+     * klasą, która sama nie nazywa się sandałem, to zakryte obuwie. Półbuty dalej przyjmują S3.
+     */
+    #[Test]
+    public function sandal_requirement_rejects_closed_shoe_with_water_resistant_class(): void
+    {
+        $req = 'Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, do prac w suchych pomieszczeniach. Właściwości ESD.';
+        $closed = $this->card('AROSERIO 750 618080 S3 ESD', 'AROSERIO 750 618080 S3 ESD', [
+            'category' => 'Obuwie',
+            'norms' => 'EN ISO 20345:2011 S3 SRC, EN IEC 61340-4-3:2018',
+            'description' => 'Obuwie ochronne AROSERIO 750 618080 S3 ESD. Kontrola ładunków elektrostatycznych (ESD).',
+        ]);
+        $namedSandal = $this->card('S3-ESD', 'Sandały ochronne ESD S3 SRC', ['category' => 'Obuwie']);
+        $s1p = $this->card('ARMEN 9007 6660 S1 P', 'ARMEN 9007 6660 S1 P', [
+            'category' => 'Obuwie',
+            'description' => 'Sandały robocze ARMEN S1 P z właściwościami antyelektrostatycznymi (ESD).',
+        ]);
+
+        $this->assertFalse($this->assortment->compatibleProduct($req, $closed), 'S3 bez typu sandała to zakryte obuwie');
+        $this->assertTrue($this->assortment->compatibleProduct($req, $namedSandal), 'karta nazwana sandałem zostaje');
+        $this->assertTrue($this->assortment->compatibleProduct($req, $s1p));
+        $this->assertTrue(
+            $this->assortment->compatibleProduct('Półbuty ochronne S1 P ESD', $closed),
+            'bramka dotyczy tylko sandałów'
+        );
+    }
+
+    /**
      * Poz. 14: pochłaniacz gazów klasy A2 dostawał filtr cząstek stałych P1 R — inna klasa
      * elementu oczyszczającego (EN 14387 vs EN 143); karta bez klas nadal przechodzi.
      */

@@ -1179,6 +1179,16 @@ final class PpeAssortment
                 return false;
             }
         }
+        // Sandały (odkryta cholewka) nie spełnią S2+/O2+ — te klasy wymagają cholewki odpornej na wodę.
+        // Karta bez typu w nazwie z klasą S3 (AROSERIO 750 618080 S3 ESD) to zakryte obuwie; karta, która
+        // sama nazywa się sandałem, zostaje (klasa z nazwy i typ nie są tu rozstrzygane przeciwko sobie).
+        if ($this->articleType($requirement, self::FAMILY_FOOTWEAR) === self::TYPE_SANDAL
+            && $this->articleType($productText, self::FAMILY_FOOTWEAR) !== self::TYPE_SANDAL) {
+            $productClass = $this->attributes()->footwearClass($productText);
+            if ($productClass !== null && preg_match('/^[SO][2-5]/u', mb_strtoupper($productClass)) === 1) {
+                return false;
+            }
+        }
         $reqType = $this->articleType($requirement, self::FAMILY_FOOTWEAR);
         if ($reqType === null) {
             return true;

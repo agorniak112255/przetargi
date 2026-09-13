@@ -1173,7 +1173,9 @@ final class ProductAiSearchService
             .'Jeśli w wymaganiu nie ma nazwy producenta — null. '
             .'Skróty norm, klas i materiałów (EN, ISO, PN-EN, SRC, S3, FFP2, ESD, PVC, NBR, AQL, FDA, ŚOI) NIE są producentem. '
             .'model_name: model/kolekcja (np. TRONCHETTO), nie producent. size_note: rozmiary, nie łącz z modelem. '
-            .'search_phrases: 3-8 synonimów sklepowych. constraints: 0-6 twardych dowodów (EN 374), puste przy samej nazwie/kolorze. '
+            .'search_phrases: 3-8 synonimów sklepowych. constraints: 0-6 KLUCZOWYCH warunków ochrony (EN 374, klasa 2 AC, '
+            .'węgiel aktywny, S1 P), najważniejsze pierwsze; bez rozmiarów, opakowań, koloru i długości; '
+            .'puste przy samej nazwie/kolorze. '
             .'Nie zmieniaj rodzaju. Popraw literówki (podnie→spodnie, TEPM-ICE→TEMP-ICE). '
             .$this->dualRequirementPromptRule()
             .'JSON: {"needed":"...","search_steps":["..."],"manufacturer":null,"model_name":null,"size_note":null,'
@@ -4488,7 +4490,8 @@ final class ProductAiSearchService
             : 'norms/specs/payload_norms/features/use_cases/description';
         $constraintLine = $constraints === []
             ? ''
-            : "\nWarunki, które karta MUSI potwierdzać w {$proofFields} (nie zgaduj):\n- "
+            : "\nWarunki z analizy (dowód z {$proofFields}, nie zgaduj; kluczowy bez dowodu → score najwyżej 50, "
+                ."drugorzędny bez wzmianki nie odrzuca karty):\n- "
                 .implode("\n- ", $constraints);
         $maxMatches = max(1, min($limit, self::MAX_MATCHES));
         $json = json_encode($cards, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -4500,12 +4503,22 @@ final class ProductAiSearchService
                 'content' => 'Jesteś ekspertem BHP. Ranking w dwóch krokach — nie mieszaj ich. '
                     .'1) NAZWA: rzeczownik z wymagania = ten sam produkt co w polu name karty '
                     .'(synonimy: buty=obuwie=trzewiki; kurtka≈bluza ochronna; '
-                    .'czapka drelichowa=czapka z daszkiem=czapka robocza — drelich to tkanina, nie asortyment). '
+                    .'czapka drelichowa=czapka z daszkiem=czapka robocza — drelich to tkanina, nie asortyment; '
+                    .'spodniobuty=wodery=spodniobuty z kaloszami). '
                     .'Inny rodzaj → nie zwracaj: kamizelka ≠ osłona twarzy; rękawice ≠ obuwie. '
                     .'Sam ten sam rodzaj (kombinezon, kalosz) NIE wystarczy, gdy wymaganie ma warunek. '
-                    .'2) WARUNEK: substancja, stężenie, klasa, typ, norma, napięcie — tylko gdy widać to '
-                    .'w polach '.$proofFields.'. '
-                    .'Brak potwierdzenia → nie zwracaj (kombinezon pszczelarski / EN 343 ≠ kwas siarkowy). '
+                    .'2) WARUNKI — każdy osobno, dowód tylko z pól '.$proofFields.'. '
+                    .'a) Karta PRZECZY warunkowi (inna klasa, niższy poziom, inny materiał, inny typ) → nie zwracaj. '
+                    .'b) Warunek KLUCZOWY (funkcja ochronna, substancja, stężenie, klasa/poziom ochrony, typ, norma, '
+                    .'napięcie, element decydujący o ochronie, np. warstwa węgla aktywnego na pary organiczne) bez dowodu '
+                    .'na karcie → nie zwracaj albo score najwyżej 50 i nazwij brak w reason '
+                    .'(kombinezon pszczelarski / EN 343 ≠ kwas siarkowy). '
+                    .'c) Warunek DRUGORZĘDNY (rozmiary, opakowanie, kolor, długość, grubość, wzór, oznakowanie, badania '
+                    .'okresowe, instrukcje) bez wzmianki na karcie → NIE odrzucaj; score 70-89 zależnie od liczby braków, '
+                    .'braki w reason. Wszystkie kluczowe potwierdzone i brak sprzeczności → score 90-99. '
+                    .'Napięcie elektroizolacyjne: klasa wg EN 50321-1 / EN 60903 wyznacza napięcie robocze '
+                    .'(00: 0,5 kV; 0: 1 kV; 1: 7,5 kV; 2: 17 kV; 3: 26,5 kV; 4: 36 kV) — karta „20 kV” klasy 2 '
+                    .'spełnia „do 17 kV” (20 kV to napięcie próby); wyższa klasa spełnia niższą. '
                     .'Równoważny dowód = spełnione: synonim katalogowy, norma/klasa, materiał konstrukcyjny '
                     .'(metalowy nosek = podnosek stalowy/steel toe; chemoodporny = EN 374 / Typ 3/4 / Tychem; '
                     .'antystatyczny = EN 1149). Nie wymagaj dosłownego cytatu z SIWZ. '
@@ -4522,11 +4535,11 @@ final class ProductAiSearchService
                     .'Pochłaniacz/filtr EN 14387: A2B2E2K2 ≠ A2B2E2K2NO — bez NO/Hg/CO z wymagania nie zwracaj karty. '
                     .'Literówka w wymaganiu nie dyskwalifikuje karty — nazwę czytaj z linii "Szukany produkt (z analizy)" '
                     .'(podnie = spodnie, rekawice = rękawice). '
-                    .'Brak zgodnej nazwy albo braku dowodu na warunek: {"matches":[]}. '
+                    .'Brak zgodnej nazwy albo sprzeczność / brak dowodu kluczowego warunku na każdej karcie: {"matches":[]}. '
                     .'W matches TYLKO id, score, reason — bez sku, name, specs, opisu i karty. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie"}]}. '
                     .$reasonHint
-                    .'score>=40 tylko przy zgodnej nazwie I spełnionych warunkach. Max '.$maxMatches.'. '
+                    .'score>=40 tylko przy zgodnej nazwie i bez sprzeczności z warunkiem. Max '.$maxMatches.'. '
                     .'Zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
                     .$this->dualRequirementPromptRule()
                     .'Tylko id z listy. Nie wymyślaj.',

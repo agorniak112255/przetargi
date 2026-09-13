@@ -205,6 +205,92 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertSame('heuristic_only', $item->ai_match_reasons[0]['code'] ?? null);
     }
 
+    /**
+     * Ranking: karta bez dowodu kluczowego warunku dostaje od modelu najwyżej 50 (przetarg 1, poz. 8:
+     * 3M 9312+ bez węgla aktywnego). Dobór po słowach nie może jej potem zapisać z 70%.
+     */
+    public function test_card_scored_below_threshold_by_model_is_not_saved_by_word_fallback(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $gloveId = (int) $glove->id;
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => [['id' => $gloveId, 'score' => 50, 'reason' => 'brak dowodu kluczowego warunku']]]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertNull($item->main_product_id, 'niska ocena modelu nie zamienia się w 70% po słowach');
+        $this->assertSame('model_low_score', $item->ai_match_reasons[0]['code'] ?? null, 'nie „brak produktu w katalogu”');
+        $this->assertStringContainsString('RNITZ-M', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+        $this->assertStringContainsString('50%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+    }
+
+    /** Poprzednia karta oceniona przez model poniżej progu zostaje z oceną modelu i jasną etykietą. */
+    public function test_previous_card_scored_low_by_model_keeps_model_score_in_label(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $gloveId = (int) $glove->id;
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => [['id' => $gloveId, 'score' => 50, 'reason' => 'brak dowodu kluczowego warunku']]]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+        $item->forceFill([
+            'main_product_id' => $gloveId,
+            'status' => 'matched',
+            'match_source' => 'ai',
+            'ai_match_percent' => 95,
+            'ai_match_reasons' => [['code' => 'ai', 'label' => 'stara ocena 95%', 'points' => 95]],
+            'offer_price' => 5,
+        ])->save();
+
+        app(ProductMatchService::class)->matchTender($tender, false);
+        $item->refresh();
+
+        $this->assertSame($gloveId, (int) $item->main_product_id);
+        $this->assertSame('not_reconfirmed', $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertStringContainsString('Model ocenił poprzednią kartę na 50%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+        $this->assertSame(50, (int) $item->ai_match_percent, 'procent nie wyższy niż ocena modelu');
+    }
+
+    /**
+     * Przetarg 1: model nie wskazał właściwych kart przy poz. 5 (wodery przy „spodniobutach”) i 12
+     * (brak rozmiarów/numerów seryjnych na karcie odrzucał kartę), a dał 95% karcie bez węgla aktywnego
+     * przy poz. 8. Ranking dostaje trzy przypadki: sprzeczność, brak kluczowego, brak drugorzędnego.
+     */
+    public function test_rank_prompt_separates_contradiction_missing_key_and_missing_minor_condition(): void
+    {
+        $this->glove('RNITZ-M');
+        $prompts = [];
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static function (array $messageSets) use (&$prompts): array {
+            foreach ($messageSets as $messages) {
+                if (FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK) {
+                    $prompts[] = (string) ($messages[0]['content'] ?? '').'||'.(string) ($messages[1]['content'] ?? '');
+                }
+            }
+
+            return array_map(static fn (): array => ['matches' => []], $messageSets);
+        });
+        $llm->shouldReceive('chatJson')->andThrow(new RuntimeException('model niedostępny'));
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        [$tender] = $this->tenderWith(self::DESCRIPTIVE);
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+
+        $this->assertNotSame([], $prompts, 'pozycja opisowa idzie do rankingu modelu');
+        $prompt = $prompts[0];
+        $this->assertStringContainsString('PRZECZY', $prompt);
+        $this->assertStringContainsString('KLUCZOWY', $prompt);
+        $this->assertStringContainsString('score najwyżej 50', $prompt);
+        $this->assertStringContainsString('DRUGORZĘDNY', $prompt);
+        $this->assertStringContainsString('NIE odrzucaj', $prompt);
+        $this->assertStringContainsString('spodniobuty=wodery', $prompt);
+        $this->assertStringContainsString('2: 17 kV', $prompt);
+        $this->assertStringNotContainsString('Brak potwierdzenia → nie zwracaj', $prompt);
+    }
+
     private function plainGlove(): Product
     {
         return Product::query()->create([
