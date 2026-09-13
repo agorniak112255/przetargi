@@ -11,6 +11,7 @@ use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentBatchItem;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
@@ -20,6 +21,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class EnrichProductJob implements ShouldQueue
@@ -41,10 +43,25 @@ class EnrichProductJob implements ShouldQueue
     /** Osobna kolejka — workery LLM nie stoją w kolejce za SearXNG. */
     public const QUEUE = 'enrich';
 
+    /**
+     * Gdy darmowa wyszukiwarka leży (bezpiecznik publicznych silników otwarty, silniki
+     * z kluczem bez środków), produkt wraca do kolejki zamiast liczyć się jako błąd.
+     * Batch #292: 533 z 869 produktów Coba poległo w kilka minut z jednym komunikatem
+     * o awarii — każdy trzeba było potem ręcznie zaznaczyć i puścić od nowa.
+     * Odstęp = czas przerwy bezpiecznika (10 min): wcześniejsze ponowienie trafia na
+     * wciąż zamknięte silniki. Budżet 60 min — tyle, by doładować klucz albo zmienić
+     * wyszukiwarkę w Ustawieniach AI; po nim stan końcowy taki jak dotąd (failed).
+     */
+    public const OUTAGE_RETRY_SECONDS = 600;
+
+    public const OUTAGE_WAIT_BUDGET_SECONDS = 3600;
+
     public function __construct(
         public readonly int $productId,
         public readonly int $batchId,
         public readonly bool $force = false,
+        /** Unix time pierwszego czekania na wyszukiwarkę — nowe joby mają świeże `tries`, więc to jedyna pamięć. */
+        public readonly ?int $outageWaitSince = null,
     ) {
         $this->onQueue(self::QUEUE);
     }
@@ -90,7 +107,7 @@ class EnrichProductJob implements ShouldQueue
         );
         if ($slot === null) {
             // Limit z Ustawień AI obłożony — produkt wraca do kolejki bez zużycia próby.
-            self::dispatch($this->productId, $this->batchId, $this->force)
+            self::dispatch($this->productId, $this->batchId, $this->force, $this->outageWaitSince)
                 ->delay(now()->addSeconds(10));
             $this->delete();
 
@@ -189,6 +206,9 @@ class EnrichProductJob implements ShouldQueue
             // Awaria wyszukiwarki zostawia produkt w „failed” — to błąd do ponowienia,
             // a nie karta, której nie ma i którą trzeba opisać ręcznie.
             $outage = $product->fresh()?->enrichment_status === Product::ENRICHMENT_FAILED;
+            if ($outage && $useDuckDuckGo && $this->waitForSearchBackend($enrichment, $product, $batch, $e->getMessage())) {
+                return;
+            }
             $enrichment->markBatchItem(
                 $batch,
                 ! $outage,
@@ -207,6 +227,63 @@ class EnrichProductJob implements ShouldQueue
             $this->recordItemFailure($product, $batch, $e->getMessage(), 'Limit Tavily — zatrzymano batch');
             $this->delete();
         }
+    }
+
+    /**
+     * Cała darmowa wyszukiwarka leży — produkt wraca do kolejki (bez liczenia błędu),
+     * dopóki starcza budżetu. Produkty z indeksu sitemap i cache SKU przechodzą dalej
+     * normalnie: to nie jest blokada przed startem, tylko reakcja na nieudaną próbę.
+     */
+    private function waitForSearchBackend(
+        ProductEnrichmentService $enrichment,
+        Product $product,
+        ProductEnrichmentBatch $batch,
+        string $detail,
+    ): bool {
+        if (! app(DuckDuckGoHtmlSearch::class)->searchBackendDown()) {
+            return false;
+        }
+        $since = $this->outageWaitSince ?? now()->getTimestamp();
+        if (now()->getTimestamp() - $since >= self::OUTAGE_WAIT_BUDGET_SECONDS) {
+            return false;
+        }
+        $batch->refresh();
+        if ($batch->isCancelled()) {
+            return false;
+        }
+
+        $retryAt = now()->addSeconds(self::OUTAGE_RETRY_SECONDS);
+        $deadline = now()->setTimestamp($since + self::OUTAGE_WAIT_BUDGET_SECONDS);
+        $note = 'Wyszukiwarka niedostępna — ponowię o '.$retryAt->format('H:i')
+            .' (czekam najdłużej do '.$deadline->format('H:i').'). ';
+        // ponowiony job „zaklepuje” produkt tylko ze statusu queued; błąd i przebieg
+        // z tej próby zostają — dopisujemy jedynie, że to nie koniec
+        $product->update([
+            'enrichment_status' => Product::ENRICHMENT_QUEUED,
+            'enrichment_error' => mb_substr($note.$detail, 0, 2000),
+        ]);
+        $enrichment->recordBatchProduct(
+            $batch,
+            $product,
+            ProductEnrichmentBatchItem::STATUS_QUEUED,
+            mb_substr($note.$detail, 0, 500),
+        );
+        $batch->update([
+            'message' => 'Wyszukiwarka niedostępna — czekam do '.$deadline->format('H:i')
+                ." · OK {$batch->done} · błędy {$batch->failed}",
+        ]);
+        Log::info('Enrichment waits for search backend', [
+            'product_id' => $product->id,
+            'sku' => $product->sku,
+            'batch_id' => $batch->id,
+            'retry_at' => $retryAt->toIso8601String(),
+            'wait_since' => $since,
+        ]);
+
+        self::dispatch($this->productId, $this->batchId, $this->force, $since)->delay($retryAt);
+        $this->delete();
+
+        return true;
     }
 
     public function failed(?Throwable $e): void

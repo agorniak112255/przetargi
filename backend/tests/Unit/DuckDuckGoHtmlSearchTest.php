@@ -429,4 +429,144 @@ HTML;
         $this->assertSame($target, $results[0]['url'] ?? null);
         $this->assertStringContainsString('ROBFM', $results[0]['snippet'] ?? '');
     }
+
+    /** Batch #292: Jina 402 (klucz bez środków) przy każdym zapytaniu każdego z 869 produktów. */
+    public function test_jina_402_is_remembered_and_not_asked_again(): void
+    {
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => 'jina_test', 'enrichment.brave_api_key' => null]);
+        Cache::flush();
+        Http::fake([
+            's.jina.ai/*' => Http::response('payment required', 402),
+            '*' => Http::response('too many requests', 429),
+        ]);
+        $jinaCalls = static function (): int {
+            $n = 0;
+            Http::assertSent(static function ($request) use (&$n): bool {
+                if (str_starts_with($request->url(), 'https://s.jina.ai/')) {
+                    $n++;
+                }
+
+                return true;
+            });
+
+            return $n;
+        };
+
+        $search = new DuckDuckGoHtmlSearch;
+        $first = null;
+        try {
+            $search->search('HyFlex 11-840 Ansell');
+        } catch (RuntimeException $e) {
+            $first = $e->getMessage();
+        }
+        $this->assertNotNull($first);
+        $this->assertStringContainsString('Jina HTTP 402', $first);
+        $this->assertSame(1, $jinaCalls());
+
+        $second = null;
+        try {
+            $search->search('AlphaTec 58-330 Ansell');
+        } catch (RuntimeException $e) {
+            $second = $e->getMessage();
+        }
+        $this->assertSame(1, $jinaCalls(), 'po 402 Jina nie jest pytana ponownie');
+        $this->assertNotNull($second);
+        $this->assertStringContainsString('Jina: pominięty', $second);
+        $this->assertStringContainsString('kod 402', $second);
+
+        // sam wpis o pominięciu nie może być sygnaturą awarii — inaczej produkt bez karty
+        // szedłby do ponowienia zamiast do ręki, dopóki klucz jest bez środków
+        $skipNote = explode(' | ', $second)[0];
+        $this->assertStringStartsWith('Jina: pominięty', $skipNote);
+        $this->assertFalse(SearchEngineOutage::matches($skipNote), $skipNote);
+        // a całość nadal jest awarią: publiczne silniki zablokowane
+        $this->assertTrue(SearchEngineOutage::matches($second));
+        $this->assertTrue($search->searchBackendDown());
+    }
+
+    public function test_jina_402_with_live_public_engines_keeps_breaker_closed(): void
+    {
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => 'jina_test', 'enrichment.brave_api_key' => null]);
+        Cache::flush();
+        Http::fake([
+            's.jina.ai/*' => Http::response('payment required', 402),
+            '*google*' => Http::response('<html><body>brak</body></html>', 200),
+            '*' => Http::response('too many requests', 429),
+        ]);
+
+        $search = new DuckDuckGoHtmlSearch;
+        try {
+            $search->search('HyFlex 11-840 Ansell');
+        } catch (RuntimeException) {
+            // oczekiwane: brak wyników
+        }
+
+        $this->assertNull(Cache::get('free_public_engines_blocked_v1'), 'Google odpowiedział — bezpiecznik zamknięty');
+        $this->assertFalse($search->searchBackendDown());
+    }
+
+    public function test_search_backend_down_requires_open_breaker_and_no_keyed_engine(): void
+    {
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => null, 'enrichment.brave_api_key' => null]);
+        Cache::flush();
+        $search = new DuckDuckGoHtmlSearch;
+
+        $this->assertFalse($search->searchBackendDown(), 'bezpiecznik zamknięty');
+
+        Cache::put('free_public_engines_blocked_v1', 'Google HTTP 429', now()->addMinutes(10));
+        $this->assertTrue($search->searchBackendDown(), 'bezpiecznik otwarty, bez silników z kluczem');
+
+        config(['enrichment.reader_api_key' => 'jina_test']);
+        $this->assertFalse($search->searchBackendDown(), 'Jina z kluczem jeszcze odpowie');
+
+        Cache::put('keyed_search_unavailable_v1:Jina', 402, now()->addMinutes(30));
+        $this->assertTrue($search->searchBackendDown(), 'Jina bez środków — nie ma czym szukać');
+
+        config(['enrichment.brave_api_key' => 'brave_test']);
+        $this->assertFalse($search->searchBackendDown(), 'Brave z kluczem jeszcze odpowie');
+
+        Cache::put('keyed_search_unavailable_v1:Brave', 401, now()->addMinutes(30));
+        $this->assertTrue($search->searchBackendDown(), 'Brave z nieważnym kluczem też nie odpowie');
+    }
+
+    public function test_brave_401_is_remembered_like_jina(): void
+    {
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => null, 'enrichment.brave_api_key' => 'brave_test']);
+        Cache::flush();
+        Http::fake([
+            'api.search.brave.com/*' => Http::response('unauthorized', 401),
+            '*' => Http::response('too many requests', 429),
+        ]);
+        $braveCalls = static function (): int {
+            $n = 0;
+            Http::assertSent(static function ($request) use (&$n): bool {
+                if (str_contains($request->url(), 'api.search.brave.com')) {
+                    $n++;
+                }
+
+                return true;
+            });
+
+            return $n;
+        };
+
+        $search = new DuckDuckGoHtmlSearch;
+        try {
+            $search->search('HyFlex 11-840 Ansell');
+        } catch (RuntimeException) {
+            // oczekiwane
+        }
+        $this->assertSame(1, $braveCalls());
+
+        $second = null;
+        try {
+            $search->search('AlphaTec 58-330 Ansell');
+        } catch (RuntimeException $e) {
+            $second = $e->getMessage();
+        }
+        $this->assertSame(1, $braveCalls(), 'po 401 Brave nie jest pytany ponownie');
+        $this->assertStringContainsString('Brave: pominięty', (string) $second);
+        $this->assertStringContainsString('BRAVE_SEARCH_API_KEY', (string) $second);
+        $this->assertFalse(SearchEngineOutage::matches(explode(' | ', (string) $second)[0]));
+    }
 }

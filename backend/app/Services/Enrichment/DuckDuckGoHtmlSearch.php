@@ -53,6 +53,15 @@ final class DuckDuckGoHtmlSearch
 
     private const BRAVE_SEARCH_LAST_AT_KEY = 'brave_search_last_at';
 
+    /**
+     * Silnik z kluczem odpowiedział 402 (klucz bez środków) albo 401 (klucz nieważny).
+     * To nie mija samo, a batch #292 pytał Jina o to przy każdym zapytaniu każdego
+     * z 869 produktów — przez pół godziny nie pytamy, komunikat mówi, co zrobić z kluczem.
+     */
+    private const KEYED_UNAVAILABLE_PREFIX = 'keyed_search_unavailable_v1:';
+
+    private const KEYED_UNAVAILABLE_MINUTES = 30;
+
     public function __construct(
         private readonly ?JinaSearchClient $jina = null,
         private readonly ?BraveSearchClient $brave = null,
@@ -106,13 +115,17 @@ final class DuckDuckGoHtmlSearch
         }
 
         $searxng = $this->searxngBaseUrl();
+        // błędy sprzed silników z kluczem — w przebiegu ma być widać, że SearXNG pominięto
+        $keyedErrors = [];
         if ($searxng !== null) {
             if ($this->searxngRecentlyBlocked() && ! $allowPublicFallback) {
                 throw new RuntimeException(
                     'SearXNG: silniki zablokowane (429/CAPTCHA). Poczekaj albo zmień wyszukiwarkę w Ustawieniach AI.'
                 );
             }
-            if (! $this->searxngRecentlyBlocked()) {
+            if ($this->searxngRecentlyBlocked()) {
+                $keyedErrors[] = 'SearXNG: pominięty (przerwa 10 min po blokadzie jego silników)';
+            } else {
                 try {
                     $this->reserveSearchSlot();
                     $results = $this->searchSearxng($searxng, $query);
@@ -144,7 +157,6 @@ final class DuckDuckGoHtmlSearch
         // Silniki z kluczem (Jina, Brave) idą przed scrapowanymi: nie blokują adresu
         // serwera, więc nie dotyczy ich ani bezpiecznik publicznych silników, ani
         // 429 Google. Bez klucza są pomijane — nic się wtedy nie zmienia.
-        $keyedErrors = [];
         $keyed = $this->searchKeyedEngines($query, $keyedErrors);
         if ($keyed !== []) {
             Cache::put($cacheKey, $keyed, now()->addHours(6));
@@ -166,6 +178,15 @@ final class DuckDuckGoHtmlSearch
         try {
             $cached = Cache::get($cacheKey);
             if (! is_array($cached)) {
+                // Workery czekające na bramce przeszły sprawdzenie bezpiecznika, zanim
+                // pierwszy z nich go zapalił — bez ponownego odczytu każdy z nich
+                // odpaliłby pełną sondę trzech silników w to samo zablokowane IP.
+                $blockedDetail = Cache::get(self::PUBLIC_BLOCKED_KEY);
+                if (is_string($blockedDetail)) {
+                    throw new RuntimeException(
+                        implode(' | ', [...$keyedErrors, 'Publiczne silniki zablokowane (przerwa 10 min po: '.$blockedDetail.'). Ponow pozniej.'])
+                    );
+                }
                 try {
                     $cached = $this->searchUncached($query);
                 } catch (RuntimeException $e) {
@@ -318,12 +339,14 @@ final class DuckDuckGoHtmlSearch
      */
     private function searchKeyedEngines(string $query, array &$errors): array
     {
-        $engines = [
-            ['Jina', $this->jina ?? new JinaSearchClient, 0.6, self::JINA_SEARCH_LAST_AT_KEY],
-            ['Brave', $this->brave ?? new BraveSearchClient, 1.1, self::BRAVE_SEARCH_LAST_AT_KEY],
-        ];
-        foreach ($engines as [$name, $client, $interval, $key]) {
+        foreach ($this->keyedEngines() as [$name, $client, $interval, $key]) {
             if (! $client->isConfigured()) {
+                continue;
+            }
+            $skipped = $this->keyedEngineSkipMessage($name);
+            if ($skipped !== null) {
+                $errors[] = $skipped;
+
                 continue;
             }
             try {
@@ -340,11 +363,79 @@ final class DuckDuckGoHtmlSearch
                 }
                 $errors[] = $name.': brak wyników';
             } catch (Throwable $e) {
+                if (preg_match('/^'.preg_quote($name, '/').' HTTP (401|402)\b/', $e->getMessage(), $m) === 1) {
+                    Cache::put(
+                        self::KEYED_UNAVAILABLE_PREFIX.$name,
+                        (int) $m[1],
+                        now()->addMinutes(self::KEYED_UNAVAILABLE_MINUTES)
+                    );
+                }
                 $errors[] = $e->getMessage();
             }
         }
 
         return [];
+    }
+
+    /**
+     * Silniki z kluczem w kolejności pytania; odstęp między zapytaniami per silnik
+     * (Brave: darmowy plan 1 zapytanie/s).
+     *
+     * @return list<array{0: string, 1: JinaSearchClient|BraveSearchClient, 2: float, 3: string}>
+     */
+    private function keyedEngines(): array
+    {
+        return [
+            ['Jina', $this->jina ?? new JinaSearchClient, 0.6, self::JINA_SEARCH_LAST_AT_KEY],
+            ['Brave', $this->brave ?? new BraveSearchClient, 1.1, self::BRAVE_SEARCH_LAST_AT_KEY],
+        ];
+    }
+
+    /**
+     * Komunikat o pominięciu silnika po 401/402 — celowo bez „HTTP 4xx”: taki ciąg
+     * SearchEngineOutage bierze za awarię wyszukiwarki, a sam wpis o pominięciu
+     * nie może wysyłać produktu do ponowienia zamiast do ręki.
+     */
+    private function keyedEngineSkipMessage(string $name): ?string
+    {
+        $status = Cache::get(self::KEYED_UNAVAILABLE_PREFIX.$name);
+        if (! is_int($status)) {
+            return null;
+        }
+        $envKey = $name === 'Brave' ? 'BRAVE_SEARCH_API_KEY' : 'JINA_API_KEY';
+
+        return $name.': pominięty przez '.self::KEYED_UNAVAILABLE_MINUTES.' min ('
+            .($status === 402
+                ? 'klucz bez środków, kod 402 — doładuj konto '.$name
+                : 'klucz nieważny, kod 401 — sprawdź '.$envKey)
+            .')';
+    }
+
+    /**
+     * Czy darmowe wyszukiwanie nie ma już czym szukać: bezpiecznik publicznych
+     * silników otwarty (i SearXNG zablokowany, jeśli jest ustawiony), a żaden silnik
+     * z kluczem nie odpowie. Wtedy ponowienie produktu za chwilę skończy się tak samo —
+     * EnrichProductJob zamiast liczyć błąd czeka, aż wyszukiwarka wróci.
+     */
+    public function searchBackendDown(): bool
+    {
+        if (! is_string(Cache::get(self::PUBLIC_BLOCKED_KEY))) {
+            return false;
+        }
+        try {
+            if ($this->searxngBaseUrl() !== null && ! $this->searxngRecentlyBlocked()) {
+                return false;
+            }
+        } catch (RuntimeException) {
+            // SearXNG wybrany bez adresu — i tak nie odpowie
+        }
+        foreach ($this->keyedEngines() as [$name, $client]) {
+            if ($client->isConfigured() && $this->keyedEngineSkipMessage($name) === null) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

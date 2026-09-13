@@ -3829,6 +3829,175 @@ final class ProductEnrichmentApiTest extends TestCase
      * Bez nich każde wywołanie dropListingResults wysypywało test na starcie i ścieżka
      * wzbogacania przez długi czas nie była sprawdzana. Oczekiwania testu mają pierwszeństwo.
      */
+    /**
+     * Batch #292 (Coba): 533 z 869 produktów poległo w kilka minut, bo darmowa wyszukiwarka
+     * leżała (Jina 402, publiczne silniki zablokowane), a job liczył każdy produkt jako błąd.
+     */
+    public function test_search_outage_requeues_item_without_counting_failed(): void
+    {
+        Queue::fake();
+        [$product, $batch] = $this->outageFixture();
+
+        $job = new EnrichProductJob($product->id, $batch->id);
+        $job->handle(app(ProductEnrichmentService::class), app(AiSettingsService::class), app(EnrichmentSlots::class));
+
+        $product->refresh();
+        $batch->refresh();
+        $this->assertSame(Product::ENRICHMENT_QUEUED, $product->enrichment_status);
+        $this->assertStringStartsWith('Wyszukiwarka niedostępna — ponowię o', (string) $product->enrichment_error);
+        $this->assertStringContainsString('Jina HTTP 402', (string) $product->enrichment_error);
+        $this->assertSame(0, $batch->failed, 'czekanie nie liczy się jako błąd');
+        $this->assertSame(1, $batch->done);
+        $this->assertSame(ProductEnrichmentBatch::STATUS_RUNNING, $batch->status);
+        $this->assertStringContainsString('Wyszukiwarka niedostępna', (string) $batch->message);
+
+        $item = ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $product->id)->first();
+        $this->assertSame(ProductEnrichmentBatchItem::STATUS_QUEUED, $item?->status);
+        $this->assertStringStartsWith('Wyszukiwarka niedostępna', (string) $item?->message);
+
+        Queue::assertPushed(EnrichProductJob::class, static function (EnrichProductJob $pushed) use ($product): bool {
+            return $pushed->productId === $product->id
+                && $pushed->outageWaitSince !== null
+                && $pushed->outageWaitSince <= now()->getTimestamp()
+                && $pushed->delay !== null;
+        });
+    }
+
+    public function test_search_outage_after_wait_budget_marks_failed(): void
+    {
+        Queue::fake();
+        [$product, $batch] = $this->outageFixture();
+
+        $since = now()->getTimestamp() - EnrichProductJob::OUTAGE_WAIT_BUDGET_SECONDS - 1;
+        $job = new EnrichProductJob($product->id, $batch->id, false, $since);
+        $job->handle(app(ProductEnrichmentService::class), app(AiSettingsService::class), app(EnrichmentSlots::class));
+
+        $batch->refresh();
+        $this->assertSame(Product::ENRICHMENT_FAILED, $product->fresh()?->enrichment_status);
+        $this->assertSame(1, $batch->failed);
+        $item = ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $product->id)->first();
+        $this->assertSame(ProductEnrichmentBatchItem::STATUS_FAILED, $item?->status);
+        Queue::assertNotPushed(EnrichProductJob::class);
+    }
+
+    public function test_search_outage_with_live_backend_marks_failed_as_before(): void
+    {
+        Queue::fake();
+        // bezpiecznik zamknięty: to pojedyncza awaria, nie leżąca wyszukiwarka
+        [$product, $batch] = $this->outageFixture(breakerOpen: false);
+
+        $job = new EnrichProductJob($product->id, $batch->id);
+        $job->handle(app(ProductEnrichmentService::class), app(AiSettingsService::class), app(EnrichmentSlots::class));
+
+        $batch->refresh();
+        $this->assertSame(Product::ENRICHMENT_FAILED, $product->fresh()?->enrichment_status);
+        $this->assertSame(1, $batch->failed);
+        Queue::assertNotPushed(EnrichProductJob::class);
+    }
+
+    public function test_search_outage_does_not_wait_when_batch_cancelled(): void
+    {
+        Queue::fake();
+        [$product, $batch] = $this->outageFixture();
+        $batch->markCancelledFlag();
+
+        $job = new EnrichProductJob($product->id, $batch->id);
+        $job->handle(app(ProductEnrichmentService::class), app(AiSettingsService::class), app(EnrichmentSlots::class));
+
+        Queue::assertNotPushed(EnrichProductJob::class);
+        $this->assertNotSame(Product::ENRICHMENT_QUEUED, $product->fresh()?->enrichment_status);
+    }
+
+    /** Pominięty po blokadzie SearXNG ma być widoczny w komunikacie, nie znikać po cichu. */
+    public function test_searxng_skip_after_block_is_visible_in_message(): void
+    {
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => null, 'enrichment.brave_api_key' => null]);
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8081/v1',
+            'api_key' => 'local',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'search_engine' => 'searxng',
+            'searxng_url' => 'http://127.0.0.1:8088',
+            'web_search_enabled' => false,
+        ]);
+        Cache::put('searxng_engines_blocked_v1', 1, now()->addMinutes(10));
+        Cache::put('free_public_engines_blocked_v1', 'Google HTTP 429', now()->addMinutes(10));
+        Http::fake(['*' => Http::response('unused', 429)]);
+
+        $search = app(DuckDuckGoHtmlSearch::class);
+        $message = null;
+        try {
+            $search->search('ROBFM JS Gloves');
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+        }
+
+        $this->assertNotNull($message);
+        $this->assertStringContainsString('SearXNG: pominięty (przerwa 10 min po blokadzie jego silników)', $message);
+        $this->assertStringContainsString('Publiczne silniki zablokowane', $message);
+        Http::assertNothingSent();
+        $this->assertTrue($search->searchBackendDown());
+    }
+
+    /**
+     * Produkt w kolejce batcha, darmowa wyszukiwarka, bez silników z kluczem;
+     * wyszukiwanie kończy się komunikatem awarii jak w batchu #292.
+     *
+     * @return array{0: Product, 1: ProductEnrichmentBatch}
+     */
+    private function outageFixture(bool $breakerOpen = true): array
+    {
+        config(['enrichment.reader_api_key' => null, 'enrichment.brave_api_key' => null]);
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8081/v1',
+            'api_key' => 'local',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+            'search_engine' => 'duckduckgo',
+            'web_search_enabled' => false,
+        ]);
+        if ($breakerOpen) {
+            Cache::put('free_public_engines_blocked_v1', 'Google: zgoda/captcha — brak wyników wyszukiwania.', now()->addMinutes(10));
+        }
+        $product = $this->makeProduct([
+            'sku' => 'AB010008C',
+            'name' => 'Alba Antracyt 2m x mb.',
+            'manufacturer' => 'Coba',
+            'enrichment_status' => Product::ENRICHMENT_QUEUED,
+        ]);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 0,
+            'total' => 3,
+            'done' => 1,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'force' => false,
+        ]);
+        app(ProductEnrichmentService::class)->recordBatchProduct($batch, $product, ProductEnrichmentBatchItem::STATUS_QUEUED);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->andReturn([
+                'results' => [],
+                'errors' => [
+                    'manufacturer: Brak stron produktu (SKU AB010008C). Jina HTTP 402: brak wyników wyszukiwania.'
+                        .' | Publiczne silniki zablokowane (przerwa 10 min po: Google: zgoda/captcha — brak wyników wyszukiwania.'
+                        .' | DuckDuckGo HTTP 202: brak wyników wyszukiwania. | Qwant HTTP 403: brak wyników wyszukiwania.). Ponow pozniej.',
+                ],
+            ]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        return [$product, $batch];
+    }
+
     private function searchMock(): MockInterface
     {
         $mock = Mockery::mock(HybridWebSearchService::class);
