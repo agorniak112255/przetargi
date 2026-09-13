@@ -1794,6 +1794,90 @@ final class ProductMatchService
     }
 
     /**
+     * Diagnostyka `tenders:debug-match`: decyzja przetargu dla wyniku wyszukiwania jednej pozycji —
+     * te same bramki co rememberAiCandidates + pickAuto, każdy wiersz z werdyktem, a na końcu
+     * prawdziwe resolveBestPick. Nic nie zapisuje do przetargu.
+     *
+     * @param  array<string, mixed>  $searchResult  wiersz z ProductAiSearchService::searchMany
+     * @return array{
+     *     candidates: list<array{sku: string, model: int, source: string, verdict: string}>,
+     *     pick: array{sku: string, score: int, source: string, heuristic_only: bool}|null,
+     *     reason: string|null
+     * }
+     */
+    public function debugPick(TenderItem $item, array $searchResult): array
+    {
+        $requirement = (string) $item->requirement;
+        $products = $this->productsForItems(collect([$item]));
+        $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
+        $rows = [];
+        foreach ($this->mapAiSearchRows($searchResult['products'] ?? [], self::AI_CANDIDATE_WINDOW, $source) as $row) {
+            $product = Product::query()->find($row['id']);
+            $entry = ['sku' => $product?->sku ?? (string) $row['id'], 'model' => (int) $row['score'], 'source' => (string) $row['source']];
+            $rows[] = $entry + ['verdict' => $product instanceof Product
+                ? $this->debugVerdict($requirement, $product, (int) $row['score'], (string) $row['source'])
+                : 'brak karty w katalogu'];
+        }
+
+        $candidates = $this->rememberAiCandidates($requirement, $searchResult, self::AI_CANDIDATE_WINDOW, $source);
+        $this->lastNoMatchReason = null;
+        $this->lastModelLowScore = null;
+        $pick = $this->resolveBestPick($requirement, $products, $candidates);
+        $reason = null;
+        if ($pick === null) {
+            $reason = $this->lastModelLowScore !== null
+                ? 'model ocenił najlepszą kartę '.$this->lastModelLowScore['sku'].' na '.$this->lastModelLowScore['score'].'%'
+                : ($this->lastNoMatchReason ?? 'żadna karta nie przeszła bramek');
+        }
+
+        return [
+            'candidates' => $rows,
+            'pick' => $pick === null ? null : [
+                'sku' => (string) $pick['product']->sku,
+                'score' => (int) $pick['score'],
+                'source' => (string) ($pick['source'] ?? ''),
+                'heuristic_only' => (bool) ($pick['heuristic_only'] ?? false),
+            ],
+            'reason' => $reason,
+        ];
+    }
+
+    /** Werdykt pojedynczego kandydata — kolejność i progi jak w pickAuto. */
+    private function debugVerdict(string $requirement, Product $product, int $score, string $source): string
+    {
+        if (! $this->assortment->compatibleProduct($requirement, $product)) {
+            return 'odrzucona: bramka asortymentu';
+        }
+        if ($this->isCatalogRowSource($source) && ! $this->aiSettings->matchAllowsCatalogRows()) {
+            return 'odrzucona: wiersz katalogowy/reguły bez zgody admina';
+        }
+        $exact = $this->honorsSpecificModelCodes($requirement, $product);
+        $minScore = $exact ? $this->applyMatchScore() : $this->substituteMatchScore();
+        if ($score < $minScore) {
+            return 'odrzucona: ocena modelu '.$score.' < '.$minScore;
+        }
+        $honest = $this->persistableScore($requirement, $product, $score, $this->trustsRowScore($source));
+        if ($honest === null) {
+            return 'odrzucona: persistableScore (brak dowodów na karcie)';
+        }
+        if (! $exact && $honest < $this->substituteMatchScore() && $score < $this->substituteMatchScore()) {
+            return 'odrzucona: zamiennik poniżej progu '.$this->substituteMatchScore();
+        }
+        if (! $this->meetsPersistThreshold($requirement, $product, $honest, $source)) {
+            return 'odrzucona: zapis '.$honest.' < próg '.$this->minMatchScore();
+        }
+        $explained = $this->explainMatch($requirement, $product);
+
+        return sprintf(
+            'kandydat: zapis %d, dowody %d, twarde %d, cena %.2f zł',
+            $honest,
+            $explained['score'],
+            $this->hardEvidenceLevel($requirement, $product, $explained),
+            $this->purchasePln($product),
+        );
+    }
+
+    /**
      * Ocena modelu (nie wiersza z katalogu) dla karty, gdy jest poniżej progu zapisu; inaczej null.
      *
      * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates

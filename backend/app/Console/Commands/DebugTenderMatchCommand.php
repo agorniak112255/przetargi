@@ -9,6 +9,7 @@ use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\ProductAiSearchService;
+use App\Services\ProductMatchService;
 use Illuminate\Console\Command;
 
 /**
@@ -51,12 +52,33 @@ final class DebugTenderMatchCommand extends Command
         $many = app()->make(ProductAiSearchService::class);
         $rows = $many->searchMany([$requirement], $limit, false, AiTask::ProductSearch, $settings->matchConcurrency());
         $this->report('„Dopasuj wszystkie” (searchMany)', is_array($rows[0] ?? null) ? $rows[0] : [], $many->lastTrace(), $sku);
+        $this->reportDecision(app(ProductMatchService::class)->debugPick($item, is_array($rows[0] ?? null) ? $rows[0] : []));
 
         $single = app()->make(ProductAiSearchService::class);
         $result = $single->search($requirement, $limit, false, AiTask::ProductSearch);
         $this->report('Wyszukiwarka (search)', $result, $single->lastTrace(), $sku);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * @param  array{candidates: list<array{sku: string, model: int, source: string, verdict: string}>, pick: array{sku: string, score: int, source: string, heuristic_only: bool}|null, reason: string|null}  $decision
+     */
+    private function reportDecision(array $decision): void
+    {
+        $this->newLine();
+        $this->info('== Decyzja przetargu dla wyniku „Dopasuj wszystkie” (bez zapisu)');
+        $this->table(
+            ['SKU', 'model %', 'źródło', 'werdykt'],
+            array_map(static fn (array $c): array => [$c['sku'], $c['model'], $c['source'], $c['verdict']], $decision['candidates']),
+        );
+        $pick = $decision['pick'];
+        $this->line('wybór przetargu: '.($pick === null
+            ? 'brak'
+            : sprintf('%s (%d%%, %s%s)', $pick['sku'], $pick['score'], $pick['source'], $pick['heuristic_only'] ? ', po słowach karty' : '')));
+        if ($decision['reason'] !== null) {
+            $this->line('powód braku karty: '.$decision['reason']);
+        }
     }
 
     /**
