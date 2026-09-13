@@ -80,6 +80,10 @@ final class PpeAssortmentTest extends TestCase
             ['Polomaska CXS 3000 s bajonetovým závitem', PpeAssortment::FAMILY_RESPIRATORY],
             ['Půlmaska EN 140', PpeAssortment::FAMILY_RESPIRATORY],
             ['Přilba ochranná CXS, bílá', PpeAssortment::FAMILY_HEAD],
+            ['Pas monterski EN 358', PpeAssortment::FAMILY_FALL],
+            ['Helmet liner winter, fleece', PpeAssortment::FAMILY_HEAD],
+            // kombinezon Ansell z wgrzanymi skarpetami/butami — „CVRL” stoi przed „BOOTS”
+            ['1800-WH TSPLUS CVRL HOOD BOOTS 122.5XL', PpeAssortment::FAMILY_APPAREL],
         ];
     }
 
@@ -325,6 +329,19 @@ final class PpeAssortmentTest extends TestCase
         $this->assertSame(['kominiark', 'balaclava'], $this->assortment->catalogNounLikes(
             'KOMINIARKA ANTYELEKTROSTATYCZNA'
         ));
+    }
+
+    /**
+     * Numer modelu w nazwie to nie numer normy: MAPA ULTRANITRIL 358 robiło z rękawic
+     * asekurację (EN 358), TITAN 397 — hełm (EN 397), a „poly liner” taśmy — wkładkę pod kask.
+     */
+    #[Test]
+    public function bare_model_number_or_liner_word_is_not_a_family(): void
+    {
+        $this->assertNull($this->assortment->family('ULTRANITRIL 358 - POLYBAG'));
+        $this->assertNull($this->assortment->family('TITAN 397'));
+        $this->assertNull($this->assortment->family('Tasma P7100B (poly liner), czarna, 1500 mm x 66 m'));
+        $this->assertSame(PpeAssortment::FAMILY_FALL, $this->assortment->family('Szelki wg EN 358'));
     }
 
     #[Test]

@@ -149,11 +149,12 @@ final class PpeAssortment
         self::FAMILY_KNEE => '/\b(nakolann|ochrona\s+kolan|knee\s*pad)\w*/u',
         self::FAMILY_APPAREL => '/\b(odziez|kurtk|spodn|podnie|kombinezon|kamizelk|kamizelak|softshell|fartuch|kitel|bluza'
             .'|kaleson|ogrodniczk|park[ae]|peleryn|spodniobut|woder|wader'
-            .'|jacket|trousers|coverall|overall|apron|sweatshirt|t-?shirt|fleece|waistcoat|hoodie|raincoat'
+            .'|jacket|trousers|coverall|cvrl|overall|apron|sweatshirt|t-?shirt|fleece|waistcoat|hoodie|raincoat'
             .'|kalhoty|bunda|vesta|kombinez|zaster|mikina|tricko|triko|monterk|kosile|svetr)\w*'
             .'|\b(pants|vests?|shirts?)\b/u',
-        self::FAMILY_HEAD => '/\b(kominiark|czapk|helm|kask|czepek|balaclava|liner|prilb|cepic|kukl|beanie)\w*'
-            .'|\bcaps?\b|\bhard\s*hats?\b|(wkladk\w*.{0,24}(helm|kask))/u',
+        // „liner” tylko przy hełmie — „poly liner” to warstwa taśmy, nie wkładka pod kask.
+        self::FAMILY_HEAD => '/\b(kominiark|czapk|helm|kask|czepek|balaclava|prilb|cepic|kukl|beanie)\w*'
+            .'|\bcaps?\b|\bhard\s*hats?\b|\bhelmet\s*liner|\bliner\w*\s+(pod\s+)?(helm|kask)|(wkladk\w*.{0,24}(helm|kask))/u',
         // Rzeczowniki obuwia bez kotwicy na końcu („trzewiki”, „półbuty”, „sandały”);
         // „buty” zostaje całym słowem, bo inaczej łapie „butylowe”.
         self::FAMILY_FOOTWEAR => '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwi|kalosz|gumowc|gumiak|wellington'
@@ -190,12 +191,13 @@ final class PpeAssortment
     }
 
     /**
-     * Numer normy liczy się tylko jako osobna liczba — „48-140” (Ansell EDGE) i SKU
-     * „3410-140-410-00” to nie EN 140, a robiły z rękawic ochronę dróg oddechowych.
+     * Numer normy liczy się tylko z oznaczeniem normy przed liczbą („EN 388”, „PN-EN ISO
+     * 20345”) — „ULTRANITRIL 358”, „TITAN 397”, „EDGE 48-140” i SKU „3410-140-410-00” to
+     * numery modeli i kodów, a robiły z rękawic asekurację, hełmy i ochronę dróg oddechowych.
      */
     private function familyFromNorms(string $normalized): ?string
     {
-        $norm = static fn (string $numbers): string => '/(?<![\d\-.])\b(?:'.$numbers.')\b(?![\d\-.])/u';
+        $norm = static fn (string $numbers): string => '/\b(?:pn[\s-]*)?(?:en|iso|din|csn)(?:[\s-]*iso)?[\s-]*(?:'.$numbers.')\b(?![\d\-.])/u';
         if (preg_match($norm('388|420|511|21420'), $normalized) === 1) {
             return self::FAMILY_GLOVES;
         }
