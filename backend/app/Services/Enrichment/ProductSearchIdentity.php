@@ -53,7 +53,10 @@ final class ProductSearchIdentity
         'extinguisher' => ['gasnic', 'extinguisher', 'feuerlosch'],
         'firstaid' => ['aptecz', 'first aid', 'firstaid', 'verbandkasten'],
         'tape' => ['tasma', 'tasmy', 'tasmow', 'adhesive tape', 'warning tape', 'isolierband', 'tape'],
-        'mat' => ['chodnik', 'dywanik', 'matting', 'insulating mat'],
+        // „mata” z granicą słowa (textHasTypeStem) — „automatyczna” i „matowa” to nie mata.
+        // Bez polskich form polski opis „Mata DeckStep…” odpadał, a angielski zrzut strony
+        // z „Matting” przechodził i zapisywał się jako opis (batch #298).
+        'mat' => ['chodnik', 'dywanik', 'matting', 'insulating mat', 'mata', 'wykladzin', 'wycieraczk'],
     ];
 
     /**
@@ -4804,6 +4807,13 @@ final class ProductSearchIdentity
             }
             if ($stem === 'pant') {
                 if (preg_match('/\bpant(?:s|aloon)?\b/u', $normalized) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+            if ($stem === 'mata') {
+                if (preg_match('/\bmat(?:a|y|e|ach|ami|om)?\b/u', $normalized) === 1) {
                     return true;
                 }
 

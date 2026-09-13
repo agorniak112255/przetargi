@@ -328,8 +328,16 @@ final class PpeAssortment
             self::FAMILY_FACE => $this->faceType($t),
             self::FAMILY_FALL => $this->fallType($t),
             self::FAMILY_KNEE => 'kneepad',
-            default => $family === null ? $this->footwearType($t) : null,
+            // Bez rodziny tylko jawne słowo obuwia daje typ obuwia. Samo „guma” zrobiło
+            // „kalosz” z maty DeckStep (specyfikacja „Materiał: guma (winyl)”, batch #298).
+            default => $family === null && $this->mentionsWellingtonWord($t) ? $this->footwearType($t) : null,
         };
+    }
+
+    /** Wyrazy obuwia spoza wzorca rodziny (Purofort, wodery, spodniobuty) — bez samego „guma”. */
+    private function mentionsWellingtonWord(string $t): bool
+    {
+        return preg_match('/\b(kalosz|wellington|gumowc|gumiak|purofort|wader|gumboot|spodniobut|woder)\w*/u', $t) === 1;
     }
 
     private function footwearType(string $t): ?string

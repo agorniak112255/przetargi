@@ -11,7 +11,8 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 
 /**
- * Karty z opisem obcej strony (raport `products:audit-descriptions --only=unrelated`)
+ * Karty z opisem obcej strony (raport `products:audit-descriptions --only=unrelated`) i ze
+ * zrzutem strony zamiast opisu (`--only=page_dump`)
  * wracają do kolejki wzbogacania: opis, normy, payload, źródło i cache SKU znikają,
  * status = none. Domyślnie tylko podgląd — zapis wymaga --apply.
  */
@@ -37,7 +38,11 @@ final class ResetForeignDescriptionsCommand extends Command
                 foreach ($products as $product) {
                     /** @var Product $product */
                     $finding = $audit->inspect($product);
-                    if ($finding === null || $finding['reason'] !== ProductDescriptionAudit::REASON_UNRELATED) {
+                    // obcy opis i zrzut strony czyścimy automatycznie; rozjazd rodziny/kroju wymaga oka człowieka
+                    if ($finding === null || ! in_array($finding['reason'], [
+                        ProductDescriptionAudit::REASON_UNRELATED,
+                        ProductDescriptionAudit::REASON_PAGE_DUMP,
+                    ], true)) {
                         continue;
                     }
                     $findings[] = $finding;

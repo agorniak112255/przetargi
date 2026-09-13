@@ -1356,6 +1356,11 @@ final class ProductEnrichmentService
         $payload = is_array($cache->enrichment_payload) ? $cache->enrichment_payload : [];
         $payload['from_cache'] = true;
         $cacheDescription = ProductDescriptionText::plain((string) $cache->description);
+        // Zrzut strony zapisany w cache przed tą kontrolą nie może się kopiować dalej —
+        // produkt idzie wtedy normalną ścieżką i nowy opis nadpisuje wpis w cache.
+        if ($this->looksLikeForeignOrPartsTableDump($cacheDescription)) {
+            return false;
+        }
         $cacheSpecs = ProductDescriptionText::dropDuplicatedListItems(
             $this->stringList($payload['specs'] ?? null),
             $cacheDescription
@@ -3006,6 +3011,16 @@ final class ProductEnrichmentService
             || ProductPageFetcher::looksLikeCookieConsent($description);
     }
 
+    /**
+     * Opis produktu jest po polsku i jest opisem, nie zrzutem strony. Fallback z karty
+     * przepuszczał angielski tekst coba.com, bo niósł kody wariantów i słowo „Matting”,
+     * a z cache SKU kopiował się dalej na rodzeństwo.
+     */
+    private function looksLikeForeignOrPartsTableDump(string $description): bool
+    {
+        return ProductDescriptionText::looksLikeForeignOrPartsTableDump($description);
+    }
+
     private function looksLikeShopChromeDescription(string $description): bool
     {
         if ($this->looksLikeRawLocaleDump($description)
@@ -3099,7 +3114,8 @@ final class ProductEnrichmentService
     {
         $d = trim($description);
         if ($d === '' || $this->looksLikeMissingCardMeta($d) || $this->looksLikeThinDescription($d)
-            || $this->looksLikeRawLocaleDump($d) || ProductPageFetcher::looksLikeShopOfferDump($d)) {
+            || $this->looksLikeRawLocaleDump($d) || ProductPageFetcher::looksLikeShopOfferDump($d)
+            || $this->looksLikeForeignOrPartsTableDump($d)) {
             return false;
         }
         if ($product->hintedShopUrl() !== null) {

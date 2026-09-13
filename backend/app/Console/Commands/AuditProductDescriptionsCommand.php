@@ -18,7 +18,7 @@ final class AuditProductDescriptionsCommand extends Command
     protected $signature = 'products:audit-descriptions
                             {--limit=0 : Maksymalna liczba wierszy w tabeli (0 = wszystkie)}
                             {--csv= : Zapisz pełną listę do pliku CSV}
-                            {--only= : Filtruj po powodzie: family|garment|unrelated}';
+                            {--only= : Filtruj po powodzie: family|garment|unrelated|page_dump}';
 
     protected $description = 'Raport produktów z podejrzanie rozjechanym opisem (bez zapisu)';
 

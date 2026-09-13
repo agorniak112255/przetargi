@@ -69,6 +69,42 @@ final class ResetForeignDescriptionsCommandTest extends TestCase
         $this->assertNotNull($familyMismatch->fresh()->description, 'rozjazd rodziny to inny powód — nie kasujemy automatycznie');
     }
 
+    /** Batch #298: angielski zrzut coba.com (tabela części, cookies) zapisany jako opis wraca do pobrania. */
+    public function test_apply_resets_page_dump_descriptions(): void
+    {
+        $dump = Product::query()->create([
+            'sku' => 'DS0106',
+            'name' => 'DeckStep Matting Czarny ~0.59m/0.6m x 10m (11.5mm)',
+            'manufacturer' => 'Coba',
+            'description' => "Parts\n\nPart Number\n\nSize\n\nColour\n\nDS010610\n\n0.59 m x 10 m\n\nBlack\n\nQty:\n\nRequest Price\n\n"
+                .'DeckStep | Multi-purpose Ribbed Vinyl Matting | COBA. Raise workers off the ground like traditional duckboard.',
+            'catalog_price_net' => 500,
+            'purchase_price' => 400,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        ProductEnrichmentCache::query()->create([
+            ...ProductEnrichmentCache::normalizeKey('Coba', 'DS0106'),
+            'description' => (string) $dump->description,
+            'source_urls' => ['https://www.coba.com/product/deckstep'],
+        ]);
+        $own = $this->ownCard();
+
+        $this->artisan('products:audit-descriptions', ['--only' => 'page_dump'])
+            ->expectsOutputToContain('DS0106')
+            ->assertSuccessful();
+        $this->artisan('products:reset-foreign-descriptions', ['--apply' => true])
+            ->expectsOutputToContain('Wyczyszczono 1 kart')
+            ->assertSuccessful();
+
+        $dump->refresh();
+        $this->assertNull($dump->description);
+        $this->assertSame(Product::ENRICHMENT_NONE, $dump->enrichment_status);
+        $this->assertSame(0, ProductEnrichmentCache::query()->count(), 'zrzut w cache SKU kopiowałby się dalej');
+        $this->assertNotNull($own->fresh()->description);
+    }
+
     private function foreignCard(): Product
     {
         return Product::query()->create([

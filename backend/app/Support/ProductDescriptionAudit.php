@@ -19,6 +19,9 @@ final class ProductDescriptionAudit
 
     public const REASON_UNRELATED = 'unrelated';
 
+    /** Zrzut strony (tabela części, cookies) albo opis nie po polsku — batch #298, Coba. */
+    public const REASON_PAGE_DUMP = 'page_dump';
+
     private const STOP_TOKENS = [
         'robocze', 'ochronne', 'ochronna', 'ochronny', 'meskie', 'damskie', 'czarne', 'czarny',
         'granatowe', 'granatowy', 'niebieskie', 'zielone', 'szare', 'biale', 'guma', 'skora',
@@ -34,6 +37,11 @@ final class ProductDescriptionAudit
         if (trim($description) === '') {
             return null;
         }
+        // przed rodziną: zrzut strony producenta nazywa model i markę, więc reszta kontroli go przepuszcza
+        if (ProductDescriptionText::looksLikeForeignOrPartsTableDump($description)) {
+            return $this->finding($product, self::REASON_PAGE_DUMP, 'zrzut strony albo opis nie po polsku');
+        }
+
         $productText = trim($product->name.' '.$product->sku.' '.(string) $product->category);
 
         $nameFamily = $this->ppe->family($productText);

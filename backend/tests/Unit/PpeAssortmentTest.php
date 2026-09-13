@@ -259,6 +259,18 @@ final class PpeAssortmentTest extends TestCase
     }
 
     #[Test]
+    public function rubber_material_alone_does_not_make_a_wellington_of_a_mat(): void
+    {
+        // batch #298: DeckStep — „Materiał: guma (winyl)” dawało typ „kalosz”
+        $this->assertNull($this->assortment->articleTypePreferIdentity(
+            'DeckStep Matting Czarny ~0.59m/0.6m x 10m (11.5mm) DS0106',
+            'SKU: DS0106 Wymiary: 0,59 m x 10 m Grubość: 11,5 mm Waga: 45 kg Materiał: guma (winyl)'
+        ));
+        // jawne słowo nadal wystarcza, także bez rozpoznanej rodziny
+        $this->assertSame(PpeAssortment::TYPE_KALOSZ, $this->assortment->articleType('DUNLOP 462933 PUROFORT'));
+    }
+
+    #[Test]
     public function family_still_falls_back_to_description_when_name_says_nothing(): void
     {
         $gloves = new Product;

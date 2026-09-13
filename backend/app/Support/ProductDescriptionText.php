@@ -32,6 +32,48 @@ final class ProductDescriptionText
         return trim($text);
     }
 
+    /**
+     * Tekst nie jest polskim opisem produktu, tylko zrzutem strony albo obcojęzyczną kartą.
+     *
+     * Batch #298: jako opis 129 produktów Coba zapisał się angielski tekst coba.com — tabela
+     * części („Part Number … Qty: … Request Price”), zakładki i zgody na cookies. Wspólna
+     * kontrola zapisu opisu (wzbogacanie, cache SKU) i audytu `products:audit-descriptions`.
+     */
+    public static function looksLikeForeignOrPartsTableDump(string $text): bool
+    {
+        $low = mb_strtolower($text);
+        // Tylko elementy wiersza tabeli i przycisków ceny. Nagłówki sekcji („Specyfikacja
+        // techniczna”, „Numer części: NP060003”) pisze też model w poprawnym polskim opisie —
+        // audyt produkcji oflagował przez nie dobre opisy Coba.
+        $rowHits = 0;
+        foreach ([
+            'part number', 'request price', 'price request', 'qty:', 'view retailer',
+            'request sample', 'zapytaj o cenę',
+        ] as $needle) {
+            if (str_contains($low, $needle)) {
+                $rowHits++;
+            }
+        }
+        if ($rowHits >= 2) {
+            return true;
+        }
+        // krótkie opisy ocenia kontrola „cienkiego opisu” — na kilku słowach języka się nie rozpozna
+        if (mb_strlen($low) < 160) {
+            return false;
+        }
+        $english = preg_match_all('/\b(?:the|and|with|for|of|is|are|from|your|you|by|this|that|which|can)\b/u', $low);
+        $polish = preg_match_all('/\b(?:i|w|z|na|do|się|oraz|jest|dla|od|przez|nie|lub|przy|po|jej|jego|które|który|która)\b/u', $low);
+        if ($english < 6 || $english <= $polish) {
+            return false;
+        }
+        // Polski tekst z angielskimi nazwami i wstawkami (karta Ansell po polsku) ma gęste
+        // polskie znaki; zrzut angielskiej strony — prawie żadnych.
+        $words = max(1, preg_match_all('/\p{L}+/u', $low));
+        $diacritics = preg_match_all('/[ąćęłńóśźż]/u', $low);
+
+        return 100 * $diacritics / $words < 8;
+    }
+
     /** Ikony Presty, wysyłka, wycena — nie fakty o modelu. */
     public static function stripShopUi(string $text): string
     {
