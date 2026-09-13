@@ -378,6 +378,7 @@ class OpenAiCompatibleClient
         }
 
         $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies, $onAnswered);
+        $responses = $this->retryChatManyOverloaded($url, $apiKey, $timeout, $profile, $bodies, $responses);
         $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses);
         $responses = $this->retryChatManyEmptyTruncated($url, $apiKey, $timeout, $profile, $bodies, $responses);
 
@@ -489,6 +490,63 @@ class OpenAiCompatibleClient
 
         foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
             $responses[$i] = $response;
+        }
+
+        return $responses;
+    }
+
+    /**
+     * HTTP 429/503 w puli (log produkcji 15:13–15:14: „Limit zapytań modelu AI (HTTP 429)” przy
+     * poz. 1, 8 i 13 przetargu 1) — jak postChatWithRetry dla pojedynczego zapytania: odczekaj
+     * i ponów tylko odrzucone zapytania, 429 najwyżej RATE_LIMIT_RETRIES razy; od drugiej powtórki
+     * przypięty dostawca OpenRoutera dopuszcza innych dostawców modelu. Pula nie zwalnia.
+     *
+     * @param  array<string, mixed>  $profile
+     * @param  array<int, array<string, mixed>>  $bodies
+     * @param  array<int, mixed>  $responses
+     * @return array<int, mixed>
+     */
+    private function retryChatManyOverloaded(
+        string $url,
+        string $apiKey,
+        int $timeout,
+        array $profile,
+        array $bodies,
+        array $responses
+    ): array {
+        $rateLimited = 0;
+        for ($attempt = 0; $attempt < self::OVERLOAD_RETRIES; $attempt++) {
+            $retryBodies = [];
+            $wait = 0;
+            $saw429 = false;
+            foreach ($bodies as $i => $body) {
+                $response = $responses[$i] ?? null;
+                if (! $response instanceof Response || ! in_array($response->status(), self::OVERLOAD_STATUSES, true)) {
+                    continue;
+                }
+                $saw429 = $saw429 || $response->status() === 429;
+                $wait = max($wait, $this->retryAfterSeconds($response, $attempt));
+                $retryBodies[$i] = $attempt >= 1 ? $this->relaxOverloadedProviderPin($body) : $body;
+            }
+            if ($retryBodies === []) {
+                return $responses;
+            }
+            if ($saw429 && ++$rateLimited > self::RATE_LIMIT_RETRIES) {
+                return $responses;
+            }
+            Log::info('AI chatMany: limit/przeciążenie dostawcy — ponawiam odrzucone zapytania', [
+                'count' => count($retryBodies),
+                'attempt' => $attempt + 1,
+                'wait_seconds' => $wait,
+                'profile' => $profile['label'] ?? '',
+            ]);
+            if ($wait > 0) {
+                sleep($wait);
+            }
+            foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
+                $responses[$i] = $response;
+                $bodies[$i] = $retryBodies[$i];
+            }
         }
 
         return $responses;
