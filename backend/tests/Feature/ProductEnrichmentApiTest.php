@@ -36,6 +36,7 @@ use App\Services\Enrichment\ProductSearchIdentity;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Contracts\Queue\Job;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
@@ -3940,6 +3941,78 @@ final class ProductEnrichmentApiTest extends TestCase
         $replayed = array_values(array_filter($product->enrichment_trace['steps'] ?? [], static fn (array $s): bool => ! empty($s['pf'])));
         $this->assertCount(2, $replayed, 'osiemnaście identycznych błędów prefetchu to jeden krok');
         $this->assertSame($blocked, $replayed[1]['m']);
+    }
+
+    /**
+     * Batch #304: job przekroczył 420 s, worker go zabił, kolejka ponowiła — a ponowienie widziało
+     * „running” z przerwanej próby i wychodziło bez pracy. Produkt i batch wisiały na zawsze.
+     */
+    public function test_retry_of_interrupted_job_takes_over_running_product(): void
+    {
+        [$product, $batch] = $this->runningProductInBatch();
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')->once()->andReturn(['results' => [], 'errors' => []]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        $job = new EnrichProductJob($product->id, $batch->id);
+        $job->setJob($this->queueJobOnAttempt(2));
+        $job->handle(app(ProductEnrichmentService::class), app(AiSettingsService::class), app(EnrichmentSlots::class));
+
+        $this->assertNotSame(Product::ENRICHMENT_RUNNING, $product->fresh()?->enrichment_status, 'ponowienie dokończyło produkt');
+        $item = ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $product->id)->first();
+        $this->assertNotSame(ProductEnrichmentBatchItem::STATUS_RUNNING, $item?->status);
+        $batch->refresh();
+        $this->assertSame(1, $batch->done + $batch->failed, 'pozycja policzona w batchu');
+    }
+
+    public function test_first_attempt_does_not_take_over_product_running_elsewhere(): void
+    {
+        [$product, $batch] = $this->runningProductInBatch();
+        $search = $this->searchMock();
+        $search->shouldNotReceive('searchBothPhases');
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        $job = new EnrichProductJob($product->id, $batch->id);
+        $job->setJob($this->queueJobOnAttempt(1));
+        $job->handle(app(ProductEnrichmentService::class), app(AiSettingsService::class), app(EnrichmentSlots::class));
+
+        // „running” należy do innego joba tego produktu — pierwsza próba go nie rusza
+        $this->assertSame(Product::ENRICHMENT_RUNNING, $product->fresh()?->enrichment_status);
+        $this->assertSame(0, $batch->fresh()->done + $batch->fresh()->failed);
+    }
+
+    /**
+     * @return array{0: Product, 1: ProductEnrichmentBatch}
+     */
+    private function runningProductInBatch(): array
+    {
+        $product = $this->makeProduct([
+            'sku' => '4320-002-000-00',
+            'name' => 'Rukavice testovací',
+            'manufacturer' => 'Canis',
+            'enrichment_status' => Product::ENRICHMENT_RUNNING,
+        ]);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 0,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'force' => false,
+        ]);
+        app(ProductEnrichmentService::class)->recordBatchProduct($batch, $product, ProductEnrichmentBatchItem::STATUS_RUNNING, 'uzupełnienie…');
+
+        return [$product, $batch];
+    }
+
+    private function queueJobOnAttempt(int $attempt): Job
+    {
+        $queueJob = Mockery::mock(Job::class);
+        $queueJob->shouldReceive('attempts')->andReturn($attempt);
+        $queueJob->shouldIgnoreMissing();
+
+        return $queueJob;
     }
 
     /** Pominięty po blokadzie SearXNG ma być widoczny w komunikacie, nie znikać po cichu. */

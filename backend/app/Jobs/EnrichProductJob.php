@@ -134,7 +134,14 @@ class EnrichProductJob implements ShouldQueue
                 'enrichment_status' => Product::ENRICHMENT_RUNNING,
                 'enrichment_error' => null,
             ]);
-        if ($claimed === 0 && ! $this->force) {
+        // Poprzednia próba TEGO joba przerwana (limit 420 s przy uzupełnianiu opisu, restart workera)
+        // zostawia produkt w „running”. Ponowienie wychodziło wtedy bez pracy, job znikał bez błędu,
+        // a produkt i batch wisiały w „w trakcie” na zawsze (batch #304: 4120-002-000-00, 4320-002-000-00).
+        // Przy pierwszej próbie „running” może należeć do innego joba — wtedy nie przejmujemy.
+        $takeOverInterrupted = $claimed === 0 && ! $this->force && $this->attempts() > 1
+            && (string) $product->fresh()?->enrichment_status === Product::ENRICHMENT_RUNNING;
+
+        if ($claimed === 0 && ! $this->force && ! $takeOverInterrupted) {
             $status = (string) $product->fresh()?->enrichment_status;
             if (in_array($status, [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL], true)) {
                 $enrichment->markBatchItem(
