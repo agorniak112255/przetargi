@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\Product;
 use App\Services\Enrichment\CandidateRejection;
 use App\Services\Enrichment\ProductPageFetcher;
+use App\Services\Enrichment\ProductSearchIdentity;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -112,18 +113,74 @@ final class ProductPageFetcherTest extends TestCase
     }
 
     /**
+     * Batch #296: cennik Coba ma skrócony kod rodziny („LM0102”), a coba.com/pl/produkt/cobawash
+     * tylko pełne kody z rozmiarem („LM010201”, „LM010202C”). Karta producenta przechodzi;
+     * ta sama tabela u obcego sklepu, doklejona litera albo inny model z cennika — nie.
+     */
+    public function test_official_family_page_with_size_codes_confirms_short_catalog_code(): void
+    {
+        $official = 'https://www.coba.com/pl/produkt/cobawash';
+        $shop = 'https://sklep-bhp.example.pl/cobawash';
+        $letterVariant = 'https://www.coba.com/pl/produkt/cobawash-b';
+        $sizeCodes = $this->cobaFamilyCard(['LM010201', 'LM010202', 'LM010202C'], 'COBAwash');
+        Http::fake([
+            $official => Http::response($sizeCodes, 200),
+            $shop => Http::response($sizeCodes, 200),
+            $letterVariant => Http::response($this->cobaFamilyCard(['LM0102B', 'LM010201'], 'COBAwash'), 200),
+            '*' => Http::response('', 404),
+        ]);
+        $product = new Product([
+            'sku' => 'LM0102',
+            'name' => 'COBAwash Czarny/Niebieski 0.85m x 1.2m',
+            'manufacturer' => 'Coba',
+        ]);
+        $fetch = static fn (string $url, Product $p): array => app(ProductPageFetcher::class)->fetch(
+            [['url' => $url, 'title' => '', 'snippet' => '']],
+            (string) $p->sku,
+            3,
+            [],
+            $p
+        );
+
+        $fromOfficial = $fetch($official, $product);
+        $this->assertSame([$official], array_column($fromOfficial['pages'], 'url'));
+        $page = $fromOfficial['pages'][0];
+        // ta sama reguła w końcowym potwierdzeniu karty — inaczej odpadłaby krok dalej
+        $this->assertTrue(app(ProductSearchIdentity::class)->isConfirmedProductCard(
+            $page['url'],
+            (string) $page['title'],
+            (string) $page['text'],
+            $product
+        ));
+
+        $this->assertContains(
+            ['url' => $shop, 'reason' => CandidateRejection::LONGER_VARIANT],
+            $fetch($shop, $product)['rejected'],
+            'obcy sklep z tą samą tabelą nie potwierdza skróconego kodu'
+        );
+        $this->assertSame([], $fetch($letterVariant, $product)['pages'], 'LM0102B dokleja literę — to inny model');
+
+        $otherModel = new Product([
+            'sku' => 'LM0102',
+            'name' => 'Superdry Szary 1.15m x 1.75m',
+            'manufacturer' => 'Coba',
+        ]);
+        $this->assertSame([], $fetch($official, $otherModel)['pages'], 'model z cennika musi stać w adresie albo tytule karty');
+    }
+
+    /**
      * @param  list<string>  $partNumbers
      */
-    private function cobaFamilyCard(array $partNumbers): string
+    private function cobaFamilyCard(array $partNumbers, string $model = 'COBAstat'): string
     {
         $rows = '';
         foreach ($partNumbers as $code) {
             $rows .= '<tr><td data-label="Numer części">'.$code.'</td><td>0,9 m x 18,3 m</td><td>Szary</td></tr>';
         }
 
-        return '<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>COBAstat | COBA Europe</title></head>'
-            .'<body><main><h1>COBAstat®</h1>'
-            .'<p>Mata antystatyczna COBA Europe COBAstat rozprasza ładunki elektrostatyczne w strefach EPA. '
+        return '<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>'.$model.' | COBA Europe</title></head>'
+            .'<body><main><h1>'.$model.'®</h1>'
+            .'<p>Mata antystatyczna COBA Europe '.$model.' rozprasza ładunki elektrostatyczne w strefach EPA. '
             .str_repeat('Warstwa wierzchnia z kauczuku o dużej odporności na ścieranie i chemikalia, spód antypoślizgowy. ', 12)
             .'</p><table><tr><th>Numer części</th><th>Rozmiar</th><th>Kolor</th></tr>'.$rows.'</table>'
             .'</main></body></html>';

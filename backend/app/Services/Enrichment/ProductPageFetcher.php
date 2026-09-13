@@ -513,7 +513,9 @@ final class ProductPageFetcher
         // „AS060003C” (na metr bieżący) i osobno „AS060003” (rolka) — dokładny numer obok
         // dłuższego to nasz produkt, nie cudzy. Batch #293: 65 takich kart poszło do kosza.
         if (! $hinted && $this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)
-            && ! $this->hayHasExactAlphanumericSku($title.' '.$text, $skuNorm)) {
+            && ! $this->hayHasExactAlphanumericSku($title.' '.$text, $skuNorm)
+            && ! ($this->matchingProduct !== null
+                && $this->identity->officialFamilyPageListsSizeCodes($url, $title, $text, $this->matchingProduct))) {
             $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::LONGER_VARIANT];
 
             return;

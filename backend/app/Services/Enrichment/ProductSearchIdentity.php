@@ -2391,6 +2391,10 @@ final class ProductSearchIdentity
             }
         }
         $hay = $url.' '.$title.' '.$text;
+        if ($this->officialFamilyPageListsSizeCodes($url, $title, $text, $product)
+            && ! $this->pageClaimsAnotherCode($url, $title, $product)) {
+            return true;
+        }
         if (! $this->hayMentionsProduct($hay, $product)) {
             return false;
         }
@@ -2421,6 +2425,52 @@ final class ProductSearchIdentity
         }
 
         return $this->pageAgreesWithBrandAndName($hay, $url, $product);
+    }
+
+    /**
+     * Karta rodziny na domenie producenta dla skróconego kodu z cennika.
+     *
+     * Cennik Coba trzyma kod rodziny z kolorem i szerokością („LM0102”, „DS0106”, „WH0600”),
+     * a strona producenta w tabeli części tylko pełne kody z doklejonym rozmiarem
+     * („LM010201”, „DS010610”, „DS010610C”). Żaden filtr nie znajdował tam naszego kodu,
+     * więc 30 z 99 produktów Coba szło do ręki mimo właściwej karty (batch #296).
+     *
+     * Trzy warunki naraz, żeby nie wpuścić cudzego wyrobu:
+     * - domena producenta (sklep z tą samą tabelą się nie liczy),
+     * - każdy dłuższy kod na stronie dokleja do naszego cyfry rozmiaru, najwyżej z „C”/„C5”
+     *   (NB27 → NB27B dokleja literę: to inny model i nadal odpada),
+     * - pierwsze słowo nazwy z cennika („COBAwash”, „DeckStep”) stoi w adresie albo tytule karty.
+     */
+    public function officialFamilyPageListsSizeCodes(string $url, string $title, string $text, Product $product): bool
+    {
+        if (! $this->isOfficialCatalogUrl($url, $product)) {
+            return false;
+        }
+        $skuCompact = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(trim((string) $product->sku))) ?? '';
+        if (mb_strlen($skuCompact) < 4 || preg_match('/[a-z]/u', $skuCompact) !== 1 || preg_match('/\d/u', $skuCompact) !== 1) {
+            return false;
+        }
+        if (preg_match_all(
+            '/(?<![a-z0-9])'.preg_quote($skuCompact, '/').'([a-z0-9]+)/u',
+            mb_strtolower($title.' '.$text),
+            $matches
+        ) < 1) {
+            return false;
+        }
+        foreach ($matches[1] as $suffix) {
+            if (preg_match('/^\d{1,4}[a-z]{0,2}\d?$/u', $suffix) !== 1) {
+                return false;
+            }
+        }
+        $model = $this->nameWords($product)[0] ?? '';
+        $model = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii($model))) ?? '';
+        if (mb_strlen($model) < 4) {
+            return false;
+        }
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+        $label = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(Str::ascii(urldecode($path).' '.$title))) ?? '';
+
+        return str_contains($label, $model);
     }
 
     /** Kupon, impressum, kontakt — nie karta jednego wyrobu. */
@@ -4684,6 +4734,14 @@ final class ProductSearchIdentity
     {
         // Numer magazynowy to jeden ciąg cyfr — „33” z 1002933 nie jest rozmiarem buta.
         if (preg_match('/^\d{5,}$/u', trim((string) $product->sku)) === 1) {
+            return false;
+        }
+        // „RR0100-40 · COBArib Standard Czarny 1.2m x 10m (6mm)” — końcówka „-40” to wariant
+        // wykładziny, nie rozmiar buta. Wymiary w metrach i grubość w mm opisują arkusz albo
+        // matę; z typem „obuwie” odpadały wszystkie wyniki wyszukiwania (batch #296).
+        $name = (string) $product->name;
+        if (preg_match('/\d(?:[.,]\d+)?\s*(?:mm|cm|m)\s*x\s*~?\d/iu', $name) === 1
+            || preg_match('/\(\s*\d+(?:[.,]\d+)?\s*mm\s*\)/iu', $name) === 1) {
             return false;
         }
         $size = (new ProductSizeVariant)->extractSize($product->name, $product->sku);

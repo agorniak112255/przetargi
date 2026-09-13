@@ -1599,6 +1599,25 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    /** Batch #296: „-40” w kodzie wykładziny Coba brało się za rozmiar buta i wymagało „obuwie” na stronie. */
+    public function test_sku_suffix_is_not_shoe_size_when_name_has_sheet_dimensions(): void
+    {
+        $id = new ProductSearchIdentity;
+        foreach ([
+            ['RR0100-40', 'COBArib Standard Czarny 1.2m x 10m (6mm)'],
+            ['SM0100-50', 'COBAswitch BS EN: 61111 (Class 0) - 1m x 10m (3mm)'],
+            ['SM0100-40', 'COBAswitch Czarny 1.2m x 10m (9.5mm)'],
+        ] as [$sku, $name]) {
+            $product = new Product(['sku' => $sku, 'name' => $name, 'manufacturer' => 'Coba']);
+            $this->assertFalse($id->nameRequiresArticleType($product), $sku);
+            $this->assertNotSame('obuwie', $id->requiredArticleTypeLabel($product), $sku);
+        }
+
+        // bez wymiarów w nazwie końcówka SKU nadal jest rozmiarem buta
+        $shoe = new Product(['sku' => 'CADIZ-42', 'name' => 'CADIZ S3', 'manufacturer' => 'Cofra']);
+        $this->assertTrue($id->nameRequiresArticleType($shoe));
+    }
+
     public function test_rejects_longer_sku_variant_pages_for_nb27(): void
     {
         $id = new ProductSearchIdentity;
