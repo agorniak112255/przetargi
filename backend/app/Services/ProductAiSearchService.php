@@ -48,6 +48,16 @@ final class ProductAiSearchService
      */
     public const MATCH_SOURCE_CATALOG = 'catalog';
 
+    /**
+     * Wiersz ze skrótu deterministycznego (klasa obuwia, odporność na przecięcie):
+     * procent jest kolejnością z puli, nie oceną karty — dopasowanie przetargu
+     * traktuje go jak `catalog` (bez zaufania do procentu), nie jak werdykt modelu.
+     */
+    public const MATCH_SOURCE_RULE = 'rule';
+
+    /** Powód wierszy zapasowych (`catalog`): ten sam rodzaj w katalogu, ale bez oceny modelu. */
+    public const UNRATED_CATALOG_REASON = 'Nieocenione przez model — ten sam rodzaj w katalogu';
+
     /** Limit listy /products „Szukaj w katalogu” — ranking zawsze do tego progu. */
     public const CATALOG_LIMIT = 40;
 
@@ -90,6 +100,9 @@ final class ProductAiSearchService
         'rank_card_ids' => [],
         'llm_matches' => [],
         'passes' => 0,
+        // Powód awarii kroku „zrozum” (wyjątek/timeout) — trafia do `search_events`,
+        // żeby intent lokalny z całym tekstem dało się odróżnić od decyzji modelu.
+        'intent_error' => null,
     ];
 
     public function __construct(
@@ -1091,8 +1104,10 @@ final class ProductAiSearchService
             .'Przykład: „Rękawice wampirki uniwersalne” → search_steps: ["rękawice","dzianinowe","dłoń powlekana"]. '
             .'Przykład: „Rękawice nitrylowe lekkie” → search_steps: ["rękawice","nitrylowe","jednorazowe"]. '
             .'Przykład: „Rękawice nitrylowe RTELA” → search_steps: ["rękawice","nitrylowe","RTELA"]. '
-            .'manufacturer: nazwa z wymagania. Jeśli jest na liście katalogu — dokładna nazwa z listy. '
-            .'Jeśli nie ma jej na liście — wpisz nazwę z SIWZ (nie null). '
+            .'manufacturer: nazwa producenta TYLKO gdy wymaganie ją podaje (po „prod.”/„producent”, w cudzysłowie albo jako marka obok modelu). '
+            .'Jeśli jest na liście katalogu — dokładna nazwa z listy; jeśli nie ma jej na liście — nazwa z SIWZ. '
+            .'Jeśli w wymaganiu nie ma nazwy producenta — null. '
+            .'Skróty norm, klas i materiałów (EN, ISO, PN-EN, SRC, S3, FFP2, ESD, PVC, NBR, AQL, FDA, ŚOI) NIE są producentem. '
             .'model_name: model/kolekcja (np. TRONCHETTO), nie producent. size_note: rozmiary, nie łącz z modelem. '
             .'search_phrases: 3-8 synonimów sklepowych. constraints: 0-6 twardych dowodów (EN 374), puste przy samej nazwie/kolorze. '
             .'Nie zmieniaj rodzaju. Popraw literówki (podnie→spodnie, TEPM-ICE→TEMP-ICE). '
@@ -1146,9 +1161,76 @@ final class ProductAiSearchService
             $raw = $this->llm->chatJson($this->understandMessages($query), null, 900, null, $task);
 
             return $this->withCatalogAliases($this->parseIntent($raw, $query), $query);
-        } catch (Throwable) {
-            return $this->localIntent($query);
+        } catch (Throwable $first) {
+            // Jedna ponowna próba krótszym promptem — tylko przy wyjątku/timeoucie,
+            // nie przy pustej odpowiedzi (tę obsługuje parseIntent). Pusta odpowiedź
+            // to decyzja modelu, wyjątek to awaria transportu albo limitu czasu.
+            $this->noteIntentFailure($first, 'understand');
+            try {
+                $raw = $this->llm->chatJson($this->understandMessagesShort($query), null, 600, null, $task);
+
+                return $this->withCatalogAliases($this->parseIntent($raw, $query), $query);
+            } catch (Throwable $retry) {
+                $this->noteIntentFailure($retry, 'understand-retry');
+
+                return $this->localIntentAfterModelFailure($query);
+            }
         }
+    }
+
+    /**
+     * Krótszy prompt na ponowną próbę: bez listy producentów i przykładów żargonu,
+     * sam kontrakt JSON — mniejsza szansa na drugi timeout. Zaczyna się tym samym
+     * zdaniem („Najpierw ZROZUM”), po którym stuby testowe rozpoznają krok „zrozum”.
+     *
+     * @return list<array{role: string, content: string}>
+     */
+    private function understandMessagesShort(string $query): array
+    {
+        return [
+            [
+                'role' => 'system',
+                'content' => 'Jesteś ekspertem BHP i katalogów. Najpierw ZROZUM wymaganie, potem podaj kroki wyszukiwania. '
+                    .'needed: rodzaj produktu (rzeczownik + typ katalogowy), bez normy i bez cytatu SIWZ. '
+                    .'search_steps: 2-6 warunków AND od najważniejszego; krok 1 = rodzaj. '
+                    .'manufacturer: null, jeśli w wymaganiu nie ma nazwy producenta; skróty norm i klas (EN, ISO, SRC, FFP, ESD) NIE są producentem. '
+                    .'search_phrases: 3-6 synonimów sklepowych. constraints: 0-6 twardych dowodów. '
+                    .'JSON: {"needed":"...","search_steps":["..."],"manufacturer":null,"model_name":null,"size_note":null,'
+                    .'"search_phrases":["..."],"constraints":[]}.',
+            ],
+            [
+                'role' => 'user',
+                'content' => "Wymaganie:\n".$query,
+            ],
+        ];
+    }
+
+    private function noteIntentFailure(Throwable $e, string $stage): void
+    {
+        $reason = mb_substr($stage.': '.get_class($e).': '.trim($e->getMessage()), 0, 300);
+        $this->trace['intent_error'] = $reason;
+        Log::warning('product-ai-search.understand-failed', ['stage' => $stage, 'error' => $e->getMessage()]);
+    }
+
+    /**
+     * Intent lokalny po awarii modelu: `needed` z nagłówka wymagania (pierwsze
+     * zdanie), nie z całego tekstu. Całe wymaganie jako `needed` włącza tryb
+     * „marka+model” na igłach z opisu (klasy, karton 100) i zabija retrieval.
+     * `localIntent` bez zmian — używa go retrieval i dopasowanie przetargu.
+     *
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
+     */
+    private function localIntentAfterModelFailure(string $query): array
+    {
+        $intent = $this->localIntent($query);
+        $head = CatalogSlangDictionary::requirementHead($this->correctQueryNouns($query));
+        if ($head === '' || $head === trim($intent['needed'])) {
+            return $intent;
+        }
+        $intent['needed'] = $head;
+        $intent['search_phrases'] = array_values(array_unique([$head, ...$intent['search_phrases']]));
+
+        return $intent;
     }
 
     /**
@@ -1327,9 +1409,13 @@ final class ProductAiSearchService
     {
         $extra = [];
         foreach ($this->fallbackPhrases($query) as $token) {
+            // Surowy token z SIWZ niesie interpunkcję („cholewką)”, „(smoke)”) —
+            // do fraz idzie samo słowo.
+            $token = trim($token, " \t\n\r\0\x0B.,;:!?()[]{}\"'„”“«»");
             $norm = $this->lexicalNormalize($token);
             if (
-                $norm === ''
+                $token === ''
+                || trim($norm) === ''
                 || $this->isNonTechnicalToken($norm)
                 || $this->isGenericAssortmentToken($norm)
                 || $this->isAbsentManufacturerToken($query, $token)
@@ -1412,9 +1498,15 @@ final class ProductAiSearchService
             if ($this->isWeakSearchStep($step)) {
                 continue;
             }
+            // Żargon (wampirki) nie jest krokiem — kaskada szuka po cenniku. Ale
+            // termin, który sam jest frazą cennika („narękawniki”), to rzeczownik
+            // katalogowy; cechy techniczne (S5, antyprzebiciowe) mają `jargon=false`
+            // i tu nie wpadają.
+            $norm = trim($this->lexicalNormalize($step));
             if (
-                $this->catalogSlang->isJargonNorm($this->lexicalNormalize($step))
+                $this->catalogSlang->isJargonNorm($norm)
                 && ! $this->assortment->isCatalogNounStep($step)
+                && ! $this->catalogSlang->isCatalogPhraseTerm($norm)
             ) {
                 continue;
             }
@@ -1520,10 +1612,17 @@ final class ProductAiSearchService
             if ($token === '') {
                 continue;
             }
+            // Klasa albo norma (S5, FFP2, A2, OB, EN 149) to mocny krok — karta ma
+            // to oznaczenie w nazwie lub kolumnie norm.
+            if ($this->isClassOrNormToken($token)) {
+                $meaningful++;
+
+                continue;
+            }
             if (mb_strlen($token) < 4 && ! $this->catalogSlang->isIndexedTerm($token)) {
                 continue;
             }
-            if ($this->catalogSlang->isJargonNorm($token)) {
+            if ($this->catalogSlang->isJargonNorm($token) && ! $this->catalogSlang->isCatalogPhraseTerm($token)) {
                 continue;
             }
             if (preg_match('/^(ochrona|przed|ciecz|olej|plyn|proste|uniwersaln|lekki|cienki)/u', $token) === 1) {
@@ -1533,6 +1632,16 @@ final class ProductAiSearchService
         }
 
         return $meaningful === 0;
+    }
+
+    /** Oznaczenie klasy/normy po `lexicalNormalize` (s5, s1p, ffp2, a2, ob, src, en, 149, 20345). */
+    private function isClassOrNormToken(string $normalizedToken): bool
+    {
+        return preg_match(
+            '/^(?:s[1-7]p?l?|sb|ob|o[1-7]|ffp[1-3]?|a[1-3]|b[1-3]|e[1-2]|k[1-2]|p[1-3]|abek\d?'
+            .'|src|sra|srb|hro|ci|hi|wr|wru|fo|esd|en|iso|\d{3,5})$/u',
+            trim($normalizedToken)
+        ) === 1;
     }
 
     /**
@@ -1660,20 +1769,28 @@ final class ProductAiSearchService
                 ->values()
         );
 
+        $wantType = $this->assortment->articleType($requirement);
+        $slang = $this->slangRewriteFor($query);
         $out = [];
         foreach ($products as $product) {
             if (! $product instanceof Product) {
                 continue;
             }
             $row = $this->productToRow($product);
-            $row['ai_match_percent'] = min(86, max(55, 48 + $this->articleTypeScore($query, $product)));
+            // Nikt tej karty nie ocenił — procent to tylko zgodność rodzaju, jawnie
+            // poniżej progu zapisu przetargu (65), żeby nie udawał werdyktu modelu.
+            // Remis rozstrzyga zgodny typ artykułu (sandały do sandałów) — +1 ponad
+            // kartę o nieznanym typie — a dopiero potem cena (wspólny sorter
+            // „procent → cena” zostaje bez zmian i nie odwraca tej kolejności).
+            $typeAgrees = $wantType !== null
+                && $this->assortment->articleType(
+                    $product->name.' '.$product->sku.' '.(string) ($product->category ?? '')
+                ) === $wantType;
+            $row['ai_match_percent'] = min(49, max(40, 30 + $this->articleTypeScore($query, $product)))
+                + ($typeAgrees ? 1 : 0);
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
-            $slang = $this->slangRewriteFor($query);
-            $row['ai_match_reason'] = $slang !== null
-                ? 'Żargon SIWZ → '.$slang['needed']
-                : ($this->isSpecificRequirement($query)
-                    ? 'Słabsze dopasowanie z zapytania — sprawdź, czy zostawić.'
-                    : 'Ten sam rodzaj w katalogu (np. czapka robocza / z daszkiem).');
+            $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON
+                .($slang !== null ? ' (żargon SIWZ → '.$slang['needed'].')' : '');
             $out[] = $row;
         }
 
@@ -1710,9 +1827,10 @@ final class ProductAiSearchService
                 continue;
             }
             $row = $this->productToRow($product);
-            $score = min(88, max(52, 50 + $this->requirementCatalogScore($query, $product)));
-            $row['ai_match_percent'] = $score;
-            $row['ai_match_reason'] = $reason;
+            // Lista zapasowa z cechy (ESD, klasa, °C) — nieoceniona przez model,
+            // więc procent zostaje poniżej progu zapisu przetargu, jak w rowsFromGenericCatalog.
+            $row['ai_match_percent'] = min(50, max(40, 30 + $this->requirementCatalogScore($query, $product)));
+            $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON.' ('.rtrim($reason, '.').')';
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $out[] = $row;
         }
@@ -2227,6 +2345,13 @@ final class ProductAiSearchService
                 if ($this->catalogHasIdentityToken($token)) {
                     continue;
                 }
+                // „Marka spoza katalogu” z samych wersalików tylko tam, gdzie SIWZ
+                // faktycznie nazywa markę: po „prod.”/„producent”/„marki”, w cudzysłowie,
+                // obok kodu modelu albo w krótkim zapytaniu. W długim opisie bez
+                // takiego sygnału wersaliki to skrót (SRC, AQL) albo akcent — nie marka.
+                if (! $this->absentBrandContext($query, $token)) {
+                    continue;
+                }
                 $intent['manufacturer'] = null;
                 $intent['manufacturer_requested'] = $token;
                 $intent['manufacturer_absent_in_catalog'] = true;
@@ -2235,6 +2360,39 @@ final class ProductAiSearchService
         }
 
         return $this->stripAbsentManufacturerNoise($intent);
+    }
+
+    private const ABSENT_BRAND_SHORT_QUERY_WORDS = 12;
+
+    private function absentBrandContext(string $query, string $token): bool
+    {
+        $words = preg_split('/\s+/u', trim($query)) ?: [];
+        if (count($words) <= self::ABSENT_BRAND_SHORT_QUERY_WORDS) {
+            return true;
+        }
+        if (in_array($token, $this->quotedIdentityTokens($query), true)) {
+            return true;
+        }
+        $quoted = preg_quote($token, '/');
+        if (preg_match('/(?:\bprod\.?|\bproducent\w*|\bmark[ai]|\bfirm[ay]|\bnp\.)\s*[:\-–]?\s*["„“«\']?'.$quoted.'/ui', $query) === 1) {
+            return true;
+        }
+        // Marka obok kodu modelu (litery + cyfry, nie klasa/norma): „HY51 UVEX”.
+        $tokens = preg_split('/[\s,;:·•\/|+()\[\]."”„“«»\']+/u', $query) ?: [];
+        foreach ($tokens as $i => $raw) {
+            if (trim((string) $raw) !== $token) {
+                continue;
+            }
+            foreach ([$tokens[$i - 1] ?? '', $tokens[$i + 1] ?? ''] as $neighbour) {
+                $neighbour = trim((string) $neighbour);
+                if (preg_match('/^(?=.*\d)(?=.*\p{L})[\p{L}\d][\p{L}\d\-]{1,}$/u', $neighbour) === 1
+                    && ! $this->isNormOrClassAbbreviation($neighbour)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -2313,7 +2471,9 @@ final class ProductAiSearchService
     private function manufacturerTokensFromQuery(string $query): array
     {
         $out = [];
-        foreach (preg_split('/[\s,;:·•\/|+]+/u', $query) ?: [] as $raw) {
+        // Nawiasy, kropki i cudzysłowy też dzielą: „FDA).”, „(ESD)”, „SRA.” to
+        // tokeny z interpunkcją, które nigdy nie trafią w nazwę z katalogu.
+        foreach (preg_split('/[\s,;:·•\/|+()\[\]."”„“«»\']+/u', $query) ?: [] as $raw) {
             $raw = trim((string) $raw);
             if ($raw === '') {
                 continue;
@@ -2372,8 +2532,44 @@ final class ProductAiSearchService
         if (mb_strlen($letters) < 3 || mb_strlen($letters) > 16) {
             return false;
         }
+        if ($this->isNormOrClassAbbreviation($token)) {
+            return false;
+        }
 
         return $letters === mb_strtoupper($letters, 'UTF-8');
+    }
+
+    /**
+     * Skróty norm, klas, materiałów i instytucji pisane wersalikami — nigdy producent.
+     *
+     * @var list<string>
+     */
+    private const NON_BRAND_ABBREVIATIONS = [
+        'EN', 'ISO', 'PN', 'PNEN', 'PNENISO', 'ENISO', 'DIN', 'ASTM', 'ANSI', 'IEC', 'CE', 'UV', 'IR', 'UKCA',
+        'FFP', 'SRA', 'SRB', 'SRC', 'HRO', 'CI', 'HI', 'WR', 'WRU', 'FO', 'ESD', 'AQL', 'NDS', 'NDSCH',
+        'PVC', 'PCV', 'PU', 'PA', 'PE', 'PP', 'PC', 'PES', 'NBR', 'HPPE', 'UHMWPE', 'TPR', 'TPU', 'TPE', 'EVA', 'SBR',
+        'SVHC', 'FDA', 'HACCP', 'REACH', 'ROHS', 'ATEX', 'OEKO', 'OEKOTEX',
+        'KV', 'SOI', 'ŚOI', 'BHP', 'PPE', 'RKO', 'AED', 'NRC', 'EU', 'UE', 'USA', 'PL',
+        'ABEK', 'ABEKP', 'SNR', 'KAT', 'OTG', 'HV', 'LED', 'RFID',
+    ];
+
+    private function isNormOrClassAbbreviation(string $token): bool
+    {
+        $compact = mb_strtoupper((string) preg_replace('/[^\p{L}\d]/u', '', $token), 'UTF-8');
+        if ($compact === '') {
+            return false;
+        }
+        if (in_array($compact, self::NON_BRAND_ABBREVIATIONS, true)) {
+            return true;
+        }
+
+        // Klasy i poziomy: FFP2, S1P, S3, OB, O2, A2B2E2K2NO, ABEK1P3, EN388, ISO20345, III.
+        return preg_match(
+            '/^(?:FFP[1-3]?|S[1-7]P?L?|SB|OB|O[1-7]|SR[ABC]|A[1-3]|B[1-3]|E[1-2]|K[1-2]|P[1-3]'
+            .'|(?:ABEK\d?|[ABEKP]\d(?:[ABEKP]\d){0,4})(?:HG|NO|CO|SX|AX|NR|R|D)?(?:P\d)?'
+            .'|EN\d{2,6}|ISO\d{2,6}|PNEN\d{2,6}|[IVX]{1,4}|\d+KV)$/u',
+            $compact
+        ) === 1;
     }
 
     private function isAbsentManufacturerToken(string $query, string $token): bool
@@ -3761,6 +3957,7 @@ final class ProductAiSearchService
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = 92;
             $row['ai_match_reason'] = 'Klasa ochrony obuwia na karcie spełnia wymaganie z SIWZ.';
+            $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }
 
@@ -3797,6 +3994,7 @@ final class ProductAiSearchService
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->cutRetrieveScore($query, $product), 20)));
             $row['ai_match_reason'] = 'Odporność na przecięcie na nazwie karty spełnia wymaganie z SIWZ.';
+            $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }
 

@@ -6,13 +6,16 @@ namespace Tests\Feature;
 
 use App\Models\Product;
 use App\Models\User;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductAiSearchService;
 use App\Support\CatalogManufacturerContext;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
+use Tests\Support\Opisowy15Fixture;
 use Tests\TestCase;
 
 final class ProductAiSearchStructuredIntentTest extends TestCase
@@ -217,7 +220,7 @@ final class ProductAiSearchStructuredIntentTest extends TestCase
         });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
-        $intent = $this->app->make(\App\Services\ProductAiSearchService::class)
+        $intent = $this->app->make(ProductAiSearchService::class)
             ->understandRequirement('Rękawice wampirki uniwersalne');
 
         $this->assertSame(['rękawice', 'dzianinowe', 'dłoń powlekana'], $intent['search_steps']);
@@ -235,7 +238,7 @@ final class ProductAiSearchStructuredIntentTest extends TestCase
             'stock' => 1,
             'ppe_family' => PpeAssortment::FAMILY_APPAREL,
         ]);
-        $svc = $this->app->make(\App\Services\ProductAiSearchService::class);
+        $svc = $this->app->make(ProductAiSearchService::class);
         $ref = new \ReflectionClass($svc);
         $m = $ref->getMethod('rankMessages');
         $m->setAccessible(true);
@@ -246,10 +249,46 @@ final class ProductAiSearchStructuredIntentTest extends TestCase
             10,
             'ubranie',
             [],
-            \App\Services\Ai\AiTask::ProductSearch,
+            AiTask::ProductSearch,
             [],
         );
         $this->assertStringContainsString('Wymaganie podwójne', (string) ($messages[0]['content'] ?? ''));
         $this->assertStringContainsString('oba rodzaje na przemian', (string) ($messages[0]['content'] ?? ''));
+    }
+
+    /**
+     * 15 opisów bez marki i kodu („przetarg opisowy 15”): skróty norm, klas i materiałów
+     * (SRC, FDA, ESD, PN-EN, UHMWPE, AQL, NDS, ŚOI) nie mogą stawać się „marką spoza katalogu”.
+     */
+    public function test_descriptive_requirements_without_brand_do_not_claim_absent_manufacturer(): void
+    {
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(static function (array $messages): array {
+            $system = (string) ($messages[0]['content'] ?? '');
+            if (str_contains($system, '"manufacturer"')) {
+                return [
+                    'needed' => null,
+                    'manufacturer' => null,
+                    'model_name' => null,
+                    'search_phrases' => [],
+                    'constraints' => [],
+                ];
+            }
+
+            return ['matches' => []];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        foreach (Opisowy15Fixture::items() as $line) {
+            $label = 'poz. '.$line['line_no'];
+            $json = $this->postJson('/api/products/ai-search', [
+                'query' => (string) $line['requirement'],
+                'limit' => 10,
+            ])->assertOk()->json();
+
+            $this->assertArrayNotHasKey('manufacturer_requested', $json['parsed_intent'] ?? [], $label);
+            $this->assertArrayNotHasKey('manufacturer_absent_in_catalog', $json['parsed_intent'] ?? [], $label);
+            $this->assertStringNotContainsString('nie ma w katalogu', (string) ($json['ai_note'] ?? ''), $label);
+        }
     }
 }

@@ -172,4 +172,31 @@ final class SearchEventLoggingTest extends TestCase
 
         $this->assertSame(0, SearchEvent::query()->count());
     }
+
+    public function test_understand_failure_reason_is_recorded_in_event(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $match = $this->catalog();
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(static function (array $messages) use ($match): array {
+            $system = (string) ($messages[0]['content'] ?? '');
+            // Krok „zrozum” (także ponowna, krótsza próba) pada jak przy timeoucie klienta.
+            if (str_contains($system, 'Najpierw ZROZUM')) {
+                throw new \RuntimeException('cURL error 28: Operation timed out');
+            }
+
+            return ['matches' => [['id' => $match->id, 'score' => 92, 'reason' => 'Odporność na amoniak']]];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $eventId = $this->postJson('/api/products/ai-search', [
+            'query' => 'rękawice do pracy z amoniakiem',
+        ])->assertOk()->json('search_event_id');
+
+        $event = SearchEvent::query()->findOrFail($eventId);
+        // Bez powodu awarii intent lokalny wyglądałby w telemetrii jak decyzja modelu.
+        $this->assertStringContainsString('understand-retry', (string) ($event->intent['model_error'] ?? ''));
+        $this->assertStringContainsString('timed out', (string) ($event->intent['model_error'] ?? ''));
+        $this->assertSame('rękawice do pracy z amoniakiem', $event->intent['needed']);
+    }
 }
