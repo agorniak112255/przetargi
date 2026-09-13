@@ -66,7 +66,13 @@ final class ProductSearchIdentity
      *
      * @var list<string>
      */
-    private const JACKET_PAGE_ALIASES = ['bluza robocz', 'bluzy robocz', 'bluze robocz'];
+    private const JACKET_PAGE_ALIASES = [
+        'bluza robocz', 'bluzy robocz', 'bluze robocz',
+        // „Men´s jacket CXS WorkTech-Multi” → „Bluza ochronna CXS WorkTech Multi” (batch #306)
+        'bluza ochronn', 'bluzy ochronn', 'bluze ochronn',
+        'bluza spawalnicz', 'bluzy spawalnicz', 'bluze spawalnicz',
+        'bluza ostrzegawcz', 'bluzy ostrzegawcz', 'bluze ostrzegawcz',
+    ];
 
     /**
      * Tokeny do dopasowania w URL/tytule/snippecie (lowercase, unikalne).

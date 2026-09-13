@@ -1611,6 +1611,9 @@ final class ProductSearchIdentityTest extends TestCase
 
         $this->assertTrue($id->hayHasRequiredTypeFromName('Bluza robocza CXS Sirius Lucius szaro-pomarańczowa', $jacket));
         $this->assertTrue($id->hayHasRequiredTypeFromName('Opis bluzy roboczej CXS Sirius', $jacket));
+        // batch #306: „Men´s jacket CXS WorkTech-Multi” → „Bluza ochronna CXS WorkTech Multi”
+        $this->assertTrue($id->hayHasRequiredTypeFromName('Bluza ochronna CXS WorkTech Multi szaro-czarna', $jacket));
+        $this->assertTrue($id->hayHasRequiredTypeFromName('Bluza spawalnicza CXS MOFOS', $jacket));
         $this->assertFalse($id->hayHasRequiredTypeFromName('Bluza polarowa CXS z kapturem', $jacket), 'sama bluza to nie kurtka');
 
         // alias działa tylko po stronie strony — „Bluza robocza” w cenniku nadal wymaga bluzy

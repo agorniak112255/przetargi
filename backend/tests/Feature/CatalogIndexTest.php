@@ -2766,6 +2766,29 @@ final class CatalogIndexTest extends TestCase
         $this->assertSame(['AB010008C', 'ALURAMP-YE', 'D-41352'], $codes);
     }
 
+    /** Batch #306: karty cxs.net.pl (marka CXS) odpadały dla produktów Canis jako „strona innego producenta”. */
+    public function test_cxs_brand_pages_match_canis_products(): void
+    {
+        $url = 'https://cxs.net.pl/spodnie-softshell-ostrzegawcze-cxs-bedford-zolte.html';
+        $this->seedPage($url, 'cxs');
+        $product = new Product([
+            'sku' => '1111-124-180-00',
+            'name' => 'High visible, softshell trousers, segmented tapes, EN 20471',
+            'manufacturer' => 'Canis',
+        ]);
+        $product->model_name = 'BEDFORD';
+
+        $search = app(CatalogIndexSearch::class);
+        $hits = array_column($search->findFor($product), 'url');
+
+        $this->assertContains($url, $hits);
+        $this->assertNotContains(
+            CandidateRejection::MANUFACTURER_CONFLICT,
+            array_column($search->lastRejections(), 'reason'),
+            'CXS to marka Canis, nie inny producent'
+        );
+    }
+
     private function seedPage(string $url, ?string $manufacturer = null, string $title = ''): void
     {
         $page = CatalogPage::query()->create([

@@ -74,7 +74,9 @@ final class CatalogPageManufacturer
         'perfect-fit' => 'honeywell',
         'kcl' => 'kcl',
         'canis' => 'canis',
-        'cxs' => 'cxs',
+        // CXS to marka Canis — osobna rodzina robiła z każdej karty cxs.net.pl / canis.cz
+        // „stronę innego producenta” dla produktów Canis (batch #306: 1700+ kart odrzuconych w indeksie)
+        'cxs' => 'canis',
     ];
 
     /**
