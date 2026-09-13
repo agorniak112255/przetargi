@@ -37,6 +37,13 @@ final class ProductMatchService
     /** Inna marka/model niż w SIWZ — zapis zamiennika od tego progu (po zgodności rodzaju). */
     public const SUBSTITUTE_MATCH_SCORE = AiSettingsService::MATCH_SUBSTITUTE_SCORE_DEFAULT;
 
+    /**
+     * Okno kandydatów AI na pozycję — tyle pierwszych wierszy odpowiedzi wyszukiwarki rozważa
+     * dopasowanie (przetarg i pojedyncza pozycja). Przy 5 właściwa karta bywała 8. w rankingu
+     * i nigdy nie trafiała pod explainMatch.
+     */
+    private const AI_CANDIDATE_WINDOW = 10;
+
     /** Progi z ustawień czytamy raz na żądanie — resolve() chodzi do bazy. */
     /** @var array<string, int> */
     private array $matchScores = [];
@@ -1031,7 +1038,7 @@ final class ProductMatchService
         }
 
         $products = $this->productsForRequirement($item->requirement);
-        $aiCandidates = $this->aiTopCandidates($item->requirement, 5);
+        $aiCandidates = $this->aiTopCandidates($item->requirement);
         $pool = $this->heuristicCandidatePool($item->requirement, $products, $aiCandidates, null);
         $described = $this->withDescriptions($pool);
         $heuristic = $described->isEmpty() ? null : $this->bestMatch($item->requirement, $described);
@@ -1147,7 +1154,7 @@ final class ProductMatchService
             }
         }
 
-        $aiCandidates ??= $this->aiTopCandidates($requirement, 5);
+        $aiCandidates ??= $this->aiTopCandidates($requirement);
         $pool = $this->heuristicCandidatePool($requirement, $products, $aiCandidates, $skuPick);
         $described = $this->withDescriptions($pool);
         $heuristic = $described->isEmpty() ? null : $this->bestMatch($requirement, $described);
@@ -1573,8 +1580,22 @@ final class ProductMatchService
 
         $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
         foreach ($queries as $i => $requirement) {
-            $this->rememberAiCandidates($requirement, is_array($rows[$i] ?? null) ? $rows[$i] : [], 5, $source);
+            $this->rememberAiCandidates(
+                $requirement,
+                is_array($rows[$i] ?? null) ? $rows[$i] : [],
+                self::AI_CANDIDATE_WINDOW,
+                $source
+            );
         }
+    }
+
+    /**
+     * Klucz cache tylko z wymagania — okno jest jedno (AI_CANDIDATE_WINDOW), a chybienie
+     * między prefetch a aiTopCandidates oznaczałoby drugie, płatne wywołanie modelu na pozycję.
+     */
+    private function aiCandidatesCacheKey(string $requirement): string
+    {
+        return md5($requirement);
     }
 
     /**
@@ -1583,7 +1604,7 @@ final class ProductMatchService
      */
     private function rememberAiCandidates(string $requirement, array $result, int $limit, string $source): array
     {
-        $cacheKey = md5($requirement.'|'.$limit);
+        $cacheKey = $this->aiCandidatesCacheKey($requirement);
         $hint = $result['external_hint'] ?? null;
         if (is_array($hint) && isset($hint['url'], $hint['title'])) {
             $this->lastExternalHint = [
@@ -1624,9 +1645,9 @@ final class ProductMatchService
     /**
      * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
      */
-    private function aiTopCandidates(string $requirement, int $limit = 5): array
+    private function aiTopCandidates(string $requirement, int $limit = self::AI_CANDIDATE_WINDOW): array
     {
-        $cacheKey = md5($requirement.'|'.$limit);
+        $cacheKey = $this->aiCandidatesCacheKey($requirement);
         if (isset($this->aiCandidatesCache[$cacheKey])) {
             return $this->aiCandidatesCache[$cacheKey];
         }
@@ -1657,17 +1678,21 @@ final class ProductMatchService
             return $mapped;
         }
 
-        $byId = [];
+        // Kolejność odpowiedzi wyszukiwarki zostaje (bez sortowania po cenie — o wyborze
+        // decydują dowody w pickAuto), wiersze katalogowe idą za wierszami modelu i nigdy
+        // nie nadpisują oceny modelu wyższym procentem z listy.
+        $seen = [];
         foreach ($mapped as $row) {
-            $byId[$row['id']] = $row;
+            $seen[$row['id']] = true;
         }
-        foreach ($this->mapAiSearchRows($catalogRows, $limit, 'catalog') as $row) {
-            $id = $row['id'];
-            if (! isset($byId[$id]) || $row['score'] > $byId[$id]['score']) {
-                $byId[$id] = $row;
+        $merged = $mapped;
+        foreach ($this->mapAiSearchRows($catalogRows, $limit, ProductAiSearchService::MATCH_SOURCE_CATALOG) as $row) {
+            if (isset($seen[$row['id']])) {
+                continue;
             }
+            $seen[$row['id']] = true;
+            $merged[] = $row;
         }
-        $merged = $this->sortCandidatesByPurchase(array_values($byId));
 
         return array_slice($merged, 0, $limit);
     }
@@ -1706,30 +1731,34 @@ final class ProductMatchService
      */
     private function mapAiSearchRows(array $rows, int $limit, string $source): array
     {
-        $out = [];
+        $model = [];
+        $catalog = [];
         foreach ($rows as $row) {
             $id = (int) ($row['id'] ?? 0);
             if ($id <= 0) {
                 continue;
             }
-            $out[] = [
+            // Wiersz z zapasowej listy katalogowej zostaje katalogowy nawet w fali AI —
+            // model go nie wskazał, więc nie wolno mu ufać jak ocenie modelu.
+            $isCatalog = ($row['ai_match_source'] ?? null) === ProductAiSearchService::MATCH_SOURCE_CATALOG;
+            $mapped = [
                 'id' => $id,
                 'sku' => (string) ($row['sku'] ?? ''),
                 'name' => (string) ($row['name'] ?? ''),
                 'score' => (int) ($row['ai_match_percent'] ?? 0),
                 'reason' => is_string($row['ai_match_reason'] ?? null) ? $row['ai_match_reason'] : null,
-                // Wiersz z zapasowej listy katalogowej zostaje katalogowy nawet w fali AI —
-                // model go nie wskazał, więc nie wolno mu ufać jak ocenie modelu.
-                'source' => ($row['ai_match_source'] ?? null) === ProductAiSearchService::MATCH_SOURCE_CATALOG
-                    ? ProductAiSearchService::MATCH_SOURCE_CATALOG
-                    : $source,
+                'source' => $isCatalog ? ProductAiSearchService::MATCH_SOURCE_CATALOG : $source,
             ];
-            if (count($out) >= $limit) {
-                break;
+            if ($isCatalog) {
+                $catalog[] = $mapped;
+            } else {
+                $model[] = $mapped;
             }
         }
 
-        return $out;
+        // Okno kandydatów najpierw obejmuje oceny modelu w kolejności odpowiedzi; wiersze
+        // katalogowe idą za nimi, żeby nie wypchnęły z okna karty wskazanej przez model.
+        return array_slice([...$model, ...$catalog], 0, max(0, $limit));
     }
 
     /**
