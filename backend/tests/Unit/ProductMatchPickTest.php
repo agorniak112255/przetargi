@@ -49,14 +49,17 @@ final class ProductMatchPickTest extends TestCase
      * Poz. 13 (półmaska wielokrotnego użytku): wyszukiwarka miała SECURA 3000 na 8. miejscu
      * z 16, a przetarg brał 5 pierwszych wierszy — właściwa karta nigdy nie była kandydatem.
      * Wszystkie karty próbki są półmaskami wielorazowymi (ten sam podtyp), żeby bramka
-     * podtypu (W3) nie odrzucała wierszy i widać było samo okno kandydatów.
+     * podtypu (W3) nie odrzucała wierszy i widać było samo okno kandydatów. Karty są
+     * syntetyczne, każda z „wielokrotnego użytku” w nazwie: przy intencji lokalnej kaskada
+     * szuka kroków po nazwie bez lematyzacji (retrieval — Fala 2), a prawdziwa karta
+     * SECURA 3000 nie ma tego słowa nigdzie — wypadałaby z puli, zanim model ją oceni,
+     * i test mierzyłby retrieval zamiast okna.
      */
     #[Test]
     public function candidate_window_keeps_eighth_search_row_for_reusable_half_mask(): void
     {
         $this->settings();
-        $ids = Opisowy15Fixture::seed(['S56T0SM0']);
-        $ids += $this->respirators([
+        $ids = $this->respirators([
             '7100113104' => 'Niewymagająca konserwacji półmaska wielokrotnego użytku 3M, seria 4000',
             '6581-EN' => 'Półmaska wielokrotnego użytku 3M, mechanizm szybkozatrzaskowy, 6500QL, rozmiar S',
             '6582-EN' => 'Półmaska wielokrotnego użytku 3M, mechanizm szybkozatrzaskowy, 6500QL, rozmiar M',
@@ -64,9 +67,10 @@ final class ProductMatchPickTest extends TestCase
             '7502' => 'Półmaska wielokrotnego użytku 3M seria 7500, rozmiar M',
             '7503' => 'Półmaska wielokrotnego użytku 3M seria 7500, rozmiar L',
             'HM-1' => 'Półmaska wielokrotnego użytku z łącznikami bagnetowymi, rozmiar M',
-            'S56T1SM0' => 'Półmaska SECURA 3100 (nagłowie trzyczęściowe)',
-            'S56T0SL0' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe), rozmiar L',
-            'S56T0SS0' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe), rozmiar S',
+            'S56T0SM0' => 'Półmaska wielokrotnego użytku SECURA 3000 (nagłowie jednoczęściowe)',
+            'S56T1SM0' => 'Półmaska wielokrotnego użytku SECURA 3100 (nagłowie trzyczęściowe)',
+            'S56T0SL0' => 'Półmaska wielokrotnego użytku SECURA 3000 (nagłowie jednoczęściowe), rozmiar L',
+            'S56T0SS0' => 'Półmaska wielokrotnego użytku SECURA 3000 (nagłowie jednoczęściowe), rozmiar S',
         ]);
         // Jak w odpowiedzi wyszukiwarki z produkcji (r_12.json): SECURA 3000 jako 8. wiersz,
         // 11 wierszy. Malejący procent utrwala kolejność w rankingu (procent, potem cena).
