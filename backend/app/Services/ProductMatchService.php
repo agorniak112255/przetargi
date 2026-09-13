@@ -54,8 +54,11 @@ final class ProductMatchService
      */
     private const CATALOG_ROW_SOURCES = [ProductAiSearchService::MATCH_SOURCE_CATALOG, 'rule'];
 
-    /** Różnica explainMatch, do której dwie karty uznajemy za równo udowodnione. */
-    private const EVIDENCE_TIE_MARGIN = 5;
+    /** Oceny modelu różniące się o mniej niż 5 pkt to remis (model daje 95 / 90 / 85 — to są różne poziomy). */
+    private const MODEL_SCORE_TIE_MARGIN = 4;
+
+    /** Dowody ze słów karty wykluczają kartę dopiero przy takiej różnicy do najlepiej opisanej (ART 702: 35 vs 99). */
+    private const EVIDENCE_VETO_GAP = 30;
 
     /** Progi z ustawień czytamy raz na żądanie — resolve() chodzi do bazy. */
     /** @var array<string, int> */
@@ -615,13 +618,15 @@ final class ProductMatchService
     }
 
     /**
-     * Rozstrzyga między kandydatami AI po dowodach z karty, nie po procencie i cenie (D5).
-     * Kolejność: explainMatch (w oknie EVIDENCE_TIE_MARGIN od najlepszej karty uznajemy remis),
-     * w remisie różnica twardych dowodów (SKU / model z cyframi / klasa ochrony), potem procent
-     * modelu (okno 8 pkt jak dotąd) i dopiero wtedy cena. Bez dawnej klauzuli „każdy ≥ min”:
-     * przez nią ART 702 (explain 35) wygrywał ceną z T5912100 (explain 99) przy równych 92%,
-     * a 65% pokonywało 96%. Równe dowody i bliski procent → nadal najtańszy (976aefb: nie
-     * przepłacamy za identyczne karty).
+     * Rozstrzyga między kandydatami, które przeszły progi. Kolejność:
+     *  1. ocena modelu — najwyższy poziom (okno MODEL_SCORE_TIE_MARGIN);
+     *  2. dowody ze słów karty tylko jako weto — odpada karta słabsza od najlepiej opisanej o EVIDENCE_VETO_GAP
+     *     (ART 702 z dowodami 35 nie wygra ceną z T5912100 z dowodami 99 przy równych 92%);
+     *  3. twarde dowody (SKU / model z cyframi / klasa ochrony);
+     *  4. najniższa cena; remis — wyższa ocena, potem dowody.
+     * Dotąd dowody ze słów (nieskalibrowana suma) rozstrzygały pierwsze w oknie 5 pkt: przy ogólnym wymaganiu
+     * (przetarg 1 poz. 2 — model dał 95 osiemnastu rękawicom antyprzecięciowym) wygrywała karta z najdłuższym opisem
+     * (ATG 76-833, rękawica chemiczna 35 cm, 59 zł) zamiast pasującej i najtańszej (Canis 3630-024-700-00, 6 zł).
      *
      * @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int}>  $options
      * @return array{product: Product, score: int, source: string}|null
@@ -631,20 +636,20 @@ final class ProductMatchService
         if ($options === []) {
             return null;
         }
-        $topEvidence = max(array_column($options, 'evidence'));
+        $topScore = max(array_column($options, 'score'));
         $near = array_values(array_filter(
             $options,
-            static fn (array $option): bool => $option['evidence'] >= $topEvidence - self::EVIDENCE_TIE_MARGIN
+            static fn (array $option): bool => $option['score'] >= $topScore - self::MODEL_SCORE_TIE_MARGIN
+        ));
+        $topEvidence = max(array_column($near, 'evidence'));
+        $near = array_values(array_filter(
+            $near,
+            static fn (array $option): bool => $option['evidence'] >= $topEvidence - self::EVIDENCE_VETO_GAP
         ));
         $topHard = max(array_column($near, 'hard'));
         $near = array_values(array_filter(
             $near,
             static fn (array $option): bool => $option['hard'] === $topHard
-        ));
-        $topScore = max(array_column($near, 'score'));
-        $near = array_values(array_filter(
-            $near,
-            static fn (array $option): bool => $option['score'] >= $topScore - 8
         ));
         usort($near, function (array $a, array $b): int {
             $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);

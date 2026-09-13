@@ -170,9 +170,9 @@ final class ProductMatchPickTest extends TestCase
     /**
      * Ten sam procent modelu, obie karty z explain ≥ apply i bez twardych dowodów (bez SKU,
      * modelu, klasy), ale karta dowodząca wymagania (nitryl, ściągacz) wygrywa z tańszą, ogólną
-     * kartą tej samej rodziny — cena rozstrzyga dopiero w oknie EVIDENCE_TIE_MARGIN.
-     * Procent modelu celowo bliski explain ogólnej karty, żeby o wyniku nie decydowało
-     * okno procentu (8 pkt), tylko okno dowodów.
+     * kartą tej samej rodziny — dowody ze słów wykluczają ogólną kartę, gdy różnica przekracza
+     * EVIDENCE_VETO_GAP (tu 99 vs 47). Przy mniejszej różnicy i równej ocenie modelu rozstrzyga cena
+     * (ProductMatchSelectionOrderTest, przetarg 1 poz. 2).
      */
     #[Test]
     public function better_proven_card_beats_cheaper_vaguer_card_at_equal_percent(): void
@@ -194,11 +194,11 @@ final class ProductMatchPickTest extends TestCase
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ])->id);
-        $margin = (new \ReflectionClassConstant(ProductMatchService::class, 'EVIDENCE_TIE_MARGIN'))->getValue();
+        $margin = (new \ReflectionClassConstant(ProductMatchService::class, 'EVIDENCE_VETO_GAP'))->getValue();
         $provenExplained = $matcher->explainMatch($requirement, $proven);
         $vagueExplained = $matcher->explainMatch($requirement, $vague);
         $this->assertGreaterThanOrEqual($matcher->applyMatchScore(), $vagueExplained['score'], 'ogólna karta ma przejść próg apply — test bada okno dowodów, nie odcięcie');
-        $this->assertGreaterThan($margin, $provenExplained['score'] - $vagueExplained['score'], 'różnica dowodów musi przekraczać margines remisu');
+        $this->assertGreaterThan($margin, $provenExplained['score'] - $vagueExplained['score'], 'różnica dowodów musi przekraczać próg weta');
         $this->assertSame(
             $this->invoke($matcher, 'hardEvidenceLevel', $requirement, $proven, $provenExplained),
             $this->invoke($matcher, 'hardEvidenceLevel', $requirement, $vague, $vagueExplained),
