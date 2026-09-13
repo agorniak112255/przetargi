@@ -61,6 +61,51 @@ final class RankCardsConstraintEvidenceTest extends TestCase
         $this->assertSame('44-304', $cards[0], 'karta z dowodem największej liczby warunków idzie do modelu pierwsza');
     }
 
+    /**
+     * Produkcja (debug-match po 2e0099b): 44-304 w kandydatach, dowód 8/10 igieł, a w kartach rankingu najsłabsza
+     * karta miała 1/10 — reguła odporności na przecięcie brała do rankingu tylko karty z przecięciem w nazwie.
+     */
+    public function test_card_outside_name_rule_with_full_evidence_reaches_ranking(): void
+    {
+        $base = [
+            'manufacturer' => 'MAPA',
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ];
+        $candidates = collect();
+        for ($i = 1; $i <= 30; $i++) {
+            $candidates->push(Product::query()->create($base + [
+                'sku' => 'CUT-'.$i,
+                'name' => 'Rękawice antyprzecięciowe HPPE powlekane '.$i,
+                'description' => 'Rękawice HPPE, pakowane po 100 par.',
+            ]));
+        }
+        $candidates->push(Product::query()->create([
+            'sku' => '44-304',
+            'manufacturer' => 'ATG',
+            'name' => 'Ściągacz, oblanie części chwytnej',
+            'description' => 'Rękawice antyprzecięciowe ATG MaxiCut Oil do pracy w środowisku zaolejonym; ochrona przed ciepłem kontaktowym do 100°C przez 15 sekund; bez silikonu.',
+            'norms' => 'EN 388:2016 + A1:2018, EN 407:2004',
+        ] + $base));
+        $query = 'Rękawice ochronne antyprzecięciowe powlekane, ochrona przed ciepłem kontaktowym do 100°C';
+        $constraints = ['EN 388:2016', 'EN 407:2004', 'ciepło kontaktowe 100°C', 'bez silikonu'];
+
+        $service = app(ProductAiSearchService::class);
+        $rows = (new \ReflectionMethod($service, 'rowsFromCutResistanceMatches'))->invoke($service, $query, $candidates, 80);
+        $this->assertNotContains('44-304', array_column($rows, 'sku'), 'reguła czyta nazwę karty — ATG nie jest kartą reguły');
+
+        $prepared = (new \ReflectionMethod($service, 'ruleRowsRankedByModel'))->invoke($service, $query, $rows, $candidates, $constraints);
+        $cards = $prepared['rank_cards']->pluck('sku')->all();
+
+        $this->assertContains('44-304', $cards, 'karta z dowodem wszystkich warunków trafia do modelu mimo nazwy z cennika');
+        $this->assertSame('44-304', $cards[0]);
+        $this->assertNotContains('44-304', array_column($prepared['products'], 'sku'), 'zapas bez modelu to nadal tylko wiersze reguły');
+    }
+
     public function test_complete_cascade_does_not_end_retrieval_before_text_search(): void
     {
         Http::fake();

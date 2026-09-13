@@ -3992,9 +3992,13 @@ final class ProductAiSearchService
     }
 
     /**
-     * Wynik reguły (próg SNR, odporność na przecięcie, kombinezon z kaloszami) to warunek konieczny,
-     * nie werdykt: karty reguły idą do rankingu modelu w kolejności reguły, a wiersze reguły zostają zapasem, gdy
-     * model nic nie oceni (`products` przy `rank_cards`). Jak reguła klasy obuwia (przetarg 1 poz. 3).
+     * Wynik reguły (próg SNR, odporność na przecięcie, kombinezon z kaloszami) nie jest werdyktem: karty reguły idą
+     * do rankingu modelu pierwsze, w kolejności reguły, a wiersze reguły zostają zapasem, gdy model nic nie oceni
+     * (`products` przy `rank_cards`). Jak reguła klasy obuwia (przetarg 1 poz. 3).
+     *
+     * Reguły czytają nazwę karty, nie opis — karta z nazwą z cennika („Ściągacz, oblanie części chwytnej”, ATG 44-304,
+     * przetarg 1 poz. 7) i opisem spełniającym wszystkie warunki nie trafiała do modelu, choć była w puli. Reszta puli
+     * idzie więc za kartami reguły, a wybór 24 kart (liczba potwierdzonych warunków) decyduje, kogo zobaczy model.
      *
      * @param  list<array<string, mixed>>  $rows
      * @param  Collection<int, Product>  $candidates
@@ -4008,7 +4012,10 @@ final class ProductAiSearchService
         $cards = $candidates->filter(
             static fn (Product $p): bool => in_array((int) $p->id, $ids, true)
         )->sortBy(static fn (Product $p): int|false => array_search((int) $p->id, $ids, true))->values();
-        $rankCards = $this->cardsForRanking($query, $cards, $constraints);
+        $rest = $candidates->reject(
+            static fn (Product $p): bool => in_array((int) $p->id, $ids, true)
+        )->values();
+        $rankCards = $this->cardsForRanking($query, $cards->concat($rest)->values(), $constraints);
         $this->traceProducts('rank_card_ids', $rankCards);
 
         return [
