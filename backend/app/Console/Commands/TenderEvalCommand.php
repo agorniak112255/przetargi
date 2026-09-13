@@ -117,7 +117,7 @@ final class TenderEvalCommand extends Command
                 try {
                     $results[$case['id']]['runs'][] = $this->classify($case, $matcher->debugPick($item, $row), $row);
                 } catch (Throwable $e) {
-                    $results[$case['id']]['runs'][] = ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => null, 'reason' => 'błąd: '.$e->getMessage()];
+                    $results[$case['id']]['runs'][] = ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => null, 'model_state' => null, 'reason' => 'błąd: '.$e->getMessage()];
                 }
             }
         }
@@ -142,11 +142,15 @@ final class TenderEvalCommand extends Command
      * @param  array{id: string, query: string, expected_skus: list<string>, forbidden_skus: list<string>}  $case
      * @param  array{candidates: list<array<string, mixed>>, pick: array{sku: string, score: int, source: string, heuristic_only: bool}|null, reason: string|null}  $decision
      * @param  array<string, mixed>  $row
-     * @return array{verdict: string, sku: string|null, score: int|null, source: string|null, top_model: string|null, reason: string|null}
+     * @return array{verdict: string, sku: string|null, score: int|null, source: string|null, top_model: string|null, model_state: string|null, reason: string|null}
      */
     private function classify(array $case, array $decision, array $row): array
     {
         $pick = $decision['pick'];
+        // Stan rankingu dla tej pozycji w paczce: ranked / empty / unavailable / skipped. Poz. 12 pojedynczo
+        // dostaje 95–99 od modelu, a w paczce 15 pozycji tylko zapasowe 92 z reguły — bez stanu nie widać,
+        // czy model odpowiedział pusto, czy zapytanie padło.
+        $state = is_string($row['model_state'] ?? null) ? $row['model_state'] : null;
         $top = null;
         $first = is_array($row['products'][0] ?? null) ? $row['products'][0] : null;
         if ($first !== null) {
@@ -155,7 +159,7 @@ final class TenderEvalCommand extends Command
                 .' ('.(string) ($first['ai_match_source'] ?? 'model').')';
         }
         if ($pick === null) {
-            return ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => $top, 'reason' => $decision['reason']];
+            return ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => $top, 'model_state' => $state, 'reason' => $decision['reason']];
         }
 
         $sku = SearchEvalMetrics::normalizeAll([$pick['sku']])[0] ?? $pick['sku'];
@@ -171,13 +175,14 @@ final class TenderEvalCommand extends Command
             'score' => $pick['score'],
             'source' => $pick['source'].($pick['heuristic_only'] ? ' (po słowach)' : ''),
             'top_model' => $top,
+            'model_state' => $state,
             'reason' => null,
         ];
     }
 
     /**
      * @param  list<array{id: string, runs: list<array<string, mixed>>}>  $results
-     * @return array{per_run: list<array<string, int>>, stable: int, unstable: list<string>}
+     * @return array{per_run: list<array<string, int>>, stable: int, unstable: list<string>, model_states: array<string, int>}
      */
     private function summarize(array $results, int $runs): array
     {
@@ -197,14 +202,23 @@ final class TenderEvalCommand extends Command
             }
         }
 
-        return ['per_run' => $perRun, 'stable' => count($results) - count($unstable), 'unstable' => $unstable];
+        $states = [];
+        foreach ($results as $result) {
+            foreach ($result['runs'] as $run) {
+                $state = (string) ($run['model_state'] ?? 'brak');
+                $states[$state] = ($states[$state] ?? 0) + 1;
+            }
+        }
+        ksort($states);
+
+        return ['per_run' => $perRun, 'stable' => count($results) - count($unstable), 'unstable' => $unstable, 'model_states' => $states];
     }
 
     /** @param list<array{id: string, expected_skus: list<string>, runs: list<array<string, mixed>>}> $results */
     private function renderCases(array $results, int $runs): void
     {
         $this->table(
-            ['przypadek', 'oczekiwane', 'wybór przetargu (przebieg 1)', 'werdykty', 'najwyżej w modelu', 'powód braku'],
+            ['przypadek', 'oczekiwane', 'wybór przetargu (przebieg 1)', 'werdykty', 'stan modelu', 'najwyżej w modelu', 'powód braku'],
             array_map(static function (array $result): array {
                 $first = $result['runs'][0] ?? [];
                 $expected = (string) ($result['expected_skus'][0] ?? '');
@@ -217,6 +231,7 @@ final class TenderEvalCommand extends Command
                     mb_substr($expected, 0, 30),
                     ($first['sku'] ?? null) === null ? '—' : mb_substr((string) $first['sku'], 0, 30).' ('.$first['score'].'%, '.$first['source'].')',
                     implode(' / ', array_map(static fn (array $run): string => (string) $run['verdict'], $result['runs'])),
+                    implode(' / ', array_map(static fn (array $run): string => (string) ($run['model_state'] ?? '—'), $result['runs'])),
                     (string) ($first['top_model'] ?? '—'),
                     mb_substr((string) ($first['reason'] ?? ''), 0, 60),
                 ];
@@ -224,7 +239,7 @@ final class TenderEvalCommand extends Command
         );
     }
 
-    /** @param array{per_run: list<array<string, int>>, stable: int, unstable: list<string>} $summary */
+    /** @param array{per_run: list<array<string, int>>, stable: int, unstable: list<string>, model_states: array<string, int>} $summary */
     private function renderSummary(array $summary, int $runs, int $cases): void
     {
         $this->line('<options=bold>Podsumowanie</>');
@@ -257,6 +272,11 @@ final class TenderEvalCommand extends Command
         $this->line(sprintf('Stabilne między przebiegami: %d/%d%s', $summary['stable'], $cases, $summary['unstable'] === []
             ? ''
             : ' · niestabilne: '.implode(', ', $summary['unstable'])));
+        $this->line('Stan modelu (wszystkie przebiegi): '.implode(' · ', array_map(
+            static fn (string $state, int $count): string => "{$state} {$count}",
+            array_keys($summary['model_states']),
+            $summary['model_states'],
+        )).' — unavailable = zapytanie padło (limit/timeout), empty = model nic nie wskazał, skipped = bez rankingu');
         $this->line('Próg akceptacji zmiany (AUDYT_4): zakazane = 0; złe karty (zakazane + inne) nie więcej niż w bazie; dziś trafne dalej trafne; trafnych ≥ 10/15.');
     }
 

@@ -90,6 +90,7 @@ final class TenderEvalCommandTest extends TestCase
             ->expectsOutputToContain('Podsumowanie')
             ->expectsOutputToContain('Stabilne między przebiegami')
             ->expectsOutputToContain('razem (2 przebiegi)')
+            ->expectsOutputToContain('Stan modelu (wszystkie przebiegi): ranked 2')
             ->expectsOutputToContain('Raport:')
             ->assertSuccessful();
 
@@ -101,6 +102,8 @@ final class TenderEvalCommandTest extends TestCase
         $verdict = $report['cases'][0]['runs'][0]['verdict'];
         $this->assertContains($verdict, ['trafna', 'zakazana', 'inna', 'pusta']);
         $this->assertSame('ARSO 701 616560 S1 P ESD=95 (model)', $report['cases'][0]['runs'][0]['top_model']);
+        $this->assertSame('ranked', $report['cases'][0]['runs'][0]['model_state'], 'stan rankingu pozycji w paczce');
+        $this->assertSame(['ranked' => 2], $report['summary']['model_states']);
 
         // baza z innymi werdyktami w obu przebiegach → tabela zmian liczona ze wszystkich przebiegów
         $other = $verdict === 'trafna' ? 'pusta' : 'trafna';
