@@ -94,6 +94,16 @@ final class DebugTenderMatchCommand extends Command
         }
         $this->line('needed w rankingu: '.json_encode($trace['rank_needed'] ?? [], JSON_UNESCAPED_UNICODE));
         $this->line('warunki w rankingu: '.json_encode($trace['rank_constraints'] ?? [], JSON_UNESCAPED_UNICODE));
+        foreach (is_array($trace['cascade'] ?? null) ? $trace['cascade'] : [] as $cascade) {
+            $this->line(sprintf(
+                'kaskada: poziom=%s · kroki=%s · znalazła=%d · po bramce=%d · %s',
+                (string) ($cascade['level'] ?? 'brak'),
+                json_encode($cascade['steps'] ?? [], JSON_UNESCAPED_UNICODE),
+                (int) ($cascade['found'] ?? 0),
+                (int) ($cascade['kept'] ?? 0),
+                ($cascade['ended_retrieval'] ?? false) ? 'zakończyła wyszukiwanie (bez wyszukiwania tekstowego)' : 'wyszukiwanie szło dalej',
+            ));
+        }
 
         $candidateIds = array_map('intval', is_array($trace['candidate_ids'] ?? null) ? $trace['candidate_ids'] : []);
         $cardIds = array_map('intval', is_array($trace['rank_card_ids'] ?? null) ? $trace['rank_card_ids'] : []);

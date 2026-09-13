@@ -131,6 +131,9 @@ final class ProductAiSearchService
         // (searchMany) i wyszukiwarka (search) różnią się tu, a bez tego nie da się tego porównać.
         'rank_needed' => [],
         'rank_constraints' => [],
+        // Kaskada po krokach nazwy: poziom, kroki, ile kart znalazła i czy zakończyła wyszukiwanie
+        // (poz. 13: SECURA 3000 nie wchodziła do puli, a lokalne dane nie odtwarzały ścieżki z produkcji).
+        'cascade' => [],
         // Powód awarii kroku „zrozum” (wyjątek/timeout) — trafia do `search_events`,
         // żeby intent lokalny z całym tekstem dało się odróżnić od decyzji modelu.
         'intent_error' => null,
@@ -765,6 +768,17 @@ final class ProductAiSearchService
             'timings_ms' => $this->timingMs,
             'prompt_version' => self::RANK_PROMPT_VERSION,
         ];
+    }
+
+    /** Uzupełnia ostatni wpis kaskady: ile kart przeszło bramkę i czy kaskada zakończyła wyszukiwanie. */
+    private function traceCascadeOutcome(int $kept, bool $endedRetrieval): void
+    {
+        $last = array_key_last($this->trace['cascade']);
+        if ($last === null) {
+            return;
+        }
+        $this->trace['cascade'][$last]['kept'] = $kept;
+        $this->trace['cascade'][$last]['ended_retrieval'] = $endedRetrieval;
     }
 
     /**
@@ -2941,6 +2955,13 @@ final class ProductAiSearchService
         });
         $cascaded = $recalled['products'];
         $cascadeLevel = $recalled['level'] ?? null;
+        $this->trace['cascade'][] = [
+            'level' => $cascadeLevel,
+            'steps' => array_slice($intent['search_steps'], 0, 6),
+            'found' => $cascaded->count(),
+            'kept' => 0,
+            'ended_retrieval' => false,
+        ];
         $cascadeKept = collect();
         if ($cascaded->isNotEmpty()) {
             $fromNameSteps = is_string($cascadeLevel) && str_starts_with($cascadeLevel, 'steps_');
@@ -2951,10 +2972,13 @@ final class ProductAiSearchService
                     : $priority->concat($cascaded));
 
             $cascadeKept = $this->keepCompatible($requirement, $this->uniqueProducts($pool, $limit));
+            $this->traceCascadeOutcome($cascadeKept->count(), false);
             // Pełna pula kończy retrieval — dokładanie czegokolwiek i tak by z niej wypadło.
             // Trafienie po kodzie modelu albo progu SNR zostaje z przodu: kaskada
             // „nauszniki nagłowne” nie może zepchnąć X2A-EU poza limit.
             if ($cascadeKept->count() >= $limit) {
+                $this->traceCascadeOutcome($cascadeKept->count(), true);
+
                 return $this->withModelCodeHits($requirement, $forcedHits, $cascadeKept, $limit);
             }
         }
@@ -2982,6 +3006,8 @@ final class ProductAiSearchService
         // kominiarkę) albo gdy zeszła do samego rzeczownika rodzaju — wtedy z definicji
         // nie widzi kart bez tego słowa w nazwie („URG-A”).
         if ($cascadeKept->isNotEmpty() && ! $this->cascadeSweptFamilyNoun($cascadeLevel, $intent)) {
+            $this->traceCascadeOutcome($cascadeKept->count(), true);
+
             return $this->withModelCodeHits($requirement, $forcedHits, $cascadeKept, $limit);
         }
 

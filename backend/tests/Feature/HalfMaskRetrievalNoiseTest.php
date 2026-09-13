@@ -58,6 +58,11 @@ final class HalfMaskRetrievalNoiseTest extends TestCase
         $service->searchMany([Opisowy15Fixture::requirement(13)], 80, false, AiTask::ProductSearch, 16);
         $trace = $service->lastTrace();
         $candidates = array_map('intval', $trace['candidate_ids'] ?? []);
+        $this->assertIsArray($trace['cascade'] ?? null, 'ślad kaskady po krokach nazwy jest zapisywany');
+        foreach ($trace['cascade'] as $cascade) {
+            $this->assertArrayHasKey('level', $cascade);
+            $this->assertArrayHasKey('ended_retrieval', $cascade);
+        }
 
         $this->assertNotContains($ids['7100200484'], $candidates, 'klej epoksydowy z „2004” w SKU nie jest kandydatem na półmaskę');
         $this->assertNotContains($ids['1998467'], $candidates, 'materiał odblaskowy z „1998” w SKU nie jest kandydatem na półmaskę');
