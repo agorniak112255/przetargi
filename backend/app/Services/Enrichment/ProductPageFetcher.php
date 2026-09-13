@@ -520,6 +520,13 @@ final class ProductPageFetcher
 
             return;
         }
+        if (! $hinted && $this->matchingProduct !== null
+            && $this->identity->isOfficialCatalogUrl($url, $this->matchingProduct)
+            && $this->markupSkuNamesOtherProduct($html, (string) $this->matchingProduct->sku)) {
+            $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::CLAIMS_OTHER_CODE];
+
+            return;
+        }
         $pageLooksLikeProduct = $this->matchingProduct !== null
             ? $this->pageConfirmsMatchingProduct($url, $title, $text)
             : ($this->pageMentionsSku($url, $text, $title, $skuNorm)
@@ -1034,12 +1041,80 @@ final class ProductPageFetcher
     /**
      * @return list<string>
      */
+    /**
+     * Kod produktu z mikrodanych (itemprop sku/mpn) i z klasy body Magento.
+     *
+     * @return list<string>
+     */
+    private function markupSkus(string $html): array
+    {
+        $out = [];
+        if (preg_match_all('#itemprop=["\'](?:sku|mpn)["\'][^>]*?(?:content=["\']([^"\']{3,40})["\'][^>]*>|>\s*([^<]{3,40}?)\s*<)#i', $html, $micro, PREG_SET_ORDER)) {
+            foreach ($micro as $row) {
+                $code = trim(html_entity_decode((string) (($row[1] ?? '') !== '' ? $row[1] : ($row[2] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+                if ($code !== '') {
+                    $out[$code] = $code;
+                }
+            }
+        }
+        if (preg_match('#\bcatalog_product_view_sku_([A-Za-z0-9][A-Za-z0-9._\-]{2,40})\b#', $html, $m)) {
+            $out[$m[1]] = $m[1];
+        }
+
+        return array_values($out);
+    }
+
+    /**
+     * Strona producenta w znacznikach mówi, że to inny produkt: SIRIUS szaro-zielona ma
+     * itemprop sku „1010-035-708-00”, a szukamy „1010-001-703-00”. Nazwa („Sirius”), marka
+     * i typ są wspólne dla wszystkich kolorów — bez tego karta innego koloru przechodziła.
+     * Porównujemy tylko kody tego samego formatu; końcówka rozmiaru („-09”) to ten sam produkt,
+     * a kod rodziny będący początkiem naszego (LM0102 ↔ LM010201) nie jest sprzecznością.
+     */
+    private function markupSkuNamesOtherProduct(string $html, string $sku): bool
+    {
+        $ours = $this->skuIdentityKey($sku);
+        if (strlen($ours) < 5 || preg_match('/\d/', $ours) !== 1) {
+            return false;
+        }
+        $comparable = 0;
+        foreach ($this->markupSkus($html) as $code) {
+            $theirs = $this->skuIdentityKey($code);
+            // wewnętrzny numer sklepu („8156”) ma inny format — nie świadczy o innym produkcie
+            if ($theirs === '' || abs(strlen($theirs) - strlen($ours)) > 3
+                || ctype_digit($theirs[0]) !== ctype_digit($ours[0])) {
+                continue;
+            }
+            if ($theirs === $ours || str_starts_with($theirs, $ours) || str_starts_with($ours, $theirs)) {
+                return false;
+            }
+            $comparable++;
+        }
+
+        return $comparable > 0;
+    }
+
+    private function skuIdentityKey(string $sku): string
+    {
+        $key = mb_strtolower(trim($sku));
+        $key = (string) preg_replace('/[\-\/\s]\d{1,2}$/u', '', $key);
+
+        return (string) preg_replace('/[^a-z0-9]+/u', '', $key);
+    }
+
     private function extractMetaProductFields(string $html): array
     {
         $out = [];
         if (preg_match('#name=["\']description["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $m)
             || preg_match('#content=["\']([^"\']+)["\'][^>]*name=["\']description["\']#i', $html, $m)) {
             $out[] = trim(html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+        // Kod z mikrodanych i z klasy Magento. Karta cxs.net.pl (Canis) ma „1010-001-703-00” tylko
+        // w itemprop="sku" i w body.catalog_product_view_sku_…, a nagłówek po polsku („Bluza robocza
+        // CXS Sirius Lucius”) nie pasuje do angielskiej nazwy z cennika — bez kodu 37 kart
+        // producenta szło do kosza jako „treść nie potwierdza produktu” (batch #305).
+        foreach ($this->markupSkus($html) as $code) {
+            $out[] = 'SKU: '.$code;
         }
         // JSON-LD Product
         if (preg_match_all('#<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>#is', $html, $blocks)) {

@@ -1599,6 +1599,25 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    /** Batch #305: „Men´s jacket SIRIUS” (Canis) na polskiej karcie to „Bluza robocza CXS Sirius Lucius”. */
+    public function test_polish_work_sweatshirt_page_matches_english_jacket_name(): void
+    {
+        $id = new ProductSearchIdentity;
+        $jacket = new Product([
+            'sku' => '1010-001-703-00',
+            'name' => 'Men´s jacket SIRIUS, grey-orange, 65% polyester 35% cotton 270g/m2, sizes 44 - 68',
+            'manufacturer' => 'Canis',
+        ]);
+
+        $this->assertTrue($id->hayHasRequiredTypeFromName('Bluza robocza CXS Sirius Lucius szaro-pomarańczowa', $jacket));
+        $this->assertTrue($id->hayHasRequiredTypeFromName('Opis bluzy roboczej CXS Sirius', $jacket));
+        $this->assertFalse($id->hayHasRequiredTypeFromName('Bluza polarowa CXS z kapturem', $jacket), 'sama bluza to nie kurtka');
+
+        // alias działa tylko po stronie strony — „Bluza robocza” w cenniku nadal wymaga bluzy
+        $sweatshirt = new Product(['sku' => 'X-1', 'name' => 'Bluza robocza polarowa', 'manufacturer' => 'Canis']);
+        $this->assertSame('bluza', $id->requiredArticleTypeLabel($sweatshirt));
+    }
+
     /** Batch #296: „-40” w kodzie wykładziny Coba brało się za rozmiar buta i wymagało „obuwie” na stronie. */
     public function test_sku_suffix_is_not_shoe_size_when_name_has_sheet_dimensions(): void
     {

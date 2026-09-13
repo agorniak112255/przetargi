@@ -169,6 +169,50 @@ final class ProductPageFetcherTest extends TestCase
     }
 
     /**
+     * Batch #305: karta cxs.net.pl ma kod tylko w itemprop="sku" i w klasie Magento, a nagłówek po
+     * polsku nie pasuje do angielskiej nazwy z cennika — 37 właściwych kart Canis szło do kosza.
+     */
+    public function test_microdata_sku_confirms_card_with_localized_heading(): void
+    {
+        $right = 'https://cxs.net.pl/bluza-robocza-cxs-sirius-lucius-szaro-pomaranczowa.html';
+        $otherColour = 'https://cxs.net.pl/bluza-robocza-cxs-sirius-lucius-szaro-zielona.html';
+        Http::fake([
+            $right => Http::response($this->magentoCard('Bluza robocza CXS Sirius Lucius szaro-pomarańczowa', '1010-001-703-00'), 200),
+            $otherColour => Http::response($this->magentoCard('Bluza robocza CXS Sirius Lucius szaro-zielona', '1010-035-708-00'), 200),
+            '*' => Http::response('', 404),
+        ]);
+        $product = new Product([
+            'sku' => '1010-001-703-00',
+            'name' => 'Men´s jacket SIRIUS, grey-orange, 65% polyester 35% cotton 270g/m2, sizes 44 - 68',
+            'manufacturer' => 'Canis',
+        ]);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [
+                ['url' => $otherColour, 'title' => '', 'snippet' => ''],
+                ['url' => $right, 'title' => '', 'snippet' => ''],
+            ],
+            (string) $product->sku,
+            3,
+            [],
+            $product
+        );
+
+        $this->assertSame([$right], array_column($fetched['pages'], 'url'), 'kod z mikrodanych potwierdza kartę, inny kolor odpada');
+    }
+
+    private function magentoCard(string $heading, string $sku): string
+    {
+        return '<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>'.$heading.'</title></head>'
+            .'<body class="catalog-product-view catalog_product_view_sku_'.$sku.'"><main>'
+            .'<h1 class="page-title"><span itemprop="name">'.$heading.'</span></h1>'
+            .'<div class="product-info-stock-sku"><div class="value" itemprop="sku">'.$sku.'</div></div>'
+            .'<div class="product attribute description"><p>'
+            .str_repeat('Odzież robocza CXS z tkaniny canvas 65% bawełna i 35% poliester o gramaturze 270 g/m², z kieszeniami i odblaskami. ', 14)
+            .'</p></div></main></body></html>';
+    }
+
+    /**
      * @param  list<string>  $partNumbers
      */
     private function cobaFamilyCard(array $partNumbers, string $model = 'COBAstat'): string

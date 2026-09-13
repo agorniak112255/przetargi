@@ -60,6 +60,15 @@ final class ProductSearchIdentity
     ];
 
     /**
+     * Polska karta nazywa kurtkę roboczą „bluzą roboczą” (Canis/CXS: „Men´s jacket SIRIUS” →
+     * „Bluza robocza CXS Sirius Lucius”). Liczone tylko przy sprawdzaniu strony, nie przy
+     * odczycie typu z nazwy produktu.
+     *
+     * @var list<string>
+     */
+    private const JACKET_PAGE_ALIASES = ['bluza robocz', 'bluzy robocz', 'bluze robocz'];
+
+    /**
      * Tokeny do dopasowania w URL/tytule/snippecie (lowercase, unikalne).
      *
      * @return list<string>
@@ -4565,9 +4574,16 @@ final class ProductSearchIdentity
             return true;
         }
         foreach ($required as $stems) {
-            if (! $this->textHasTypeStem($page, $stems)) {
-                return false;
+            if ($this->textHasTypeStem($page, $stems)) {
+                continue;
             }
+            // „Men´s jacket SIRIUS” w cenniku Canis to na polskiej karcie „Bluza robocza CXS Sirius”.
+            // Tylko po stronie strony — nazwa „Bluza robocza” w cenniku nadal wymaga „bluzy”.
+            if ($stems === self::TYPE_STEMS['jacket'] && $this->textHasTypeStem($page, self::JACKET_PAGE_ALIASES)) {
+                continue;
+            }
+
+            return false;
         }
 
         return true;

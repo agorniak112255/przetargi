@@ -126,6 +126,21 @@ final class EnrichmentDescriptionGuardTest extends TestCase
         $this->assertFalse($this->usable($text, $nitrile, ['https://sklep-bhp.example.pl/guma']), 'ze sklepu bez marki nadal za mało');
     }
 
+    /** Batch #305: model pisze „Bluza robocza CXS Sirius Lucius”, a cennik Canis ma „Men´s jacket SIRIUS”. */
+    public function test_polish_work_sweatshirt_description_is_usable_for_english_jacket_name(): void
+    {
+        $sirius = new Product([
+            'sku' => '1010-001-703-00',
+            'name' => 'Men´s jacket SIRIUS, grey-orange, 65% polyester 35% cotton 270g/m2, sizes 44 - 68',
+            'manufacturer' => 'Canis',
+        ]);
+        $text = 'Bluza robocza CXS Sirius Lucius to lekka odzież ochronna przeznaczona do prac w warsztacie, magazynie '
+            .'i lekkim przemyśle. Wykonana z tkaniny canvas o splocie płóciennym (65% bawełna, 35% poliester) o gramaturze '
+            .'270 g/m², zapewnia komfort i trwałość podczas codziennej pracy.';
+
+        $this->assertTrue($this->usable($text, $sirius, ['https://cxs.net.pl/bluza-robocza-cxs-sirius-lucius-szaro-pomaranczowa.html']));
+    }
+
     public function test_brand_prefixed_trade_names_are_not_split(): void
     {
         $plain = ProductDescriptionText::plain(
