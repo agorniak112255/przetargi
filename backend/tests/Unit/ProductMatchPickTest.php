@@ -48,24 +48,30 @@ final class ProductMatchPickTest extends TestCase
     /**
      * Poz. 13 (półmaska wielokrotnego użytku): wyszukiwarka miała SECURA 3000 na 8. miejscu
      * z 16, a przetarg brał 5 pierwszych wierszy — właściwa karta nigdy nie była kandydatem.
+     * Wszystkie karty próbki są półmaskami wielorazowymi (ten sam podtyp), żeby bramka
+     * podtypu (W3) nie odrzucała wierszy i widać było samo okno kandydatów.
      */
     #[Test]
     public function candidate_window_keeps_eighth_search_row_for_reusable_half_mask(): void
     {
         $this->settings();
-        $ids = Opisowy15Fixture::seed(['9310+', '9312+', '9914', '7100329384', 'S56T0SM0']);
+        $ids = Opisowy15Fixture::seed(['S56T0SM0']);
         $ids += $this->respirators([
-            '7100113104' => 'Niewymagająca konserwacji półmaska wielokrotnego użytku 3M, FFP2',
-            '9320+' => '3M Aura półmaska filtrująca, FFP2, bez zaworu, 9320+',
-            '9322+' => '3M Aura półmaska filtrująca, FFP2, z zaworem, 9322+',
-            'AURA 9322+GEN3' => '3M Aura półmaska filtrująca, FFP2, z zaworem, 9322+Gen3',
-            '6581-EN' => 'Półmaska wielokrotnego użytku 3M, mechanizm szybkozatrzaskowy, 6500',
-            '9926' => '3M Półmaska filtrująca 9926, specjalistyczna, z zaworem, FFP2',
+            '7100113104' => 'Niewymagająca konserwacji półmaska wielokrotnego użytku 3M, seria 4000',
+            '6581-EN' => 'Półmaska wielokrotnego użytku 3M, mechanizm szybkozatrzaskowy, 6500QL, rozmiar S',
+            '6582-EN' => 'Półmaska wielokrotnego użytku 3M, mechanizm szybkozatrzaskowy, 6500QL, rozmiar M',
+            '7501' => 'Półmaska wielokrotnego użytku 3M seria 7500, rozmiar S',
+            '7502' => 'Półmaska wielokrotnego użytku 3M seria 7500, rozmiar M',
+            '7503' => 'Półmaska wielokrotnego użytku 3M seria 7500, rozmiar L',
+            'HM-1' => 'Półmaska wielokrotnego użytku z łącznikami bagnetowymi, rozmiar M',
+            'S56T1SM0' => 'Półmaska SECURA 3100 (nagłowie trzyczęściowe)',
+            'S56T0SL0' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe), rozmiar L',
+            'S56T0SS0' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe), rozmiar S',
         ]);
-        // Kolejność odpowiedzi wyszukiwarki z produkcji (r_12.json): SECURA 3000 jako 8. wiersz.
-        // Malejący procent utrwala tę kolejność w rankingu wyszukiwarki (procent, potem cena).
-        $order = ['9310+', '7100113104', '9312+', '9320+', '9322+', 'AURA 9322+GEN3', '6581-EN',
-            'S56T0SM0', '9914', '7100329384', '9926'];
+        // Jak w odpowiedzi wyszukiwarki z produkcji (r_12.json): SECURA 3000 jako 8. wiersz,
+        // 11 wierszy. Malejący procent utrwala kolejność w rankingu (procent, potem cena).
+        $order = ['7100113104', '6581-EN', '6582-EN', '7501', '7502', '7503', 'HM-1',
+            'S56T0SM0', 'S56T1SM0', 'S56T0SL0', 'S56T0SS0'];
         $matches = [];
         foreach ($order as $i => $sku) {
             $matches[] = ['id' => $ids[$sku], 'score' => 72 - $i, 'reason' => 'stub: półmaska'];
@@ -78,7 +84,7 @@ final class ProductMatchPickTest extends TestCase
 
         $skus = array_column($candidates, 'sku');
         $this->assertContains('S56T0SM0', $skus, 'SECURA 3000 (8. wiersz odpowiedzi) musi być kandydatem');
-        $this->assertNotContains('9926', $skus, 'okno obejmuje 10 pierwszych wierszy odpowiedzi');
+        $this->assertNotContains('S56T0SS0', $skus, 'okno obejmuje 10 pierwszych wierszy odpowiedzi');
         $this->assertSame(array_slice($order, 0, 10), $skus, 'kolejność kandydatów = kolejność odpowiedzi wyszukiwarki');
     }
 
