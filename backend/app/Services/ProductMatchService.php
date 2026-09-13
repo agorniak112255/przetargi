@@ -61,15 +61,23 @@ final class ProductMatchService
         '2xl', '3xl', '4xl', '5xl', '2x', '3x', '4x',
     ];
 
-    /** Typowe słowa SIWZ pisane KAPITALIKAMI — to nie są kody modelu. */
+    /**
+     * Typowe słowa SIWZ pisane KAPITALIKAMI — to nie są kody modelu; te same rzeczowniki
+     * rodzajowe w nazwie karty nie są też „marką/modelem” (brandModelScore).
+     */
     private const GENERIC_SIWZ_CODES = [
         'kurtka', 'bluza', 'spodnie', 'odziez', 'ubranie', 'komplet', 'zestaw',
         'ochronna', 'ochronne', 'robocza', 'robocze', 'odblask', 'ostrzegaw',
         'elektryk', 'spawal', 'laboratory', 'fartuch', 'kamizelka', 'kitel',
-        'kombinezon', 'kalesony', 'rekawice', 'rekawica', 'oslona', 'przylbica',
-        'polmaska', 'okulary', 'gogle', 'nauszniki', 'szelki', 'trzewiki',
+        'kombinezon', 'kalesony', 'rekawic', 'oslona', 'przylbica',
+        'polmask', 'okular', 'gogl', 'nausznik', 'szelk', 'trzewik',
         'obuwie', 'helm', 'kask', 'kominiarka', 'siatkowa', 'odblaskowa',
+        // rdzenie: „szelka/szelkami”, „półmaskami”, „okularów”, „zaworem”, „bezpieczne/bezpieczeństwa”
+        'typu', 'zawor', 'soczewk', 'oczy', 'oczu', 'filtrujac', 'bezpieczenstw', 'bezpieczn', 'ochron',
     ];
+
+    /** Oznaczenia klas ochrony (FFP1, S1P, OB, A2, K2) — nie marka ani kod modelu. */
+    private const PROTECTION_CLASS_CODE = '/^(?:ffp[1-3]|s[1-7]p?l?|sb|ob|o[1-7]|a[1-3]|b[1-3]|e[1-2]|k[1-2]|p[1-3])$/';
 
     public function __construct(
         private readonly TenderPricingService $pricing,
@@ -830,6 +838,10 @@ final class ProductMatchService
             if (mb_strlen($token) < 4 || in_array($token, self::STOPWORDS, true) || $this->isClothingSize($token)) {
                 continue;
             }
+            // „szelki”, „półmaska”, „typu”, „FFP1” w nazwie karty to rodzaj wyrobu, nie marka z SIWZ
+            if ($this->isGenericSiwzCode($token)) {
+                continue;
+            }
             if ($manuf !== '' && str_contains($manuf, $token)) {
                 $score += 28;
 
@@ -965,6 +977,9 @@ final class ProductMatchService
 
     private function isGenericSiwzCode(string $code): bool
     {
+        if (preg_match(self::PROTECTION_CLASS_CODE, $code) === 1) {
+            return true;
+        }
         foreach (self::GENERIC_SIWZ_CODES as $generic) {
             if ($code === $generic || str_starts_with($code, $generic) || str_contains($generic, $code)) {
                 return true;
@@ -1340,13 +1355,20 @@ final class ProductMatchService
         if ($products->isEmpty()) {
             return null;
         }
+        // remis punktów: najpierw więcej dowodów z karty (explainMatch), dopiero potem cena
+        $explained = [];
+        $evidence = function (Product $p) use (&$explained, $requirement): int {
+            return $explained[spl_object_id($p)] ??= (int) $this->explainMatch($requirement, $p)['score'];
+        };
         foreach ($products as $product) {
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
+            // fuzzy rozstrzyga jak SKU tylko na mocnych igłach (z cyfrą, URG-A, linia po marce) —
+            // „FFP1” czy goły wyraz nie może zablokować pozycji przed oceną modelu
             $score = max(
                 $this->skuMatchScore($reqNorm, $reqCodes, $product),
-                $this->modelFuzzy->score($requirement, $product)
+                $this->modelFuzzy->strongSkuScore($requirement, $product)
             );
             if ($score < 70) {
                 continue;
@@ -1356,10 +1378,16 @@ final class ProductMatchService
                 'score' => max($this->minMatchScore(), $score),
                 'source' => 'heuristic',
             ];
-            if ($best === null
-                || $candidate['score'] > $best['score']
-                || ($candidate['score'] === $best['score']
-                    && $this->purchasePln($product) < $this->purchasePln($best['product']))) {
+            if ($best === null || $candidate['score'] > $best['score']) {
+                $best = $candidate;
+
+                continue;
+            }
+            if ($candidate['score'] !== $best['score']) {
+                continue;
+            }
+            $gap = $evidence($product) <=> $evidence($best['product']);
+            if ($gap > 0 || ($gap === 0 && $this->purchasePln($product) < $this->purchasePln($best['product']))) {
                 $best = $candidate;
             }
         }
@@ -1373,7 +1401,7 @@ final class ProductMatchService
             $this->normalize($requirement),
             $this->codeCandidates($requirement),
             $product
-        ) >= 70 || $this->modelFuzzy->score($requirement, $product) >= 80;
+        ) >= 70 || $this->modelFuzzy->strongSkuScore($requirement, $product) >= 80;
     }
 
     /** Kody z cyfrą (6503, HF803) — nie wolno podstawić innej półmaski tej samej marki. */
@@ -1508,11 +1536,15 @@ final class ProductMatchService
             && ! $this->modelFuzzy->matches($requirement, $product);
     }
 
-    private function requestedManufacturerFromSiwz(string $requirement): ?string
+    /**
+     * Producent wskazany w SIWZ: „prod.CERVA”, „Producent: CERVA”, „prod. 3M” — nie „produkcja metodą”
+     * ani „Produkt spełnia” (wymagana kropka albo „producent…”, nazwa od wielkiej litery lub cyfry).
+     */
+    public function requestedManufacturerFromSiwz(string $requirement): ?string
     {
-        if (preg_match('/\bprod\.?\s*([A-Za-zĄĆĘŁŃÓŚŹŻ0-9\-]+)/ui', $requirement, $m) === 1) {
+        if (preg_match('/\b(?i:prod(?:\.|ucent\w*\.?:?))\s*([A-Z0-9][A-Za-z0-9\-]+)/u', $requirement, $m) === 1) {
             $token = trim($m[1]);
-            if ($token !== '') {
+            if ($token !== '' && preg_match('/[A-Za-z]/', $token) === 1) {
                 return $token;
             }
         }
