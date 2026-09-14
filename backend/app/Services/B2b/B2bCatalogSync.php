@@ -25,8 +25,9 @@ use Throwable;
  * Wspólne zasady zapisu produktów z B2B do katalogu (dla każdego łącznika):
  * - karta dopasowana po powiązaniu z poprzedniego przebiegu, inaczej po dokładnym kodzie; kod karty
  *   innego producenta jest pomijany (wspólny import cenników skleja warianty po rdzeniu kodu i cenie);
- * - cena zawsze ze źródła; historia cen karty (źródło „b2b:{łącznik}”, przebieg) tylko przy nowej karcie
- *   lub zmianie ceny — bez wpisów w historii cenników (zmiany widać na karcie produktu z datą);
+ * - cena zawsze ze źródła; historia cen karty (źródło „b2b:{łącznik}”, przebieg, stały wpis konta w Cennikach)
+ *   tylko przy nowej karcie lub zmianie ceny — zmiany widać na karcie produktu z datą; wpis konta w Cennikach
+ *   (jeden na konto, B2bAccountPriceList) pokazuje wynik ostatniego przebiegu;
  * - opis ze źródła, gdy karta go nie ma albo ma opis zapisany wcześniej przez synchronizację i
  *   niezmieniony od tamtej pory — opisu poprawionego ręcznie nie nadpisujemy;
  * - kategoria, link i zdjęcie tylko gdy puste; produktów znikniętych z B2B nie kasujemy.
@@ -63,6 +64,7 @@ final class B2bCatalogSync
 
     /**
      * @param  (callable(string): void)|null  $onProduct
+     * @param  int|null  $priceListId  stały wpis konta w Cennikach — zapisywany przy historii cen kart
      * @return array{
      *     total_remote: int,
      *     seen: int,
@@ -90,6 +92,7 @@ final class B2bCatalogSync
         bool $withImages = true,
         ?callable $onProduct = null,
         ?B2bSyncProgress $progress = null,
+        ?int $priceListId = null,
     ): array {
         $variantConnector = $connector instanceof B2bVariantConnector ? $connector : null;
         $unit = $variantConnector !== null ? B2bSyncRun::UNIT_VARIANTS : B2bSyncRun::UNIT_PRODUCTS;
@@ -136,8 +139,8 @@ final class B2bCatalogSync
 
             try {
                 $outcome = $variantConnector !== null
-                    ? $this->syncVariantProduct($account, $variantConnector, $remote, $dryRun, $withImages, $runId)
-                    : $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId);
+                    ? $this->syncVariantProduct($account, $variantConnector, $remote, $dryRun, $withImages, $runId, $priceListId)
+                    : $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId, $priceListId);
             } catch (B2bFatalException $e) {
                 // utrata sesji / blokada — kolejne produkty zapisałyby złe ceny; przebieg kończy się jako „failed”
                 throw $e;
@@ -152,11 +155,22 @@ final class B2bCatalogSync
             if ($outcome['status'] === 'skipped') {
                 $stats['skipped']++;
                 $errors[] = $label.': '.$outcome['reason'];
+                $progress?->error($label.': '.$outcome['reason']);
+                $progress?->skipped([
+                    'reason' => (string) $outcome['reason'],
+                    'row' => $stats['seen'],
+                    'sheet' => null,
+                    'sku' => $remote->sku !== '' ? $remote->sku : null,
+                    'name' => $remote->name !== '' ? $remote->name : null,
+                ]);
             } else {
                 $stats[$outcome['status']]++;
                 foreach ($this->priceChangesOf($outcome) as $change) {
                     $pricesChanged++;
                     $progress?->priceChange([...$change, 'at' => now()->toIso8601String()]);
+                }
+                if (($outcome['update_summary'] ?? null) !== null) {
+                    $progress?->updatedProduct($outcome['update_summary']);
                 }
                 if ($outcome['description'] ?? false) {
                     $stats['descriptions']++;
@@ -166,6 +180,7 @@ final class B2bCatalogSync
                 }
                 if (($outcome['image_error'] ?? null) !== null) {
                     $errors[] = $label.': zdjęcie — '.$outcome['image_error'];
+                    $progress?->error($label.': zdjęcie — '.$outcome['image_error']);
                 }
             }
 
@@ -311,6 +326,7 @@ final class B2bCatalogSync
         bool $dryRun,
         bool $withImages,
         ?int $runId,
+        ?int $priceListId,
     ): array {
         if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
             return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
@@ -346,9 +362,12 @@ final class B2bCatalogSync
         $descriptionHash = $this->applyCardDetails($payload, $existing, $link, $connector, $remote);
 
         $priceChange = null;
+        $updateSummary = null;
         $dirty = true;
         if ($existing !== null) {
             $priceChange = $this->priceLists->detectPriceChange($existing, $payload, $remote->sku);
+            // przed fill — porównuje zapisane wartości karty z nowymi
+            $updateSummary = $this->priceLists->summarizeUpdate($existing, $payload, $remote->sku, $priceChange !== null);
             $existing->fill($payload);
             $dirty = $existing->isDirty();
         }
@@ -370,7 +389,7 @@ final class B2bCatalogSync
         if ($existing === null || $priceChange !== null) {
             ProductPriceHistory::query()->create([
                 'product_id' => $product->id,
-                'price_list_id' => null,
+                'price_list_id' => $priceListId,
                 'b2b_sync_run_id' => $runId,
                 'catalog_price_net' => $product->catalog_price_net,
                 'purchase_price' => $product->purchase_price,
@@ -394,6 +413,7 @@ final class B2bCatalogSync
             'status' => $status,
             'product_id' => (int) $product->id,
             'price_change' => $priceChange,
+            'update_summary' => $status === 'updated' ? $updateSummary : null,
             'description' => isset($payload['description']),
             'image' => $image,
             'image_error' => $imageError,
@@ -413,6 +433,7 @@ final class B2bCatalogSync
         bool $dryRun,
         bool $withImages,
         ?int $runId,
+        ?int $priceListId,
     ): array {
         if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
             return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
@@ -627,6 +648,10 @@ final class B2bCatalogSync
         $warnings = [];
         $descriptionHash = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
 
+        // przed fill — porównuje zapisane wartości karty z nowymi; zmiany wersji dopisane po zapisie
+        $updateSummary = $existing !== null
+            ? $this->priceLists->summarizeUpdate($existing, $payload, $remote->sku, false)
+            : null;
         $existing?->fill($payload);
         $cardDirty = $existing === null || $existing->isDirty();
         $status = $existing === null ? 'created' : (($cardDirty || $variantChanged) ? 'updated' : 'unchanged');
@@ -642,7 +667,7 @@ final class B2bCatalogSync
 
         $changes = [];
         $product = DB::transaction(function () use (
-            $account, $remote, $existing, $payload, $rows, $runId, $descriptionHash, $source,
+            $account, $remote, $existing, $payload, $rows, $runId, $priceListId, $descriptionHash, $source,
             $hadCardPrice, $oldCardPurchase, $oldCardCatalog, &$warnings, &$changes,
         ): Product {
             $now = now();
@@ -658,7 +683,7 @@ final class B2bCatalogSync
             if ($hadCardPrice) {
                 ProductPriceHistory::query()->create([
                     'product_id' => $product->id,
-                    'price_list_id' => null,
+                    'price_list_id' => $priceListId,
                     'b2b_sync_run_id' => $runId,
                     'catalog_price_net' => 0,
                     'purchase_price' => 0,
@@ -738,12 +763,22 @@ final class B2bCatalogSync
             ReindexProductEmbeddingJob::dispatch((int) $product->id);
         }
 
+        if ($updateSummary !== null && $status === 'updated') {
+            $fields = array_values(array_diff($updateSummary['fields'], ['bez zmian wartości']));
+            if ($variantChanged) {
+                $fields[] = 'wersje';
+            }
+            $updateSummary['fields'] = $fields !== [] ? $fields : ['bez zmian wartości'];
+            $updateSummary['price_changed'] = $changes !== [];
+        }
+
         [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
 
         return [
             'status' => $status,
             'product_id' => (int) $product->id,
             'price_changes' => $changes,
+            'update_summary' => $status === 'updated' ? $updateSummary : null,
             'description' => isset($payload['description']),
             'image' => $image,
             'image_error' => $imageError,

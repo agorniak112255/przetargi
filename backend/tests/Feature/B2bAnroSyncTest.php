@@ -99,12 +99,15 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertSame($product->id, $link->product_id);
         $this->assertSame(sha1((string) $product->description), $link->description_hash);
 
-        // Synchronizacja nie zakłada wpisów w historii cenników; historia ceny karty wskazuje przebieg.
-        $this->assertSame(0, PriceList::query()->count());
+        // Jeden stały wpis konta w Cennikach; historia ceny karty wskazuje przebieg i ten wpis.
+        $list = PriceList::query()->sole();
+        $this->assertSame($result['price_list_id'], $list->id);
+        $this->assertSame('b2b.anro.net.pl (API)', $list->original_filename);
+        $this->assertSame([$product->id], $list->product_ids);
         $this->assertNotNull($result['sync_run_id']);
         $this->assertTrue(ProductPriceHistory::query()
             ->where('product_id', $product->id)
-            ->whereNull('price_list_id')
+            ->where('price_list_id', $list->id)
             ->where('b2b_sync_run_id', $result['sync_run_id'])
             ->where('source', 'b2b:anro')
             ->exists());
@@ -116,12 +119,12 @@ final class B2bAnroSyncTest extends TestCase
 
         $account = $this->account->fresh();
         $this->assertSame('ok', $account->last_sync_status);
-        $this->assertNull($account->last_price_list_id);
+        $this->assertSame($list->id, $account->last_price_list_id);
         $this->assertStringContainsString('nowe: 1', (string) $account->last_sync_message);
         $this->assertNotNull($account->last_sync_finished_at);
     }
 
-    public function test_second_sync_without_changes_adds_no_price_history_and_no_price_list(): void
+    public function test_second_sync_without_changes_adds_no_price_history_and_keeps_one_price_list(): void
     {
         $this->fakeAnro();
 
@@ -130,7 +133,7 @@ final class B2bAnroSyncTest extends TestCase
 
         $this->assertSame(1, $second['unchanged']);
         $this->assertSame(0, $second['created'] + $second['updated']);
-        $this->assertSame(0, PriceList::query()->count());
+        $this->assertSame(1, PriceList::query()->count());
         $this->assertSame(1, ProductPriceHistory::query()->count());
         $this->assertSame(1, Product::query()->where('sku', self::SKU)->firstOrFail()->images()->count());
     }

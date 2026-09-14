@@ -40,14 +40,23 @@ type HistoryKind = 'prices' | 'updates' | 'skips'
 type PriceChange = {
   sku: string
   name: string
-  catalog_old: number
-  catalog_new: number
-  catalog_pct: number
+  /** Zmiana ceny wersji z konta B2B (np. format × podłoże) — bez ceny katalogowej i upustu. */
+  variant_label?: string | null
+  catalog_old: number | null
+  catalog_new: number | null
+  catalog_pct: number | null
   purchase_old: number
   purchase_new: number
-  discount_old: number
-  discount_new: number
+  discount_old: number | null
+  discount_new: number | null
   direction: 'up' | 'down' | 'flat'
+}
+
+/** Konto B2B, do którego należy wpis — wpis aktualizuje pobieranie z konta. */
+type PriceListB2bAccount = {
+  id: number
+  username: string
+  connector_label: string | null
 }
 
 type UpdatedProduct = {
@@ -94,8 +103,14 @@ type PriceList = {
   enrichment_batch_status?: string | null
   enrichment_current_sku?: string | null
   enrichment_last_error?: string | null
+  b2b_account?: PriceListB2bAccount | null
   created_at: string
   importer?: { name: string }
+}
+
+function b2bLockedTitle(account: PriceListB2bAccount): string {
+  const label = account.connector_label ? `${account.connector_label} · ` : ''
+  return `Cennik konta B2B (${label}${account.username}) — aby go usunąć lub edytować, najpierw usuń konto w zakładce Cenniki → B2B.`
 }
 
 type ImportResult = {
@@ -385,6 +400,9 @@ export function PriceLists() {
   const [rows, setRows] = useState<PriceList[]>([])
   const [historyQuery, setHistoryQuery] = useState(() => searchParams.get('manufacturer') ?? '')
   const [deleteBusyId, setDeleteBusyId] = useState<number | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<PriceList | null>(null)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deleteConfirmError, setDeleteConfirmError] = useState('')
   const [editId, setEditId] = useState<number | null>(null)
   const [editManufacturer, setEditManufacturer] = useState('')
   const [editVersion, setEditVersion] = useState('')
@@ -548,16 +566,23 @@ export function PriceLists() {
     }
   }
 
+  function openDeleteConfirm(row: PriceList) {
+    setDeleteConfirm(row)
+    setDeleteConfirmText('')
+    setDeleteConfirmError('')
+  }
+
+  function closeDeleteConfirm() {
+    if (deleteBusyId !== null) return
+    setDeleteConfirm(null)
+    setDeleteConfirmText('')
+    setDeleteConfirmError('')
+  }
+
   async function deletePriceList(row: PriceList) {
-    const count = (row.product_ids ?? historyCache[row.id]?.product_ids ?? []).length
-    const ok = window.confirm(
-      `Usunąć cennik ${row.manufacturer} / ${row.version}?\n\n` +
-        `Zostaną usunięte produkty powiązane wyłącznie z tym importem` +
-        (count > 0 ? ` (do ${count} pozycji).` : '.') +
-        `\nProdukty występujące też w innych cennikach zostaną zachowane.\n\nTej operacji nie można cofnąć.`,
-    )
-    if (!ok) return
+    if (deleteConfirmText.trim() !== 'Tak') return
     setDeleteBusyId(row.id)
+    setDeleteConfirmError('')
     setErr('')
     setMsg('')
     try {
@@ -570,12 +595,23 @@ export function PriceLists() {
         return next
       })
       if (expandedHistory?.id === row.id) setExpandedHistory(null)
+      setDeleteConfirm(null)
+      setDeleteConfirmText('')
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Błąd usuwania cennika')
+      setDeleteConfirmError(ex instanceof Error ? ex.message : 'Błąd usuwania cennika')
     } finally {
       setDeleteBusyId(null)
     }
   }
+
+  useEffect(() => {
+    if (!deleteConfirm) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeDeleteConfirm()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   async function exportPriceListToPresta(row: PriceList) {
     const count = (row.product_ids ?? historyCache[row.id]?.product_ids ?? []).length
@@ -763,12 +799,19 @@ export function PriceLists() {
             </tr>
           </thead>
           <tbody>
-            {list.map((c) => (
-              <tr key={c.sku} className="border-b">
+            {list.map((c, i) => (
+              <tr key={`${c.sku}-${c.variant_label ?? ''}-${i}`} className="border-b">
                 <td className="p-2 font-medium">{c.sku}</td>
-                <td className="p-2">{c.name}</td>
                 <td className="p-2">
-                  {c.catalog_old} → {c.catalog_new}
+                  {c.name}
+                  {c.variant_label ? (
+                    <span className="block text-slate-500">wersja: {c.variant_label}</span>
+                  ) : null}
+                </td>
+                <td className="p-2">
+                  {c.catalog_old != null && c.catalog_new != null
+                    ? `${c.catalog_old} → ${c.catalog_new}`
+                    : '—'}
                 </td>
                 <td
                   className={`p-2 font-semibold ${
@@ -779,14 +822,15 @@ export function PriceLists() {
                         : 'text-slate-500'
                   }`}
                 >
-                  {c.catalog_pct > 0 ? '+' : ''}
-                  {c.catalog_pct}%
+                  {c.catalog_pct != null ? `${c.catalog_pct > 0 ? '+' : ''}${c.catalog_pct}%` : '—'}
                 </td>
                 <td className="p-2">
                   {c.purchase_old} → {c.purchase_new}
                 </td>
                 <td className="p-2">
-                  {c.discount_old}% → {c.discount_new}%
+                  {c.discount_old != null && c.discount_new != null
+                    ? `${c.discount_old}% → ${c.discount_new}%`
+                    : '—'}
                 </td>
               </tr>
             ))}
@@ -1697,6 +1741,15 @@ export function PriceLists() {
                     ) : (
                       '—'
                     )}
+                    {!editing && r.b2b_account && (
+                      <Link
+                        to="/price-lists/b2b"
+                        className="ml-1.5 inline-block rounded bg-indigo-100 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-indigo-800 hover:bg-indigo-200"
+                        title={`Wpis konta B2B ${r.b2b_account.username} — aktualizowany przy każdym pobraniu`}
+                      >
+                        B2B
+                      </Link>
+                    )}
                   </td>
                   <td className="p-2">
                     {editing ? (
@@ -1854,9 +1907,10 @@ export function PriceLists() {
                           ) : (
                             <button
                               type="button"
-                              disabled={editBusyId != null || deleteBusyId === r.id}
+                              disabled={editBusyId != null || deleteBusyId === r.id || !!r.b2b_account}
                               onClick={() => startEditPriceList(r)}
                               className="rounded border border-sky-300 px-2 py-1 text-[11px] text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+                              title={r.b2b_account ? b2bLockedTitle(r.b2b_account) : undefined}
                             >
                               Edytuj
                             </button>
@@ -1875,9 +1929,10 @@ export function PriceLists() {
                         {canDelete && (
                           <button
                             type="button"
-                            disabled={deleteBusyId === r.id || editing}
-                            onClick={() => void deletePriceList(r)}
+                            disabled={deleteBusyId === r.id || editing || !!r.b2b_account}
+                            onClick={() => openDeleteConfirm(r)}
                             className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50 disabled:opacity-50"
+                            title={r.b2b_account ? b2bLockedTitle(r.b2b_account) : undefined}
                           >
                             {deleteBusyId === r.id ? 'Usuwam…' : 'Usuń'}
                           </button>
@@ -2013,6 +2068,76 @@ export function PriceLists() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {deleteConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="price-list-delete-title"
+          onClick={closeDeleteConfirm}
+        >
+          <form
+            className="w-full max-w-md rounded-xl bg-white p-4 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault()
+              void deletePriceList(deleteConfirm)
+            }}
+          >
+            <p id="price-list-delete-title" className="text-sm font-semibold text-slate-800">
+              Usuń cennik — {deleteConfirm.manufacturer} / {deleteConfirm.version}
+            </p>
+            {(() => {
+              const count = (
+                deleteConfirm.product_ids ??
+                historyCache[deleteConfirm.id]?.product_ids ??
+                []
+              ).length
+              return (
+                <p className="mt-2 text-xs text-slate-600">
+                  Zostaną usunięte produkty powiązane wyłącznie z tym importem
+                  {count > 0 ? <> (do <b>{count}</b> pozycji)</> : null}. Produkty występujące też
+                  w innych cennikach zostaną zachowane. <b>Tej operacji nie można cofnąć.</b>
+                </p>
+              )
+            })()}
+            <label className="mt-3 block text-xs text-slate-700">
+              Wpisz <b>Tak</b>, aby potwierdzić
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                disabled={deleteBusyId !== null}
+                autoFocus
+                autoComplete="off"
+              />
+            </label>
+            {deleteConfirmError && (
+              <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                {deleteConfirmError}
+              </p>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded border border-slate-300 px-3 py-1.5 text-xs disabled:opacity-50"
+                onClick={closeDeleteConfirm}
+                disabled={deleteBusyId !== null}
+              >
+                Anuluj
+              </button>
+              <button
+                type="submit"
+                disabled={deleteConfirmText.trim() !== 'Tak' || deleteBusyId !== null}
+                className="rounded bg-red-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+              >
+                {deleteBusyId === deleteConfirm.id ? 'Usuwam…' : 'Usuń cennik'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

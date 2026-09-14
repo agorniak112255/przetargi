@@ -9,6 +9,7 @@ use App\Jobs\RegisterManufacturerCatalogJob;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Services\B2b\B2bAccountPriceList;
 use App\Services\PriceListDeletionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,6 +20,7 @@ class PriceListController extends Controller
 {
     public function __construct(
         private readonly PriceListDeletionService $deletion,
+        private readonly B2bAccountPriceList $b2bLists,
     ) {}
 
     public function index(): JsonResponse
@@ -27,6 +29,7 @@ class PriceListController extends Controller
             ->with('importer:id,name')
             ->latest()
             ->get();
+        $owners = $this->b2bLists->owners($lists);
 
         $allIds = [];
         foreach ($lists as $list) {
@@ -79,7 +82,7 @@ class PriceListController extends Controller
             }
         }
 
-        $payload = $lists->map(static function (PriceList $list) use ($statusSets, $latestBatchMsg): array {
+        $payload = $lists->map(function (PriceList $list) use ($statusSets, $latestBatchMsg, $owners): array {
             $ids = array_map('intval', $list->product_ids ?? []);
             $countStatus = static function (array $set) use ($ids): int {
                 $n = 0;
@@ -103,6 +106,7 @@ class PriceListController extends Controller
             $row['enrichment_last_error'] = $batch && $batch->failed > 0
                 ? mb_substr((string) ($batch->message ?? ''), 0, 240)
                 : null;
+            $row['b2b_account'] = isset($owners[$list->id]) ? $this->b2bLists->ownerPayload($owners[$list->id]) : null;
 
             return $row;
         })->values()->all();
@@ -112,7 +116,32 @@ class PriceListController extends Controller
 
     public function show(PriceList $priceList): JsonResponse
     {
-        return response()->json($priceList->load('importer:id,name'));
+        $owner = $this->b2bLists->owners([$priceList])[$priceList->id] ?? null;
+
+        return response()->json([
+            ...$priceList->load('importer:id,name')->toArray(),
+            'b2b_account' => $owner !== null ? $this->b2bLists->ownerPayload($owner) : null,
+        ]);
+    }
+
+    /**
+     * Wpis konta B2B: nazwę, wersję i produkty ustawia pobieranie z konta, a usunięcie wpisu skasowałoby katalog
+     * dostawcy — dopóki konto istnieje, wpis jest tylko do odczytu.
+     */
+    private function b2bAccountBlock(PriceList $priceList, string $action): ?JsonResponse
+    {
+        $owner = $this->b2bLists->owners([$priceList])[$priceList->id] ?? null;
+        if ($owner === null) {
+            return null;
+        }
+        $label = $this->b2bLists->ownerPayload($owner)['connector_label'] ?? (string) $priceList->manufacturer;
+        $account = $label.' · '.$owner->username;
+
+        return response()->json([
+            'message' => $action === 'delete'
+                ? 'Nie można usunąć cennika konta B2B ('.$account.') — najpierw usuń konto w zakładce Cenniki → B2B.'
+                : 'Nie można edytować cennika konta B2B ('.$account.') — nazwę i wersję ustawia pobieranie z konta. Najpierw usuń konto w zakładce Cenniki → B2B.',
+        ], 422);
     }
 
     /**
@@ -127,6 +156,9 @@ class PriceListController extends Controller
 
         if ($data === []) {
             return response()->json(['message' => 'Brak pól do aktualizacji.'], 422);
+        }
+        if (($blocked = $this->b2bAccountBlock($priceList, 'update')) !== null) {
+            return $blocked;
         }
 
         $oldManufacturer = (string) $priceList->manufacturer;
@@ -179,6 +211,10 @@ class PriceListController extends Controller
 
     public function destroy(Request $request, PriceList $priceList): JsonResponse
     {
+        if (($blocked = $this->b2bAccountBlock($priceList, 'delete')) !== null) {
+            return $blocked;
+        }
+
         try {
             $result = $this->deletion->delete($priceList, $request->user());
         } catch (Throwable $e) {

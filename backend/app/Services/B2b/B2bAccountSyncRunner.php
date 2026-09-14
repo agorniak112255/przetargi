@@ -6,13 +6,16 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\B2bSyncRun;
+use App\Models\PriceList;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
 
 /**
  * Jeden przebieg synchronizacji konta: status na koncie (running/ok/failed/cancelled), wpis w
- * b2b_sync_runs z postępem i dziennikiem (poza --dry-run) + wynik.
+ * b2b_sync_runs z postępem i dziennikiem oraz aktualizacja stałego wpisu konta w Cennikach
+ * (poza --dry-run) + wynik.
  */
 final class B2bAccountSyncRunner
 {
@@ -21,13 +24,14 @@ final class B2bAccountSyncRunner
     public function __construct(
         private readonly B2bConnectorRegistry $connectors,
         private readonly B2bCatalogSync $sync,
+        private readonly B2bAccountPriceList $priceLists,
     ) {}
 
     /**
      * @param  (callable(string): void)|null  $onProduct
      * @param  string  $trigger  B2bSyncRun::TRIGGER_* — skąd przebieg ruszył
      * @param  B2bConnector|null  $connector  gotowy łącznik (testy); domyślnie z rejestru wg konta
-     * @return array<string, mixed> wynik B2bCatalogSync::run + sync_run_id (null przy --dry-run)
+     * @return array<string, mixed> wynik B2bCatalogSync::run + sync_run_id i price_list_id (null przy --dry-run)
      *
      * @throws RuntimeException gdy konto ma już przebieg w toku (ALREADY_RUNNING)
      */
@@ -45,16 +49,23 @@ final class B2bAccountSyncRunner
         if (! $dryRun) {
             $progress = $this->claim($account, $trigger);
         }
+        $priceList = null;
+        $priceListCreated = false;
 
         try {
+            $connector ??= $this->connectors->make($account, $delayMs);
+            if ($progress !== null) {
+                [$priceList, $priceListCreated] = $this->priceLists->resolve($account, $connector);
+            }
             $result = $this->sync->run(
                 $account,
-                $connector ?? $this->connectors->make($account, $delayMs),
+                $connector,
                 limit: $limit,
                 dryRun: $dryRun,
                 withImages: $withImages ?? (bool) ($account->sync_images ?? true),
                 onProduct: $onProduct,
                 progress: $progress,
+                priceListId: $priceList?->id,
             );
         } catch (Throwable $e) {
             if (! $dryRun) {
@@ -65,6 +76,14 @@ final class B2bAccountSyncRunner
                     'last_sync_message' => $message,
                 ])->save();
                 $progress?->log('error', $message);
+                if ($progress !== null && $priceList !== null) {
+                    $run = $progress->run();
+                    if ((int) ($run->created ?? 0) + (int) ($run->updated ?? 0) > 0) {
+                        $this->recordPriceList($priceList, $account, $progress);
+                    } elseif ($priceListCreated) {
+                        $this->discardPriceList($priceList, $account);
+                    }
+                }
                 $progress?->finish(B2bSyncRun::STATUS_FAILED, $message);
             }
 
@@ -92,6 +111,9 @@ final class B2bAccountSyncRunner
                 default => $summary,
             };
             $message = mb_substr($message, 0, 2000);
+            if ($progress !== null && $priceList !== null) {
+                $this->recordPriceList($priceList, $account, $progress);
+            }
             $account->forceFill([
                 'last_sync_status' => $status,
                 'last_sync_finished_at' => now(),
@@ -104,7 +126,38 @@ final class B2bAccountSyncRunner
             $progress?->finish($status, $message);
         }
 
-        return [...$result, 'sync_run_id' => $progress?->run()->id];
+        return [...$result, 'sync_run_id' => $progress?->run()->id, 'price_list_id' => $priceList?->id];
+    }
+
+    /**
+     * Błąd zapisu wpisu w Cennikach nie zmienia wyniku przebiegu — produkty i ceny są już zapisane;
+     * następny przebieg nadpisze wpis.
+     */
+    private function recordPriceList(PriceList $priceList, B2bAccount $account, B2bSyncProgress $progress): void
+    {
+        try {
+            $this->priceLists->record($priceList, $account, $progress);
+        } catch (Throwable $e) {
+            $progress->log('warn', 'Nie zaktualizowano wpisu konta w Cennikach: '.$e->getMessage());
+            Log::warning('B2B: nie zaktualizowano wpisu konta w Cennikach', [
+                'b2b_account_id' => $account->id,
+                'price_list_id' => $priceList->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function discardPriceList(PriceList $priceList, B2bAccount $account): void
+    {
+        try {
+            $this->priceLists->discardNew($priceList, $account);
+        } catch (Throwable $e) {
+            Log::warning('B2B: nie usunięto pustego wpisu konta w Cennikach', [
+                'b2b_account_id' => $account->id,
+                'price_list_id' => $priceList->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

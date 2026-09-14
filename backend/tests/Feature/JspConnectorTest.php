@@ -375,11 +375,11 @@ final class JspConnectorTest extends TestCase
         $this->assertSame(sha1((string) $product->description), $link->description_hash);
         $this->assertTrue(ProductPriceHistory::query()
             ->where('product_id', $product->id)
-            ->whereNull('price_list_id')
+            ->where('price_list_id', $result['price_list_id'])
             ->where('b2b_sync_run_id', $result['sync_run_id'])
             ->where('source', 'b2b:jsp')
             ->exists());
-        $this->assertSame(0, PriceList::query()->count());
+        $this->assertSame(1, PriceList::query()->count());
         $this->assertStringStartsWith('W B2B: 4 · sprawdzone: 4 · nowe: 2', (string) $this->account()->last_sync_message);
     }
 

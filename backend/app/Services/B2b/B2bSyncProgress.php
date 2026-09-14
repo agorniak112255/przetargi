@@ -25,6 +25,19 @@ final class B2bSyncProgress
     /** @var list<array<string, mixed>> */
     private array $priceChanges = [];
 
+    /**
+     * Szczegóły ostatniego przebiegu dla wpisu konta w Cennikach (B2bAccountPriceList) — tylko w pamięci.
+     *
+     * @var list<array<string, mixed>>
+     */
+    private array $updatedProducts = [];
+
+    /** @var list<array<string, mixed>> */
+    private array $skippedDetails = [];
+
+    /** @var list<string> */
+    private array $errors = [];
+
     private int $sinceFlush = 0;
 
     private float $lastFlushAt;
@@ -78,6 +91,57 @@ final class B2bSyncProgress
         if (count($this->priceChanges) < B2bSyncRun::PRICE_CHANGES_LIMIT) {
             $this->priceChanges[] = $change;
         }
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function priceChanges(): array
+    {
+        return $this->priceChanges;
+    }
+
+    /**
+     * @param  array<string, mixed>  $summary  kształt PriceListImportService::summarizeUpdate
+     */
+    public function updatedProduct(array $summary): void
+    {
+        if (count($this->updatedProducts) < B2bAccountPriceList::UPDATED_PRODUCTS_LIMIT) {
+            $this->updatedProducts[] = $summary;
+        }
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function updatedProducts(): array
+    {
+        return $this->updatedProducts;
+    }
+
+    /**
+     * @param  array{reason: string, row: int|null, sheet: string|null, sku: string|null, name: string|null}  $detail
+     */
+    public function skipped(array $detail): void
+    {
+        if (count($this->skippedDetails) < B2bAccountPriceList::SKIPPED_DETAILS_LIMIT) {
+            $this->skippedDetails[] = $detail;
+        }
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function skippedDetails(): array
+    {
+        return $this->skippedDetails;
+    }
+
+    public function error(string $message): void
+    {
+        if (count($this->errors) < B2bAccountPriceList::ERRORS_LIMIT) {
+            $this->errors[] = mb_substr($message, 0, 1000);
+        }
+    }
+
+    /** @return list<string> */
+    public function errors(): array
+    {
+        return $this->errors;
     }
 
     public function setTotal(int $total): void
