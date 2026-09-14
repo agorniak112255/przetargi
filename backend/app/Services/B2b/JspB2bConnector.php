@@ -29,6 +29,12 @@ final class JspB2bConnector implements B2bConnector
 {
     private const REASON_UNAVAILABLE = 'niedostępny w katalogu konta (sklep przekierował na stronę główną)';
 
+    /** Elementy bez tekstu opisu (pola formularza, media, ramki). */
+    private const SKIPPED_TAGS = ['input', 'button', 'select', 'option', 'textarea', 'img', 'iframe', 'video', 'audio', 'object', 'embed', 'svg', 'link', 'meta', 'script', 'style', 'noscript'];
+
+    /** Elementy, które zaczynają i kończą linię tekstu (li i tr mają osobną obsługę). */
+    private const BLOCK_TAGS = ['p', 'div', 'section', 'article', 'header', 'footer', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'dl', 'dt', 'dd', 'table', 'thead', 'tbody', 'tfoot', 'hr', 'pre'];
+
     private int $total = 0;
 
     public function __construct(private readonly JspB2bClient $client) {}
@@ -117,15 +123,63 @@ final class JspB2bConnector implements B2bConnector
         );
     }
 
+    /**
+     * Opis z tekstów strony, dosłownie (język strony konta, bez tłumaczenia), sekcje oddzielone pustą linią:
+     * pełny opis z zakładki Overview; krótkie cechy spod tytułu tylko wtedy, gdy nie wszystkie są już liniami
+     * opisu (bez Overview — same cechy, jak dotąd); zakładki Features & Benefits, Delivered With (bez linii już
+     * obecnych w opisie) i Weights & Dimensions (tylko pary „nazwa: wartość”); na końcu jednostka sprzedaży.
+     * Zakładki Documents, Other Colours, Product Reviews i Video nie trafiają do opisu.
+     */
     public function description(B2bRemoteProduct $product): string
     {
-        $lines = array_map(static fn (string $feature): string => '- '.$feature, $product->raw['features'] ?? []);
-        $unit = (string) ($product->raw['unit'] ?? '');
-        if ($unit !== '') {
-            $lines[] = ($lines !== [] ? "\n" : '').'Jednostka: '.$unit;
+        $raw = $product->raw;
+        $sections = [];
+        $known = [];
+
+        $overview = $raw['overview'] ?? [];
+        if ($overview !== []) {
+            $sections[] = implode("\n", $overview);
+            foreach ($overview as $line) {
+                $known[self::lineKey($line)] = true;
+            }
+            $short = $raw['short_features'] ?? [];
+            $uncovered = array_filter($short, static fn (string $item): bool => ! isset($known[self::lineKey($item)]));
+            if ($uncovered !== []) {
+                $sections[] = "Cechy w skrócie:\n".implode("\n", array_map(static fn (string $item): string => '- '.$item, $short));
+                foreach ($short as $item) {
+                    $known[self::lineKey($item)] = true;
+                }
+            }
+        } elseif (($raw['features'] ?? []) !== []) {
+            $sections[] = implode("\n", array_map(static fn (string $item): string => '- '.$item, $raw['features']));
+            foreach ($raw['features'] as $item) {
+                $known[self::lineKey($item)] = true;
+            }
         }
 
-        return mb_substr(implode("\n", $lines), 0, 10000);
+        foreach (['tab_features' => 'Cechy i zalety:', 'delivered_with' => 'W zestawie:'] as $key => $heading) {
+            $items = [];
+            foreach ($raw[$key] ?? [] as $item) {
+                if (! isset($known[self::lineKey($item)])) {
+                    $known[self::lineKey($item)] = true;
+                    $items[] = '- '.$item;
+                }
+            }
+            if ($items !== []) {
+                $sections[] = $heading."\n".implode("\n", $items);
+            }
+        }
+
+        if (($raw['weights'] ?? []) !== []) {
+            $sections[] = "Wagi i wymiary:\n".implode("\n", $raw['weights']);
+        }
+
+        $unit = (string) ($raw['unit'] ?? '');
+        if ($unit !== '') {
+            $sections[] = 'Jednostka: '.$unit;
+        }
+
+        return mb_substr(implode("\n\n", $sections), 0, 10000);
     }
 
     public function image(B2bRemoteProduct $product): ?B2bRemoteImage
@@ -187,6 +241,11 @@ final class JspB2bConnector implements B2bConnector
                 'mrrp_text' => self::text(self::first($xpath, 'Prices_PriceMRRPText', $mrrpBox)),
                 'unit' => $unit,
                 'features' => self::features($xpath),
+                'short_features' => self::listItems($xpath, '//*['.JspB2bClient::classPredicate('ProductShortDescription').']//li'),
+                'overview' => self::consecutiveUnique(self::tabLines($xpath, 'overview')),
+                'tab_features' => self::tabItems($xpath, 'features'),
+                'delivered_with' => self::tabItems($xpath, 'delivered'),
+                'weights' => self::weightRows(self::tabLines($xpath, 'weights')),
                 'image_url' => self::metaProperty($xpath, 'og:image'),
             ],
         );
@@ -220,12 +279,22 @@ final class JspB2bConnector implements B2bConnector
      */
     private static function features(DOMXPath $xpath): array
     {
-        $items = $xpath->query('//ul['.JspB2bClient::classPredicate('description-overview').']/li');
-        if ($items === false || $items->length === 0) {
-            $items = $xpath->query('//*['.JspB2bClient::classPredicate('ProductShortDescription').']//li');
-        }
+        $items = self::listItems($xpath, '//ul['.JspB2bClient::classPredicate('description-overview').']/li');
+
+        return $items !== []
+            ? $items
+            : self::listItems($xpath, '//*['.JspB2bClient::classPredicate('ProductShortDescription').']//li');
+    }
+
+    /**
+     * Teksty elementów listy, dosłownie, bez pustych i powtórzeń.
+     *
+     * @return list<string>
+     */
+    private static function listItems(DOMXPath $xpath, string $query): array
+    {
         $out = [];
-        foreach ($items ?: [] as $li) {
+        foreach ($xpath->query($query) ?: [] as $li) {
             $text = self::text($li);
             if ($text !== '' && ! isset($out[$text])) {
                 $out[$text] = true;
@@ -233,6 +302,235 @@ final class JspB2bConnector implements B2bConnector
         }
 
         return array_map('strval', array_keys($out));
+    }
+
+    /**
+     * Treść zakładki danego rodzaju jako linie tekstu (pusta lista, gdy zakładki brak). Zakładkę rozpoznajemy po
+     * tytule akordeonu (TabbedData_TabBodyAccordionTitle) albo nagłówku zakładki z tym samym data-index — tylko
+     * Overview i Documents mają klasę Tab_*, reszta treści zakładek jest bez nazwy. Tytuły są po angielsku także
+     * dla konta polskiego. Po słowach z treści (np. „waga”) zakładek nie zgadujemy.
+     *
+     * @param  'overview'|'features'|'delivered'|'weights'  $kind
+     * @return list<string>
+     */
+    private static function tabLines(DOMXPath $xpath, string $kind): array
+    {
+        foreach ($xpath->query('//*['.JspB2bClient::classPredicate('TabbedData_TabBodyContainer').']') ?: [] as $body) {
+            if (! $body instanceof DOMElement) {
+                continue;
+            }
+            if (self::tabKind($xpath, $body) === $kind) {
+                return self::blockLines($body);
+            }
+        }
+
+        return [];
+    }
+
+    private static function tabKind(DOMXPath $xpath, DOMElement $body): ?string
+    {
+        $title = '';
+        $index = $body->getAttribute('data-index');
+        if ($index !== '' && preg_match('/^\d+$/', $index) === 1) {
+            $container = $xpath->query('ancestor::*['.JspB2bClient::classPredicate('TabbedData_Container').'][1]', $body)->item(0);
+            foreach (['TabbedData_TabBodyAccordionTitle', 'TabbedData_TabHead'] as $class) {
+                $title = self::text($xpath->query(
+                    ($container !== null ? './/' : '//').'*['.JspB2bClient::classPredicate($class).'][@data-index="'.$index.'"]',
+                    $container,
+                )->item(0));
+                if ($title !== '') {
+                    break;
+                }
+            }
+        }
+        if ($title === '') {
+            $previous = $body->previousSibling;
+            while ($previous !== null && ! $previous instanceof DOMElement) {
+                $previous = $previous->previousSibling;
+            }
+            if ($previous instanceof DOMElement && str_contains(' '.$previous->getAttribute('class').' ', ' TabbedData_TabBodyAccordionTitle ')) {
+                $title = self::text($previous);
+            }
+        }
+
+        return match (true) {
+            preg_match('/^overview$/i', $title) === 1,
+            $title === '' && str_contains(' '.$body->getAttribute('class').' ', ' Tab_Overview ') => 'overview',
+            preg_match('/\bfeatures\b.*\bbenefits\b/i', $title) === 1 => 'features',
+            preg_match('/^delivered\s+with$/i', $title) === 1 => 'delivered',
+            preg_match('/^weights\b/i', $title) === 1 => 'weights',
+            default => null,
+        };
+    }
+
+    /**
+     * Pozycje zakładki listowej (Features & Benefits, Delivered With): bez znacznika „- ” i bez powtórzeń.
+     *
+     * @param  'features'|'delivered'  $kind
+     * @return list<string>
+     */
+    private static function tabItems(DOMXPath $xpath, string $kind): array
+    {
+        $out = [];
+        foreach (self::tabLines($xpath, $kind) as $line) {
+            $item = (string) preg_replace('/^- /u', '', $line);
+            if ($item !== '' && ! isset($out[$item])) {
+                $out[$item] = true;
+            }
+        }
+
+        return array_map('strval', array_keys($out));
+    }
+
+    /**
+     * Wiersze Weights & Dimensions: tylko linie „nazwa: wartość” (dosłownie, bez tłumaczenia i przeliczania
+     * jednostek), poprzedzone ostatnią nazwą grupy — linią bez dwukropka, np. „INNER PACK” → „INNER PACK – Height: 12CM”.
+     *
+     * @param  list<string>  $lines
+     * @return list<string>
+     */
+    private static function weightRows(array $lines): array
+    {
+        $rows = [];
+        $group = '';
+        foreach ($lines as $line) {
+            if (preg_match('/^([^:]{1,80}?)\s*:\s*(\S.*)$/u', $line, $m) === 1) {
+                $rows[] = ($group !== '' ? $group.' – ' : '').$m[1].': '.$m[2];
+            } elseif (! str_contains($line, ':') && ! str_contains($line, ' | ')) {
+                $group = $line;
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Element HTML → linie tekstu. Nowa linia: <br>, początek i koniec elementu blokowego, pozycja listy („- …”),
+     * wiersz tabeli (dwie komórki → „nazwa: wartość”). Pogrubienie (<strong>, <b>) jest osobną linią-nagłówkiem,
+     * gdy zaczyna linię poza listą, a tekst po nim nie jest dalszym ciągiem zdania („<strong>CR2</strong> - CR2 to…”,
+     * „<strong>Wkładka EPP </strong>- Nasza…” zostają w jednej linii). Bez pól formularza, obrazków, ramek
+     * i przełącznika „Show more/less”. Białe znaki w tekście zwinięte do spacji, puste linie pominięte.
+     *
+     * @return list<string>
+     */
+    private static function blockLines(DOMNode $root): array
+    {
+        $lines = [];
+        $buffer = '';
+        $flush = static function () use (&$lines, &$buffer): void {
+            $line = trim((string) preg_replace('/[\s\x{00A0}]+/u', ' ', $buffer));
+            if ($line !== '' && $line !== '-') {
+                $lines[] = $line;
+            }
+            $buffer = '';
+        };
+
+        $walk = static function (DOMNode $node, bool $inList) use (&$walk, &$buffer, $flush): void {
+            foreach ($node->childNodes as $child) {
+                if ($child->nodeType === XML_TEXT_NODE || $child->nodeType === XML_CDATA_SECTION_NODE) {
+                    $buffer .= $child->nodeValue;
+
+                    continue;
+                }
+                if (! $child instanceof DOMElement) {
+                    continue;
+                }
+                $tag = strtolower($child->nodeName);
+                $class = ' '.$child->getAttribute('class').' ';
+                if (in_array($tag, self::SKIPPED_TAGS, true)
+                    || str_contains($class, ' ProductDescription_ShowHideDescriptionLinkContainer ')
+                    || str_contains($class, ' ProductDescription_ShowHideDescriptionLink ')) {
+                    continue;
+                }
+
+                if ($tag === 'br') {
+                    $flush();
+                } elseif ($tag === 'li') {
+                    $flush();
+                    $buffer = '- ';
+                    $walk($child, true);
+                    $flush();
+                } elseif ($tag === 'tr') {
+                    $flush();
+                    $total = 0;
+                    $cells = [];
+                    foreach ($child->childNodes as $cell) {
+                        if ($cell instanceof DOMElement && in_array(strtolower($cell->nodeName), ['td', 'th'], true)) {
+                            $total++;
+                            if (self::text($cell) !== '') {
+                                $cells[] = self::text($cell);
+                            }
+                        }
+                    }
+                    // nazwa bez wartości (np. „Uwagi” | pusta komórka) to ani para, ani nagłówek grupy — pomijamy
+                    if (! ($total >= 2 && count($cells) === 1)) {
+                        $buffer = count($cells) === 2 ? $cells[0].': '.$cells[1] : implode(' | ', $cells);
+                    }
+                    $flush();
+                } elseif (in_array($tag, self::BLOCK_TAGS, true)) {
+                    $flush();
+                    $walk($child, $inList);
+                    $flush();
+                } elseif (in_array($tag, ['strong', 'b'], true) && ! $inList && self::isHeading($child, $buffer)) {
+                    $flush();
+                    $walk($child, $inList);
+                    $flush();
+                } else {
+                    $walk($child, $inList);
+                }
+            }
+        };
+
+        $walk($root, false);
+        $flush();
+
+        return $lines;
+    }
+
+    /** Pogrubienie jako nagłówek: zaczyna linię, nie kończy się łącznikiem, a następny tekst nie ciągnie zdania. */
+    private static function isHeading(DOMElement $bold, string $buffer): bool
+    {
+        if (trim((string) preg_replace('/[\s\x{00A0}]+/u', ' ', $buffer)) !== '') {
+            return false;
+        }
+        $own = trim((string) preg_replace('/[\s\x{00A0}]+/u', ' ', $bold->textContent));
+        if ($own === '' || preg_match('/[-–—:]$/u', $own) === 1) {
+            return false;
+        }
+        $next = $bold->nextSibling;
+        while ($next !== null && $next->nodeType === XML_TEXT_NODE && trim((string) preg_replace('/[\s\x{00A0}]+/u', '', (string) $next->nodeValue)) === '') {
+            $next = $next->nextSibling;
+        }
+        if ($next === null || $next->nodeType !== XML_TEXT_NODE) {
+            return true;
+        }
+        $following = ltrim((string) preg_replace('/^[\s\x{00A0}]+/u', '', (string) $next->nodeValue));
+
+        return preg_match('/^[-–—:,.;)\p{Ll}]/u', $following) !== 1;
+    }
+
+    /**
+     * Linie bez powtórzeń tuż po sobie (ta sama linia w dwóch miejscach opisu może mieć inne znaczenie — zostaje).
+     *
+     * @param  list<string>  $lines
+     * @return list<string>
+     */
+    private static function consecutiveUnique(array $lines): array
+    {
+        $out = [];
+        foreach ($lines as $line) {
+            if ($out === [] || end($out) !== $line) {
+                $out[] = $line;
+            }
+        }
+
+        return $out;
+    }
+
+    /** Klucz porównania linii (czy cecha jest już w opisie): bez „- ”, końcowej kropki i wielkości liter. */
+    private static function lineKey(string $line): string
+    {
+        return mb_strtolower(trim((string) preg_replace(['/^-\s+/u', '/[\s.;:,]+$/u'], '', $line)));
     }
 
     /** Ścieżka kategorii z okruszków; „All Products” i „Search : …” (adres kw/a) to nie kategorie. */

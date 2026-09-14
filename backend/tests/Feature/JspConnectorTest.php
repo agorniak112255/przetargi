@@ -41,6 +41,48 @@ final class JspConnectorTest extends TestCase
 
     private const FAR_URL = 'https://www.jspsafety.com/products/kw/a/FAR0701_2m-Webbing-Self-Retractable-lifeline-Vertical-Horizontal-FF2';
 
+    /** Mapa strony z jednym produktem (adres prawdziwy, z sitemap.xml sklepu). */
+    private const ASA_SITEMAP = '<?xml version="1.0" encoding="utf-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        .'<url><loc>https://www.jspsafety.com/products/PPE/Eye-Face-Protection/Over-Spectacles/ASA940-061-300_Stealth-Coverlite-lightweight-Overspecs-Clear-Anti-scratch-lenses-Black-Frames</loc></url>'
+        .'</urlset>';
+
+    /**
+     * SYNTETYCZNE zakładki Features & Benefits i Delivered With (strona ASA940 ich nie ma; znaczniki jak w innych
+     * zakładkach bez klasy Tab_*). „Pantoskopowe ramiona…” powtarza nagłówek z Overview — ma nie wejść drugi raz.
+     */
+    private const EXTRA_TABS = '<h3 class="TabbedData_TabBodyAccordionTitle" data-index="7"><span> Features &amp; Benefits </span></h3>'
+        .'<div class="TabbedData_TabBodyContainer" data-index="7"><div class="TabbedData_SectionContainer"><div class="TabbedData_TextContentContainer">'
+        .'<ul class="description-overview"><li> Pantoskopowe ramiona z miękkim uchwytem </li><li> Soczewka 1 klasy optycznej </li><li> Soczewka 1 klasy optycznej </li></ul>'
+        .'</div></div></div>'
+        .'<h3 class="TabbedData_TabBodyAccordionTitle" data-index="8"><span> Delivered With </span></h3>'
+        .'<div class="TabbedData_TabBodyContainer" data-index="8"><div class="TabbedData_SectionContainer"><div class="TabbedData_TextContentContainer">'
+        .'<ul><li> Etui z mikrofibry </li><li> Linka do okularów </li></ul>'
+        .'</div></div></div>';
+
+    private const ASA_OVERVIEW = "Stealth™ Coverlite™ z powłoką nierysującą K — przezroczyste\n"
+        ."Spełnia wymagania normy EN 166\n"
+        ."Stylowe\n"
+        ."Stylowa i przestronna konstrukcja Stealth™ Coverlite™ oznacza, że mogą one wygodnie zmieścić się na okulary korekcyjne, zachowując nowoczesny wygląd.\n"
+        ."Powłoka nierysująca K\n"
+        ."Soczewka Stealth™ CoverLite™ jest pokryta z obu stron powłoką PremierShield™ K o właściwościach nierysujących.\n"
+        ."Optycznie doskonały\n"
+        ."Wytrzymała, niska podstawa, minimalna krzywizna, soczewka 1 klasy optycznej zapewnia optymalne widzenie.\n"
+        ."Pantoskopowe ramiona z miękkim uchwytem\n"
+        ."Ramiona Stealth™ CoverLite™ są pantoskopowe i mają miękkie nakładki.\n"
+        ."Elastyczna oprawka\n"
+        ."Oprawka Stealth™ Coverlite™ jest elastyczna i sprężysta.\n"
+        ."Bardzo lekka waga\n"
+        .'Stealth™ Coverlite™ waży zaledwie 34 g.';
+
+    private const ASA_SHORT = "- Stylowy Overspec\n- Powłoka soczewki K\n- Optycznie doskonały\n- Pantoskopowe ramiona z miękkim uchwytem\n- Elastyczna oprawka\n- Ultralekkie";
+
+    private const ASA_WEIGHTS = "Wagi i wymiary:\n"
+        ."INNER PACK – Pack quantity: 10\nINNER PACK – Height: 12CM\nINNER PACK – Width: 17.5CM\nINNER PACK – Length: 27.5CM\nINNER PACK – Weight: 0.58KG\n"
+        .'OUTER PACK – Pack quantity: 120'."\nOUTER PACK – Height: 30CM\nOUTER PACK – Width: 50CM\nOUTER PACK – Length: 54CM\nOUTER PACK – Weight: 5.082KG";
+
+    /** Zastępcza mapa strony (null = tests/Fixtures/jsp/sitemap.xml). */
+    private ?string $sitemap = null;
+
     /** @var array<string, string> kod bez myślników → HTML strony produktu */
     private array $pages = [];
 
@@ -72,6 +114,8 @@ final class JspConnectorTest extends TestCase
                 '<div id="ctl00_ContentPlaceHolder1_ctl16_dvPartNo" class="ProductTitleBar_PartNo"> FAR0701 </div>', '', $far
             ),
             // AJF030000100 nie ma strony dla konta → przekierowanie na stronę główną
+            // w mapie strony tylko przy $this->sitemap = ASA_SITEMAP
+            'ASA940061300' => $this->fixture('product_asa940061300.html'),
         ];
     }
 
@@ -289,6 +333,152 @@ final class JspConnectorTest extends TestCase
         Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), 'showfile.aspx'));
     }
 
+    public function test_description_is_full_overview_then_short_features_weights_and_unit_without_other_tabs(): void
+    {
+        $description = $this->asaDescription();
+
+        $this->assertSame(implode("\n\n", [
+            self::ASA_OVERVIEW,
+            // polskie krótkie cechy nie są dosłownie nagłówkami opisu („Stylowy Overspec” ≠ „Stylowe”) — zostają
+            "Cechy w skrócie:\n".self::ASA_SHORT,
+            self::ASA_WEIGHTS,
+            'Jednostka: sztuka',
+        ]), $description);
+        foreach (['Karta techniczna', 'Download', 'przydymione', 'Add to basket', 'Brak opinii', 'Oceń ten produkt', 'Jak dobrać', 'Show More', 'Show Less', 'Szablon ze skryptu', '€'] as $chrome) {
+            $this->assertStringNotContainsString($chrome, $description);
+        }
+    }
+
+    public function test_short_features_are_dropped_when_each_is_already_a_line_of_overview(): void
+    {
+        $this->pages['ASA940061300'] = str_replace(
+            ['Stylowy Overspec', 'Powłoka soczewki K', 'Ultralekkie', 'Elastyczna oprawka'],
+            ['Stylowe', 'powłoka nierysująca K.', 'Bardzo lekka waga', 'Elastyczna oprawka'],
+            $this->pages['ASA940061300'],
+        );
+
+        $this->assertSame(
+            implode("\n\n", [self::ASA_OVERVIEW, self::ASA_WEIGHTS, 'Jednostka: sztuka']),
+            $this->asaDescription(),
+        );
+    }
+
+    public function test_without_overview_tab_description_falls_back_to_short_features(): void
+    {
+        $this->pages['ASA940061300'] = (string) preg_replace('#<!-- overview -->.*?<!-- /overview -->#s', '', $this->pages['ASA940061300']);
+
+        $this->assertSame(
+            implode("\n\n", [self::ASA_SHORT, self::ASA_WEIGHTS, 'Jednostka: sztuka']),
+            $this->asaDescription(),
+        );
+    }
+
+    public function test_features_and_delivered_with_tabs_add_only_lines_not_yet_in_description(): void
+    {
+        $this->pages['ASA940061300'] = str_replace('<!-- /weights -->', self::EXTRA_TABS, $this->pages['ASA940061300']);
+
+        $this->assertSame(implode("\n\n", [
+            self::ASA_OVERVIEW,
+            "Cechy w skrócie:\n".self::ASA_SHORT,
+            "Cechy i zalety:\n- Soczewka 1 klasy optycznej",
+            "W zestawie:\n- Etui z mikrofibry\n- Linka do okularów",
+            self::ASA_WEIGHTS,
+            'Jednostka: sztuka',
+        ]), $this->asaDescription());
+    }
+
+    public function test_weights_table_gives_only_label_value_rows_with_group_prefix(): void
+    {
+        $this->pages['ASA940061300'] = (string) preg_replace(
+            '#<span class="field-value">.*?</span>#s',
+            '<table><tr><th colspan="2">INNER PACK</th></tr><tr><td>Pack quantity</td><td>10</td></tr><tr><td>Uwagi</td><td> </td></tr>'
+            .'<tr><td>Height</td><td>12CM</td></tr></table><table><tr><td>Weight</td><td>0.58KG</td></tr></table>',
+            $this->pages['ASA940061300'],
+        );
+
+        $this->assertStringContainsString(
+            "Wagi i wymiary:\nINNER PACK – Pack quantity: 10\nINNER PACK – Height: 12CM\nINNER PACK – Weight: 0.58KG\n\nJednostka: sztuka",
+            $this->asaDescription(),
+        );
+    }
+
+    public function test_overview_keeps_inline_bold_in_its_sentence_and_list_items_as_bullets(): void
+    {
+        // układ z opisów EVO®5 i Force®8 (strony anonimowe), teksty skrócone
+        $this->pages['ASA940061300'] = (string) preg_replace(
+            '#(<div class="TabbedData_TextContentContainer">)\s*<h2> Stealth.*?(<input)#s',
+            '$1<h2> EVO®5 Dualswitch™ </h2>'."\n".'Hełm zgodny z normami EN 397 i EN 12492, z możliwością przełączania pomiędzy'."\n"
+            .'2 normami.<br><br><strong> Praca na ziemi - przesuń w górę </strong><br><br><ul class="description-overview"><li> EN 397 </li><li> ANSI / ISEA Z89.1 </li></ul>'
+            .'<strong> Praca na wysokości - przesuń w dół </strong><ul class="description-overview"><li> EN 12492 </li><li> ANSI / ISEA Z89.1 </li></ul><br><br>'
+            .' <strong>Wkładka EPP </strong>- Nasza wytrzymała wyściółka.<br><br><strong> Bezpieczne dopasowanie -</strong> w pełni regulowany pasek.<br><br>'
+            .'<strong> CR2</strong> - materiał odblaskowy.<br>Soczewka <strong>1 klasy</strong> optycznej.<br>'
+            .'<strong>Features &amp; Benefits</strong><ul class="description-overview"><li> <b>Convenience</b> - half-mask always on hand </li></ul>'
+            .'<img src="https://data.jsp.co.uk/images/dualswitch.png"><br><br>Zdjęcia tylko do celów poglądowych.$2',
+            $this->pages['ASA940061300'],
+        );
+
+        $this->assertStringStartsWith(implode("\n", [
+            'EVO®5 Dualswitch™',
+            'Hełm zgodny z normami EN 397 i EN 12492, z możliwością przełączania pomiędzy 2 normami.',
+            'Praca na ziemi - przesuń w górę',
+            '- EN 397',
+            '- ANSI / ISEA Z89.1',
+            'Praca na wysokości - przesuń w dół',
+            '- EN 12492',
+            // ta sama norma pod innym nagłówkiem zostaje
+            '- ANSI / ISEA Z89.1',
+            'Wkładka EPP - Nasza wytrzymała wyściółka.',
+            'Bezpieczne dopasowanie - w pełni regulowany pasek.',
+            'CR2 - materiał odblaskowy.',
+            'Soczewka 1 klasy optycznej.',
+            'Features & Benefits',
+            '- Convenience - half-mask always on hand',
+            'Zdjęcia tylko do celów poglądowych.',
+        ])."\n\nCechy w skrócie:", $this->asaDescription());
+    }
+
+    public function test_next_sync_replaces_description_written_by_sync_with_full_page_description(): void
+    {
+        Storage::fake('public');
+        $this->sitemap = self::ASA_SITEMAP;
+        $full = $this->pages['ASA940061300'];
+        // strona w starym odczycie: bez zakładek zostają tylko krótkie cechy (jak w zgłoszeniu)
+        $this->pages['ASA940061300'] = (string) preg_replace('#<!-- zakładki -->.*?<!-- /zakładki -->#s', '', $full);
+        $this->fakeSite();
+
+        $first = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+        $product = Product::query()->where('sku', 'ASA940-061-300')->sole();
+        $this->assertSame(1, $first['created']);
+        $this->assertSame(self::ASA_SHORT."\n\nJednostka: sztuka", $product->description);
+
+        $this->pages['ASA940061300'] = $full;
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $product->refresh();
+        $this->assertSame(1, $second['descriptions']);
+        $this->assertStringStartsWith(self::ASA_OVERVIEW."\n\nCechy w skrócie:", (string) $product->description);
+        $this->assertStringContainsString(self::ASA_WEIGHTS, (string) $product->description);
+        $this->assertSame(sha1((string) $product->description), B2bProductLink::query()->where('remote_id', 'ASA940-061-300')->value('description_hash'));
+    }
+
+    public function test_next_sync_keeps_manually_edited_description(): void
+    {
+        Storage::fake('public');
+        $this->sitemap = self::ASA_SITEMAP;
+        $full = $this->pages['ASA940061300'];
+        $this->pages['ASA940061300'] = (string) preg_replace('#<!-- zakładki -->.*?<!-- /zakładki -->#s', '', $full);
+        $this->fakeSite();
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+        $product = Product::query()->where('sku', 'ASA940-061-300')->sole();
+        $product->update(['description' => 'Opis poprawiony ręcznie przez handlowca w katalogu.']);
+
+        $this->pages['ASA940061300'] = $full;
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame(0, $second['descriptions']);
+        $this->assertSame('Opis poprawiony ręcznie przez handlowca w katalogu.', $product->fresh()?->description);
+    }
+
     public function test_image_comes_from_og_image_as_public_url(): void
     {
         $this->fakeSite();
@@ -426,6 +616,19 @@ final class JspConnectorTest extends TestCase
         return $out;
     }
 
+    /** Opis ASA940-061-300 z przebiegu łącznika po stronie z $this->pages (mapa strony z jednym produktem). */
+    private function asaDescription(): string
+    {
+        $this->sitemap = self::ASA_SITEMAP;
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['ASA940-061-300'];
+        $this->assertSame('ok', $product->raw['status']);
+
+        return $connector->description($product);
+    }
+
     private function fixture(string $name): string
     {
         return (string) file_get_contents(base_path('tests/Fixtures/jsp/'.$name));
@@ -464,7 +667,7 @@ final class JspConnectorTest extends TestCase
                 return Http::response($this->withMarker($this->fixture('home.html'), $loggedIn));
             }
             if ($path === '/netalogue/sitemap.xml') {
-                return Http::response($this->fixture('sitemap.xml'), 200, ['Content-Type' => 'text/xml']);
+                return Http::response($this->sitemap ?? $this->fixture('sitemap.xml'), 200, ['Content-Type' => 'text/xml']);
             }
             if (str_starts_with($path, '/products/kw/a/')) {
                 if ($this->dropSessionOnce) {
