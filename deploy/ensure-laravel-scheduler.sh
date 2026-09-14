@@ -58,7 +58,14 @@ cd "$BACKEND"
 # Jako właściciel, nie root: blokady harmonogramu i cache założone przez roota
 # blokowały potem cron użytkownika (np. b2b:sync-due z „Sprawdź teraz” nie ruszał).
 if [[ "$(id -u)" -eq 0 ]]; then
-  runuser -u "$OWNER" -- "$PHP_BIN" artisan schedule:run -v || true
+  # runuser nie wszędzie jest w PATH (serwer Plesk) — sudo albo su jako zapas
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$OWNER" -- "$PHP_BIN" artisan schedule:run -v || true
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo -u "$OWNER" "$PHP_BIN" artisan schedule:run -v || true
+  else
+    su -s /bin/sh "$OWNER" -c "\"$PHP_BIN\" artisan schedule:run -v" || true
+  fi
 else
   "$PHP_BIN" artisan schedule:run -v || true
 fi
