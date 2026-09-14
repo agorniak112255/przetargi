@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Services\Ai\AiServedProviderTally;
+use App\Services\B2b\B2bSyncLauncher;
+use App\Services\B2b\BackgroundB2bSyncLauncher;
+use App\Services\B2b\InlineB2bSyncLauncher;
 use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\EnrichmentLiveProgress;
 use App\Services\MailSettingsService;
@@ -24,6 +27,19 @@ class AppServiceProvider extends ServiceProvider
         $this->app->scoped(EnrichmentLiveProgress::class);
         $this->app->bind(PrestaCatalogGateway::class, PrestaShopCatalogClient::class);
         $this->app->bind(PrestaExportGateway::class, PrestaShopExportClient::class);
+        // b2b:sync-due: w testach przebieg w tym samym procesie (bez podprocesów), poza testami — proces w tle na konto
+        $this->app->bind(B2bSyncLauncher::class, function ($app): B2bSyncLauncher {
+            if ($app->runningUnitTests()) {
+                return $app->make(InlineB2bSyncLauncher::class);
+            }
+
+            return new BackgroundB2bSyncLauncher(
+                $app->make(InlineB2bSyncLauncher::class),
+                PHP_BINARY,
+                base_path('artisan'),
+                storage_path('logs/b2b-sync.log'),
+            );
+        });
     }
 
     public function boot(): void

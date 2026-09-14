@@ -8,24 +8,37 @@ use App\Models\B2bAccount;
 use App\Models\B2bSyncRun;
 use App\Services\B2b\B2bAccountSyncRunner;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 use Throwable;
 
 /**
  * Ręczne pobranie cennika z konta B2B (Cenniki → B2B): produkty, ceny konta, opisy, zdjęcia.
+ * Uruchamiane też w tle przez b2b:sync-due (--trigger=manual|schedule).
  */
 final class B2bSyncCommand extends Command
 {
+    /** @var list<string> */
+    public const TRIGGERS = [B2bSyncRun::TRIGGER_CLI, B2bSyncRun::TRIGGER_MANUAL, B2bSyncRun::TRIGGER_SCHEDULE];
+
     protected $signature = 'b2b:sync
         {account : ID konta B2B (widoczne na karcie w Cenniki → B2B)}
         {--limit= : Ile produktów sprawdzić (próbka)}
         {--dry-run : Tylko pobiera i pokazuje, nic nie zapisuje}
         {--no-images : Bez pobierania zdjęć}
-        {--delay=150 : Przerwa między zapytaniami do dostawcy w ms}';
+        {--delay=150 : Przerwa między zapytaniami do dostawcy w ms}
+        {--trigger=cli : Skąd przebieg ruszył: cli (ręcznie z konsoli), manual („Sprawdź teraz”), schedule (harmonogram)}';
 
     protected $description = 'Pobiera produkty, ceny, opisy i zdjęcia z witryny B2B dostawcy';
 
     public function handle(B2bAccountSyncRunner $runner): int
     {
+        $trigger = (string) $this->option('trigger');
+        if (! in_array($trigger, self::TRIGGERS, true)) {
+            $this->error('Nieznany --trigger „'.$trigger.'”. Dozwolone: '.implode(', ', self::TRIGGERS).'.');
+
+            return self::FAILURE;
+        }
+
         $account = B2bAccount::query()->find((int) $this->argument('account'));
         if ($account === null) {
             $this->error('Nie ma konta B2B o ID '.$this->argument('account').'.');
@@ -43,6 +56,10 @@ final class B2bSyncCommand extends Command
             $dryRun ? ' · bez zapisu (--dry-run)' : '',
         ));
 
+        // Przebieg z b2b:sync-due pisze do storage/logs/b2b-sync.log — wiersz na produkt tylko z -v (postęp jest
+        // w dzienniku przebiegu w panelu), inaczej plik rósłby o tysiące wierszy co noc.
+        $productVerbosity = $trigger === B2bSyncRun::TRIGGER_CLI ? null : 'v';
+
         try {
             $result = $runner->run(
                 $account,
@@ -50,14 +67,20 @@ final class B2bSyncCommand extends Command
                 dryRun: $dryRun,
                 withImages: $this->option('no-images') ? false : null,
                 delayMs: max(0, (int) $this->option('delay')),
-                onProduct: function (string $line): void {
-                    $this->line('  '.$line);
+                onProduct: function (string $line) use ($productVerbosity): void {
+                    $this->line('  '.$line, null, $productVerbosity);
                 },
+                trigger: $trigger,
             );
         } catch (Throwable $e) {
             $this->error($e->getMessage());
 
             return self::FAILURE;
+        } finally {
+            if ($trigger !== B2bSyncRun::TRIGGER_CLI) {
+                // konto zajęte albo przebieg zakończony — kolejne „Sprawdź teraz” może ruszyć od razu
+                Cache::forget(B2bSyncDueCommand::launchGuardKey((int) $account->id));
+            }
         }
 
         $this->newLine();
