@@ -72,19 +72,95 @@ final class ProductMatchSelectionOrderTest extends TestCase
         $this->assertSame('B-93', $picked);
     }
 
-    /** @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int}>  $options */
-    private function pick(array $options): string
+    /**
+     * Poz. 8 z produkcji (14.09): model dał 95 obu półmaskom FFP1 — 9914 z węglem aktywnym (potwierdza „pary organiczne”)
+     * i 9312+ bez węgla; dowody ze słów równe (99). Rozstrzygają potwierdzone warunki, nie cena 0,88 EUR wobec 305 EUR
+     * (karton) — a rozrzut cen ponad 20× oznacza pozycję ostrzeżeniem.
+     */
+    public function test_more_confirmed_conditions_beat_price_at_equal_model_score_and_flag_pack_price(): void
     {
-        $service = app(ProductMatchService::class);
-        $picked = (new \ReflectionMethod($service, 'preferCheapestAmongCloseScores'))->invoke($service, $options);
+        $carbon = $this->card('9914', 1318.45);
+        $plain = $this->card('9312+', 3.80);
 
-        return (string) $picked['product']->sku;
+        $picked = $this->pickFull([
+            $this->option($plain, 95, 99, 4),
+            $this->option($carbon, 95, 99, 5),
+        ]);
+
+        $this->assertSame('9914', (string) $picked['product']->sku);
+        $this->assertTrue($picked['price_suspect'], 'ceny równo ocenionych kart różnią się ponad 20-krotnie');
     }
 
-    /** @return array{product: Product, score: int, source: string, evidence: int, hard: int} */
-    private function option(Product $product, int $score, int $evidence): array
+    /**
+     * Poz. 15 z produkcji: zakazana 87-063 (0,75 mm, 320 mm) dostała 95, a właściwa 87-320 90. 87-320 potwierdza
+     * wszystkie 4 warunki, 87-063 tylko 3 — pretendent do 10 pkt niżej z większą liczbą warunków zostaje w grze.
+     */
+    public function test_challenger_with_more_confirmed_conditions_beats_higher_model_tier(): void
     {
-        return ['product' => $product, 'score' => $score, 'source' => 'ai', 'evidence' => $evidence, 'hard' => 0];
+        $forbidden = $this->card('87063100BP', 8.39);
+        $bulk = $this->card('87320100-BULK', 6.79);
+        $pair = $this->card('87320100-PAIR', 6.79);
+
+        $picked = $this->pickFull([
+            $this->option($forbidden, 95, 36, 3),
+            $this->option($bulk, 90, 51, 4),
+            $this->option($pair, 90, 36, 4),
+        ]);
+
+        $this->assertSame('87320100-BULK', (string) $picked['product']->sku);
+        $this->assertFalse($picked['price_suspect']);
+    }
+
+    /** Poz. 7: KRYTECH 580 (90) potwierdza tyle samo warunków co 44-304 (95) — nie jest pretendentem, wygrywa poziom modelu. */
+    public function test_lower_tier_card_with_equal_conditions_is_not_a_challenger(): void
+    {
+        $atg = $this->card('44-304', 32.84);
+        $mapa = $this->card('34580008', 17.90);
+
+        $this->assertSame('44-304', $this->pick([
+            $this->option($atg, 95, 99, 8),
+            $this->option($mapa, 90, 99, 8),
+        ]));
+    }
+
+    /** Poz. 2 (ogólne wymaganie, wszystkie karty 95 i 1/1 warunków): weto dowodów zdejmuje ULTRANE (39), cena wybiera Canis. */
+    public function test_generic_requirement_equal_conditions_fall_back_to_price_after_evidence_veto(): void
+    {
+        $chemical = $this->card('76-833', 59.24);
+        $canis = $this->card('3630-024-700-00', 6.09);
+        $ultrane = $this->card('34681008', 8.39);
+
+        $picked = $this->pickFull([
+            $this->option($chemical, 95, 98, 1),
+            $this->option($ultrane, 95, 39, 1),
+            $this->option($canis, 95, 81, 1),
+        ]);
+
+        $this->assertSame('3630-024-700-00', (string) $picked['product']->sku);
+        $this->assertFalse($picked['price_suspect'], 'rozrzut 59 zł wobec 6 zł to prawdziwe rękawice, nie karton');
+    }
+
+    /** @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int, hits: int}>  $options */
+    private function pick(array $options): string
+    {
+        return (string) $this->pickFull($options)['product']->sku;
+    }
+
+    /**
+     * @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int, hits: int}>  $options
+     * @return array{product: Product, score: int, source: string, price_suspect: bool}
+     */
+    private function pickFull(array $options): array
+    {
+        $service = app(ProductMatchService::class);
+
+        return (new \ReflectionMethod($service, 'preferCheapestAmongCloseScores'))->invoke($service, $options);
+    }
+
+    /** @return array{product: Product, score: int, source: string, evidence: int, hard: int, hits: int} */
+    private function option(Product $product, int $score, int $evidence, int $hits = 0): array
+    {
+        return ['product' => $product, 'score' => $score, 'source' => 'ai', 'evidence' => $evidence, 'hard' => 0, 'hits' => $hits];
     }
 
     private function card(string $sku, float $price): Product
