@@ -77,6 +77,43 @@ final class BlockedPageReaderTest extends TestCase
         $this->assertNull((new BlockedPageReader)->fetch('https://shop.ansell.com/eu/s/product/hyflex-1181'));
     }
 
+    public function test_fetch_treats_reader_captcha_warning_as_a_wall(): void
+    {
+        // bolle-safety.com za DataDome: Jina oddaje 200 z samym ostrzeżeniem o CAPTCHA
+        $url = 'https://www.bolle-safety.com/us/safety/protective-eyewear/safety-glasses/ness-5075.html';
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                "Title: bolle-safety.com\n\nURL Source: {$url}\n\n"
+                ."Warning: This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.\n\n"
+                ."Markdown Content:\n",
+                200
+            ),
+        ]);
+
+        $reader = new BlockedPageReader;
+
+        $this->assertNull($reader->fetch($url));
+        $this->assertSame('zapora także u readera', $reader->failureFor($url));
+        $this->assertFalse($reader->failureIsTransient($url));
+    }
+
+    public function test_fetch_keeps_real_content_despite_captcha_warning(): void
+    {
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                "Title: NESS+\n\nWarning: This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.\n\n"
+                ."Markdown Content:\n# NESS+ safety glasses\n\n"
+                .str_repeat('Okulary ochronne NESS+ z soczewką PC, EN 166 1FT, powłoka PLATINUM. ', 5),
+                200
+            ),
+        ]);
+
+        $page = (new BlockedPageReader)->fetch('https://www.bolle-safety.com/gb/ness-plus.html');
+
+        $this->assertIsArray($page);
+        $this->assertStringContainsString('EN 166', $page['text']);
+    }
+
     public function test_fetch_rejects_salesforce_error_shell(): void
     {
         Http::fake([

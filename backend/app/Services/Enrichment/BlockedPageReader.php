@@ -111,7 +111,8 @@ final class BlockedPageReader
 
             return null;
         }
-        if (str_contains(mb_strtolower($markdown), 'incapsula') && mb_strlen($markdown) < 1200) {
+        if ((str_contains(mb_strtolower($markdown), 'incapsula') && mb_strlen($markdown) < 1200)
+            || $this->readerHitCaptchaOnly($markdown)) {
             $this->failures[$url] = 'zapora także u readera';
 
             return null;
@@ -258,6 +259,21 @@ final class BlockedPageReader
     private function readerReportsTargetError(string $markdown): bool
     {
         return preg_match('/^Warning:\s*Target URL returned error\s+[45]\d\d\b/mi', $markdown) === 1;
+    }
+
+    /**
+     * bolle-safety.com (DataDome): Jina odpowiada 200 z samym „Warning: This page maybe requiring
+     * CAPTCHA” i pustą treścią. Tekst ostrzeżenia szedł dalej jako karta i przebieg pisał
+     * „treść nie potwierdza produktu” zamiast blokady. Ostrzeżenie przy prawdziwej treści zostaje.
+     */
+    private function readerHitCaptchaOnly(string $markdown): bool
+    {
+        if (preg_match('/^Warning:.*requiring CAPTCHA/mi', $markdown) !== 1) {
+            return false;
+        }
+        $body = preg_replace('/^Warning:.*$/mi', '', $this->stripReaderChrome($markdown)) ?? '';
+
+        return mb_strlen(trim($body)) < 200;
     }
 
     /** Sklep na Salesforce bez przeglądarki pokazuje tylko „Loading… Sorry to interrupt… CSS Error”. */
