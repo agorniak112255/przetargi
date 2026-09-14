@@ -3238,6 +3238,7 @@ final class ProductAiSearchService
             'elektroizolacja' => $this->meetsRequiredElectricalInsulation($requirement, $product),
             'buty zgrzewane' => $this->meetsRequiredWeldedBootsCoverall($requirement, $product),
             'hełm' => $this->assortment->helmetSpecAllows($requirement, (string) $product->name.' '.$product->sku),
+            'poziom cięcia' => $this->meetsRequiredCutLevel($requirement, $product),
         ];
     }
 
@@ -3257,8 +3258,28 @@ final class ProductAiSearchService
                 && $this->meetsRequiredAntistatic($query, $p)
                 && $this->meetsRequiredElectricalInsulation($query, $p)
                 && $this->meetsRequiredWeldedBootsCoverall($query, $p)
+                && $this->meetsRequiredCutLevel($query, $p)
                 && $this->assortment->helmetSpecAllows($query, (string) $p->name.' '.$p->sku))
             ->values();
+    }
+
+    /**
+     * Poziom cięcia ISO 13997 jak SNR: wymagany (wprost albo B dla rękawic „odpornych na przecięcie”), a karta podaje
+     * niższy → odpada. Karta bez podanego poziomu zostaje — brak danych to nie sprzeczność.
+     */
+    private function meetsRequiredCutLevel(string $query, Product $product): bool
+    {
+        $min = $this->assortment->requiredCutLevel($query);
+        if ($min === null) {
+            return true;
+        }
+        $have = $this->assortment->cutLevel(implode(' ', [
+            (string) $product->name,
+            (string) ($product->norms ?? ''),
+            (string) ($product->description ?? ''),
+        ]));
+
+        return $have === null || $have >= $min;
     }
 
     private function meetsRequiredSnr(string $query, Product $product): bool

@@ -440,6 +440,68 @@ final class PpeAssortment
             || preg_match('/\bcut\s*(resist|protect)\w*/u', $t) === 1;
     }
 
+    /**
+     * Najniższy poziom cięcia ISO 13997 (A–F) z wymagania. Poziom podany wprost („2.X.4.2.C”, „4X43D” przy EN 388,
+     * „przecięcie wg metody ISO – poziom B”) wygrywa. Rękawice „odporne na przecięcie” bez poziomu — co najmniej B:
+     * decyzja użytkownika 14.09 po pomiarze, w którym MAPA ULTRANE 681 (EN 388 4X21A, poziom A) wygrała poz. 2
+     * (prace ze szkłem, skalpelem, nożem drukarskim). Poza rękawicami (rodzina gloves, także rękawy) — brak progu.
+     */
+    public function requiredCutLevel(string $requirement): ?string
+    {
+        $t = $this->normalize($requirement);
+        $explicit = $this->cutLevelsIn($requirement);
+        if ($explicit !== []) {
+            return min($explicit);
+        }
+        if ($this->family($requirement) !== self::FAMILY_GLOVES) {
+            return null;
+        }
+
+        return $this->wantsCutResistance($t)
+            || preg_match('/\b(odporn\w*\s+na\s+przeci|(?:ochron\w*\s+)?(?:dloni\s+)?przed\s+przeci|ryzyk\w*\s+przeci)\w*/u', $t) === 1
+            ? 'B'
+            : null;
+    }
+
+    /** Najwyższy poziom cięcia ISO 13997 podany na karcie (kod EN 388:2016 albo słownie); null, gdy karta go nie podaje. */
+    public function cutLevel(string $productText): ?string
+    {
+        $levels = $this->cutLevelsIn($productText);
+
+        return $levels === [] ? null : max($levels);
+    }
+
+    /**
+     * Litery poziomu cięcia ISO 13997. Kod EN 388:2016 („4331B”, „4X21A”, „2.X.4.2.C”) — z tekstu po normalize(), tylko
+     * w pobliżu numeru normy 388, więc „2021A” w nazwie modelu to nie poziom. Zapis słowny — z oryginalnego tekstu, tylko
+     * wielka litera A–F po „ISO 13997”, „EN ISO” albo po „przecięcie … poziom”: polskie „a” ani litera przed kolejną normą
+     * („B, EN 407”) nie mylą odczytu. Literówka 13977 zamiast 13997 jest w opisach kart ATG i MAPA.
+     *
+     * @return list<string>
+     */
+    private function cutLevelsIn(string $text): array
+    {
+        $levels = [];
+        if (preg_match_all('/388[^a-z]{0,1}.{0,80}?\b(?=[0-5x\s]*\d)([0-5x])\s?([0-5x])\s?([0-5x])\s?([0-5x])\s?([a-f])\b/u', $this->normalize($text), $m) > 0) {
+            $levels = array_merge($levels, array_map('strtoupper', $m[5]));
+        }
+        $worded = [
+            // „przecięcie ISO 13977: B”, „przecięcie wg ISO 13977 - B”, „ISO 13997 poziom C”
+            '/(?i:iso)\s*139[79]7\s*[:\-–—]?\s*(?:(?i:poziom)\w*\s*)?([A-F])\b/u',
+            // „odporność na przecięcie poziom C”, „przecięcie wg metody ISO – poziom B”
+            '/(?i:przecię|przecie|przeciec)\w*[^0-9\n]{0,30}?(?i:poziom)\w*\s*[:\-–—]?\s*([A-F])\b/u',
+            // „ochrona przed przecięciem EN ISO B”
+            '/(?i:en\s*iso)\s+([A-F])\b/u',
+        ];
+        foreach ($worded as $pattern) {
+            if (preg_match_all($pattern, $text, $m) > 0) {
+                $levels = array_merge($levels, $m[1]);
+            }
+        }
+
+        return array_values(array_unique($levels));
+    }
+
     /** Przymiotnik albo włókno na nazwie/SKU (XtremCut, HPPE). Opisu nie czytamy. */
     public function showsCutResistance(string $text): bool
     {

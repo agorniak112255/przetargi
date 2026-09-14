@@ -1200,6 +1200,33 @@ final class PpeAssortmentTest extends TestCase
     /**
      * @param  array<string, mixed>  $attrs
      */
+    /** Decyzja użytkownika 14.09: rękawice „odporne na przecięcie” bez podanego poziomu — co najmniej poziom B wg ISO 13997. */
+    #[Test]
+    public function cut_level_required_by_requirement_and_shown_on_card(): void
+    {
+        $poz2 = 'Rękawice ochronne odporne na przecięcie, przeznaczone do prac z narzędziami tnącymi, ostrymi elementami i szkłem. '
+            .'Wymagane: ochrona dłoni przed przecięciem i ścieraniem potwierdzona oznakowaniem zgodnie z EN 388.';
+        $poz7 = 'Rękawice ochronne antyprzecięciowe powlekane. EN 388:2016 – ścieranie 4, przecięcie (Coup Test) 3, rozdzieranie 4, '
+            .'przekłucie 1, przecięcie wg metody ISO – poziom B; EN 407:2004 – ciepło kontaktowe poziom 1.';
+        $poz1 = 'Ochraniacz przedramienia (rękaw) chroniący przed przecięciem. Wymagane: EN 388 z poziomami min. 2.X.4.2.C '
+            .'(odporność na przecięcie poziom C, na rozdzieranie 4, na przekłucie 2).';
+
+        $this->assertSame('B', $this->assortment->requiredCutLevel($poz2), 'bez poziomu — co najmniej B');
+        $this->assertSame('B', $this->assortment->requiredCutLevel($poz7), 'poziom podany wprost');
+        $this->assertSame('C', $this->assortment->requiredCutLevel($poz1), 'kod EN 388 i słownie');
+        $this->assertSame('B', $this->assortment->requiredCutLevel('Rękawice antyprzecięciowe powlekane nitrylem do prac montażowych'));
+        $this->assertNull($this->assortment->requiredCutLevel('Rękawice powlekane nitrylem do prac montażowych'));
+        $this->assertNull($this->assortment->requiredCutLevel('Spodnie ochronne chroniące przed przecięciem piłą łańcuchową, klasa 1'), 'poza rękawicami bez progu');
+
+        $this->assertSame('B', $this->assortment->cutLevel('EN 388:2016 – 4331B (ścieranie 4, przecięcie Coup Test 3, rozerwanie 3, przekłucie 1, przecięcie ISO 13977: B)'));
+        $this->assertSame('A', $this->assortment->cutLevel('EN 388 – odporność mechaniczna (ścieranie 4, przecięcie Coup X, rozerwanie 2, przekłucie 1, przecięcie ISO 13977 A)'));
+        $this->assertSame('C', $this->assortment->cutLevel('EN 420:2003 + A1:2009, EN 388:2016 (2.X.4.2.C), EN 407 (X.1.X.X.X)'));
+        $this->assertSame('B', $this->assortment->cutLevel('Rękawice ATG MaxiCut Oil 44-304, przecięcie wg ISO 13977 - B, EN 407'));
+        $this->assertSame('E', $this->assortment->cutLevel('EN 388:2016 (4X21A) w wersji podstawowej, wersja wzmocniona EN 388:2016 (4X43E)'), 'najwyższy podany');
+        $this->assertNull($this->assortment->cutLevel('Rękawice robocze model 2021A, EN 420'), 'numer modelu to nie poziom');
+        $this->assertNull($this->assortment->cutLevel('Rękawice nitrylowe EN 388 4131, EN 420'), 'EN 388:2003 bez litery');
+    }
+
     private function card(string $sku, string $name, array $attrs = []): Product
     {
         $product = new Product;
