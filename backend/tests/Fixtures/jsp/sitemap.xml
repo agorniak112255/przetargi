@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Wycinek https://www.jspsafety.com/netalogue/sitemap.xml (14.09.2026, ~10 084 adresów). Adresy prawdziwe poza
+  oznaczonymi SYNTETYCZNIE przypadkami brzegowymi. Mapa psuje wielkość liter kodów („1lEOCARB23S”, „aJF030…”).
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9 http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd">
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/Bespoke-Products/AAF000-001-108-C0001_HardCap-aerolite-Short-Peak-Blk-Transfer-Smeg</loc><lastmod>2024-04-11</lastmod></url>
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/PPE/Height-Safety/Fall-limiters/FAR0701_2m-Webbing-Self-Retractable-lifeline-Vertical-Horizontal-FF2</loc></url>
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/PPE/Eye-Face-Protection/Premium-Safety-Spectacles/1lEOCARB23S_leone-Premium-Safety-Spec-Smoke-K-N-Anti-scratch-Anti-mist-lenses-Carbon-Style-Frames</loc></url>
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/Bespoke-Products/Bespoke-Products/1lEOCARB23S-W9_leone-Spectacle-Carbon-Style-Frame-25-Smk-lens-UV400-KN-COO</loc></url>
+  <!-- SYNTETYCZNE: ten sam kod w drugiej kategorii -->
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/PPE/last-Chance-To-Buy/last-Chance-Eye-Protection/1lEOCARB23S_leone-Premium-Safety-Spec-Smoke</loc></url>
+  <!-- SYNTETYCZNE: produkt z logo firmy poza ścieżką Bespoke-Products (końcówka kodu), także małą literą -->
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/PPE/Head-Protection/Safety-Helmets/AJF030-000-101-A6562_EVO3-Safety-Helmet-Logo</loc></url>
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/PPE/Head-Protection/Safety-Helmets/aJF030-000-101-a6563_EVO3-Safety-Helmet-Logo</loc></url>
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/PPE/Head-Protection/Safety-Helmets/aJF030-000-100_EVO3-Safety-Helmet</loc></url>
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/PPE/Head-Protection/Safety-Helmets/VAR-AKS270-000-100_EVO5-Dualswitch-Helmet</loc></url>
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/products/PPE/Head-Protection</loc></url>
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/manufacturer/leone</loc></url>
+  <url xmlns="http://www.w3.org/1999/xhtml"><loc>https://www.jspsafety.com/</loc></url>
+</urlset>

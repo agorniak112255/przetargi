@@ -141,9 +141,12 @@ final class B2bAccountSyncRunner
      */
     private function summary(array $result): string
     {
+        $variants = ($result['progress_unit'] ?? null) === B2bSyncRun::UNIT_VARIANTS;
+        // przy wersjach total_remote to szacunek liczby znaków — pewna jest liczba wersji z listy dostawcy
         $text = sprintf(
-            'W B2B: %d · sprawdzone: %d · nowe: %d · zaktualizowane: %d · bez zmian: %d · pominięte: %d · zmiany cen: %d · nowe opisy: %d · zdjęcia: %d',
-            $result['total_remote'],
+            '%s: %d · sprawdzone: %d · nowe: %d · zaktualizowane: %d · bez zmian: %d · pominięte: %d · zmiany cen: %d · nowe opisy: %d · zdjęcia: %d',
+            $variants ? 'Wersji w B2B' : 'W B2B',
+            $variants ? $result['progress_total'] : $result['total_remote'],
             $result['seen'],
             $result['created'],
             $result['updated'],

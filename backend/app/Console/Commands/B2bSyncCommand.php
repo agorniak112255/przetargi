@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Models\B2bAccount;
+use App\Models\B2bSyncRun;
 use App\Services\B2b\B2bAccountSyncRunner;
 use Illuminate\Console\Command;
 use Throwable;
@@ -60,9 +61,11 @@ final class B2bSyncCommand extends Command
         }
 
         $this->newLine();
+        $variants = ($result['progress_unit'] ?? null) === B2bSyncRun::UNIT_VARIANTS;
         $this->info(sprintf(
-            'W B2B: %d · sprawdzone: %d · nowe: %d · zaktualizowane: %d · bez zmian: %d · pominięte: %d · zmiany cen: %d · nowe opisy: %d · zdjęcia: %d',
-            $result['total_remote'],
+            '%s: %d · sprawdzone: %d · nowe: %d · zaktualizowane: %d · bez zmian: %d · pominięte: %d · zmiany cen: %d · nowe opisy: %d · zdjęcia: %d',
+            $variants ? 'Wersji w B2B' : 'W B2B',
+            $variants ? $result['progress_total'] : $result['total_remote'],
             $result['seen'],
             $result['created'],
             $result['updated'],

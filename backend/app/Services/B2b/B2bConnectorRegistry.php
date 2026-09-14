@@ -17,6 +17,7 @@ final class B2bConnectorRegistry
     private const CONNECTORS = [
         AnroB2bConnector::class,
         SignProjectB2bConnector::class,
+        JspB2bConnector::class,
     ];
 
     /**

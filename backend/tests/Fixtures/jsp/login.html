@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<!--
+  Strona logowania www.jspsafety.com (zapisana anonimowo 14.09.2026), mocno przycięta: bez skryptów, stylów,
+  menu i stopki. Zostały: formularz aspnetForm z ukrytymi polami, pola logowania i przyciski.
+  Wartości __VIEWSTATE / __EVENTVALIDATION / ciasteczek są SYNTETYCZNE (prawdziwe miały ~70 KB i były tokenami sesji).
+  Ukryte pole z tekstem „logout” jest na prawdziwej stronie gościa — test sprawdza, że samo „Logout” nie oznacza zalogowania.
+-->
+<html lang="en">
+<head>
+<title> JSP | Login </title>
+</head>
+<body>
+<form method="post" action="/login.aspx" id="aspnetForm" name="aspnetForm">
+<div class="aspNetHidden">
+<input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="VS-SYNTETYCZNY" />
+</div>
+<div class="aspNetHidden">
+<input type="hidden" name="__VIEWSTATEGENERATOR" id="__VIEWSTATEGENERATOR" value="C2EE9ABB" />
+<input type="hidden" name="__EVENTVALIDATION" id="__EVENTVALIDATION" value="EV-SYNTETYCZNY" />
+</div>
+<input type="hidden" name="ctl00$hfBaselink" id="ctl00_hfBaselink" value="https://www.jspsafety.com/" />
+<input type="hidden" name="ctl00$hfreturnurl" id="ctl00_hfreturnurl" value="" />
+<input type="hidden" name="ctl00$ucSiteTopLinks$hdnLeaveMessage2" id="hdnLeaveMessage2" value="Are you sure you want to logout and be redirected to the home page?" />
+<script type="text/javascript">var x = '<input type="hidden" name="zeSkryptu" value="nie-wysylac" />';</script>
+<div class="BreadCrumbs_Container">
+  <a class="BreadCrumbs_HomeBreadcrumb" href="https://www.jspsafety.com">Home</a>
+</div>
+<div class="Login_Container">
+  <input type="hidden" name="ctl00$ContentPlaceHolder1$hdnDefaultLoginButtonEnabled" id="hdnDefaultLoginButtonEnabled" value="true" />
+  <input type="text" name="ctl00$ContentPlaceHolder1$tbusername" id="ctl00_ContentPlaceHolder1_tbusername" value="" />
+  <input type="password" name="ctl00$ContentPlaceHolder1$tbpassword" id="ctl00_ContentPlaceHolder1_tbpassword" value="" />
+  <input type="submit" name="ctl00$ContentPlaceHolder1$bGoogleLogin" id="ctl00_ContentPlaceHolder1_bGoogleLogin" value="Google" />
+  <input type="submit" name="ctl00$ContentPlaceHolder1$bSAMLLogin" id="ctl00_ContentPlaceHolder1_bSAMLLogin" value="SAML" />
+  <input type="submit" name="ctl00$ContentPlaceHolder1$blogin" id="ctl00_ContentPlaceHolder1_blogin" value="Login to distributor account" />
+</div>
+</form>
+</body>
+</html>

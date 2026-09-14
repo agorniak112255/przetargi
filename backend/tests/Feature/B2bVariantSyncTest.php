@@ -378,7 +378,8 @@ final class B2bVariantSyncTest extends TestCase
         $this->assertFalse(Product::query()->where('sku', 'AA002')->exists());
         $run = B2bSyncRun::query()->findOrFail($result['sync_run_id']);
         $this->assertSame('ok', $run->status);
-        $this->assertStringStartsWith("Częściowy: 2/3 wersji — kontynuacja w następnym przebiegu\nW B2B: 2", (string) $run->message);
+        // podsumowanie przebiegu z wersjami zaczyna się od liczby wersji z listy (3), nie od szacunku liczby znaków
+        $this->assertStringStartsWith("Częściowy: 2/3 wersji — kontynuacja w następnym przebiegu\nWersji w B2B: 3 · sprawdzone: 1", (string) $run->message);
         $account = $this->account->fresh();
         $this->assertSame('ok', $account->last_sync_status);
         $this->assertStringStartsWith('Częściowy: 2/3 wersji', (string) $account->last_sync_message);
