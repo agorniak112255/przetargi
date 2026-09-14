@@ -115,6 +115,7 @@ final class B2bVariantSyncTest extends TestCase
         $this->assertSame(1, $run->created);
         $this->assertStringContainsString('wersje: 4/4', (string) $run->message);
         $this->assertContains('[1/1] BB014 — nowy · wersji: 4', array_column($run->log, 'text'));
+        $this->assertContains('Wersji w B2B: 4', array_column($run->log, 'text'));
 
         // formaty/podłoża w indeksie tekstowym i w dokumencie embeddingu
         $this->assertStringContainsString('folia samoprzylepna', (string) $product->search_blob);
@@ -385,6 +386,30 @@ final class B2bVariantSyncTest extends TestCase
         $this->assertStringStartsWith('Częściowy: 2/3 wersji', (string) $account->last_sync_message);
     }
 
+    public function test_limited_sample_has_unknown_total_until_the_end_and_logs_only_version_count(): void
+    {
+        foreach (['AA001', 'AA002', 'AA003', 'AA004', 'AA005', 'AA006'] as $n => $code) {
+            $this->sign($code, [($n + 1).'01' => 1.00]);
+        }
+        $totalsSeen = [];
+        $this->connector->onVariants = static function () use (&$totalsSeen): void {
+            $totalsSeen[] = B2bSyncRun::query()->latest('id')->value('total');
+        };
+
+        $result = $this->sync(limit: 5);
+
+        // postęp zapisywany po pierwszym znaku — kolejne znaki widzą zapisany total; próbka nie zna łącznej liczby
+        $this->assertSame([null, null, null, null, null], $totalsSeen);
+        $this->assertSame(5, $result['seen']);
+        $this->assertSame(5, $result['progress_total']);
+        $run = B2bSyncRun::query()->findOrFail($result['sync_run_id']);
+        $this->assertSame(5, $run->total);
+        $this->assertSame(5, $run->processed);
+        $texts = array_column($run->log, 'text');
+        $this->assertContains('Wersji w B2B: 6 · próbka: 5 znaków', $texts);
+        $this->assertSame([], array_values(array_filter($texts, static fn (string $t): bool => str_starts_with($t, 'Produktów w B2B'))));
+    }
+
     public function test_previously_priced_card_gets_price_zero_with_one_history_row(): void
     {
         $card = Product::query()->create([
@@ -581,6 +606,9 @@ final class FakeVariantConnector implements B2bVariantConnector
 
     public ?string $descriptionError = null;
 
+    /** Wołane na początku variants() — podgląd stanu przebiegu w trakcie. */
+    public ?\Closure $onVariants = null;
+
     public static function key(): string
     {
         return 'fakesign';
@@ -641,6 +669,9 @@ final class FakeVariantConnector implements B2bVariantConnector
 
     public function variants(B2bRemoteProduct $product): array
     {
+        if ($this->onVariants !== null) {
+            ($this->onVariants)($product);
+        }
         $variants = [];
         foreach ($this->signs as $sign) {
             if ($sign['remote'] === $product) {

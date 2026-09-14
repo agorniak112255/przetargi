@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
+use App\Models\Product;
 use App\Models\ProductVariant;
 use RuntimeException;
 
 /**
  * signproject.pl — jeden znak (kod, np. BB014) = jedna karta, wersje (format × podłoże) = osobne produkty
- * IdoSell z własną ceną konta. Lista z mapy strony, ceny z ajax/projector.php (osobne zapytanie na wersję).
+ * IdoSell z własną ceną konta. Lista z mapy strony, ceny z ajax/projector.php (osobne zapytanie na wersję,
+ * seriami z jedną przerwą na serię — SignProjectB2bClient::projectorMany).
  *
  * Bezpieczeństwo sesji: przy logowaniu zapamiętujemy cenę konta i cenę anonimową wersji kontrolnej.
  * Po zebraniu cen znaku cena kontrolna jest pobierana ponownie — inna niż zapamiętana (albo równa anonimowej)
@@ -63,6 +65,14 @@ final class SignProjectB2bConnector implements B2bVariantConnector
 
     /** false = cena konta wersji kontrolnej równa anonimowej; wtedy utratę sesji wykrywa tylko „Wyloguj”. */
     private bool $controlDistinguishable = false;
+
+    /**
+     * ID wersji (bazowe, sprzed „:”) znane w product_variants → karta; 0 = wersja na kilku kartach.
+     * Wypełniane przy starcie products() — tylko do decyzji, czy strona znaku jest potrzebna dla kategorii.
+     *
+     * @var array<int, int>
+     */
+    private array $knownCardOf = [];
 
     /** @var array<int, array<string, mixed>> odpowiedź projector.php znaku bieżącego (z products()) */
     private array $projectorCache = [];
@@ -298,6 +308,10 @@ final class SignProjectB2bConnector implements B2bVariantConnector
             $baseId = (int) explode(':', (string) $row->remote_id, 2)[0];
             $productId = (int) $row->product_id;
             $productOf[$baseId] ??= $productId;
+            $this->knownCardOf[$baseId] = $this->knownCardOf[$baseId] ?? $productId;
+            if ($this->knownCardOf[$baseId] !== $productId) {
+                $this->knownCardOf[$baseId] = 0;
+            }
             // nigdy niesprawdzona cena = najstarsza
             $checked = $row->price_checked_at !== null ? (string) $row->price_checked_at : '';
             if (! isset($oldest[$productId]) || strcmp($checked, $oldest[$productId]) < 0) {
@@ -372,7 +386,7 @@ final class SignProjectB2bConnector implements B2bVariantConnector
 
         $sourceUrl = $versions[0]['link'];
         $category = null;
-        if ($sourceUrl !== null) {
+        if ($sourceUrl !== null && $this->categoryNeeded($versions)) {
             try {
                 $segments = self::categorySegments($this->page($sourceUrl));
                 $category = $segments !== [] ? implode(' › ', $segments) : null;
@@ -403,30 +417,66 @@ final class SignProjectB2bConnector implements B2bVariantConnector
     }
 
     /**
+     * Strona znaku jest potrzebna dla kategorii, chyba że znane wersje tego znaku należą do jednej karty, która
+     * kategorię już ma — B2bCatalogSync uzupełnia tylko pustą kategorię (karta wybierana po znanych wersjach),
+     * więc pobranie strony nic by nie zmieniło. description()/image() i tak pobiorą stronę, gdy synchronizacja
+     * ich potrzebuje.
+     *
+     * @param  list<array{id: int, name: string, link: string|null}>  $versions
+     */
+    private function categoryNeeded(array $versions): bool
+    {
+        $cards = [];
+        foreach ($versions as $version) {
+            $card = $this->knownCardOf[$version['id']] ?? null;
+            if ($card === 0) {
+                return true;
+            }
+            if ($card !== null) {
+                $cards[$card] = true;
+            }
+        }
+        if (count($cards) !== 1) {
+            return true;
+        }
+
+        $category = Product::query()->whereKey(array_key_first($cards))->value('category');
+
+        return trim((string) $category) === '';
+    }
+
+    /**
+     * Ceny wersji znaku: z pamięci products() (useCache) albo z SignProjectB2bClient::projectorMany (serie zapytań).
+     *
      * @return list<B2bRemoteVariant>
      */
     private function collectVariants(B2bRemoteProduct $product, bool $useCache): array
     {
+        $versions = $product->raw['versions'] ?? [];
+        $toFetch = [];
+        foreach ($versions as $version) {
+            $id = (int) $version['id'];
+            if (! $useCache || ! isset($this->projectorCache[$id])) {
+                $toFetch[] = $id;
+            }
+        }
+        $fetched = $toFetch !== [] ? $this->client->projectorMany($toFetch, self::PRICE_GET) : [];
+
         $headerParts = self::members((string) ($product->raw['version_header'] ?? ''));
         $variants = [];
         $sort = 0;
-        foreach ($product->raw['versions'] ?? [] as $version) {
+        foreach ($versions as $version) {
             $id = (int) $version['id'];
             $label = $version['name'] !== '' ? $version['name'] : $product->name;
             $attributes = $version['name'] !== '' ? self::attributes($headerParts, $version['name']) : [];
 
-            $json = $useCache ? ($this->projectorCache[$id] ?? null) : null;
-            if ($json === null) {
-                try {
-                    $json = $this->client->projector($id, self::PRICE_GET);
-                } catch (B2bFatalException $e) {
-                    throw $e;
-                } catch (RuntimeException $e) {
-                    $variants[] = new B2bRemoteVariant((string) $id, $label, $attributes, null,
-                        'nie udało się pobrać ceny: '.$e->getMessage(), $version['link'], $sort++);
+            $json = $useCache && isset($this->projectorCache[$id]) ? $this->projectorCache[$id] : ($fetched[$id] ?? null);
+            if (! is_array($json)) {
+                $reason = $json instanceof RuntimeException ? $json->getMessage() : 'brak odpowiedzi sklepu';
+                $variants[] = new B2bRemoteVariant((string) $id, $label, $attributes, null,
+                    'nie udało się pobrać ceny: '.$reason, $version['link'], $sort++);
 
-                    continue;
-                }
+                continue;
             }
 
             foreach ($this->versionVariants($product, $id, $label, $attributes, $version['link'], $json) as $variant) {

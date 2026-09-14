@@ -7,12 +7,15 @@ namespace Tests\Feature;
 use App\Models\B2bAccount;
 use App\Models\Product;
 use App\Models\ProductVariant;
+use App\Models\User;
+use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteVariant;
 use App\Services\B2b\SignProjectB2bClient;
 use App\Services\B2b\SignProjectB2bConnector;
+use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -60,6 +63,12 @@ final class SignProjectConnectorTest extends TestCase
 
     /** @var (callable(int, string): void)|null wołane przy każdym zapytaniu projector.php (id, get) */
     private $onProjector = null;
+
+    /** @var array<int, string|null> wersja → Retry-After pierwszej odpowiedzi 429 (null = bez nagłówka) */
+    private array $throttleOnce = [];
+
+    /** @var array<int, true> wersje, dla których zapytanie o cenę (sizes,sizeprices) kończy się HTTP 500 */
+    private array $failingPrices = [];
 
     /** @var list<int> */
     private array $sleeps = [];
@@ -322,6 +331,166 @@ final class SignProjectConnectorTest extends TestCase
         $connector->variants($bb014);
     }
 
+    public function test_version_prices_are_fetched_in_batches_with_one_pause_per_batch_and_account_cookie(): void
+    {
+        $this->manyVersionSign('ZZ100', 50001, 14);
+        $this->sitemapUrls = [$this->link(50001)];
+        $this->fakeShop();
+        $connector = new SignProjectB2bConnector($this->client(150));
+        $connector->login();
+        $sign = $this->firstSign($connector);
+        $this->sleeps = [];
+
+        $variants = $connector->variants($sign);
+
+        $this->assertSame(array_map('strval', range(50001, 50014)), array_map(static fn (B2bRemoteVariant $v): string => $v->remoteId, $variants));
+        $this->assertSame(range(0, 13), array_map(static fn (B2bRemoteVariant $v): int => $v->sortOrder, $variants));
+        $this->assertSame(
+            array_map(static fn (int $i): float => round(1 + $i / 100, 2), range(0, 13)),
+            array_map(static fn (B2bRemoteVariant $v): ?float => $v->price?->net, $variants),
+        );
+        $this->assertSame([], array_values(array_filter(array_map(static fn (B2bRemoteVariant $v): ?string => $v->priceError, $variants))));
+
+        // 50001 z pamięci products(); pozostałe 13 zapytań w kolejności wersji, każde z ciasteczkiem sesji konta
+        $priceRequests = Http::recorded(fn (Request $r): bool => str_contains($r->url(), 'projector.php')
+            && ($r['get'] ?? '') === 'sizes,sizeprices' && (int) $r['product'] !== 7109)
+            ->map(fn (array $pair): Request => $pair[0]);
+        $this->assertSame(range(50002, 50014), $priceRequests->map(fn (Request $r): int => (int) $r['product'])->values()->all());
+        foreach ($priceRequests as $request) {
+            $this->assertStringContainsString('RSSID=sess1', $request->header('Cookie')[0] ?? '');
+        }
+        // przerwa przed każdą z 3 serii (13 = 6 + 6 + 1) i przed pojedynczym sprawdzeniem ceny kontrolnej
+        $this->assertSame([150, 150, 150, 150], $this->sleeps);
+    }
+
+    public function test_rate_limited_versions_in_a_batch_honour_retry_after_then_backoff(): void
+    {
+        $this->manyVersionSign('TT001', 60001, 3);
+        $this->sitemapUrls = [$this->link(60001)];
+        $this->throttleOnce = [60002 => '3', 60003 => null];
+        $this->fakeShop();
+        $connector = $this->connector();
+        $connector->login();
+        $sign = $this->firstSign($connector);
+        $this->sleeps = [];
+
+        $variants = $connector->variants($sign);
+
+        $this->assertSame([1.0, 1.01, 1.02], array_map(static fn (B2bRemoteVariant $v): ?float => $v->price?->net, $variants));
+        // 60002: Retry-After 3 s; 60003: bez nagłówka — pierwszy krok backoffu (2 s); potem ponowienie z ceną
+        $this->assertSame([3000, 2000], $this->sleeps);
+        $this->assertCount(2, Http::recorded(fn (Request $r): bool => str_contains($r->url(), 'projector.php') && (int) $r['product'] === 60002));
+        $this->assertSame(1, $this->logins);
+    }
+
+    public function test_failures_inside_batches_count_in_version_order_and_twenty_in_a_row_are_fatal(): void
+    {
+        $this->manyVersionSign('FA001', 70001, 26);
+        $this->manyVersionSign('FA002', 71001, 21);
+        $this->sitemapUrls = [$this->link(70001), $this->link(71001)];
+        $this->pages[$this->link(70001)] = $this->fixture('product_gl031.html');
+        $this->pages[$this->link(71001)] = $this->fixture('product_gl031.html');
+        // FA001: 19 błędów, sukces (70021, w tej samej serii co 70020), 5 błędów — ciąg błędów przerwany
+        $this->failingPrices = array_fill_keys([...range(70002, 70020), ...range(70022, 70026)], true);
+        // FA002: 20 błędów z rzędu
+        $this->failingPrices += array_fill_keys(range(71002, 71021), true);
+        $this->fakeShop();
+        $connector = $this->connector();
+        $connector->login();
+
+        $outcomes = [];
+        foreach ($connector->products() as $sign) {
+            try {
+                $outcomes[$sign->sku] = $connector->variants($sign);
+            } catch (B2bFatalException $e) {
+                $outcomes[$sign->sku] = $e->getMessage();
+                break;
+            }
+        }
+
+        $this->assertIsArray($outcomes['FA001']);
+        $errors = array_values(array_filter(array_map(static fn (B2bRemoteVariant $v): ?string => $v->priceError, $outcomes['FA001'])));
+        $this->assertCount(24, $errors);
+        $this->assertSame('nie udało się pobrać ceny: signproject.pl odpowiedziało HTTP 500', $errors[0]);
+        $this->assertSame(1.2, $outcomes['FA001'][20]->price?->net);
+        $this->assertSame(
+            '20 kolejnych błędów zapytań do signproject.pl (ostatni: signproject.pl odpowiedziało HTTP 500) — pobieranie przerwane',
+            $outcomes['FA002'],
+        );
+    }
+
+    public function test_session_loss_during_batched_sign_logs_in_again_and_collects_all_prices_in_batches(): void
+    {
+        $this->manyVersionSign('SL001', 80001, 8);
+        $this->sitemapUrls = [$this->link(80001)];
+        $this->fakeShop();
+        $connector = new SignProjectB2bConnector($this->client(150));
+        $connector->login();
+        $sign = $this->firstSign($connector);
+        $this->sleeps = [];
+        $dropped = false;
+        $this->onProjector = function (int $id) use (&$dropped): void {
+            if ($id === 80004 && ! $dropped) {
+                $dropped = true;
+                $this->validSessions = [];
+            }
+        };
+
+        $variants = $connector->variants($sign);
+
+        $this->assertSame(2, $this->logins);
+        $this->assertSame(
+            array_map(static fn (int $i): float => round(1 + $i / 100, 2), range(0, 7)),
+            array_map(static fn (B2bRemoteVariant $v): ?float => $v->price?->net, $variants),
+        );
+        // po ponownym logowaniu wszystkie 8 wersji (także ta z pamięci products()) jeszcze raz, z nową sesją
+        $recollected = Http::recorded(fn (Request $r): bool => str_contains($r->url(), 'projector.php')
+            && ($r['get'] ?? '') === 'sizes,sizeprices' && (int) $r['product'] >= 80001
+            && str_contains($r->header('Cookie')[0] ?? '', 'RSSID=sess2'));
+        $this->assertSame(range(80001, 80008), $recollected->map(fn (array $pair): int => (int) $pair[0]['product'])->values()->all());
+        // przerwy: 2 serie (7 wersji), kontrola, logowanie (2), cena kontrolna konta i anonimowa (2),
+        // ponowne zebranie w 2 seriach (8 wersji — z przerwą przed każdym zapytaniem byłoby 8), kontrola
+        $this->assertSame(array_fill(0, 10, 150), $this->sleeps);
+    }
+
+    public function test_second_sync_skips_product_page_of_known_sign_whose_card_has_category(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $user = User::factory()->withRole('admin')->create();
+        $account = B2bAccount::query()->create([
+            'username' => 'jan', 'password' => 'dobre-haslo', 'sites' => ['signproject.pl'], 'connector' => 'signproject',
+            'created_by' => $user->id, 'updated_by' => $user->id,
+        ]);
+        $this->fakeShop();
+        $pageRequests = fn (int $id): int => Http::recorded(fn (Request $r): bool => $r->url() === $this->link($id))->count();
+
+        $first = $this->syncAccount($account);
+
+        $this->assertSame(2, $first['created']);
+        $this->assertSame(1, $pageRequests(7109));
+        $this->assertSame(1, $pageRequests(32059));
+        $bb014 = Product::query()->where('sku', 'BB014')->sole();
+        $this->assertSame('Znaki bezpieczeństwa - Ochrona Przeciwpożarowa', $bb014->category);
+        // opis poprawiony ręcznie — synchronizacja go nie nadpisze, więc description() nie jest wołane
+        Product::query()->whereKey($bb014->id)->update(['description' => 'Opis poprawiony ręcznie na karcie produktu.']);
+        $this->sign('GX001', 'GX001 Nowy znak', [40000 => ['', 5.00, 6.00]]);
+        $this->sitemapUrls[] = $this->link(40000);
+        $this->pages[$this->link(40000)] = $this->fixture('product_gl031.html');
+
+        $second = $this->syncAccount($account);
+
+        $this->assertSame(1, $second['created']);
+        // znany znak z kategorią na karcie — bez strony
+        $this->assertSame(1, $pageRequests(7109));
+        // GL031: opis zapisany wcześniej przez synchronizację jest odświeżany — description() pobiera stronę sama
+        $this->assertSame(2, $pageRequests(32059));
+        // nowy znak — strona dla kategorii (i ta sama kopia dla opisu)
+        $this->assertSame(1, $pageRequests(40000));
+        $this->assertSame('Ochrona i higiena pracy › Znaki nakazu z opisem', Product::query()->where('sku', 'GX001')->value('category'));
+        $this->assertSame('Znaki bezpieczeństwa - Ochrona Przeciwpożarowa', $bb014->fresh()->category);
+        $this->assertSame('Opis poprawiony ręcznie na karcie produktu.', $bb014->fresh()->description);
+    }
+
     public function test_product_page_without_logout_marker_triggers_one_relogin(): void
     {
         $this->pageDropsMarkerOnce = true;
@@ -436,11 +605,29 @@ final class SignProjectConnectorTest extends TestCase
         $this->assertInstanceOf(SignProjectB2bConnector::class, $registry->make($account, 0));
     }
 
-    private function client(): SignProjectB2bClient
+    private function client(int $delayMs = 0): SignProjectB2bClient
     {
-        return new SignProjectB2bClient('jan', 'dobre-haslo', 0, function (int $ms): void {
+        return new SignProjectB2bClient('jan', 'dobre-haslo', $delayMs, function (int $ms): void {
             $this->sleeps[] = $ms;
         });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function syncAccount(B2bAccount $account): array
+    {
+        return app(B2bAccountSyncRunner::class)->run($account->fresh(), withImages: false, delayMs: 0, connector: $this->connector());
+    }
+
+    /** Znak z $count wersjami od $firstId; cena konta 1,00 + i/100, anonimowa 5,00 + i/100. */
+    private function manyVersionSign(string $code, int $firstId, int $count): void
+    {
+        $versions = [];
+        for ($i = 0; $i < $count; $i++) {
+            $versions[$firstId + $i] = [(10 + $i).' x 10 cm \ FN - folia samoprzylepna', round(1 + $i / 100, 2), round(5 + $i / 100, 2)];
+        }
+        $this->sign($code, $code.' Znak testowy', $versions);
     }
 
     private function connector(): SignProjectB2bConnector
@@ -540,6 +727,15 @@ final class SignProjectConnectorTest extends TestCase
                     ($this->onProjector)($id, $get);
                     preg_match('/RSSID=([^;\s]+)/', $request->header('Cookie')[0] ?? '', $m);
                     $loggedIn = isset($m[1]) && in_array($m[1], $this->validSessions, true);
+                }
+                if ($get === 'sizes,sizeprices' && isset($this->failingPrices[$id])) {
+                    return Http::response('', 500);
+                }
+                if (array_key_exists($id, $this->throttleOnce)) {
+                    $retryAfter = $this->throttleOnce[$id];
+                    unset($this->throttleOnce[$id]);
+
+                    return Http::response('', 429, $retryAfter !== null ? ['Retry-After' => $retryAfter] : []);
                 }
 
                 return isset($this->catalog[$id])

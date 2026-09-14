@@ -123,6 +123,9 @@ final class B2bCatalogSync
 
             return $limit === null ? $variantConnector->totalVariants() : $variantsProcessed;
         };
+        // W trakcie próbki z wersjami łączna liczba jest nieznana — null (panel: pasek bez procentu i bez „pozostało”),
+        // a nie processed, które dawało stałe 100%. Na końcu przebiegu setTotal($progressTotal()).
+        $liveTotal = static fn (): ?int => $variantConnector !== null && $limit !== null ? null : $progressTotal();
         $runId = $progress?->run()->id;
 
         foreach ($connector->products() as $remote) {
@@ -133,7 +136,7 @@ final class B2bCatalogSync
             $stats['total_remote'] = $connector->totalProducts();
             $label = $remote->sku !== '' ? $remote->sku : 'ID '.$remote->remoteId;
             if ($stats['seen'] === 1 && $progress !== null) {
-                $progress->setTotal($progressTotal());
+                $progress->setTotal($liveTotal());
                 $progress->log('info', $this->totalLine($stats['total_remote'], $limit, $variantConnector));
             }
 
@@ -209,7 +212,7 @@ final class B2bCatalogSync
                 if (($outcome['image_error'] ?? null) !== null) {
                     $progress->log('warn', $label.': zdjęcie — '.$outcome['image_error']);
                 }
-                $progress->setTotal($progressTotal());
+                $progress->setTotal($liveTotal());
                 $progress->advance($label, [
                     'processed' => $variantConnector !== null ? $variantsProcessed : $stats['seen'],
                     'created' => $stats['created'],
@@ -283,14 +286,17 @@ final class B2bCatalogSync
         ];
     }
 
+    /**
+     * Łącznik z wersjami: tylko fakty — liczba wersji z listy dostawcy i limit próbki (liczba produktów takiego
+     * łącznika to szacunek, więc jej nie pokazujemy).
+     */
     private function totalLine(int $total, ?int $limit, ?B2bVariantConnector $variants): string
     {
-        $sample = $limit !== null ? ' · próbka: '.min($limit, $total) : '';
         if ($variants === null) {
-            return 'Produktów w B2B: '.$total.$sample;
+            return 'Produktów w B2B: '.$total.($limit !== null ? ' · próbka: '.min($limit, $total) : '');
         }
 
-        return 'Produktów w B2B: '.$total.' · wersji: '.$variants->totalVariants().($sample !== '' ? $sample.' produktów' : '');
+        return 'Wersji w B2B: '.$variants->totalVariants().($limit !== null ? ' · próbka: '.$limit.' znaków' : '');
     }
 
     /**

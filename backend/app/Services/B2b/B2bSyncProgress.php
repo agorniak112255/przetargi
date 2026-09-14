@@ -144,7 +144,8 @@ final class B2bSyncProgress
         return $this->errors;
     }
 
-    public function setTotal(int $total): void
+    /** null = łączna liczba jeszcze nieznana (np. próbka łącznika z wersjami). */
+    public function setTotal(?int $total): void
     {
         $this->run->total = $total;
     }

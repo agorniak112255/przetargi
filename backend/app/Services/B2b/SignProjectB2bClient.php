@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use Closure;
 use GuzzleHttp\Cookie\CookieJar;
+use GuzzleHttp\Utils;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
@@ -16,13 +17,20 @@ use RuntimeException;
  * Sklep signproject.pl (IdoSell). Nieoficjalne: adresy i pola odczytane ze strony www (14.09.2026).
  * Sesja konta żyje w ciasteczkach; po jej utracie sklep dalej odpowiada 200, ale z cenami anonimowymi —
  * dlatego logowanie sprawdza napis „Wyloguj”, a łącznik porównuje cenę wersji kontrolnej.
- * Zapytania idą po kolei (jedno połączenie), z przerwą przed każdym.
+ *
+ * Zapytania idą po kolei przez jeden stały handler Guzzle (połączenie keep-alive używane ponownie, bez nowego TLS
+ * przy każdym zapytaniu). Bez równoległości: sklep szereguje zapytania jednej sesji (pomiar 14.09.2026 — w paczce
+ * 6 równoległych zapytań z ciasteczkiem sesji czas do pierwszego bajtu rósł 42 → 75 → 91 → 196 → 397 → 797 ms,
+ * te same 6 po kolei trwały razem 285 ms), więc równoległe zapytania byłyby wolniejsze i blokowałyby sklep.
  */
 final class SignProjectB2bClient
 {
     public const HOST = 'signproject.pl';
 
     public const BASE = 'https://signproject.pl';
+
+    /** Ile zapytań o ceny wersji (po kolei) między przerwami delayMs w projectorMany(). */
+    public const BATCH_SIZE = 6;
 
     private const LOGIN_PAGE = self::BASE.'/pl/login.html';
 
@@ -33,6 +41,8 @@ final class SignProjectB2bClient
     private const PROJECTOR = self::BASE.'/ajax/projector.php';
 
     private const LOGGED_IN_MARKER = 'Wyloguj';
+
+    private const TIMEOUT_SECONDS = 30;
 
     private const MAX_CONSECUTIVE_FAILURES = 20;
 
@@ -55,6 +65,16 @@ final class SignProjectB2bClient
     private Closure $sleep;
 
     /**
+     * Stały handler Guzzle (cURL) na cały przebieg — zachowuje otwarte połączenie między zapytaniami
+     * (pomiar 14.09.2026: ~0,05 s na zapytanie zamiast ~0,3 s z nowym połączeniem). Podawany przez
+     * PendingRequest::setHandler, więc Http::fake w testach dalej przechwytuje zapytania (w przeciwieństwie do setClient).
+     *
+     * @var callable
+     */
+    private $handler;
+
+    /**
+     * @param  int  $delayMs  przerwa przed każdym pojedynczym zapytaniem i przed każdą serią BATCH_SIZE zapytań o ceny
      * @param  (Closure(int): void)|null  $sleep  pauza w ms (w testach bez czekania)
      */
     public function __construct(
@@ -67,6 +87,7 @@ final class SignProjectB2bClient
         $this->sleep = $sleep ?? static function (int $ms): void {
             usleep($ms * 1000);
         };
+        $this->handler = Utils::chooseHandler();
     }
 
     public function login(): void
@@ -178,12 +199,42 @@ final class SignProjectB2bClient
             static fn (PendingRequest $http): Response => $http->acceptJson()->get(self::PROJECTOR, ['product' => $id, 'get' => $get]),
             $anonymous ? new CookieJar : null,
         );
-        $json = $response->json();
-        if (! is_array($json)) {
-            throw new RuntimeException('odpowiedź '.self::HOST.' dla produktu '.$id.' nie jest poprawnym JSON');
+
+        return self::projectorJson($id, $response);
+    }
+
+    /**
+     * Dane wielu produktów z ajax/projector.php z ciasteczkami konta: seriami po BATCH_SIZE zapytań po kolei,
+     * z przerwą delayMs przed każdą serią (nie przed każdym zapytaniem). Każde zapytanie jak w projector():
+     * 429/503 z Retry-After/backoffem, licznik kolejnych błędów (20 z rzędu = B2bFatalException).
+     * Błąd jednego ID nie przerywa pozostałych — wynik to JSON albo RuntimeException z opisem.
+     *
+     * @param  list<int>  $ids
+     * @return array<int, array<string, mixed>|RuntimeException> w kolejności $ids (bez powtórzeń)
+     */
+    public function projectorMany(array $ids, string $get): array
+    {
+        $results = [];
+        foreach (array_chunk(array_values(array_unique($ids)), self::BATCH_SIZE) as $batch) {
+            if ($this->delayMs > 0) {
+                ($this->sleep)($this->delayMs);
+            }
+            foreach ($batch as $id) {
+                try {
+                    $response = $this->send(
+                        static fn (PendingRequest $http): Response => $http->acceptJson()->get(self::PROJECTOR, ['product' => $id, 'get' => $get]),
+                        pause: false,
+                    );
+                    $results[$id] = self::projectorJson($id, $response);
+                } catch (B2bFatalException $e) {
+                    throw $e;
+                } catch (RuntimeException $e) {
+                    $results[$id] = $e;
+                }
+            }
         }
 
-        return $json;
+        return $results;
     }
 
     /**
@@ -222,19 +273,22 @@ final class SignProjectB2bClient
 
     /**
      * @param  callable(PendingRequest): Response  $call
+     * @param  bool  $pause  przerwa delayMs przed zapytaniem (false = przerwę robi seria w projectorMany)
      */
-    private function send(callable $call, ?CookieJar $jar = null): Response
+    private function send(callable $call, ?CookieJar $jar = null, bool $pause = true): Response
     {
         $retries = 0;
         while (true) {
-            if ($this->delayMs > 0) {
+            if ($pause && $this->delayMs > 0) {
                 ($this->sleep)($this->delayMs);
             }
 
             $response = null;
             $error = null;
             try {
-                $response = $call(Http::timeout(30)->withOptions(['cookies' => $jar ?? $this->jar]));
+                $response = $call(Http::timeout(self::TIMEOUT_SECONDS)
+                    ->withOptions(['cookies' => $jar ?? $this->jar])
+                    ->setHandler($this->handler));
             } catch (ConnectionException $e) {
                 $error = 'brak połączenia ('.$e->getMessage().')';
             }
@@ -262,6 +316,19 @@ final class SignProjectB2bClient
 
             throw new RuntimeException($error);
         }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function projectorJson(int $id, Response $response): array
+    {
+        $json = $response->json();
+        if (! is_array($json)) {
+            throw new RuntimeException('odpowiedź '.self::HOST.' dla produktu '.$id.' nie jest poprawnym JSON');
+        }
+
+        return $json;
     }
 
     private static function retryAfterMs(Response $response): ?int
