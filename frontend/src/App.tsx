@@ -22,6 +22,7 @@ import { ProductCompare } from './pages/ProductCompare'
 import { ProductDetail } from './pages/ProductDetail'
 import { AiSettingsPage } from './pages/AiSettings'
 import { PriceLists } from './pages/PriceLists'
+import { PriceListsB2b } from './pages/PriceListsB2b'
 import { Products } from './pages/Products'
 import { Reports } from './pages/Reports'
 import { Substitutes } from './pages/Substitutes'
@@ -64,6 +65,14 @@ export default function App() {
           <Route path="products/compare" element={<ProductCompare />} />
           <Route path="products/:id" element={<ProductDetail />} />
           <Route path="price-lists" element={<PriceLists />} />
+          <Route
+            path="price-lists/b2b"
+            element={
+              <PermissionGuard permission="b2b_accounts.view">
+                <PriceListsB2b />
+              </PermissionGuard>
+            }
+          />
           <Route
             path="reports"
             element={

@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from '
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
+import { PriceListsTabs } from '../components/PriceListsTabs'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { api, can, parseActiveEnrichment, type EnrichmentBatch, type PrestaExportBatch } from '../lib/api'
@@ -1139,6 +1140,7 @@ export function PriceLists() {
 
   return (
     <div>
+      <PriceListsTabs />
       <h1 className="mb-2 text-xl font-semibold">Cenniki producentów</h1>
       <p className="mb-4 text-xs text-slate-500">
         Importujemy: <strong>nazwa</strong>, <strong>symbol/kod</strong>, <strong>cena</strong>,{' '}

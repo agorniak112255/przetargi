@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\Admin\RoleController as AdminRoleController;
 use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Api\AiSettingsController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\B2bAccountController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
@@ -215,6 +216,13 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:price_lists.import');
     Route::post('/price-lists/{priceList}/presta-export', [PrestaExportController::class, 'exportPriceList'])
         ->middleware('permission:presta.export');
+
+    Route::get('/b2b-accounts', [B2bAccountController::class, 'index'])->middleware('permission:b2b_accounts.view');
+    Route::post('/b2b-accounts', [B2bAccountController::class, 'store'])->middleware('permission:b2b_accounts.manage');
+    Route::patch('/b2b-accounts/{b2bAccount}', [B2bAccountController::class, 'update'])->middleware('permission:b2b_accounts.manage');
+    Route::delete('/b2b-accounts/{b2bAccount}', [B2bAccountController::class, 'destroy'])->middleware('permission:b2b_accounts.manage');
+    Route::post('/b2b-accounts/{b2bAccount}/password', [B2bAccountController::class, 'revealPassword'])
+        ->middleware('permission:b2b_accounts.view');
 
     Route::get('/ai-settings', [AiSettingsController::class, 'show'])->middleware('permission:ai_settings.manage');
     Route::put('/ai-settings', [AiSettingsController::class, 'update'])->middleware('permission:ai_settings.manage');
