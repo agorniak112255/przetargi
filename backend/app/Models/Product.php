@@ -35,6 +35,7 @@ class Product extends Model
         'category',
         'assortment_group_id',
         'description',
+        'variant_summary',
         'enrichment_status',
         'enriched_at',
         'enrichment_error',
@@ -163,6 +164,12 @@ class Product extends Model
     public function priceHistory(): HasMany
     {
         return $this->hasMany(ProductPriceHistory::class)->latest('id');
+    }
+
+    /** Wersje karty u dostawcy B2B (np. format × podłoże) z cenami konta; także wycofane (removed_at). */
+    public function variants(): HasMany
+    {
+        return $this->hasMany(ProductVariant::class)->orderBy('sort_order')->orderBy('id');
     }
 
     public function specialPrices(): HasMany

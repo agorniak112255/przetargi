@@ -13,6 +13,7 @@ use App\Models\ProductPriceHistory;
 use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
 use App\Support\ProductSizeVariant;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
@@ -34,7 +35,9 @@ final class ProductSizeMergeService
      */
     public function merge(?string $manufacturer = null, bool $dryRun = false): array
     {
-        $query = Product::query()->withCount('images')->orderBy('id');
+        // Karta z wersjami B2B (znak w formatach × podłożach) to już jedna karta z cenami w wersjach — cena karty 0
+        // skleiłaby różne znaki w jedną grupę, a usunięcie karty skasowałoby jej wersje i historię cen.
+        $query = Product::query()->withCount('images')->whereDoesntHave('variants')->orderBy('id');
         if ($manufacturer !== null && trim($manufacturer) !== '') {
             $query->where('manufacturer', trim($manufacturer));
         }
@@ -108,7 +111,6 @@ final class ProductSizeMergeService
     }
 
     /**
-     * @param  Product  $product
      * @param  array<string, string>  $knownStems
      */
     private function mergeGroupKey(Product $product, array $knownStems): ?string
@@ -331,7 +333,7 @@ final class ProductSizeMergeService
     /**
      * Ten sam PDF/zdjęcie na wielu rozmiarach — przenosimy raz, resztę kasujemy.
      *
-     * @param  \Illuminate\Support\Collection<int, ProductImage|ProductDocument>  $rows
+     * @param  Collection<int, ProductImage|ProductDocument>  $rows
      * @param  list<string>  $takenChecksums
      */
     private function reassignUniqueChecksums($rows, array $takenChecksums, int $winnerId): void

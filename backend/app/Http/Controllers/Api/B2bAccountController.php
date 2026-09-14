@@ -101,6 +101,13 @@ class B2bAccountController extends Controller
             ], 422);
         }
 
+        // Drugie zlecenie w trakcie przebiegu dałoby podwójne pobieranie tuż po zakończeniu pierwszego.
+        $running = $b2bAccount->last_sync_status === B2bSyncRun::STATUS_RUNNING
+            || $b2bAccount->syncRuns()->where('status', B2bSyncRun::STATUS_RUNNING)->exists();
+        if ($running) {
+            return response()->json(['message' => 'Pobieranie już trwa.'], 409);
+        }
+
         $b2bAccount->forceFill(['sync_requested_at' => now()])->save();
 
         return response()->json($this->view($b2bAccount->fresh()->load(['creator:id,name', 'updater:id,name'])));
@@ -159,7 +166,7 @@ class B2bAccountController extends Controller
     private const RUN_COLUMNS = [
         'status', 'trigger', 'started_at', 'finished_at', 'updated_at', 'total', 'processed', 'created',
         'updated', 'unchanged', 'skipped', 'prices_changed', 'descriptions', 'images', 'current_sku',
-        'message', 'cancel_requested_at',
+        'message', 'cancel_requested_at', 'progress_unit',
     ];
 
     /**
@@ -171,6 +178,8 @@ class B2bAccountController extends Controller
             'id' => $run->id,
             'status' => $run->status,
             'trigger' => $run->trigger,
+            // products = postęp liczony w kartach; variants = w wersjach (liczniki nadal w kartach).
+            'progress_unit' => (string) ($run->progress_unit ?: 'products'),
             'started_at' => $run->started_at?->toIso8601String(),
             'finished_at' => $run->finished_at?->toIso8601String(),
             'updated_at' => $run->updated_at?->toIso8601String(),

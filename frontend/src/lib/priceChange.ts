@@ -43,6 +43,25 @@ export function isRecentPriceChange(iso: string): boolean {
   return Date.now() - new Date(iso).getTime() <= RECENT_PRICE_CHANGE_DAYS * 24 * 3600 * 1000
 }
 
+/** „1 wersja”, „3 wersje”, „25 wersji”, „44 wersje”. */
+export function variantCountLabel(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  const word =
+    n === 1 ? 'wersja' : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'wersje' : 'wersji'
+  return `${n.toLocaleString('pl-PL')} ${word}`
+}
+
+/** Cena karty z wersjami na liście: „od 0,97 zł · 44 wersje”; bez porównywalnej ceny sama liczba wersji. */
+export function variantsFromLabel(
+  count: number,
+  minPrice: string | null | undefined,
+  currency: string | null | undefined,
+): string {
+  const versions = variantCountLabel(count)
+  return minPrice ? `od ${formatPrice(minPrice)} ${currencyLabel(currency)} · ${versions}` : versions
+}
+
 /** „Anro B2B: zakup 36,72 → 39,90 zł, katalog 40,80 → 40,80 zł · 15.09.2026 02:14” */
 export function priceChangeSummary(change: ProductPriceChange, currency: string | null | undefined): string {
   const cur = currencyLabel(currency)

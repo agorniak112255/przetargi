@@ -107,6 +107,8 @@ final class ProductEmbeddingIndexer
             (string) ($product->category ?? ''),
             (string) ($product->norms ?? ''),
             (string) ($product->description ?? ''),
+            // formaty/podłoża wersji (bez cen — zmiana samej ceny wersji nie zmienia dokumentu)
+            (string) ($product->variant_summary ?? ''),
             $this->joinList($payload['materials'] ?? null),
             $this->joinList($payload['features'] ?? null),
             $this->joinList($payload['use_cases'] ?? null),

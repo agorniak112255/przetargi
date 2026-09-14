@@ -7,6 +7,7 @@ import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductAiSearchModal } from '../components/ProductAiSearchModal'
 import { PriceChangeNote } from '../components/ProductPriceChange'
+import { variantsFromLabel } from '../lib/priceChange'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { applyCheckboxRange } from '../lib/checkboxRange'
@@ -1070,7 +1071,9 @@ export function Products() {
                   )}
                   {aiMode && (
                     <td className="p-2 tabular-nums">
-                      {p.purchase_price_pln != null
+                      {(p.variants_count ?? 0) > 0
+                        ? variantsFromLabel(p.variants_count ?? 0, p.variants_min_price, p.variants_currency)
+                        : p.purchase_price_pln != null
                         ? `${p.purchase_price_pln.toFixed(2)} zł`
                         : p.purchase_price != null && p.purchase_price !== ''
                           ? `${p.purchase_price} ${p.currency ?? 'PLN'}`
@@ -1111,16 +1114,25 @@ export function Products() {
                   </td>
                   <td className="p-2">{p.manufacturer}</td>
                   <td className="p-2 whitespace-nowrap">
-                    {p.catalog_price_net}
-                    {(p.currency ?? 'PLN').toUpperCase() !== 'PLN' && p.price_pln != null && (
-                      <span
-                        className="mt-0.5 block text-[10px] text-slate-500"
-                        title="Przeliczenie NBP tabela A do PLN"
-                      >
-                        ≈ {Number(p.price_pln).toFixed(2)} PLN
+                    {(p.variants_count ?? 0) > 0 ? (
+                      // Karta z wersjami ma cenę 0 — ceny są w wersjach (cena konta netto).
+                      <span className="tabular-nums" title="Cena konta netto najtańszej aktywnej wersji — wszystkie wersje na karcie">
+                        {variantsFromLabel(p.variants_count ?? 0, p.variants_min_price, p.variants_currency)}
                       </span>
+                    ) : (
+                      <>
+                        {p.catalog_price_net}
+                        {(p.currency ?? 'PLN').toUpperCase() !== 'PLN' && p.price_pln != null && (
+                          <span
+                            className="mt-0.5 block text-[10px] text-slate-500"
+                            title="Przeliczenie NBP tabela A do PLN"
+                          >
+                            ≈ {Number(p.price_pln).toFixed(2)} PLN
+                          </span>
+                        )}
+                        {p.last_price_change && <PriceChangeNote change={p.last_price_change} currency={p.currency} />}
+                      </>
                     )}
-                    {p.last_price_change && <PriceChangeNote change={p.last_price_change} currency={p.currency} />}
                   </td>
                   <td className="p-2">{p.currency ?? 'PLN'}</td>
                   <td className="p-2">

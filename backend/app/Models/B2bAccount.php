@@ -22,9 +22,6 @@ class B2bAccount extends Model
     /** Automatyczne sprawdzanie rusza od tej godziny (czas polski) — noc, poza godzinami pracy. */
     public const SYNC_FROM_HOUR = 2;
 
-    /** Przebieg „running” starszy niż tyle godzin uznajemy za przerwany (np. restart serwera). */
-    public const RUNNING_STALE_HOURS = 6;
-
     protected $fillable = [
         'username',
         'password',
@@ -64,9 +61,9 @@ class B2bAccount extends Model
         if (trim((string) $this->connector) === '') {
             return false;
         }
-        if ($this->last_sync_status === 'running'
-            && $this->last_sync_started_at !== null
-            && $this->last_sync_started_at->greaterThan($now->copy()->subHours(self::RUNNING_STALE_HOURS))) {
+        // Trwający przebieg nigdy nie jest „do uruchomienia” — bez limitu godzin (pobranie SignProject trwa kilka godzin).
+        // Przerwany przebieg wykrywa b2b:sync-due po sygnale życia (B2bSyncRun::STALE_MINUTES bez postępu).
+        if ($this->last_sync_status === 'running') {
             return false;
         }
         if ($this->sync_requested_at !== null) {

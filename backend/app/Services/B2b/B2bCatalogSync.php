@@ -4,12 +4,21 @@ declare(strict_types=1);
 
 namespace App\Services\B2b;
 
+use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductVariant;
+use App\Models\ProductVariantPriceHistory;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\PriceListImportService;
+use App\Support\ProductSearchBlob;
+use Carbon\CarbonImmutable;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -21,9 +30,32 @@ use Throwable;
  * - opis ze źródła, gdy karta go nie ma albo ma opis zapisany wcześniej przez synchronizację i
  *   niezmieniony od tamtej pory — opisu poprawionego ręcznie nie nadpisujemy;
  * - kategoria, link i zdjęcie tylko gdy puste; produktów znikniętych z B2B nie kasujemy.
+ *
+ * Łącznik z wersjami (B2bVariantConnector): karta ma cenę 0 („brak ceny”), ceny konta i ich historia są w
+ * product_variants / product_variant_price_history; jedna transakcja na produkt; wersje zniknięte z pełnej
+ * listy dostawcy dostają removed_at; formaty/podłoża trafiają do products.variant_summary (wyszukiwanie).
  */
 final class B2bCatalogSync
 {
+    private const VARIANT_SUMMARY_LIMIT = 1500;
+
+    /** Bezpiecznik: taki udział wersji z ceną zmienił cenę tym samym współczynnikiem… */
+    private const FUSE_SHARE = 0.8;
+
+    private const FUSE_TOLERANCE = 0.02;
+
+    /** …a współczynnik jest co najmniej taki (albo co najwyżej FUSE_DOWN). */
+    private const FUSE_UP = 1.5;
+
+    private const FUSE_DOWN = 0.67;
+
+    /** Tyle podejrzanych produktów z rzędu kończy przebieg (B2bFatalException). */
+    private const FUSE_STREAK = 3;
+
+    private const FUSE_REASON = 'podejrzana zmiana wszystkich cen — możliwa utrata ceny konta';
+
+    private const REMOVAL_CHUNK = 2000;
+
     public function __construct(
         private readonly PriceListImportService $priceLists,
         private readonly ProductImageDownloader $images,
@@ -42,7 +74,12 @@ final class B2bCatalogSync
      *     images: int,
      *     prices_changed: int,
      *     errors: list<string>,
-     *     cancelled: bool
+     *     cancelled: bool,
+     *     partial: bool,
+     *     progress_unit: string,
+     *     processed: int,
+     *     progress_total: int,
+     *     variants_removed: int
      * }
      */
     public function run(
@@ -54,6 +91,9 @@ final class B2bCatalogSync
         ?callable $onProduct = null,
         ?B2bSyncProgress $progress = null,
     ): array {
+        $variantConnector = $connector instanceof B2bVariantConnector ? $connector : null;
+        $unit = $variantConnector !== null ? B2bSyncRun::UNIT_VARIANTS : B2bSyncRun::UNIT_PRODUCTS;
+        $progress?->setUnit($unit);
         $progress?->log('info', 'Logowanie…');
         $progress?->flush();
         $connector->login();
@@ -65,7 +105,21 @@ final class B2bCatalogSync
         $errors = [];
         $pricesChanged = 0;
         $cancelled = false;
+        $partial = false;
+        $variantsProcessed = 0;
+        $variantsRemoved = 0;
+        $fuseStreak = 0;
+        $budgetMinutes = $variantConnector?->runBudgetMinutes();
+        $startedAt = CarbonImmutable::now();
         $expected = static fn (int $total): int => $limit !== null ? min($limit, $total) : $total;
+        // Przy wersjach postęp liczony w wersjach; próbka (--limit = produkty) nie zna z góry liczby wersji swoich produktów.
+        $progressTotal = static function () use ($variantConnector, $limit, $expected, &$stats, &$variantsProcessed): int {
+            if ($variantConnector === null) {
+                return $expected($stats['total_remote']);
+            }
+
+            return $limit === null ? $variantConnector->totalVariants() : $variantsProcessed;
+        };
         $runId = $progress?->run()->id;
 
         foreach ($connector->products() as $remote) {
@@ -76,14 +130,23 @@ final class B2bCatalogSync
             $stats['total_remote'] = $connector->totalProducts();
             $label = $remote->sku !== '' ? $remote->sku : 'ID '.$remote->remoteId;
             if ($stats['seen'] === 1 && $progress !== null) {
-                $progress->setTotal($expected($stats['total_remote']));
-                $progress->log('info', $this->totalLine($stats['total_remote'], $limit));
+                $progress->setTotal($progressTotal());
+                $progress->log('info', $this->totalLine($stats['total_remote'], $limit, $variantConnector));
             }
 
             try {
-                $outcome = $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId);
+                $outcome = $variantConnector !== null
+                    ? $this->syncVariantProduct($account, $variantConnector, $remote, $dryRun, $withImages, $runId)
+                    : $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId);
+            } catch (B2bFatalException $e) {
+                // utrata sesji / blokada — kolejne produkty zapisałyby złe ceny; przebieg kończy się jako „failed”
+                throw $e;
             } catch (Throwable $e) {
                 $outcome = ['status' => 'skipped', 'reason' => $e->getMessage()];
+            }
+
+            if ($variantConnector !== null) {
+                $variantsProcessed += (int) ($outcome['variants'] ?? $this->listedVersionCount($remote));
             }
 
             if ($outcome['status'] === 'skipped') {
@@ -91,13 +154,9 @@ final class B2bCatalogSync
                 $errors[] = $label.': '.$outcome['reason'];
             } else {
                 $stats[$outcome['status']]++;
-                if (($outcome['price_change'] ?? null) !== null) {
+                foreach ($this->priceChangesOf($outcome) as $change) {
                     $pricesChanged++;
-                    $progress?->priceChange([
-                        'product_id' => $outcome['product_id'],
-                        ...$outcome['price_change'],
-                        'at' => now()->toIso8601String(),
-                    ]);
+                    $progress?->priceChange([...$change, 'at' => now()->toIso8601String()]);
                 }
                 if ($outcome['description'] ?? false) {
                     $stats['descriptions']++;
@@ -110,18 +169,16 @@ final class B2bCatalogSync
                 }
             }
 
-            $line = sprintf(
-                '[%d/%d] %s — %s',
-                $stats['seen'],
-                $expected($stats['total_remote']),
-                $label,
-                match ($outcome['status']) {
-                    'created' => 'nowy',
-                    'updated' => 'zaktualizowany',
-                    'unchanged' => 'bez zmian',
-                    default => 'pominięty: '.$outcome['reason'],
-                },
-            );
+            $statusText = match ($outcome['status']) {
+                'created' => 'nowy',
+                'updated' => 'zaktualizowany',
+                'unchanged' => 'bez zmian',
+                default => 'pominięty: '.$outcome['reason'],
+            };
+            if ($variantConnector !== null && $outcome['status'] !== 'skipped') {
+                $statusText .= ' · wersji: '.(int) ($outcome['variants'] ?? 0);
+            }
+            $line = sprintf('[%d/%d] %s — %s', $stats['seen'], $expected($stats['total_remote']), $label, $statusText);
             if ($onProduct !== null) {
                 $onProduct($line);
             }
@@ -131,12 +188,15 @@ final class B2bCatalogSync
                 if ($outcome['status'] !== 'unchanged') {
                     $progress->log($outcome['status'] === 'skipped' ? 'warn' : 'info', $line);
                 }
+                foreach ($outcome['warnings'] ?? [] as $warning) {
+                    $progress->log('warn', $label.': '.$warning);
+                }
                 if (($outcome['image_error'] ?? null) !== null) {
                     $progress->log('warn', $label.': zdjęcie — '.$outcome['image_error']);
                 }
-                $progress->setTotal($expected($stats['total_remote']));
+                $progress->setTotal($progressTotal());
                 $progress->advance($label, [
-                    'processed' => $stats['seen'],
+                    'processed' => $variantConnector !== null ? $variantsProcessed : $stats['seen'],
                     'created' => $stats['created'],
                     'updated' => $stats['updated'],
                     'unchanged' => $stats['unchanged'],
@@ -145,17 +205,53 @@ final class B2bCatalogSync
                     'descriptions' => $stats['descriptions'],
                     'images' => $stats['images'],
                 ]);
-                if ($progress->cancelRequested()) {
-                    $cancelled = true;
-                    break;
+            }
+
+            if ($variantConnector !== null) {
+                if ($outcome['suspicious'] ?? false) {
+                    $fuseStreak++;
+                    if ($fuseStreak >= self::FUSE_STREAK) {
+                        throw new B2bFatalException(sprintf(
+                            'Przerwano: %d produkty z rzędu — %s (ostatni: %s).',
+                            $fuseStreak,
+                            self::FUSE_REASON,
+                            $label,
+                        ));
+                    }
+                } elseif ($outcome['compared'] ?? false) {
+                    $fuseStreak = 0;
                 }
+            }
+
+            if ($progress?->cancelRequested()) {
+                $cancelled = true;
+                break;
+            }
+            if ($budgetMinutes !== null
+                && $startedAt->diffInSeconds(CarbonImmutable::now(), true) >= $budgetMinutes * 60
+                && $stats['seen'] < $connector->totalProducts()) {
+                $partial = true;
+                break;
             }
         }
         $stats['total_remote'] = $connector->totalProducts();
+
+        if ($variantConnector !== null && ! $cancelled && ! $dryRun) {
+            $listed = $variantConnector->listedVariantIds();
+            if ($listed !== null) {
+                $variantsRemoved = $this->markRemovedVariants($account, $variantConnector, $listed, $startedAt);
+                if ($variantsRemoved > 0) {
+                    $progress?->log('info', 'Wersje wycofane (nie ma ich już na liście dostawcy): '.$variantsRemoved);
+                }
+            } else {
+                $progress?->log('warn', 'Lista wersji u dostawcy niepełna — wycofanych wersji nie oznaczono.');
+            }
+        }
+
         if ($progress !== null) {
-            $progress->setTotal($expected($stats['total_remote']));
+            $progress->setTotal($progressTotal());
             if ($stats['seen'] === 0) {
-                $progress->log('info', $this->totalLine($stats['total_remote'], $limit));
+                $progress->log('info', $this->totalLine($stats['total_remote'], $limit, $variantConnector));
             }
         }
 
@@ -164,12 +260,45 @@ final class B2bCatalogSync
             'prices_changed' => $pricesChanged,
             'errors' => $errors,
             'cancelled' => $cancelled,
+            'partial' => $partial,
+            'progress_unit' => $unit,
+            'processed' => $variantConnector !== null ? $variantsProcessed : $stats['seen'],
+            'progress_total' => $progressTotal(),
+            'variants_removed' => $variantsRemoved,
         ];
     }
 
-    private function totalLine(int $total, ?int $limit): string
+    private function totalLine(int $total, ?int $limit, ?B2bVariantConnector $variants): string
     {
-        return 'Produktów w B2B: '.$total.($limit !== null ? ' · próbka: '.min($limit, $total) : '');
+        $sample = $limit !== null ? ' · próbka: '.min($limit, $total) : '';
+        if ($variants === null) {
+            return 'Produktów w B2B: '.$total.$sample;
+        }
+
+        return 'Produktów w B2B: '.$total.' · wersji: '.$variants->totalVariants().($sample !== '' ? $sample.' produktów' : '');
+    }
+
+    /**
+     * @param  array<string, mixed>  $outcome
+     * @return list<array<string, mixed>>
+     */
+    private function priceChangesOf(array $outcome): array
+    {
+        if (isset($outcome['price_changes'])) {
+            return $outcome['price_changes'];
+        }
+        if (($outcome['price_change'] ?? null) === null) {
+            return [];
+        }
+
+        return [['product_id' => $outcome['product_id'], ...$outcome['price_change']]];
+    }
+
+    private function listedVersionCount(B2bRemoteProduct $remote): int
+    {
+        $versions = $remote->raw['versions'] ?? null;
+
+        return is_array($versions) ? count($versions) : 0;
     }
 
     /**
@@ -196,8 +325,7 @@ final class B2bCatalogSync
         $existing = $linked ?? Product::query()->where('sku', $remote->sku)->first();
         $manufacturer = mb_substr(trim($connector->manufacturer($remote)), 0, 100);
 
-        if ($existing !== null && $linked === null
-            && mb_strtolower(trim((string) $existing->manufacturer)) !== mb_strtolower($manufacturer)) {
+        if ($existing !== null && $linked === null && $this->foreignManufacturer($existing, $manufacturer)) {
             return ['status' => 'skipped', 'reason' => 'kod należy do karty producenta '.$existing->manufacturer];
         }
 
@@ -215,23 +343,7 @@ final class B2bCatalogSync
             'discount_percent' => $price->discountPercent,
             'currency' => $price->currency,
         ];
-        if ($remote->category !== null && trim((string) ($existing?->category ?? '')) === '') {
-            $payload['category'] = mb_substr($remote->category, 0, 255);
-        }
-        if ($remote->sourceUrl !== null && trim((string) ($existing?->shop_source_url ?? '')) === '') {
-            $payload['shop_source_url'] = $remote->sourceUrl;
-        }
-
-        $descriptionHash = $link?->description_hash;
-        if ($this->mayWriteDescription($existing, $link)) {
-            $description = $connector->description($remote);
-            if ($description !== '') {
-                $descriptionHash = sha1($description);
-                if ($existing === null || $description !== (string) $existing->description) {
-                    $payload['description'] = $description;
-                }
-            }
-        }
+        $descriptionHash = $this->applyCardDetails($payload, $existing, $link, $connector, $remote);
 
         $priceChange = null;
         $dirty = true;
@@ -276,18 +388,7 @@ final class B2bCatalogSync
             ],
         );
 
-        $image = false;
-        $imageError = null;
-        if ($withImages && ! $product->images()->exists()) {
-            try {
-                $remoteImage = $connector->image($remote);
-                if ($remoteImage !== null) {
-                    $image = $this->images->storeBytes($product, $remoteImage->bytes, $remoteImage->mime, $remoteImage->sourceUrl, 0) !== null;
-                }
-            } catch (Throwable $e) {
-                $imageError = $e->getMessage();
-            }
-        }
+        [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
 
         return [
             'status' => $status,
@@ -297,6 +398,639 @@ final class B2bCatalogSync
             'image' => $image,
             'image_error' => $imageError,
         ];
+    }
+
+    /**
+     * Produkt z wersjami: karta z ceną 0, wersje z cenami konta i historią w jednej transakcji.
+     * Zwraca także „variants” (liczba wersji do postępu), „compared” / „suspicious” (bezpiecznik).
+     *
+     * @return array<string, mixed>
+     */
+    private function syncVariantProduct(
+        B2bAccount $account,
+        B2bVariantConnector $connector,
+        B2bRemoteProduct $remote,
+        bool $dryRun,
+        bool $withImages,
+        ?int $runId,
+    ): array {
+        if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
+            return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
+        }
+        $source = 'b2b:'.$connector::key();
+
+        $remoteVariants = $this->uniqueVariants($connector->variants($remote));
+        $count = count($remoteVariants);
+        if ($remoteVariants === []) {
+            return ['status' => 'skipped', 'reason' => 'brak wersji w B2B'];
+        }
+        $remoteIds = array_map(static fn (B2bRemoteVariant $v): string => $v->remoteId, $remoteVariants);
+
+        // (1) karta, do której należą znane wersje tego produktu
+        $knownIds = $remoteIds;
+        foreach ((array) ($remote->raw['versions'] ?? []) as $version) {
+            if (is_array($version) && isset($version['id']) && trim((string) $version['id']) !== '') {
+                $knownIds[] = trim((string) $version['id']);
+            }
+        }
+        $cardIds = ProductVariant::query()
+            ->where('source', $source)
+            ->whereIn('remote_id', array_values(array_unique($knownIds)))
+            ->distinct()
+            ->pluck('product_id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->sort()
+            ->values()
+            ->all();
+        if (count($cardIds) > 1) {
+            return [
+                'status' => 'skipped',
+                'reason' => 'wersje należą do kilku kart (#'.implode(', #', $cardIds).') — pominięty bez scalania',
+                'variants' => $count,
+            ];
+        }
+
+        // (2) powiązanie z poprzedniego przebiegu (remote_id = kod), (3) dokładny kod z regułą producenta
+        $link = B2bProductLink::query()
+            ->where('b2b_account_id', $account->id)
+            ->where('remote_id', $remote->remoteId)
+            ->first();
+        if ($cardIds !== [] && $link !== null && (int) $link->product_id !== $cardIds[0]) {
+            return [
+                'status' => 'skipped',
+                'reason' => 'kod powiązany z kartą #'.$link->product_id.', a wersje z kartą #'.$cardIds[0].' — pominięty bez scalania',
+                'variants' => $count,
+            ];
+        }
+        $linked = $cardIds !== []
+            ? Product::query()->find($cardIds[0])
+            : ($link !== null ? Product::query()->find($link->product_id) : null);
+        $existing = $linked ?? Product::query()->where('sku', $remote->sku)->first();
+        $manufacturer = mb_substr(trim($connector->manufacturer($remote)), 0, 100);
+
+        if ($existing !== null && $linked === null && $this->foreignManufacturer($existing, $manufacturer)) {
+            return ['status' => 'skipped', 'reason' => 'kod należy do karty producenta '.$existing->manufacturer, 'variants' => $count];
+        }
+
+        // Żadne ID tej grupy nie jest znane, a karta kodu ma już aktywne wersje tego źródła — to inna grupa wersji
+        // o tym samym kodzie (inny znak). Nie scalamy dwóch znaków w jedną kartę. Gdy dostawca nadał wersjom nowe ID,
+        // stare dostaną removed_at przy pełnej liście i kolejny przebieg zapisze nowe.
+        if ($existing !== null && $cardIds === []) {
+            $otherVariants = ProductVariant::query()
+                ->where('product_id', $existing->id)
+                ->where('source', $source)
+                ->whereNull('removed_at')
+                ->count();
+            if ($otherVariants > 0) {
+                return [
+                    'status' => 'skipped',
+                    'reason' => 'karta #'.$existing->id.' tego kodu ma już inne wersje ('.$otherVariants.') — inna grupa wersji o tym samym kodzie, pominięty bez scalania',
+                    'variants' => $count,
+                ];
+            }
+        }
+
+        $priced = array_values(array_filter(
+            $remoteVariants,
+            static fn (B2bRemoteVariant $v): bool => $v->price !== null && $v->priceError === null,
+        ));
+        if ($priced === []) {
+            $firstError = null;
+            foreach ($remoteVariants as $v) {
+                $firstError ??= $v->priceError;
+            }
+
+            return [
+                'status' => 'skipped',
+                'reason' => 'brak ceny w B2B'.($firstError !== null ? ' ('.$firstError.')' : ''),
+                'variants' => $count,
+            ];
+        }
+        $currencies = array_values(array_unique(array_map(
+            static fn (B2bRemoteVariant $v): string => strtoupper(trim((string) $v->price?->currency)),
+            $priced,
+        )));
+        if (count($currencies) !== 1 || $currencies[0] === '') {
+            return ['status' => 'skipped', 'reason' => 'różne lub brak walut wersji: '.implode(', ', $currencies), 'variants' => $count];
+        }
+
+        /** @var Collection<string, ProductVariant> $stored */
+        $stored = ProductVariant::query()
+            ->where('source', $source)
+            ->whereIn('remote_id', $remoteIds)
+            ->get()
+            ->keyBy(static fn (ProductVariant $v): string => (string) $v->remote_id);
+
+        $factors = [];
+        foreach ($priced as $v) {
+            $old = $stored->get($v->remoteId)?->purchase_price;
+            if ($old !== null && (float) $old > 0 && $v->price !== null) {
+                $factors[] = $v->price->net / (float) $old;
+            }
+        }
+        $compared = $factors !== [];
+        if ($compared && $this->suspiciousPriceShift($factors)) {
+            return ['status' => 'skipped', 'reason' => self::FUSE_REASON, 'variants' => $count, 'suspicious' => true];
+        }
+
+        $hadCardPrice = $existing !== null
+            && ((float) $existing->purchase_price > 0 || (float) $existing->catalog_price_net > 0);
+        $oldCardPurchase = $existing !== null ? (float) $existing->purchase_price : 0.0;
+        $oldCardCatalog = $existing !== null ? (float) $existing->catalog_price_net : 0.0;
+
+        // Plan wersji w pamięci — przy --dry-run nic nie zapisujemy, ale status karty uwzględnia zmiany wersji.
+        $rows = [];
+        $variantChanged = false;
+        foreach ($remoteVariants as $v) {
+            $model = $stored->get($v->remoteId) ?? new ProductVariant(['source' => $source, 'remote_id' => mb_substr($v->remoteId, 0, 64)]);
+            $isNew = ! $model->exists;
+            $priceOk = $v->price !== null && $v->priceError === null;
+            $oldPurchase = $model->purchase_price;
+            $oldList = $model->list_price_net;
+
+            $model->fill([
+                'b2b_account_id' => $account->id,
+                'label' => mb_substr($v->label, 0, 255),
+                'attributes' => $v->attributes,
+                'sort_order' => max(0, $v->sortOrder),
+                'removed_at' => null,
+            ]);
+            if ($existing !== null) {
+                $model->product_id = $existing->id;
+            }
+            if ($v->sourceUrl !== null) {
+                $model->source_url = mb_substr($v->sourceUrl, 0, 2000);
+            }
+            // VAT i jednostka zwykle przychodzą z tym samym zapytaniem co cena — błąd ceny nie kasuje zapisanych
+            if ($priceOk || $v->vatRate !== null) {
+                $model->vat_rate = $v->vatRate;
+            }
+            if ($priceOk || $v->unit !== null) {
+                $model->unit = $v->unit !== null ? mb_substr($v->unit, 0, 20) : null;
+            }
+            if ($priceOk && $v->price !== null) {
+                $model->fill([
+                    'purchase_price' => round($v->price->net, 2),
+                    // cena katalogowa tylko gdy źródło podaje ją wprost
+                    'list_price_net' => $v->price->base !== null ? round($v->price->base, 2) : null,
+                    'currency' => mb_substr(strtoupper(trim($v->price->currency)), 0, 3),
+                ]);
+            }
+
+            $newPurchase = $model->purchase_price;
+            $newList = $model->list_price_net;
+            $purchaseChanged = $priceOk && ($oldPurchase === null || abs((float) $oldPurchase - (float) $newPurchase) >= 0.005);
+            $listChanged = $priceOk && ! $isNew && (($oldList === null) !== ($newList === null)
+                || ($oldList !== null && $newList !== null && abs((float) $oldList - (float) $newList) >= 0.005));
+            $dirty = $isNew || $model->isDirty();
+            $variantChanged = $variantChanged || $dirty;
+
+            $change = null;
+            if (! $isNew && $oldPurchase !== null && ($purchaseChanged || $listChanged)) {
+                $old = round((float) $oldPurchase, 2);
+                $new = round((float) $newPurchase, 2);
+                $change = [
+                    'sku' => $remote->sku,
+                    'name' => mb_substr($remote->name, 0, 255),
+                    'variant_label' => (string) $model->label,
+                    'purchase_old' => $old,
+                    'purchase_new' => $new,
+                    'catalog_old' => null,
+                    'catalog_new' => null,
+                    'catalog_pct' => null,
+                    'discount_old' => null,
+                    'discount_new' => null,
+                    'direction' => $new - $old >= 0.005 ? 'up' : ($old - $new >= 0.005 ? 'down' : 'flat'),
+                ];
+            }
+
+            $rows[] = [
+                'variant' => $model,
+                'dirty' => $dirty,
+                'price_ok' => $priceOk,
+                'history' => $purchaseChanged || $listChanged,
+                'change' => $change,
+            ];
+        }
+
+        $payload = [
+            'name' => mb_substr($remote->name, 0, 1000),
+            'manufacturer' => $manufacturer,
+            // 0 = „brak ceny” (oferta, dopasowanie, wycena) — ceny są tylko w wersjach
+            'catalog_price_net' => 0,
+            'purchase_price' => 0,
+            'discount_percent' => 0,
+            'currency' => $currencies[0],
+            'variant_summary' => $this->variantSummary($this->summaryItems($rows, $existing, $stored)),
+        ];
+        // błąd pobrania opisu nie wstrzymuje cen: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
+        $warnings = [];
+        $descriptionHash = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
+
+        $existing?->fill($payload);
+        $cardDirty = $existing === null || $existing->isDirty();
+        $status = $existing === null ? 'created' : (($cardDirty || $variantChanged) ? 'updated' : 'unchanged');
+
+        if ($dryRun) {
+            return [
+                'status' => $status,
+                'description' => isset($payload['description']),
+                'variants' => $count,
+                'compared' => $compared,
+            ];
+        }
+
+        $changes = [];
+        $product = DB::transaction(function () use (
+            $account, $remote, $existing, $payload, $rows, $runId, $descriptionHash, $source,
+            $hadCardPrice, $oldCardPurchase, $oldCardCatalog, &$warnings, &$changes,
+        ): Product {
+            $now = now();
+            if ($existing !== null) {
+                if ($existing->isDirty()) {
+                    $existing->save();
+                }
+                $product = $existing;
+            } else {
+                $product = Product::query()->create(['sku' => $remote->sku, ...$payload]);
+            }
+
+            if ($hadCardPrice) {
+                ProductPriceHistory::query()->create([
+                    'product_id' => $product->id,
+                    'price_list_id' => null,
+                    'b2b_sync_run_id' => $runId,
+                    'catalog_price_net' => 0,
+                    'purchase_price' => 0,
+                    'source' => $source,
+                ]);
+                $warning = sprintf(
+                    'cena karty (zakup %.2f, katalog %.2f) zmieniona na 0 — ceny są teraz w wersjach',
+                    $oldCardPurchase,
+                    $oldCardCatalog,
+                );
+                $warnings[] = $warning;
+                Log::warning('B2B: karta z wersjami — cena karty zmieniona na 0', [
+                    'product_id' => $product->id,
+                    'sku' => $remote->sku,
+                    'purchase_old' => $oldCardPurchase,
+                    'catalog_old' => $oldCardCatalog,
+                    'b2b_sync_run_id' => $runId,
+                ]);
+            }
+
+            $touchPriced = [];
+            $touchSeen = [];
+            foreach ($rows as $row) {
+                /** @var ProductVariant $variant */
+                $variant = $row['variant'];
+                if ($row['dirty']) {
+                    $variant->product_id = $product->id;
+                    $variant->last_seen_at = $now;
+                    if ($row['price_ok']) {
+                        $variant->price_checked_at = $now;
+                    }
+                    $variant->save();
+                } elseif ($row['price_ok']) {
+                    $touchPriced[] = (int) $variant->id;
+                } else {
+                    $touchSeen[] = (int) $variant->id;
+                }
+
+                if ($row['history']) {
+                    ProductVariantPriceHistory::query()->create([
+                        'product_variant_id' => $variant->id,
+                        'b2b_sync_run_id' => $runId,
+                        'purchase_price' => $variant->purchase_price,
+                        'list_price_net' => $variant->list_price_net,
+                        'currency' => $variant->currency,
+                        'source' => $source,
+                    ]);
+                }
+                if ($row['change'] !== null) {
+                    $changes[] = ['product_id' => (int) $product->id, 'variant_id' => (int) $variant->id, ...$row['change']];
+                }
+            }
+            // wersje bez zmian: jeden UPDATE sygnału widoczności (bez updated_at — wiersz się nie zmienił)
+            if ($touchPriced !== []) {
+                ProductVariant::query()->toBase()->whereIn('id', $touchPriced)->update(['last_seen_at' => $now, 'price_checked_at' => $now]);
+            }
+            if ($touchSeen !== []) {
+                ProductVariant::query()->toBase()->whereIn('id', $touchSeen)->update(['last_seen_at' => $now]);
+            }
+
+            B2bProductLink::query()->updateOrCreate(
+                ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
+                [
+                    'product_id' => $product->id,
+                    'remote_sku' => mb_substr($remote->sku, 0, 255),
+                    'description_hash' => $descriptionHash,
+                    'last_seen_at' => $now,
+                ],
+            );
+
+            return $product;
+        });
+
+        // Hak modelu wysyła reindeks jeszcze w transakcji (kolejka bez after_commit) — worker mógłby przeczytać
+        // kartę sprzed zapisu. Ponowne zlecenie po commit; ShouldBeUnique pomija je, gdy pierwsze jeszcze czeka.
+        if ($product->wasRecentlyCreated || $product->wasChanged(ProductSearchBlob::SOURCE_COLUMNS)) {
+            ReindexProductEmbeddingJob::dispatch((int) $product->id);
+        }
+
+        [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
+
+        return [
+            'status' => $status,
+            'product_id' => (int) $product->id,
+            'price_changes' => $changes,
+            'description' => isset($payload['description']),
+            'image' => $image,
+            'image_error' => $imageError,
+            'variants' => $count,
+            'compared' => $compared,
+            'warnings' => $warnings,
+        ];
+    }
+
+    /**
+     * @param  list<B2bRemoteVariant>  $variants
+     * @return list<B2bRemoteVariant>
+     */
+    private function uniqueVariants(array $variants): array
+    {
+        $seen = [];
+        $out = [];
+        foreach ($variants as $variant) {
+            $id = trim($variant->remoteId);
+            if ($id === '' || isset($seen['#'.$id])) {
+                continue;
+            }
+            $seen['#'.$id] = true;
+            $out[] = $variant;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Czy ponad FUSE_SHARE wersji zmieniło cenę tym samym (±FUSE_TOLERANCE) dużym współczynnikiem —
+     * tak wygląda cena anonimowa zamiast ceny konta, nie zwykła zmiana cennika.
+     *
+     * @param  list<float>  $factors  nowa cena / zapisana cena
+     */
+    private function suspiciousPriceShift(array $factors): bool
+    {
+        $total = count($factors);
+        foreach ($factors as $pivot) {
+            if ($pivot < self::FUSE_UP && $pivot > self::FUSE_DOWN) {
+                continue;
+            }
+            $same = 0;
+            foreach ($factors as $factor) {
+                $close = $pivot == 0.0 ? $factor == 0.0 : abs($factor / $pivot - 1) <= self::FUSE_TOLERANCE;
+                if ($close) {
+                    $same++;
+                }
+            }
+            if ($same > self::FUSE_SHARE * $total) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Aktywne wersje karty po zapisie: wersje tego produktu + pozostałe aktywne wersje karty spoza listy.
+     *
+     * @param  list<array{variant: ProductVariant}>  $rows
+     * @param  Collection<string, ProductVariant>  $stored
+     * @return list<array{label: string, attributes: mixed, sort_order: int, id: int|null}>
+     */
+    private function summaryItems(array $rows, ?Product $existing, $stored): array
+    {
+        $items = array_map(static fn (array $row): array => [
+            'label' => (string) $row['variant']->label,
+            'attributes' => $row['variant']->attributes,
+            'sort_order' => (int) $row['variant']->sort_order,
+            'id' => $row['variant']->exists ? (int) $row['variant']->id : null,
+        ], $rows);
+
+        if ($existing !== null) {
+            $others = ProductVariant::query()
+                ->where('product_id', $existing->id)
+                ->whereNull('removed_at')
+                ->whereNotIn('id', $stored->pluck('id')->all())
+                ->orderBy('sort_order')
+                ->orderBy('id')
+                ->get(['id', 'label', 'attributes', 'sort_order']);
+            foreach ($others as $other) {
+                $items[] = [
+                    'label' => (string) $other->label,
+                    'attributes' => $other->attributes,
+                    'sort_order' => (int) $other->sort_order,
+                    'id' => (int) $other->id,
+                ];
+            }
+            usort($items, static fn (array $a, array $b): int => [$a['sort_order'], $a['id'] ?? PHP_INT_MAX] <=> [$b['sort_order'], $b['id'] ?? PHP_INT_MAX]);
+        }
+
+        return $items;
+    }
+
+    /**
+     * „Format: 10 x 14,8 cm; 20 x 29,6 cm | Podłoże: FN - folia samoprzylepna” — wartości dosłownie, bez powtórzeń,
+     * w kolejności źródła; gdy któraś wersja nie ma atrybutów — unikalne etykiety wersji.
+     *
+     * @param  list<array{label: string, attributes: mixed}>  $items
+     */
+    private function variantSummary(array $items): ?string
+    {
+        if ($items === []) {
+            return null;
+        }
+
+        $dimensions = [];
+        $structured = true;
+        foreach ($items as $item) {
+            $attributes = is_array($item['attributes']) ? $item['attributes'] : [];
+            if ($attributes === []) {
+                $structured = false;
+                break;
+            }
+            foreach ($attributes as $name => $value) {
+                $name = trim((string) $name);
+                $value = trim((string) $value);
+                if ($name !== '' && $value !== '') {
+                    $dimensions['#'.$name]['#'.$value] = true;
+                }
+            }
+        }
+
+        $strip = static fn (string $key): string => substr($key, 1);
+        if ($structured && $dimensions !== []) {
+            $parts = [];
+            foreach ($dimensions as $name => $values) {
+                $parts[] = $strip($name).': '.implode('; ', array_map($strip, array_keys($values)));
+            }
+            $text = implode(' | ', $parts);
+        } else {
+            $labels = [];
+            foreach ($items as $item) {
+                $label = trim($item['label']);
+                if ($label !== '') {
+                    $labels['#'.$label] = true;
+                }
+            }
+            $text = implode('; ', array_map($strip, array_keys($labels)));
+        }
+
+        $text = trim($text);
+
+        return $text === '' ? null : mb_substr($text, 0, self::VARIANT_SUMMARY_LIMIT);
+    }
+
+    /**
+     * Wersje tego źródła i konta, których nie ma na pełnej liście dostawcy → removed_at. Skan po zakresach id
+     * (same id/remote_id), bez ładowania modeli; potem nowe variant_summary dotkniętych kart.
+     * Wersja jest „na liście”, gdy lista ma jej pełne remote_id albo ID bazowe sprzed „:” (wersja wielokluczowa
+     * „{id}:{klucz}” — mapa strony zna tylko ID bazowe). Wersji widzianej w tym przebiegu nie wycofujemy nigdy
+     * (sklep zwraca też wersje, których nie ma w mapie strony).
+     *
+     * @param  list<string>  $listed
+     */
+    private function markRemovedVariants(
+        B2bAccount $account,
+        B2bVariantConnector $connector,
+        array $listed,
+        CarbonImmutable $runStartedAt,
+    ): int {
+        $listedSet = [];
+        foreach ($listed as $id) {
+            $listedSet['#'.trim((string) $id)] = true;
+        }
+        $now = now();
+        $removed = 0;
+        $productIds = [];
+
+        ProductVariant::query()
+            ->toBase()
+            ->select(['id', 'remote_id', 'product_id'])
+            ->where('source', 'b2b:'.$connector::key())
+            ->where('b2b_account_id', $account->id)
+            ->whereNull('removed_at')
+            ->where(static function ($query) use ($runStartedAt): void {
+                $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', $runStartedAt);
+            })
+            ->chunkById(self::REMOVAL_CHUNK, function ($chunk) use ($listedSet, $now, &$removed, &$productIds): void {
+                $ids = [];
+                foreach ($chunk as $row) {
+                    $remoteId = (string) $row->remote_id;
+                    $base = strstr($remoteId, ':', true);
+                    $isListed = isset($listedSet['#'.$remoteId]) || ($base !== false && isset($listedSet['#'.$base]));
+                    if (! $isListed) {
+                        $ids[] = (int) $row->id;
+                        $productIds[(int) $row->product_id] = true;
+                    }
+                }
+                if ($ids !== []) {
+                    $removed += DB::table('product_variants')->whereIn('id', $ids)->update(['removed_at' => $now, 'updated_at' => $now]);
+                }
+            });
+
+        foreach (array_keys($productIds) as $productId) {
+            $product = Product::query()->find($productId);
+            if ($product === null) {
+                continue;
+            }
+            $items = ProductVariant::query()
+                ->where('product_id', $productId)
+                ->whereNull('removed_at')
+                ->orderBy('sort_order')
+                ->orderBy('id')
+                ->get(['label', 'attributes'])
+                ->map(static fn (ProductVariant $v): array => ['label' => (string) $v->label, 'attributes' => $v->attributes])
+                ->all();
+            $product->variant_summary = $this->variantSummary($items);
+            if ($product->isDirty('variant_summary')) {
+                $product->save();
+            }
+        }
+
+        return $removed;
+    }
+
+    /**
+     * Kategoria i link tylko gdy puste; opis wg mayWriteDescription. Zwraca hash opisu do powiązania.
+     * Z $warnings (łącznik wersji) błąd pobrania opisu nie przerywa produktu: opis i jego hash zostają bez zmian.
+     * Bez $warnings (dotychczasowe łączniki) wyjątek leci dalej jak wcześniej.
+     *
+     * @param  array<string, mixed>  $payload
+     * @param  list<string>|null  $warnings
+     */
+    private function applyCardDetails(
+        array &$payload,
+        ?Product $existing,
+        ?B2bProductLink $link,
+        B2bConnector $connector,
+        B2bRemoteProduct $remote,
+        ?array &$warnings = null,
+    ): ?string {
+        if ($remote->category !== null && trim((string) ($existing?->category ?? '')) === '') {
+            $payload['category'] = mb_substr($remote->category, 0, 255);
+        }
+        if ($remote->sourceUrl !== null && trim((string) ($existing?->shop_source_url ?? '')) === '') {
+            $payload['shop_source_url'] = $remote->sourceUrl;
+        }
+
+        $descriptionHash = $link?->description_hash;
+        if ($this->mayWriteDescription($existing, $link)) {
+            try {
+                $description = $connector->description($remote);
+            } catch (B2bFatalException $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                if ($warnings === null) {
+                    throw $e;
+                }
+                $warnings[] = 'opis nie został pobrany ('.$e->getMessage().') — opis bez zmian, ceny zaktualizowane';
+                $description = '';
+            }
+            if ($description !== '') {
+                $descriptionHash = sha1($description);
+                if ($existing === null || $description !== (string) $existing->description) {
+                    $payload['description'] = $description;
+                }
+            }
+        }
+
+        return $descriptionHash;
+    }
+
+    private function foreignManufacturer(Product $existing, string $manufacturer): bool
+    {
+        return mb_strtolower(trim((string) $existing->manufacturer)) !== mb_strtolower($manufacturer);
+    }
+
+    /**
+     * @return array{0: bool, 1: string|null}
+     */
+    private function storeImage(B2bConnector $connector, B2bRemoteProduct $remote, Product $product): array
+    {
+        if ($product->images()->exists()) {
+            return [false, null];
+        }
+        try {
+            $remoteImage = $connector->image($remote);
+            if ($remoteImage === null) {
+                return [false, null];
+            }
+
+            return [$this->images->storeBytes($product, $remoteImage->bytes, $remoteImage->mime, $remoteImage->sourceUrl, 0) !== null, null];
+        } catch (Throwable $e) {
+            return [false, $e->getMessage()];
+        }
     }
 
     private function mayWriteDescription(?Product $existing, ?B2bProductLink $link): bool

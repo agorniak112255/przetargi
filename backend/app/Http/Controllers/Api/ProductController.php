@@ -12,12 +12,14 @@ use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductVariant;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\NbpExchangeRateService;
 use App\Services\ProductDeletionService;
 use App\Services\ProductKitService;
 use App\Support\ProductModelFuzzy;
 use App\Support\ProductPriceChangeResolver;
+use App\Support\ProductVariantPresenter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Throwable;
@@ -31,6 +33,7 @@ class ProductController extends Controller
         private readonly ProductKitService $kit,
         private readonly ProductDeletionService $deletion,
         private readonly ProductPriceChangeResolver $priceChanges,
+        private readonly ProductVariantPresenter $variants,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -220,11 +223,16 @@ class ProductController extends Controller
         });
 
         // Ostatnia zmiana ceny tylko dla zwróconej strony — kilka zapytań na całą stronę.
-        $changes = $this->priceChanges->latestChanges(
-            $page->getCollection()->map(static fn (array $row): int => (int) $row['id'])->all()
-        );
-        $page->getCollection()->transform(static function (array $row) use ($changes): array {
+        $pageIds = $page->getCollection()->map(static fn (array $row): int => (int) $row['id'])->all();
+        $changes = $this->priceChanges->latestChanges($pageIds);
+        // Wersje z cenami (karta ma cenę 0): liczba aktywnych i „od” — jedno zapytanie na stronę.
+        $variantSummaries = $this->variants->listSummaries($pageIds);
+        $page->getCollection()->transform(static function (array $row) use ($changes, $variantSummaries): array {
             $row['last_price_change'] = $changes[(int) $row['id']] ?? null;
+            $summary = $variantSummaries[(int) $row['id']] ?? null;
+            $row['variants_count'] = $summary['variants_count'] ?? 0;
+            $row['variants_min_price'] = $summary['variants_min_price'] ?? null;
+            $row['variants_currency'] = $summary['variants_currency'] ?? null;
 
             return $row;
         });
@@ -346,6 +354,7 @@ class ProductController extends Controller
         $payload['price_change_percent'] = $catalogChangePct;
         $payload['price_history_latest_at'] = $latest?->created_at;
         $payload['last_price_change'] = $this->priceChanges->latestChanges([(int) $product->id])[(int) $product->id] ?? null;
+        $payload['variants'] = $this->variants->forProduct((int) $product->id);
         $payload = $this->fx->appendPricePln($payload);
         $payload['presta_export'] = $this->prestaExportPayload($product);
         $payload['accessories'] = $this->kit->present($product);
@@ -415,6 +424,15 @@ class ProductController extends Controller
     public function priceHistory(Product $product): JsonResponse
     {
         return response()->json(['data' => $this->priceChanges->history((int) $product->id, 100)]);
+    }
+
+    public function variantPriceHistory(Product $product, ProductVariant $variant): JsonResponse
+    {
+        if ((int) $variant->product_id !== (int) $product->id) {
+            abort(404);
+        }
+
+        return response()->json(['data' => $this->variants->history((int) $variant->id, 100)]);
     }
 
     /**

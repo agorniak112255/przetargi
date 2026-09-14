@@ -9,6 +9,8 @@ type SyncRunSummary = {
   id: number
   status: RunStatus
   trigger: RunTrigger
+  /** products = postęp w kartach; variants = w wersjach (liczniki nadal w kartach). */
+  progress_unit?: 'products' | 'variants'
   started_at: string
   finished_at: string | null
   updated_at: string
@@ -363,6 +365,7 @@ export function B2bSyncProgressModal({ account, canManage, onClose, onChanged }:
                           <td className="whitespace-nowrap py-1 pr-2 text-right tabular-nums">
                             {formatNumber(r.processed)}
                             {r.total !== null ? ` / ${formatNumber(r.total)}` : ''}
+                            {r.progress_unit === 'variants' ? ' wersji' : ''}
                           </td>
                           <td className="py-1 pr-2 text-right tabular-nums">{formatNumber(r.created)}</td>
                           <td className="py-1 pr-2 text-right tabular-nums">{formatNumber(r.prices_changed)}</td>
@@ -414,6 +417,7 @@ export function B2bSyncProgressModal({ account, canManage, onClose, onChanged }:
 
 function RunDetails({ run, now }: { run: SyncRunFull; now: number }) {
   const running = run.status === 'running'
+  const byVariants = run.progress_unit === 'variants'
   const startedMs = new Date(run.started_at).getTime()
   const endMs = running ? now : run.finished_at ? new Date(run.finished_at).getTime() : null
   const elapsedMs = endMs !== null ? endMs - startedMs : null
@@ -462,7 +466,8 @@ function RunDetails({ run, now }: { run: SyncRunFull; now: number }) {
             {run.total !== null ? (
               <>
                 {' '}
-                / <span className="tabular-nums">{formatNumber(run.total)}</span> produktów
+                / <span className="tabular-nums">{formatNumber(run.total)}</span>{' '}
+                {byVariants ? 'wersji' : 'produktów'}
                 {percent !== null && <span className="text-slate-500"> ({percent}%)</span>}
               </>
             ) : (
@@ -496,6 +501,9 @@ function RunDetails({ run, now }: { run: SyncRunFull; now: number }) {
         )}
       </div>
 
+      {byVariants && (
+        <p className="text-[10px] text-slate-500">Postęp liczony w wersjach; liczniki poniżej dotyczą kart.</p>
+      )}
       <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-7">
         {counters.map(([label, value]) => (
           <div key={label} className="rounded bg-slate-100 px-2 py-1">

@@ -27,6 +27,11 @@ class B2bSyncRun extends Model
 
     public const TRIGGER_CLI = 'cli';
 
+    /** Jednostka total/processed: produkty listy dostawcy albo wersje (łącznik z wersjami — liczniki kart bez zmian). */
+    public const UNIT_PRODUCTS = 'products';
+
+    public const UNIT_VARIANTS = 'variants';
+
     /** Tyle ostatnich wpisów dziennika trzymamy przy przebiegu. */
     public const LOG_LIMIT = 200;
 
@@ -43,6 +48,7 @@ class B2bSyncRun extends Model
         'b2b_account_id',
         'status',
         'trigger',
+        'progress_unit',
         'started_at',
         'finished_at',
         'total',

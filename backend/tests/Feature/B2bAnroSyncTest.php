@@ -255,7 +255,7 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertNull($noConnector->fresh()->last_sync_status);
     }
 
-    public function test_schedule_waits_for_night_hour_frequency_and_retries_stale_running(): void
+    public function test_schedule_waits_for_night_hour_frequency_and_never_while_running(): void
     {
         $account = $this->makeAccount('konto', ['sync_frequency' => 'weekly']);
 
@@ -266,9 +266,14 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertFalse($account->isSyncDue(CarbonImmutable::parse('2026-09-20 02:05', B2bAccount::SYNC_TIMEZONE)));
         $this->assertTrue($account->isSyncDue(CarbonImmutable::parse('2026-09-22 02:05', B2bAccount::SYNC_TIMEZONE)));
 
+        // Dawniej „running” starszy niż 6 h uznawany był za przerwany — pobranie SignProject trwa kilka godzin, więc
+        // ruszałby drugi przebieg. Teraz przerwanie wykrywa tylko b2b:sync-due po braku postępu (B2bSyncOverlapTest).
         $account->last_sync_status = 'running';
-        $this->assertTrue($account->isSyncDue(CarbonImmutable::parse('2026-09-22 09:00', B2bAccount::SYNC_TIMEZONE)));
+        $this->assertFalse($account->isSyncDue(CarbonImmutable::parse('2026-09-22 09:00', B2bAccount::SYNC_TIMEZONE)));
         $this->assertFalse($account->isSyncDue(CarbonImmutable::parse('2026-09-15 04:00', B2bAccount::SYNC_TIMEZONE)));
+
+        $account->last_sync_status = 'failed';
+        $this->assertTrue($account->isSyncDue(CarbonImmutable::parse('2026-09-22 09:00', B2bAccount::SYNC_TIMEZONE)));
     }
 
     public function test_manual_daytime_run_does_not_shift_night_schedule(): void

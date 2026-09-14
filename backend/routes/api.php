@@ -149,6 +149,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::post('/products/{product}/kit', [ProductKitController::class, 'attach'])->middleware('permission:products.view');
     Route::delete('/products/{product}/kit', [ProductKitController::class, 'destroy'])->middleware('permission:products.view');
     Route::get('/products/{product}/price-history', [ProductController::class, 'priceHistory'])->middleware('permission:products.view');
+    Route::get('/products/{product}/variants/{variant}/price-history', [ProductController::class, 'variantPriceHistory'])->middleware('permission:products.view');
     Route::post('/products/{product}/enrich', [ProductEnrichmentController::class, 'enrichProduct'])
         ->middleware('permission:price_lists.import');
     Route::get('/presta/status', [PrestaShopSearchController::class, 'status'])

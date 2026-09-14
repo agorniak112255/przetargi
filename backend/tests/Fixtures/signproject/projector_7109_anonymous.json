@@ -1,0 +1,74 @@
+{
+    "sizes": {
+        "id": 7109,
+        "name": "BB014 Drzwi przeciwpożarowe Zamykać! Kierunek drogi ewakuacyjnej w prawo",
+        "firm": {
+            "name": "SIGNPROJECT",
+            "productsLink": "/pl/producers/signproject-1644341039",
+            "gfx": "\"/data/lang/pol/producers/gfx/projector/1644341039_1.png\""
+        },
+        "cleardescription": "",
+        "description": "",
+        "icon": "hpeciai/5d9f2210a6af4efbb3b33eae93e023a9/pol_il_BB014-Drzwi-przeciwpozarowe-Zamykac-Kierunek-drogi-ewakuacyjnej-w-prawo-7109.png",
+        "series": {
+            "name": "100x148_FN",
+            "link": "search.php?series=203&lang=pol"
+        },
+        "taxes": {
+            "vat": "23.0"
+        },
+        "code": "BB014",
+        "moreprices": "y",
+        "new": "0",
+        "link": "/pl/products/bb014-drzwi-przeciwpozarowe-zamykac-kierunek-drogi-ewakuacyjnej-w-prawo-7109",
+        "product_type": "product_item",
+        "unit": "szt.",
+        "unit_single": "szt.",
+        "unit_plural": "szt.",
+        "unit_fraction": "szt.",
+        "unit_precision": "0",
+        "unit_sellby": 1,
+        "items": {
+            "00000-uniw": {
+                "type": "uniw",
+                "priority": "0",
+                "name": "uniwersalny",
+                "description": "uniwersalny",
+                "amount": -1,
+                "phone_price": "false",
+                "prices": {
+                    "price_retail": 3.97,
+                    "price_minimal": 0,
+                    "price_automatic_calculation": 0,
+                    "price_retail_dynamic": 0,
+                    "price_srp": 0,
+                    "price_crossed_retail": 0,
+                    "price_crossed_wholesale": 0,
+                    "price_pos": 0,
+                    "omnibus_price_retail": 3.44,
+                    "omnibus_price_retail_new_price": false,
+                    "omnibus_price_wholesale": 1.41,
+                    "omnibus_price_wholesale_new_price": false,
+                    "price": 3.97,
+                    "price_net": 3.23
+                }
+            }
+        },
+        "amount": -1
+    },
+    "sizeprices": {
+        "value": "3.97",
+        "price_formatted": "3,97 zł",
+        "price_net": "3.23",
+        "price_net_formatted": "3,23 zł",
+        "vat": "23",
+        "worth": "3.97",
+        "worth_net": "3.23",
+        "worth_formatted": "3,97 zł",
+        "worth_net_formatted": "3,23 zł",
+        "basket_enable": "y",
+        "special_offer": "false",
+        "rebate_code_active": "n",
+        "priceformula_error": "false"
+    }
+}

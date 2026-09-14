@@ -141,6 +141,61 @@ export type ProductPriceHistoryRow = {
   catalog_pct: number | null
 }
 
+/** Ostatnia zmiana ceny wersji (ceny jako tekst z dwoma miejscami po przecinku). */
+export type ProductVariantPriceChange = {
+  purchase_old: string | null
+  purchase_new: string | null
+  pct: number | null
+  at: string | null
+  b2b_sync_run_id: number | null
+}
+
+/** Wersja karty u dostawcy (np. format × podłoże znaku) z ceną konta; etykieta i atrybuty dosłownie ze źródła. */
+export type ProductVariant = {
+  id: number
+  remote_id: string
+  label: string
+  attributes: Record<string, string>
+  purchase_price: string | null
+  list_price_net: string | null
+  currency: string | null
+  vat_rate: number | null
+  unit: string | null
+  source_url: string | null
+  sort_order: number
+  price_checked_at: string | null
+  last_seen_at: string | null
+  /** Wersja zniknęła z listy dostawcy — nie liczy się do „od–do”. */
+  removed_at: string | null
+  last_price_change: ProductVariantPriceChange | null
+}
+
+export type ProductVariants = {
+  count: number
+  active_count: number
+  /** Tylko z aktywnych wersji z ceną; null przy różnych walutach albo braku cen. */
+  min_price: string | null
+  max_price: string | null
+  currency: string | null
+  source_label: string | null
+  dimensions: string[]
+  items: ProductVariant[]
+}
+
+export type ProductVariantPriceHistoryRow = {
+  id: number
+  purchase_price: string | null
+  list_price_net: string | null
+  currency: string | null
+  source: string
+  source_label: string
+  b2b_sync_run_id: number | null
+  created_at: string
+  /** null dla pierwszego wpisu wersji (dodanie ceny, nie zmiana). */
+  purchase_old: string | null
+  purchase_pct: number | null
+}
+
 export type Product = {
   id: number
   sku: string
@@ -175,6 +230,12 @@ export type Product = {
   price_change_percent?: number | null
   price_history_latest_at?: string | null
   last_price_change?: ProductPriceChange | null
+  /** Karta szczegółów: null, gdy karta nie ma wersji. */
+  variants?: ProductVariants | null
+  /** Lista produktów: liczba aktywnych wersji i najniższa cena wersji. */
+  variants_count?: number
+  variants_min_price?: string | null
+  variants_currency?: string | null
   enrichment_payload?: {
     features?: string[]
     specs?: string[]

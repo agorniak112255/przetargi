@@ -6,6 +6,7 @@ import { CrossRefPanel } from '../components/CrossRefPanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { PrestaKitBadge, ProductKitModal } from '../components/ProductKitModal'
 import { PriceStep } from '../components/ProductPriceChange'
+import { ProductVariantsTable } from '../components/ProductVariantsTable'
 import {
   api,
   can,
@@ -17,7 +18,13 @@ import {
   type ProductPriceHistoryRow,
   type Substitute,
 } from '../lib/api'
-import { formatDateTime, priceChangeSummary } from '../lib/priceChange'
+import {
+  currencyLabel,
+  formatDateTime,
+  formatPrice,
+  priceChangeSummary,
+  variantCountLabel,
+} from '../lib/priceChange'
 
 type Detail = Product & { substitutes: Substitute[] }
 
@@ -331,6 +338,8 @@ export function ProductDetail() {
 
   const status = p.enrichment_status ?? 'none'
   const currency = p.currency?.trim() || 'PLN'
+  const variants = p.variants ?? null
+  const variantsBlockExport = variants !== null && variants.active_count > 0
 
   return (
     <div>
@@ -490,10 +499,14 @@ export function ProductDetail() {
           {canExportPresta && (
             <button
               type="button"
-              disabled={exportBusy}
+              disabled={exportBusy || variantsBlockExport}
               onClick={() => void exportPresta()}
               className="rounded bg-violet-700 px-3 py-2 text-xs text-white disabled:opacity-50"
-              title="Wysyła kartę do sklepu: opis, rozmiary, termin na zamówienie"
+              title={
+                variantsBlockExport
+                  ? 'Karta ma wersje z cenami (np. formaty znaku) — eksport do Presty nie jest obsługiwany.'
+                  : 'Wysyła kartę do sklepu: opis, rozmiary, termin na zamówienie'
+              }
             >
               {exportBusy
                 ? 'Wysyłam…'
@@ -586,18 +599,49 @@ export function ProductDetail() {
         </p>
       )}
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
-          Cena kat. netto: <b>{p.catalog_price_net} {currency}</b>
+      {variants !== null ? (
+        <>
+          <div className="mt-4 rounded-xl bg-white p-4 shadow-sm text-sm">
+            Cena konta netto:{' '}
+            {variants.active_count === 0 ? (
+              <b>brak — wszystkie wersje wycofane ({variants.count})</b>
+            ) : variants.min_price !== null && variants.max_price !== null ? (
+              <>
+                <b>
+                  {variants.min_price === variants.max_price
+                    ? formatPrice(variants.min_price)
+                    : `od ${formatPrice(variants.min_price)} do ${formatPrice(variants.max_price)}`}{' '}
+                  {currencyLabel(variants.currency)} netto
+                </b>
+                {' · '}
+                {variantCountLabel(variants.active_count)}
+              </>
+            ) : (
+              <>
+                <b>{variantCountLabel(variants.active_count)}</b>
+                <span className="text-slate-500"> — brak cen do porównania (różne waluty albo wersje bez ceny)</span>
+              </>
+            )}
+            {variants.source_label && <span className="text-slate-500"> (ceny konta {variants.source_label})</span>}
+          </div>
+          <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            Ceny są w wersjach — auto-oferta w przetargu nie przyjmie ceny tej karty; wpisz cenę wybranej wersji ręcznie.
+          </p>
+        </>
+      ) : (
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
+            Cena kat. netto: <b>{p.catalog_price_net} {currency}</b>
+          </div>
+          <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
+            Zakup: <b>{p.purchase_price} {currency}</b>
+          </div>
+          <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
+            Upust:{' '}
+            <b>{p.discount_percent != null && p.discount_percent !== '' ? `${p.discount_percent}%` : '—'}</b>
+          </div>
         </div>
-        <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
-          Zakup: <b>{p.purchase_price} {currency}</b>
-        </div>
-        <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
-          Upust:{' '}
-          <b>{p.discount_percent != null && p.discount_percent !== '' ? `${p.discount_percent}%` : '—'}</b>
-        </div>
-      </div>
+      )}
       <p className="mb-4 mt-2 text-xs text-slate-600">
         {p.last_price_change ? (
           <span title={priceChangeSummary(p.last_price_change, currency)}>
@@ -627,6 +671,8 @@ export function ProductDetail() {
           </span>
         )}
       </p>
+
+      {variants !== null && <ProductVariantsTable key={p.id} productId={p.id} variants={variants} />}
 
       <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">

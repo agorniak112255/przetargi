@@ -48,7 +48,9 @@ final class B2bSyncDueCommand extends Command
 
     /**
      * Przebieg zabity w trakcie (restart serwera, OOM) zostaje „running” — bez tego okno postępu
-     * wisiałoby, a konto przez 6 h nie byłoby sprawdzane.
+     * wisiałoby, a konto nie byłoby sprawdzane wcale (isSyncDue i zajęcie konta w runnerze pomijają
+     * konto „running” bez limitu godzin). Jedyny sygnał przerwania: brak postępu przez STALE_MINUTES.
+     * Wyścig z drugim procesem kończy się wyjątkiem runnera „już trwa” — konto jest pomijane.
      */
     private function sweepStaleRuns(): void
     {

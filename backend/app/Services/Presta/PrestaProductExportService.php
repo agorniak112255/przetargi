@@ -9,6 +9,7 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductAccessory;
 use App\Models\ProductImage;
+use App\Models\ProductVariant;
 use App\Services\NbpExchangeRateService;
 use App\Support\ProductSizeVariant;
 use Illuminate\Support\Facades\Log;
@@ -47,6 +48,11 @@ final class PrestaProductExportService
      */
     public function export(Product $product, bool $force = false): array
     {
+        $blocked = $this->blockedReason($product);
+        if ($blocked !== null) {
+            throw new RuntimeException($blocked);
+        }
+
         $error = $this->gateway->writeError();
         if ($error !== '') {
             throw new RuntimeException($error);
@@ -153,6 +159,22 @@ final class PrestaProductExportService
             'errors' => array_slice($errors, 0, 20),
         ];
     }
+
+    /**
+     * Powód, dla którego karty nie wolno wysłać do Presty; null = można.
+     * Karta z wersjami ma cenę 0 („brak ceny”) — w sklepie pojawiłaby się za 0 zł.
+     */
+    public function blockedReason(Product $product): ?string
+    {
+        $hasVariants = ProductVariant::query()
+            ->where('product_id', $product->id)
+            ->whereNull('removed_at')
+            ->exists();
+
+        return $hasVariants ? self::VARIANTS_BLOCKED_MESSAGE : null;
+    }
+
+    public const VARIANTS_BLOCKED_MESSAGE = 'Karta ma wersje z cenami (np. formaty znaku) — eksport do Presty nie jest obsługiwany.';
 
     /**
      * @return list<int>

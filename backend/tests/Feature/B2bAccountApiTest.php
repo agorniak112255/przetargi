@@ -138,6 +138,45 @@ final class B2bAccountApiTest extends TestCase
             ->assertJsonPath('recent_runs', []);
     }
 
+    public function test_sync_progress_reports_progress_unit(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $account = B2bAccount::query()->create(['username' => 'jan', 'password' => 'sekret', 'sites' => ['b2b.anro.net.pl'], 'connector' => 'anro']);
+
+        $account->syncRuns()->create(['status' => 'ok', 'trigger' => 'schedule', 'started_at' => now()->subDay()]);
+        $variants = $account->syncRuns()->create(['status' => 'running', 'trigger' => 'manual', 'started_at' => now()]);
+        $variants->forceFill(['progress_unit' => 'variants', 'total' => 69000, 'processed' => 44])->save();
+
+        $this->getJson("/api/b2b-accounts/{$account->id}/sync-progress")
+            ->assertOk()
+            ->assertJsonPath('run.id', $variants->id)
+            ->assertJsonPath('run.progress_unit', 'variants')
+            ->assertJsonPath('recent_runs.0.progress_unit', 'variants')
+            ->assertJsonPath('recent_runs.1.progress_unit', 'products');
+    }
+
+    public function test_sync_request_while_sync_is_running_returns_conflict(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $account = B2bAccount::query()->create(['username' => 'jan', 'password' => 'sekret', 'sites' => ['b2b.anro.net.pl'], 'connector' => 'anro']);
+
+        // Przebieg w toku według tabeli przebiegów.
+        $run = $account->syncRuns()->create(['status' => 'running', 'trigger' => 'schedule', 'started_at' => now()]);
+        $this->postJson("/api/b2b-accounts/{$account->id}/sync")
+            ->assertStatus(409)
+            ->assertExactJson(['message' => 'Pobieranie już trwa.']);
+        $this->assertNull($account->fresh()->sync_requested_at);
+
+        // Konto zajęte przez runner, zanim powstał wiersz przebiegu.
+        $run->forceFill(['status' => 'ok', 'finished_at' => now()])->save();
+        $account->forceFill(['last_sync_status' => 'running'])->save();
+        $this->postJson("/api/b2b-accounts/{$account->id}/sync")->assertStatus(409);
+
+        $account->forceFill(['last_sync_status' => 'ok'])->save();
+        $this->postJson("/api/b2b-accounts/{$account->id}/sync")->assertOk();
+        $this->assertNotNull($account->fresh()->sync_requested_at);
+    }
+
     public function test_cancel_marks_running_run_and_is_logged(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

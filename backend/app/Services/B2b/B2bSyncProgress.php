@@ -31,6 +31,8 @@ final class B2bSyncProgress
 
     private bool $cancelRequested = false;
 
+    private bool $advanced = false;
+
     private function __construct(private readonly B2bSyncRun $run)
     {
         $this->lastFlushAt = microtime(true);
@@ -42,6 +44,7 @@ final class B2bSyncProgress
             'b2b_account_id' => $account->id,
             'status' => B2bSyncRun::STATUS_RUNNING,
             'trigger' => $trigger,
+            'progress_unit' => B2bSyncRun::UNIT_PRODUCTS,
             'started_at' => now(),
             'log' => [],
             'price_changes' => [],
@@ -82,6 +85,12 @@ final class B2bSyncProgress
         $this->run->total = $total;
     }
 
+    /** B2bSyncRun::UNIT_* — w czym liczone są total i processed (zapis przy najbliższym flush). */
+    public function setUnit(string $unit): void
+    {
+        $this->run->progress_unit = $unit;
+    }
+
     /**
      * Po każdym produkcie; zapisuje od razu pierwszy (panel szybko zna liczbę produktów), potem z przerwami.
      *
@@ -95,9 +104,12 @@ final class B2bSyncProgress
                 $this->run->{$key} = $counters[$key];
             }
         }
+        $first = ! $this->advanced;
+        $this->advanced = true;
         $this->sinceFlush++;
 
-        if ($this->run->processed === 1
+        // „pierwszy” = pierwsze wywołanie, nie processed === 1: przy wersjach processed skacze o liczbę wersji znaku
+        if ($first
             || $this->sinceFlush >= self::FLUSH_EVERY_PRODUCTS
             || microtime(true) - $this->lastFlushAt >= self::FLUSH_EVERY_SECONDS) {
             $this->flush();

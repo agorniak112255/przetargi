@@ -16,7 +16,7 @@ final class ProductSearchBlob
     /** Kolumny, po których zmianie blob przestaje być aktualny. */
     public const SOURCE_COLUMNS = [
         'sku', 'name', 'model_name', 'manufacturer', 'category', 'norms',
-        'description', 'enrichment_payload',
+        'description', 'variant_summary', 'enrichment_payload',
     ];
 
     private const MAX_LENGTH = 16000;
@@ -84,6 +84,8 @@ final class ProductSearchBlob
             (string) ($product->category ?? ''),
             (string) ($product->norms ?? ''),
             (string) ($product->description ?? ''),
+            // formaty/podłoża wersji z B2B — osobno od opisu źródła
+            (string) ($product->variant_summary ?? ''),
             $this->flattenPayload($payload),
             $this->bhpAttributes->toSearchText($this->bhpAttributes->forProduct($product)),
         ], static fn (string $part): bool => trim($part) !== '')));
