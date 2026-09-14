@@ -1067,6 +1067,9 @@ final class PpeAssortmentTest extends TestCase
         $this->assertTrue($this->assortment->isArmSleeve($req));
         $this->assertTrue($this->assortment->isArmSleeve('Ochraniacz przedramienia (rękaw) antyprzecięciowy'));
         $this->assertTrue($this->assortment->isArmSleeve('Zarękawek antyprzecięciowy 45 cm'));
+        // raport 20260914_161701: model zrozumiał rękaw jako „narękawniki”, a wymaganie przestawało być rękawem
+        $this->assertTrue($this->assortment->isArmSleeve('Narękawnik antyprzecięciowy 45 cm'));
+        $this->assertTrue($this->assortment->isArmSleeve('narękawniki ochronne przeciwprzecięciowe EN 388 min. 2.X.4.2.C EN 407 poziom 1'));
         $this->assertTrue($this->assortment->isArmSleeve('Rękaw antyprzecięciowy HPPE 45 cm'), 'goły rzeczownik „rękaw” poza odzieżą');
         $this->assertTrue($this->assortment->isArmSleeve('Rękawy ochronne termoodporne, para'));
         $this->assertTrue($this->assortment->isArmSleeve('Naramiennik z rękawem do rękawic spawalniczych'), 'rękawice wymienione po rękawie nie odbierają typu');

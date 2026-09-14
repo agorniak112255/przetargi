@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Console\Commands\TenderEvalCommand;
 use App\Models\AiSetting;
 use App\Models\Product;
 use App\Models\TenderItem;
 use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductAiSearchService;
 use App\Support\PpeAssortment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
@@ -287,6 +289,22 @@ final class TenderEvalCommandTest extends TestCase
         } finally {
             @unlink($recorded);
         }
+    }
+
+    /** Raport 20260914_161701 poz. 1: 40 wierszy listy zapasowej (48) nad oceną modelu — ocena karty 11202000 nie trafiła do raportu. */
+    public function test_recorded_search_keeps_model_rows_below_first_forty_rows(): void
+    {
+        $rows = [];
+        for ($i = 1; $i <= 45; $i++) {
+            $rows[] = ['id' => $i, 'sku' => 'CAT-'.$i, 'name' => 'Rękawice ESD', 'ai_match_percent' => 48, 'ai_match_reason' => 'lista zapasowa', 'ai_match_source' => ProductAiSearchService::MATCH_SOURCE_CATALOG];
+        }
+        $rows[] = ['id' => 99, 'sku' => '11202000', 'name' => 'HyFlex 11202', 'ai_match_percent' => 30, 'ai_match_reason' => 'brak EN 388', 'ai_match_source' => null];
+        $command = app(TenderEvalCommand::class);
+
+        $recorded = (new \ReflectionMethod($command, 'recordedSearch'))->invoke($command, ['model_state' => 'ranked', 'products' => $rows]);
+
+        $this->assertCount(41, $recorded['products'], 'pierwsze 40 wierszy + wiersz oceniony przez model');
+        $this->assertSame(['11202000', 30], [$recorded['products'][40]['sku'], $recorded['products'][40]['ai_match_percent']]);
     }
 
     public function test_replay_of_report_without_recorded_search_fails_clearly(): void

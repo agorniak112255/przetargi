@@ -581,7 +581,16 @@ final class TenderEvalCommand extends Command
     private function recordedSearch(array $row): array
     {
         $products = [];
-        foreach (array_slice(is_array($row['products'] ?? null) ? $row['products'] : [], 0, 40) as $product) {
+        $all = is_array($row['products'] ?? null) ? array_values($row['products']) : [];
+        // Pierwsze 40 wierszy i każdy dalszy wiersz oceniony przez model. Raport 20260914_161701 poz. 1: 40 wierszy listy
+        // zapasowej (48) i nie było widać, czy model w ogóle ocenił kartę 11202000.
+        $kept = array_slice($all, 0, 40);
+        foreach (array_slice($all, 40) as $extra) {
+            if (is_array($extra) && ! in_array($extra['ai_match_source'] ?? null, [ProductAiSearchService::MATCH_SOURCE_CATALOG, ProductAiSearchService::MATCH_SOURCE_RULE], true)) {
+                $kept[] = $extra;
+            }
+        }
+        foreach ($kept as $product) {
             if (! is_array($product)) {
                 continue;
             }

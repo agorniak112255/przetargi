@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Models\Product;
+use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Catalog\ProductKindClassifier;
+use App\Services\Enrichment\ProductEnrichmentService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
+use RuntimeException;
+use Throwable;
 
 /**
  * Podgląd rodzaju produktu rozpoznanego modelem obok rodziny z reguł (tylko odczyt). Służy do znajdowania luk w regułach
@@ -20,7 +25,9 @@ final class ClassifyProductKindCommand extends Command
         {--manufacturer= : Tylko ten producent}
         {--sku=* : Tylko te karty (SKU)}
         {--all : Także karty, którym reguły już dały rodzinę (porównanie reguł z modelem)}
-        {--limit=40 : Najwyżej tyle kart}';
+        {--limit=40 : Najwyżej tyle kart}
+        {--enrich : Zleć pobranie opisu kartom ŚOI rozpoznanym tylko z wiedzy modelu (rodzina nie jest zapisywana)}
+        {--user= : E-mail użytkownika, na którego idzie partia pobierania opisów (domyślnie pierwszy administrator)}';
 
     protected $description = 'Podgląd: rodzaj produktu rozpoznany modelem AI obok rodziny z reguł, z cytatem z karty (nic nie zapisuje)';
 
@@ -76,6 +83,63 @@ final class ClassifyProductKindCommand extends Command
             array_keys($counts),
             $counts,
         )));
+        if ($this->option('enrich')) {
+            return $this->queueEnrichment($products, $results);
+        }
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * Karty ŚOI rozpoznane tylko z wiedzy modelu (nazwa to kod, brak dowodu w danych) idą do pobrania opisu; reguły rodziny
+     * rozpoznają je potem z opisu, z dowodem. Rodzina z wiedzy modelu nadal nie jest zapisywana.
+     *
+     * @param  Collection<int, Product>  $products
+     * @param  array<int, array{family: ?string, ppe: string, basis: string}>  $results
+     */
+    private function queueEnrichment(Collection $products, array $results): int
+    {
+        $ids = $products
+            ->filter(static function (Product $product) use ($results): bool {
+                $result = $results[(int) $product->id] ?? null;
+
+                return $result !== null
+                    && $result['ppe'] === ProductKindClassifier::PPE_YES
+                    && $result['family'] !== null
+                    && $result['basis'] === ProductKindClassifier::BASIS_MODEL
+                    && ! in_array($product->enrichment_status, [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL], true);
+            })
+            ->map(static fn (Product $product): int => (int) $product->id)
+            ->values()
+            ->all();
+        if ($ids === []) {
+            $this->info('Nie ma kart do pobrania opisu (ŚOI rozpoznane tylko z wiedzy modelu i jeszcze bez opisu).');
+
+            return self::SUCCESS;
+        }
+
+        $email = trim((string) $this->option('user'));
+        try {
+            $user = $email !== ''
+                ? User::query()->where('email', $email)->first()
+                : User::role('admin')->orderBy('id')->first();
+        } catch (Throwable) {
+            $user = null;
+        }
+        if (! $user instanceof User) {
+            $this->error($email !== '' ? "Nie ma użytkownika {$email}." : 'Nie ma administratora, na którego można zlecić partię — podaj --user=.');
+
+            return self::FAILURE;
+        }
+
+        try {
+            $queued = app(ProductEnrichmentService::class)->enqueueProductIds($ids, $user);
+        } catch (RuntimeException $e) {
+            $this->warn($e->getMessage());
+
+            return self::SUCCESS;
+        }
+        $this->info(sprintf('Zlecono pobranie opisu: %d kart (partia #%d).', count($queued['product_ids']), (int) $queued['batch']->id));
 
         return self::SUCCESS;
     }

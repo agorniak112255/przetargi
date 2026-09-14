@@ -6,11 +6,15 @@ namespace Tests\Feature;
 
 use App\Models\AiSetting;
 use App\Models\Product;
+use App\Models\ProductEnrichmentBatch;
+use App\Models\User;
 use App\Services\Catalog\ProductKindClassifier;
 use App\Support\PpeAssortment;
+use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 /**
@@ -85,6 +89,33 @@ final class ClassifyProductKindCommandTest extends TestCase
 
         $this->assertStringNotContainsString('Rękawice nitrylowe ProGlove', implode("\n", $this->sent), 'domyślnie tylko karty bez rodziny');
         $this->assertSame($before, Product::query()->orderBy('id')->get(['id', 'ppe_family', 'updated_at'])->toArray(), 'podgląd niczego nie zapisuje');
+    }
+
+    /**
+     * Słabe nazwy („ActivArmr 59416 Size 26,0”): model rozpoznaje ŚOI tylko z własnej wiedzy. Taka karta idzie do pobrania
+     * opisu, żeby reguły rodziny rozpoznały ją z dowodem; rodzina z wiedzy modelu dalej nie jest zapisywana.
+     */
+    public function test_enrich_option_queues_description_only_for_ppe_recognised_from_model_knowledge(): void
+    {
+        Queue::fake();
+        $this->seed(RolesAndPermissionsSeeder::class);
+        User::factory()->withRole('admin')->create();
+        [$activ, $thumb, $heat, $tape] = $this->cardsWithoutFamily();
+        $this->fakeModel([
+            ['id' => $activ->id, 'ppe' => 'tak', 'family' => 'gloves', 'type' => 'rękaw spawalniczy', 'basis' => 'wiedza_modelu', 'evidence' => null],
+            ['id' => $thumb->id, 'ppe' => 'tak', 'family' => 'gloves', 'type' => 'rękaw ochronny', 'basis' => 'dane', 'evidence' => 'ściągacz z otworem na kciuk'],
+            ['id' => $heat->id, 'ppe' => 'nie', 'family' => null, 'type' => 'rękaw termokurczliwy', 'basis' => 'dane', 'evidence' => 'Rękaw termokurczliwy'],
+            ['id' => $tape->id, 'ppe' => 'nieznane', 'family' => null, 'type' => null, 'basis' => 'wiedza_modelu', 'evidence' => null],
+        ]);
+
+        $this->artisan('products:classify-kind', ['--enrich' => true])
+            ->expectsOutputToContain('Zlecono pobranie opisu: 1 kart')
+            ->assertSuccessful();
+
+        $batch = ProductEnrichmentBatch::query()->latest('id')->first();
+        $this->assertNotNull($batch);
+        $this->assertSame(1, (int) $batch->total, 'tylko karta ŚOI rozpoznana z wiedzy modelu');
+        $this->assertNull($activ->fresh()->ppe_family, 'rodzina z wiedzy modelu nie jest zapisywana');
     }
 
     /** @return list<Product> */

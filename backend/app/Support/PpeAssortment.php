@@ -1539,7 +1539,7 @@ final class PpeAssortment
     {
         $t = $this->normalize($text);
         $sleeveAt = $this->firstWordOffset(
-            '/\b(naramiennik|zarekaw|arm\s*sleeves?|armguards?|arm\s*guards?|arm\s*protectors?|manchon'
+            '/\b(naramiennik|narekawnik|zarekaw|arm\s*sleeves?|armguards?|arm\s*guards?|arm\s*protectors?|manchon'
             .'|ochraniacz\w*\s+(przed)?ramien|cut[\s-]*resistant\s+sleeves?)\w*'
             .'|\brekaw(y|a|u|ow|em|ie|ach|om|ami)?\b|primacuff|\bcuffs\b/u',
             $t
