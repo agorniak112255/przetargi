@@ -112,7 +112,7 @@ final class TenderEvalCommand extends Command
 
         $results = [];
         foreach ($cases as $case) {
-            $results[$case['id']] = ['id' => $case['id'], 'expected_skus' => $case['expected_skus'], 'forbidden_skus' => $case['forbidden_skus'], 'runs' => []];
+            $results[$case['id']] = ['id' => $case['id'], 'expected_skus' => $case['expected_skus'], 'forbidden_skus' => $case['forbidden_skus'], 'expect_empty' => $case['expect_empty'] ?? false, 'runs' => []];
         }
         $runTimings = [];
         if ($replay !== '') {
@@ -202,7 +202,7 @@ final class TenderEvalCommand extends Command
     }
 
     /**
-     * @param  array{id: string, query: string, expected_skus: list<string>, forbidden_skus: list<string>}  $case
+     * @param  array{id: string, query: string, expected_skus: list<string>, forbidden_skus: list<string>, expect_empty?: bool}  $case
      * @param  array{candidates: list<array<string, mixed>>, pick: array{sku: string, score: int, source: string, heuristic_only: bool}|null, reason: string|null}  $decision
      * @param  array<string, mixed>  $row
      * @return array{verdict: string, sku: string|null, score: int|null, source: string|null, top_model: string|null, model_state: string|null, reason: string|null}
@@ -222,13 +222,15 @@ final class TenderEvalCommand extends Command
             $top = (string) ($first['sku'] ?? '').'='.(int) ($first['ai_match_percent'] ?? 0)
                 .' ('.(string) ($first['ai_match_source'] ?? 'model').')';
         }
+        $expectEmpty = ($case['expect_empty'] ?? false) === true;
         if ($pick === null) {
-            return ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => $top, 'model_state' => $state, 'reason' => $decision['reason'], 'providers' => $providers];
+            // tender_expect_empty: katalog nie ma karty spełniającej wymaganie — brak propozycji jest trafny
+            return ['verdict' => $expectEmpty ? self::VERDICT_HIT : self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => $top, 'model_state' => $state, 'reason' => $decision['reason'], 'providers' => $providers];
         }
 
         $sku = SearchEvalMetrics::normalizeAll([$pick['sku']])[0] ?? $pick['sku'];
         $verdict = match (true) {
-            in_array($sku, SearchEvalMetrics::normalizeAll($case['expected_skus']), true) => self::VERDICT_HIT,
+            ! $expectEmpty && in_array($sku, SearchEvalMetrics::normalizeAll($case['expected_skus']), true) => self::VERDICT_HIT,
             in_array($sku, SearchEvalMetrics::normalizeAll($case['forbidden_skus']), true) => self::VERDICT_FORBIDDEN,
             default => self::VERDICT_OTHER,
         };
@@ -321,6 +323,9 @@ final class TenderEvalCommand extends Command
                 $expected = (string) ($result['expected_skus'][0] ?? '');
                 if (count($result['expected_skus']) > 1) {
                     $expected .= ' +'.(count($result['expected_skus']) - 1);
+                }
+                if (($result['expect_empty'] ?? false) === true) {
+                    $expected = 'brak (nie '.$expected.')';
                 }
 
                 return [

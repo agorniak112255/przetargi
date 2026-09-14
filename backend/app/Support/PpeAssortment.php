@@ -67,6 +67,9 @@ final class PpeAssortment
     ];
 
     /** @var array<string, string> */
+    /** Klasy wytrzymałości mechanicznej EN 166 od najniższej. */
+    private const IMPACT_CLASS_RANK = ['F' => 1, 'B' => 2, 'A' => 3];
+
     private const FAMILY_TO_KATEGORIA = [
         self::FAMILY_GLOVES => 'rekawice',
         self::FAMILY_FOOTWEAR => 'obuwie',
@@ -500,6 +503,148 @@ final class PpeAssortment
         }
 
         return array_values(array_unique($levels));
+    }
+
+    /**
+     * Najniższa klasa wytrzymałości mechanicznej EN 166 z wymagania: F (45 m/s, niska energia), B (120 m/s, średnia),
+     * A (190 m/s, wysoka). Decyzja użytkownika 14.09 po pomiarze 20260914_205010: poz. 9 wymaga soczewki „do 120 m/s”,
+     * a 3M 2890 z zaciemnieniem 5.0 (1406213) ma tylko FT — raz dostawała 95, raz 50.
+     */
+    public function requiredImpactClass(string $requirement): ?string
+    {
+        $classes = $this->impactClassesIn($requirement);
+        if ($classes === []) {
+            return null;
+        }
+        usort($classes, static fn (string $a, string $b): int => self::IMPACT_CLASS_RANK[$a] <=> self::IMPACT_CLASS_RANK[$b]);
+
+        return $classes[0];
+    }
+
+    /**
+     * Najwyższa klasa wytrzymałości mechanicznej EN 166 podana na karcie; null, gdy karta jej nie podaje. Oprawka BT
+     * z soczewką FT daje B — łagodnie, bo brak pewności to nie sprzeczność.
+     */
+    public function impactClass(string $productText): ?string
+    {
+        $classes = $this->impactClassesIn($productText);
+        if ($classes === []) {
+            return null;
+        }
+        usort($classes, static fn (string $a, string $b): int => self::IMPACT_CLASS_RANK[$b] <=> self::IMPACT_CLASS_RANK[$a]);
+
+        return $classes[0];
+    }
+
+    /** Okulary, gogle, osłony twarzy: karta z niższą klasą uderzenia niż wymagana odpada; karta bez klasy zostaje. */
+    public function meetsRequiredImpactClass(string $requirement, Product $product): bool
+    {
+        $family = $this->family($requirement);
+        if ($family !== self::FAMILY_EYES && $family !== self::FAMILY_FACE) {
+            return true;
+        }
+
+        return $this->impactClassAllows($requirement, $this->productFullText($product));
+    }
+
+    /**
+     * Okulary, gogle, osłony twarzy do spawania z podanym zaciemnieniem: karta, która wprost podaje bezbarwną lub przezroczystą
+     * szybę i żadnego filtra spawalniczego, odpada. Pomiar 20260914_191625 poz. 9: po odrzuceniu gogli z FT model dał 90
+     * bezbarwnym 3M 2891S-SGAF, uznając „brak zaciemnienia 5.0” za warunek drugorzędny.
+     */
+    public function meetsRequiredWeldingFilter(string $requirement, Product $product): bool
+    {
+        $family = $this->family($requirement);
+        if ($family !== self::FAMILY_EYES && $family !== self::FAMILY_FACE) {
+            return true;
+        }
+
+        return $this->weldingFilterAllows($requirement, $this->productFullText($product));
+    }
+
+    /** Wymaganie spawalnicze ze stopniem zaciemnienia („spawalnicze, z zaciemnieniem 5.0”, „filtr spawalniczy 5”, EN 169). */
+    public function requiresWeldingFilter(string $requirement): bool
+    {
+        $t = $this->normalize($requirement);
+
+        return preg_match('/\bspawal/u', $t) === 1 && $this->showsWeldingFilter($t);
+    }
+
+    private function weldingFilterAllows(string $requirement, string $productText): bool
+    {
+        if (! $this->requiresWeldingFilter($requirement)) {
+            return true;
+        }
+        $t = $this->normalize($productText);
+        if ($this->showsWeldingFilter($t)) {
+            return true;
+        }
+
+        return preg_match('/\b(bezbarwn|przezroczyst|transparentn|clear)\w*/u', $t) !== 1;
+    }
+
+    /**
+     * Filtr spawalniczy w tekście po normalize(): zaciemnienie z numerem („zaciemnieniem spawalniczym 5 0”, „zaciemnienie nr 5”),
+     * normy filtrów EN 169 i EN 379, DIN z numerem, filtr samościemniający. Samo „zaciemnienie 3” okularów przeciwsłonecznych
+     * liczy się tylko przy słowie „spawal” w wymaganiu — karta z takim zapisem zostaje, bo to brak sprzeczności, nie dowód.
+     */
+    private function showsWeldingFilter(string $normalized): bool
+    {
+        return preg_match(
+            '/\bzaciemn\w*\s+(?:spawal\w*\s+)?(?:nr\s+|stopni\w*\s+|o\s+stopniu\s+)?\d|\bstopni\w*\s+zaciemn\w*\s+\d|\b(?:en\s*)?(?:169|379)\b'
+            .'|\bdin\s*\d|\bsamosciemn|\bfiltr\w*\s+spawal|\bspawal\w*\s+(?:filtr|szyb|soczew|wizjer)\w*\s+\d|\bshade\s*\d/u',
+            $normalized
+        ) === 1;
+    }
+
+    private function impactClassAllows(string $requirement, string $productText): bool
+    {
+        $min = $this->requiredImpactClass($requirement);
+        if ($min === null) {
+            return true;
+        }
+        $have = $this->impactClass($productText);
+
+        return $have === null || self::IMPACT_CLASS_RANK[$have] >= self::IMPACT_CLASS_RANK[$min];
+    }
+
+    /**
+     * Klasy uderzenia z tekstu. Z tekstu po normalize(): prędkość („do 120 m/s”) i energia przy uderzeniu lub cząstkach
+     * („uderzenia przy niskiej energii”) — „promieniowanie o wysokiej energii” to nie klasa. Z oryginalnego tekstu, tylko
+     * wielkie litery: oznaczenie przy EN 166 („EN 166 FT”, „EN166:BT”, „EN 166:2001 B”, „EN166 3 4 BT”), samodzielne
+     * FT/BT/AT oraz „klasa F”, „oznaczenia FT”. Klasa S (5,1 m/s) nie jest odczytywana.
+     *
+     * @return list<string>
+     */
+    private function impactClassesIn(string $text): array
+    {
+        $classes = [];
+        $t = $this->normalize($text);
+        if (preg_match_all('/\b(45|120|190)\s*m\s*s\b/u', $t, $m) > 0) {
+            foreach ($m[1] as $speed) {
+                $classes[] = ['45' => 'F', '120' => 'B', '190' => 'A'][$speed];
+            }
+        }
+        $energy = '(nisk|mal|sredni|wysok|duz)\w*\s+energi\w*';
+        if (preg_match_all('/\b(?:uderz|czastk|odprysk)\w*[a-z0-9\s]{0,40}?\b'.$energy.'|\b'.$energy.'\s+(?:kinetyczn\w*\s+)?(?:uderz|czastk)/u', $t, $m) > 0) {
+            foreach (array_merge($m[1], $m[2]) as $word) {
+                if ($word !== '') {
+                    $classes[] = in_array($word, ['nisk', 'mal'], true) ? 'F' : ($word === 'sredni' ? 'B' : 'A');
+                }
+            }
+        }
+        $marks = [
+            '/\b(?:EN\s?166|166)(?::\s?2001)?\s*[:\-–]?\s*(?:[0-9]\s+){0,4}([FBA])T?\b/u',
+            '/\b([FBA])T\b/u',
+            '/(?i:klas|oznacz)\w*\s*[:\-–]?\s*\(?([FBA])T?\)?(?![\p{L}\d])/u',
+        ];
+        foreach ($marks as $pattern) {
+            if (preg_match_all($pattern, $text, $m) > 0) {
+                $classes = array_merge($classes, $m[1]);
+            }
+        }
+
+        return array_values(array_unique($classes));
     }
 
     /** Przymiotnik albo włókno na nazwie/SKU (XtremCut, HPPE). Opisu nie czytamy. */
@@ -964,6 +1109,11 @@ final class PpeAssortment
                 return false;
             }
             $helmetMount = true;
+        }
+        if (($reqFamily === self::FAMILY_EYES || $reqFamily === self::FAMILY_FACE)
+            && (! $this->impactClassAllows($requirement, $this->productFullText($product))
+                || ! $this->weldingFilterAllows($requirement, $this->productFullText($product)))) {
+            return false;
         }
         if ($reqFamily === self::FAMILY_APPAREL) {
             $identity = $this->productNameText($product);

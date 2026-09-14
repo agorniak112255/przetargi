@@ -533,6 +533,7 @@
                 "9310+",
                 "9312+"
             ],
+            "tender_expect_empty": true,
             "note": "Z nazwy i opisu: gogle szczelne spawalnicze, zaciemnienie 5.0, spawanie gazowe/cięcie metalu, soczewka PC do 120 m/s, powłoki anti-fog i anti-scratch (bez nazwy własnej), wentylacja szczelna, pole widzenia 180°, miejsce na okulary korekcyjne, pasek nylonowy, uszczelka elastomerowa, kompatybilność z półmaskami, EN 166, CE. Pominięto producenta, serię i numery modelu."
         },
         {

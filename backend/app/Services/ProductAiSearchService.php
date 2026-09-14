@@ -3239,6 +3239,8 @@ final class ProductAiSearchService
             'buty zgrzewane' => $this->meetsRequiredWeldedBootsCoverall($requirement, $product),
             'hełm' => $this->assortment->helmetSpecAllows($requirement, (string) $product->name.' '.$product->sku),
             'poziom cięcia' => $this->meetsRequiredCutLevel($requirement, $product),
+            'klasa uderzenia' => $this->assortment->meetsRequiredImpactClass($requirement, $product),
+            'filtr spawalniczy' => $this->assortment->meetsRequiredWeldingFilter($requirement, $product),
         ];
     }
 

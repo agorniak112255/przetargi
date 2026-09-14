@@ -41,14 +41,15 @@ final class Opisowy15AssortmentGateTest extends TestCase
      * @var array<string, list<int>>
      */
     private const ENABLED_LINES = [
-        // A1 — właściwa karta przechodzi bramkę
-        'gate_expected' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        // A1 — właściwa karta przechodzi bramkę. Bez 9: 1406213 ma FT, a przetarg wymaga 120 m/s — poprawny jest brak propozycji (test niżej)
+        'gate_expected' => [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15],
         // A1 — karta innego rodzaju odrzucona. Wyłączone: 3 — AROX 733 bez rzeczownika typu w nazwie i pierwszym zdaniu opisu (D6, krucho), 6 — okulary nakładkowe bezbarwne vs smoke: kolor soczewki (lensTint) odłożony do Fali 2
         'gate_wrong' => [1, 4, 5, 8, 9, 12, 13],
         // A1 — rodzina wymagania po rzeczowniku głównym
         'family' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         // A2 — explain właściwej > błędnej. Wyłączone: 2 — karta 34837018 ma opis kategorii sklepu (dane), 56‑426 legalnie punktuje EN 388
-        'explain_order' => [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        // Wyłączone też 9 — karta 1406213 odpada w bramce klasy uderzenia (FT, a wymaganie 120 m/s), tak jak półmaski 9310+/9312+
+        'explain_order' => [1, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15],
         // A2 — brak fuzzy_model dla opisu bez kodu
         'no_fuzzy_model' => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         // A2 — catalogModelNeedles() === []
@@ -88,6 +89,22 @@ final class Opisowy15AssortmentGateTest extends TestCase
         );
         $explained = $this->matcher->explainMatch($requirement, $expected);
         $this->assertNotSame('asortyment_reject', $explained['reasons'][0]['code'] ?? null, "poz. {$line}: explainMatch odrzuca właściwą kartę");
+    }
+
+    /**
+     * Poz. 9, decyzja użytkownika 14.09: jedyne gogle z zaciemnieniem 5.0 w katalogu (3M 2890, 1406213) mają FT — uderzenia niskiej
+     * energii, 45 m/s — a przetarg wymaga soczewki odpornej na uderzenia do 120 m/s. Bramka odrzuca kartę, pozycja zostaje pusta.
+     */
+    #[Test]
+    public function welding_goggles_with_low_energy_impact_class_are_rejected_for_120_ms_requirement(): void
+    {
+        $requirement = Opisowy15Fixture::requirement(9);
+        $goggles = Opisowy15Fixture::product('1406213');
+
+        $this->assertSame('B', $this->assortment->requiredImpactClass($requirement));
+        $this->assertSame('F', $this->assortment->impactClass((string) $goggles->norms.' '.(string) $goggles->description));
+        $this->assertFalse($this->assortment->compatibleProduct($requirement, $goggles), 'poz. 9: gogle z FT nie spełniają 120 m/s');
+        $this->assertTrue((bool) (Opisowy15Fixture::line(9)['eval_expect_empty'] ?? false), 'pomiar przetargu liczy brak propozycji jako trafny');
     }
 
     /**

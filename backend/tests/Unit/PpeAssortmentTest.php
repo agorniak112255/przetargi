@@ -1227,6 +1227,59 @@ final class PpeAssortmentTest extends TestCase
         $this->assertNull($this->assortment->cutLevel('Rękawice nitrylowe EN 388 4131, EN 420'), 'EN 388:2003 bez litery');
     }
 
+    /** Decyzja użytkownika 14.09: wymaganie „do 120 m/s” odrzuca gogle z samym FT (45 m/s); karta bez klasy uderzenia zostaje. */
+    #[Test]
+    public function impact_class_required_by_requirement_and_shown_on_card(): void
+    {
+        $poz9 = 'Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0. Wymagane: soczewka poliwęglanowa o odporności na uderzenia '
+            .'do 120 m/s; powłoka przeciwmgielna. Zgodność z EN 166, oznakowanie CE.';
+        $poz6 = 'Okulary ochronne z przyciemnianymi soczewkami. Zgodność z EN 166, EN 172 oraz EN ISO 16321-1; odporność na uderzenia '
+            .'cząstek o niskiej energii, odporność w temperaturach ekstremalnych (T).';
+
+        $this->assertSame('B', $this->assortment->requiredImpactClass($poz9));
+        $this->assertSame('F', $this->assortment->requiredImpactClass($poz6));
+        $this->assertSame('A', $this->assortment->requiredImpactClass('Gogle odporne na uderzenia o wysokiej energii (190 m/s), EN 166'));
+        $this->assertNull(
+            $this->assortment->requiredImpactClass('Okulary ochronne bezbarwne, EN 166, filtr UV chroniący przed promieniowaniem o wysokiej energii'),
+            'energia promieniowania to nie klasa uderzenia',
+        );
+
+        $this->assertSame('F', $this->assortment->impactClass('EN 166: FT – odporność na uderzenia przy niskiej energii, EN 166: 1 – klasa optyczna'));
+        $this->assertSame('B', $this->assortment->impactClass('Szyba jest zgodna z normą EN 166:2001 B'));
+        $this->assertSame('B', $this->assortment->impactClass('Oznaczenia na soczewce (2C-1.2 3M 1 BT KN) i oprawce (3M EN166 3 4 BT)'));
+        $this->assertSame('F', $this->assortment->impactClass('EN 166 – ochrona oczu (klasa F, odporność na uderzenia niskiej energii)'));
+        $this->assertSame('B', $this->assortment->impactClass('Soczewka FT, oprawka EN166:BT'), 'najwyższa podana klasa');
+        $this->assertSame('B', $this->assortment->impactClass('chronią przed odpryskami i uderzeniami o prędkości do 120 m/s'));
+        $this->assertNull($this->assortment->impactClass('Okulary ochronne, EN 166, klasa optyczna 1, rozmiar S'), 'karta bez klasy uderzenia');
+    }
+
+    /** Pomiar 20260914_191625 poz. 9: bezbarwne gogle 3M 2891S-SGAF z oceną 90 modelu przy wymaganiu gogli spawalniczych z zaciemnieniem 5.0. */
+    #[Test]
+    public function welding_filter_required_rejects_explicitly_clear_lens_only(): void
+    {
+        $poz9 = 'Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0 – do ochrony oczu podczas spawania gazowego i cięcia metalu. '
+            .'Zgodność z EN 166, oznakowanie CE.';
+        $this->assertTrue($this->assortment->requiresWeldingFilter($poz9));
+        $this->assertFalse($this->assortment->requiresWeldingFilter('Okulary ochronne przyciemniane, filtr przeciwsłoneczny o stopniu zaciemnienia 3, EN 172'));
+        $this->assertFalse($this->assortment->requiresWeldingFilter('Gogle ochronne szczelne do prac szlifierskich i spawalniczych, bezbarwne, EN 166'), 'spawanie bez stopnia zaciemnienia');
+
+        $clear = $this->card('2891S-SGAF', '3M™ 2890 Gogle ochronne, szczelne, powłoka odporna na zarysowanie/zaparowanie Scotchgard™ (K i N), przezroczyste szybki, 2891S-SGAF', [
+            'ppe_family' => PpeAssortment::FAMILY_EYES,
+            'description' => 'Model 2891S-SGAF wyposażony jest w bezbarwną, poliwęglanową szybkę z powłoką 3M Scotchgard.',
+        ]);
+        $welding = $this->card('1406213', '3M™ 2890 Gogle ochronne, szczelne, powłoka odporna na zarysowanie/zaparowanie, zaciemnienie spawalnicze 5.0, 2895S', [
+            'ppe_family' => PpeAssortment::FAMILY_EYES,
+        ]);
+        $unknown = $this->card('G-1', 'Gogle ochronne szczelne z poliwęglanu', ['ppe_family' => PpeAssortment::FAMILY_EYES]);
+        $autoDark = $this->card('P-1', 'Przyłbica spawalnicza samościemniająca DIN 9-13, bezbarwna szybka ochronna zewnętrzna', ['ppe_family' => PpeAssortment::FAMILY_FACE]);
+
+        $this->assertFalse($this->assortment->meetsRequiredWeldingFilter($poz9, $clear), 'bezbarwna szyba bez filtra spawalniczego');
+        $this->assertTrue($this->assortment->meetsRequiredWeldingFilter($poz9, $welding));
+        $this->assertTrue($this->assortment->meetsRequiredWeldingFilter($poz9, $unknown), 'karta bez barwy szyby zostaje');
+        $this->assertTrue($this->assortment->meetsRequiredWeldingFilter('Przyłbica spawalnicza z filtrem o stopniu zaciemnienia 11', $autoDark), 'filtr samościemniający z bezbarwną szybką zewnętrzną');
+        $this->assertTrue($this->assortment->meetsRequiredWeldingFilter('Okulary ochronne bezbarwne, EN 166', $clear), 'wymaganie bez filtra spawalniczego');
+    }
+
     private function card(string $sku, string $name, array $attrs = []): Product
     {
         $product = new Product;

@@ -423,6 +423,7 @@
             "9312+"
         ],
         "eval_extra_expected_skus": [],
+        "eval_expect_empty": true,
         "prod_search": {
             "needed": "gogle ochronne spawalnicze",
             "rank_of_expected": null,

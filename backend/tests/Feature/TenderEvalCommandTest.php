@@ -291,6 +291,82 @@ final class TenderEvalCommandTest extends TestCase
         }
     }
 
+    /**
+     * `tender_expect_empty` (golden poz. 9): katalog nie ma karty spełniającej wymaganie, więc brak propozycji jest trafny,
+     * a wybór — nawet karty z `expected_skus`, najlepszej dla pomiaru wyszukiwania — jest zły.
+     */
+    public function test_case_expecting_no_proposal_counts_empty_decision_as_hit_and_any_pick_as_other(): void
+    {
+        $sandal = Product::query()->create([
+            'sku' => 'ARSO 701 616560 S1 P ESD',
+            'name' => 'ARSO 701 616560 S1 P ESD',
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'ppe_family' => PpeAssortment::FAMILY_FOOTWEAR,
+            'catalog_price_net' => 46,
+            'purchase_price' => 46.26,
+            'stock' => 0,
+            'norms' => 'EN ISO 20345 S1 P, EN IEC 61340-4-3 ESD',
+            'description' => 'Sandały bezpieczne ARSO 701 616560 S1 P ESD, podnosek, zabudowana pięta, wkładka antyprzebiciowa, ESD, podeszwa FO.',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $llm->shouldNotReceive('chatJsonMany');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        @mkdir(dirname($this->golden), 0775, true);
+        file_put_contents($this->golden, json_encode(['cases' => [
+            [
+                'id' => 'test-sandaly-brak',
+                'query' => 'Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, zabudowana pięta, podnosek, ESD, podeszwa FO.',
+                'expected_skus' => ['ARSO 701 616560 S1 P ESD'],
+                'forbidden_skus' => [],
+                'tender_expect_empty' => true,
+                'note' => '',
+            ],
+            [
+                'id' => 'test-gogle-brak',
+                'query' => 'Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0, soczewka odporna na uderzenia do 120 m/s, EN 166.',
+                'expected_skus' => ['NIE-MA-TAKICH-GOGLI'],
+                'forbidden_skus' => [],
+                'tender_expect_empty' => true,
+                'note' => '',
+            ],
+        ]], JSON_UNESCAPED_UNICODE));
+        $recorded = storage_path('framework/testing/tender-eval-recorded-'.uniqid().'.json');
+        file_put_contents($recorded, json_encode(['cases' => [
+            ['id' => 'test-sandaly-brak', 'runs' => [
+                ['verdict' => 'pusta', 'search' => ['model_state' => 'ranked', 'external_hint' => null, 'products' => [
+                    ['id' => (int) $sandal->id, 'sku' => $sandal->sku, 'name' => $sandal->name, 'ai_match_percent' => 95, 'ai_match_reason' => 'Sandały S1 P ESD', 'ai_match_source' => null],
+                ]]],
+            ]],
+            ['id' => 'test-gogle-brak', 'runs' => [
+                ['verdict' => 'pusta', 'search' => ['model_state' => 'empty', 'external_hint' => null, 'products' => []]],
+            ]],
+        ]], JSON_UNESCAPED_UNICODE));
+        $before = glob($this->reportDir.'/*.json') ?: [];
+        try {
+            $this->artisan('tenders:eval', ['--file' => $this->golden, '--filter' => '', '--replay' => $recorded, '--save' => true])
+                ->expectsOutputToContain('brak (nie')
+                ->assertSuccessful();
+
+            $created = array_values(array_diff(glob($this->reportDir.'/*.json') ?: [], $before));
+            $this->assertCount(1, $created);
+            $report = json_decode((string) file_get_contents($created[0]), true);
+            @unlink($created[0]);
+            $verdicts = [];
+            foreach ($report['cases'] as $case) {
+                $verdicts[$case['id']] = array_column($case['runs'], 'verdict');
+            }
+            $this->assertSame(['inna'], $verdicts['test-sandaly-brak'], 'wybór karty przy oczekiwanym braku to zły wybór');
+            $this->assertSame(['trafna'], $verdicts['test-gogle-brak'], 'brak propozycji przy oczekiwanym braku jest trafny');
+        } finally {
+            @unlink($recorded);
+        }
+    }
+
     /** Raport 20260914_161701 poz. 1: 40 wierszy listy zapasowej (48) nad oceną modelu — ocena karty 11202000 nie trafiła do raportu. */
     public function test_recorded_search_keeps_model_rows_below_first_forty_rows(): void
     {

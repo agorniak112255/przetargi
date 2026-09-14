@@ -25,7 +25,10 @@ final class SearchEvalRunner
     ) {}
 
     /**
-     * @return list<array{id: string, query: string, expected_skus: list<string>, forbidden_skus: list<string>, note: string}>
+     * `tender_expect_empty`: dla pomiaru decyzji przetargu poprawny jest brak propozycji (poz. 9: jedyne gogle z zaciemnieniem 5.0
+     * mają FT zamiast wymaganych 120 m/s); `expected_skus` zostaje najlepszą kartą katalogu dla pomiaru wyszukiwania.
+     *
+     * @return list<array{id: string, query: string, expected_skus: list<string>, forbidden_skus: list<string>, note: string, expect_empty: bool}>
      */
     public function loadCases(string $path): array
     {
@@ -57,6 +60,7 @@ final class SearchEvalRunner
                 'expected_skus' => $expected,
                 'forbidden_skus' => $this->stringList($case['forbidden_skus'] ?? []),
                 'note' => trim((string) ($case['note'] ?? '')),
+                'expect_empty' => ($case['tender_expect_empty'] ?? false) === true,
             ];
         }
 

@@ -75,6 +75,7 @@ final class SearchEvalRunnerTest extends TestCase
                 $case['forbidden_skus'],
             );
             $this->assertSame(trim((string) $line['source_facts']), $case['note']);
+            $this->assertSame(($line['eval_expect_empty'] ?? false) === true, $case['expect_empty'], "poz. {$line['line_no']}: tender_expect_empty w golden.json");
         }
     }
 

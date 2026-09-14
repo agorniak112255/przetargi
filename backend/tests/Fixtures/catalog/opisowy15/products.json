@@ -628,7 +628,7 @@
         "manufacturer": "3M",
         "ean": "04046719420872",
         "category": "Środki ochrony indywidualnej",
-        "description": "Gogle ochronne 3M™ GoggleGear™ z serii 2890, model 2895S, to szczelne gogle spawalnicze z zaciemnieniem 5.0, przeznaczone do ochrony oczu podczas spawania gazowego i cięcia metalu. Wysoki profil gogli zapewnia wystarczającą ilość miejsca na okulary korekcyjne, co zwiększa komfort pracy osób noszących na co dzień szkła. Soczewka wykonana z poliwęglanu charakteryzuje się wysoką odpornością na uderzenia (do 120 m/s) oraz odpornością na odpryski i chemikalia. Powłoka 3M™ Scotchgard™ Anti-Fog skutecznie zapobiega parowaniu, a dodatkowa powłoka odporna na zarysowania zwiększa trwałość i utrzymuje dobrą widoczność w trudnych warunkach. Gogle wyposażone są w szczelną wentylację, która chroni przed małymi cząstkami pyłu i gazem, a jednocześnie minimalizuje zamglenie. Szeroki, regulowany pasek z nylonu oraz miękka uszczelka z elastomeru gwarantują doskonałe dopasowanie i wysoki komfort noszenia, również w połączeniu z półmaskami oddechowymi 3M. Cylindryczna, zakrzywiona konstrukcja soczewki zapewnia szerokie, 180-stopniowe pole widzenia bez zniekształceń optycznych. Produkt spełnia wymagania normy EN 166 i posiada certyfikat CE, co potwierdza jego skuteczność jako środka ochrony indywidualnej oczu. Gogle znajdują zastosowanie w przemyśle spawalniczym, budownictwie, laboratoriach, malarniach oraz wszędzie tam, gdzie oczy narażone są na pył, odpryski i promieniowanie spawalnicze.",
+        "description": "Szczelne gogle ochronne 3M™ 2890 z zaciemnieniem spawalniczym 5.0 to profesjonalne rozwiązanie do prac spawalniczych i szlifierskich. Model 2895S zapewnia skuteczną ochronę oczu przed iskrami, odpryskami i szkodliwym promieniowaniem, a jednocześnie gwarantuje komfort noszenia dzięki ergonomicznej konstrukcji.\n\nGogle wyposażono w poliwęglanową soczewkę z powłoką odporną na zarysowania i zaparowanie, co zapewnia trwałość i dobrą widoczność w trudnych warunkach. Szczelna budowa chroni oczy przed pyłem i drobnymi cząstkami, a elastyczny pasek umożliwia pewne dopasowanie do głowy.\n\nProdukt spełnia wymagania normy EN 166 (ochrona oczu) oraz posiada oznaczenia FT (odporność na uderzenia przy niskiej energii), 1 (klasa optyczna), 3 (odporność na kropelki cieczy), 4 (odporność na grube cząstki pyłu), 5 (odporność na gaz i drobny pył) oraz 9 (odporność na stopiony metal i gorące ciała stałe). Gogle są przeznaczone do prac spawalniczych, szlifierskich, w przemyśle metalowym i budowlanym.",
         "enrichment_status": "done",
         "enrichment_payload": {
             "features": [
@@ -705,7 +705,7 @@
             "from_cache": false,
             "document_urls": []
         },
-        "norms": "EN 166 – Ochrona indywidualna oczu – Wymagania",
+        "norms": "EN 166: Ochrona indywidualna oczu, EN 166: FT – odporność na uderzenia przy niskiej energii, EN 166: 1 – klasa optyczna, EN 166: 3 – odporność na kropelki cieczy, EN 166: 4 – odporność na grube cząstki pyłu, EN 166: 5 – odporność na gaz i drobny pył, EN 166: 9 – odporność na stopiony metal i gorące ciała stałe",
         "catalog_price_net": "89.87",
         "discount_percent": "35.00",
         "purchase_price": "58.42",
