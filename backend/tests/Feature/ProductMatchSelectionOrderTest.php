@@ -72,6 +72,60 @@ final class ProductMatchSelectionOrderTest extends TestCase
         $this->assertSame('B-93', $picked);
     }
 
+    /**
+     * Pomiar 20260914_200209 poz. 6: przetarg wymaga EN 166, EN 172 i EN ISO 16321-1. Bollé SWIFTN20E (tylko EN 166) wygrała
+     * ceną z Bollé RUSHPTWI, która podaje wszystkie trzy normy, przy ocenie 99 modelu dla obu.
+     */
+    public function test_card_showing_all_required_norms_beats_cheaper_card_missing_one(): void
+    {
+        $requirement = 'Okulary ochronne z przyciemnianymi (smoke) soczewkami poliwęglanowymi. Zgodność z EN 166, EN 172 oraz EN ISO 16321-1; '
+            .'filtr przeciwsłoneczny o stopniu zaciemnienia 3, klasa optyczna 1.';
+        $rush = $this->card('RUSHPTWI', 48.0, 'EN166 – ochrona oczu, EN172 – filtry przeciwsłoneczne do użytku przemysłowego, EN ISO 16321-1 – indywidualna ochrona wzroku');
+        $swift = $this->card('SWIFTN20E', 19.5, 'EN166 – ochrona oczu, wymagania ogólne, Klasa F – odporność na uderzenie (0,86 g, 45 m/s)');
+        $service = app(ProductMatchService::class);
+        $shows = new \ReflectionMethod($service, 'showsAllRequiredNorms');
+
+        $this->assertTrue($shows->invoke($service, $requirement, $rush));
+        $this->assertFalse($shows->invoke($service, $requirement, $swift));
+        $this->assertTrue($shows->invoke($service, 'Okulary ochronne przyciemniane do pracy w słońcu', $swift), 'przetarg bez norm');
+
+        $picked = $this->pick([
+            $this->option($swift, 99, 90, $shows->invoke($service, $requirement, $swift)),
+            $this->option($rush, 99, 90, $shows->invoke($service, $requirement, $rush)),
+        ]);
+
+        $this->assertSame('RUSHPTWI', $picked, 'komplet norm z przetargu przed ceną');
+    }
+
+    public function test_newer_iso_21420_satisfies_en_420_and_price_decides_without_complete_card(): void
+    {
+        $service = app(ProductMatchService::class);
+        $shows = new \ReflectionMethod($service, 'showsAllRequiredNorms');
+        $new = $this->card('NEW-21420', 20, 'EN ISO 21420:2020, EN 388:2016 4X42C');
+        $this->assertTrue($shows->invoke($service, 'Rękawice powlekane, zgodne z EN 420 i EN 388', $new));
+
+        $dearer = $this->card('A-1', 50);
+        $cheaper = $this->card('B-1', 30);
+        $picked = $this->pick([
+            $this->option($dearer, 95, 60, false),
+            $this->option($cheaper, 95, 60, false),
+        ]);
+        $this->assertSame('B-1', $picked, 'żadna karta bez kompletu norm — decyduje cena');
+    }
+
+    public function test_norm_completeness_does_not_override_higher_model_tier(): void
+    {
+        $complete = $this->card('C-90', 10);
+        $partial = $this->card('P-99', 40);
+
+        $picked = $this->pick([
+            $this->option($complete, 90, 90, true),
+            $this->option($partial, 99, 90, false),
+        ]);
+
+        $this->assertSame('P-99', $picked, 'normy rozstrzygają tylko w oknie remisu ocen modelu');
+    }
+
     /** @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int}>  $options */
     private function pick(array $options): string
     {
@@ -81,18 +135,19 @@ final class ProductMatchSelectionOrderTest extends TestCase
         return (string) $picked['product']->sku;
     }
 
-    /** @return array{product: Product, score: int, source: string, evidence: int, hard: int} */
-    private function option(Product $product, int $score, int $evidence): array
+    /** @return array{product: Product, score: int, source: string, evidence: int, hard: int, norms_complete: bool} */
+    private function option(Product $product, int $score, int $evidence, bool $normsComplete = true): array
     {
-        return ['product' => $product, 'score' => $score, 'source' => 'ai', 'evidence' => $evidence, 'hard' => 0];
+        return ['product' => $product, 'score' => $score, 'source' => 'ai', 'evidence' => $evidence, 'hard' => 0, 'norms_complete' => $normsComplete];
     }
 
-    private function card(string $sku, float $price): Product
+    private function card(string $sku, float $price, ?string $norms = null): Product
     {
         return Product::query()->create([
             'sku' => $sku,
             'name' => 'Karta '.$sku,
             'manufacturer' => 'X',
+            'norms' => $norms,
             'description' => 'Karta testowa z opisem dłuższym niż dwadzieścia cztery znaki.',
             'catalog_price_net' => $price,
             'purchase_price' => $price,

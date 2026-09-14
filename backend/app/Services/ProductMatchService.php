@@ -14,6 +14,7 @@ use App\Support\BhpAttributeNormalizer;
 use App\Support\CatalogManufacturerContext;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
+use App\Support\ProductFeatureMatch;
 use App\Support\ProductModelFuzzy;
 use App\Support\ProductSizeVariant;
 use App\Support\RequirementCodeNoise;
@@ -157,6 +158,7 @@ final class ProductMatchService
         private readonly CatalogManufacturerContext $manufacturerContext,
         private readonly ProductSizeVariant $sizes,
         private readonly NbpExchangeRateService $fx,
+        private readonly ProductFeatureMatch $features,
     ) {}
 
     /**
@@ -629,12 +631,14 @@ final class ProductMatchService
      *  2. dowody ze słów karty tylko jako weto — odpada karta słabsza od najlepiej opisanej o EVIDENCE_VETO_GAP
      *     (ART 702 z dowodami 35 nie wygra ceną z T5912100 z dowodami 99 przy równych 92%);
      *  3. twarde dowody (SKU / model z cyframi / klasa ochrony);
-     *  4. najniższa cena; remis — wyższa ocena, potem dowody.
+     *  4. komplet norm — gdy któraś karta podaje wszystkie normy wymienione w przetargu, karty bez kompletu odpadają
+     *     (pomiar 20260914_200209 poz. 6: SWIFTN20E z samą EN 166 wygrała ceną z Rush+ z EN 166, EN 172 i EN ISO 16321-1);
+     *  5. najniższa cena; remis — wyższa ocena, potem dowody.
      * Dotąd dowody ze słów (nieskalibrowana suma) rozstrzygały pierwsze w oknie 5 pkt: przy ogólnym wymaganiu
      * (przetarg 1 poz. 2 — model dał 95 osiemnastu rękawicom antyprzecięciowym) wygrywała karta z najdłuższym opisem
      * (ATG 76-833, rękawica chemiczna 35 cm, 59 zł) zamiast pasującej i najtańszej (Canis 3630-024-700-00, 6 zł).
      *
-     * @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int}>  $options
+     * @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int, norms_complete?: bool}>  $options
      * @return array{product: Product, score: int, source: string}|null
      */
     private function preferCheapestAmongCloseScores(array $options): ?array
@@ -657,6 +661,13 @@ final class ProductMatchService
             $near,
             static fn (array $option): bool => $option['hard'] === $topHard
         ));
+        $complete = array_values(array_filter(
+            $near,
+            static fn (array $option): bool => ($option['norms_complete'] ?? false) === true
+        ));
+        if ($complete !== []) {
+            $near = $complete;
+        }
         usort($near, function (array $a, array $b): int {
             $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
             if ($byPrice !== 0) {
@@ -674,6 +685,30 @@ final class ProductMatchService
             'score' => $near[0]['score'],
             'source' => $near[0]['source'],
         ];
+    }
+
+    /**
+     * Czy karta (nazwa, normy, opis) podaje każdy numer normy EN wymieniony w przetargu. Przetarg bez norm — true dla
+     * wszystkich, więc krok nic nie zmienia. EN 420 zastąpiła EN ISO 21420 — karta z nowszą normą spełnia starszy zapis.
+     * Brak normy na karcie to brak informacji, nie sprzeczność: taka karta nie odpada w bramce, tylko przegrywa remis
+     * z kartą, która normy podaje.
+     */
+    private function showsAllRequiredNorms(string $requirement, Product $product): bool
+    {
+        $required = $this->features->norms($requirement);
+        if ($required === []) {
+            return true;
+        }
+        $shown = $this->features->norms(implode(' ', [
+            (string) $product->name,
+            (string) ($product->norms ?? ''),
+            (string) ($product->description ?? ''),
+        ]));
+        if (in_array('21420', $shown, true)) {
+            $shown[] = '420';
+        }
+
+        return array_diff($required, $shown) === [];
     }
 
     /** Wiersz listy katalogowej albo skrótu deterministycznego — nie ocena modelu. */
@@ -1769,6 +1804,7 @@ final class ProductMatchService
                 'exact' => $exact,
                 'evidence' => $explained['score'],
                 'hard' => $this->hardEvidenceLevel($requirement, $product, $explained),
+                'norms_complete' => $this->showsAllRequiredNorms($requirement, $product),
             ];
         }
 
