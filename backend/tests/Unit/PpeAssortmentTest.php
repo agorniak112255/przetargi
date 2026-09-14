@@ -1122,6 +1122,17 @@ final class PpeAssortmentTest extends TestCase
             'description' => 'Kurtka robocza z długim rękawem i mankietem na rzep.',
         ]);
         $this->assertSame(PpeAssortment::FAMILY_APPAREL, $this->assortment->productFamily($jacket), 'rękaw kurtki to odzież');
+
+        // przebudowa indeksu 14.09: osprzęt kablowy i sorbent z „rękawem” w nazwie trafiły do rękawic
+        $heatShrink = $this->card('7000032369', 'Rękaw termokurczliwy 3M™ HDCW, 55/15-500 mm', ['manufacturer' => '3M']);
+        $this->assertNull($this->assortment->productFamily($heatShrink), 'rękaw termokurczliwy to osprzęt kablowy');
+        $sorbent = $this->card('T-270', '3M™ Sorbent do substancji ropopochodnych rękaw, 200 mm, 300 mm', ['manufacturer' => '3M']);
+        $this->assertNull($this->assortment->productFamily($sorbent), 'sorbent w rękawie to nie środek ochrony');
+        $welding = $this->card('59416260', 'ActivArmr 59416 Size 26,0', [
+            'manufacturer' => 'Ansell',
+            'description' => 'ActivArmr 59-416 to średnio wytrzymałe rękawy spawalnicze przeznaczone do ochrony przed gorącem i oparzeniami.',
+        ]);
+        $this->assertSame(PpeAssortment::FAMILY_GLOVES, $this->assortment->productFamily($welding), 'rękaw spawalniczy to ochrona ramion');
     }
 
     /** Przetarg 1 poz. 1: „wyrób antystatyczny” w SIWZ, a karta HyFlex 11-202 mówi po angielsku „extra features: antistatic”. */

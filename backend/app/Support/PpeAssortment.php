@@ -806,11 +806,32 @@ final class PpeAssortment
         // polski opis „rękaw ochronny”, normy EN 407 i ISO 13997) zostawał bez rodziny. Wyszukiwanie tekstowe całej rodziny
         // „rękawice” go pomijało, a bramka „rękaw ≠ rękawica” obsługuje go właśnie w tej rodzinie. Przetarg 1 poz. 1 (debug 14.09):
         // karta była tylko w źródle kart bez rodziny, na 77. miejscu, i wypadała przy przycięciu puli.
-        if ($resolved === null && $this->productIsArmSleeve($product)) {
+        if ($resolved === null && $this->productIsArmSleeve($product) && $this->sleeveShowsProtection($product)) {
             return self::FAMILY_GLOVES;
         }
 
         return $resolved;
+    }
+
+    /**
+     * Rękaw jako środek ochrony, nie osprzęt: przebudowa indeksu 14.09 dopisała do rękawic „Rękaw termokurczliwy 3M HDCW”
+     * (osprzęt kablowy, bez opisu) i „3M Sorbent do substancji ropopochodnych rękaw”. Rękawy ochronne mają dowód ochrony
+     * w nazwie, opisie albo normach (przecięcie, przedramię, spawanie, EN 388/407); osprzęt i sorbenty go nie mają.
+     */
+    private function sleeveShowsProtection(Product $product): bool
+    {
+        $text = $this->productFullText($product);
+        $t = $this->normalize($text);
+        if (preg_match('/\b(termokurcz|sorbent|kabl|kablow|przewod|rura|rurk|mufa|osprzet)\w*/u', $t) === 1) {
+            return false;
+        }
+
+        return $this->showsCutResistance($text)
+            || preg_match(
+                '/\b(ochronn\w*\s+(na\s+)?(rek|ram|przedram)|przedrami|antyprzeci|przeciwprzeci|zarekaw|narekaw|spawal'
+                .'|arm\s*(protector|guard|sleeve)|cut[\s-]*resist|en\s*(iso\s*)?(388|407|13997|11611|11612))\w*/u',
+                $t
+            ) === 1;
     }
 
     /**
