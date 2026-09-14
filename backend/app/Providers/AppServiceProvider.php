@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Services\Ai\AiServedProviderTally;
 use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\EnrichmentLiveProgress;
 use App\Services\MailSettingsService;
@@ -18,6 +19,7 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->app->scoped(AiServedProviderTally::class);
         $this->app->scoped(EnrichmentAttemptLog::class);
         $this->app->scoped(EnrichmentLiveProgress::class);
         $this->app->bind(PrestaCatalogGateway::class, PrestaShopCatalogClient::class);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\AiSetting;
+use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -59,7 +60,11 @@ final class AiChatManyOverloadTest extends TestCase
                 return Http::response(['error' => ['message' => 'Rate limit exceeded']], 429);
             }
 
+            $pin = $request->data()['provider'] ?? null;
+
             return Http::response([
+                // OpenRouter podaje, kto odpowiedział; po poluzowaniu przypięcia może to być inny dostawca modelu
+                'provider' => is_array($pin) && ($pin['allow_fallbacks'] ?? false) === true ? 'DeepInfra' : 'Makora',
                 'choices' => [['message' => ['content' => '{"prompt":"'.$prompt.'"}'], 'finish_reason' => 'stop']],
             ]);
         });
@@ -103,6 +108,24 @@ final class AiChatManyOverloadTest extends TestCase
         $this->assertSame(['only' => ['makora'], 'allow_fallbacks' => false], $providers['a'][0]);
         $this->assertSame(['only' => ['makora'], 'allow_fallbacks' => false], $providers['a'][1]);
         $this->assertSame(['order' => ['makora'], 'allow_fallbacks' => true], $providers['a'][2]);
+    }
+
+    /**
+     * Pomiar przetargu 1 (raport 20260914_131814): jeden przebieg tym samym kodem dał 5 złych kart z oceną 95 — pomiar
+     * musi widzieć, który dostawca modelu odpowiadał i czy przypięcie było luzowane.
+     */
+    public function test_tally_records_served_providers_and_relaxed_pin(): void
+    {
+        $providers = [];
+        $this->fakeOpenRouter(['a' => 2], $providers);
+        $tally = app(AiServedProviderTally::class);
+        $tally->reset();
+
+        $this->rankTwo();
+
+        $snapshot = $tally->snapshot();
+        $this->assertEquals(['Makora' => 1, 'DeepInfra' => 1], $snapshot['served'], 'b od przypiętego, a po poluzowaniu od innego');
+        $this->assertSame(1, $snapshot['relaxed_pins']);
     }
 
     public function test_exhausted_429_stops_after_rate_limit_retries(): void

@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Models\Product;
 use App\Models\TenderItem;
+use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\ProductAiSearchService;
 use App\Services\ProductMatchService;
 use App\Services\Search\SearchEvalRunner;
 use App\Support\SearchEvalMetrics;
+use Carbon\CarbonInterface;
 use Illuminate\Console\Command;
 use Throwable;
 
@@ -134,6 +137,12 @@ final class TenderEvalCommand extends Command
         }
         for ($run = 1; $replay === '' && $run <= $runs; $run++) {
             $this->line("Przebieg {$run}/{$runs}…");
+            // Raport 20260914_131814: przebieg 1 dał 5 złych kart z oceną 95, przebiegi 2–3 tym samym kodem żadnej,
+            // a serwer pobierał wtedy opisy produktów przez tego samego klienta modelu. Zmienione karty i dostawcy
+            // modelu z przebiegu muszą być widoczne, bo zmieniają porównanie z innymi raportami.
+            $runStartedAt = now()->startOfSecond();
+            $tally = app(AiServedProviderTally::class);
+            $tally->reset();
             $searchStarted = hrtime(true);
             $search = app()->make(ProductAiSearchService::class);
             $matcher = app()->make(ProductMatchService::class);
@@ -171,7 +180,8 @@ final class TenderEvalCommand extends Command
                 max(0, $searchMs - $understandMs - $catalogMs) / 1000,
                 $decisionMs / 1000,
             ));
-            $runTimings[] = ['run' => $run, 'search_ms' => $searchMs, 'decision_ms' => $decisionMs, 'stages_ms' => $stages];
+            $runTimings[] = ['run' => $run, 'search_ms' => $searchMs, 'decision_ms' => $decisionMs, 'stages_ms' => $stages]
+                + $this->runConditions($run, $runStartedAt, $cases, is_array($rows) ? $rows : [], $tally->snapshot());
         }
 
         $results = array_values($results);
@@ -449,7 +459,68 @@ final class TenderEvalCommand extends Command
         return ['hit' => $hit / $count, 'bad' => $bad / $count, 'label' => "{$hit}/{$count} · {$bad}/{$count}"];
     }
 
-    /** @param array<string, mixed> $report */
+    /**
+     * Warunki przebiegu, które zmieniają porównanie z innym raportem: karty katalogu zmienione w trakcie (pobrane opisy,
+     * ceny) i dostawcy modelu, którzy odpowiadali, razem z poluzowaniem przypiętego dostawcy po limicie zapytań.
+     *
+     * @param  list<array{id: string, query: string, expected_skus: list<string>, forbidden_skus: list<string>}>  $cases
+     * @param  array<int, mixed>  $rows
+     * @param  array{served: array<string, int>, relaxed_pins: int}  $providers
+     * @return array{catalog_changed: int, catalog_changed_in_results: list<string>, providers: array<string, int>, relaxed_pins: int}
+     */
+    private function runConditions(int $run, CarbonInterface $startedAt, array $cases, array $rows, array $providers): array
+    {
+        $changed = array_values(array_unique(array_map(
+            'strval',
+            Product::query()->where('updated_at', '>=', $startedAt)->pluck('sku')->all(),
+        )));
+        $inResults = [];
+        if ($changed !== []) {
+            $seen = [];
+            foreach ($cases as $i => $case) {
+                foreach ($case['expected_skus'] as $sku) {
+                    $seen[(string) $sku] = true;
+                }
+                foreach (is_array($rows[$i]['products'] ?? null) ? $rows[$i]['products'] : [] as $product) {
+                    if (is_array($product) && is_string($product['sku'] ?? null)) {
+                        $seen[$product['sku']] = true;
+                    }
+                }
+            }
+            $inResults = array_values(array_filter($changed, static fn (string $sku): bool => isset($seen[$sku])));
+            $this->warn(sprintf(
+                'Uwaga: w trakcie przebiegu %d zmieniono karty katalogu: %d%s — ten przebieg porównuj z innymi raportami ostrożnie.',
+                $run,
+                count($changed),
+                $inResults !== [] ? ' (w wynikach pomiaru: '.implode(', ', array_slice($inResults, 0, 8)).')' : '',
+            ));
+        }
+        if ($providers['served'] !== [] || $providers['relaxed_pins'] > 0) {
+            $parts = [];
+            foreach ($providers['served'] as $name => $count) {
+                $parts[] = $name.' '.$count;
+            }
+            $line = sprintf(
+                'Dostawcy modelu w przebiegu %d: %s%s',
+                $run,
+                $parts !== [] ? implode(' · ', $parts) : 'brak danych',
+                $providers['relaxed_pins'] > 0 ? ' · poluzowane przypięcie dostawcy: '.$providers['relaxed_pins'] : '',
+            );
+            if (count($providers['served']) > 1 || $providers['relaxed_pins'] > 0) {
+                $this->warn($line);
+            } else {
+                $this->line($line);
+            }
+        }
+
+        return [
+            'catalog_changed' => count($changed),
+            'catalog_changed_in_results' => $inResults,
+            'providers' => $providers['served'],
+            'relaxed_pins' => $providers['relaxed_pins'],
+        ];
+    }
+
     /**
      * Wynik wyszukiwania pozycji w kształcie, który czyta decyzja przetargu (debugPick → mapAiSearchRows):
      * stan modelu i wiersze z oceną i źródłem. Wystarcza do odtworzenia decyzji bieżącym kodem bez modelu.
@@ -513,6 +584,7 @@ final class TenderEvalCommand extends Command
         return $out;
     }
 
+    /** @param array<string, mixed> $report */
     private function saveReport(array $report): void
     {
         $dir = storage_path('app/tender-eval/reports');

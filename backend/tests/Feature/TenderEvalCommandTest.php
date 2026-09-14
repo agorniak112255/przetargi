@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\AiSetting;
 use App\Models\Product;
 use App\Models\TenderItem;
+use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Support\PpeAssortment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -128,6 +129,82 @@ final class TenderEvalCommandTest extends TestCase
         }
 
         $this->assertSame(0, TenderItem::query()->count(), 'pomiar nie tworzy pozycji przetargu');
+    }
+
+    /**
+     * Raport 20260914_131814: przebieg 1 dał 5 złych kart z oceną 95, przebiegi 2–3 tym samym kodem żadnej, a serwer
+     * pobierał w tym czasie opisy produktów. Przebieg ostrzega o kartach zmienionych w trakcie i pokazuje dostawców modelu.
+     */
+    public function test_run_warns_about_catalog_changed_during_run_and_lists_served_model_providers(): void
+    {
+        $sandal = Product::query()->create([
+            'sku' => 'ARSO 701 616560 S1 P ESD',
+            'name' => 'ARSO 701 616560 S1 P ESD',
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'ppe_family' => PpeAssortment::FAMILY_FOOTWEAR,
+            'catalog_price_net' => 46,
+            'purchase_price' => 46.26,
+            'stock' => 0,
+            'norms' => 'EN ISO 20345 S1 P, EN IEC 61340-4-3 ESD',
+            'description' => 'Sandały bezpieczne ARSO 701 616560 S1 P ESD, podnosek, zabudowana pięta, wkładka antyprzebiciowa, ESD, podeszwa FO.',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $sandalId = (int) $sandal->id;
+        $this->travel(5)->seconds();
+        $mutated = false;
+        $answer = function (array $messages) use ($sandalId, &$mutated): array {
+            if (FakeSearchLlm::kind($messages) !== FakeSearchLlm::KIND_RANK) {
+                return ['matches' => []];
+            }
+            $tally = app(AiServedProviderTally::class);
+            $tally->served(['provider' => 'Makora']);
+            if (! $mutated) {
+                $mutated = true;
+                // opis pobrany w trakcie przebiegu 1, jak równoległe pobieranie opisów na produkcji
+                Product::query()->whereKey($sandalId)->update([
+                    'description' => 'Sandały bezpieczne ARSO 701 616560 S1 P ESD z podnoskiem, zabudowaną piętą, wkładką antyprzebiciową, ESD i podeszwą FO.',
+                ]);
+                $tally->served(['provider' => 'DeepInfra']);
+                $tally->relaxedPin();
+                $this->travel(2)->seconds();
+            }
+
+            return ['matches' => [['id' => $sandalId, 'score' => 95, 'reason' => 'Sandały S1 P ESD', 'missing_key' => []]]];
+        };
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(static fn (array $messages): array => $answer($messages));
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        @mkdir(dirname($this->golden), 0775, true);
+        file_put_contents($this->golden, json_encode(['cases' => [[
+            'id' => 'test-03-sandaly',
+            'query' => 'Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, zabudowana pięta, podnosek, ESD, podeszwa FO.',
+            'expected_skus' => ['ARSO 701 616560 S1 P ESD'],
+            'forbidden_skus' => [],
+            'note' => '',
+        ]]], JSON_UNESCAPED_UNICODE));
+        $before = glob($this->reportDir.'/*.json') ?: [];
+
+        $this->artisan('tenders:eval', ['--file' => $this->golden, '--filter' => '', '--runs' => 2, '--save' => true])
+            ->expectsOutputToContain('Uwaga: w trakcie przebiegu 1 zmieniono karty katalogu: 1 (w wynikach pomiaru: ARSO 701 616560 S1 P ESD)')
+            ->expectsOutputToContain('Dostawcy modelu w przebiegu 1: Makora 1 · DeepInfra 1 · poluzowane przypięcie dostawcy: 1')
+            ->expectsOutputToContain('Dostawcy modelu w przebiegu 2: Makora 1')
+            ->doesntExpectOutputToContain('w trakcie przebiegu 2')
+            ->assertSuccessful();
+
+        $created = array_values(array_diff(glob($this->reportDir.'/*.json') ?: [], $before));
+        $this->assertCount(1, $created);
+        $report = json_decode((string) file_get_contents($created[0]), true);
+        @unlink($created[0]);
+        $this->assertSame(1, $report['timings'][0]['catalog_changed']);
+        $this->assertSame(['ARSO 701 616560 S1 P ESD'], $report['timings'][0]['catalog_changed_in_results']);
+        $this->assertSame(['Makora' => 1, 'DeepInfra' => 1], $report['timings'][0]['providers']);
+        $this->assertSame(1, $report['timings'][0]['relaxed_pins']);
+        $this->assertSame(0, $report['timings'][1]['catalog_changed'], 'przebieg 2 bez zmian katalogu');
+        $this->assertSame(['Makora' => 1], $report['timings'][1]['providers']);
     }
 
     /**

@@ -635,6 +635,8 @@ class OpenAiCompatibleClient
             )];
         }
 
+        app(AiServedProviderTally::class)->served($payload);
+
         return [
             'ok' => true,
             'content' => $content,
@@ -831,6 +833,7 @@ class OpenAiCompatibleClient
 
             $resultModel = (string) data_get($payload, 'model', $profile['model']);
             $usage = data_get($payload, 'usage');
+            app(AiServedProviderTally::class)->served($payload);
 
             return [
                 'content' => $content,
@@ -1470,6 +1473,7 @@ class OpenAiCompatibleClient
             'provider' => $only,
             'model' => $payload['model'] ?? null,
         ]);
+        app(AiServedProviderTally::class)->relaxedPin();
         $payload['provider'] = ['order' => array_values($only), 'allow_fallbacks' => true];
 
         return $payload;
