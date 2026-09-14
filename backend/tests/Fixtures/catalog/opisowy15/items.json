@@ -61,7 +61,8 @@
         "eval_extra_expected_skus": [
             "34-8743",
             "3630-020-000-00",
-            "3630-024-700-00"
+            "3630-024-700-00",
+            "3630-002-700-00"
         ],
         "prod_search": {
             "needed": null,
@@ -95,7 +96,8 @@
             "ARDEUS 350 Air 618080 S1 PL ESD"
         ],
         "eval_extra_expected_skus": [
-            "ARSO 701 616560 S1 P ESD"
+            "ARSO 701 616560 S1 P ESD",
+            "2136-025-808-00"
         ],
         "eval_extra_forbidden_skus": [
             "AROSIO 730 Air 618080 S1 P ESD",
@@ -361,6 +363,9 @@
         "forbidden_skus": [
             "9310+",
             "7100329384"
+        ],
+        "eval_extra_expected_skus": [
+            "4510-016-000-00"
         ],
         "prod_search": {
             "needed": "Półmaska filtrująca klasy FFP1 z zaworem wydechowym, specjalistyczna – do ochrony dróg oddechowych przed pyłami, mgłami oraz uciążliwym poziomem par organicznych. Wymagane: warstwa węgla aktywowanego eliminująca drażniące zapachy par organicznych poniżej NDS; zawór wydechowy odprowadzający nagromadzone ciepło i wydychane powietrze, ograniczający parowanie okularów; mocna konstrukcja kopułkowa dopasowująca się do większości kształtów i rozmiarów twarzy, nieodkształcająca się i niezapadająca; lekka, kompatybilna ze środkami ochrony wzroku i słuchu. Zakres stosowania: do 4 x NDS dla cząstek; poniżej NDS dla par organicznych. Zgodność z EN 149. Opakowanie: 10 szt., karton 100 szt.",
