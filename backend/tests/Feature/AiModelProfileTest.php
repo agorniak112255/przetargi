@@ -554,7 +554,53 @@ final class AiModelProfileTest extends TestCase
         });
     }
 
+    /** Opisy produktów: po drugim 429 wolno wziąć zastępczego dostawcę modelu. */
     public function test_overloaded_pinned_provider_falls_back_to_other_providers(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedMainConfig();
+
+        $this->putJson('/api/ai-settings', [
+            'model_profiles' => [[
+                'id' => 'fast',
+                'name' => 'Profil 2',
+                'base_url' => 'https://openrouter.ai/api/v1',
+                'model' => 'deepseek/deepseek-v4-flash-0731',
+                'openrouter_provider' => 'makora',
+                'api_key' => 'sk-or-profile-123',
+                'tasks' => ['product_search', 'enrichment'],
+            ]],
+        ])->assertOk();
+
+        // przypięta makora odpowiada 429 — workery opisów produktów czekały minutami na jednego dostawcę
+        Http::fake(['*' => Http::sequence()
+            ->push(['error' => ['message' => 'Rate limit exceeded']], 429)
+            ->push(['error' => ['message' => 'Rate limit exceeded']], 429)
+            ->push(self::jsonReply('{"ok":true}'))]);
+
+        $result = app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']],
+            null,
+            null,
+            null,
+            AiTask::Enrichment
+        );
+
+        $this->assertSame(['ok' => true], $result);
+        $providers = array_map(
+            static fn (array $pair): mixed => $pair[0]->data()['provider'] ?? null,
+            Http::recorded()->all()
+        );
+        $this->assertSame(['only' => ['makora'], 'allow_fallbacks' => false], $providers[0]);
+        $this->assertSame(['order' => ['makora'], 'allow_fallbacks' => true], end($providers));
+    }
+
+    /**
+     * Pomiar 20260914_154500: zastępczy OpenInference ocenił 5 pozycji przetargu z 3 złymi kartami (przypięty Makora: 40 pozycji,
+     * 1 zła). Ocena kart nie przechodzi na zastępców modelu.
+     */
+    public function test_overloaded_pinned_provider_stays_pinned_for_product_search(): void
     {
         $this->seed(RolesAndPermissionsSeeder::class);
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
@@ -572,7 +618,7 @@ final class AiModelProfileTest extends TestCase
             ]],
         ])->assertOk();
 
-        // przypięta makora odpowiada 429 — przy wielu workerach czekały minutami na jednego dostawcę
+        // te same dwa 429: wyszukiwarka czeka na przypiętego dostawcę zamiast oceny od zastępcy
         Http::fake(['*' => Http::sequence()
             ->push(['error' => ['message' => 'Rate limit exceeded']], 429)
             ->push(['error' => ['message' => 'Rate limit exceeded']], 429)
@@ -591,8 +637,8 @@ final class AiModelProfileTest extends TestCase
             static fn (array $pair): mixed => $pair[0]->data()['provider'] ?? null,
             Http::recorded()->all()
         );
-        $this->assertSame(['only' => ['makora'], 'allow_fallbacks' => false], $providers[0]);
-        $this->assertSame(['order' => ['makora'], 'allow_fallbacks' => true], end($providers));
+        $pinned = ['only' => ['makora'], 'allow_fallbacks' => false];
+        $this->assertSame([$pinned, $pinned, $pinned], $providers, 'każda powtórka do przypiętego dostawcy');
     }
 
     public function test_openrouter_provider_is_ignored_on_local_endpoint(): void

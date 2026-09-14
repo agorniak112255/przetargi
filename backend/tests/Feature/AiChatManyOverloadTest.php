@@ -41,7 +41,7 @@ final class AiChatManyOverloadTest extends TestCase
             'model' => 'deepseek/deepseek-v4-flash-0731',
             'openrouter_provider' => 'makora',
             'api_key' => 'sk-or-profile-123',
-            'tasks' => [AiTask::ProductSearch->value],
+            'tasks' => [AiTask::ProductSearch->value, AiTask::TenderMatch->value, AiTask::Enrichment->value],
         ]]])->save();
     }
 
@@ -71,7 +71,7 @@ final class AiChatManyOverloadTest extends TestCase
     }
 
     /** @return list<array<string, mixed>> */
-    private function rankTwo(): array
+    private function rankTwo(AiTask $task = AiTask::ProductSearch): array
     {
         return app(OpenAiCompatibleClient::class)->chatJsonMany(
             [
@@ -79,7 +79,7 @@ final class AiChatManyOverloadTest extends TestCase
                 [['role' => 'user', 'content' => 'b']],
             ],
             null,
-            AiTask::ProductSearch,
+            $task,
             16,
         );
     }
@@ -96,12 +96,13 @@ final class AiChatManyOverloadTest extends TestCase
         $this->assertCount(1, $providers['b'], 'przyjęte zapytanie nie jest wysyłane drugi raz');
     }
 
+    /** Opisy produktów: po drugim ponowieniu wolno wziąć zastępczego dostawcę, żeby nie czekać minutami. */
     public function test_second_retry_relaxes_pinned_provider(): void
     {
         $providers = [];
         $this->fakeOpenRouter(['a' => 2], $providers);
 
-        $out = $this->rankTwo();
+        $out = $this->rankTwo(AiTask::Enrichment);
 
         $this->assertSame(['prompt' => 'a'], $out[0]);
         $this->assertCount(3, $providers['a']);
@@ -121,7 +122,7 @@ final class AiChatManyOverloadTest extends TestCase
         $tally = app(AiServedProviderTally::class);
         $tally->reset();
 
-        $this->rankTwo();
+        $this->rankTwo(AiTask::Enrichment);
 
         $snapshot = $tally->snapshot();
         $this->assertEquals(['Makora' => 1, 'DeepInfra' => 1], $snapshot['served'], 'b od przypiętego, a po poluzowaniu od innego');
@@ -130,6 +131,31 @@ final class AiChatManyOverloadTest extends TestCase
 
         app(OpenAiCompatibleClient::class)->chatJsonMany([[['role' => 'user', 'content' => 'c']]], null, AiTask::ProductSearch, 16);
         $this->assertSame(['Makora'], $tally->lastBatch(), 'pojedyncze zapytanie idzie bez puli, dostawca też zapisany');
+    }
+
+    /**
+     * Pomiar 20260914_154500: przypięty Makora ocenił 40 pozycji z 1 złą kartą, zastępczy OpenInference 5 pozycji z 3 złymi
+     * kartami z oceną 95. Ocena kart w wyszukiwarce i dopasowaniu przetargu czeka na przypiętego dostawcę przy każdej
+     * powtórce — w puli i w pojedynczym zapytaniu.
+     */
+    public function test_ranking_tasks_keep_pinned_provider_on_every_retry(): void
+    {
+        $providers = [];
+        $this->fakeOpenRouter(['a' => 2, 'c' => 2], $providers);
+        $tally = app(AiServedProviderTally::class);
+        $tally->reset();
+        $pinned = ['only' => ['makora'], 'allow_fallbacks' => false];
+
+        $out = $this->rankTwo(AiTask::ProductSearch);
+
+        $this->assertSame(['prompt' => 'a'], $out[0]);
+        $this->assertSame([$pinned, $pinned, $pinned], $providers['a'], 'każda powtórka do przypiętego dostawcy');
+        $this->assertSame(0, $tally->snapshot()['relaxed_pins']);
+        $this->assertSame(['Makora', 'Makora'], $tally->lastBatch());
+
+        app(OpenAiCompatibleClient::class)->chatJsonMany([[['role' => 'user', 'content' => 'c']]], null, AiTask::TenderMatch, 16);
+        $this->assertSame([$pinned, $pinned, $pinned], $providers['c'], 'pojedyncze zapytanie dopasowania przetargu też bez zastępcy');
+        $this->assertSame(0, $tally->snapshot()['relaxed_pins']);
     }
 
     public function test_exhausted_429_stops_after_rate_limit_retries(): void

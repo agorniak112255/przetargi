@@ -138,6 +138,8 @@ final class ProductAiSearchService
     /** @var array<int, ?string> dostawca modelu, który zrozumiał zapytanie (indeks zapytania w searchMany) */
     private array $understandProviders = [];
 
+    private bool $traceSources = false;
+
     private const EMPTY_TRACE = [
         'candidate_ids' => [],
         'rank_card_ids' => [],
@@ -153,6 +155,8 @@ final class ProductAiSearchService
         // Pula przed bramką zgodności — czy karty zabrakło w wyszukiwaniu, czy odrzuciła ją bramka
         // (poz. 1: HyFlex 11-202 z angielskim opisem odpadał na dowodzie żargonu i antystatyce).
         'pregate_ids' => [],
+        // Tylko po enableSourceTrace() (tenders:debug-match): id z każdego źródła wyszukiwania i przycięcie fuzji.
+        'sources' => [],
         // Powód awarii kroku „zrozum” (wyjątek/timeout) — trafia do `search_events`,
         // żeby intent lokalny z całym tekstem dało się odróżnić od decyzji modelu.
         'intent_error' => null,
@@ -791,6 +795,16 @@ final class ProductAiSearchService
             'timings_ms' => $this->timingMs,
             'prompt_version' => self::RANK_PROMPT_VERSION,
         ];
+    }
+
+    /**
+     * Diagnostyka: ślad dostaje listy id z każdego źródła wyszukiwania (priorytet, kaskada przed i po bramce, tekst,
+     * karty bez rodziny, wektor) i przyciętą fuzję. Przetarg 1 poz. 1: rękaw przechodził wszystkie bramki, a nie było go
+     * w puli przed bramką — bez miejsca w źródłach nie da się powiedzieć, czy go nie znaleziono, czy wypadł przy przycięciu.
+     */
+    public function enableSourceTrace(): void
+    {
+        $this->traceSources = true;
     }
 
     /** Uzupełnia ostatni wpis kaskady: ile kart przeszło bramkę i czy kaskada zakończyła wyszukiwanie. */
@@ -3068,6 +3082,18 @@ final class ProductAiSearchService
             ],
             $limit * 2,
         );
+        if ($this->traceSources) {
+            $this->trace['sources'][] = [
+                'priority' => $rankings['priority'],
+                'cascade_found' => $cascaded->pluck('id')->map(intval(...))->all(),
+                'cascade' => $rankings['cascade'],
+                'text' => $rankings['text'],
+                'unclassified' => $rankings['unclassified'],
+                'vector' => $rankings['vector'],
+                'fused' => $fused,
+                'fused_cap' => $limit * 2,
+            ];
+        }
 
         $recall = $this->clock('retrieve_catalog', function () use ($query, $intent, $limit): Collection {
             return $this->catalogRecall->shouldRecallToCandidatePool(

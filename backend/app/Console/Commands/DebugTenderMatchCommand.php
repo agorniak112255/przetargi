@@ -50,11 +50,13 @@ final class DebugTenderMatchCommand extends Command
         $this->line('Pozycja '.$item->line_no.': '.mb_substr($requirement, 0, 160));
 
         $many = app()->make(ProductAiSearchService::class);
+        $many->enableSourceTrace();
         $rows = $many->searchMany([$requirement], $limit, false, AiTask::ProductSearch, $settings->matchConcurrency());
         $this->report('„Dopasuj wszystkie” (searchMany)', is_array($rows[0] ?? null) ? $rows[0] : [], $many->lastTrace(), $sku);
         $this->reportDecision(app(ProductMatchService::class)->debugPick($item, is_array($rows[0] ?? null) ? $rows[0] : []));
 
         $single = app()->make(ProductAiSearchService::class);
+        $single->enableSourceTrace();
         $result = $single->search($requirement, $limit, false, AiTask::ProductSearch);
         $this->report('Wyszukiwarka (search)', $result, $single->lastTrace(), $sku);
 
@@ -118,6 +120,41 @@ final class DebugTenderMatchCommand extends Command
             $weakest === null ? 'brak' : $weakest['sku'].' ('.$weakest['hits'].'/'.$total.')',
             mb_strlen((string) ($product->description ?? '')),
             json_encode(mb_substr((string) ($product->norms ?? ''), 0, 80), JSON_UNESCAPED_UNICODE),
+        );
+    }
+
+    /**
+     * Miejsce karty w każdym źródle wyszukiwania i w przyciętej fuzji (ostatnie wyszukiwanie w śladzie): „—/300” = brak
+     * w źródle, „87/300” = jest na 87. miejscu. Fuzja przycięta do dwukrotności limitu, a bramka zgodności działa dopiero
+     * na przyciętej puli — przetarg 1 poz. 1: rękaw przechodził bramki, a nie było go w puli przed bramką.
+     *
+     * @param  array<string, mixed>  $trace
+     */
+    private function sourcesLine(string $sku, int $skuId, array $trace): string
+    {
+        $all = is_array($trace['sources'] ?? null) ? $trace['sources'] : [];
+        if ($all === []) {
+            return 'źródła wyszukiwania karty '.$sku.': brak danych (wyszukiwanie bez fuzji źródeł)';
+        }
+        $last = $all[array_key_last($all)];
+        $position = static function (mixed $ids) use ($skuId): string {
+            $ids = array_values(array_map('intval', is_array($ids) ? $ids : []));
+            $at = array_search($skuId, $ids, true);
+
+            return ($at === false ? '—' : (string) ($at + 1)).'/'.count($ids);
+        };
+
+        return sprintf(
+            'źródła wyszukiwania karty %s: priorytet=%s · kaskada przed bramką=%s · kaskada po bramce=%s · tekst=%s · bez rodziny=%s · wektor=%s · fuzja=%s (przycięta do %d)',
+            $sku,
+            $position($last['priority'] ?? []),
+            $position($last['cascade_found'] ?? []),
+            $position($last['cascade'] ?? []),
+            $position($last['text'] ?? []),
+            $position($last['unclassified'] ?? []),
+            $position($last['vector'] ?? []),
+            $position($last['fused'] ?? []),
+            (int) ($last['fused_cap'] ?? 0),
         );
     }
 
@@ -211,6 +248,7 @@ final class DebugTenderMatchCommand extends Command
             if ($skuId > 0) {
                 $this->line($this->constraintEvidenceLine($sku, $skuId, $cardIds, $trace));
                 $this->line($this->compatibilityGatesLine($sku, $skuId, (string) ($result['query'] ?? ''), $trace));
+                $this->line($this->sourcesLine($sku, $skuId, $trace));
             }
         }
 

@@ -72,7 +72,7 @@ class OpenAiCompatibleClient
     ): array {
         return $this->withProfileFallback(
             $task,
-            fn (array $profile): array => $this->chatWithProfile($profile, $messages, $temperature, $jsonMode, $extra)
+            fn (array $profile): array => $this->chatWithProfile($this->withProviderPinPolicy($profile, $task), $messages, $temperature, $jsonMode, $extra)
         );
     }
 
@@ -167,7 +167,7 @@ class OpenAiCompatibleClient
             }
         }
 
-        $profile = $this->settings->profileForTask($task);
+        $profile = $this->withProviderPinPolicy($this->settings->profileForTask($task), $task);
         try {
             return $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra, $onAnswered);
         } catch (RuntimeException $e) {
@@ -182,7 +182,7 @@ class OpenAiCompatibleClient
 
             return $this->runOnMainOrRethrow(
                 $e,
-                fn (array $main): array => $this->chatManyWithProfile($main, $messageSets, $jsonMode, $extra, $onAnswered),
+                fn (array $main): array => $this->chatManyWithProfile($this->withProviderPinPolicy($main, $task), $messageSets, $jsonMode, $extra, $onAnswered),
                 $task,
                 $profile['label']
             );
@@ -530,7 +530,9 @@ class OpenAiCompatibleClient
                 }
                 $saw429 = $saw429 || $response->status() === 429;
                 $wait = max($wait, $this->retryAfterSeconds($response, $attempt));
-                $retryBodies[$i] = $attempt >= 1 ? $this->relaxOverloadedProviderPin($body) : $body;
+                $retryBodies[$i] = $attempt >= 1 && ! ($profile['keep_provider_pin'] ?? false)
+                    ? $this->relaxOverloadedProviderPin($body)
+                    : $body;
             }
             if ($retryBodies === []) {
                 return $responses;
@@ -543,6 +545,7 @@ class OpenAiCompatibleClient
                 'attempt' => $attempt + 1,
                 'wait_seconds' => $wait,
                 'profile' => $profile['label'] ?? '',
+                'keep_provider_pin' => (bool) ($profile['keep_provider_pin'] ?? false),
             ]);
             if ($wait > 0) {
                 sleep($wait);
@@ -774,7 +777,7 @@ class OpenAiCompatibleClient
         $this->reportLiveWaiting($profile, $model);
         try {
             try {
-                $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
+                $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false));
             } catch (ConnectionException $e) {
                 throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
             }
@@ -797,7 +800,7 @@ class OpenAiCompatibleClient
                     'max_tokens' => $maxTokens,
                 ]);
                 try {
-                    $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
+                    $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false));
                 } catch (ConnectionException $e) {
                     throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
                 }
@@ -1435,7 +1438,8 @@ class OpenAiCompatibleClient
         array $payload,
         bool $jsonMode,
         bool $reasoning,
-        int $timeout
+        int $timeout,
+        bool $relaxPin = true,
     ): Response {
         $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
         $attempt = 0;
@@ -1453,7 +1457,7 @@ class OpenAiCompatibleClient
             }
             // Przypięty dostawca dalej przeciążony — po jednej powtórce wolno OpenRouterowi
             // wziąć innego dostawcę tego modelu, zamiast czekać minutami na jednego.
-            if ($attempt >= 1) {
+            if ($attempt >= 1 && $relaxPin) {
                 $payload = $this->relaxOverloadedProviderPin($payload);
             }
             $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
@@ -1461,6 +1465,23 @@ class OpenAiCompatibleClient
         }
 
         return $response;
+    }
+
+    /**
+     * Ocena kart i zrozumienie wymagań (wyszukiwarka, dopasowanie przetargu) nie przechodzą po limicie zapytań na zastępczych
+     * dostawców modelu. Pomiar 20260914_154500: przypięty Makora ocenił 40 pozycji z 1 złą kartą, zastępczy OpenInference
+     * 5 pozycji z 3 złymi kartami z oceną 95 (wcześniej StreamLake i DeepInfra w przebiegach z seriami złych kart).
+     * Brak odpowiedzi daje pustą pozycję, którą widać; zła karta z oceną 95 wyglądała jak pewny wybór.
+     * Opisy produktów i pozostałe zadania dalej mogą wziąć zastępcę, żeby nie czekać minutami.
+     *
+     * @param  array<string, mixed>  $profile
+     * @return array<string, mixed>
+     */
+    private function withProviderPinPolicy(array $profile, ?AiTask $task): array
+    {
+        $profile['keep_provider_pin'] = in_array($task, [AiTask::ProductSearch, AiTask::TenderMatch], true);
+
+        return $profile;
     }
 
     /**
