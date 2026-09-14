@@ -1102,6 +1102,28 @@ final class PpeAssortmentTest extends TestCase
         $this->assertFalse($this->assortment->compatibleProduct('Rękawice antyprzecięciowe HyFlex EN 388', $sleeve));
     }
 
+    /** Przetarg 1 poz. 1: karta rękawa z polskim opisem, bez „rękawic” i bez EN 388, zostawała bez rodziny. */
+    #[Test]
+    public function arm_sleeve_card_without_family_noun_belongs_to_gloves(): void
+    {
+        $sleeve = $this->card('11202000', 'HyFlex 11202 SIZE 19\'\'/47,5 cm', [
+            'manufacturer' => 'Ansell',
+            'norms' => 'EN 407: poziom 1 (ochrona termiczna do 100°C), EN ISO 13997: odporność na przecięcie poziom C',
+            'description' => 'Rękaw ochronny Ansell HyFlex 11-202 o wysokiej widoczności chroni przedramię przed przecięciem, zapięcie na rzep.',
+        ]);
+        $this->assertSame(PpeAssortment::FAMILY_GLOVES, $this->assortment->productFamily($sleeve));
+
+        $foreign = $this->card('X-1', 'HyFlex 99999', [
+            'description' => 'Rękaw ochronny o wysokiej widoczności, zapięcie na rzep.',
+        ]);
+        $this->assertNull($this->assortment->productFamily($foreign), 'opis, który nie nazywa karty, nie świadczy o typie');
+
+        $jacket = $this->card('K-1', 'Kurtka robocza', [
+            'description' => 'Kurtka robocza z długim rękawem i mankietem na rzep.',
+        ]);
+        $this->assertSame(PpeAssortment::FAMILY_APPAREL, $this->assortment->productFamily($jacket), 'rękaw kurtki to odzież');
+    }
+
     /** Przetarg 1 poz. 1: „wyrób antystatyczny” w SIWZ, a karta HyFlex 11-202 mówi po angielsku „extra features: antistatic”. */
     #[Test]
     public function antistatic_evidence_accepts_english_wording(): void

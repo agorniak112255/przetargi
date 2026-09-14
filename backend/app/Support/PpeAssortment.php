@@ -801,7 +801,16 @@ final class PpeAssortment
         $identity = $this->productIdentityText($product);
         $familyText = $this->family($identity) !== null ? $identity : $this->productFullText($product);
 
-        return $this->resolveFamily($familyText, $kat);
+        $resolved = $this->resolveFamily($familyText, $kat);
+        // Rękaw / ochraniacz przedramienia bez rzeczownika rodziny i bez normy rękawic w nazwie i opisie („HyFlex 11202 SIZE 19''”,
+        // polski opis „rękaw ochronny”, normy EN 407 i ISO 13997) zostawał bez rodziny. Wyszukiwanie tekstowe całej rodziny
+        // „rękawice” go pomijało, a bramka „rękaw ≠ rękawica” obsługuje go właśnie w tej rodzinie. Przetarg 1 poz. 1 (debug 14.09):
+        // karta była tylko w źródle kart bez rodziny, na 77. miejscu, i wypadała przy przycięciu puli.
+        if ($resolved === null && $this->productIsArmSleeve($product)) {
+            return self::FAMILY_GLOVES;
+        }
+
+        return $resolved;
     }
 
     /**
