@@ -2,11 +2,13 @@
 
 use App\Http\Middleware\EnsureTenderAccess;
 use App\Http\Middleware\LogApiActivity;
+use App\Models\B2bSyncRun;
 use App\Services\Enrichment\JinaAccountService;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Spatie\Permission\Exceptions\UnauthorizedException;
 use Spatie\Permission\Middleware\PermissionMiddleware;
@@ -35,6 +37,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('storage:prune')->hourly();
         // cenniki B2B: konta z harmonogramem (od 02:00) i „Sprawdź teraz”; pełny przebieg trwa > 1 h
         $schedule->command('b2b:sync-due')->everyFiveMinutes()->withoutOverlapping(360)->runInBackground();
+        // sygnał, że cron serwera (schedule:run) działa — okno „Sprawdź teraz” ostrzega, gdy go brak
+        $schedule->call(static function (): void {
+            Cache::forever(B2bSyncRun::SCHEDULER_HEARTBEAT_KEY, now()->toIso8601String());
+        })->everyMinute()->name('b2b-scheduler-heartbeat')->withoutOverlapping();
         // próbka salda Jina co godzinę — z niej panel liczy zużycie na dobę i datę wyczerpania
         $schedule->call(static function (): void {
             try {

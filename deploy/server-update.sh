@@ -167,6 +167,11 @@ else
   echo "UWAGA: brak deploy/ensure-enrichment-workers.sh — enrichment nie ma kto przetwarzać."
 fi
 
+# migrate / cache / testowy schedule:run szły jako root po chown z początku skryptu —
+# pliki root-owned w storage blokowały cron i aplikację działające jako $OWNER
+echo "==> uprawnienia storage po komendach artisan"
+chown -R "$OWNER:$GROUP" "$APP_ROOT/backend/storage" "$APP_ROOT/backend/bootstrap/cache" || true
+
 echo "==> gotowe: https://przetargi.supon.rzeszow.pl"
 if [[ "$INDEX_CATALOG" -eq 0 ]]; then
   echo "==> Aby zaindeksować sklepy, wykonaj:"

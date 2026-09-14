@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -73,7 +74,9 @@ class B2bAccount extends Model
         }
 
         $frequency = $this->sync_frequency ?? 'off';
-        if ($frequency === 'off' || $now->copy()->setTimezone(self::SYNC_TIMEZONE)->hour < self::SYNC_FROM_HOUR) {
+        $local = CarbonImmutable::instance($now)->setTimezone(self::SYNC_TIMEZONE);
+        $boundary = $local->setTime(self::SYNC_FROM_HOUR, 0);
+        if ($frequency === 'off' || $local->lessThan($boundary)) {
             return false;
         }
 
@@ -82,10 +85,11 @@ class B2bAccount extends Model
             return true;
         }
 
-        // Zapas kilku godzin: przebieg o 02:05 nie przesuwa kolejnego na 02:10 następnego dnia.
+        // Liczone od dzisiejszej 02:00, nie od godziny ostatniego przebiegu: „Sprawdź teraz” o 18:00
+        // nie przesuwa kolejnego automatycznego przebiegu na dzień roboczy.
         return match ($frequency) {
-            'daily' => $last->lessThanOrEqualTo($now->copy()->subHours(20)),
-            'weekly' => $last->lessThanOrEqualTo($now->copy()->subHours(6 * 24 + 12)),
+            'daily' => $last->lessThan($boundary),
+            'weekly' => $last->lessThan($boundary->subDays(6)),
             default => false,
         };
     }
@@ -103,5 +107,10 @@ class B2bAccount extends Model
     public function productLinks(): HasMany
     {
         return $this->hasMany(B2bProductLink::class);
+    }
+
+    public function syncRuns(): HasMany
+    {
+        return $this->hasMany(B2bSyncRun::class);
     }
 }

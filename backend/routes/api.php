@@ -225,6 +225,10 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:b2b_accounts.view');
     Route::post('/b2b-accounts/{b2bAccount}/sync', [B2bAccountController::class, 'requestSync'])
         ->middleware('permission:b2b_accounts.manage');
+    Route::get('/b2b-accounts/{b2bAccount}/sync-progress', [B2bAccountController::class, 'syncProgress'])
+        ->middleware('permission:b2b_accounts.view');
+    Route::post('/b2b-accounts/{b2bAccount}/sync-cancel', [B2bAccountController::class, 'cancelSync'])
+        ->middleware('permission:b2b_accounts.manage');
     Route::get('/b2b-connectors', [B2bAccountController::class, 'connectors'])->middleware('permission:b2b_accounts.view');
 
     Route::get('/ai-settings', [AiSettingsController::class, 'show'])->middleware('permission:ai_settings.manage');

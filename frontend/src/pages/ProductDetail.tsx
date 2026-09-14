@@ -5,6 +5,7 @@ import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
 import { CrossRefPanel } from '../components/CrossRefPanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { PrestaKitBadge, ProductKitModal } from '../components/ProductKitModal'
+import { PriceStep } from '../components/ProductPriceChange'
 import {
   api,
   can,
@@ -13,8 +14,10 @@ import {
   type Product,
   type ProductAccessory,
   type ProductKitSuggestions,
+  type ProductPriceHistoryRow,
   type Substitute,
 } from '../lib/api'
+import { formatDateTime, priceChangeSummary } from '../lib/priceChange'
 
 type Detail = Product & { substitutes: Substitute[] }
 
@@ -60,16 +63,7 @@ export function ProductDetail() {
   const [exportBusy, setExportBusy] = useState(false)
   const [exportMsg, setExportMsg] = useState('')
   const [deleteBusy, setDeleteBusy] = useState(false)
-  const [priceHistory, setPriceHistory] = useState<
-    {
-      id: number
-      catalog_price_net: string | null
-      purchase_price: string | null
-      source: string | null
-      created_at: string
-      price_list?: { manufacturer: string; version: string } | null
-    }[]
-  >([])
+  const [priceHistory, setPriceHistory] = useState<ProductPriceHistoryRow[]>([])
   const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([])
   const [categoryBusy, setCategoryBusy] = useState(false)
   const [categoryMsg, setCategoryMsg] = useState('')
@@ -592,19 +586,9 @@ export function ProductDetail() {
         </p>
       )}
 
-      <div className="mb-4 mt-4 grid gap-3 sm:grid-cols-3">
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
         <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
           Cena kat. netto: <b>{p.catalog_price_net} {currency}</b>
-          {p.price_change_percent != null && (
-            <span
-              className={`ml-2 text-xs ${
-                p.price_change_percent > 0 ? 'text-red-600' : 'text-emerald-600'
-              }`}
-            >
-              {p.price_change_percent > 0 ? '+' : ''}
-              {p.price_change_percent}% vs poprzedni cennik
-            </span>
-          )}
         </div>
         <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
           Zakup: <b>{p.purchase_price} {currency}</b>
@@ -614,6 +598,35 @@ export function ProductDetail() {
           <b>{p.discount_percent != null && p.discount_percent !== '' ? `${p.discount_percent}%` : '—'}</b>
         </div>
       </div>
+      <p className="mb-4 mt-2 text-xs text-slate-600">
+        {p.last_price_change ? (
+          <span title={priceChangeSummary(p.last_price_change, currency)}>
+            Ostatnia zmiana ceny: <b>{formatDateTime(p.last_price_change.at)}</b> · {p.last_price_change.source_label}
+            {' · zakup '}
+            <PriceStep
+              oldValue={p.last_price_change.purchase_old}
+              newValue={p.last_price_change.purchase_new}
+              pct={p.last_price_change.purchase_pct}
+              currency={currency}
+            />
+            {p.last_price_change.catalog_old !== p.last_price_change.catalog_new && (
+              <>
+                {' · katalog '}
+                <PriceStep
+                  oldValue={p.last_price_change.catalog_old}
+                  newValue={p.last_price_change.catalog_new}
+                  pct={p.last_price_change.catalog_pct}
+                  currency={currency}
+                />
+              </>
+            )}
+          </span>
+        ) : (
+          <span className="text-slate-400">
+            {priceHistory.length > 0 ? 'Cena bez zmian od dodania.' : 'Brak historii cen.'}
+          </span>
+        )}
+      </p>
 
       <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -716,34 +729,38 @@ export function ProductDetail() {
       {priceHistory.length > 0 && (
         <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
           <h2 className="mb-2 text-sm font-semibold">Historia cen</h2>
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b bg-slate-50">
-                <th className="p-2">Data</th>
-                <th className="p-2">Kat. netto</th>
-                <th className="p-2">Zakup</th>
-                <th className="p-2">Źródło</th>
-              </tr>
-            </thead>
-            <tbody>
-              {priceHistory.map((h) => (
-                <tr key={h.id} className="border-b">
-                  <td className="p-2">{new Date(h.created_at).toLocaleString('pl-PL')}</td>
-                  <td className="p-2">
-                    {h.catalog_price_net != null ? `${h.catalog_price_net} ${currency}` : '—'}
-                  </td>
-                  <td className="p-2">
-                    {h.purchase_price != null ? `${h.purchase_price} ${currency}` : '—'}
-                  </td>
-                  <td className="p-2">
-                    {h.price_list
-                      ? `${h.price_list.manufacturer} ${h.price_list.version}`
-                      : h.source ?? '—'}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50">
+                  <th className="p-2">Data</th>
+                  <th className="p-2">Źródło</th>
+                  <th className="p-2">Zakup</th>
+                  <th className="p-2">Katalog</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {priceHistory.map((h, i) => {
+                  const first = i === priceHistory.length - 1 && h.purchase_old === null && h.catalog_old === null
+                  return (
+                    <tr key={h.id} className="border-b">
+                      <td className="whitespace-nowrap p-2">{formatDateTime(h.created_at)}</td>
+                      <td className="p-2" title={h.source ?? undefined}>
+                        {h.source_label}
+                        {first && <span className="ml-1 text-slate-400">(dodanie ceny)</span>}
+                      </td>
+                      <td className="whitespace-nowrap p-2">
+                        <PriceStep oldValue={h.purchase_old} newValue={h.purchase_price} pct={h.purchase_pct} currency={currency} />
+                      </td>
+                      <td className="whitespace-nowrap p-2">
+                        <PriceStep oldValue={h.catalog_old} newValue={h.catalog_price_net} pct={h.catalog_pct} currency={currency} />
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

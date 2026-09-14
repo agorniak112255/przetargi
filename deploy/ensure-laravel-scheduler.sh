@@ -55,5 +55,11 @@ fi
 
 echo "==> scheduler: jednorazowy test schedule:run"
 cd "$BACKEND"
-"$PHP_BIN" artisan schedule:run -v || true
+# Jako właściciel, nie root: blokady harmonogramu i cache założone przez roota
+# blokowały potem cron użytkownika (np. b2b:sync-due z „Sprawdź teraz” nie ruszał).
+if [[ "$(id -u)" -eq 0 ]]; then
+  runuser -u "$OWNER" -- "$PHP_BIN" artisan schedule:run -v || true
+else
+  "$PHP_BIN" artisan schedule:run -v || true
+fi
 echo "==> scheduler: OK"

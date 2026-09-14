@@ -14,6 +14,7 @@ class ProductPriceHistory extends Model
     protected $fillable = [
         'product_id',
         'price_list_id',
+        'b2b_sync_run_id',
         'catalog_price_net',
         'purchase_price',
         'source',

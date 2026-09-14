@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
-use App\Models\User;
-use RuntimeException;
+use App\Models\B2bSyncRun;
 use Throwable;
 
 /**
- * Jeden przebieg synchronizacji konta: status na koncie (running/ok/failed) + wynik.
+ * Jeden przebieg synchronizacji konta: status na koncie (running/ok/failed/cancelled), wpis w
+ * b2b_sync_runs z postępem i dziennikiem (poza --dry-run) + wynik.
  */
 final class B2bAccountSyncRunner
 {
@@ -21,7 +21,8 @@ final class B2bAccountSyncRunner
 
     /**
      * @param  (callable(string): void)|null  $onProduct
-     * @return array<string, mixed> wynik B2bCatalogSync::run
+     * @param  string  $trigger  B2bSyncRun::TRIGGER_* — skąd przebieg ruszył
+     * @return array<string, mixed> wynik B2bCatalogSync::run + sync_run_id (null przy --dry-run)
      */
     public function run(
         B2bAccount $account,
@@ -30,7 +31,9 @@ final class B2bAccountSyncRunner
         ?bool $withImages = null,
         int $delayMs = 150,
         ?callable $onProduct = null,
+        string $trigger = B2bSyncRun::TRIGGER_CLI,
     ): array {
+        $progress = null;
         if (! $dryRun) {
             $account->forceFill([
                 'last_sync_status' => 'running',
@@ -39,46 +42,53 @@ final class B2bAccountSyncRunner
                 'last_sync_message' => null,
                 'sync_requested_at' => null,
             ])->save();
+            $progress = B2bSyncProgress::start($account, $trigger);
         }
 
         try {
-            $userId = $account->updated_by ?? $account->created_by;
-            $user = $userId !== null ? User::query()->find($userId) : null;
-            if ($user === null) {
-                throw new RuntimeException('Konto B2B nie ma użytkownika, który mógłby być zapisany jako importujący — zapisz konto ponownie.');
-            }
-
             $result = $this->sync->run(
                 $account,
                 $this->connectors->make($account, $delayMs),
-                $user,
                 limit: $limit,
                 dryRun: $dryRun,
                 withImages: $withImages ?? (bool) ($account->sync_images ?? true),
                 onProduct: $onProduct,
+                progress: $progress,
             );
         } catch (Throwable $e) {
             if (! $dryRun) {
+                $message = mb_substr($e->getMessage(), 0, 2000);
                 $account->forceFill([
                     'last_sync_status' => 'failed',
                     'last_sync_finished_at' => now(),
-                    'last_sync_message' => mb_substr($e->getMessage(), 0, 2000),
+                    'last_sync_message' => $message,
                 ])->save();
+                $progress?->log('error', $message);
+                $progress?->finish(B2bSyncRun::STATUS_FAILED, $message);
             }
 
             throw $e;
         }
 
         if (! $dryRun) {
+            $summary = $this->summary($result);
+            $status = $result['cancelled'] ? B2bSyncRun::STATUS_CANCELLED : B2bSyncRun::STATUS_OK;
+            $message = $result['cancelled']
+                ? sprintf('Zatrzymano ręcznie po %d z %d', $result['seen'], $progress?->run()->total ?? $result['total_remote'])
+                : $summary;
             $account->forceFill([
-                'last_sync_status' => 'ok',
+                'last_sync_status' => $status,
                 'last_sync_finished_at' => now(),
-                'last_sync_message' => $this->summary($result),
-                'last_price_list_id' => $result['price_list']?->id ?? $account->last_price_list_id,
+                'last_sync_message' => $message,
             ])->save();
+            if ($result['cancelled']) {
+                $progress?->log('warn', $message);
+            }
+            $progress?->log('info', strtok($summary, "\n") ?: $summary);
+            $progress?->finish($status, $message);
         }
 
-        return $result;
+        return [...$result, 'sync_run_id' => $progress?->run()->id];
     }
 
     /**

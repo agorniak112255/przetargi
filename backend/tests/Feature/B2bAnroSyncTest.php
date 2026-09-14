@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\B2bSyncRun;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
@@ -33,6 +34,9 @@ final class B2bAnroSyncTest extends TestCase
     private int $logins = 0;
 
     private bool $expireTokenOnce = false;
+
+    /** Symuluje „Zatrzymaj” kliknięte w panelu, gdy przebieg pobiera cenę pierwszego produktu. */
+    private bool $cancelOnFirstPrice = false;
 
     private string $opis = '<h2>Znak &amp; alarm pożarowy</h2><p>Nadruk:</p><ul><li>fotoluminescencyjny</li><li>dwustronny</li></ul>';
 
@@ -95,14 +99,14 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertSame($product->id, $link->product_id);
         $this->assertSame(sha1((string) $product->description), $link->description_hash);
 
-        $priceList = $result['price_list'];
-        $this->assertInstanceOf(PriceList::class, $priceList);
-        $this->assertSame('Anro', $priceList->manufacturer);
-        $this->assertSame([$product->id], $priceList->fresh()->product_ids);
+        // Synchronizacja nie zakłada wpisów w historii cenników; historia ceny karty wskazuje przebieg.
+        $this->assertSame(0, PriceList::query()->count());
+        $this->assertNotNull($result['sync_run_id']);
         $this->assertTrue(ProductPriceHistory::query()
             ->where('product_id', $product->id)
-            ->where('price_list_id', $priceList->id)
-            ->where('source', 'b2b_api')
+            ->whereNull('price_list_id')
+            ->where('b2b_sync_run_id', $result['sync_run_id'])
+            ->where('source', 'b2b:anro')
             ->exists());
 
         $reasons = implode(' | ', $result['errors']);
@@ -112,7 +116,7 @@ final class B2bAnroSyncTest extends TestCase
 
         $account = $this->account->fresh();
         $this->assertSame('ok', $account->last_sync_status);
-        $this->assertSame($priceList->id, $account->last_price_list_id);
+        $this->assertNull($account->last_price_list_id);
         $this->assertStringContainsString('nowe: 1', (string) $account->last_sync_message);
         $this->assertNotNull($account->last_sync_finished_at);
     }
@@ -126,8 +130,7 @@ final class B2bAnroSyncTest extends TestCase
 
         $this->assertSame(1, $second['unchanged']);
         $this->assertSame(0, $second['created'] + $second['updated']);
-        $this->assertNull($second['price_list']);
-        $this->assertSame(1, PriceList::query()->count());
+        $this->assertSame(0, PriceList::query()->count());
         $this->assertSame(1, ProductPriceHistory::query()->count());
         $this->assertSame(1, Product::query()->where('sku', self::SKU)->firstOrFail()->images()->count());
     }
@@ -183,7 +186,9 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertSame('https://inny.example.test/karta', $existing->shop_source_url);
         $this->assertSame('36.72', $existing->purchase_price);
         $this->assertSame(1, $existing->images()->count());
-        $this->assertSame(self::SKU, $result['price_list']->fresh()->price_changes[0]['sku']);
+        $priceChange = B2bSyncRun::query()->findOrFail($result['sync_run_id'])->price_changes[0];
+        $this->assertSame(self::SKU, $priceChange['sku']);
+        $this->assertSame($existing->id, $priceChange['product_id']);
         $this->assertNull(B2bProductLink::query()->where('product_id', $existing->id)->value('description_hash'));
     }
 
@@ -194,7 +199,8 @@ final class B2bAnroSyncTest extends TestCase
         $result = $this->sync(dryRun: true);
 
         $this->assertSame(1, $result['created']);
-        $this->assertNull($result['price_list']);
+        $this->assertNull($result['sync_run_id']);
+        $this->assertSame(0, B2bSyncRun::query()->count());
         $this->assertSame(0, PriceList::query()->count());
         $this->assertSame(0, B2bProductLink::query()->count());
         $this->assertFalse(Product::query()->where('sku', self::SKU)->exists());
@@ -265,6 +271,167 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertFalse($account->isSyncDue(CarbonImmutable::parse('2026-09-15 04:00', B2bAccount::SYNC_TIMEZONE)));
     }
 
+    public function test_manual_daytime_run_does_not_shift_night_schedule(): void
+    {
+        $at = static fn (string $time): CarbonImmutable => CarbonImmutable::parse($time, B2bAccount::SYNC_TIMEZONE);
+
+        $daily = $this->makeAccount('codziennie', [
+            'sync_frequency' => 'daily',
+            'last_sync_status' => 'ok',
+            'last_sync_started_at' => $at('2026-09-15 18:00'),
+        ]);
+        $this->assertFalse($daily->isSyncDue($at('2026-09-15 20:00')));
+        $this->assertFalse($daily->isSyncDue($at('2026-09-16 01:59')));
+        $this->assertTrue($daily->isSyncDue($at('2026-09-16 02:00')));
+
+        $daily->last_sync_started_at = $at('2026-09-16 02:05');
+        $this->assertFalse($daily->isSyncDue($at('2026-09-16 23:00')));
+        $this->assertTrue($daily->isSyncDue($at('2026-09-17 02:00')));
+
+        $weekly = $this->makeAccount('co-tydzien', [
+            'sync_frequency' => 'weekly',
+            'last_sync_status' => 'ok',
+            'last_sync_started_at' => $at('2026-09-15 18:00'),
+        ]);
+        $this->assertFalse($weekly->isSyncDue($at('2026-09-21 02:30')));
+        $this->assertFalse($weekly->isSyncDue($at('2026-09-22 01:59')));
+        $this->assertTrue($weekly->isSyncDue($at('2026-09-22 02:00')));
+
+        $weekly->last_sync_started_at = $at('2026-09-15 02:05');
+        $this->assertFalse($weekly->isSyncDue($at('2026-09-21 23:00')));
+        $this->assertTrue($weekly->isSyncDue($at('2026-09-22 02:00')));
+    }
+
+    public function test_sync_records_run_with_counters_total_log_and_price_changes(): void
+    {
+        $this->fakeAnro();
+
+        $first = $this->sync();
+        $run = B2bSyncRun::query()->findOrFail($first['sync_run_id']);
+
+        $this->assertSame($this->account->id, $run->b2b_account_id);
+        $this->assertSame('ok', $run->status);
+        $this->assertSame('cli', $run->trigger);
+        $this->assertSame(3, $run->total);
+        $this->assertSame(3, $run->processed);
+        $this->assertSame(1, $run->created);
+        $this->assertSame(2, $run->skipped);
+        $this->assertSame(1, $run->images);
+        $this->assertNull($run->current_sku);
+        $this->assertNotNull($run->finished_at);
+        $this->assertStringContainsString('nowe: 1', (string) $run->message);
+
+        $texts = array_column($run->log, 'text');
+        $this->assertSame('Logowanie…', $texts[0]);
+        $this->assertContains('Produktów w B2B: 3', $texts);
+        $this->assertContains('[1/3] '.self::SKU.' — nowy', $texts);
+        $this->assertContains('[2/3] BEZ-CENY — pominięty: brak ceny w B2B', $texts);
+        $this->assertSame('warn', $run->log[array_search('[2/3] BEZ-CENY — pominięty: brak ceny w B2B', $texts, true)]['level']);
+        $this->assertStringStartsWith('W B2B: 3 · sprawdzone: 3', (string) end($texts));
+
+        $second = B2bSyncRun::query()->findOrFail($this->sync()['sync_run_id']);
+        $this->assertSame(1, $second->unchanged);
+        $this->assertSame([], array_values(array_filter(
+            array_column($second->log, 'text'),
+            static fn (string $text): bool => str_contains($text, '— bez zmian'),
+        )));
+
+        $this->netPrice = '39.90';
+        $third = B2bSyncRun::query()->findOrFail($this->sync()['sync_run_id']);
+        $product = Product::query()->where('sku', self::SKU)->firstOrFail();
+        $this->assertSame(1, $third->prices_changed);
+        $this->assertCount(1, $third->price_changes);
+        $this->assertSame($product->id, $third->price_changes[0]['product_id']);
+        $this->assertEquals(36.72, $third->price_changes[0]['purchase_old']);
+        $this->assertEquals(39.9, $third->price_changes[0]['purchase_new']);
+        $this->assertNotEmpty($third->price_changes[0]['at']);
+        $this->assertTrue(ProductPriceHistory::query()
+            ->where('product_id', $product->id)
+            ->where('b2b_sync_run_id', $third->id)
+            ->where('source', 'b2b:anro')
+            ->exists());
+    }
+
+    public function test_cancel_request_stops_sync_after_current_product(): void
+    {
+        $this->fakeAnro();
+        $this->cancelOnFirstPrice = true;
+
+        $result = $this->sync();
+
+        $this->assertTrue($result['cancelled']);
+        $this->assertSame(1, $result['seen']);
+        $this->assertTrue(Product::query()->where('sku', self::SKU)->exists());
+        Http::assertNotSent(static fn (Request $r): bool => str_ends_with((string) parse_url($r->url(), PHP_URL_PATH), '/products/2/price'));
+
+        $run = B2bSyncRun::query()->findOrFail($result['sync_run_id']);
+        $this->assertSame('cancelled', $run->status);
+        $this->assertNotNull($run->cancel_requested_at);
+        $this->assertSame(1, $run->processed);
+        $this->assertSame(3, $run->total);
+        $this->assertSame('Zatrzymano ręcznie po 1 z 3', $run->message);
+        $this->assertContains('Zatrzymano ręcznie po 1 z 3', array_column($run->log, 'text'));
+
+        $account = $this->account->fresh();
+        $this->assertSame('cancelled', $account->last_sync_status);
+        $this->assertSame('Zatrzymano ręcznie po 1 z 3', $account->last_sync_message);
+        $this->assertNotNull($account->last_sync_finished_at);
+    }
+
+    public function test_failed_login_marks_run_failed_and_triggers_are_recorded(): void
+    {
+        Http::fake(['b2b.anro.net.pl/api-zami/api/token' => Http::response(['error_description' => 'Nieprawidłowy login lub hasło'], 400)]);
+        $now = CarbonImmutable::parse('2026-09-15 10:00', B2bAccount::SYNC_TIMEZONE);
+        $this->travelTo($now);
+
+        $daily = $this->makeAccount('dzienne', ['sync_frequency' => 'daily', 'last_sync_started_at' => $now->subHours(25)]);
+        $requested = $this->makeAccount('na-zadanie', ['sync_requested_at' => $now->subMinutes(3)]);
+
+        $this->artisan('b2b:sync-due')->assertSuccessful();
+        $this->artisan('b2b:sync', ['account' => $this->account->id])->assertFailed();
+
+        $this->assertSame('schedule', $daily->syncRuns()->sole()->trigger);
+        $this->assertSame('manual', $requested->syncRuns()->sole()->trigger);
+        $cli = $this->account->syncRuns()->sole();
+        $this->assertSame('cli', $cli->trigger);
+        $this->assertSame('failed', $cli->status);
+        $this->assertNotNull($cli->finished_at);
+        $this->assertStringContainsString('Nieprawidłowy login lub hasło', (string) $cli->message);
+        $log = $cli->log;
+        $this->assertSame(['Logowanie…', 'error'], [$log[0]['text'], end($log)['level']]);
+    }
+
+    public function test_sync_due_marks_runs_without_progress_as_failed(): void
+    {
+        Http::fake();
+        $now = CarbonImmutable::parse('2026-09-15 10:00', B2bAccount::SYNC_TIMEZONE);
+        $this->travelTo($now);
+
+        $killed = $this->makeAccount('zabity', ['last_sync_status' => 'running', 'last_sync_started_at' => $now->subHours(2)]);
+        $staleRun = $killed->syncRuns()->create(['status' => 'running', 'trigger' => 'manual', 'started_at' => $now->subHours(2), 'processed' => 700]);
+        // now() w strefie aplikacji (UTC) — surowy update zapisuje czas bez przeliczenia strefy
+        B2bSyncRun::query()->whereKey($staleRun->id)->update(['updated_at' => now()->subMinutes(31)]);
+
+        $alive = $this->makeAccount('zywy', ['last_sync_status' => 'running', 'last_sync_started_at' => $now->subHours(2)]);
+        $aliveRun = $alive->syncRuns()->create(['status' => 'running', 'trigger' => 'cli', 'started_at' => $now->subHours(2)]);
+        B2bSyncRun::query()->whereKey($aliveRun->id)->update(['updated_at' => now()->subMinutes(5)]);
+
+        $this->artisan('b2b:sync-due')->assertSuccessful();
+
+        $staleRun->refresh();
+        $message = 'Przerwane — brak postępu ponad 30 min (np. restart serwera)';
+        $this->assertSame('failed', $staleRun->status);
+        $this->assertSame($message, $staleRun->message);
+        $this->assertNotNull($staleRun->finished_at);
+        $this->assertSame(700, $staleRun->processed);
+        $this->assertSame('failed', $killed->fresh()->last_sync_status);
+        $this->assertSame($message, $killed->fresh()->last_sync_message);
+
+        $this->assertSame('running', $aliveRun->fresh()->status);
+        $this->assertSame('running', $alive->fresh()->last_sync_status);
+        Http::assertNothingSent();
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -309,6 +476,9 @@ final class B2bAnroSyncTest extends TestCase
                 $this->expireTokenOnce = false;
 
                 return Http::response(['mgs' => 'Token expired'], 401);
+            }
+            if ($this->cancelOnFirstPrice && str_ends_with($path, '/api/zit/products/13507/price')) {
+                B2bSyncRun::query()->where('status', 'running')->update(['cancel_requested_at' => now()]);
             }
 
             return match (true) {

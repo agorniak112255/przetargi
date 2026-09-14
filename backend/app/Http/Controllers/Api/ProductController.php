@@ -17,6 +17,7 @@ use App\Services\NbpExchangeRateService;
 use App\Services\ProductDeletionService;
 use App\Services\ProductKitService;
 use App\Support\ProductModelFuzzy;
+use App\Support\ProductPriceChangeResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Throwable;
@@ -29,6 +30,7 @@ class ProductController extends Controller
         private readonly EnrichmentDescriptionTemplateService $descriptionTemplates,
         private readonly ProductKitService $kit,
         private readonly ProductDeletionService $deletion,
+        private readonly ProductPriceChangeResolver $priceChanges,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -217,6 +219,16 @@ class ProductController extends Controller
             return $this->fx->appendPricePln($row);
         });
 
+        // Ostatnia zmiana ceny tylko dla zwróconej strony — kilka zapytań na całą stronę.
+        $changes = $this->priceChanges->latestChanges(
+            $page->getCollection()->map(static fn (array $row): int => (int) $row['id'])->all()
+        );
+        $page->getCollection()->transform(static function (array $row) use ($changes): array {
+            $row['last_price_change'] = $changes[(int) $row['id']] ?? null;
+
+            return $row;
+        });
+
         return response()->json($page);
     }
 
@@ -333,6 +345,7 @@ class ProductController extends Controller
         }
         $payload['price_change_percent'] = $catalogChangePct;
         $payload['price_history_latest_at'] = $latest?->created_at;
+        $payload['last_price_change'] = $this->priceChanges->latestChanges([(int) $product->id])[(int) $product->id] ?? null;
         $payload = $this->fx->appendPricePln($payload);
         $payload['presta_export'] = $this->prestaExportPayload($product);
         $payload['accessories'] = $this->kit->present($product);
@@ -401,14 +414,7 @@ class ProductController extends Controller
 
     public function priceHistory(Product $product): JsonResponse
     {
-        $rows = ProductPriceHistory::query()
-            ->where('product_id', $product->id)
-            ->with('priceList:id,manufacturer,version,created_at')
-            ->orderByDesc('id')
-            ->limit(100)
-            ->get();
-
-        return response()->json(['data' => $rows]);
+        return response()->json(['data' => $this->priceChanges->history((int) $product->id, 100)]);
     }
 
     /**

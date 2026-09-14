@@ -6,10 +6,8 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
-use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
-use App\Models\User;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\PriceListImportService;
 use Throwable;
@@ -18,7 +16,8 @@ use Throwable;
  * Wspólne zasady zapisu produktów z B2B do katalogu (dla każdego łącznika):
  * - karta dopasowana po powiązaniu z poprzedniego przebiegu, inaczej po dokładnym kodzie; kod karty
  *   innego producenta jest pomijany (wspólny import cenników skleja warianty po rdzeniu kodu i cenie);
- * - cena zawsze ze źródła; historia cen tylko przy nowej karcie lub zmianie ceny;
+ * - cena zawsze ze źródła; historia cen karty (źródło „b2b:{łącznik}”, przebieg) tylko przy nowej karcie
+ *   lub zmianie ceny — bez wpisów w historii cenników (zmiany widać na karcie produktu z datą);
  * - opis ze źródła, gdy karta go nie ma albo ma opis zapisany wcześniej przez synchronizację i
  *   niezmieniony od tamtej pory — opisu poprawionego ręcznie nie nadpisujemy;
  * - kategoria, link i zdjęcie tylko gdy puste; produktów znikniętych z B2B nie kasujemy.
@@ -33,7 +32,6 @@ final class B2bCatalogSync
     /**
      * @param  (callable(string): void)|null  $onProduct
      * @return array{
-     *     price_list: ?PriceList,
      *     total_remote: int,
      *     seen: int,
      *     created: int,
@@ -43,131 +41,135 @@ final class B2bCatalogSync
      *     descriptions: int,
      *     images: int,
      *     prices_changed: int,
-     *     errors: list<string>
+     *     errors: list<string>,
+     *     cancelled: bool
      * }
      */
     public function run(
         B2bAccount $account,
         B2bConnector $connector,
-        User $user,
         ?int $limit = null,
         bool $dryRun = false,
         bool $withImages = true,
         ?callable $onProduct = null,
+        ?B2bSyncProgress $progress = null,
     ): array {
-        // Złe hasło ma przerwać przed założeniem wpisu w historii cenników.
+        $progress?->log('info', 'Logowanie…');
+        $progress?->flush();
         $connector->login();
-
-        $priceList = $dryRun ? null : PriceList::query()->create([
-            'manufacturer' => mb_substr($connector::label(), 0, 100),
-            'version' => 'B2B '.now()->setTimezone(B2bAccount::SYNC_TIMEZONE)->format('Y-m-d H:i'),
-            'original_filename' => $connector::host().' (API)',
-            'imported_by' => $user->id,
-        ]);
 
         $stats = [
             'total_remote' => 0, 'seen' => 0, 'created' => 0, 'updated' => 0,
             'unchanged' => 0, 'skipped' => 0, 'descriptions' => 0, 'images' => 0,
         ];
         $errors = [];
-        $skippedDetails = [];
-        $priceChanges = [];
-        $updatedProducts = [];
-        $productIds = [];
+        $pricesChanged = 0;
+        $cancelled = false;
+        $expected = static fn (int $total): int => $limit !== null ? min($limit, $total) : $total;
+        $runId = $progress?->run()->id;
 
-        try {
-            foreach ($connector->products() as $remote) {
-                if ($limit !== null && $stats['seen'] >= $limit) {
-                    break;
-                }
-                $stats['seen']++;
-                $stats['total_remote'] = $connector->totalProducts();
-                $label = $remote->sku !== '' ? $remote->sku : 'ID '.$remote->remoteId;
-
-                try {
-                    $outcome = $this->syncProduct($account, $connector, $remote, $priceList, $dryRun, $withImages);
-                } catch (Throwable $e) {
-                    $outcome = ['status' => 'skipped', 'reason' => $e->getMessage()];
-                }
-
-                if ($outcome['status'] === 'skipped') {
-                    $stats['skipped']++;
-                    $errors[] = $label.': '.$outcome['reason'];
-                    $skippedDetails[] = [
-                        'reason' => $outcome['reason'],
-                        'row' => $stats['seen'],
-                        'sheet' => null,
-                        'sku' => $remote->sku !== '' ? $remote->sku : null,
-                        'name' => $remote->name !== '' ? $remote->name : null,
-                    ];
-                } else {
-                    $stats[$outcome['status']]++;
-                    if (isset($outcome['product_id'])) {
-                        $productIds[] = $outcome['product_id'];
-                    }
-                    if (($outcome['price_change'] ?? null) !== null) {
-                        $priceChanges[] = $outcome['price_change'];
-                    }
-                    if (($outcome['update_summary'] ?? null) !== null) {
-                        $updatedProducts[] = $outcome['update_summary'];
-                    }
-                    if ($outcome['description'] ?? false) {
-                        $stats['descriptions']++;
-                    }
-                    if ($outcome['image'] ?? false) {
-                        $stats['images']++;
-                    }
-                    if (($outcome['image_error'] ?? null) !== null) {
-                        $errors[] = $label.': zdjęcie — '.$outcome['image_error'];
-                    }
-                }
-
-                if ($onProduct !== null) {
-                    $onProduct(sprintf(
-                        '[%d/%d] %s — %s',
-                        $stats['seen'],
-                        $limit !== null ? min($limit, $stats['total_remote']) : $stats['total_remote'],
-                        $label,
-                        match ($outcome['status']) {
-                            'created' => 'nowy',
-                            'updated' => 'zaktualizowany',
-                            'unchanged' => 'bez zmian',
-                            default => 'pominięty: '.$outcome['reason'],
-                        },
-                    ));
-                }
+        foreach ($connector->products() as $remote) {
+            if ($limit !== null && $stats['seen'] >= $limit) {
+                break;
             }
+            $stats['seen']++;
             $stats['total_remote'] = $connector->totalProducts();
-        } finally {
-            if ($priceList !== null) {
-                if ($stats['created'] === 0 && $stats['updated'] === 0) {
-                    // Codzienny przebieg bez zmian nie zaśmieca historii cenników.
-                    $priceList->delete();
-                    $priceList = null;
-                } else {
-                    usort($priceChanges, static fn (array $a, array $b): int => abs($b['catalog_pct']) <=> abs($a['catalog_pct']));
-                    $priceList->update([
-                        'rows_total' => $stats['seen'],
-                        'products_created' => $stats['created'],
-                        'products_updated' => $stats['updated'],
-                        'prices_changed' => count($priceChanges),
-                        'rows_skipped' => $stats['skipped'],
-                        'errors' => array_slice($errors, 0, 50),
-                        'price_changes' => array_slice($priceChanges, 0, 100),
-                        'updated_products' => array_slice($updatedProducts, 0, 100),
-                        'skipped_details' => array_slice($skippedDetails, 0, 100),
-                        'product_ids' => array_values(array_unique($productIds)),
+            $label = $remote->sku !== '' ? $remote->sku : 'ID '.$remote->remoteId;
+            if ($stats['seen'] === 1 && $progress !== null) {
+                $progress->setTotal($expected($stats['total_remote']));
+                $progress->log('info', $this->totalLine($stats['total_remote'], $limit));
+            }
+
+            try {
+                $outcome = $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId);
+            } catch (Throwable $e) {
+                $outcome = ['status' => 'skipped', 'reason' => $e->getMessage()];
+            }
+
+            if ($outcome['status'] === 'skipped') {
+                $stats['skipped']++;
+                $errors[] = $label.': '.$outcome['reason'];
+            } else {
+                $stats[$outcome['status']]++;
+                if (($outcome['price_change'] ?? null) !== null) {
+                    $pricesChanged++;
+                    $progress?->priceChange([
+                        'product_id' => $outcome['product_id'],
+                        ...$outcome['price_change'],
+                        'at' => now()->toIso8601String(),
                     ]);
                 }
+                if ($outcome['description'] ?? false) {
+                    $stats['descriptions']++;
+                }
+                if ($outcome['image'] ?? false) {
+                    $stats['images']++;
+                }
+                if (($outcome['image_error'] ?? null) !== null) {
+                    $errors[] = $label.': zdjęcie — '.$outcome['image_error'];
+                }
+            }
+
+            $line = sprintf(
+                '[%d/%d] %s — %s',
+                $stats['seen'],
+                $expected($stats['total_remote']),
+                $label,
+                match ($outcome['status']) {
+                    'created' => 'nowy',
+                    'updated' => 'zaktualizowany',
+                    'unchanged' => 'bez zmian',
+                    default => 'pominięty: '.$outcome['reason'],
+                },
+            );
+            if ($onProduct !== null) {
+                $onProduct($line);
+            }
+
+            if ($progress !== null) {
+                // „bez zmian” tylko w licznikach — przy pełnym cenniku to tysiące wierszy szumu
+                if ($outcome['status'] !== 'unchanged') {
+                    $progress->log($outcome['status'] === 'skipped' ? 'warn' : 'info', $line);
+                }
+                if (($outcome['image_error'] ?? null) !== null) {
+                    $progress->log('warn', $label.': zdjęcie — '.$outcome['image_error']);
+                }
+                $progress->setTotal($expected($stats['total_remote']));
+                $progress->advance($label, [
+                    'processed' => $stats['seen'],
+                    'created' => $stats['created'],
+                    'updated' => $stats['updated'],
+                    'unchanged' => $stats['unchanged'],
+                    'skipped' => $stats['skipped'],
+                    'prices_changed' => $pricesChanged,
+                    'descriptions' => $stats['descriptions'],
+                    'images' => $stats['images'],
+                ]);
+                if ($progress->cancelRequested()) {
+                    $cancelled = true;
+                    break;
+                }
+            }
+        }
+        $stats['total_remote'] = $connector->totalProducts();
+        if ($progress !== null) {
+            $progress->setTotal($expected($stats['total_remote']));
+            if ($stats['seen'] === 0) {
+                $progress->log('info', $this->totalLine($stats['total_remote'], $limit));
             }
         }
 
         return [
-            'price_list' => $priceList,
             ...$stats,
-            'prices_changed' => count($priceChanges),
+            'prices_changed' => $pricesChanged,
             'errors' => $errors,
+            'cancelled' => $cancelled,
         ];
+    }
+
+    private function totalLine(int $total, ?int $limit): string
+    {
+        return 'Produktów w B2B: '.$total.($limit !== null ? ' · próbka: '.min($limit, $total) : '');
     }
 
     /**
@@ -177,9 +179,9 @@ final class B2bCatalogSync
         B2bAccount $account,
         B2bConnector $connector,
         B2bRemoteProduct $remote,
-        ?PriceList $priceList,
         bool $dryRun,
         bool $withImages,
+        ?int $runId,
     ): array {
         if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
             return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
@@ -232,11 +234,9 @@ final class B2bCatalogSync
         }
 
         $priceChange = null;
-        $updateSummary = null;
         $dirty = true;
         if ($existing !== null) {
             $priceChange = $this->priceLists->detectPriceChange($existing, $payload, $remote->sku);
-            $updateSummary = $this->priceLists->summarizeUpdate($existing, $payload, $remote->sku, $priceChange !== null);
             $existing->fill($payload);
             $dirty = $existing->isDirty();
         }
@@ -258,10 +258,11 @@ final class B2bCatalogSync
         if ($existing === null || $priceChange !== null) {
             ProductPriceHistory::query()->create([
                 'product_id' => $product->id,
-                'price_list_id' => $priceList?->id,
+                'price_list_id' => null,
+                'b2b_sync_run_id' => $runId,
                 'catalog_price_net' => $product->catalog_price_net,
                 'purchase_price' => $product->purchase_price,
-                'source' => 'b2b_api',
+                'source' => 'b2b:'.$connector::key(),
             ]);
         }
 
@@ -292,7 +293,6 @@ final class B2bCatalogSync
             'status' => $status,
             'product_id' => (int) $product->id,
             'price_change' => $priceChange,
-            'update_summary' => $dirty ? $updateSummary : null,
             'description' => isset($payload['description']),
             'image' => $image,
             'image_error' => $imageError,

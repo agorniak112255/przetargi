@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { B2bSyncProgressModal } from '../components/B2bSyncProgressModal'
 import { PriceListsTabs } from '../components/PriceListsTabs'
 import { api, can } from '../lib/api'
 
@@ -17,7 +17,7 @@ type B2bAccount = {
   sync_frequency: SyncFrequency
   sync_images: boolean
   sync_requested_at: string | null
-  last_sync_status: 'running' | 'ok' | 'failed' | null
+  last_sync_status: 'running' | 'ok' | 'failed' | 'cancelled' | null
   last_sync_started_at: string | null
   last_sync_finished_at: string | null
   last_sync_message: string | null
@@ -79,6 +79,7 @@ export function PriceListsB2b() {
   const [busy, setBusy] = useState(false)
   const [revealed, setRevealed] = useState<Record<number, string>>({})
   const [visible, setVisible] = useState<Record<number, boolean>>({})
+  const [progressAccount, setProgressAccount] = useState<B2bAccount | null>(null)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
 
@@ -209,6 +210,7 @@ export function PriceListsB2b() {
     try {
       await api(`/b2b-accounts/${row.id}/sync`, { method: 'POST' })
       setMsg('Zlecono sprawdzenie cennika — ruszy w ciągu kilku minut i działa w tle.')
+      setProgressAccount(row)
       await load()
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się zlecić sprawdzenia')
@@ -228,10 +230,16 @@ export function PriceListsB2b() {
       return <p className="text-slate-500">Cennik nie był jeszcze pobierany.</p>
     }
     const failed = row.last_sync_status === 'failed'
+    const cancelled = row.last_sync_status === 'cancelled'
     return (
       <div className={failed ? 'text-red-700' : 'text-slate-600'}>
         <p className="font-medium">
-          {failed ? 'Ostatnie pobieranie nie powiodło się' : 'Ostatnie pobieranie'}: {formatDate(row.last_sync_finished_at)}
+          {failed
+            ? 'Ostatnie pobieranie nie powiodło się'
+            : cancelled
+              ? 'Ostatnie pobieranie zatrzymane ręcznie'
+              : 'Ostatnie pobieranie'}
+          : {formatDate(row.last_sync_finished_at)}
         </p>
         {row.last_sync_message && <p className="mt-0.5 whitespace-pre-wrap">{row.last_sync_message}</p>}
       </div>
@@ -462,12 +470,13 @@ export function PriceListsB2b() {
                       {row.sync_images ? ' · ze zdjęciami' : ' · bez zdjęć'}
                     </p>
                     <div className="flex gap-3">
-                      <Link
+                      <button
+                        type="button"
                         className="text-blue-700 underline"
-                        to={`/price-lists?manufacturer=${encodeURIComponent(row.connector_label)}`}
+                        onClick={() => setProgressAccount(row)}
                       >
-                        Historia cenników
-                      </Link>
+                        Postęp i log
+                      </button>
                       {canManage && (
                         <button
                           type="button"
@@ -506,6 +515,15 @@ export function PriceListsB2b() {
           </div>
         ))}
       </div>
+
+      {progressAccount && (
+        <B2bSyncProgressModal
+          account={progressAccount}
+          canManage={canManage}
+          onClose={() => setProgressAccount(null)}
+          onChanged={() => void load().catch(() => {})}
+        />
+      )}
     </div>
   )
 }

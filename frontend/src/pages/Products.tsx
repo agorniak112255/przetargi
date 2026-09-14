@@ -6,6 +6,7 @@ import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductAiSearchModal } from '../components/ProductAiSearchModal'
+import { PriceChangeNote } from '../components/ProductPriceChange'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { applyCheckboxRange } from '../lib/checkboxRange'
@@ -1119,6 +1120,7 @@ export function Products() {
                         ≈ {Number(p.price_pln).toFixed(2)} PLN
                       </span>
                     )}
+                    {p.last_price_change && <PriceChangeNote change={p.last_price_change} currency={p.currency} />}
                   </td>
                   <td className="p-2">{p.currency ?? 'PLN'}</td>
                   <td className="p-2">

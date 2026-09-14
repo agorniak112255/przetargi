@@ -107,6 +107,40 @@ export type ProductDocument = {
   sort_order?: number
 }
 
+/** Ostatnia zmiana ceny z historii (import cennika albo synchronizacja B2B). */
+export type ProductPriceChange = {
+  at: string
+  source: string | null
+  source_label: string
+  purchase_old: number | null
+  purchase_new: number | null
+  catalog_old: number | null
+  catalog_new: number | null
+  /** Procent od zakupu; od katalogu, gdy zakupu nie da się porównać lub zmienił się tylko katalog. */
+  pct: number | null
+  pct_basis: 'purchase' | 'catalog' | null
+  purchase_pct: number | null
+  catalog_pct: number | null
+}
+
+export type ProductPriceHistoryRow = {
+  id: number
+  product_id: number
+  price_list_id: number | null
+  catalog_price_net: string | null
+  purchase_price: string | null
+  source: string | null
+  source_label: string
+  created_at: string
+  updated_at: string | null
+  price_list: { id: number; manufacturer: string; version: string; created_at: string | null } | null
+  /** null dla pierwszego wpisu produktu (dodanie ceny, nie zmiana). */
+  purchase_old: number | null
+  catalog_old: number | null
+  purchase_pct: number | null
+  catalog_pct: number | null
+}
+
 export type Product = {
   id: number
   sku: string
@@ -140,6 +174,7 @@ export type Product = {
   } | null
   price_change_percent?: number | null
   price_history_latest_at?: string | null
+  last_price_change?: ProductPriceChange | null
   enrichment_payload?: {
     features?: string[]
     specs?: string[]

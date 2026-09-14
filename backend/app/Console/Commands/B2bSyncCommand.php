@@ -75,8 +75,8 @@ final class B2bSyncCommand extends Command
         foreach (array_slice($result['errors'], 0, 20) as $error) {
             $this->warn('  '.$error);
         }
-        if ($result['price_list'] !== null) {
-            $this->info('Historia cenników: #'.$result['price_list']->id.' '.$result['price_list']->version);
+        if ($result['sync_run_id'] !== null) {
+            $this->info('Przebieg #'.$result['sync_run_id']);
         }
 
         return self::SUCCESS;

@@ -6,10 +6,13 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\B2bAccount;
+use App\Models\B2bSyncRun;
 use App\Services\B2b\B2bConnectorRegistry;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -101,6 +104,89 @@ class B2bAccountController extends Controller
         $b2bAccount->forceFill(['sync_requested_at' => now()])->save();
 
         return response()->json($this->view($b2bAccount->fresh()->load(['creator:id,name', 'updater:id,name'])));
+    }
+
+    /**
+     * Okno postępu: najnowszy przebieg z dziennikiem, ostatnie przebiegi i czy cron harmonogramu żyje.
+     */
+    public function syncProgress(B2bAccount $b2bAccount): JsonResponse
+    {
+        $lastSeen = Cache::get(B2bSyncRun::SCHEDULER_HEARTBEAT_KEY);
+        $lastSeenAt = is_string($lastSeen) && $lastSeen !== '' ? Carbon::parse($lastSeen) : null;
+
+        $latest = $b2bAccount->syncRuns()->orderByDesc('id')->first();
+        $recent = $b2bAccount->syncRuns()
+            ->select(array_merge(['id', 'b2b_account_id'], self::RUN_COLUMNS))
+            ->orderByDesc('id')
+            ->limit(10)
+            ->get();
+
+        return response()->json([
+            'scheduler' => [
+                'last_seen_at' => $lastSeenAt?->toIso8601String(),
+                'healthy' => $lastSeenAt !== null && $lastSeenAt->greaterThanOrEqualTo(now()->subMinutes(3)),
+            ],
+            'sync_requested_at' => $b2bAccount->sync_requested_at?->toIso8601String(),
+            'run' => $latest !== null ? [
+                ...$this->runView($latest),
+                'log' => array_values($latest->log ?? []),
+                'price_changes' => array_values($latest->price_changes ?? []),
+            ] : null,
+            'recent_runs' => $recent->map(fn (B2bSyncRun $run): array => $this->runView($run))->values(),
+        ]);
+    }
+
+    /**
+     * Zatrzymanie sprawdzane przez przebieg między produktami (co kilka sekund).
+     */
+    public function cancelSync(B2bAccount $b2bAccount): JsonResponse
+    {
+        $run = $b2bAccount->syncRuns()
+            ->where('status', B2bSyncRun::STATUS_RUNNING)
+            ->orderByDesc('id')
+            ->first();
+        if ($run === null) {
+            return response()->json(['message' => 'Nie trwa żadne pobieranie.'], 422);
+        }
+
+        if ($run->cancel_requested_at === null) {
+            $run->forceFill(['cancel_requested_at' => now()])->save();
+        }
+
+        return response()->json(['ok' => true]);
+    }
+
+    private const RUN_COLUMNS = [
+        'status', 'trigger', 'started_at', 'finished_at', 'updated_at', 'total', 'processed', 'created',
+        'updated', 'unchanged', 'skipped', 'prices_changed', 'descriptions', 'images', 'current_sku',
+        'message', 'cancel_requested_at',
+    ];
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function runView(B2bSyncRun $run): array
+    {
+        return [
+            'id' => $run->id,
+            'status' => $run->status,
+            'trigger' => $run->trigger,
+            'started_at' => $run->started_at?->toIso8601String(),
+            'finished_at' => $run->finished_at?->toIso8601String(),
+            'updated_at' => $run->updated_at?->toIso8601String(),
+            'total' => $run->total,
+            'processed' => (int) $run->processed,
+            'created' => (int) $run->created,
+            'updated' => (int) $run->updated,
+            'unchanged' => (int) $run->unchanged,
+            'skipped' => (int) $run->skipped,
+            'prices_changed' => (int) $run->prices_changed,
+            'descriptions' => (int) $run->descriptions,
+            'images' => (int) $run->images,
+            'current_sku' => $run->current_sku,
+            'message' => $run->message,
+            'cancel_requested' => $run->cancel_requested_at !== null,
+        ];
     }
 
     /**

@@ -1,0 +1,138 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services\B2b;
+
+use App\Models\B2bAccount;
+use App\Models\B2bSyncRun;
+
+/**
+ * Postęp przebiegu w b2b_sync_runs. Zapis do bazy co kilka sekund / kilka produktów, nie przy każdym
+ * produkcie (pełny cennik to tysiące pozycji); przy tym samym zapisie sprawdzamy prośbę o zatrzymanie.
+ */
+final class B2bSyncProgress
+{
+    private const FLUSH_EVERY_PRODUCTS = 10;
+
+    private const FLUSH_EVERY_SECONDS = 2.0;
+
+    private const COUNTERS = ['processed', 'created', 'updated', 'unchanged', 'skipped', 'prices_changed', 'descriptions', 'images'];
+
+    /** @var list<array{at: string, level: string, text: string}> */
+    private array $log = [];
+
+    /** @var list<array<string, mixed>> */
+    private array $priceChanges = [];
+
+    private int $sinceFlush = 0;
+
+    private float $lastFlushAt;
+
+    private bool $cancelRequested = false;
+
+    private function __construct(private readonly B2bSyncRun $run)
+    {
+        $this->lastFlushAt = microtime(true);
+    }
+
+    public static function start(B2bAccount $account, string $trigger): self
+    {
+        return new self(B2bSyncRun::query()->create([
+            'b2b_account_id' => $account->id,
+            'status' => B2bSyncRun::STATUS_RUNNING,
+            'trigger' => $trigger,
+            'started_at' => now(),
+            'log' => [],
+            'price_changes' => [],
+        ]));
+    }
+
+    public function run(): B2bSyncRun
+    {
+        return $this->run;
+    }
+
+    public function log(string $level, string $text): void
+    {
+        $this->log[] = [
+            'at' => now()->toIso8601String(),
+            'level' => $level,
+            'text' => mb_substr($text, 0, 1000),
+        ];
+        if (count($this->log) > B2bSyncRun::LOG_LIMIT) {
+            $this->log = array_slice($this->log, -B2bSyncRun::LOG_LIMIT);
+        }
+    }
+
+    /**
+     * Pierwsze PRICE_CHANGES_LIMIT zmian w kolejności wystąpienia; licznik prices_changed liczy wszystkie.
+     *
+     * @param  array<string, mixed>  $change
+     */
+    public function priceChange(array $change): void
+    {
+        if (count($this->priceChanges) < B2bSyncRun::PRICE_CHANGES_LIMIT) {
+            $this->priceChanges[] = $change;
+        }
+    }
+
+    public function setTotal(int $total): void
+    {
+        $this->run->total = $total;
+    }
+
+    /**
+     * Po każdym produkcie; zapisuje od razu pierwszy (panel szybko zna liczbę produktów), potem z przerwami.
+     *
+     * @param  array<string, int>  $counters
+     */
+    public function advance(string $sku, array $counters): void
+    {
+        $this->run->current_sku = mb_substr($sku, 0, 255);
+        foreach (self::COUNTERS as $key) {
+            if (isset($counters[$key])) {
+                $this->run->{$key} = $counters[$key];
+            }
+        }
+        $this->sinceFlush++;
+
+        if ($this->run->processed === 1
+            || $this->sinceFlush >= self::FLUSH_EVERY_PRODUCTS
+            || microtime(true) - $this->lastFlushAt >= self::FLUSH_EVERY_SECONDS) {
+            $this->flush();
+        }
+    }
+
+    public function flush(): void
+    {
+        $this->run->forceFill([
+            'log' => $this->log,
+            'price_changes' => $this->priceChanges,
+            'updated_at' => now(),
+        ])->save();
+        $this->cancelRequested = B2bSyncRun::query()
+            ->whereKey($this->run->id)
+            ->whereNotNull('cancel_requested_at')
+            ->exists();
+        $this->sinceFlush = 0;
+        $this->lastFlushAt = microtime(true);
+    }
+
+    /** Stan z ostatniego zapisu — bez dodatkowego zapytania. */
+    public function cancelRequested(): bool
+    {
+        return $this->cancelRequested;
+    }
+
+    public function finish(string $status, ?string $message): void
+    {
+        $this->run->forceFill([
+            'status' => $status,
+            'finished_at' => now(),
+            'current_sku' => null,
+            'message' => $message !== null ? mb_substr($message, 0, 2000) : null,
+        ]);
+        $this->flush();
+    }
+}
