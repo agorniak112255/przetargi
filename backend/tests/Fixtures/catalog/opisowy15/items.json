@@ -414,14 +414,12 @@
         "line_no": 9,
         "requirement": "Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0 – do ochrony oczu podczas spawania gazowego i cięcia metalu oraz przed pyłem, odpryskami i chemikaliami. Wymagane: soczewka poliwęglanowa o odporności na uderzenia do 120 m/s; powłoka przeciwmgielna oraz powłoka odporna na zarysowania; wentylacja szczelna chroniąca przed drobnymi cząstkami pyłu i gazem, ograniczająca zamglenie; cylindryczna, zakrzywiona soczewka o polu widzenia 180° bez zniekształceń optycznych; wysoki profil umożliwiający noszenie na okularach korekcyjnych; szeroki, regulowany pasek nylonowy; miękka uszczelka z elastomeru; możliwość stosowania łącznie z półmaskami oddechowymi. Zgodność z EN 166, oznakowanie CE.",
         "unit": "szt.",
-        "expected_sku": "34340",
+        "expected_sku": "1406213",
         "forbidden_skus": [
             "9310+",
             "9312+"
         ],
-        "eval_extra_expected_skus": [
-            "7100010665"
-        ],
+        "eval_extra_expected_skus": [],
         "prod_search": {
             "needed": "gogle ochronne spawalnicze",
             "rank_of_expected": null,

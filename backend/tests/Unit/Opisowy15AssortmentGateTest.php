@@ -108,7 +108,7 @@ final class Opisowy15AssortmentGateTest extends TestCase
             'poz. 7 rękawice cut NBR 44-304' => [7],
             'poz. 8 półmaska FFP1 z zaworem 9914' => [8],
             // czerwony do scalenia W3 — przyczyna: family(req) = respiratory („łącznie z półmaskami” przed „gogle”, R0)
-            'poz. 9 gogle spawalnicze 34340' => [9],
+            'poz. 9 gogle spawalnicze 1406213' => [9],
             'poz. 10 apteczka ścienna 191400' => [10],
             'poz. 11 płukanka 500 ml 7251' => [11],
             'poz. 12 półbuty elektroizolacyjne T5912100' => [12],
@@ -145,7 +145,7 @@ final class Opisowy15AssortmentGateTest extends TestCase
     {
         $controls = [
             'kontrola: poz. 1 rękaw (gloves) vs sandały ARMEN 9007 (footwear)' => [1, 'ARMEN 9007 6660 S1 P'],
-            'kontrola: poz. 8 półmaska (respiratory) vs gogle 34340 (eyes)' => [8, '34340'],
+            'kontrola: poz. 8 półmaska (respiratory) vs gogle 1406213 (eyes)' => [8, '1406213'],
             'kontrola: poz. 12 półbuty (footwear) vs szelki AB178 (fall)' => [12, 'AB178'],
             'kontrola: poz. 15 rękawice (gloves) vs fartuch 202 (apparel)' => [15, '202'],
         ];
@@ -257,8 +257,8 @@ final class Opisowy15AssortmentGateTest extends TestCase
             'poz. 8 9914 > 9310+' => [8, '9310+'],
             'poz. 8 9914 > 7100329384' => [8, '7100329384'],
             // czerwony do scalenia W3 — przyczyna: właściwa karta odrzucona przez bramkę (0 vs 58)
-            'poz. 9 34340 > 9310+' => [9, '9310+'],
-            'poz. 9 34340 > 9312+' => [9, '9312+'],
+            'poz. 9 1406213 > 9310+' => [9, '9310+'],
+            'poz. 9 1406213 > 9312+' => [9, '9312+'],
             'poz. 11 7251 > 7251-7200' => [11, '7251-7200'],
             'poz. 12 T5912100 > ART 702' => [12, 'ART 702 Air 6660 OB A E FO'],
             // czerwony do scalenia W3 — przyczyna: remis 99 = 99, podtyp ffp vs reusable_half nie jest egzekwowany

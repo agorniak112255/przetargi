@@ -338,8 +338,7 @@
                 "D1229",
                 "GH1",
                 "GH1N",
-                "GH1N-EA",
-                "7100150147"
+                "GH1N-EA"
             ],
             "forbidden_skus": [],
             "note": "Paski do G3000 — nie hełm G3000 i nie SKU z samym ciągiem 3000 w numerze."
@@ -525,8 +524,7 @@
             "id": "opisowy15-09-gogle-spawalnicze-5",
             "query": "Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0 – do ochrony oczu podczas spawania gazowego i cięcia metalu oraz przed pyłem, odpryskami i chemikaliami. Wymagane: soczewka poliwęglanowa o odporności na uderzenia do 120 m/s; powłoka przeciwmgielna oraz powłoka odporna na zarysowania; wentylacja szczelna chroniąca przed drobnymi cząstkami pyłu i gazem, ograniczająca zamglenie; cylindryczna, zakrzywiona soczewka o polu widzenia 180° bez zniekształceń optycznych; wysoki profil umożliwiający noszenie na okularach korekcyjnych; szeroki, regulowany pasek nylonowy; miękka uszczelka z elastomeru; możliwość stosowania łącznie z półmaskami oddechowymi. Zgodność z EN 166, oznakowanie CE.",
             "expected_skus": [
-                "34340",
-                "7100010665"
+                "1406213"
             ],
             "forbidden_skus": [
                 "9310+",
