@@ -4106,7 +4106,11 @@ SYS,
             if ($text === '') {
                 continue;
             }
-            $text = mb_substr($text, 0, min($perPage, $left));
+            $limit = min($perPage, $left);
+            $block = mb_strlen($text) > $limit ? $this->normsBlockBeyondBudget($text, $limit) : '';
+            $text = $block !== ''
+                ? $block."\n\n".mb_substr($text, 0, max(0, $limit - mb_strlen($block) - 2))
+                : mb_substr($text, 0, $limit);
             $left -= mb_strlen($text);
             $out[] = $this->copyPageMeta($page, [
                 'url' => (string) ($page['url'] ?? ''),
@@ -4115,6 +4119,39 @@ SYS,
         }
 
         return $out;
+    }
+
+    /**
+     * Normy i oznaczenia ochrony, które na długiej stronie stoją za granicą przycięcia — dosłownie, na początek tekstu dla
+     * modelu. Strona Ansell HyFlex 11-202 (53 tys. znaków) ma sekcję „Normy i certyfikaty” od ok. 23 tys. znaku, jako podpisy
+     * obrazków („![Image 10: EN 388:2016 +A1:2018](…) 1X42C”); model widział 8000 znaków i zapisał tylko EN 407 i ANSI ze wstępu.
+     * Bez adresów obrazków i bez własnych słów — tylko linie z kodem normy, poziomem ANSI albo kategorią ŚOI.
+     */
+    private function normsBlockBeyondBudget(string $text, int $cut): string
+    {
+        $head = mb_strtolower(mb_substr($text, 0, $cut));
+        $lines = [];
+        $length = 0;
+        foreach (preg_split('/\R+/u', mb_substr($text, $cut)) ?: [] as $raw) {
+            // „![Image 10: EN 388:2016 +A1:2018](https://…) 1X42C” → „EN 388:2016 +A1:2018 1X42C”
+            $line = (string) preg_replace('/!\[(?:Image\s*\d+\s*:\s*)?([^\]]*)\]\([^)]*\)/u', '$1', (string) $raw);
+            $line = (string) preg_replace('/\[([^\]]*)\]\([^)]*\)/u', '$1', $line);
+            $line = trim((string) preg_replace('/\s+/u', ' ', $line), " \t|#*-");
+            if ($line === '' || mb_strlen($line) > 160) {
+                continue;
+            }
+            $isNorm = preg_match('/\b(?:PN-)?EN(?:\s*ISO)?\s*\d{3,5}\b|\bISO\s*\d{4,5}\b|\bANSI\s*\/?\s*ISEA\b|\b(?:kategori[ai]|category|kat\.)\s*(?:I{1,3}|[123])\b/iu', $line) === 1;
+            if (! $isNorm || str_contains($head, mb_strtolower($line)) || in_array($line, $lines, true)) {
+                continue;
+            }
+            if ($length + mb_strlen($line) > 800 || count($lines) >= 12) {
+                break;
+            }
+            $lines[] = $line;
+            $length += mb_strlen($line) + 1;
+        }
+
+        return $lines === [] ? '' : "Normy i oznaczenia z dalszej części strony:\n".implode("\n", $lines);
     }
 
     /**
