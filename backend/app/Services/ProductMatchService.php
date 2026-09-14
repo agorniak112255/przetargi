@@ -60,24 +60,11 @@ final class ProductMatchService
     /** Dowody ze słów karty wykluczają kartę dopiero przy takiej różnicy do najlepiej opisanej (ART 702: 35 vs 99). */
     private const EVIDENCE_VETO_GAP = 30;
 
-    /**
-     * Pretendent: karta oceniona przez model do tyle punktów niżej (dwa poziomy: 95 → 85) zostaje w grze, jeśli
-     * potwierdza w tekście ściśle więcej warunków niż każda karta z najwyższego poziomu (poz. 15: 87-320 z 4/4
-     * warunkami przy 90 wobec zakazanej 87-063 z 3/4 przy 95).
-     */
-    private const CHALLENGER_SCORE_GAP = 10;
-
-    /**
-     * Gdy ceny równo ocenionych kandydatów różnią się bardziej, to niemal zawsze inna jednostka (karton vs sztuka:
-     * 3M 9914 305 EUR wobec 9312+ 0,88 EUR) albo błąd cennika — cena nie rozstrzyga, a pozycja dostaje ostrzeżenie.
-     */
-    private const PRICE_RATIO_LIMIT = 20.0;
-
     /** Progi z ustawień czytamy raz na żądanie — resolve() chodzi do bazy. */
     /** @var array<string, int> */
     private array $matchScores = [];
 
-    /** @var array<string, list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>> */
+    /** @var array<string, list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>> */
     private array $aiCandidatesCache = [];
 
     /**
@@ -303,7 +290,6 @@ final class ProductMatchService
                     $pick['source'] ?? 'heuristic',
                     null,
                     (bool) ($pick['heuristic_only'] ?? false),
-                    (bool) ($pick['price_suspect'] ?? false),
                 );
                 if (! $applied) {
                     if ($this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE) {
@@ -639,42 +625,28 @@ final class ProductMatchService
 
     /**
      * Rozstrzyga między kandydatami, które przeszły progi. Kolejność:
-     *  1. ocena modelu — najwyższy poziom (okno MODEL_SCORE_TIE_MARGIN) plus pretendenci: do CHALLENGER_SCORE_GAP niżej,
-     *     jeśli potwierdzają ściśle więcej warunków rankingu niż każda karta z poziomu;
+     *  1. ocena modelu — najwyższy poziom (okno MODEL_SCORE_TIE_MARGIN);
      *  2. dowody ze słów karty tylko jako weto — odpada karta słabsza od najlepiej opisanej o EVIDENCE_VETO_GAP
      *     (ART 702 z dowodami 35 nie wygra ceną z T5912100 z dowodami 99 przy równych 92%);
      *  3. twarde dowody (SKU / model z cyframi / klasa ochrony);
-     *  4. więcej potwierdzonych warunków rankingu (`hits` — ten sam sygnał, który porządkuje karty dla modelu);
-     *  5. najniższa cena — o ile ceny w remisie nie różnią się ponad PRICE_RATIO_LIMIT (wtedy cena to zwykle
-     *     inna jednostka i nie rozstrzyga); remis — wyższa ocena, potem dowody.
-     * Dowody ze słów (nieskalibrowana suma) nie idą pierwsze: przy ogólnym wymaganiu (poz. 2 — model dał 95 osiemnastu
-     * rękawicom) wygrywała karta z najdłuższym opisem (ATG 76-833, rękawica chemiczna, 59 zł) zamiast pasującej
-     * i najtańszej (Canis 3630-024-700-00, 6 zł). Sam poziom modelu też nie: model bywa niestabilny (9312+ raz 50,
-     * raz 95), a potwierdzone warunki są deterministyczne dla danych constraints.
+     *  4. najniższa cena; remis — wyższa ocena, potem dowody.
+     * Dotąd dowody ze słów (nieskalibrowana suma) rozstrzygały pierwsze w oknie 5 pkt: przy ogólnym wymaganiu
+     * (przetarg 1 poz. 2 — model dał 95 osiemnastu rękawicom antyprzecięciowym) wygrywała karta z najdłuższym opisem
+     * (ATG 76-833, rękawica chemiczna 35 cm, 59 zł) zamiast pasującej i najtańszej (Canis 3630-024-700-00, 6 zł).
      *
-     * @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int, hits?: int}>  $options
-     * @return array{product: Product, score: int, source: string, price_suspect: bool}|null
+     * @param  list<array{product: Product, score: int, source: string, evidence: int, hard: int}>  $options
+     * @return array{product: Product, score: int, source: string}|null
      */
     private function preferCheapestAmongCloseScores(array $options): ?array
     {
         if ($options === []) {
             return null;
         }
-        $hitsOf = static fn (array $option): int => (int) ($option['hits'] ?? 0);
         $topScore = max(array_column($options, 'score'));
-        $window = array_values(array_filter(
+        $near = array_values(array_filter(
             $options,
             static fn (array $option): bool => $option['score'] >= $topScore - self::MODEL_SCORE_TIE_MARGIN
         ));
-        $topHitsInWindow = max(array_map($hitsOf, $window));
-        $challengers = array_values(array_filter(
-            $options,
-            static fn (array $option): bool => $option['score'] < $topScore - self::MODEL_SCORE_TIE_MARGIN
-                && $option['score'] >= $topScore - self::CHALLENGER_SCORE_GAP
-                && $hitsOf($option) > $topHitsInWindow
-        ));
-        $near = [...$window, ...$challengers];
-
         $topEvidence = max(array_column($near, 'evidence'));
         $near = array_values(array_filter(
             $near,
@@ -685,20 +657,10 @@ final class ProductMatchService
             $near,
             static fn (array $option): bool => $option['hard'] === $topHard
         ));
-        // Rozrzut cen liczony wśród równo ocenionych i udowodnionych kart — zanim warunki wybiorą jedną z nich:
-        // 9914 za 305 EUR wobec 9312+ za 0,88 EUR przy równych 95 to ostrzeżenie dla użytkownika, nie argument.
-        $priceSuspect = $this->pricesSpreadBeyondLimit($near);
-        $topHits = max(array_map($hitsOf, $near));
-        $near = array_values(array_filter(
-            $near,
-            static fn (array $option): bool => $hitsOf($option) === $topHits
-        ));
-        usort($near, function (array $a, array $b) use ($priceSuspect): int {
-            if (! $priceSuspect) {
-                $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
-                if ($byPrice !== 0) {
-                    return $byPrice;
-                }
+        usort($near, function (array $a, array $b): int {
+            $byPrice = $this->purchasePln($a['product']) <=> $this->purchasePln($b['product']);
+            if ($byPrice !== 0) {
+                return $byPrice;
             }
             if ($a['score'] !== $b['score']) {
                 return $b['score'] <=> $a['score'];
@@ -711,29 +673,7 @@ final class ProductMatchService
             'product' => $near[0]['product'],
             'score' => $near[0]['score'],
             'source' => $near[0]['source'],
-            'price_suspect' => $priceSuspect,
         ];
-    }
-
-    /**
-     * Czy znane ceny kandydatów różnią się ponad PRICE_RATIO_LIMIT (nieznane ceny pomijamy).
-     *
-     * @param  list<array{product: Product}>  $options
-     */
-    private function pricesSpreadBeyondLimit(array $options): bool
-    {
-        $prices = [];
-        foreach ($options as $option) {
-            $price = $this->purchasePln($option['product']);
-            if ($price > 0 && $price < PHP_FLOAT_MAX) {
-                $prices[] = $price;
-            }
-        }
-        if (count($prices) < 2) {
-            return false;
-        }
-
-        return max($prices) / min($prices) > self::PRICE_RATIO_LIMIT;
     }
 
     /** Wiersz listy katalogowej albo skrótu deterministycznego — nie ocena modelu. */
@@ -1409,7 +1349,7 @@ final class ProductMatchService
             }
         }
         if ($this->heuristicWouldReplaceModelPick($item, $pick)
-            || ! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason, (bool) ($pick['heuristic_only'] ?? false), (bool) ($pick['price_suspect'] ?? false))) {
+            || ! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason, (bool) ($pick['heuristic_only'] ?? false))) {
             $this->applyNoCatalogMatch($item, $products);
             $item->refresh();
 
@@ -1570,7 +1510,7 @@ final class ProductMatchService
     }
 
     /**
-     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>  $aiCandidates
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
      * @param  array{product: Product, score: int, source: string}|null  $skuPick
      * @param  Collection<int, Product>  $familyProducts
      * @return Collection<int, Product>
@@ -1759,7 +1699,7 @@ final class ProductMatchService
 
     /**
      * @param  array{product: Product, score: int}|null  $heuristic
-     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>  $aiCandidates
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
      * @param  Collection<int, Product>  $products
      * @return array{product: Product, score: int, source: string}|null
      */
@@ -1829,7 +1769,6 @@ final class ProductMatchService
                 'exact' => $exact,
                 'evidence' => $explained['score'],
                 'hard' => $this->hardEvidenceLevel($requirement, $product, $explained),
-                'hits' => (int) ($topAi['constraint_hits'] ?? 0),
             ];
         }
 
@@ -1914,7 +1853,7 @@ final class ProductMatchService
             $product = Product::query()->find($row['id']);
             $entry = ['sku' => $product?->sku ?? (string) $row['id'], 'model' => (int) $row['score'], 'source' => (string) $row['source']];
             $rows[] = $entry + ['verdict' => $product instanceof Product
-                ? $this->debugVerdict($requirement, $product, (int) $row['score'], (string) $row['source'], (int) ($row['constraint_hits'] ?? 0))
+                ? $this->debugVerdict($requirement, $product, (int) $row['score'], (string) $row['source'])
                 : 'brak karty w katalogu'];
         }
 
@@ -1936,14 +1875,13 @@ final class ProductMatchService
                 'score' => (int) $pick['score'],
                 'source' => (string) ($pick['source'] ?? ''),
                 'heuristic_only' => (bool) ($pick['heuristic_only'] ?? false),
-                'price_suspect' => (bool) ($pick['price_suspect'] ?? false),
             ],
             'reason' => $reason,
         ];
     }
 
     /** Werdykt pojedynczego kandydata — kolejność i progi jak w pickAuto. */
-    private function debugVerdict(string $requirement, Product $product, int $score, string $source, int $constraintHits = 0): string
+    private function debugVerdict(string $requirement, Product $product, int $score, string $source): string
     {
         if (! $this->assortment->compatibleProduct($requirement, $product)) {
             return 'odrzucona: bramka asortymentu';
@@ -1972,11 +1910,10 @@ final class ProductMatchService
         $explained = $this->explainMatch($requirement, $product);
 
         return sprintf(
-            'kandydat: zapis %d, dowody %d, twarde %d, warunki %d, cena %.2f zł',
+            'kandydat: zapis %d, dowody %d, twarde %d, cena %.2f zł',
             $honest,
             $explained['score'],
             $this->hardEvidenceLevel($requirement, $product, $explained),
-            $constraintHits,
             $this->purchasePln($product),
         );
     }
@@ -1984,7 +1921,7 @@ final class ProductMatchService
     /**
      * Ocena modelu (nie wiersza z katalogu) dla karty, gdy jest poniżej progu zapisu; inaczej null.
      *
-     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>  $aiCandidates
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
      */
     private function modelScoreBelowMin(array $aiCandidates, int $productId): ?int
     {
@@ -2120,7 +2057,7 @@ final class ProductMatchService
 
     /**
      * @param  array<string, mixed>  $result
-     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
      */
     private function rememberAiCandidates(string $requirement, array $result, int $limit, string $source): array
     {
@@ -2164,7 +2101,7 @@ final class ProductMatchService
     }
 
     /**
-     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
      */
     private function aiTopCandidates(string $requirement, int $limit = self::AI_CANDIDATE_WINDOW): array
     {
@@ -2189,8 +2126,8 @@ final class ProductMatchService
     }
 
     /**
-     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>  $mapped
-     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $mapped
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
      */
     private function mergeCatalogCandidatesForTender(string $requirement, array $mapped, int $limit): array
     {
@@ -2224,8 +2161,8 @@ final class ProductMatchService
     }
 
     /**
-     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>  $rows
-     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $rows
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
      */
     private function sortCandidatesByPurchase(array $rows): array
     {
@@ -2253,7 +2190,7 @@ final class ProductMatchService
 
     /**
      * @param  list<array<string, mixed>>  $rows
-     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
      */
     private function mapAiSearchRows(array $rows, int $limit, string $source): array
     {
@@ -2276,7 +2213,6 @@ final class ProductMatchService
                 'score' => (int) ($row['ai_match_percent'] ?? 0),
                 'reason' => is_string($row['ai_match_reason'] ?? null) ? $row['ai_match_reason'] : null,
                 'source' => $isCatalog ? $rowSource : $source,
-                'constraint_hits' => (int) ($row['ai_constraint_hits'] ?? 0),
             ];
             if ($isCatalog) {
                 $catalog[] = $mapped;
@@ -2292,8 +2228,8 @@ final class ProductMatchService
 
     /**
      * @param  array{product: Product, score: int}|null  $heuristic
-     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>  $aiCandidates
-     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string, constraint_hits?: int}>
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
      */
     private function mergeCandidates(?array $heuristic, array $aiCandidates): array
     {
@@ -2374,7 +2310,6 @@ final class ProductMatchService
         ?string $source = 'heuristic',
         ?string $aiReason = null,
         bool $heuristicOnly = false,
-        bool $priceSuspect = false,
     ): bool {
         $honest = $this->persistableScore(
             $item->requirement,
@@ -2406,14 +2341,6 @@ final class ProductMatchService
                 'label' => 'Bez oceny modelu — wybór po słowach karty (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.',
                 'points' => $honest,
             ]);
-        }
-        if ($priceSuspect) {
-            $reasons[] = [
-                'code' => 'price_pack_suspect',
-                'label' => 'Ceny równo ocenionych kandydatów różnią się ponad '.(int) self::PRICE_RATIO_LIMIT
-                    .'-krotnie (prawdopodobnie cena za opakowanie albo błąd cennika) — cena nie rozstrzygała wyboru; sprawdź cenę karty.',
-                'points' => 0,
-            ];
         }
         if ($aiReason !== null && $aiReason !== '') {
             array_unshift($reasons, [
@@ -2545,7 +2472,7 @@ final class ProductMatchService
      * nic nie wskazał. Taki wybór nie jest nowym dowodem — poprzednia karta modelu zostaje
      * (applyNoCatalogMatch: sufit 70% i etykieta „nie potwierdzono”), o ile nadal przechodzi bramki.
      *
-     * @param  array{product: Product, score: int, source: string, heuristic_only?: bool, price_suspect?: bool}  $pick
+     * @param  array{product: Product, score: int, source: string, heuristic_only?: bool}  $pick
      */
     private function heuristicWouldReplaceModelPick(TenderItem $item, array $pick): bool
     {

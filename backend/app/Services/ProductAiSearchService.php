@@ -348,7 +348,6 @@ final class ProductAiSearchService
                 $limit,
                 $retrieveIntent['needed'],
                 $retrieveIntent,
-                is_array($retrieveIntents[$i]['constraints'] ?? null) ? $retrieveIntents[$i]['constraints'] : [],
             );
             $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
             $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $clean[$i]);
@@ -1155,7 +1154,6 @@ final class ProductAiSearchService
                 $limit,
                 $retrieveIntent['needed'],
                 $retrieveIntent,
-                is_array($intents[$i]['constraints'] ?? null) ? $intents[$i]['constraints'] : [],
             );
             $catalogQ = $this->catalogSearchQuery($clean[$i], $retrieveIntent);
             $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $clean[$i]);
@@ -3858,12 +3856,6 @@ final class ProductAiSearchService
                 }
                 $needles[] = $part;
             }
-            // Warunek z liczbą także jako cała fraza („aql 1 5”, „0 45 mm”, „300 mm”): przecinek dziesiętny rozbija
-            // liczbę na cyfry za krótkie na igłę, a to liczby odróżniają karty (0,45 vs 0,75 mm; 300 vs 320 mm).
-            $phrase = trim(preg_replace('/\s+/u', ' ', $norm) ?? $norm);
-            if (preg_match('/\d/u', $phrase) === 1 && str_contains($phrase, ' ') && mb_strlen($phrase) >= 3) {
-                $needles[] = $phrase;
-            }
         }
 
         return array_values(array_unique($needles));
@@ -3903,10 +3895,7 @@ final class ProductAiSearchService
 
         return [
             'needles' => $needles,
-            'matched' => array_values(array_filter(
-                $needles,
-                fn (string $needle): bool => $this->haystackHasNeedleAtWordStart($haystack, $needle)
-            )),
+            'matched' => array_values(array_filter($needles, static fn (string $needle): bool => str_contains($haystack, $needle))),
         ];
     }
 
@@ -3919,7 +3908,7 @@ final class ProductAiSearchService
     {
         $hits = 0;
         foreach ($needles as $needle) {
-            if ($this->haystackHasNeedleAtWordStart($haystack, $needle)) {
+            if (str_contains($haystack, $needle)) {
                 $hits++;
             }
         }
@@ -3928,12 +3917,17 @@ final class ProductAiSearchService
     }
 
     /**
-     * Igła trafia na początku słowa: „zawor” → „zaworem”, ale „pary” ≠ „opary”, „149” ≠ „2149”. Tekst karty i igły są
-     * po lexicalNormalize (tylko [a-z0-9] i spacje), więc granicą słowa jest spacja.
+     * @param  list<string>  $needles
      */
-    private function haystackHasNeedleAtWordStart(string $haystack, string $needle): bool
+    private function haystackHasNeedle(string $haystack, array $needles): bool
     {
-        return preg_match('/(?:^|\s)'.preg_quote($needle, '/').'/u', $haystack) === 1;
+        foreach ($needles as $needle) {
+            if (str_contains($haystack, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -4460,7 +4454,7 @@ final class ProductAiSearchService
             return [];
         }
 
-        return $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $needed, null, $constraints);
+        return $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $needed);
     }
 
     /**
@@ -4493,7 +4487,7 @@ final class ProductAiSearchService
         }
         $intent = $this->mergeRetrieveIntent($this->parseIntent($raw, $query), $retrieveIntent);
 
-        return [$intent, $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed'], $intent, $constraints), false];
+        return [$intent, $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed'], $intent), false];
     }
 
     /** @param array<string, mixed> $parsed @param array<string, mixed> $retrieve */
@@ -4738,14 +4732,9 @@ final class ProductAiSearchService
         int $limit,
         ?string $needed,
         ?array $intent = null,
-        ?array $rankConstraints = null,
     ): array {
         $intent = $this->normalizeIntent($intent ?? []);
         $requirement = $this->assortmentText($query, $needed);
-        // Ile warunków z rankingu potwierdza tekst karty — ten sam sygnał, który porządkuje karty wysyłane do modelu
-        // (cardsForRanking). Idzie do wiersza, bo przetarg rozstrzyga nim remis ocen modelu (poz. 8: 9914 potwierdza
-        // „pary organiczne”, 9312+ nie; poz. 15: 87-320 potwierdza „ścieranie”, 87-063 nie).
-        $constraintNeedles = $this->constraintNeedles($rankConstraints ?? $intent['constraints']);
         $this->traceLlmMatches($raw);
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
         $candidates = $this->withResponseRelations($candidates);
@@ -4802,10 +4791,6 @@ final class ProductAiSearchService
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(0, $score));
             $row['ai_match_reason'] = $reason;
-            $row['ai_constraint_hits'] = $constraintNeedles === []
-                ? 0
-                : $this->haystackNeedleHits($this->rankingHaystack($product), $constraintNeedles);
-            $row['ai_constraint_total'] = count($constraintNeedles);
             $out[] = $row;
         }
 

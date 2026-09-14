@@ -106,63 +106,6 @@ final class RankCardsConstraintEvidenceTest extends TestCase
         $this->assertNotContains('44-304', array_column($prepared['products'], 'sku'), 'zapas bez modelu to nadal tylko wiersze reguły');
     }
 
-    /**
-     * Igły warunków: dopasowanie od początku słowa („pary” ≠ „opary”, „zawor” → „zaworem”) i cała fraza z liczbą
-     * („AQL 1,5” → „aql 1 5”, bo przecinek rozbijał liczbę na cyfry za krótkie na igłę). Wiersz oceniony przez model
-     * niesie liczbę potwierdzonych warunków do decyzji przetargu.
-     */
-    public function test_constraint_needles_match_word_starts_and_numeric_phrases_and_reach_model_rows(): void
-    {
-        $base = [
-            'manufacturer' => '3M',
-            'category' => 'Drogi oddechowe',
-            'ppe_family' => PpeAssortment::FAMILY_RESPIRATORY,
-            'catalog_price_net' => 10,
-            'purchase_price' => 5,
-            'stock' => 1,
-            'enrichment_status' => Product::ENRICHMENT_DONE,
-        ];
-        $plain = Product::query()->create($base + [
-            'sku' => '9312+',
-            'name' => 'Półmaska filtrująca FFP1 z zaworem 9312+',
-            'description' => 'Półmaska FFP1 z zaworem wydechowym chroni przed pyłami i oparami wodnymi. AQL 1,5.',
-        ]);
-        $carbon = Product::query()->create($base + [
-            'sku' => '9914',
-            'name' => 'Półmaska filtrująca 9914 FFP1 (pyły i pary organiczne)',
-            'description' => 'Półmaska FFP1 z zaworem i warstwą węgla aktywnego, pary organiczne poniżej NDS. EN 149. AQL 1,5.',
-        ]);
-        $constraints = ['pary organiczne', 'AQL 1,5', 'EN 149'];
-        $service = app(ProductAiSearchService::class);
-
-        $plainEvidence = $service->debugConstraintEvidence($plain, $constraints);
-        $carbonEvidence = $service->debugConstraintEvidence($carbon, $constraints);
-
-        $this->assertContains('aql 1 5', $plainEvidence['needles'], 'warunek z liczbą jest igłą jako cała fraza');
-        $this->assertSame(['aql 1 5'], $plainEvidence['matched'], '„oparami” nie potwierdza „pary”');
-        // „EN 149” daje token „149” i całą frazę „en 149” — obie liczą się tak samo dla każdej karty.
-        $this->assertSame(['pary', 'organiczne', 'aql 1 5', '149', 'en 149'], $carbonEvidence['matched']);
-
-        $rows = (new \ReflectionMethod($service, 'rowsFromLlmMatches'))->invoke(
-            $service,
-            'Półmaska FFP1 z zaworem, z węglem aktywnym przeciw parom organicznym',
-            collect([$plain, $carbon]),
-            ['matches' => [
-                ['id' => (int) $plain->id, 'score' => 95, 'reason' => 'FFP1 z zaworem', 'missing_key' => []],
-                ['id' => (int) $carbon->id, 'score' => 95, 'reason' => 'FFP1 z węglem', 'missing_key' => []],
-            ]],
-            10,
-            'półmaska FFP1',
-            null,
-            $constraints,
-        );
-        $hits = array_column($rows, 'ai_constraint_hits', 'sku');
-
-        $this->assertSame(1, $hits['9312+'] ?? null);
-        $this->assertSame(5, $hits['9914'] ?? null);
-        $this->assertSame(5, $rows[0]['ai_constraint_total'] ?? null);
-    }
-
     public function test_complete_cascade_does_not_end_retrieval_before_text_search(): void
     {
         Http::fake();
