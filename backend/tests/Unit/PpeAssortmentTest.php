@@ -1102,6 +1102,26 @@ final class PpeAssortmentTest extends TestCase
         $this->assertFalse($this->assortment->compatibleProduct('Rękawice antyprzecięciowe HyFlex EN 388', $sleeve));
     }
 
+    /** Przetarg 1 poz. 1: „wyrób antystatyczny” w SIWZ, a karta HyFlex 11-202 mówi po angielsku „extra features: antistatic”. */
+    #[Test]
+    public function antistatic_evidence_accepts_english_wording(): void
+    {
+        $this->assertTrue($this->assortment->productShowsAntistatic('Lining material: nylon, polyester, glass fibre. extra features: antistatic, latex-free'));
+        $this->assertTrue($this->assortment->productShowsAntistatic('Anti-static PU coated gloves'));
+        $this->assertFalse($this->assortment->productShowsAntistatic('Rękawice montażowe powlekane poliuretanem, EN 388 4131X'));
+
+        $req = 'Ochraniacz przedramienia (rękaw) chroniący przed przecięciem; wyrób antystatyczny, bez lateksu; EN 388 min. 2.X.4.2.C.';
+        $sleeve = $this->card('11202000', 'HyFlex 11202 SIZE 19\'\'/47,5 cm', [
+            'manufacturer' => 'Ansell',
+            'norms' => 'EN 420:2003 + A1:2009, EN 388:2016 (2.X.4.2.C), EN 407 (X.1.X.X.X)',
+            'description' => 'The new HyFlex® 11-202 HI-VIZ™ arm protector offers optimum wearing comfort. extra features: antistatic, latex-free',
+        ]);
+        $this->assertTrue($this->assortment->productMeetsAntistaticRequirement($req, $sleeve));
+        $this->assertFalse($this->assortment->productMeetsAntistaticRequirement($req, $this->card('11200000', 'HyFlex 11200', [
+            'description' => 'Rękawy ochronne HyFlex 11-200 o wysokiej widoczności, ochrona przed przecięciem.',
+        ])), 'bez słowa o antystatyce dalej brak dowodu');
+    }
+
     #[Test]
     public function footwear_antistatic_accepts_esd_stated_in_description(): void
     {

@@ -86,6 +86,7 @@ final class DebugTenderMatchCommandTest extends TestCase
             ->expectsOutputToContain('ARSO 701 616560 S1 P ESD=93')
             ->expectsOutputToContain('w kartach rankingu=tak')
             ->expectsOutputToContain('dowód warunków karty ARSO 701 616560 S1 P ESD:')
+            ->expectsOutputToContain('bramki zgodności karty ARSO 701 616560 S1 P ESD: w puli przed bramką=tak · przeszła wszystkie')
             ->expectsOutputToContain('Decyzja przetargu dla wyniku „Dopasuj wszystkie” (bez zapisu)')
             ->expectsOutputToContain('wybór przetargu:')
             ->assertSuccessful();

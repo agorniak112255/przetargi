@@ -150,6 +150,9 @@ final class ProductAiSearchService
         // Kaskada po krokach nazwy: poziom, kroki, ile kart znalazła i czy zakończyła wyszukiwanie
         // (poz. 13: SECURA 3000 nie wchodziła do puli, a lokalne dane nie odtwarzały ścieżki z produkcji).
         'cascade' => [],
+        // Pula przed bramką zgodności — czy karty zabrakło w wyszukiwaniu, czy odrzuciła ją bramka
+        // (poz. 1: HyFlex 11-202 z angielskim opisem odpadał na dowodzie żargonu i antystatyce).
+        'pregate_ids' => [],
         // Powód awarii kroku „zrozum” (wyjątek/timeout) — trafia do `search_events`,
         // żeby intent lokalny z całym tekstem dało się odróżnić od decyzji modelu.
         'intent_error' => null,
@@ -3076,14 +3079,14 @@ final class ProductAiSearchService
         });
 
         $merged = $this->clock('retrieve_hydrate', function () use ($requirement, $forcedHits, $cascadeKept, $fused, $recall, $brandHits, $limit): Collection {
-            return $this->keepCompatible(
-                $requirement,
-                $this->uniqueProducts(
-                    // Kolejność z fuzji rang (w niej kaskada, priorytet, tekst, wektor); reszta list tylko uzupełnia pulę.
-                    $this->hydrate($fused)->concat($forcedHits)->concat($cascadeKept)->concat($recall)->concat($brandHits),
-                    $limit * 3
-                )
+            $pool = $this->uniqueProducts(
+                // Kolejność z fuzji rang (w niej kaskada, priorytet, tekst, wektor); reszta list tylko uzupełnia pulę.
+                $this->hydrate($fused)->concat($forcedHits)->concat($cascadeKept)->concat($recall)->concat($brandHits),
+                $limit * 3
             );
+            $this->traceProducts('pregate_ids', $pool);
+
+            return $this->keepCompatible($requirement, $pool);
         });
         $branded = $this->preferCatalogBrands($query, $merged, $intent);
 
@@ -3188,6 +3191,28 @@ final class ProductAiSearchService
         }
 
         return $out->values();
+    }
+
+    /**
+     * Werdykt każdej bramki zgodności z osobna dla jednej karty — te same sprawdzenia co keepCompatible, ten sam tekst
+     * wymagania co w retrieveCandidates (wymaganie + nazwa odczytana przez model). Tylko do diagnostyki.
+     *
+     * @return array<string, bool>
+     */
+    public function debugCompatibilityGates(string $query, ?string $needed, Product $product): array
+    {
+        $requirement = $this->assortmentText($query, $needed);
+
+        return [
+            'rodzina' => $this->assortment->compatibleProduct($requirement, $product) || $this->modelFuzzy->matches($requirement, $product),
+            'dowód żargonu' => $this->matchesSlangEvidence($requirement, $product),
+            'SNR' => $this->meetsRequiredSnr($requirement, $product),
+            'klasa obuwia' => $this->meetsRequiredFootwearClass($requirement, $product),
+            'antystatyka' => $this->meetsRequiredAntistatic($requirement, $product),
+            'elektroizolacja' => $this->meetsRequiredElectricalInsulation($requirement, $product),
+            'buty zgrzewane' => $this->meetsRequiredWeldedBootsCoverall($requirement, $product),
+            'hełm' => $this->assortment->helmetSpecAllows($requirement, (string) $product->name.' '.$product->sku),
+        ];
     }
 
     /**

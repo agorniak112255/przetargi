@@ -1279,8 +1279,9 @@ final class PpeAssortment
     {
         $t = $this->normalize($text);
 
+        // „antistatic” / „anti-static”: karty z angielskim opisem (Ansell HyFlex 11-202: „extra features: antistatic”).
         return preg_match(
-            '/\b(esd|antyelektrostat|antystatyczn|en\s*1149|1149[\s-]*5|61340)\w*/u',
+            '/\b(esd|antyelektrostat|antystatyczn|anti\s?static|en\s*1149|1149[\s-]*5|61340)\w*/u',
             $t
         ) === 1;
     }

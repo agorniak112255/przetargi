@@ -300,6 +300,27 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertTrue(str_contains($abek, 'abek') || str_contains($abek, 'a2b2e2k2'));
     }
 
+    /**
+     * Przetarg 1 poz. 1 (3/3 przebiegi puste): Ansell HyFlex 11-202 ma angielski opis („arm protector”, „cut-resistant
+     * sleeve”) bez słowa „rękaw” — dowód żargonu „narękawniki” odrzucał kartę, którą bramka rodziny już rozpoznała jako rękaw.
+     */
+    public function test_narekawniki_evidence_accepts_english_arm_protector(): void
+    {
+        $q = 'Ochraniacz przedramienia (rękaw) chroniący przed przecięciem, długość ok. 475 mm (19\'\'), regulowane zapięcie na rzep.';
+        $this->assertNotNull($this->dict()->searchRewrite($q), 'zapytanie trafia w hasło „narękawniki / rękawy”');
+
+        $this->assertTrue($this->dict()->matchesEvidence(
+            $q,
+            'HyFlex 11202 SIZE 19\'\'/47,5 cm 11202000 The new HyFlex® 11-202 HI-VIZ™ arm protector offers optimum wearing comfort. '
+            .'Ansell HyFlex 11-202 Hi-Vis Cut-Resistant Sleeve with Velcro Fixing System.'
+        ));
+        $this->assertTrue($this->dict()->matchesEvidence($q, 'Rękaw antyprzecięciowy HPPE 45 cm'));
+        $this->assertFalse($this->dict()->matchesEvidence(
+            $q,
+            'HyFlex 11724 11724110 Gloves HPPE with PU palm coating, seamless knit, cut level B'
+        ), 'angielska rękawica bez słowa o rękawie nie jest dowodem');
+    }
+
     public function test_antyprzecieciowe_evidence_accepts_xtremcut_fiber(): void
     {
         $q = 'Rękawice antyprzecięciowe powlekane nitrylem do prac montażowych';

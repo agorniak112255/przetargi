@@ -495,12 +495,29 @@ final class CatalogSlangDictionary
                 && $this->assortment->showsCutResistance($productText)) {
                 $hit = true;
             }
+            // Narękawnik opisany po angielsku („arm protector”, „cut-resistant sleeve” — Ansell HyFlex 11-202,
+            // przetarg 1 poz. 1) nie ma słowa „rękaw”; rodzaj rozpoznaje ta sama reguła co bramka rodziny.
+            if (! $hit && $this->isSleeveEvidenceGroup($group) && $this->assortment->isArmSleeve($productText)) {
+                $hit = true;
+            }
             if (! $hit) {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /** @param list<string> $group */
+    private function isSleeveEvidenceGroup(array $group): bool
+    {
+        foreach ($group as $needle) {
+            if (preg_match('/^(narekaw|zarekaw|naramien|rekaw(y|ow)?)$/u', (string) $needle) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

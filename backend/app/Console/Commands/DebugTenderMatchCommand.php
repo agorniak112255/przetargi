@@ -122,6 +122,34 @@ final class DebugTenderMatchCommand extends Command
     }
 
     /**
+     * Czy karta była w puli przed bramką zgodności i które bramki ją odrzuciły. Przetarg 1 poz. 1: HyFlex 11-202
+     * z angielskim opisem przechodził bramkę rodziny, a odrzucały go dowód żargonu („rękaw”) i antystatyka („antystatyczn”)
+     * — z samego „w kandydatach=nie” nie dało się tego odróżnić od braku karty w wyszukiwaniu.
+     *
+     * @param  array<string, mixed>  $trace
+     */
+    private function compatibilityGatesLine(string $sku, int $skuId, string $query, array $trace): string
+    {
+        $product = Product::query()->find($skuId);
+        if (! $product instanceof Product || trim($query) === '') {
+            return 'bramki zgodności karty '.$sku.': brak danych';
+        }
+        $needed = is_array($trace['rank_needed'] ?? null) && $trace['rank_needed'] !== []
+            ? $trace['rank_needed'][array_key_last($trace['rank_needed'])]
+            : null;
+        $gates = app()->make(ProductAiSearchService::class)->debugCompatibilityGates($query, is_string($needed) ? $needed : null, $product);
+        $failed = array_keys(array_filter($gates, static fn (bool $ok): bool => ! $ok));
+        $pregate = in_array($skuId, array_map('intval', is_array($trace['pregate_ids'] ?? null) ? $trace['pregate_ids'] : []), true);
+
+        return sprintf(
+            'bramki zgodności karty %s: w puli przed bramką=%s · %s',
+            $sku,
+            $pregate ? 'tak' : 'nie',
+            $failed === [] ? 'przeszła wszystkie' : 'odrzucona: '.implode(', ', $failed),
+        );
+    }
+
+    /**
      * @param  array<string, mixed>  $result
      * @param  array<string, mixed>  $trace
      */
@@ -182,6 +210,7 @@ final class DebugTenderMatchCommand extends Command
             ));
             if ($skuId > 0) {
                 $this->line($this->constraintEvidenceLine($sku, $skuId, $cardIds, $trace));
+                $this->line($this->compatibilityGatesLine($sku, $skuId, (string) ($result['query'] ?? ''), $trace));
             }
         }
 
