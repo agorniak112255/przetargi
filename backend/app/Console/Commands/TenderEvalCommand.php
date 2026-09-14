@@ -214,6 +214,7 @@ final class TenderEvalCommand extends Command
         // dostaje 95–99 od modelu, a w paczce 15 pozycji tylko zapasowe 92 z reguły — bez stanu nie widać,
         // czy model odpowiedział pusto, czy zapytanie padło.
         $state = is_string($row['model_state'] ?? null) ? $row['model_state'] : null;
+        $providers = $this->rowProviders($row);
         $top = null;
         $first = is_array($row['products'][0] ?? null) ? $row['products'][0] : null;
         if ($first !== null) {
@@ -222,7 +223,7 @@ final class TenderEvalCommand extends Command
                 .' ('.(string) ($first['ai_match_source'] ?? 'model').')';
         }
         if ($pick === null) {
-            return ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => $top, 'model_state' => $state, 'reason' => $decision['reason']];
+            return ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => $top, 'model_state' => $state, 'reason' => $decision['reason'], 'providers' => $providers];
         }
 
         $sku = SearchEvalMetrics::normalizeAll([$pick['sku']])[0] ?? $pick['sku'];
@@ -240,12 +241,13 @@ final class TenderEvalCommand extends Command
             'top_model' => $top,
             'model_state' => $state,
             'reason' => null,
+            'providers' => $providers,
         ];
     }
 
     /**
      * @param  list<array{id: string, runs: list<array<string, mixed>>}>  $results
-     * @return array{per_run: list<array<string, int>>, stable: int, unstable: list<string>, model_states: array<string, int>}
+     * @return array{per_run: list<array<string, int>>, stable: int, unstable: list<string>, model_states: array<string, int>, by_rank_provider: array<string, array<string, int>>}
      */
     private function summarize(array $results, int $runs): array
     {
@@ -274,7 +276,39 @@ final class TenderEvalCommand extends Command
         }
         ksort($states);
 
-        return ['per_run' => $perRun, 'stable' => count($results) - count($unstable), 'unstable' => $unstable, 'model_states' => $states];
+        // Raport 20260914_134633: jedyna zła karta w przebiegu, w którym połowę odpowiedzi dał zastępczy dostawca modelu.
+        $byProvider = [];
+        foreach ($results as $result) {
+            foreach ($result['runs'] as $run) {
+                $provider = is_string($run['providers']['rank'] ?? null) ? $run['providers']['rank'] : 'nieznany';
+                $byProvider[$provider] ??= array_fill_keys(self::VERDICTS, 0);
+                $verdict = (string) ($run['verdict'] ?? self::VERDICT_EMPTY);
+                $byProvider[$provider][$verdict] = ($byProvider[$provider][$verdict] ?? 0) + 1;
+            }
+        }
+        if (array_keys($byProvider) === ['nieznany']) {
+            $byProvider = [];
+        }
+        ksort($byProvider);
+
+        return ['per_run' => $perRun, 'stable' => count($results) - count($unstable), 'unstable' => $unstable, 'model_states' => $states, 'by_rank_provider' => $byProvider];
+    }
+
+    /**
+     * Dostawca modelu, który zrozumiał i ocenił pozycję (pole wyszukiwania `model_providers`; null = brak odpowiedzi
+     * albo API bez pola „provider”).
+     *
+     * @param  array<string, mixed>  $row
+     * @return array{understand: ?string, rank: ?string}
+     */
+    private function rowProviders(array $row): array
+    {
+        $providers = is_array($row['model_providers'] ?? null) ? $row['model_providers'] : [];
+
+        return [
+            'understand' => is_string($providers['understand'] ?? null) ? $providers['understand'] : null,
+            'rank' => is_string($providers['rank'] ?? null) ? $providers['rank'] : null,
+        ];
     }
 
     /** @param list<array{id: string, expected_skus: list<string>, runs: list<array<string, mixed>>}> $results */
@@ -323,6 +357,7 @@ final class TenderEvalCommand extends Command
                     mb_substr((string) ($run['sku'] ?? ''), 0, 34),
                     ($run['score'] ?? null) === null ? '—' : $run['score'].'%',
                     (string) ($run['source'] ?? ''),
+                    ($run['providers']['understand'] ?? '—').' / '.($run['providers']['rank'] ?? '—'),
                 ];
             }
         }
@@ -330,10 +365,10 @@ final class TenderEvalCommand extends Command
             return;
         }
         $this->line('<options=bold>Złe wybory (wszystkie przebiegi)</>');
-        $this->table(['przypadek', 'przebieg', 'werdykt', 'karta', 'zapis', 'źródło'], $rows);
+        $this->table(['przypadek', 'przebieg', 'werdykt', 'karta', 'zapis', 'źródło', 'dostawca: zrozumienie / ocena'], $rows);
     }
 
-    /** @param array{per_run: list<array<string, int>>, stable: int, unstable: list<string>, model_states: array<string, int>} $summary */
+    /** @param array{per_run: list<array<string, int>>, stable: int, unstable: list<string>, model_states: array<string, int>, by_rank_provider: array<string, array<string, int>>} $summary */
     private function renderSummary(array $summary, int $runs, int $cases): void
     {
         $this->line('<options=bold>Podsumowanie</>');
@@ -363,6 +398,21 @@ final class TenderEvalCommand extends Command
             ];
         }
         $this->table(['', 'trafne', 'zakazane', 'inne (złe)', 'puste'], $rows);
+        if ($summary['by_rank_provider'] !== []) {
+            $this->line('<options=bold>Werdykty wg dostawcy modelu, który ocenił pozycję (wszystkie przebiegi)</>');
+            $providerRows = [];
+            foreach ($summary['by_rank_provider'] as $provider => $counts) {
+                $providerRows[] = [
+                    (string) $provider,
+                    (string) array_sum($counts),
+                    (string) $counts[self::VERDICT_HIT],
+                    (string) $counts[self::VERDICT_FORBIDDEN],
+                    (string) $counts[self::VERDICT_OTHER],
+                    (string) $counts[self::VERDICT_EMPTY],
+                ];
+            }
+            $this->table(['dostawca', 'pozycji', 'trafne', 'zakazane', 'inne (złe)', 'puste'], $providerRows);
+        }
         $this->line(sprintf('Stabilne między przebiegami: %d/%d%s', $summary['stable'], $cases, $summary['unstable'] === []
             ? ''
             : ' · niestabilne: '.implode(', ', $summary['unstable'])));
@@ -526,7 +576,7 @@ final class TenderEvalCommand extends Command
      * stan modelu i wiersze z oceną i źródłem. Wystarcza do odtworzenia decyzji bieżącym kodem bez modelu.
      *
      * @param  array<string, mixed>  $row
-     * @return array{model_state: ?string, external_hint: null, products: list<array<string, mixed>>}
+     * @return array{model_state: ?string, model_providers: array{understand: ?string, rank: ?string}, external_hint: null, products: list<array<string, mixed>>}
      */
     private function recordedSearch(array $row): array
     {
@@ -547,6 +597,7 @@ final class TenderEvalCommand extends Command
 
         return [
             'model_state' => is_string($row['model_state'] ?? null) ? $row['model_state'] : null,
+            'model_providers' => $this->rowProviders($row),
             'external_hint' => null,
             'products' => $products,
         ];

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Product;
+use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
@@ -133,6 +134,9 @@ final class ProductAiSearchService
      * @var array{candidate_ids: list<int>, rank_card_ids: list<int>, llm_matches: list<array{id: int, score: int}>, passes: int}
      */
     private array $trace = self::EMPTY_TRACE;
+
+    /** @var array<int, ?string> dostawca modelu, który zrozumiał zapytanie (indeks zapytania w searchMany) */
+    private array $understandProviders = [];
 
     private const EMPTY_TRACE = [
         'candidate_ids' => [],
@@ -330,6 +334,8 @@ final class ProductAiSearchService
             );
         }
         $report(self::PROGRESS_STAGE_RANK, 0, count($rankMessages));
+        $providerTally = app(AiServedProviderTally::class);
+        $providerTally->forgetBatch();
         $rankRaws = $this->llm->chatJsonMany(
             $rankMessages,
             $this->rankMaxTokens($task),
@@ -337,8 +343,13 @@ final class ProductAiSearchService
             $maxConcurrent,
             static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_RANK, $done, $total),
         );
+        // Dostawca OpenRoutera, który ocenił pozycję. Raport 20260914_131814: 15 poluzowań przypięcia dostawcy w przebiegu
+        // z 6 złymi kartami ocenionymi na 95 — bez dostawcy przy pozycji nie da się tego powiązać.
+        $rankProviders = $providerTally->lastBatch();
+        $rankProviderByIndex = [];
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
+            $rankProviderByIndex[$i] = $rankProviders[$pos] ?? null;
             $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
             $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $retrieveIntents[$i]);
             $ranked = $this->rowsFromLlmMatches(
@@ -396,6 +407,10 @@ final class ProductAiSearchService
             $done[$i]['model_state'] = $rated !== [] && $state !== self::MODEL_STATE_UNAVAILABLE
                 ? self::MODEL_STATE_RANKED
                 : $state;
+            $done[$i]['model_providers'] = [
+                'understand' => $this->understandProviders[$i] ?? null,
+                'rank' => $rankProviderByIndex[$i] ?? null,
+            ];
         }
         ksort($done);
 
@@ -1394,6 +1409,7 @@ final class ProductAiSearchService
      */
     private function analyzeQueriesForRetrieve(array $queries, AiTask $task, int $maxConcurrent, ?callable $report = null): array
     {
+        $this->understandProviders = [];
         $intents = [];
         $need = [];
         foreach ($queries as $i => $query) {
@@ -1414,6 +1430,8 @@ final class ProductAiSearchService
         if ($report !== null) {
             $report(self::PROGRESS_STAGE_UNDERSTAND, 0, count($messages));
         }
+        $providerTally = app(AiServedProviderTally::class);
+        $providerTally->forgetBatch();
         $raws = $this->llm->chatJsonMany(
             $messages,
             900,
@@ -1421,8 +1439,10 @@ final class ProductAiSearchService
             $maxConcurrent,
             $report === null ? null : static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_UNDERSTAND, $done, $total),
         );
+        $understandProviders = $providerTally->lastBatch();
         foreach ($need as $pos => $i) {
             $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
+            $this->understandProviders[$i] = $understandProviders[$pos] ?? null;
             $intents[$i] = $this->applySlangIntent(
                 $queries[$i],
                 $raw === []

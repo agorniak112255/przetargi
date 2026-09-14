@@ -17,10 +17,36 @@ final class AiServedProviderTally
 
     private int $relaxedPins = 0;
 
+    /** @var list<?string> */
+    private array $lastBatch = [];
+
     public function reset(): void
     {
         $this->served = [];
         $this->relaxedPins = 0;
+        $this->lastBatch = [];
+    }
+
+    /**
+     * Dostawca każdej odpowiedzi ostatniego chatJsonMany w kolejności zapytań; null = brak odpowiedzi albo API
+     * bez pola „provider”. Wyszukiwanie przypisuje go pozycji, pomiar łączy złe karty z dostawcą modelu.
+     *
+     * @param  list<?string>  $providers
+     */
+    public function recordBatch(array $providers): void
+    {
+        $this->lastBatch = array_values($providers);
+    }
+
+    public function forgetBatch(): void
+    {
+        $this->lastBatch = [];
+    }
+
+    /** @return list<?string> */
+    public function lastBatch(): array
+    {
+        return $this->lastBatch;
     }
 
     /** Odpowiedź OpenRoutera niesie pole „provider”; inne API go nie mają i nic się nie liczy. */

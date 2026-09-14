@@ -93,6 +93,7 @@ final class TenderEvalCommandTest extends TestCase
             ->expectsOutputToContain('Stabilne między przebiegami')
             ->expectsOutputToContain('razem (2 przebiegi)')
             ->expectsOutputToContain('Stan modelu (wszystkie przebiegi): ranked 2')
+            ->doesntExpectOutputToContain('Werdykty wg dostawcy modelu')
             ->expectsOutputToContain('Raport:')
             ->assertSuccessful();
 
@@ -175,7 +176,18 @@ final class TenderEvalCommandTest extends TestCase
         };
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
         $llm->shouldReceive('chatJson')->andReturnUsing(static fn (array $messages): array => $answer($messages));
-        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $understood = false;
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static function (array $sets) use ($answer, &$understood): array {
+            $kinds = array_map(static fn (array $messages): string => FakeSearchLlm::kind($messages), $sets);
+            $understood = $understood || in_array(FakeSearchLlm::KIND_UNDERSTAND, $kinds, true);
+            // prawdziwy klient zapisuje dostawcę każdej odpowiedzi paczki
+            app(AiServedProviderTally::class)->recordBatch(array_map(
+                static fn (string $kind): string => $kind === FakeSearchLlm::KIND_RANK ? 'StreamLake' : 'Makora',
+                $kinds,
+            ));
+
+            return array_map($answer, $sets);
+        });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
 
         @mkdir(dirname($this->golden), 0775, true);
@@ -193,6 +205,8 @@ final class TenderEvalCommandTest extends TestCase
             ->expectsOutputToContain('Dostawcy modelu w przebiegu 1: Makora 1 · DeepInfra 1 · poluzowane przypięcie dostawcy: 1')
             ->expectsOutputToContain('Dostawcy modelu w przebiegu 2: Makora 1')
             ->doesntExpectOutputToContain('w trakcie przebiegu 2')
+            ->expectsOutputToContain('Werdykty wg dostawcy modelu, który ocenił pozycję')
+            ->expectsOutputToContain('| StreamLake')
             ->assertSuccessful();
 
         $created = array_values(array_diff(glob($this->reportDir.'/*.json') ?: [], $before));
@@ -205,6 +219,10 @@ final class TenderEvalCommandTest extends TestCase
         $this->assertSame(1, $report['timings'][0]['relaxed_pins']);
         $this->assertSame(0, $report['timings'][1]['catalog_changed'], 'przebieg 2 bez zmian katalogu');
         $this->assertSame(['Makora' => 1], $report['timings'][1]['providers']);
+        $expectedProviders = ['understand' => $understood ? 'Makora' : null, 'rank' => 'StreamLake'];
+        $this->assertSame($expectedProviders, $report['cases'][0]['runs'][0]['providers'], 'dostawca przy pozycji');
+        $this->assertSame($expectedProviders, $report['cases'][0]['runs'][0]['search']['model_providers'], 'zapisany do odtworzenia');
+        $this->assertSame(2, array_sum($report['summary']['by_rank_provider']['StreamLake']));
     }
 
     /**

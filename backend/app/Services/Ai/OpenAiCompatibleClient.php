@@ -61,7 +61,7 @@ class OpenAiCompatibleClient
      * $task wskazuje profil modelu z Ustawień AI; bez niego działa konfiguracja główna.
      *
      * @param  list<array{role: string, content: mixed}>  $messages
-     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string}
+     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string, provider: ?string}
      */
     public function chat(
         array $messages,
@@ -161,7 +161,7 @@ class OpenAiCompatibleClient
             try {
                 $raw = $this->chat($messageSets[0], null, $jsonMode, $extra, $task);
 
-                return [['ok' => true, 'content' => $raw['content'], 'model' => $raw['model']]];
+                return [['ok' => true, 'content' => $raw['content'], 'model' => $raw['model'], 'provider' => $raw['provider'] ?? null]];
             } catch (RuntimeException $e) {
                 return [['ok' => false, 'error' => $e->getMessage()]];
             }
@@ -211,6 +211,7 @@ class OpenAiCompatibleClient
         }
         $maxConcurrent = max(1, min(AiSettingsService::CONCURRENCY_MAX, $maxConcurrent));
         $parsed = [];
+        $providers = [];
         // $onProgress(odpowiedzi, wszystkie) — okno „Trwa dopasowanie” liczy każdą odpowiedź modelu,
         // nie całą paczkę naraz. Tylko w górę: ponowienie na profilu głównym nie cofa licznika.
         $total = count($messageSets);
@@ -237,15 +238,18 @@ class OpenAiCompatibleClient
                         'error' => $row['error'] ?? 'unknown',
                     ]);
                     $parsed[] = [];
+                    $providers[] = null;
 
                     continue;
                 }
                 $json = $this->tryParseJson((string) ($row['content'] ?? ''));
                 $parsed[] = $json ?? [];
+                $providers[] = is_string($row['provider'] ?? null) ? $row['provider'] : null;
             }
             // pojedyncze zapytanie idzie bez puli, a ponowienia mogą nie wywołać licznika — wyrównanie
             $report(count($parsed));
         }
+        app(AiServedProviderTally::class)->recordBatch($providers);
 
         return $parsed;
     }
@@ -641,6 +645,7 @@ class OpenAiCompatibleClient
             'ok' => true,
             'content' => $content,
             'model' => (string) data_get($payload, 'model', $profile['model'] ?? ''),
+            'provider' => is_string(data_get($payload, 'provider')) ? (string) data_get($payload, 'provider') : null,
         ];
     }
 
@@ -714,7 +719,7 @@ class OpenAiCompatibleClient
     /**
      * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $profile
      * @param  list<array{role: string, content: mixed}>  $messages
-     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string}
+     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string, provider: ?string}
      */
     private function chatWithProfile(
         array $profile,
@@ -840,6 +845,7 @@ class OpenAiCompatibleClient
                 'model' => $resultModel,
                 'usage' => $usage,
                 'finish_reason' => $this->contentReader->finishReason($payload),
+                'provider' => is_string(data_get($payload, 'provider')) ? (string) data_get($payload, 'provider') : null,
             ];
         } finally {
             $this->reportLiveDone($profile, $resultModel, $started, $usage);

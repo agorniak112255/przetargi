@@ -126,6 +126,10 @@ final class AiChatManyOverloadTest extends TestCase
         $snapshot = $tally->snapshot();
         $this->assertEquals(['Makora' => 1, 'DeepInfra' => 1], $snapshot['served'], 'b od przypiętego, a po poluzowaniu od innego');
         $this->assertSame(1, $snapshot['relaxed_pins']);
+        $this->assertSame(['DeepInfra', 'Makora'], $tally->lastBatch(), 'dostawca każdej odpowiedzi w kolejności zapytań');
+
+        app(OpenAiCompatibleClient::class)->chatJsonMany([[['role' => 'user', 'content' => 'c']]], null, AiTask::ProductSearch, 16);
+        $this->assertSame(['Makora'], $tally->lastBatch(), 'pojedyncze zapytanie idzie bez puli, dostawca też zapisany');
     }
 
     public function test_exhausted_429_stops_after_rate_limit_retries(): void
@@ -138,5 +142,6 @@ final class AiChatManyOverloadTest extends TestCase
         $this->assertSame([], $out[0], 'po wyczerpaniu ponowień wynik jak dotąd: brak odpowiedzi');
         $this->assertSame(['prompt' => 'b'], $out[1]);
         $this->assertCount(3, $providers['a'], 'pierwsza próba + 2 ponowienia przy 429');
+        $this->assertSame([null, 'Makora'], app(AiServedProviderTally::class)->lastBatch(), 'brak odpowiedzi = null na swojej pozycji');
     }
 }
