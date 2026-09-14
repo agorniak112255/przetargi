@@ -419,4 +419,66 @@ final class ProductPageFetcherTest extends TestCase
         $this->assertContains($photo, $page['image_urls'] ?? []);
         $this->assertContains($photo, $fetched['image_urls']);
     }
+
+    /**
+     * Batch #319: Akamai zrywa połączenie z 3m.com bez statusu. Karta /p/dc/ nie szła przez
+     * czytnik — przebieg mówił „strona nie odpowiedziała”, a produkt trafiał do ręki.
+     */
+    public function test_three_m_variant_card_with_dropped_connection_is_read_via_reader(): void
+    {
+        $card = 'https://www.3m.com/3M/sl_SI/p/dc/v000059787/';
+        $this->fakeThreeMDroppedConnection(Http::response(
+            "Title: 3M™ Textured Surface Applicator TSA-2\n\n# Aplikator do płaszczyzn 3M™ TSA-2\n\n"
+            .'Aplikator 3M TSA-2 do nakładania powłok teksturowanych na płaszczyznach, kod 887747.',
+            200
+        ));
+        $product = new Product([
+            'sku' => '887747',
+            'name' => '3M™ Aplikator do płaszczyzn TSA-2',
+            'manufacturer' => '3M',
+        ]);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [['url' => $card, 'title' => '', 'snippet' => '']], '887747', 1, [], $product,
+        );
+
+        $this->assertSame([$card], array_column($fetched['pages'], 'url'));
+    }
+
+    public function test_three_m_card_rejection_names_reader_failure(): void
+    {
+        // bez tego przebieg mówił „brak odpowiedzi”, choć próbował też czytnik — nie było wiadomo dlaczego padł
+        $card = 'https://www.3m.com/3M/en_US/p/d/v000075479/';
+        $this->fakeThreeMDroppedConnection(Http::response('Rate limit exceeded', 429));
+        $product = new Product([
+            'sku' => 'FF-400-01',
+            'name' => 'Taśmy nagłowia 3M™ Secure Click™ do masek serii FF-800, FF-400-01',
+            'manufacturer' => '3M',
+        ]);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [['url' => $card, 'title' => '', 'snippet' => '']], 'FF-400-01', 1, [], $product,
+        );
+
+        $this->assertSame(
+            [['url' => $card, 'reason' => CandidateRejection::FETCH_FAILED, 'detail' => 'reader: limit 429']],
+            $fetched['rejected']
+        );
+    }
+
+    /**
+     * Akamai zrywa połączenie z 3m.com; czytnik odpowiada podaną odpowiedzią. Jedna funkcja
+     * zamiast mapy adresów: Http::fake woła każdy stub z mapy, a failedConnection pod „*”
+     * rzucałby wyjątek także przy żądaniu do czytnika.
+     */
+    private function fakeThreeMDroppedConnection(mixed $readerResponse): void
+    {
+        Http::fake(static function ($request) use ($readerResponse) {
+            if (str_starts_with($request->url(), 'https://r.jina.ai/')) {
+                return $readerResponse;
+            }
+
+            return Http::failedConnection('cURL error 35: OpenSSL SSL_connect: Connection was reset');
+        });
+    }
 }

@@ -517,16 +517,52 @@ HTML;
         $this->assertTrue($search->searchBackendDown(), 'bezpiecznik otwarty, bez silników z kluczem');
 
         config(['enrichment.reader_api_key' => 'jina_test']);
-        $this->assertFalse($search->searchBackendDown(), 'Jina z kluczem jeszcze odpowie');
+        $this->assertTrue($search->searchBackendDown(), 'sam klucz Jina nie dowodzi, że szuka (batch #319: 422 na każde zapytanie)');
+
+        Cache::put('keyed_search_last_hit_v1:Jina', now()->getTimestamp(), now()->addMinutes(15));
+        $this->assertFalse($search->searchBackendDown(), 'Jina z kluczem niedawno zwróciła wyniki');
 
         Cache::put('keyed_search_unavailable_v1:Jina', 402, now()->addMinutes(30));
         $this->assertTrue($search->searchBackendDown(), 'Jina bez środków — nie ma czym szukać');
 
         config(['enrichment.brave_api_key' => 'brave_test']);
-        $this->assertFalse($search->searchBackendDown(), 'Brave z kluczem jeszcze odpowie');
+        Cache::put('keyed_search_last_hit_v1:Brave', now()->getTimestamp(), now()->addMinutes(15));
+        $this->assertFalse($search->searchBackendDown(), 'Brave z kluczem niedawno zwrócił wyniki');
 
         Cache::put('keyed_search_unavailable_v1:Brave', 401, now()->addMinutes(30));
         $this->assertTrue($search->searchBackendDown(), 'Brave z nieważnym kluczem też nie odpowie');
+    }
+
+    /** Batch #319: SearXNG i publiczne silniki zablokowane, a Jina z kluczem oddawała 422 na każde zapytanie. */
+    public function test_keyed_engine_without_results_does_not_keep_backend_alive(): void
+    {
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => 'jina_test', 'enrichment.brave_api_key' => null]);
+        Cache::flush();
+        Cache::put('free_public_engines_blocked_v1', 'Google: zgoda/captcha — brak wyników wyszukiwania.', now()->addMinutes(10));
+        Http::fake([
+            's.jina.ai/*' => Http::sequence()
+                ->push('{"data":null,"code":422,"name":"AssertionFailureError"}', 422)
+                ->push(json_encode(['data' => [[
+                    'url' => 'https://www.3m.com/3M/sl_SI/p/dc/v000059787/',
+                    'title' => '3M™ Textured Surface Applicator TSA-2',
+                    'description' => 'Aplikator TSA-2',
+                ]]], JSON_THROW_ON_ERROR), 200),
+            '*' => Http::response('too many requests', 429),
+        ]);
+
+        $search = new DuckDuckGoHtmlSearch;
+        $message = null;
+        try {
+            $search->search('site:3m.com/products 11TAPE');
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+        }
+        $this->assertNotNull($message);
+        $this->assertStringContainsString('Jina HTTP 422', $message);
+        $this->assertTrue($search->searchBackendDown(), 'Jina bez wyników nie dowodzi, że wyszukiwarka działa');
+
+        $this->assertNotSame([], $search->search('3M TSA-2 887747'));
+        $this->assertFalse($search->searchBackendDown(), 'Jina zwróciła wyniki — produkt bez karty to realny brak');
     }
 
     public function test_brave_401_is_remembered_like_jina(): void

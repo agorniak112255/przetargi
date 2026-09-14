@@ -3896,6 +3896,24 @@ final class ProductEnrichmentApiTest extends TestCase
         Queue::assertNotPushed(EnrichProductJob::class);
     }
 
+    /**
+     * Batch #319: SearXNG i publiczne silniki zablokowane, Jina z kluczem odpowiadała 422 na każde
+     * zapytanie. Sam klucz uchodził za żywą wyszukiwarkę — 118 produktów 3M dostało „błąd” bez ponowienia.
+     */
+    public function test_search_outage_with_keyed_engine_without_results_requeues_item(): void
+    {
+        Queue::fake();
+        [$product, $batch] = $this->outageFixture();
+        config(['enrichment.reader_api_key' => 'jina_test']);
+
+        $job = new EnrichProductJob($product->id, $batch->id);
+        $job->handle(app(ProductEnrichmentService::class), app(AiSettingsService::class), app(EnrichmentSlots::class));
+
+        $this->assertSame(Product::ENRICHMENT_QUEUED, $product->fresh()?->enrichment_status);
+        $this->assertSame(0, $batch->fresh()->failed, 'czekanie nie liczy się jako błąd');
+        Queue::assertPushed(EnrichProductJob::class, static fn (EnrichProductJob $pushed): bool => $pushed->productId === $product->id);
+    }
+
     public function test_search_outage_does_not_wait_when_batch_cancelled(): void
     {
         Queue::fake();

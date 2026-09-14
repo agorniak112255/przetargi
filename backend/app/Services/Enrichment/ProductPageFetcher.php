@@ -440,8 +440,8 @@ final class ProductPageFetcher
             // Ale tylko jawne 403/401/429… to blokada stała; timeout bez statusu zostaje
             // „nie odpowiedziała” i wraca do ponowienia.
             $walled = $this->isBlockedStatus($status);
-            if (($walled || $this->officialThreeMFetchNeedsReader($url, $status))
-                && $this->ingestViaReader($url, $goodPages, $images, $documents, $trustedImages)) {
+            $readerTried = $walled || $this->officialThreeMFetchNeedsReader($url, $status);
+            if ($readerTried && $this->ingestViaReader($url, $goodPages, $images, $documents, $trustedImages)) {
                 return;
             }
             Log::info('Product page fetch skipped', ['url' => $url, 'status' => $status]);
@@ -455,7 +455,12 @@ final class ProductPageFetcher
             $this->rejections[] = array_filter([
                 'url' => $url,
                 'reason' => $permanentWall ? CandidateRejection::BOT_WALL : CandidateRejection::FETCH_FAILED,
-                'detail' => $walled ? $this->blockedPages->failureFor($url) : ($status === null ? 'brak odpowiedzi' : 'status '.$status),
+                'detail' => match (true) {
+                    $walled => $this->blockedPages->failureFor($url),
+                    // karta 3M po zerwanym połączeniu szła przez czytnik — przebieg ma mówić, czemu i on padł
+                    $readerTried => $this->blockedPages->failureFor($url) ?? 'brak odpowiedzi',
+                    default => $status === null ? 'brak odpowiedzi' : 'status '.$status,
+                },
             ]);
             $snippet = trim((string) ($row['snippet'] ?? ''));
             if ($snippet !== '') {

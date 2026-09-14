@@ -2098,7 +2098,11 @@ final class ProductSearchIdentity
         return $key === '3m';
     }
 
-    /** Karta 3M: /3M/pl_PL/p/d/v0005202/ — numer katalogowy nie stoi w adresie. */
+    /**
+     * Karta 3M: /3M/pl_PL/p/d/v0005202/, karta z wyborem wariantu /p/dc/v000059787/
+     * i starszy adres …/all-3m-products/~/Nazwa-Produktu-7445/ — numer katalogowy nie stoi w adresie.
+     * /p/c/ to kategoria, a ~/All-3M-Products/… to listing — nie karty.
+     */
     public function isOfficialThreeMProductUrl(string $url): bool
     {
         $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
@@ -2111,7 +2115,8 @@ final class ProductSearchIdentity
         }
         $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
 
-        return preg_match('#/p/[di]/#i', $path) === 1;
+        return preg_match('#/p/(?:dc?|i)/#i', $path) === 1
+            || preg_match('#/all-3m-products/~/(?!all-3m-products/)[^/]+#i', $path) === 1;
     }
 
     /**

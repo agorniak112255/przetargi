@@ -62,6 +62,16 @@ final class DuckDuckGoHtmlSearch
 
     private const KEYED_UNAVAILABLE_MINUTES = 30;
 
+    /**
+     * Sam klucz nie dowodzi, że silnik szuka: w batchu #319 Jina odpowiadała 422
+     * („brak wyników”) na każde zapytanie, gdy SearXNG i publiczne silniki leżały,
+     * a searchBackendDown() uznawał ją za żywą — produkty szły od razu do „błędu”
+     * zamiast czekać. Żywy jest silnik, który niedawno zwrócił wyniki.
+     */
+    private const KEYED_LAST_HIT_PREFIX = 'keyed_search_last_hit_v1:';
+
+    private const KEYED_ALIVE_MINUTES = 15;
+
     public function __construct(
         private readonly ?JinaSearchClient $jina = null,
         private readonly ?BraveSearchClient $brave = null,
@@ -359,6 +369,8 @@ final class DuckDuckGoHtmlSearch
                     }
                 }
                 if ($results !== []) {
+                    Cache::put(self::KEYED_LAST_HIT_PREFIX.$name, now()->getTimestamp(), now()->addMinutes(self::KEYED_ALIVE_MINUTES));
+
                     return $results;
                 }
                 $errors[] = $name.': brak wyników';
@@ -414,8 +426,8 @@ final class DuckDuckGoHtmlSearch
     /**
      * Czy darmowe wyszukiwanie nie ma już czym szukać: bezpiecznik publicznych
      * silników otwarty (i SearXNG zablokowany, jeśli jest ustawiony), a żaden silnik
-     * z kluczem nie odpowie. Wtedy ponowienie produktu za chwilę skończy się tak samo —
-     * EnrichProductJob zamiast liczyć błąd czeka, aż wyszukiwarka wróci.
+     * z kluczem nie zwrócił ostatnio wyników. Wtedy ponowienie produktu za chwilę skończy
+     * się tak samo — EnrichProductJob zamiast liczyć błąd czeka, aż wyszukiwarka wróci.
      */
     public function searchBackendDown(): bool
     {
@@ -430,7 +442,8 @@ final class DuckDuckGoHtmlSearch
             // SearXNG wybrany bez adresu — i tak nie odpowie
         }
         foreach ($this->keyedEngines() as [$name, $client]) {
-            if ($client->isConfigured() && $this->keyedEngineSkipMessage($name) === null) {
+            if ($client->isConfigured() && $this->keyedEngineSkipMessage($name) === null
+                && Cache::has(self::KEYED_LAST_HIT_PREFIX.$name)) {
                 return false;
             }
         }

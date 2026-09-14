@@ -2293,6 +2293,25 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertContains('mat.konin.pl', $id->catalogSearchHosts($product));
     }
 
+    /**
+     * Batch #319: karty 3M pod /p/dc/ i all-3m-products/~/ nie uchodziły za karty 3M, więc przy
+     * zerwanym przez Akamai połączeniu nie szły przez czytnik — produkt trafiał do „wpisz ręcznie”.
+     */
+    public function test_three_m_card_urls_include_variant_and_legacy_product_paths(): void
+    {
+        $id = new ProductSearchIdentity;
+
+        $this->assertTrue($id->isOfficialThreeMProductUrl('https://www.3m.com/3M/sl_SI/p/dc/v000059787/'));
+        $this->assertTrue($id->isOfficialThreeMProductUrl(
+            'https://www.3m.com/3M/en_US/company-us/all-3m-products/~/Scotch-Brite-Light-Cleansing-Hand-Pad-7445/?N=5002385+3293194061+4294946319&rt=rud'
+        ));
+        $this->assertFalse($id->isOfficialThreeMProductUrl('https://www.3m.com/3M/en_US/p/c/abrasives/handheld/hand-pads/'), 'kategoria');
+        $this->assertFalse(
+            $id->isOfficialThreeMProductUrl('https://www.3m.com/3M/en_US/company-us/all-3m-products/~/All-3M-Products/Safety/?N=5002385'),
+            'listing wszystkich produktów'
+        );
+    }
+
     public function test_three_m_uses_catalog_code_from_name_not_warehouse_sku(): void
     {
         $id = new ProductSearchIdentity;
