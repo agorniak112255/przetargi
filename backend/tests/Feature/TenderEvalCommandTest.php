@@ -105,6 +105,10 @@ final class TenderEvalCommandTest extends TestCase
         $this->assertSame('ARSO 701 616560 S1 P ESD=95 (model)', $report['cases'][0]['runs'][0]['top_model']);
         $this->assertSame('ranked', $report['cases'][0]['runs'][0]['model_state'], 'stan rankingu pozycji w paczce');
         $this->assertSame(['ranked' => 2], $report['summary']['model_states']);
+        $recorded = $report['cases'][0]['runs'][0]['search'] ?? null;
+        $this->assertIsArray($recorded, 'raport zapisuje wynik wyszukiwania do odtworzenia decyzji');
+        $this->assertSame('ranked', $recorded['model_state']);
+        $this->assertSame([$sandalId, 95], [$recorded['products'][0]['id'], $recorded['products'][0]['ai_match_percent']]);
 
         // baza z innymi werdyktami w obu przebiegach → tabela zmian liczona ze wszystkich przebiegów
         $other = $verdict === 'trafna' ? 'pusta' : 'trafna';
@@ -124,6 +128,84 @@ final class TenderEvalCommandTest extends TestCase
         }
 
         $this->assertSame(0, TenderItem::query()->count(), 'pomiar nie tworzy pozycji przetargu');
+    }
+
+    /**
+     * Pomiar 14.09: zmiana kolejności wyboru wdrożona na próbę dała 7 regresów, a z dwóch przebiegów modelu nie dało się
+     * odróżnić jej skutku od szumu modelu. Odtworzenie liczy decyzję bieżącym kodem na zapisanych ocenach modelu.
+     */
+    public function test_replay_recomputes_decision_from_recorded_search_without_calling_model(): void
+    {
+        $sandal = Product::query()->create([
+            'sku' => 'ARSO 701 616560 S1 P ESD',
+            'name' => 'ARSO 701 616560 S1 P ESD',
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'ppe_family' => PpeAssortment::FAMILY_FOOTWEAR,
+            'catalog_price_net' => 46,
+            'purchase_price' => 46.26,
+            'stock' => 0,
+            'norms' => 'EN ISO 20345 S1 P, EN IEC 61340-4-3 ESD',
+            'description' => 'Sandały bezpieczne ARSO 701 616560 S1 P ESD, podnosek, zabudowana pięta, wkładka antyprzebiciowa, ESD, podeszwa FO.',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $llm->shouldNotReceive('chatJsonMany');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        @mkdir(dirname($this->golden), 0775, true);
+        $query = 'Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, zabudowana pięta, podnosek, ESD, podeszwa FO.';
+        file_put_contents($this->golden, json_encode(['cases' => [[
+            'id' => 'test-03-sandaly',
+            'query' => $query,
+            'expected_skus' => ['ARSO 701 616560 S1 P ESD'],
+            'forbidden_skus' => [],
+            'note' => '',
+        ]]], JSON_UNESCAPED_UNICODE));
+        $recorded = storage_path('framework/testing/tender-eval-recorded-'.uniqid().'.json');
+        file_put_contents($recorded, json_encode(['cases' => [[
+            'id' => 'test-03-sandaly',
+            'runs' => [
+                ['verdict' => 'pusta', 'search' => ['model_state' => 'ranked', 'external_hint' => null, 'products' => [
+                    ['id' => (int) $sandal->id, 'sku' => $sandal->sku, 'name' => $sandal->name, 'ai_match_percent' => 95, 'ai_match_reason' => 'Sandały S1 P ESD', 'ai_match_source' => null],
+                ]]],
+                ['verdict' => 'pusta', 'search' => ['model_state' => 'empty', 'external_hint' => null, 'products' => []]],
+            ],
+        ]]], JSON_UNESCAPED_UNICODE));
+        $before = glob($this->reportDir.'/*.json') ?: [];
+        try {
+            $this->artisan('tenders:eval', ['--file' => $this->golden, '--filter' => '', '--replay' => $recorded, '--save' => true])
+                ->expectsOutputToContain('Odtworzenie decyzji z zapisanych wyników wyszukiwania (bez modelu)')
+                ->expectsOutputToContain('razem (2 przebiegi)')
+                ->assertSuccessful();
+
+            $created = array_values(array_diff(glob($this->reportDir.'/*.json') ?: [], $before));
+            $this->assertCount(1, $created);
+            $report = json_decode((string) file_get_contents($created[0]), true);
+            @unlink($created[0]);
+            $this->assertSame($recorded, $report['header']['replay_of']);
+            // przebieg 1: ocena modelu 95; przebieg 2: model nic nie wskazał — decyzja po słowach karty (sufit 70%)
+            $this->assertSame(['trafna', 'trafna'], array_column($report['cases'][0]['runs'], 'verdict'));
+            $this->assertSame(['ai', 'heuristic (po słowach)'], array_column($report['cases'][0]['runs'], 'source'));
+        } finally {
+            @unlink($recorded);
+        }
+    }
+
+    public function test_replay_of_report_without_recorded_search_fails_clearly(): void
+    {
+        $recorded = storage_path('framework/testing/tender-eval-old-'.uniqid().'.json');
+        @mkdir(dirname($recorded), 0775, true);
+        file_put_contents($recorded, json_encode(['cases' => [['id' => 'x', 'runs' => [['verdict' => 'trafna']]]]]));
+        try {
+            $this->artisan('tenders:eval', ['--replay' => $recorded])
+                ->expectsOutputToContain('nie zawiera zapisanych wyników wyszukiwania')
+                ->assertFailed();
+        } finally {
+            @unlink($recorded);
+        }
     }
 
     public function test_fails_without_ai_configuration(): void

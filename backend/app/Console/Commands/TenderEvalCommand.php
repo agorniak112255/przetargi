@@ -38,13 +38,15 @@ final class TenderEvalCommand extends Command
         {--filter=opisowy15 : Tylko przypadki, których id lub zapytanie zawiera ten tekst (pusty = wszystkie)}
         {--runs=1 : Ile przebiegów (1–5); model nie jest deterministyczny}
         {--save : Zapisz raport JSON w storage/app/tender-eval/reports}
-        {--baseline= : Raport do porównania (ścieżka JSON z poprzedniego przebiegu)}';
+        {--baseline= : Raport do porównania (ścieżka JSON z poprzedniego przebiegu)}
+        {--replay= : Raport z zapisanymi wynikami wyszukiwania — decyzja liczona od nowa bez wywołań modelu}';
 
     protected $description = 'Mierzy decyzję zapisu przetargu na golden secie: trafna / zakazana / inna / pusta (bez zapisu, wywołuje model)';
 
     public function handle(SearchEvalRunner $runner, AiSettingsService $settings): int
     {
-        if (! $settings->isReady()) {
+        $replay = trim((string) $this->option('replay'));
+        if ($replay === '' && ! $settings->isReady()) {
             $this->error('AI nie jest skonfigurowane — pomiar wymaga modelu.');
 
             return self::FAILURE;
@@ -68,7 +70,16 @@ final class TenderEvalCommand extends Command
             return self::SUCCESS;
         }
 
-        $runs = max(1, min(5, (int) $this->option('runs')));
+        $replayed = [];
+        if ($replay !== '') {
+            $replayed = $this->loadReplay($replay);
+            if ($replayed === null) {
+                return self::FAILURE;
+            }
+        }
+        $runs = $replay !== ''
+            ? max(1, ...array_values(array_map(static fn (array $case): int => count($case['runs'] ?? []), $replayed ?: [['runs' => [1]]])))
+            : max(1, min(5, (int) $this->option('runs')));
         $profile = $settings->profileForTask(AiTask::ProductSearch);
         $header = [
             'generated_at' => now()->toIso8601String(),
@@ -82,6 +93,7 @@ final class TenderEvalCommand extends Command
             'card_detail' => $settings->productSearchUsesShortCards() ? 'short' : 'long',
             'match_concurrency' => $settings->matchConcurrency(),
             'catalog_search_limit' => $settings->catalogSearchLimit(),
+            'replay_of' => $replay !== '' ? $replay : null,
         ];
         $this->info(sprintf(
             'Golden set: %s · przypadków: %d · przebiegów: %d · prompt=%s · model=%s (%s) · karty=%s · równolegle=%d',
@@ -100,7 +112,27 @@ final class TenderEvalCommand extends Command
             $results[$case['id']] = ['id' => $case['id'], 'expected_skus' => $case['expected_skus'], 'forbidden_skus' => $case['forbidden_skus'], 'runs' => []];
         }
         $runTimings = [];
-        for ($run = 1; $run <= $runs; $run++) {
+        if ($replay !== '') {
+            // Te same odpowiedzi modelu, bieżący kod decyzji: zmiana kolejności wyboru bez szumu modelu i bez kosztu.
+            $this->line('Odtworzenie decyzji z zapisanych wyników wyszukiwania (bez modelu): '.$replay);
+            for ($run = 0; $run < $runs; $run++) {
+                // nowy obiekt jak w przebiegu na żywo — pamięć kandydatów poprzedniego przebiegu nie wpływa na decyzję
+                $matcher = app()->make(ProductMatchService::class);
+                foreach ($cases as $case) {
+                    $recorded = $replayed[$case['id']]['runs'][$run] ?? null;
+                    $row = is_array($recorded['search'] ?? null) ? $recorded['search'] : null;
+                    if ($row === null) {
+                        $results[$case['id']]['runs'][] = ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => null, 'model_state' => null, 'reason' => 'raport bez zapisanego wyszukiwania'];
+
+                        continue;
+                    }
+                    $item = new TenderItem;
+                    $item->forceFill(['requirement' => $case['query']]);
+                    $results[$case['id']]['runs'][] = $this->classify($case, $matcher->debugPick($item, $row), $row) + ['search' => $row];
+                }
+            }
+        }
+        for ($run = 1; $replay === '' && $run <= $runs; $run++) {
             $this->line("Przebieg {$run}/{$runs}…");
             $searchStarted = hrtime(true);
             $search = app()->make(ProductAiSearchService::class);
@@ -120,7 +152,8 @@ final class TenderEvalCommand extends Command
                 $item = new TenderItem;
                 $item->forceFill(['requirement' => $case['query']]);
                 try {
-                    $results[$case['id']]['runs'][] = $this->classify($case, $matcher->debugPick($item, $row), $row);
+                    $results[$case['id']]['runs'][] = $this->classify($case, $matcher->debugPick($item, $row), $row)
+                        + ['search' => $this->recordedSearch($row)];
                 } catch (Throwable $e) {
                     $results[$case['id']]['runs'][] = ['verdict' => self::VERDICT_EMPTY, 'sku' => null, 'score' => null, 'source' => null, 'top_model' => null, 'model_state' => null, 'reason' => 'błąd: '.$e->getMessage()];
                 }
@@ -417,6 +450,69 @@ final class TenderEvalCommand extends Command
     }
 
     /** @param array<string, mixed> $report */
+    /**
+     * Wynik wyszukiwania pozycji w kształcie, który czyta decyzja przetargu (debugPick → mapAiSearchRows):
+     * stan modelu i wiersze z oceną i źródłem. Wystarcza do odtworzenia decyzji bieżącym kodem bez modelu.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array{model_state: ?string, external_hint: null, products: list<array<string, mixed>>}
+     */
+    private function recordedSearch(array $row): array
+    {
+        $products = [];
+        foreach (array_slice(is_array($row['products'] ?? null) ? $row['products'] : [], 0, 40) as $product) {
+            if (! is_array($product)) {
+                continue;
+            }
+            $products[] = [
+                'id' => (int) ($product['id'] ?? 0),
+                'sku' => (string) ($product['sku'] ?? ''),
+                'name' => (string) ($product['name'] ?? ''),
+                'ai_match_percent' => (int) ($product['ai_match_percent'] ?? 0),
+                'ai_match_reason' => is_string($product['ai_match_reason'] ?? null) ? $product['ai_match_reason'] : null,
+                'ai_match_source' => is_string($product['ai_match_source'] ?? null) ? $product['ai_match_source'] : null,
+            ];
+        }
+
+        return [
+            'model_state' => is_string($row['model_state'] ?? null) ? $row['model_state'] : null,
+            'external_hint' => null,
+            'products' => $products,
+        ];
+    }
+
+    /**
+     * @return array<string, array{runs: list<array<string, mixed>>}>|null
+     */
+    private function loadReplay(string $path): ?array
+    {
+        if (! is_file($path)) {
+            $this->error("Nie ma raportu do odtworzenia: {$path}");
+
+            return null;
+        }
+        $report = json_decode((string) file_get_contents($path), true);
+        $out = [];
+        foreach (is_array($report['cases'] ?? null) ? $report['cases'] : [] as $case) {
+            if (is_array($case) && is_string($case['id'] ?? null)) {
+                $out[$case['id']] = ['runs' => is_array($case['runs'] ?? null) ? array_values($case['runs']) : []];
+            }
+        }
+        $withSearch = 0;
+        foreach ($out as $case) {
+            foreach ($case['runs'] as $run) {
+                $withSearch += is_array($run['search'] ?? null) ? 1 : 0;
+            }
+        }
+        if ($withSearch === 0) {
+            $this->error('Raport nie zawiera zapisanych wyników wyszukiwania (powstał przed zapisem „search”) — nie da się go odtworzyć.');
+
+            return null;
+        }
+
+        return $out;
+    }
+
     private function saveReport(array $report): void
     {
         $dir = storage_path('app/tender-eval/reports');
