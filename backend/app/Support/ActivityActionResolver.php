@@ -101,6 +101,7 @@ final class ActivityActionResolver
             ['PATCH', '#^b2b-accounts/\d+$#', 'b2b_account.updated', 'Zaktualizowano konto B2B'],
             ['DELETE', '#^b2b-accounts/\d+$#', 'b2b_account.deleted', 'Usunięto konto B2B'],
             ['POST', '#^b2b-accounts/\d+/password$#', 'b2b_account.password_revealed', 'Odsłonięto hasło konta B2B'],
+            ['POST', '#^b2b-accounts/\d+/sync$#', 'b2b_account.sync_requested', 'Zlecono pobranie cennika B2B'],
             ['POST', '#^products/enrich$#', 'product.enriched', 'Wzbogacanie produktów'],
             ['POST', '#^products/\d+/enrich$#', 'product.enriched', 'Wzbogacanie produktu'],
             ['POST', '#^products/delete$#', 'product.deleted', 'Usunięto produkty'],

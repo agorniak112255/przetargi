@@ -223,6 +223,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::delete('/b2b-accounts/{b2bAccount}', [B2bAccountController::class, 'destroy'])->middleware('permission:b2b_accounts.manage');
     Route::post('/b2b-accounts/{b2bAccount}/password', [B2bAccountController::class, 'revealPassword'])
         ->middleware('permission:b2b_accounts.view');
+    Route::post('/b2b-accounts/{b2bAccount}/sync', [B2bAccountController::class, 'requestSync'])
+        ->middleware('permission:b2b_accounts.manage');
+    Route::get('/b2b-connectors', [B2bAccountController::class, 'connectors'])->middleware('permission:b2b_accounts.view');
 
     Route::get('/ai-settings', [AiSettingsController::class, 'show'])->middleware('permission:ai_settings.manage');
     Route::put('/ai-settings', [AiSettingsController::class, 'update'])->middleware('permission:ai_settings.manage');

@@ -93,6 +93,59 @@ final class B2bAccountApiTest extends TestCase
             ->assertJsonValidationErrors(['password', 'sites']);
     }
 
+    public function test_connector_is_detected_from_site_and_sync_settings_are_saved(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->getJson('/api/b2b-connectors')
+            ->assertOk()
+            ->assertJsonPath('0.key', 'anro')
+            ->assertJsonPath('0.host', 'b2b.anro.net.pl');
+
+        $id = $this->postJson('/api/b2b-accounts', [
+            'username' => 'jan',
+            'password' => 'haslo-testowe',
+            'sites' => ['https://b2b.anro.net.pl/'],
+            'sync_frequency' => 'daily',
+            'sync_images' => false,
+        ])
+            ->assertCreated()
+            ->assertJsonPath('connector', 'anro')
+            ->assertJsonPath('connector_label', 'Anro')
+            ->assertJsonPath('sync_frequency', 'daily')
+            ->assertJsonPath('sync_images', false)
+            ->assertJsonPath('last_sync_status', null)
+            ->json('id');
+
+        $this->postJson("/api/b2b-accounts/{$id}/sync")->assertOk();
+        $this->assertNotNull(B2bAccount::query()->find($id)?->sync_requested_at);
+
+        $this->postJson('/api/b2b-accounts', [
+            'username' => 'jan',
+            'password' => 'haslo-testowe',
+            'sites' => ['b2b.anro.net.pl'],
+            'sync_frequency' => 'hourly',
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['sync_frequency']);
+    }
+
+    public function test_sync_request_needs_connector_and_manage_permission(): void
+    {
+        $account = B2bAccount::query()->create([
+            'username' => 'jan',
+            'password' => 'sekret',
+            'sites' => ['b2b.example.test'],
+        ]);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->postJson("/api/b2b-accounts/{$account->id}/sync")->assertUnprocessable();
+
+        Sanctum::actingAs(User::factory()->withRole('kierownik')->create());
+        $this->postJson("/api/b2b-accounts/{$account->id}/sync")->assertForbidden();
+        $this->getJson('/api/b2b-connectors')->assertForbidden();
+    }
+
     public function test_user_without_b2b_permission_cannot_list_or_reveal(): void
     {
         $account = B2bAccount::query()->create([

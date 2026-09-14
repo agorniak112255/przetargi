@@ -1,7 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { PriceListsTabs } from '../components/PriceListsTabs'
 import { api, can } from '../lib/api'
+
+type SyncFrequency = 'off' | 'daily' | 'weekly'
 
 type B2bAccount = {
   id: number
@@ -9,10 +12,22 @@ type B2bAccount = {
   has_password: boolean
   sites: string[]
   note: string | null
+  connector: string | null
+  connector_label: string | null
+  sync_frequency: SyncFrequency
+  sync_images: boolean
+  sync_requested_at: string | null
+  last_sync_status: 'running' | 'ok' | 'failed' | null
+  last_sync_started_at: string | null
+  last_sync_finished_at: string | null
+  last_sync_message: string | null
+  last_price_list_id: number | null
   created_by: { id: number; name: string } | null
   updated_by: { id: number; name: string } | null
   updated_at: string | null
 }
+
+type Connector = { key: string; label: string; host: string }
 
 type FormState = {
   id: number | null
@@ -20,9 +35,27 @@ type FormState = {
   password: string
   sites: string
   note: string
+  connector: string
+  sync_frequency: SyncFrequency
+  sync_images: boolean
 }
 
-const EMPTY_FORM: FormState = { id: null, username: '', password: '', sites: '', note: '' }
+const EMPTY_FORM: FormState = {
+  id: null,
+  username: '',
+  password: '',
+  sites: '',
+  note: '',
+  connector: '',
+  sync_frequency: 'off',
+  sync_images: true,
+}
+
+const FREQUENCY_LABEL: Record<SyncFrequency, string> = {
+  off: 'wyłączone',
+  daily: 'codziennie (w nocy)',
+  weekly: 'raz w tygodniu (w nocy)',
+}
 
 function siteHref(site: string): string {
   return /^https?:\/\//i.test(site) ? site : `https://${site}`
@@ -32,10 +65,15 @@ function siteLabel(site: string): string {
   return site.replace(/^https?:\/\//i, '').replace(/\/$/, '')
 }
 
+function formatDate(value: string | null): string {
+  return value ? new Date(value).toLocaleString('pl-PL') : ''
+}
+
 export function PriceListsB2b() {
   const { user } = useAuth()
   const canManage = can(user, 'b2b_accounts.manage')
   const [rows, setRows] = useState<B2bAccount[]>([])
+  const [connectors, setConnectors] = useState<Connector[]>([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState<FormState | null>(null)
   const [busy, setBusy] = useState(false)
@@ -49,10 +87,19 @@ export function PriceListsB2b() {
   }
 
   useEffect(() => {
-    load()
+    Promise.all([load(), api<Connector[]>('/b2b-connectors').then(setConnectors)])
       .catch((ex) => setErr(ex instanceof Error ? ex.message : 'Błąd wczytywania'))
       .finally(() => setLoading(false))
   }, [])
+
+  const syncInProgress = rows.some((r) => r.last_sync_status === 'running' || r.sync_requested_at !== null)
+  useEffect(() => {
+    if (!syncInProgress) return
+    const timer = window.setInterval(() => {
+      void load().catch(() => {})
+    }, 30000)
+    return () => window.clearInterval(timer)
+  }, [syncInProgress])
 
   async function fetchPassword(id: number): Promise<string> {
     if (revealed[id] !== undefined) return revealed[id]
@@ -95,6 +142,9 @@ export function PriceListsB2b() {
       password: '',
       sites: row.sites.join('\n'),
       note: row.note ?? '',
+      connector: row.connector ?? '',
+      sync_frequency: row.sync_frequency,
+      sync_images: row.sync_images,
     })
   }
 
@@ -110,6 +160,9 @@ export function PriceListsB2b() {
         password: form.password,
         sites: form.sites.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
         note: form.note.trim() || null,
+        connector: form.connector || null,
+        sync_frequency: form.sync_frequency,
+        sync_images: form.sync_images,
       })
       if (form.id === null) {
         await api('/b2b-accounts', { method: 'POST', body })
@@ -149,6 +202,42 @@ export function PriceListsB2b() {
     }
   }
 
+  async function onRequestSync(row: B2bAccount) {
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      await api(`/b2b-accounts/${row.id}/sync`, { method: 'POST' })
+      setMsg('Zlecono sprawdzenie cennika — ruszy w ciągu kilku minut i działa w tle.')
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zlecić sprawdzenia')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function renderSyncStatus(row: B2bAccount) {
+    if (row.last_sync_status === 'running') {
+      return <p className="text-blue-700">Trwa pobieranie cennika (od {formatDate(row.last_sync_started_at)}).</p>
+    }
+    if (row.sync_requested_at) {
+      return <p className="text-blue-700">Zlecono sprawdzenie — ruszy w ciągu kilku minut.</p>
+    }
+    if (!row.last_sync_status) {
+      return <p className="text-slate-500">Cennik nie był jeszcze pobierany.</p>
+    }
+    const failed = row.last_sync_status === 'failed'
+    return (
+      <div className={failed ? 'text-red-700' : 'text-slate-600'}>
+        <p className="font-medium">
+          {failed ? 'Ostatnie pobieranie nie powiodło się' : 'Ostatnie pobieranie'}: {formatDate(row.last_sync_finished_at)}
+        </p>
+        {row.last_sync_message && <p className="mt-0.5 whitespace-pre-wrap">{row.last_sync_message}</p>}
+      </div>
+    )
+  }
+
   const fieldBox = 'flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm'
   const iconBtn = 'rounded px-1.5 py-0.5 text-xs text-slate-600 hover:bg-slate-200 hover:text-slate-900'
   const outlineBtn = 'rounded-full border border-blue-300 px-4 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50'
@@ -160,7 +249,8 @@ export function PriceListsB2b() {
         <div>
           <h1 className="text-xl font-semibold">Konta B2B dostawców</h1>
           <p className="text-xs text-slate-500">
-            Dane logowania do witryn B2B. Hasła są zaszyfrowane; każde odsłonięcie trafia do dziennika aktywności.
+            Dane logowania do witryn B2B. Dla obsługiwanych witryn cennik (ceny konta, nowe produkty, opisy, zdjęcia)
+            pobiera się automatycznie wg harmonogramu. Hasła są zaszyfrowane; każde odsłonięcie trafia do dziennika.
           </p>
         </div>
         {canManage && (
@@ -171,7 +261,7 @@ export function PriceListsB2b() {
               setErr('')
               setForm(EMPTY_FORM)
             }}
-            className="rounded bg-blue-600 px-3 py-2 text-xs text-white hover:bg-blue-700"
+            className="shrink-0 rounded bg-blue-600 px-3 py-2 text-xs text-white hover:bg-blue-700"
           >
             + Dodaj konto B2B
           </button>
@@ -227,6 +317,43 @@ export function PriceListsB2b() {
                 onChange={(e) => setForm({ ...form, note: e.target.value })}
               />
             </label>
+            <label className="block text-xs">
+              Importer cennika
+              <select
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                value={form.connector}
+                onChange={(e) => setForm({ ...form, connector: e.target.value })}
+              >
+                <option value="">Wykryj z witryny</option>
+                {connectors.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label} ({c.host})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-xs">
+                Sprawdzanie cennika
+                <select
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                  value={form.sync_frequency}
+                  onChange={(e) => setForm({ ...form, sync_frequency: e.target.value as SyncFrequency })}
+                >
+                  <option value="off">Wyłączone</option>
+                  <option value="daily">Codziennie (w nocy)</option>
+                  <option value="weekly">Raz w tygodniu (w nocy)</option>
+                </select>
+              </label>
+              <label className="mt-5 flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={form.sync_images}
+                  onChange={(e) => setForm({ ...form, sync_images: e.target.checked })}
+                />
+                Pobieraj zdjęcia
+              </label>
+            </div>
           </div>
           <div className="mt-3 flex gap-2">
             <button
@@ -326,10 +453,44 @@ export function PriceListsB2b() {
                 </div>
               </div>
             </div>
+            <div className="space-y-2 border-t border-slate-100 px-4 py-3 text-xs">
+              {row.connector_label ? (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-slate-700">
+                      Importer: <b>{row.connector_label}</b> · sprawdzanie: <b>{FREQUENCY_LABEL[row.sync_frequency]}</b>
+                      {row.sync_images ? ' · ze zdjęciami' : ' · bez zdjęć'}
+                    </p>
+                    <div className="flex gap-3">
+                      <Link
+                        className="text-blue-700 underline"
+                        to={`/price-lists?manufacturer=${encodeURIComponent(row.connector_label)}`}
+                      >
+                        Historia cenników
+                      </Link>
+                      {canManage && (
+                        <button
+                          type="button"
+                          className="text-blue-700 underline disabled:text-slate-400 disabled:no-underline"
+                          disabled={busy || row.last_sync_status === 'running' || row.sync_requested_at !== null}
+                          onClick={() => void onRequestSync(row)}
+                        >
+                          Sprawdź teraz
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {renderSyncStatus(row)}
+                </>
+              ) : (
+                <p className="text-slate-500">Dla tej witryny nie ma jeszcze importera cennika.</p>
+              )}
+            </div>
             <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
               <p className="text-[11px] text-slate-400">
-                {row.updated_by ? `Zmienił: ${row.updated_by.name}` : ''}
-                {row.updated_at ? ` · ${new Date(row.updated_at).toLocaleString('pl-PL')}` : ''}
+                #{row.id}
+                {row.updated_by ? ` · zmienił: ${row.updated_by.name}` : ''}
+                {row.updated_at ? ` · ${formatDate(row.updated_at)}` : ''}
               </p>
               {canManage && (
                 <div className="flex gap-2">

@@ -476,7 +476,7 @@ final class PriceListImportService
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */
-    private function summarizeUpdate(Product $existing, array $payload, string $sku, bool $priceChanged): array
+    public function summarizeUpdate(Product $existing, array $payload, string $sku, bool $priceChanged): array
     {
         $fields = [];
         foreach (['name', 'manufacturer', 'category', 'currency', 'packaging'] as $field) {
@@ -576,7 +576,7 @@ final class PriceListImportService
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>|null
      */
-    private function detectPriceChange(Product $existing, array $payload, string $sku): ?array
+    public function detectPriceChange(Product $existing, array $payload, string $sku): ?array
     {
         $oldCatalog = (float) $existing->catalog_price_net;
         $newCatalog = (float) ($payload['catalog_price_net'] ?? $oldCatalog);

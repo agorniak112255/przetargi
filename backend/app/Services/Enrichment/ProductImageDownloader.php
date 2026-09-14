@@ -313,7 +313,11 @@ final class ProductImageDownloader
         return $this->storeBytes($product, $bytes, $mime, $url, $sortOrder);
     }
 
-    private function storeBytes(
+    /**
+     * Zapis pobranych już bajtów (np. z API B2B dostawcy, gdzie plik wymaga tokenu).
+     * $sourceUrl trafia do bazy — bez tokenów w query.
+     */
+    public function storeBytes(
         Product $product,
         string $bytes,
         string $mime,
