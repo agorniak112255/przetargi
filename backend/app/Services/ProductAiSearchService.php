@@ -120,7 +120,7 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-13b';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-14';
 
     /** @var array<string, int> */
     private array $timingMs = [];
@@ -4558,7 +4558,10 @@ final class ProductAiSearchService
     /**
      * @return array<string, mixed>
      */
-    private function rankCard(Product $product, bool $short): array
+    /**
+     * @param  list<string>  $constraints  warunki rankingu — do dosłownych fragmentów karty, które je potwierdzają
+     */
+    private function rankCard(Product $product, bool $short, array $constraints = []): array
     {
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         $card = [
@@ -4584,8 +4587,73 @@ final class ProductAiSearchService
             $card['description'] = mb_substr((string) ($product->description ?? ''), 0, 360);
             $card['features'] = array_slice($this->stringList($payload['features'] ?? null), 0, 4);
         }
+        // Dosłowne fragmenty z CAŁEGO opisu, cech i specyfikacji, które potwierdzają warunki rankingu, a których model
+        // nie widzi w przyciętych polach. Przetarg 1 poz. 5: „odporność na zginanie do -50°C” stoi w opisie SBM01 FLUO
+        // na znaku 950 — model zgłaszał brak kluczowego warunku i kod obcinał ocenę 95 do 50 w każdym przebiegu.
+        $card['constraint_evidence'] = $this->constraintEvidenceFragments($product, $card, $constraints);
 
         return $card;
+    }
+
+    /**
+     * Najwyżej 4 fragmenty po 200 znaków: dla każdego warunku pierwsze zdanie opisu, cecha albo pozycja specyfikacji
+     * z co najmniej dwiema igłami warunku (albo jedyną), pomijając fragmenty już widoczne na karcie. Igły i dopasowanie
+     * te same co przy wyborze kart do rankingu — fragment niczego nie dopowiada, jest cytatem z karty.
+     *
+     * @param  array<string, mixed>  $card
+     * @param  list<string>  $constraints
+     * @return list<string>
+     */
+    private function constraintEvidenceFragments(Product $product, array $card, array $constraints): array
+    {
+        $constraints = $this->stringList($constraints);
+        if ($constraints === []) {
+            return [];
+        }
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $visible = $this->lexicalNormalize(implode(' ', [
+            (string) ($card['name'] ?? ''),
+            (string) ($card['norms'] ?? ''),
+            (string) ($card['description'] ?? ''),
+            implode(' ', $this->stringList($card['specs'] ?? null)),
+            implode(' ', $this->stringList($card['features'] ?? null)),
+            implode(' ', $this->stringList($card['payload_norms'] ?? null)),
+        ]));
+        $fragments = array_merge(
+            preg_split('/(?<=[.;!?])\s+|\R+/u', (string) ($product->description ?? '')) ?: [],
+            $this->stringList($payload['features'] ?? null),
+            $this->stringList($payload['specs'] ?? null),
+        );
+        $out = [];
+        foreach ($constraints as $constraint) {
+            $needles = $this->constraintNeedles([$constraint]);
+            if ($needles === []) {
+                continue;
+            }
+            $required = min(2, count($needles));
+            $visibleHits = count(array_filter($needles, static fn (string $needle): bool => str_contains($visible, $needle)));
+            if ($visibleHits >= count($needles)) {
+                continue;
+            }
+            foreach ($fragments as $fragment) {
+                $fragment = trim(preg_replace('/\s+/u', ' ', (string) $fragment) ?? '');
+                if ($fragment === '') {
+                    continue;
+                }
+                $haystack = $this->lexicalNormalize($fragment);
+                $hits = count(array_filter($needles, static fn (string $needle): bool => str_contains($haystack, $needle)));
+                if ($hits < $required || str_contains($visible, trim($haystack))) {
+                    continue;
+                }
+                $out[] = mb_substr($fragment, 0, 200);
+                break;
+            }
+            if (count($out) >= 4) {
+                break;
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     /** Komplet dwóch krojów/produktów — na teraz i na kolejne SIWZ. */
@@ -4627,7 +4695,7 @@ final class ProductAiSearchService
         array $retrieveIntent = [],
     ): array {
         $short = $this->useShortSearchCards($task);
-        $cards = $candidates->map(fn (Product $p): array => $this->rankCard($p, $short))->values()->all();
+        $cards = $candidates->map(fn (Product $p): array => $this->rankCard($p, $short, $constraints))->values()->all();
 
         $neededLine = is_string($needed) && trim($needed) !== ''
             ? "\nSzukany produkt (z analizy):\n".trim($needed)
@@ -4650,8 +4718,8 @@ final class ProductAiSearchService
             $intentLine .= "\nModel z analizy: ".$intent['model_name'];
         }
         $proofFields = $short
-            ? 'name/norms/specs/payload_norms/description_norms/use_cases/heat_celsius'
-            : 'name/norms/specs/payload_norms/description_norms/features/use_cases/description';
+            ? 'name/norms/specs/payload_norms/description_norms/constraint_evidence/use_cases/heat_celsius'
+            : 'name/norms/specs/payload_norms/description_norms/constraint_evidence/features/use_cases/description';
         $constraintLine = $constraints === []
             ? ''
             : "\nWarunki z analizy (dowód z {$proofFields}, nie zgaduj; kluczowy bez dowodu → score najwyżej 50, "
