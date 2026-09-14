@@ -120,7 +120,8 @@ final class AnroB2bConnector implements B2bConnector
         $technical = $this->client->technicalData((int) $product->remoteId);
         if ($technical !== []) {
             $params = array_map(static fn (array $p): string => '- '.$p['name'].': '.$p['value'], $technical);
-            $out .= ($out !== '' ? "\n\n" : '').'Parametry ('.AnroB2bClient::HOST."):\n".implode("\n", $params);
+            // źródło karty jest w linku produktu i powiązaniu z kontem B2B — nie w treści opisu
+            $out .= ($out !== '' ? "\n\n" : '')."Parametry:\n".implode("\n", $params);
         }
 
         return mb_substr($out, 0, 10000);

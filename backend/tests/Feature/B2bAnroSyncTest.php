@@ -83,7 +83,8 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertStringNotContainsString('<', (string) $product->description);
         $this->assertStringContainsString('Znak & alarm pożarowy', (string) $product->description);
         $this->assertStringContainsString("- fotoluminescencyjny\n- dwustronny", (string) $product->description);
-        $this->assertStringContainsString("Parametry (b2b.anro.net.pl):\n- Format: 200 x 200\n- Materiał: Płyta PVC", (string) $product->description);
+        $this->assertStringContainsString("Parametry:\n- Format: 200 x 200\n- Materiał: Płyta PVC", (string) $product->description);
+        $this->assertStringNotContainsString('b2b.anro.net.pl', (string) $product->description);
 
         $image = $product->images()->firstOrFail();
         Storage::disk('public')->assertExists($image->path);
