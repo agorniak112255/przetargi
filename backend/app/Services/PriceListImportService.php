@@ -1250,7 +1250,6 @@ final class PriceListImportService
         $description = null;
         $name = $rawName;
         if ($rawName !== '' && $this->isDescriptionLike($rawName)) {
-            $description = $rawName;
             // Nazwa z wiersza wyżej tylko w obrębie tego samego modelu (DuPont: tytuł w 1. wierszu
             // Reference, opis w kolejnych). Bez wspólnego klucza modelu każdy wiersz opisuje własny
             // wyrób — w cenniku Canis „Men´s shorts CXS LEONIS” przechodziło na setki kolejnych
@@ -1258,11 +1257,14 @@ final class PriceListImportService
             $sameModelTitle = ($carry['name'] ?? null) !== null
                 && $groupKey !== null
                 && ($carry['name_group'] ?? null) === $groupKey;
-            $name = $sameModelTitle
-                ? (string) $carry['name']
-                : $this->titleFromDescription($rawName);
+            // Opisem jest tylko tekst pod tytułem tego samego modelu (DuPont). Wiersz z własnym kodem i długą nazwą to nazwa
+            // produktu: cennik 3M 2026 („Osłona przed rozkurzem maski … do bezobsługowej półmaski … 4000+”) dawał nazwę z
+            // pierwszych 80 znaków albo z wiersza wyżej, a całą nazwę w opisie — karta wyglądała na opisaną, choć opis
+            // był tylko nazwą z cennika, i nie trafiała do pobrania opisu.
+            $description = $sameModelTitle ? $rawName : null;
+            $name = $sameModelTitle ? (string) $carry['name'] : $rawName;
             if (($carry['name'] ?? null) === null) {
-                $carry['name'] = $name;
+                $carry['name'] = $this->titleFromDescription($rawName);
                 $carry['name_group'] = $groupKey;
             }
         } elseif ($rawName === '' && $carryKey !== null) {

@@ -123,14 +123,15 @@ class Product extends Model
     }
 
     /**
-     * Karta ma tekst opisu (co najmniej 24 znaki). Status „done” bez tekstu nie wystarcza — w katalogu jest takich kart
-     * kilkanaście, a model i dowody ze słów nie mają wtedy czego potwierdzić.
+     * Karta ma tekst opisu (co najmniej 24 znaki), który mówi coś ponad nazwę. Status „done” bez tekstu nie wystarcza — w katalogu
+     * jest takich kart kilkanaście, a model i dowody ze słów nie mają wtedy czego potwierdzić. Opis powtarzający nazwę też nie:
+     * import cennika 3M 2026 zapisał długie nazwy produktów jako opis (2939 kart bez pobranego opisu).
      */
     public function hasDescriptionText(): bool
     {
         $d = trim((string) ($this->description ?? ''));
 
-        return $d !== '' && mb_strlen($d) >= 24;
+        return $d !== '' && mb_strlen($d) >= 24 && ! $this->descriptionRepeatsName($d);
     }
 
     public function hasUsableDescription(): bool
@@ -138,9 +139,25 @@ class Product extends Model
         if ($this->enrichment_status === self::ENRICHMENT_DONE) {
             return true;
         }
-        $d = trim((string) ($this->description ?? ''));
 
-        return $d !== '' && mb_strlen($d) >= 24;
+        return $this->hasDescriptionText();
+    }
+
+    /**
+     * Opis to tekst nazwy z cennika: równy nazwie, jej początek albo długa nazwa ucięta przy imporcie (≥ 60 znaków) z krótką
+     * resztą (< 80 znaków). Krótka nazwa na początku zwykłego opisu („Rękawice robocze wzmacniane, dzianina…”) to nadal opis.
+     */
+    private function descriptionRepeatsName(string $description): bool
+    {
+        $normalize = static fn (string $text): string => trim((string) preg_replace('/[^\p{L}\p{N}]+/u', ' ', mb_strtolower($text)));
+        $name = $normalize((string) ($this->name ?? ''));
+        $text = $normalize($description);
+        if ($name === '' || $text === '') {
+            return false;
+        }
+
+        return str_starts_with($name, $text)
+            || (mb_strlen($name) >= 60 && str_starts_with($text, $name) && mb_strlen($text) - mb_strlen($name) < 80);
     }
 
     public function priceHistory(): HasMany

@@ -234,6 +234,36 @@ final class PriceListGroupedRowsImportTest extends TestCase
         }
     }
 
+    /**
+     * Cennik 3M 2026: wiersz z własnym kodem i długą nazwą („Osłona przed rozkurzem maski … 4000+”) dawał nazwę z pierwszych
+     * 80 znaków albo z wiersza wyżej (półmaska 4279+), a całą nazwę w opisie. Długa nazwa to nazwa, opisu z cennika nie ma.
+     */
+    public function test_long_product_name_with_own_code_stays_name_not_description(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'flat3m').'.xlsx';
+        $spreadsheet = new Spreadsheet;
+        $longName = 'Osłona przed rozkurzem maski wielokrotnego użytku 3M™ do bezobsługowej półmaski wielokrotnego użytku 3M™ z serii 4000+, 400+';
+        $spreadsheet->getActiveSheet()->fromArray([
+            ['sku', 'nazwa', 'cena'],
+            ['4279+', 'Niewymagająca konserwacji półmaska wielokrotnego użytku 3M™, filtry FFABEK1P3 R D, 4279+', 120],
+            ['7100113104', $longName, 0.8],
+        ]);
+        (new Xlsx($spreadsheet))->save($path);
+        try {
+            $preview = app(PriceListImportService::class)->previewFromMapping($path, $this->flatMapping($spreadsheet->getActiveSheet()->getTitle()), 10);
+            $bySku = [];
+            foreach ($preview['products'] as $product) {
+                $bySku[$product['sku']] = $product;
+            }
+
+            $this->assertSame($longName, $bySku['7100113104']['name'], 'cała nazwa z cennika jest nazwą karty');
+            $this->assertNull($bySku['7100113104']['description'] ?? null, 'nazwa z cennika nie udaje opisu');
+            $this->assertStringStartsWith('Niewymagająca konserwacji półmaska', $bySku['4279+']['name']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_flat_price_list_still_imports(): void
     {
         $path = tempnam(sys_get_temp_dir(), 'flat').'.xlsx';
