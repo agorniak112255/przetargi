@@ -477,7 +477,8 @@
             "query": "Spodniobuty wodoochronne z wgrzanymi na stałe kaloszami – obuwie bezpieczne typu S5 SRC wg EN ISO 20345, z wkładką antyprzebiciową. Wymagane: tkanina na podkładzie poliestrowym, jednostronnie powlekana PVC, o zwiększonej widzialności (kolor fluorescencyjny) i odporności na rozdzieranie, spełniająca wymagania EN 343; szwy zgrzewane obustronnie (szczelność i wytrzymałość); wzmocnienia na kolanach; regulacja w pasie sznurkiem; wymienne szelki z szerokiej elastycznej gumy; materiał odporny na zginanie bez pękania w temperaturze do -50°C; przeznaczenie do pracy w warunkach ograniczonej widoczności. Rozmiary: 39–48.",
             "expected_skus": [
                 "SB04 AIR",
-                "SBM01 FLUO"
+                "SBM01 FLUO",
+                "WRM02 FLUO"
             ],
             "forbidden_skus": [
                 "AB178"

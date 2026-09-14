@@ -207,7 +207,8 @@
             "AB178"
         ],
         "eval_extra_expected_skus": [
-            "SBM01 FLUO"
+            "SBM01 FLUO",
+            "WRM02 FLUO"
         ],
         "prod_search": {
             "needed": "Spodniobuty wodoochronne z kaloszami",
