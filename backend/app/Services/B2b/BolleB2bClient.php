@@ -38,6 +38,20 @@ final class BolleB2bClient
 
     private const LOGIN_URL = self::BASE.'/safety/services/Account.Login.Service.ss?n='.self::SITE_ID.'&c='.self::COMPANY_ID;
 
+    /**
+     * Nagłówki, które przeglądarka dokłada do zapytań usług sklepu (jQuery.ajaxSetup w checkout.js: X-SC-Touchpoint
+     * strony logowania; X-Requested-With dla zapytań z tej samej domeny). Bez nich usługa logowania odpowiada
+     * HTTP 200 z ERR_INVALID_ORIGIN, zanim sprawdzi hasło (sprawdzone na koncie 15.09.2026; samo Origin i Referer
+     * albo sam X-SC-Touchpoint nie wystarczały). Tylko przy logowaniu: profil z X-SC-Touchpoint „checkout” nie
+     * podaje isLoggedIn.
+     */
+    private const LOGIN_HEADERS = [
+        'X-SC-Touchpoint' => 'checkout',
+        'X-Requested-With' => 'XMLHttpRequest',
+        'Origin' => self::BASE,
+        'Referer' => self::BASE.'/safety/checkout.ssp?is=login&login=T',
+    ];
+
     private const PROFILE_URL = self::BASE.'/safety/services/Profile.Service.ss';
 
     private const ENVIRONMENT_URL = self::BASE.'/safety/public/shopping.environment.shortcache.ssp?X-SC-Touchpoint=shopping';
@@ -97,12 +111,18 @@ final class BolleB2bClient
 
         try {
             $response = $this->send(
-                fn (PendingRequest $http): Response => $http->acceptJson()->asJson()->post(self::LOGIN_URL, $this->loginBody()),
+                fn (PendingRequest $http): Response => $http
+                    ->withHeaders(self::LOGIN_HEADERS)
+                    ->acceptJson()
+                    ->withBody((string) json_encode($this->loginBody()), 'application/json; charset=UTF-8')
+                    ->post(self::LOGIN_URL),
                 [400, 401, 403],
             );
-            if (! $response->successful()) {
-                $message = trim((string) ($response->json('errorMessage') ?? $response->json('errorCode') ?? ''));
-                throw new RuntimeException('sklep odrzucił dane logowania (HTTP '.$response->status().($message !== '' ? ': '.$message : '').')');
+            // sklep zgłasza odmowę także w HTTP 200 (np. ERR_INVALID_ORIGIN) — o wyniku decyduje treść
+            $errorCode = trim((string) ($response->json('errorCode') ?? ''));
+            if (! $response->successful() || $errorCode !== '') {
+                $message = trim($errorCode.' '.(string) ($response->json('errorMessage') ?? ''));
+                throw new RuntimeException('sklep odrzucił logowanie (HTTP '.$response->status().($message !== '' ? ': '.$message : '').')');
             }
             $profile = $this->profile();
         } catch (B2bFatalException $e) {
@@ -279,9 +299,8 @@ final class BolleB2bClient
     }
 
     /**
-     * Ciało logowania — standardowy kształt SuiteCommerce Advanced (Account.Login.Service.ss). NIEZWERYFIKOWANE
-     * na żywo: 15.09.2026 sprawdzono tylko, że adres przyjmuje wyłącznie POST (GET = ERR_METHOD_NOT_ALLOWED).
-     * Gdyby sklep oczekiwał innych pól, zmiana tylko tutaj.
+     * Ciało logowania — kształt SuiteCommerce Advanced (Account.Login.Service.ss), sprawdzony na koncie 15.09.2026:
+     * odpowiedź z user.isLoggedIn „T”, a potem profil i ceny konta (BMCDI021: 30,15 przy katalogowej 67).
      *
      * @return array<string, string>
      */

@@ -105,6 +105,9 @@ final class BolleConnectorTest extends TestCase
         $this->assertSame('https://b2b.bolle-safety.com/safety/services/Account.Login.Service.ss?n=3&c=5230881', $post->url());
         $this->assertStringContainsString('application/json', $post->header('Content-Type')[0] ?? '');
         $this->assertSame(['email' => 'jan@example.com', 'password' => 'dobre-haslo', 'redirect' => 'true'], $post->data());
+        $this->assertSame('checkout', $post->header('X-SC-Touchpoint')[0] ?? null);
+        $this->assertSame('XMLHttpRequest', $post->header('X-Requested-With')[0] ?? null);
+        $this->assertSame('https://b2b.bolle-safety.com', $post->header('Origin')[0] ?? null);
 
         $profiles = Http::recorded(fn (Request $r): bool => str_contains($r->url(), 'Profile.Service.ss'));
         $this->assertCount(2, $profiles);
@@ -135,8 +138,36 @@ final class BolleConnectorTest extends TestCase
         $client = new BolleB2bClient('jan@example.com', 'zle-haslo', 0, static function (int $ms): void {});
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Logowanie do bolle-safety.com nieudane: sklep odrzucił dane logowania (HTTP 401: Invalid login)');
+        $this->expectExceptionMessage('Logowanie do bolle-safety.com nieudane: sklep odrzucił logowanie (HTTP 401: ERR_WS_INVALID_LOGIN Invalid login)');
         $client->login();
+    }
+
+    /**
+     * Sklep odmawia logowania w HTTP 200 z kodem błędu w treści (15.09.2026: ERR_INVALID_ORIGIN bez nagłówków
+     * przeglądarki). Komunikat ma podać powód sklepu, a nie sugerować złe hasło.
+     */
+    public function test_refusal_in_http_200_body_reports_shop_error_code(): void
+    {
+        Http::fake([
+            'b2b.bolle-safety.com/safety/services/Account.Login.Service.ss*' => Http::response(
+                ['errorStatusCode' => '400', 'errorCode' => 'ERR_INVALID_ORIGIN', 'errorMessage' => 'Invalid request origin'],
+                200,
+            ),
+            '*' => Http::response(['errorCode' => 'NIE_POWINNO_BYC_WYWOLANE'], 500),
+        ]);
+        $client = $this->client();
+
+        try {
+            $client->login();
+            $this->fail('Logowanie powinno się nie udać');
+        } catch (RuntimeException $e) {
+            $this->assertSame(
+                'Logowanie do bolle-safety.com nieudane: sklep odrzucił logowanie (HTTP 200: ERR_INVALID_ORIGIN Invalid request origin)',
+                $e->getMessage(),
+            );
+        }
+        $this->assertFalse($client->isLoggedIn());
+        Http::assertSentCount(1);
     }
 
     public function test_profile_without_currency_fails_login_instead_of_default_currency(): void
@@ -491,6 +522,10 @@ final class BolleConnectorTest extends TestCase
             if ($path === '/safety/services/Account.Login.Service.ss') {
                 if ($request->method() !== 'POST') {
                     return Http::response(['errorCode' => 'ERR_METHOD_NOT_ALLOWED'], 405);
+                }
+                // jak sklep 15.09.2026: bez nagłówków przeglądarki odmowa w HTTP 200, zanim sprawdzi hasło
+                if (($request->header('X-SC-Touchpoint')[0] ?? null) !== 'checkout' || ($request->header('X-Requested-With')[0] ?? null) !== 'XMLHttpRequest') {
+                    return Http::response(['errorStatusCode' => '400', 'errorCode' => 'ERR_INVALID_ORIGIN', 'errorMessage' => 'Invalid request origin'], 200);
                 }
                 if (($request->data()['password'] ?? null) !== 'dobre-haslo' || ($request->data()['email'] ?? null) !== 'jan@example.com') {
                     return Http::response(['errorStatusCode' => '401', 'errorCode' => 'ERR_WS_INVALID_LOGIN', 'errorMessage' => 'Invalid login'], 401);
