@@ -1,0 +1,265 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Jobs;
+
+use App\Models\B2bProductLink;
+use App\Models\Product;
+use App\Services\B2b\B2bTextTranslator;
+use App\Services\B2b\B2bTranslationRejected;
+use App\Services\Enrichment\EnrichmentSlots;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Throwable;
+
+/**
+ * Tłumaczenie na polski opisu (i nazwy nowej karty) zapisanych przez import B2B łącznika B2bForeignLanguageSource.
+ *
+ * Decyzja użytkownika 15.09.2026: opisy i nazwy nowych kart z importu mają być po polsku, bez przechowywania
+ * oryginalnego opisu. Tłumaczymy wyłącznie tekst, który zapisał import i którego nikt nie ruszył: opis tylko
+ * gdy sha1(opisu karty) === link.description_hash, nazwę tylko gdy nazwa karty === link.remote_name.
+ *
+ * - Slot z EnrichmentSlots (wspólny limit zapytań AI z Ustawień AI): import tysiąca kart zlecał tyle samo
+ *   równoległych wywołań modelu — 15.09.2026 kończyło się HTTP 429. Brak slotu = ponowne zlecenie z opóźnieniem,
+ *   bez zużycia próby (jak EnrichProductJob).
+ * - Compare-and-set: model odpowiada nawet minutę, a w tym czasie karta może zostać poprawiona ręcznie, wzbogacona
+ *   albo nadpisana kolejnym przebiegiem importu. Zapis w transakcji z blokadą karty i linku i tylko wtedy, gdy opis,
+ *   nazwa i hashe są dokładnie takie jak przy starcie — inaczej tłumaczenie przepada, karta zostaje nietknięta.
+ * - Niezmiennik: link.source_description_hash jest niepusty TYLKO gdy opis karty jest tłumaczeniem
+ *   (sha1 tekstu źródła, z którego powstał), a link.description_hash = sha1(opisu na karcie) — dzięki temu import
+ *   rozpozna, że opis nie był edytowany ręcznie, a ponowny przebieg z tym samym źródłem nie zleca tłumaczenia od nowa.
+ *
+ * Unikalność do startu (ShouldBeUniqueUntilProcessing): kolejne przebiegi importu nie dublują czekającego joba,
+ * a ponowne zlecenie z handle() przy braku slotu nie jest po cichu odrzucane przez blokadę tego samego joba
+ * (przy ShouldBeUnique blokada trwa do końca handle()). Duplikat w trakcie pracy odrzuci compare-and-set.
+ */
+class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
+{
+    use Dispatchable;
+    use InteractsWithQueue;
+    use Queueable;
+    use SerializesModels;
+
+    public const QUEUE = 'enrich';
+
+    /** Kolumna products.name to VARCHAR(1000) — dłuższej nazwy nie zapisujemy (i nie ucinamy po cichu). */
+    private const MAX_NAME_LENGTH = 1000;
+
+    public int $tries = 3;
+
+    /** @var list<int> */
+    public array $backoff = [30, 90, 180];
+
+    // Klient AI potrafi czekać ~2 min na przeciążony model; do tego do 2 min czekania na slot.
+    public int $timeout = 300;
+
+    public int $uniqueFor = 3600;
+
+    public function __construct(
+        public readonly int $productId,
+        public readonly int $b2bAccountId,
+        /** Tłumaczyć też nazwę (tylko nowa karta łącznika B2bKeepsExistingNames). */
+        public readonly bool $translateName = false,
+    ) {
+        $this->onQueue(self::QUEUE);
+    }
+
+    public function uniqueId(): string
+    {
+        return (string) $this->productId;
+    }
+
+    public function handle(B2bTextTranslator $translator, EnrichmentSlots $slots): void
+    {
+        $product = Product::query()->find($this->productId);
+        $link = $product !== null ? $this->findLink() : null;
+        if ($product === null || $link === null) {
+            return;
+        }
+
+        $start = $this->snapshot($product, $link);
+        if ($start === null) {
+            return;
+        }
+
+        $slot = $slots->acquire(
+            $this->timeout + 60,
+            (float) config('ai.enrichment_slot_wait_seconds', 120)
+        );
+        if ($slot === null) {
+            // Limit z Ustawień AI obłożony — karta wraca do kolejki bez zużycia próby.
+            self::dispatch($this->productId, $this->b2bAccountId, $this->translateName)
+                ->delay(now()->addSeconds(10));
+            $this->delete();
+
+            return;
+        }
+
+        try {
+            // Sama nazwa (opis edytowany ręcznie) — opis pusty, jego tłumaczenie ignorujemy.
+            $translated = $translator->translate($start['description'] ?? '', $start['name']);
+        } catch (B2bTranslationRejected $e) {
+            $this->logRejected($product, $e->getMessage());
+
+            return;
+        } finally {
+            $slot->release();
+        }
+
+        $description = $start['description'] !== null ? trim((string) ($translated['description'] ?? '')) : null;
+        $name = $start['name'] !== null ? trim((string) ($translated['name'] ?? '')) : null;
+        if ($description === '' || $name === '') {
+            $this->logRejected($product, 'puste tłumaczenie');
+
+            return;
+        }
+        if ($name !== null && mb_strlen($name) > self::MAX_NAME_LENGTH) {
+            $this->logRejected($product, 'nazwa po tłumaczeniu dłuższa niż '.self::MAX_NAME_LENGTH.' znaków');
+
+            return;
+        }
+
+        $skipReason = $this->store((int) $link->id, $start, $description, $name);
+        if ($skipReason !== null) {
+            Log::info('Tłumaczenie tekstu B2B niezapisane — karta zmieniła się w trakcie', [
+                'product_id' => $this->productId,
+                'b2b_account_id' => $this->b2bAccountId,
+                'sku' => $product->sku,
+                'reason' => $skipReason,
+            ]);
+
+            return;
+        }
+
+        Log::info('Przetłumaczono tekst karty z importu B2B', [
+            'product_id' => $this->productId,
+            'sku' => $product->sku,
+            'description' => $description !== null ? 'tak' : 'nie',
+            'name' => $name !== null ? 'tak' : 'nie',
+            'description_length' => $start['description'] !== null
+                ? mb_strlen($start['description']).' → '.mb_strlen((string) $description)
+                : null,
+            'name_length' => $start['name'] !== null
+                ? mb_strlen($start['name']).' → '.mb_strlen((string) $name)
+                : null,
+        ]);
+    }
+
+    public function failed(?Throwable $e): void
+    {
+        Log::warning('Tłumaczenie tekstu B2B nie powiodło się', [
+            'product_id' => $this->productId,
+            'b2b_account_id' => $this->b2bAccountId,
+            'error' => $e?->getMessage(),
+        ]);
+    }
+
+    private function findLink(bool $lock = false): ?B2bProductLink
+    {
+        $query = B2bProductLink::query()
+            ->where('b2b_account_id', $this->b2bAccountId)
+            ->where('product_id', $this->productId)
+            ->orderBy('id');
+
+        return ($lock ? $query->lockForUpdate() : $query)->first();
+    }
+
+    /**
+     * Co tłumaczyć i stan karty/linku, który musi przetrwać do zapisu. Null = nic do tłumaczenia.
+     *
+     * @return array{description: string|null, name: string|null, description_hash: string|null, remote_name: string|null, product_description: string|null, product_name: string}|null
+     */
+    private function snapshot(Product $product, B2bProductLink $link): ?array
+    {
+        if ($link->source_description_hash !== null) {
+            return null;
+        }
+
+        $current = (string) ($product->description ?? '');
+        $description = trim($current) !== ''
+            && $link->description_hash !== null
+            && hash_equals($link->description_hash, sha1($current))
+            ? $current
+            : null;
+
+        $name = $this->translateName
+            && $link->remote_name !== null
+            && trim($link->remote_name) !== ''
+            && (string) $product->name === $link->remote_name
+            ? (string) $product->name
+            : null;
+
+        if ($description === null && $name === null) {
+            return null;
+        }
+
+        return [
+            'description' => $description,
+            'name' => $name,
+            'description_hash' => $link->description_hash,
+            'remote_name' => $link->remote_name,
+            'product_description' => $product->description,
+            'product_name' => (string) $product->name,
+        ];
+    }
+
+    /**
+     * Compare-and-set. Zwraca powód pominięcia albo null, gdy zapisano.
+     *
+     * @param  array{description: string|null, name: string|null, description_hash: string|null, remote_name: string|null, product_description: string|null, product_name: string}  $start
+     */
+    private function store(int $linkId, array $start, ?string $description, ?string $name): ?string
+    {
+        return DB::transaction(function () use ($linkId, $start, $description, $name): ?string {
+            $product = Product::query()->lockForUpdate()->find($this->productId);
+            $link = B2bProductLink::query()->lockForUpdate()->find($linkId);
+            if ($product === null || $link === null) {
+                return 'karta albo powiązanie usunięte';
+            }
+            if ($link->source_description_hash !== null) {
+                return 'opis już przetłumaczony';
+            }
+            if ($link->description_hash !== $start['description_hash']) {
+                return 'import zapisał nowy opis';
+            }
+            if ($start['description'] !== null && $product->description !== $start['product_description']) {
+                return 'opis karty zmieniony';
+            }
+            if ($start['name'] !== null
+                && ((string) $product->name !== $start['product_name'] || $link->remote_name !== $start['remote_name'])) {
+                return 'nazwa karty albo nazwa u dostawcy zmieniona';
+            }
+
+            if ($description !== null) {
+                $product->description = $description;
+                $link->description_hash = sha1($description);
+                $link->source_description_hash = sha1((string) $start['description']);
+            }
+            if ($name !== null) {
+                $product->name = $name;
+            }
+            // haki modelu przebudują search_blob i zlecą reindeks embeddingu
+            $product->save();
+            $link->save();
+
+            return null;
+        });
+    }
+
+    private function logRejected(Product $product, string $reason): void
+    {
+        Log::warning('Tłumaczenie tekstu B2B odrzucone', [
+            'product_id' => $this->productId,
+            'b2b_account_id' => $this->b2bAccountId,
+            'sku' => $product->sku,
+            'reason' => $reason,
+        ]);
+    }
+}

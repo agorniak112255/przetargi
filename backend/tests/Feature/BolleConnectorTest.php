@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\B2bAccount;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
+use App\Services\B2b\B2bForeignLanguageSource;
 use App\Services\B2b\B2bKeepsExistingNames;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\BolleB2bClient;
@@ -382,11 +383,11 @@ final class BolleConnectorTest extends TestCase
             '- Anti-scratch & anti-fog',
             '',
             'Parametry:',
-            '- Frame Material: Nylon',
-            '- Lens coating: Platinum®',
-            '- Lens colour: Copper',
+            '- Materiał oprawki: Nylon',
+            '- Powłoka soczewki: Platinum®',
+            '- Kolor soczewki: Copper',
         ]), $description);
-        foreach (['&nbsp;', 'Frame Technology', 'SEGMENT-WEWNETRZNY', '2026-10-01', '<p>'] as $absent) {
+        foreach (['&nbsp;', 'Technologia oprawki', 'Frame Material', 'SEGMENT-WEWNETRZNY', '2026-10-01', '<p>'] as $absent) {
             $this->assertStringNotContainsString($absent, $description);
         }
     }
@@ -450,6 +451,7 @@ final class BolleConnectorTest extends TestCase
         $connector = $registry->make($account, 0);
         $this->assertInstanceOf(BolleB2bConnector::class, $connector);
         $this->assertInstanceOf(B2bKeepsExistingNames::class, $connector);
+        $this->assertInstanceOf(B2bForeignLanguageSource::class, $connector);
         $this->assertSame('Bolle', $connector->manufacturer(new B2bRemoteProduct('1', 'X', 'X')));
     }
 

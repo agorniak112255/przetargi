@@ -17,7 +17,9 @@ class B2bProductLink extends Model
         'remote_id',
         'product_id',
         'remote_sku',
+        'remote_name',
         'description_hash',
+        'source_description_hash',
         'last_seen_at',
     ];
 

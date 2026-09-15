@@ -25,8 +25,12 @@ use RuntimeException;
  *
  * Nazwa istniejącej karty nie jest nadpisywana (B2bKeepsExistingNames): 254 karty Bolle mają polskie nazwy
  * z cennika EMEA, sklep podaje angielskie nazwy rodzin.
+ *
+ * Sklep podaje teksty po angielsku (B2bForeignLanguageSource, decyzja użytkownika 15.09.2026): opis zapisany
+ * przez import i nazwa nowej karty są tłumaczone na polski po zapisie (TranslateB2bProductTextJob). Łącznik
+ * podaje tekst dosłownie; tylko etykiety cech w „Parametry:” są naszymi stałymi polskimi odpowiednikami.
  */
-final class BolleB2bConnector implements B2bConnector, B2bKeepsExistingNames
+final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bKeepsExistingNames
 {
     private const SESSION_LOST = 'Utracono sesję konta bolle-safety.com — ceny konta niedostępne';
 
@@ -35,14 +39,17 @@ final class BolleB2bConnector implements B2bConnector, B2bKeepsExistingNames
     private const EPSILON = 0.005;
 
     /**
-     * Pola cech z etykietami filtrów sklepu (SC.CONFIGURATION.facets, odczyt 15.09.2026). Pozostałe custitem_*
-     * nie mają etykiet w źródle (część to pola wewnętrzne: segmenty klientów, najbliższa dostawa) — nie trafiają do opisu.
+     * Pola cech, które mają etykiety filtrów sklepu (SC.CONFIGURATION.facets, odczyt 15.09.2026: Frame Material,
+     * Frame Technology, Lens coating, Lens colour). Etykiety to nasze stałe polskie odpowiedniki tych etykiet
+     * (15.09.2026) — wartości cech zostają dosłownie ze źródła i tłumaczy je dopiero job tłumaczenia opisu.
+     * Pozostałe custitem_* nie mają etykiet w źródle (część to pola wewnętrzne: segmenty klientów, najbliższa
+     * dostawa) — nie trafiają do opisu.
      */
     private const PARAMETERS = [
-        'custitem_bb_fm_product_material' => 'Frame Material',
-        'custitem_bb_specific_technology' => 'Frame Technology',
-        'custitem_bb_safety_lens_coating' => 'Lens coating',
-        'custitem_bb_safety_lens_shade' => 'Lens colour',
+        'custitem_bb_fm_product_material' => 'Materiał oprawki',
+        'custitem_bb_specific_technology' => 'Technologia oprawki',
+        'custitem_bb_safety_lens_coating' => 'Powłoka soczewki',
+        'custitem_bb_safety_lens_shade' => 'Kolor soczewki',
     ];
 
     /** Pola pozycji zachowywane w raw (reszta odpowiedzi nie jest potrzebna). */
@@ -170,9 +177,10 @@ final class BolleB2bConnector implements B2bConnector, B2bKeepsExistingNames
     }
 
     /**
-     * Opis dosłownie ze sklepu (bez tłumaczenia), sekcje oddzielone pustą linią: krótki opis (storedescription),
-     * opis szczegółowy (storedetaileddescription), opis wyróżniony (featureddescription) — sekcja identyczna
-     * z wcześniejszą pominięta. Na końcu „Parametry:” tylko z pól z etykietami filtrów sklepu (PARAMETERS).
+     * Opis dosłownie ze sklepu (tłumaczenie dopiero po zapisie karty — B2bForeignLanguageSource), sekcje
+     * oddzielone pustą linią: krótki opis (storedescription), opis szczegółowy (storedetaileddescription), opis
+     * wyróżniony (featureddescription) — sekcja identyczna z wcześniejszą pominięta. Na końcu „Parametry:” tylko
+     * z pól z etykietami filtrów sklepu (PARAMETERS, polskie etykiety, wartości dosłownie).
      */
     public function description(B2bRemoteProduct $product): string
     {

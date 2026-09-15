@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\B2b;
 
 use App\Jobs\ReindexProductEmbeddingJob;
+use App\Jobs\TranslateB2bProductTextJob;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
@@ -31,11 +32,20 @@ use Throwable;
  * - opis ze źródła, gdy karta go nie ma albo ma opis zapisany wcześniej przez synchronizację i
  *   niezmieniony od tamtej pory — opisu poprawionego ręcznie nie nadpisujemy;
  * - kategoria, link i zdjęcie tylko gdy puste; produktów znikniętych z B2B nie kasujemy;
- * - łącznik B2bKeepsExistingNames nie zmienia nazwy istniejącej karty (nazwa ze źródła tylko na nowej).
+ * - łącznik B2bKeepsExistingNames nie zmienia nazwy istniejącej karty (nazwa ze źródła tylko na nowej);
+ *   b2b_product_links.remote_name zawsze trzyma nazwę ze źródła z ostatniego przebiegu;
+ * - łącznik B2bForeignLanguageSource (decyzja użytkownika 15.09.2026): po zapisie opisu ze źródła (i przy nowej
+ *   karcie łącznika B2bKeepsExistingNames — także nazwy) zlecamy TranslateB2bProductTextJob; nigdy w dry-run.
+ *   Niezmiennik hashy powiązania: description_hash = sha1 opisu na karcie zapisanego przez synchronizację;
+ *   source_description_hash niepusty tylko wtedy, gdy ten opis jest tłumaczeniem — wtedy to sha1 tekstu źródła.
+ *   Źródło bez zmian i tłumaczenie na karcie nietknięte → import nie przywraca oryginału i nie zleca ponownie;
+ *   zapis tekstu źródła zeruje source_description_hash. Oryginalnego opisu nie przechowujemy.
  *
  * Łącznik z wersjami (B2bVariantConnector): karta ma cenę 0 („brak ceny”), ceny konta i ich historia są w
  * product_variants / product_variant_price_history; jedna transakcja na produkt; wersje zniknięte z pełnej
  * listy dostawcy dostają removed_at; formaty/podłoża trafiają do products.variant_summary (wyszukiwanie).
+ * Tłumaczenia obsługuje tylko ścieżka bez wersji — żaden łącznik z wersjami nie ma obcojęzycznego źródła
+ * (15.09.2026), znacznik B2bForeignLanguageSource na takim łączniku nic nie zleca.
  */
 final class B2bCatalogSync
 {
@@ -82,7 +92,8 @@ final class B2bCatalogSync
      *     progress_unit: string,
      *     processed: int,
      *     progress_total: int,
-     *     variants_removed: int
+     *     variants_removed: int,
+     *     translations_queued: int
      * }
      */
     public function run(
@@ -105,6 +116,7 @@ final class B2bCatalogSync
         $stats = [
             'total_remote' => 0, 'seen' => 0, 'created' => 0, 'updated' => 0,
             'unchanged' => 0, 'skipped' => 0, 'descriptions' => 0, 'images' => 0,
+            'translations_queued' => 0,
         ];
         $errors = [];
         $pricesChanged = 0;
@@ -181,6 +193,9 @@ final class B2bCatalogSync
                 }
                 if ($outcome['image'] ?? false) {
                     $stats['images']++;
+                }
+                if ($outcome['translation_queued'] ?? false) {
+                    $stats['translations_queued']++;
                 }
                 if (($outcome['image_error'] ?? null) !== null) {
                     $errors[] = $label.': zdjęcie — '.$outcome['image_error'];
@@ -265,6 +280,10 @@ final class B2bCatalogSync
             } else {
                 $progress?->log('warn', 'Lista wersji u dostawcy niepełna — wycofanych wersji nie oznaczono.');
             }
+        }
+
+        if ($stats['translations_queued'] > 0) {
+            $progress?->log('info', 'Opisy zlecone do tłumaczenia na polski: '.$stats['translations_queued']);
         }
 
         if ($progress !== null) {
@@ -371,7 +390,7 @@ final class B2bCatalogSync
         if ($existing !== null && $connector instanceof B2bKeepsExistingNames) {
             unset($payload['name']);
         }
-        $descriptionHash = $this->applyCardDetails($payload, $existing, $link, $connector, $remote);
+        [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote);
 
         $priceChange = null;
         $updateSummary = null;
@@ -409,15 +428,34 @@ final class B2bCatalogSync
             ]);
         }
 
+        $linkValues = [
+            'product_id' => $product->id,
+            'remote_sku' => mb_substr($remote->sku, 0, 255),
+            'remote_name' => mb_substr($remote->name, 0, 1000),
+            'description_hash' => $descriptionHash,
+            'last_seen_at' => now(),
+        ];
+        // karta dostała (albo już ma) tekst źródła, więc nie jest tłumaczeniem — jedyne miejsce zerowania
+        if ($sourceTextTaken) {
+            $linkValues['source_description_hash'] = null;
+        }
         B2bProductLink::query()->updateOrCreate(
             ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
-            [
-                'product_id' => $product->id,
-                'remote_sku' => mb_substr($remote->sku, 0, 255),
-                'description_hash' => $descriptionHash,
-                'last_seen_at' => now(),
-            ],
+            $linkValues,
         );
+
+        // po zapisie powiązania — job czyta z niego hashe i nazwę ze źródła
+        $created = $existing === null;
+        $translationQueued = false;
+        if ($connector instanceof B2bForeignLanguageSource
+            && (isset($payload['description']) || ($created && $connector instanceof B2bKeepsExistingNames))) {
+            TranslateB2bProductTextJob::dispatch(
+                (int) $product->id,
+                (int) $account->id,
+                $created && $connector instanceof B2bKeepsExistingNames,
+            );
+            $translationQueued = true;
+        }
 
         [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
 
@@ -429,6 +467,7 @@ final class B2bCatalogSync
             'description' => isset($payload['description']),
             'image' => $image,
             'image_error' => $imageError,
+            'translation_queued' => $translationQueued,
         ];
     }
 
@@ -658,7 +697,7 @@ final class B2bCatalogSync
         ];
         // błąd pobrania opisu nie wstrzymuje cen: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
         $warnings = [];
-        $descriptionHash = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
+        [$descriptionHash] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
 
         // przed fill — porównuje zapisane wartości karty z nowymi; zmiany wersji dopisane po zapisie
         $updateSummary = $existing !== null
@@ -761,6 +800,7 @@ final class B2bCatalogSync
                 [
                     'product_id' => $product->id,
                     'remote_sku' => mb_substr($remote->sku, 0, 255),
+                    'remote_name' => mb_substr($remote->name, 0, 1000),
                     'description_hash' => $descriptionHash,
                     'last_seen_at' => $now,
                 ],
@@ -1009,12 +1049,17 @@ final class B2bCatalogSync
     }
 
     /**
-     * Kategoria i link tylko gdy puste; opis wg mayWriteDescription. Zwraca hash opisu do powiązania.
+     * Kategoria i link tylko gdy puste; opis wg mayWriteDescription. Zwraca [hash opisu do powiązania, czy
+     * przyjęto niepusty tekst źródła] — przy true powiązanie zeruje source_description_hash (karta nie ma
+     * tłumaczenia). Tłumaczenie na karcie (source_description_hash = sha1 niezmienionego źródła, description_hash =
+     * sha1 opisu karty, czyli nietknięte ręcznie) zostaje: opis nie jest nadpisywany, hash bez zmian, false
+     * (15.09.2026). Opis z łącznika pobierany jest raz.
      * Z $warnings (łącznik wersji) błąd pobrania opisu nie przerywa produktu: opis i jego hash zostają bez zmian.
      * Bez $warnings (dotychczasowe łączniki) wyjątek leci dalej jak wcześniej.
      *
      * @param  array<string, mixed>  $payload
      * @param  list<string>|null  $warnings
+     * @return array{0: string|null, 1: bool}
      */
     private function applyCardDetails(
         array &$payload,
@@ -1023,7 +1068,7 @@ final class B2bCatalogSync
         B2bConnector $connector,
         B2bRemoteProduct $remote,
         ?array &$warnings = null,
-    ): ?string {
+    ): array {
         if ($remote->category !== null && trim((string) ($existing?->category ?? '')) === '') {
             $payload['category'] = mb_substr($remote->category, 0, 255);
         }
@@ -1045,14 +1090,31 @@ final class B2bCatalogSync
                 $description = '';
             }
             if ($description !== '') {
+                if ($this->keepsTranslation($existing, $link, $description)) {
+                    return [$descriptionHash, false];
+                }
                 $descriptionHash = sha1($description);
                 if ($existing === null || $description !== (string) $existing->description) {
                     $payload['description'] = $description;
                 }
+
+                return [$descriptionHash, true];
             }
         }
 
-        return $descriptionHash;
+        return [$descriptionHash, false];
+    }
+
+    /**
+     * Karta ma tłumaczenie tego samego tekstu źródła, nietknięte od zapisu przez job tłumaczenia.
+     */
+    private function keepsTranslation(?Product $existing, ?B2bProductLink $link, string $source): bool
+    {
+        return $existing !== null
+            && $link?->source_description_hash !== null
+            && $link->description_hash !== null
+            && hash_equals($link->source_description_hash, sha1($source))
+            && hash_equals($link->description_hash, sha1((string) $existing->description));
     }
 
     private function foreignManufacturer(Product $existing, string $manufacturer): bool
