@@ -194,6 +194,83 @@ final class PpeAssortment
     }
 
     /**
+     * Rzeczownik rodziny z nagłówka wymagania w brzmieniu oryginału — chip „Gogle” w weryfikacji
+     * karty. `stem` („Gogl”) liczy też „gogli” w opisie. Dopasowujemy po słowach, nie po offsetach:
+     * normalize() zmienia długość tekstu („ß” → „ss”, „½” → „1 2”), więc offset znormalizowanego
+     * tekstu nie wskazuje miejsca w oryginale. Wygrywa pierwsze trafienie — przy goglach dalsze
+     * „okularach korekcyjnych” to ta sama rodzina, ale nie rzeczownik wyrobu. Gdy brzmienia nie
+     * da się odtworzyć bez wątpliwości, zwracamy null: lepiej brak chipu niż zły chip.
+     *
+     * @return array{label: string, stem: string}|null
+     */
+    public function familyNoun(string $head, string $family): ?array
+    {
+        $pattern = self::FAMILY_PATTERNS[$family] ?? null;
+        if ($pattern === null || preg_match_all('/[\p{L}\p{N}]+/u', $head, $words, PREG_OFFSET_CAPTURE) < 1) {
+            return null;
+        }
+        $words = $words[0];
+        $collapse = static fn (string $s): string => trim((string) preg_replace('/\s+/', ' ', $s));
+
+        foreach (array_slice($words, 0, 16) as $i => [$word, $start]) {
+            // Litera, której Str::ascii nie zapisze, przesunęłaby dopasowanie na następne słowo.
+            if (trim($this->normalize($word)) === '') {
+                continue;
+            }
+            $suffix = ltrim($this->normalize(substr($head, $start)));
+            if (preg_match($pattern, $suffix, $m, PREG_OFFSET_CAPTURE) !== 1 || $m[0][1] !== 0) {
+                continue;
+            }
+
+            $match = $collapse($m[0][0]);
+            $last = $i + count(explode(' ', $match)) - 1;
+            if ($match === '' || ! isset($words[$last])) {
+                return null;
+            }
+            $label = substr($head, $start, $words[$last][1] + strlen($words[$last][0]) - $start);
+            // Dopasowanie kończące się w środku słowa albo rozjechane z oryginałem — bez chipu.
+            if ($collapse($this->normalize($label)) !== $match) {
+                return null;
+            }
+
+            return ['label' => $label, 'stem' => $last === $i ? $this->familyNounStem($word, $m) : $label];
+        }
+
+        return null;
+    }
+
+    /**
+     * Rdzeń to prefiks słowa o długości pierwszej grupy wzorca („rekawic” → „Rękawic”) — tylko
+     * gdy znaki mapują się 1:1; „Fußschutz” → „fussschutz” nie ma bezpiecznego prefiksu.
+     * Grupa krótsza od słowa o więcej niż końcówkę to wcześniejsza alternatywa złożenia:
+     * „Spodniobuty” łapie „spodn”, a taki rdzeń liczyłby w opisie „spodnie”. Wtedy rdzeniem
+     * jest słowo bez końcowych samogłosek („Spodniobut” liczy też „spodniobutów”).
+     *
+     * @param  array<int, array{0: string, 1: int}>  $m
+     */
+    private function familyNounStem(string $word, array $m): string
+    {
+        $normalized = $this->normalize($word);
+        if (mb_strlen($word) !== strlen($normalized)) {
+            return $word;
+        }
+        foreach (array_slice($m, 1) as [$group, $offset]) {
+            if ($group === '' || $offset < 0) {
+                continue;
+            }
+            if ($offset !== 0 || ! str_starts_with($normalized, $group)) {
+                return $word;
+            }
+            $prefix = strlen($normalized) - strlen($group) > 3 ? rtrim($normalized, 'aeiouy') : $group;
+            $stem = mb_substr($word, 0, strlen($prefix));
+
+            return strlen($prefix) >= strlen($group) && $this->normalize($stem) === $prefix ? $stem : $word;
+        }
+
+        return $word;
+    }
+
+    /**
      * Numer normy liczy się tylko z oznaczeniem normy przed liczbą („EN 388”, „PN-EN ISO
      * 20345”) — „ULTRANITRIL 358”, „TITAN 397”, „EDGE 48-140” i SKU „3410-140-410-00” to
      * numery modeli i kodów, a robiły z rękawic asekurację, hełmy i ochronę dróg oddechowych.

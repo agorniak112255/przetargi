@@ -1,8 +1,14 @@
 const STOP = new Set([
   'do', 'pracy', 'z', 'na', 'oraz', 'dla', 'the', 'and', 'with', 'od', 'przy',
   'bez', 'jak', 'lub', 'czy', 'jest', 'sie', 'się', 'pod', 'nad', 'typ',
-  'rodzaju', 'przed', 'formie', 'celu', 'produkt', 'lub', 'albo', 'czyli',
+  'rodzaju', 'przed', 'formie', 'celu', 'produkt', 'albo', 'czyli',
 ])
+
+/**
+ * Powyżej tylu słów zapytanie to już pełne wymaganie przetargowe — chip na każde słowo
+ * zasłania, czego naprawdę szukamy, więc okno weryfikacji pokazuje tylko rodzaj i normy.
+ */
+export const KEY_TERMS_MIN_TOKENS = 8
 
 export type HighlightKind = 'text' | 'query' | 'find' | 'both'
 
