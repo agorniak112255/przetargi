@@ -12,9 +12,12 @@ use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
+use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\NbpExchangeRateService;
+use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\ProductDeletionService;
 use App\Services\ProductKitService;
 use App\Support\ProductModelFuzzy;
@@ -34,6 +37,8 @@ class ProductController extends Controller
         private readonly ProductDeletionService $deletion,
         private readonly ProductPriceChangeResolver $priceChanges,
         private readonly ProductVariantPresenter $variants,
+        private readonly ProductEffectivePrice $effectivePrice,
+        private readonly B2bConnectorRegistry $connectors,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -355,6 +360,7 @@ class ProductController extends Controller
         $payload['price_history_latest_at'] = $latest?->created_at;
         $payload['last_price_change'] = $this->priceChanges->latestChanges([(int) $product->id])[(int) $product->id] ?? null;
         $payload['variants'] = $this->variants->forProduct((int) $product->id);
+        $payload['source_prices'] = $this->sourcePricesPayload($product);
         $payload = $this->fx->appendPricePln($payload);
         $payload['presta_export'] = $this->prestaExportPayload($product);
         $payload['accessories'] = $this->kit->present($product);
@@ -433,6 +439,69 @@ class ProductController extends Controller
         }
 
         return response()->json(['data' => $this->variants->history((int) $variant->id, 100)]);
+    }
+
+    /**
+     * Ceny karty osobno dla każdego źródła (product_source_prices). Kolejność: slot, z którego pochodzi cena karty,
+     * potem konta B2B (najświeżej sprawdzone wyżej), na końcu cennik z pliku. Etykieta konta bez loginu i hasła.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function sourcePricesPayload(Product $product): array
+    {
+        $slots = ProductSourcePrice::query()
+            ->with(['account:id,connector,sites', 'priceList:id,manufacturer,version'])
+            ->where('product_id', $product->id)
+            ->get();
+        if ($slots->isEmpty()) {
+            return [];
+        }
+        // null, gdy karta ma aktywne wersje — wtedy żaden slot nie ustala ceny karty
+        $effectiveKey = $this->effectivePrice->resolve($product)['source_key'] ?? null;
+        $rank = static fn (ProductSourcePrice $slot): array => [
+            $slot->source_key === $effectiveKey ? 0 : 1,
+            $slot->isB2b() ? 0 : 1,
+            -($slot->checked_at?->getTimestamp() ?? 0),
+        ];
+
+        return $slots
+            ->sort(static fn (ProductSourcePrice $a, ProductSourcePrice $b): int => $rank($a) <=> $rank($b))
+            ->map(fn (ProductSourcePrice $slot): array => [
+                'source_key' => $slot->source_key,
+                'source_label' => $this->sourcePriceLabel($slot),
+                'catalog_price_net' => $slot->catalog_price_net,
+                'purchase_price' => $slot->purchase_price,
+                'discount_percent' => $slot->discount_percent,
+                'currency' => $slot->currency,
+                'checked_at' => $slot->checked_at?->toISOString(),
+                'migrated' => (bool) $slot->migrated,
+                'is_effective' => $effectiveKey !== null && $slot->source_key === $effectiveKey,
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function sourcePriceLabel(ProductSourcePrice $slot): string
+    {
+        if ($slot->source_key === ProductSourcePrice::SOURCE_FILE) {
+            $list = $slot->priceList;
+            $listLabel = $list !== null ? trim(trim((string) $list->manufacturer).' '.trim((string) $list->version)) : '';
+
+            return $listLabel !== '' ? 'Cennik z pliku · '.$listLabel : 'Cennik z pliku';
+        }
+        if (! $slot->isB2b()) {
+            return (string) $slot->source_key;
+        }
+
+        $account = $slot->account;
+        if ($account === null) {
+            return 'B2B (usunięte konto)';
+        }
+        // b2b_accounts nie ma nazwy — bez łącznika pierwsza witryna konta (nigdy login ani notatka)
+        $name = $this->connectors->label($account->connector)
+            ?? (is_array($account->sites) && isset($account->sites[0]) ? trim((string) $account->sites[0]) : '');
+
+        return $name !== '' ? 'B2B '.$name : 'B2B konto #'.$account->id;
     }
 
     /**

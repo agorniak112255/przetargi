@@ -24,7 +24,7 @@ use Tests\TestCase;
 
 /**
  * Import B2B łącznika B2bForeignLanguageSource zleca TranslateB2bProductTextJob po zapisie opisu ze źródła
- * (i przy nowej karcie łącznika B2bKeepsExistingNames — z nazwą). Niezmiennik hashy powiązania: tłumaczenie
+ * (i przy nowej karcie — z nazwą, niezależnie od znacznika B2bKeepsExistingNames). Niezmiennik hashy powiązania: tłumaczenie
  * niezmienionego źródła, nietknięte ręcznie, nie jest nadpisywane oryginałem (decyzja 15.09.2026).
  */
 final class B2bTranslationDispatchTest extends TestCase
@@ -81,6 +81,21 @@ final class B2bTranslationDispatchTest extends TestCase
                 && $job->translateName === true,
         );
         Queue::assertPushedOn(TranslateB2bProductTextJob::QUEUE, TranslateB2bProductTextJob::class);
+    }
+
+    public function test_new_card_of_foreign_connector_without_name_marker_also_queues_translation_with_name(): void
+    {
+        $shop = $this->shop(new TranslationForeignOnlyConnector);
+
+        $result = $this->runSync($shop);
+
+        $product = Product::query()->where('sku', 'BOL-1')->sole();
+        $this->assertSame(1, $result['created']);
+        $this->assertSame(1, $result['translations_queued']);
+        Queue::assertPushed(
+            TranslateB2bProductTextJob::class,
+            fn (TranslateB2bProductTextJob $job): bool => $job->productId === (int) $product->id && $job->translateName === true,
+        );
     }
 
     public function test_existing_card_with_polish_name_gets_description_and_translation_without_name(): void
@@ -340,3 +355,6 @@ class TranslationPlainConnector implements B2bConnector
 }
 
 final class TranslationForeignConnector extends TranslationPlainConnector implements B2bForeignLanguageSource, B2bKeepsExistingNames {}
+
+/** Obcojęzyczne źródło bez znacznika B2bKeepsExistingNames — nazwy istniejących kart i tak zostają (15.09.2026). */
+final class TranslationForeignOnlyConnector extends TranslationPlainConnector implements B2bForeignLanguageSource {}

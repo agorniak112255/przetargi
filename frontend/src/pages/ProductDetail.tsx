@@ -21,6 +21,7 @@ import {
 import {
   currencyLabel,
   formatDateTime,
+  formatPct,
   formatPrice,
   priceChangeSummary,
   variantCountLabel,
@@ -639,6 +640,54 @@ export function ProductDetail() {
           <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
             Upust:{' '}
             <b>{p.discount_percent != null && p.discount_percent !== '' ? `${p.discount_percent}%` : '—'}</b>
+          </div>
+        </div>
+      )}
+      {(p.source_prices?.length ?? 0) > 0 && (
+        <div className="mt-3 rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold">Ceny ze źródeł</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50">
+                  <th className="p-2">Źródło</th>
+                  <th className="p-2 text-right">Katalogowa</th>
+                  <th className="p-2 text-right">Zakup</th>
+                  <th className="p-2 text-right">Rabat</th>
+                  <th className="p-2">Waluta</th>
+                  <th className="p-2">Sprawdzono</th>
+                  <th className="p-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {p.source_prices!.map((s) => (
+                  <tr key={s.source_key} className="border-b">
+                    <td className="p-2" title={s.source_key}>
+                      {s.source_label}
+                      {s.migrated && <span className="ml-1 text-[11px] text-slate-400">(z historii cen)</span>}
+                    </td>
+                    <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.catalog_price_net)}</td>
+                    <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.purchase_price)}</td>
+                    <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                      {s.discount_percent !== null && s.discount_percent !== ''
+                        ? formatPct(Number(s.discount_percent), false)
+                        : '—'}
+                    </td>
+                    <td className="p-2">{s.currency ?? '—'}</td>
+                    <td className="whitespace-nowrap p-2 tabular-nums">
+                      {s.checked_at ? formatDateTime(s.checked_at) : '—'}
+                    </td>
+                    <td className="p-2">
+                      {s.is_effective && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                          obowiązuje
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

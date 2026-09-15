@@ -184,7 +184,8 @@ final class B2bAnroSyncTest extends TestCase
         $existing->refresh();
         $this->assertSame(1, $result['updated']);
         $this->assertSame(0, $result['images']);
-        $this->assertSame('Alarm pożarowy na wysięgniku W-02', $existing->name);
+        // nazwa istniejącej karty zostaje dla każdego łącznika (decyzja użytkownika 15.09.2026)
+        $this->assertSame('Stara nazwa', $existing->name);
         $this->assertSame('Opis wpisany ręcznie, dłuższy niż dwadzieścia cztery znaki.', $existing->description);
         $this->assertSame('https://inny.example.test/karta', $existing->shop_source_url);
         $this->assertSame('36.72', $existing->purchase_price);

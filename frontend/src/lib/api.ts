@@ -269,6 +269,8 @@ export type Product = {
     status: string
   } | null
   accessories?: ProductAccessory[]
+  /** Karta szczegółów: ceny karty osobno dla każdego źródła (plik, konta B2B). */
+  source_prices?: ProductSourcePrice[]
   special_prices?: Array<{
     id: number
     client_id: number | null
@@ -295,6 +297,19 @@ export type ProductAccessory = {
   presta_id?: number | null
   presta_url?: string | null
   matched: boolean
+}
+
+/** Cena karty z jednego źródła (product_source_prices); is_effective = z tego slotu pochodzi cena karty. */
+export type ProductSourcePrice = {
+  source_key: string
+  source_label: string
+  catalog_price_net: string | null
+  purchase_price: string | null
+  discount_percent: string | null
+  currency: string | null
+  checked_at: string | null
+  migrated: boolean
+  is_effective: boolean
 }
 
 export type ProductKitSuggestion = {

@@ -10,8 +10,10 @@ use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductImage;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductSourcePrice;
 use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
+use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\ProductSizeVariant;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -22,7 +24,25 @@ final class ProductSizeMergeService
 {
     public function __construct(
         private readonly ProductSizeVariant $sizes,
+        private readonly ProductEffectivePrice $effectivePrices,
     ) {}
+
+    /**
+     * Koszyk ceny do łączenia rozmiarów: z ceny z pliku (slot „file”) — rozmiary z jednego cennika mają tę samą cenę
+     * z pliku, a cena obowiązująca bywa ceną B2B, która rozdzieliłaby rozmiary. Karta bez slotu pliku (sprzed slotów,
+     * tylko B2B, ręczna) — z ceny karty, jak dotąd.
+     */
+    public function filePriceBucket(Product $product, ?ProductSourcePrice $fileSlot): string
+    {
+        if ($fileSlot === null) {
+            return $this->sizes->priceBucket($product->catalog_price_net, $product->purchase_price);
+        }
+
+        return $this->sizes->priceBucket(
+            $fileSlot->catalog_price_net ?? $fileSlot->purchase_price,
+            $fileSlot->purchase_price ?? $fileSlot->catalog_price_net,
+        );
+    }
 
     /**
      * @return array{
@@ -50,10 +70,18 @@ final class ProductSizeMergeService
             }
         }
 
+        /** @var array<int, ProductSourcePrice> $fileSlots */
+        $fileSlots = ProductSourcePrice::query()
+            ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+            ->whereIn('product_id', (clone $query)->reorder()->select('products.id'))
+            ->get()
+            ->keyBy('product_id')
+            ->all();
+
         /** @var array<string, list<Product>> $groups */
         $groups = [];
         foreach ($query->cursor() as $product) {
-            $key = $this->mergeGroupKey($product, $knownStems);
+            $key = $this->mergeGroupKey($product, $knownStems, $fileSlots[(int) $product->id] ?? null);
             if ($key === null) {
                 continue;
             }
@@ -113,9 +141,9 @@ final class ProductSizeMergeService
     /**
      * @param  array<string, string>  $knownStems
      */
-    private function mergeGroupKey(Product $product, array $knownStems): ?string
+    private function mergeGroupKey(Product $product, array $knownStems, ?ProductSourcePrice $fileSlot): ?string
     {
-        $price = $this->sizes->priceBucket($product->catalog_price_net, $product->purchase_price);
+        $price = $this->filePriceBucket($product, $fileSlot);
         $stem = $this->sizes->resolveMergeStem((string) $product->sku, $knownStems);
         if ($stem !== null) {
             return 'stem:'.mb_strtolower((string) $product->manufacturer).'|'.mb_strtolower($stem).'|'.$price;
@@ -245,11 +273,14 @@ final class ProductSizeMergeService
                     $newSku = $core;
                 }
             }
+            // przed usunięciem scalanych kart — ich sloty zniknęłyby kaskadą
+            $this->moveSourcePrices((int) $winner->id, $loserIds);
             $winner->update($updates);
             Product::query()->whereIn('id', $loserIds)->delete();
             if ($newSku !== null) {
                 $winner->update(['sku' => $newSku]);
             }
+            $this->effectivePrices->refresh($winner);
         });
 
         try {
@@ -363,6 +394,34 @@ final class ProductSizeMergeService
             return;
         }
         ProductPriceHistory::query()->whereIn('product_id', $loserIds)->update(['product_id' => $winnerId]);
+    }
+
+    /**
+     * Sloty cen scalanych kart na kartę docelową. Ten sam source_key (UNIQUE) — zostaje slot z nowszym checked_at.
+     *
+     * @param  list<int>  $loserIds
+     */
+    private function moveSourcePrices(int $winnerId, array $loserIds): void
+    {
+        if (! Schema::hasTable('product_source_prices') || $loserIds === []) {
+            return;
+        }
+        $kept = ProductSourcePrice::query()->where('product_id', $winnerId)->get()->keyBy('source_key')->all();
+        foreach (ProductSourcePrice::query()->whereIn('product_id', $loserIds)->orderBy('id')->get() as $slot) {
+            $key = (string) $slot->source_key;
+            $current = $kept[$key] ?? null;
+            if ($current !== null) {
+                if (($slot->checked_at?->getTimestamp() ?? 0) <= ($current->checked_at?->getTimestamp() ?? 0)) {
+                    $slot->delete();
+
+                    continue;
+                }
+                $current->delete();
+            }
+            $slot->product_id = $winnerId;
+            $slot->save();
+            $kept[$key] = $slot;
+        }
     }
 
     /**

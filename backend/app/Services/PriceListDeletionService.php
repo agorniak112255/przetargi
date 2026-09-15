@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
+use App\Models\ProductSourcePrice;
 use App\Models\User;
+use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Vector\ProductEmbeddingIndexer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -18,6 +21,7 @@ final class PriceListDeletionService
 {
     public function __construct(
         private readonly ProductEmbeddingIndexer $embeddings,
+        private readonly ProductEffectivePrice $effectivePrices,
     ) {}
 
     /**
@@ -40,7 +44,11 @@ final class PriceListDeletionService
         )));
 
         return DB::transaction(function () use ($priceList, $actor, $ids): array {
-            $shared = $this->productIdsReferencedByOtherPriceLists($priceList->id, $ids);
+            // karta z powiązaniem B2B zostaje (ma cenę z B2B), nawet gdy wpis konta nie ma jej w product_ids
+            $shared = array_values(array_unique([
+                ...$this->productIdsReferencedByOtherPriceLists($priceList->id, $ids),
+                ...$this->productIdsLinkedToB2b($ids),
+            ]));
             $toDelete = array_values(array_diff($ids, $shared));
 
             if ($toDelete !== []) {
@@ -49,8 +57,11 @@ final class PriceListDeletionService
                 foreach ($toDelete as $productId) {
                     $this->embeddings->delete($productId);
                 }
+                // sloty cen kasowanych kart znikają kaskadą
                 Product::query()->whereIn('id', $toDelete)->delete();
             }
+
+            $this->deleteFileSlotsOfPriceList($priceList->id, $toDelete);
 
             $meta = [
                 'deleted_price_list_id' => $priceList->id,
@@ -102,6 +113,45 @@ final class PriceListDeletionService
         }
 
         return array_map('intval', array_keys($shared));
+    }
+
+    /**
+     * @param  list<int>  $productIds
+     * @return list<int>
+     */
+    private function productIdsLinkedToB2b(array $productIds): array
+    {
+        if ($productIds === []) {
+            return [];
+        }
+
+        return B2bProductLink::query()
+            ->whereIn('product_id', $productIds)
+            ->distinct()
+            ->pluck('product_id')
+            ->map(static fn ($id): int => (int) $id)
+            ->all();
+    }
+
+    /**
+     * Karty, które zostają: znika tylko slot ceny z pliku pochodzący z usuwanego cennika (slot z nowszego cennika
+     * zostaje). deleteSlot przelicza cenę obowiązującą — z B2B, a bez innych slotów cena karty zostaje bez zmian.
+     * Po price_list_id slotu, nie po product_ids — sloty przeniesione przy scalaniu rozmiarów też się liczą.
+     *
+     * @param  list<int>  $deletedProductIds
+     */
+    private function deleteFileSlotsOfPriceList(int $priceListId, array $deletedProductIds): void
+    {
+        $productIds = ProductSourcePrice::query()
+            ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+            ->where('price_list_id', $priceListId)
+            ->whereNotIn('product_id', $deletedProductIds)
+            ->pluck('product_id')
+            ->all();
+
+        foreach (Product::query()->whereIn('id', $productIds)->get() as $product) {
+            $this->effectivePrices->deleteSlot($product, ProductSourcePrice::SOURCE_FILE);
+        }
     }
 
     /**

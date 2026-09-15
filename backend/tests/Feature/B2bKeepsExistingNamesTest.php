@@ -24,7 +24,8 @@ use Tests\TestCase;
 
 /**
  * Łącznik ze znacznikiem B2bKeepsExistingNames: istniejąca karta zachowuje nazwę, reszta pól jak dotąd;
- * nowa karta dostaje nazwę ze źródła. Łącznik bez znacznika nadpisuje nazwę (kontrola).
+ * nowa karta dostaje nazwę ze źródła. Od decyzji użytkownika 15.09.2026 łącznik bez znacznika też zachowuje
+ * nazwę istniejącej karty (zasada dla wszystkich łączników).
  */
 final class B2bKeepsExistingNamesTest extends TestCase
 {
@@ -107,7 +108,7 @@ final class B2bKeepsExistingNamesTest extends TestCase
         $this->assertSame(self::SOURCE_NAME.' 2', Product::query()->where('sku', 'BOL-2')->sole()->name);
     }
 
-    public function test_connector_without_marker_overwrites_name(): void
+    public function test_connector_without_marker_also_keeps_name_of_existing_card(): void
     {
         $existing = $this->existingCard();
         $shop = $this->shop(new KeepNamesPlainConnector);
@@ -116,8 +117,10 @@ final class B2bKeepsExistingNamesTest extends TestCase
 
         $existing->refresh();
         $this->assertSame(1, $result['updated']);
-        $this->assertSame(self::SOURCE_NAME, $existing->name);
+        $this->assertSame(self::POLISH_NAME, $existing->name);
         $this->assertSame('50.00', $existing->purchase_price);
+        $this->assertSame(self::SOURCE_NAME, B2bProductLink::query()->where('remote_id', '1')->value('remote_name'));
+        $this->assertSame(self::SOURCE_NAME.' 2', Product::query()->where('sku', 'BOL-2')->sole()->name);
     }
 
     /**

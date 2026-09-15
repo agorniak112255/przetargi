@@ -6,11 +6,14 @@ namespace App\Services;
 
 use App\Jobs\RegisterManufacturerCatalogJob;
 use App\Jobs\ReindexProductEmbeddingJob;
+use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductSourcePrice;
 use App\Models\User;
 use App\Services\Presta\ProductCategorySanitizer;
+use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\ProductSizeVariant;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
@@ -29,6 +32,7 @@ final class PriceListImportService
         private readonly SpreadsheetCellReader $cells,
         private readonly ProductCategorySanitizer $categorySanitizer,
         private readonly ProductSizeMergeService $sizeMerge,
+        private readonly ProductEffectivePrice $effectivePrices,
     ) {}
 
     /**
@@ -352,9 +356,23 @@ final class PriceListImportService
         $priceChanges = [];
         $updatedProducts = [];
         $productIds = [];
+        $skippedDetails = [];
 
-        DB::transaction(function () use ($collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds): void {
+        // Wpis cennika powstaje na początku tej samej transakcji — sloty ceny pliku wskazują cennik, z którego
+        // pochodzą (usunięcie cennika usuwa tylko jego slot). Liczniki uzupełniane na końcu; import dalej atomowy.
+        /** @var PriceList $priceList */
+        $priceList = DB::transaction(function () use ($file, $manufacturer, $version, $user, &$collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds, &$skippedDetails): PriceList {
+            $priceList = PriceList::query()->create([
+                'manufacturer' => $manufacturer,
+                'version' => $version,
+                'original_filename' => $file->getClientOriginalName(),
+                'imported_by' => $user->id,
+                'rows_total' => $collected['rows_total'],
+            ]);
+
             $byManufacturer = [];
+            $fileSlots = [];
+            $historyIds = [];
             foreach ($collected['products'] as $payload) {
                 $sku = (string) $payload['sku'];
                 unset($payload['sku'], $payload['_purchase_from_file']);
@@ -366,14 +384,51 @@ final class PriceListImportService
                 if (($payload['model_name'] ?? null) === null) {
                     unset($payload['model_name']);
                 }
-                $existing = $this->findExistingProduct($sku, $payload, $byManufacturer);
+                $existing = $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots);
+                // sku jest UNIQUE — kod karty innego producenta: pozycja pominięta, bez drugiej karty i bez nadpisania
+                if ($existing !== null && $this->foreignManufacturer($existing, (string) ($payload['manufacturer'] ?? ''))) {
+                    $reason = 'kod należy do karty producenta '.$existing->manufacturer;
+                    $collected['skipped']++;
+                    $collected['errors'][] = $sku.': '.$reason;
+                    if (is_array($collected['skipped_details'] ?? null)) {
+                        $collected['skipped_details'][] = [
+                            'reason' => $reason,
+                            'row' => null,
+                            'sheet' => null,
+                            'sku' => $sku,
+                            'name' => isset($payload['name']) ? (string) $payload['name'] : null,
+                        ];
+                    }
+
+                    continue;
+                }
+
+                $slotValues = [
+                    'catalog_price_net' => $payload['catalog_price_net'] ?? null,
+                    'purchase_price' => $payload['purchase_price'] ?? null,
+                    'discount_percent' => $payload['discount_percent'] ?? null,
+                    'currency' => $payload['currency'] ?? null,
+                    'pack_qty' => $payload['pack_qty'] ?? null,
+                    'price_list_id' => $priceList->id,
+                ];
+
                 if ($existing !== null) {
-                    $change = $this->detectPriceChange($existing, $payload, $sku);
+                    // cena z pliku trafia tylko do slotu „file”; raporty porównują z poprzednią ceną z pliku
+                    $fileSlot = $this->fileSlot($existing, $fileSlots);
+                    $before = $this->effectivePrices->cardWithSlotPrices($existing, $fileSlot);
+                    $cardPayload = $payload;
+                    // karta z powiązaniem B2B: nazwa i producent zostają na karcie (decyzja użytkownika 15.09.2026)
+                    if (B2bProductLink::query()->where('product_id', $existing->id)->exists()) {
+                        unset($cardPayload['name'], $cardPayload['manufacturer']);
+                    }
+                    $change = $this->detectPriceChange($before, $cardPayload, $sku);
                     if ($change !== null) {
                         $priceChanges[] = $change;
+                        $historyIds[(int) $existing->id] = true;
                     }
-                    $updatedProducts[] = $this->summarizeUpdate($existing, $payload, $sku, $change !== null);
-                    $updates = $payload;
+                    $updatedProducts[] = $this->summarizeUpdate($before, $cardPayload, $sku, $change !== null);
+                    $updates = array_diff_key($cardPayload, array_flip(ProductEffectivePrice::PRICE_FIELDS));
+                    // producent zgodny (sprawdzone wyżej), a nowy kod nie jest zajęty przez inną kartę
                     if ($sku !== (string) $existing->sku) {
                         $taken = Product::query()
                             ->where('sku', $sku)
@@ -384,56 +439,61 @@ final class PriceListImportService
                         }
                     }
                     $existing->update($updates);
+                    $saved = $this->effectivePrices->saveSlot($existing, ProductSourcePrice::SOURCE_FILE, $slotValues);
+                    $fileSlots[(int) $existing->id] = $saved['slot'];
                     $productIds[] = (int) $existing->id;
                     $updated++;
                 } else {
+                    // nowa karta: cena z pliku jest też startową ceną obowiązującą
                     $createdProduct = Product::query()->create(['sku' => $sku, ...$payload]);
+                    $saved = $this->effectivePrices->saveSlot($createdProduct, ProductSourcePrice::SOURCE_FILE, $slotValues);
+                    $fileSlots[(int) $createdProduct->id] = $saved['slot'];
+                    $historyIds[(int) $createdProduct->id] = true;
                     $productIds[] = (int) $createdProduct->id;
                     $created++;
                 }
             }
-        });
 
-        $productIds = array_values(array_unique($productIds));
+            $productIds = array_values(array_unique($productIds));
 
-        // największe zmiany % najpierw
-        usort($priceChanges, static fn (array $a, array $b): int => abs($b['catalog_pct']) <=> abs($a['catalog_pct']));
+            // największe zmiany % najpierw
+            usort($priceChanges, static fn (array $a, array $b): int => abs($b['catalog_pct']) <=> abs($a['catalog_pct']));
 
-        $skippedDetails = is_array($collected['skipped_details'] ?? null)
-            ? array_slice($collected['skipped_details'], 0, 100)
-            : $this->skippedDetailsFromErrors($collected['errors'] ?? [], (int) $collected['skipped']);
+            $skippedDetails = is_array($collected['skipped_details'] ?? null)
+                ? array_slice($collected['skipped_details'], 0, 100)
+                : $this->skippedDetailsFromErrors($collected['errors'] ?? [], (int) $collected['skipped']);
 
-        $priceList = PriceList::query()->create([
-            'manufacturer' => $manufacturer,
-            'version' => $version,
-            'original_filename' => $file->getClientOriginalName(),
-            'imported_by' => $user->id,
-            'rows_total' => $collected['rows_total'],
-            'products_created' => $created,
-            'products_updated' => $updated,
-            'prices_changed' => count($priceChanges),
-            'rows_skipped' => $collected['skipped'],
-            'errors' => array_slice($collected['errors'], 0, 50),
-            'price_changes' => array_slice($priceChanges, 0, 100),
-            'updated_products' => array_slice($updatedProducts, 0, 100),
-            'skipped_details' => $skippedDetails,
-            'product_ids' => $productIds,
-        ]);
+            $priceList->update([
+                'products_created' => $created,
+                'products_updated' => $updated,
+                'prices_changed' => count($priceChanges),
+                'rows_skipped' => $collected['skipped'],
+                'errors' => array_slice($collected['errors'], 0, 50),
+                'price_changes' => array_slice($priceChanges, 0, 100),
+                'updated_products' => array_slice($updatedProducts, 0, 100),
+                'skipped_details' => $skippedDetails,
+                'product_ids' => $productIds,
+            ]);
 
-        if ($productIds !== []) {
-            $products = Product::query()
-                ->whereIn('id', $productIds)
-                ->get(['id', 'catalog_price_net', 'purchase_price']);
-            foreach ($products as $product) {
+            // historia: ceny slotu pliku (nie ceny obowiązującej karty), tylko nowa karta albo zmiana ceny z pliku
+            foreach (array_keys($historyIds) as $productId) {
+                $slot = $fileSlots[$productId] ?? null;
+                if ($slot === null) {
+                    continue;
+                }
                 ProductPriceHistory::query()->create([
-                    'product_id' => $product->id,
+                    'product_id' => $productId,
                     'price_list_id' => $priceList->id,
-                    'catalog_price_net' => $product->catalog_price_net,
-                    'purchase_price' => $product->purchase_price,
+                    'catalog_price_net' => $slot->catalog_price_net,
+                    'purchase_price' => $slot->purchase_price,
                     'source' => 'price_list_import',
                 ]);
             }
 
+            return $priceList;
+        });
+
+        if ($productIds !== []) {
             foreach ($productIds as $productId) {
                 ReindexProductEmbeddingJob::dispatch($productId);
             }
@@ -1046,9 +1106,11 @@ final class PriceListImportService
     /**
      * @param  array<string, mixed>  $payload
      * @param  array<string, Collection<int, Product>>  $byManufacturer
+     * @param  array<int, ProductSourcePrice|null>  $fileSlots  product_id => slot „file” (null = brak slotu)
      */
-    private function findExistingProduct(string $sku, array $payload, array &$byManufacturer): ?Product
+    private function findExistingProduct(string $sku, array $payload, array &$byManufacturer, array &$fileSlots): ?Product
     {
+        // karta po samym kodzie może należeć do innego producenta — persistImport pomija wtedy pozycję
         $hit = Product::query()->where('sku', $sku)->first();
         if ($hit !== null) {
             return $hit;
@@ -1065,6 +1127,16 @@ final class PriceListImportService
         );
         if (! isset($byManufacturer[$mfr])) {
             $byManufacturer[$mfr] = Product::query()->where('manufacturer', $mfr)->get();
+            $slots = ProductSourcePrice::query()
+                ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+                ->whereIn('product_id', $byManufacturer[$mfr]->modelKeys())
+                ->get()
+                ->keyBy('product_id');
+            foreach ($byManufacturer[$mfr] as $product) {
+                if (! array_key_exists((int) $product->id, $fileSlots)) {
+                    $fileSlots[(int) $product->id] = $slots->get($product->id);
+                }
+            }
         }
 
         $knownStems = [];
@@ -1082,7 +1154,7 @@ final class PriceListImportService
                 if ($pStem === null || mb_strtolower($pStem) !== mb_strtolower($incomingStem)) {
                     continue;
                 }
-                if ($this->sizes->priceBucket($product->catalog_price_net, $product->purchase_price) !== $price) {
+                if ($this->sizeMerge->filePriceBucket($product, $this->fileSlot($product, $fileSlots)) !== $price) {
                     continue;
                 }
                 if (strcasecmp((string) $product->sku, $incomingStem) === 0) {
@@ -1111,12 +1183,42 @@ final class PriceListImportService
                 (string) $product->sku,
                 $product->packaging !== null ? (string) $product->packaging : null,
             );
-            if ($pk === $key && $this->sizes->priceBucket($product->catalog_price_net, $product->purchase_price) === $price) {
+            if ($pk === $key && $this->sizeMerge->filePriceBucket($product, $this->fileSlot($product, $fileSlots)) === $price) {
                 return $product;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Slot ceny z pliku karty (null = karta nie ma jeszcze ceny z pliku), z pamięcią na czas importu.
+     *
+     * @param  array<int, ProductSourcePrice|null>  $fileSlots
+     */
+    private function fileSlot(Product $product, array &$fileSlots): ?ProductSourcePrice
+    {
+        $id = (int) $product->id;
+        if (! array_key_exists($id, $fileSlots)) {
+            $fileSlots[$id] = ProductSourcePrice::query()
+                ->where('product_id', $id)
+                ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+                ->first();
+        }
+
+        return $fileSlots[$id];
+    }
+
+    /**
+     * Karta innego producenta niż cennik — porównanie jak B2bCatalogSync::foreignManufacturer (małe litery, trim).
+     * Pusty producent karty albo cennika = zgoda.
+     */
+    private function foreignManufacturer(Product $existing, string $manufacturer): bool
+    {
+        $card = mb_strtolower(trim((string) $existing->manufacturer));
+        $incoming = mb_strtolower(trim($manufacturer));
+
+        return $card !== '' && $incoming !== '' && $card !== $incoming;
     }
 
     /**

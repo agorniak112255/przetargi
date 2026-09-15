@@ -7,12 +7,16 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\B2bAccount;
 use App\Models\B2bSyncRun;
+use App\Models\Product;
+use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bConnectorRegistry;
+use App\Services\Pricing\ProductEffectivePrice;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -67,9 +71,28 @@ class B2bAccountController extends Controller
         return response()->json($this->view($b2bAccount->fresh()->load(['creator:id,name', 'updater:id,name'])));
     }
 
-    public function destroy(B2bAccount $b2bAccount): JsonResponse
+    /**
+     * Ceny konta znikają z kart przed usunięciem konta: cena obowiązująca wraca do cennika z pliku albo innego konta
+     * (klucz obcy slotu tylko zeruje b2b_account_id — slot „b2b:{id}” zostałby na karcie i nadal wygrywał).
+     */
+    public function destroy(B2bAccount $b2bAccount, ProductEffectivePrice $effectivePrices): JsonResponse
     {
-        $b2bAccount->delete();
+        $sourceKey = ProductSourcePrice::b2bKey((int) $b2bAccount->id);
+
+        DB::transaction(function () use ($b2bAccount, $effectivePrices, $sourceKey): void {
+            $productIds = ProductSourcePrice::query()
+                ->where('source_key', $sourceKey)
+                ->orderBy('product_id')
+                ->pluck('product_id')
+                ->all();
+            foreach (array_chunk($productIds, 500) as $chunk) {
+                foreach (Product::query()->whereIn('id', $chunk)->get() as $product) {
+                    $effectivePrices->deleteSlot($product, $sourceKey);
+                }
+            }
+
+            $b2bAccount->delete();
+        });
 
         return response()->json(['ok' => true]);
     }

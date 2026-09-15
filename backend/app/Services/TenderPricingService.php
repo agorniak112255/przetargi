@@ -31,6 +31,13 @@ final class TenderPricingService
         );
     }
 
+    /**
+     * Zmiana marży docelowej przetargu. Pozycje trzymają cenę oferty z chwili dopasowania (decyzja użytkownika
+     * 15.09.2026): cena karty zmieniona później przez import cennika / B2B nie może cicho zmienić oferty, więc
+     * dotychczasowa cena oferty (także drugiego produktu) jest tylko przeskalowana narzutem stary → nowy — jak dla
+     * ofert własnych. Z bieżącej ceny karty liczona jest wyłącznie cena, której pozycja jeszcze nie ma (null) —
+     * nie ma wtedy czego trzymać.
+     */
     public function applyTargetMarginChange(Tender $tender, float $oldPercent, float $newPercent): void
     {
         if (abs($oldPercent - $newPercent) < 0.0001) {
@@ -41,17 +48,12 @@ final class TenderPricingService
 
         foreach ($tender->items as $item) {
             if ($item->main_product_id !== null) {
-                $product = $item->mainProduct;
-                if ($product !== null && (float) $product->purchase_price > 0) {
-                    $item->offer_price = OfferPricing::fromPurchase(
-                        $this->fx->purchasePln($product),
-                        $newPercent,
-                    );
-                }
-                $companion = $item->companionProduct;
-                if ($companion !== null && (float) $companion->purchase_price > 0) {
-                    $item->companion_offer_price = OfferPricing::fromPurchase(
-                        $this->fx->purchasePln($companion),
+                $item->offer_price = $this->repricedOffer($item->offer_price, $item->mainProduct, $oldPercent, $newPercent);
+                if ($item->companion_product_id !== null) {
+                    $item->companion_offer_price = $this->repricedOffer(
+                        $item->companion_offer_price,
+                        $item->companionProduct,
+                        $oldPercent,
                         $newPercent,
                     );
                 }
@@ -71,6 +73,10 @@ final class TenderPricingService
         $this->recalculateTenderTotals($tender->fresh());
     }
 
+    /**
+     * Marża pozycji liczona od BIEŻĄCEJ ceny zakupu karty (i drugiego produktu), a nie od ceny z chwili dopasowania —
+     * to informacja o realnym koszcie: po zmianie ceny karty oferta zostaje, a marża pokazuje, ile na niej zostaje.
+     */
     public function recalculateItemMargin(TenderItem $item): void
     {
         $offer = $item->lineOfferUnit();
@@ -142,5 +148,21 @@ final class TenderPricingService
             : null;
         $tender->last_activity_at = now();
         $tender->save();
+    }
+
+    /**
+     * Cena oferty po zmianie marży: istniejąca — przeskalowana; brak ceny — z bieżącego zakupu karty (null, gdy karta
+     * nie ma zakupu).
+     */
+    private function repricedOffer(mixed $offer, ?Product $product, float $oldPercent, float $newPercent): ?float
+    {
+        if ($offer !== null) {
+            return OfferPricing::scaleByMarginChange((float) $offer, $oldPercent, $newPercent);
+        }
+        if ($product === null || (float) $product->purchase_price <= 0) {
+            return null;
+        }
+
+        return OfferPricing::fromPurchase($this->fx->purchasePln($product), $newPercent);
     }
 }

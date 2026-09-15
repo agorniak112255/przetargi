@@ -11,10 +11,12 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantPriceHistory;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\PriceListImportService;
+use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\ProductSearchBlob;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
@@ -26,16 +28,21 @@ use Throwable;
  * Wspólne zasady zapisu produktów z B2B do katalogu (dla każdego łącznika):
  * - karta dopasowana po powiązaniu z poprzedniego przebiegu, inaczej po dokładnym kodzie; kod karty
  *   innego producenta jest pomijany (wspólny import cenników skleja warianty po rdzeniu kodu i cenie);
- * - cena zawsze ze źródła; historia cen karty (źródło „b2b:{łącznik}”, przebieg, stały wpis konta w Cennikach)
- *   tylko przy nowej karcie lub zmianie ceny — zmiany widać na karcie produktu z datą; wpis konta w Cennikach
- *   (jeden na konto, B2bAccountPriceList) pokazuje wynik ostatniego przebiegu;
+ * - cena ze źródła trafia do slotu konta w product_source_prices („b2b:{id konta}”), nie wprost na kartę
+ *   (decyzja użytkownika 15.09.2026: cenniki z plików i B2B nie nadpisują sobie cen); cenę obowiązującą karty
+ *   przelicza ProductEffectivePrice (slot B2B ma pierwszeństwo przed plikiem). Zmiana ceny i podsumowanie
+ *   aktualizacji porównują z poprzednim slotem tego konta (bez slotu — z ceną karty). Historia cen karty (źródło
+ *   „b2b:{łącznik}”, przebieg, stały wpis konta w Cennikach) z wartościami slotu, tylko przy nowej karcie lub
+ *   zmianie ceny slotu — zmiany widać na karcie produktu z datą; wpis konta w Cennikach (jeden na konto,
+ *   B2bAccountPriceList) pokazuje wynik ostatniego przebiegu;
  * - opis ze źródła, gdy karta go nie ma albo ma opis zapisany wcześniej przez synchronizację i
  *   niezmieniony od tamtej pory — opisu poprawionego ręcznie nie nadpisujemy;
  * - kategoria, link i zdjęcie tylko gdy puste; produktów znikniętych z B2B nie kasujemy;
- * - łącznik B2bKeepsExistingNames nie zmienia nazwy istniejącej karty (nazwa ze źródła tylko na nowej);
- *   b2b_product_links.remote_name zawsze trzyma nazwę ze źródła z ostatniego przebiegu;
+ * - żaden łącznik nie zmienia nazwy istniejącej karty — nazwa ze źródła tylko na nowej (decyzja użytkownika
+ *   15.09.2026; znacznik B2bKeepsExistingNames zostaje dla zgodności); b2b_product_links.remote_name zawsze
+ *   trzyma nazwę ze źródła z ostatniego przebiegu;
  * - łącznik B2bForeignLanguageSource (decyzja użytkownika 15.09.2026): po zapisie opisu ze źródła (i przy nowej
- *   karcie łącznika B2bKeepsExistingNames — także nazwy) zlecamy TranslateB2bProductTextJob; nigdy w dry-run.
+ *   karcie — także nazwy) zlecamy TranslateB2bProductTextJob; nigdy w dry-run.
  *   Niezmiennik hashy powiązania: description_hash = sha1 opisu na karcie zapisanego przez synchronizację;
  *   source_description_hash niepusty tylko wtedy, gdy ten opis jest tłumaczeniem — wtedy to sha1 tekstu źródła.
  *   Źródło bez zmian i tłumaczenie na karcie nietknięte → import nie przywraca oryginału i nie zleca ponownie;
@@ -71,6 +78,7 @@ final class B2bCatalogSync
     public function __construct(
         private readonly PriceListImportService $priceLists,
         private readonly ProductImageDownloader $images,
+        private readonly ProductEffectivePrice $effectivePrices,
     ) {}
 
     /**
@@ -376,33 +384,48 @@ final class B2bCatalogSync
             return ['status' => 'skipped', 'reason' => 'brak ceny w B2B'];
         }
 
+        // pola opisowe karty; ceny idą do slotu konta, nie do fill karty
         $payload = [
             'name' => mb_substr($remote->name, 0, 1000),
             'manufacturer' => $manufacturer,
+        ];
+        // każdy łącznik (decyzja użytkownika 15.09.2026): nazwa ze źródła tylko na nową kartę — przed
+        // detectPriceChange/summarizeUpdate, żeby zachowana nazwa nie liczyła się jako zmiana
+        if ($existing !== null) {
+            unset($payload['name']);
+        }
+        $prices = [
             // cena konta (po rabacie) = zakup; cena bazowa dostawcy = katalogowa
             'catalog_price_net' => $price->base ?? $price->net,
             'purchase_price' => $price->net,
             'discount_percent' => $price->discountPercent,
             'currency' => $price->currency,
         ];
-        // łącznik ze znacznikiem: nazwa ze źródła tylko na nową kartę — przed detectPriceChange/summarizeUpdate,
-        // żeby zachowana nazwa nie liczyła się jako zmiana
-        if ($existing !== null && $connector instanceof B2bKeepsExistingNames) {
-            unset($payload['name']);
-        }
+        $slotKey = ProductSourcePrice::b2bKey((int) $account->id);
         [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote);
 
         $priceChange = null;
         $updateSummary = null;
         $dirty = true;
+        $slotChanged = true;
         if ($existing !== null) {
-            $priceChange = $this->priceLists->detectPriceChange($existing, $payload, $remote->sku);
-            // przed fill — porównuje zapisane wartości karty z nowymi
-            $updateSummary = $this->priceLists->summarizeUpdate($existing, $payload, $remote->sku, $priceChange !== null);
+            $slot = ProductSourcePrice::query()
+                ->where('product_id', $existing->id)
+                ->where('source_key', $slotKey)
+                ->first();
+            // porównanie z poprzednią ceną tego konta, nie z ceną obowiązującą (ta może być z pliku albo innego
+            // konta); bez slotu (pierwszy przebieg konta) — z ceną karty. Przed fill — kopia ma zapisane wartości.
+            $previous = $this->effectivePrices->cardWithSlotPrices($existing, $slot);
+            $compared = [...$payload, ...$prices];
+            $priceChange = $this->priceLists->detectPriceChange($previous, $compared, $remote->sku);
+            $updateSummary = $this->priceLists->summarizeUpdate($previous, $compared, $remote->sku, $priceChange !== null);
+            $slotChanged = $slot === null
+                || $priceChange !== null
+                || strtoupper((string) $slot->currency) !== strtoupper($price->currency);
             $existing->fill($payload);
             $dirty = $existing->isDirty();
         }
-        $status = $existing === null ? 'created' : ($dirty ? 'updated' : 'unchanged');
+        $status = $existing === null ? 'created' : (($dirty || $slotChanged) ? 'updated' : 'unchanged');
 
         if ($dryRun) {
             return ['status' => $status, 'description' => isset($payload['description'])];
@@ -414,16 +437,23 @@ final class B2bCatalogSync
             }
             $product = $existing;
         } else {
-            $product = Product::query()->create(['sku' => $remote->sku, ...$payload]);
+            // kolumny cen karty są NOT NULL — nowa karta startuje z ceną konta, przeliczenie ze slotu jej nie zmieni
+            $product = Product::query()->create(['sku' => $remote->sku, ...$payload, ...$prices]);
         }
+
+        // zapis slotu także bez zmiany ceny — checked_at wyznacza najświeższe konto przy kilku kontach
+        $slot = $this->effectivePrices->saveSlot($product, $slotKey, [
+            ...$prices,
+            'b2b_account_id' => $account->id,
+        ])['slot'];
 
         if ($existing === null || $priceChange !== null) {
             ProductPriceHistory::query()->create([
                 'product_id' => $product->id,
                 'price_list_id' => $priceListId,
                 'b2b_sync_run_id' => $runId,
-                'catalog_price_net' => $product->catalog_price_net,
-                'purchase_price' => $product->purchase_price,
+                'catalog_price_net' => $slot->catalog_price_net,
+                'purchase_price' => $slot->purchase_price,
                 'source' => 'b2b:'.$connector::key(),
             ]);
         }
@@ -447,13 +477,9 @@ final class B2bCatalogSync
         // po zapisie powiązania — job czyta z niego hashe i nazwę ze źródła
         $created = $existing === null;
         $translationQueued = false;
-        if ($connector instanceof B2bForeignLanguageSource
-            && (isset($payload['description']) || ($created && $connector instanceof B2bKeepsExistingNames))) {
-            TranslateB2bProductTextJob::dispatch(
-                (int) $product->id,
-                (int) $account->id,
-                $created && $connector instanceof B2bKeepsExistingNames,
-            );
+        // nazwa ze źródła jest tylko na karcie utworzonej w tym przebiegu — tylko wtedy tłumaczymy też nazwę
+        if ($connector instanceof B2bForeignLanguageSource && (isset($payload['description']) || $created)) {
+            TranslateB2bProductTextJob::dispatch((int) $product->id, (int) $account->id, $created);
             $translationQueued = true;
         }
 
@@ -695,6 +721,10 @@ final class B2bCatalogSync
             'currency' => $currencies[0],
             'variant_summary' => $this->variantSummary($this->summaryItems($rows, $existing, $stored)),
         ];
+        // jak w ścieżce bez wersji: nazwa ze źródła tylko na nową kartę (decyzja użytkownika 15.09.2026)
+        if ($existing !== null) {
+            unset($payload['name']);
+        }
         // błąd pobrania opisu nie wstrzymuje cen: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
         $warnings = [];
         [$descriptionHash] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
