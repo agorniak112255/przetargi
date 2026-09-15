@@ -11,7 +11,15 @@ import { variantsFromLabel } from '../lib/priceChange'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { applyCheckboxRange } from '../lib/checkboxRange'
-import { api, can, parseActiveEnrichment, type EnrichmentBatch, type PrestaExportBatch, type Product } from '../lib/api'
+import {
+  api,
+  B2B_DESCRIPTION_OVERWRITE_CONFIRM,
+  can,
+  parseActiveEnrichment,
+  type EnrichmentBatch,
+  type PrestaExportBatch,
+  type Product,
+} from '../lib/api'
 import {
   AI_SEARCH_MIN_CHARS,
   externalHintsFrom,
@@ -512,7 +520,7 @@ export function Products() {
     setErr('')
     setMsg('')
     try {
-      const res = await api<{ batch: EnrichmentBatch; product_ids?: number[] }>('/products/enrich', {
+      const res = await api<{ batch: EnrichmentBatch; product_ids?: number[]; skipped_b2b?: number }>('/products/enrich', {
         method: 'POST',
         body: JSON.stringify({ product_ids: capped, force }),
       })
@@ -522,6 +530,7 @@ export function Products() {
         (ids.length > enrichBatchLimit
           ? `Zlecono ${queuedIds.length}/${ids.length} (limit ${enrichBatchLimit})`
           : `Zlecono ${queuedIds.length} produktów`) +
+          ((res.skipped_b2b ?? 0) > 0 ? ` · pominięto ${res.skipped_b2b} z opisem z cennika B2B` : '') +
           `. Serwer liczy ${enrichConcurrency} naraz — możesz zamknąć stronę.`,
       )
       setSelected({})
@@ -561,13 +570,15 @@ export function Products() {
   }
 
   async function enrichOne(p: Product, force = false) {
+    const overwriteB2b = Boolean(p.description_from_b2b)
+    if (overwriteB2b && !window.confirm(B2B_DESCRIPTION_OVERWRITE_CONFIRM)) return
     setEnrichRowId(p.id)
     setEnrichBusy(true)
     setErr('')
     try {
       const res = await api<{ batch: EnrichmentBatch }>(`/products/${p.id}/enrich`, {
         method: 'POST',
-        body: JSON.stringify({ force }),
+        body: JSON.stringify({ force, overwrite_b2b_description: overwriteB2b }),
       })
       setBatch(res.batch)
       setMsg(`Pobieranie: ${p.sku}`)
@@ -696,8 +707,9 @@ export function Products() {
     return sortProductRows(data, sort, dir)
   }, [result, aiMode, sort, dir])
   const visibleIds = displayRows.map((p) => p.id)
+  // karty z opisem z cennika B2B nie idą do zbiorczego AI (serwer i tak je pomija)
   const pendingVisible = displayRows.filter(
-    (p) => (p.enrichment_status ?? 'none') !== 'done',
+    (p) => (p.enrichment_status ?? 'none') !== 'done' && !p.description_from_b2b,
   )
   const selectedIds = Object.keys(selected)
     .map(Number)
@@ -1084,22 +1096,31 @@ export function Products() {
                     </td>
                   )}
                   <td className="p-2">
-                    <span
-                      className={
-                        status === 'done'
-                          ? 'text-green-700'
-                          : status === 'failed'
-                            ? 'text-red-600'
-                            : status === 'manual'
-                              ? 'text-amber-700'
-                              : status === 'running' || status === 'queued'
-                                ? 'text-blue-700'
-                                : 'text-slate-400'
-                      }
-                      title={p.enrichment_error ?? undefined}
-                    >
-                      {STATUS_LABEL[status] ?? status}
-                    </span>
+                    {status === 'none' && p.description_from_b2b ? (
+                      <span
+                        className="text-emerald-700"
+                        title="Opis ze sklepu dostawcy (cennik B2B) — AI nie było uruchamiane i nie nadpisze go zbiorczo"
+                      >
+                        Z B2B
+                      </span>
+                    ) : (
+                      <span
+                        className={
+                          status === 'done'
+                            ? 'text-green-700'
+                            : status === 'failed'
+                              ? 'text-red-600'
+                              : status === 'manual'
+                                ? 'text-amber-700'
+                                : status === 'running' || status === 'queued'
+                                  ? 'text-blue-700'
+                                  : 'text-slate-400'
+                        }
+                        title={p.enrichment_error ?? undefined}
+                      >
+                        {STATUS_LABEL[status] ?? status}
+                      </span>
+                    )}
                   </td>
                   <td className="p-2">
                     <Link

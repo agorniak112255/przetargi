@@ -20,6 +20,7 @@ use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\B2b\B2bDescriptionSource;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
@@ -106,11 +107,12 @@ final class ProductEnrichmentService
         return app(EnrichmentDescriptionTemplateService::class);
     }
 
-    public function enqueueProduct(Product $product, User $user, bool $force = false): ProductEnrichmentBatch
+    public function enqueueProduct(Product $product, User $user, bool $force = false, bool $overwriteB2bDescription = false): ProductEnrichmentBatch
     {
         if (! $force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
             throw new RuntimeException('Produkt ma już pobrane dane. Użyj force=true, aby pobrać ponownie.');
         }
+        app(B2bDescriptionSource::class)->assertMayOverwrite($product, $overwriteB2bDescription);
 
         $batch = ProductEnrichmentBatch::query()->create([
             'scope' => ProductEnrichmentBatch::SCOPE_PRODUCT,
@@ -160,8 +162,11 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Karty z opisem z cennika B2B (B2bDescriptionSource) są pomijane zawsze, także z force — zbiorczo AI nie nadpisuje
+     * opisu ze sklepu dostawcy (decyzja użytkownika 15.09.2026); skipped_b2b = ile takich kart pominięto.
+     *
      * @param  list<int>  $ids
-     * @return array{batch: ProductEnrichmentBatch, product_ids: list<int>}
+     * @return array{batch: ProductEnrichmentBatch, product_ids: list<int>, skipped_b2b: int}
      */
     public function enqueueProductIds(
         array $ids,
@@ -186,15 +191,26 @@ final class ProductEnrichmentService
         // zachowaj kolejność z $ids
         $eligible = $query->pluck('id')->map(static fn ($id): int => (int) $id)->all();
         $eligibleSet = array_fill_keys($eligible, true);
+        $fromB2b = app(B2bDescriptionSource::class)->productIds($eligible);
         $productIds = [];
+        $skippedB2b = 0;
         foreach ($ids as $id) {
-            if (isset($eligibleSet[$id])) {
-                $productIds[] = $id;
+            if (! isset($eligibleSet[$id])) {
+                continue;
             }
+            if (isset($fromB2b[$id])) {
+                $skippedB2b++;
+
+                continue;
+            }
+            $productIds[] = $id;
         }
 
         if ($productIds === []) {
-            throw new RuntimeException('Brak produktów do wzbogacenia (wszystkie już mają dane).');
+            throw new RuntimeException($skippedB2b > 0
+                ? 'Brak produktów do wzbogacenia — '.$skippedB2b.' kart ma opis z cennika B2B (ze sklepu dostawcy), którego AI nie nadpisuje. '
+                    .'Pojedynczą kartę można nadpisać przyciskiem „Pobierz” po potwierdzeniu.'
+                : 'Brak produktów do wzbogacenia (wszystkie już mają dane).');
         }
 
         $limit = $this->aiSettings->enrichmentBatchLimit();
@@ -204,9 +220,10 @@ final class ProductEnrichmentService
         }
 
         $queued = count($productIds);
-        $message = $requested > $limit
+        $message = ($requested > $limit
             ? "W kolejce: {$queued}/{$requested} (limit {$limit} — Ustawienia AI)"
-            : 'W kolejce: '.$queued.' produktów';
+            : 'W kolejce: '.$queued.' produktów')
+            .($skippedB2b > 0 ? ' · pominięto '.$skippedB2b.' z opisem z cennika B2B' : '');
 
         $batch = ProductEnrichmentBatch::query()->create([
             'scope' => $scope,
@@ -237,6 +254,7 @@ final class ProductEnrichmentService
         return [
             'batch' => $batch,
             'product_ids' => $productIds,
+            'skipped_b2b' => $skippedB2b,
         ];
     }
 
@@ -500,13 +518,15 @@ final class ProductEnrichmentService
     }
 
     /**
-     * Synchroniczne pobranie (1 produkt) — omija stare workery kolejki.
+     * Synchroniczne pobranie (1 produkt) — omija stare workery kolejki. Karta z opisem z cennika B2B tylko po
+     * potwierdzeniu ($overwriteB2bDescription).
      */
-    public function enrichProductSync(Product $product, User $user, bool $force = false): ProductEnrichmentBatch
+    public function enrichProductSync(Product $product, User $user, bool $force = false, bool $overwriteB2bDescription = false): ProductEnrichmentBatch
     {
         if (! $force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
             throw new RuntimeException('Produkt ma już pobrane dane. Użyj force=true, aby pobrać ponownie.');
         }
+        app(B2bDescriptionSource::class)->assertMayOverwrite($product, $overwriteB2bDescription);
 
         $batch = ProductEnrichmentBatch::query()->create([
             'scope' => 'product',

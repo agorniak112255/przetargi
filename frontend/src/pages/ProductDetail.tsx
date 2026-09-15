@@ -9,6 +9,7 @@ import { PriceStep } from '../components/ProductPriceChange'
 import { ProductVariantsTable } from '../components/ProductVariantsTable'
 import {
   api,
+  B2B_DESCRIPTION_OVERWRITE_CONFIRM,
   can,
   type EnrichmentBatch,
   type PrestaExportResult,
@@ -183,6 +184,8 @@ export function ProductDetail() {
       const saved = await persistShopSource(shopUrlDraft)
       if (!saved) return
     }
+    const overwriteB2b = Boolean(p?.description_from_b2b)
+    if (overwriteB2b && !window.confirm(B2B_DESCRIPTION_OVERWRITE_CONFIRM)) return
     setBusy(true)
     setErr('')
     try {
@@ -190,7 +193,7 @@ export function ProductDetail() {
         `/products/${id}/enrich`,
         {
           method: 'POST',
-          body: JSON.stringify({ force }),
+          body: JSON.stringify({ force, overwrite_b2b_description: overwriteB2b }),
         },
       )
       setBatch(res.batch)
@@ -445,7 +448,7 @@ export function ProductDetail() {
             </form>
           )}
           <p className="text-xs text-slate-500">
-            Opis/zdjęcia: <b>{STATUS_LABEL[status] ?? status}</b>
+            Opis/zdjęcia: <b>{status === 'none' && p.description_from_b2b ? 'Z B2B (opis ze sklepu dostawcy)' : (STATUS_LABEL[status] ?? status)}</b>
             {p.enriched_at ? ` · ${new Date(p.enriched_at).toLocaleString('pl-PL')}` : ''}
           </p>
         </div>

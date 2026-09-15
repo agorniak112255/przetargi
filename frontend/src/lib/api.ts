@@ -225,6 +225,8 @@ export type Product = {
   shop_source_url?: string | null
   substitutes_count?: number
   enrichment_status?: 'none' | 'queued' | 'running' | 'done' | 'failed' | 'manual'
+  /** Opis zapisany przez cennik B2B i niezmieniony — AI nie nadpisuje go zbiorczo, pojedynczo po potwierdzeniu. */
+  description_from_b2b?: boolean
   enriched_at?: string | null
   enrichment_error?: string | null
   enrichment_trace?: {
@@ -305,6 +307,10 @@ export type ProductAccessory = {
   presta_url?: string | null
   matched: boolean
 }
+
+/** Pytanie przed uzupełnianiem AI karty z opisem z cennika B2B (description_from_b2b). */
+export const B2B_DESCRIPTION_OVERWRITE_CONFIRM =
+  'Ta karta ma opis ze sklepu dostawcy (cennik B2B).\n\nUzupełnianie AI zastąpi go opisem z internetu, a kolejne pobranie cennika go nie przywróci.\n\nNadpisać opis?'
 
 /** Cena karty z jednego źródła (product_source_prices); is_effective = z tego slotu pochodzi cena karty. */
 export type ProductSourcePrice = {

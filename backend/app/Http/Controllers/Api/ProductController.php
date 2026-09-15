@@ -15,6 +15,7 @@ use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\B2b\B2bConnectorRegistry;
+use App\Services\B2b\B2bDescriptionSource;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\ProductEffectivePrice;
@@ -232,8 +233,11 @@ class ProductController extends Controller
         $changes = $this->priceChanges->latestChanges($pageIds);
         // Wersje z cenami (karta ma cenę 0): liczba aktywnych i „od” — jedno zapytanie na stronę.
         $variantSummaries = $this->variants->listSummaries($pageIds);
-        $page->getCollection()->transform(static function (array $row) use ($changes, $variantSummaries): array {
+        // opis z cennika B2B (status AI „Z B2B”, bez zbiorczego nadpisywania) — dwa zapytania na stronę
+        $fromB2b = app(B2bDescriptionSource::class)->productIds($pageIds);
+        $page->getCollection()->transform(static function (array $row) use ($changes, $variantSummaries, $fromB2b): array {
             $row['last_price_change'] = $changes[(int) $row['id']] ?? null;
+            $row['description_from_b2b'] = isset($fromB2b[(int) $row['id']]);
             $summary = $variantSummaries[(int) $row['id']] ?? null;
             $row['variants_count'] = $summary['variants_count'] ?? 0;
             $row['variants_min_price'] = $summary['variants_min_price'] ?? null;
@@ -361,6 +365,7 @@ class ProductController extends Controller
         $payload['last_price_change'] = $this->priceChanges->latestChanges([(int) $product->id])[(int) $product->id] ?? null;
         $payload['variants'] = $this->variants->forProduct((int) $product->id);
         $payload['source_prices'] = $this->sourcePricesPayload($product);
+        $payload['description_from_b2b'] = app(B2bDescriptionSource::class)->has($product);
         $payload = $this->fx->appendPricePln($payload);
         $payload['presta_export'] = $this->prestaExportPayload($product);
         $payload['accessories'] = $this->kit->present($product);

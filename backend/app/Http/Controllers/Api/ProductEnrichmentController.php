@@ -39,6 +39,8 @@ class ProductEnrichmentController extends Controller
     {
         $data = $request->validate([
             'force' => ['sometimes', 'boolean'],
+            // potwierdzenie użytkownika: AI może zastąpić opis z cennika B2B (B2bDescriptionSource)
+            'overwrite_b2b_description' => ['sometimes', 'boolean'],
         ]);
 
         if (function_exists('set_time_limit')) {
@@ -51,6 +53,7 @@ class ProductEnrichmentController extends Controller
                 $product,
                 $request->user(),
                 (bool) ($data['force'] ?? false),
+                (bool) ($data['overwrite_b2b_description'] ?? false),
             );
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
@@ -109,6 +112,7 @@ class ProductEnrichmentController extends Controller
         return response()->json([
             'batch' => $this->batchPayload($queued['batch']),
             'product_ids' => $queued['product_ids'],
+            'skipped_b2b' => $queued['skipped_b2b'],
             'price_list_id' => $priceList->id,
         ], 202);
     }
@@ -134,6 +138,7 @@ class ProductEnrichmentController extends Controller
         return response()->json([
             'batch' => $this->batchPayload($queued['batch']),
             'product_ids' => $queued['product_ids'],
+            'skipped_b2b' => $queued['skipped_b2b'],
         ], 202);
     }
 
