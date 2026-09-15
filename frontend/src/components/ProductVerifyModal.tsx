@@ -8,6 +8,8 @@ import {
   queryHighlightTokens,
 } from '../lib/descriptionHighlight'
 import { productDisplayName } from '../lib/productLabel'
+import { useRequirementCheck } from '../lib/useRequirementCheck'
+import { CardConflictsModal } from './CardConflictsModal'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 import { RequirementCheckList } from './RequirementCheckList'
 
@@ -15,6 +17,8 @@ type Props = {
   productId: number | null
   query?: string
   onClose: () => void
+  /** po wczytaniu karty wpisuje tę frazę do „Szukaj w opisie” (raz na produkt) */
+  initialFind?: string
 }
 
 type RequirementTerms = {
@@ -25,7 +29,7 @@ type RequirementTerms = {
 
 type KeyChip = { key: string; label: string; find: string; count: number }
 
-export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
+export function ProductVerifyModal({ productId, query = '', onClose, initialFind }: Props) {
   const [product, setProduct] = useState<Product | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -36,6 +40,8 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
   // zapytania/produktu stare wartości same przestają obowiązywać, bez resetu w efekcie.
   const [fetchedTerms, setFetchedTerms] = useState<{ query: string; terms: RequirementTerms } | null>(null)
   const [showAllFor, setShowAllFor] = useState<string | null>(null)
+  const [conflictsOpen, setConflictsOpen] = useState(false)
+  const initialFindFor = useRef<number | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
 
   const allTokens = useMemo(() => queryHighlightTokens(query), [query])
@@ -68,23 +74,39 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
     setFindIndex(0)
     setImageIndex(0)
     setShowAllFor(null)
+    setConflictsOpen(false)
     void api<Product>(`/products/${productId}`)
       .then(setProduct)
       .catch((e) => setError(e instanceof Error ? e.message : 'Nie udało się pobrać produktu'))
       .finally(() => setLoading(false))
   }, [productId])
 
+  // Porównanie dopiero po wczytaniu karty — lista i przycisk „Sprzeczności” korzystają z jednego wyniku.
+  const loadedId = product != null && product.id === productId ? productId : null
+  const { check, error: checkError } = useRequirementCheck(loadedId, query)
+
+  useEffect(() => {
+    if (productId == null) {
+      initialFindFor.current = null
+      return
+    }
+    if (loadedId == null || initialFindFor.current === loadedId) return
+    initialFindFor.current = loadedId
+    if (initialFind?.trim()) setFind(initialFind)
+  }, [productId, loadedId, initialFind])
+
   useEffect(() => {
     if (productId == null) return
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
+      // Otwarty modal sprzeczności sam obsługuje Escape (window, capture) — zamyka tylko siebie.
+      if (e.key === 'Escape' && !conflictsOpen) {
         e.stopPropagation()
         onClose()
       }
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [productId, onClose])
+  }, [productId, onClose, conflictsOpen])
 
   const bodyText = useMemo(() => (product ? descriptionSearchText(product) : ''), [product])
 
@@ -197,6 +219,24 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
             {error && <p className="text-sm text-red-100">{error}</p>}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {check && check.conflicts.count > 0 ? (
+              <button
+                type="button"
+                onClick={() => setConflictsOpen(true)}
+                title={conflictsTitle(check.conflicts.requirement.length, check.conflicts.card_fields.length)}
+                className="rounded-full border border-rose-200 bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-800 hover:bg-rose-200"
+              >
+                ⚠ Sprzeczności ({check.conflicts.count})
+              </button>
+            ) : check ? (
+              <button
+                type="button"
+                onClick={() => setConflictsOpen(true)}
+                className="px-1 text-[11px] text-white/70 hover:text-white hover:underline"
+              >
+                sprawdź sprzeczności modelem
+              </button>
+            ) : null}
             <a
               href={appHref(`/products/${productId}`)}
               target="_blank"
@@ -373,8 +413,8 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
             )}
             {product && (
               <RequirementCheckList
-                productId={productId}
-                query={query}
+                check={check}
+                error={checkError}
                 onFind={setFind}
                 findHitCount={(p) => countFindHits(bodyText, p)}
               />
@@ -395,6 +435,28 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
           </div>
         </div>
       </div>
+      <CardConflictsModal
+        open={conflictsOpen && product != null}
+        onClose={() => setConflictsOpen(false)}
+        productId={productId}
+        productName={product ? productDisplayName(product, 160) : undefined}
+        check={check}
+        onFind={setFind}
+      />
     </div>
   )
+}
+
+/** „2 niespełnione wymagania · 1 sprzeczne pole karty” */
+function conflictsTitle(requirement: number, cardFields: number): string {
+  const form = (n: number, one: string, few: string, many: string) => {
+    if (n === 1) return one
+    const d = n % 10
+    const t = n % 100
+    return d >= 2 && d <= 4 && (t < 12 || t > 14) ? few : many
+  }
+  return [
+    `${requirement} ${form(requirement, 'niespełnione wymaganie', 'niespełnione wymagania', 'niespełnionych wymagań')}`,
+    `${cardFields} ${form(cardFields, 'sprzeczne pole karty', 'sprzeczne pola karty', 'sprzecznych pól karty')}`,
+  ].join(' · ')
 }

@@ -1803,7 +1803,7 @@ class OpenAiCompatibleClient
         }
         if ($status === 429) {
             return 'Limit zapytań modelu AI (HTTP 429). To OpenRouter/dostawca modelu, nie Tavily. '
-                .'Poczekaj ok. minutę i ponów opis produktu.';
+                .'Poczekaj ok. minutę i ponów próbę.';
         }
 
         return $who.' zwróciło błąd HTTP '.$status.': '.$detail;

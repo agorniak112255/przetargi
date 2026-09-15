@@ -10,6 +10,9 @@ import { api, can, downloadFile, type Product, type Substitute, type Tender } fr
 import { offerMarkupFactor, productDisplayName, productThumbUrl, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
 import { isDualRequirement } from '../lib/productAiSearch'
 import { SiwzItemTile, SiwzRequirementBlock, splitSiwzRequirement } from '../components/SiwzRequirementBlock'
+import { CardConflictsModal } from '../components/CardConflictsModal'
+import type { TenderConflicts } from '../components/RequirementCheckList'
+import { useRequirementCheck } from '../lib/useRequirementCheck'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -189,6 +192,16 @@ type InvitationRow = {
 }
 
 type DirectoryUser = { id: number; name: string; email: string; role: string }
+
+/** Sprzeczności kart zapisanych w pozycjach; błąd = brak oznaczeń (to tylko podpowiedź). */
+async function fetchTenderConflicts(tenderId: string): Promise<TenderConflicts['items']> {
+  try {
+    const res = await api<TenderConflicts>(`/tenders/${tenderId}/conflicts`)
+    return res.items && typeof res.items === 'object' ? res.items : {}
+  } catch {
+    return {}
+  }
+}
 
 function itemProductId(item: Item): string {
   const id = item.main_product_id ?? item.main_product?.id
@@ -721,6 +734,24 @@ export function TenderDetail() {
     void loadMeta()
     void api<{ data: Product[] }>('/products?per_page=100').then((p) => setProducts(p.data ?? []))
   }, [load, loadMeta])
+
+  // Sprzeczności kart: ponownie po zmianie zapisanych produktów lub wymagań (też po „Dopasuj AI”).
+  const [conflicts, setConflicts] = useState<TenderConflicts['items']>({})
+  const conflictsKey =
+    data?.tender.items
+      .map((i) => `${i.id}:${i.main_product_id ?? i.main_product?.id ?? ''}:${i.requirement?.length ?? 0}`)
+      .join('|') ?? ''
+
+  useEffect(() => {
+    if (!id || !conflictsKey) return
+    let cancelled = false
+    void fetchTenderConflicts(id).then((items) => {
+      if (!cancelled) setConflicts(items)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [id, conflictsKey])
 
   useEffect(() => {
     if (!id) {
@@ -2123,6 +2154,7 @@ export function TenderDetail() {
                     busy={busy}
                     focused={focusItemId === item.id}
                     changedByAi={aiChangedIds.has(item.id)}
+                    conflicts={conflicts[String(item.id)]}
                     comments={comments.filter((c) => c.tender_item_id === item.id)}
                     itemActivities={activities.filter(
                       (a) => a.item?.id === item.id && activityHasRealChange(a),
@@ -3042,6 +3074,7 @@ function ItemRow({
   busy,
   focused,
   changedByAi,
+  conflicts,
   comments,
   itemActivities,
   onSave,
@@ -3059,6 +3092,7 @@ function ItemRow({
   busy: boolean
   focused?: boolean
   changedByAi?: boolean
+  conflicts?: TenderConflicts['items'][string]
   comments: CommentRow[]
   itemActivities: ActivityRow[]
   onSave: (id: number, patch: Record<string, unknown>) => Promise<void>
@@ -3085,6 +3119,9 @@ function ItemRow({
   const [customUrl, setCustomUrl] = useState(item.custom_url ?? '')
   const [matchHint, setMatchHint] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
+  /** fraza do podświetlenia w karcie po kliknięciu w oknie sprzeczności */
+  const [verifyFind, setVerifyFind] = useState('')
+  const [conflictsOpen, setConflictsOpen] = useState(false)
   const [aiModalOpen, setAiModalOpen] = useState(false)
   const [aiModalWeb, setAiModalWeb] = useState(false)
   const [aiModalCatalog, setAiModalCatalog] = useState(false)
@@ -3093,6 +3130,19 @@ function ItemRow({
   const [showComment, setShowComment] = useState(false)
   const [showPriceHistory, setShowPriceHistory] = useState(false)
   const hasChanges = itemActivities.length > 0
+  const savedProductId = item.main_product_id ?? item.main_product?.id ?? null
+  // Pełne sprawdzenie pobierane dopiero po otwarciu okna sprzeczności.
+  const { check: conflictsCheck, error: conflictsError } = useRequirementCheck(
+    conflictsOpen ? savedProductId : null,
+    item.requirement ?? '',
+  )
+  // Wynik dotyczy tylko zapisanego produktu — niezapisany wybór w edycji go nie ma.
+  const showConflicts =
+    conflicts != null &&
+    conflicts.count > 0 &&
+    savedProductId != null &&
+    conflicts.product_id === savedProductId &&
+    productId === String(savedProductId)
 
   useEffect(() => {
     setProductId(itemProductId(item))
@@ -3609,6 +3659,16 @@ function ItemRow({
                     Wybrane w ofercie
                   </span>
                 )}
+                {showConflicts && (
+                  <button
+                    type="button"
+                    className="rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800 hover:bg-rose-100"
+                    title={`${conflicts.requirement.length} niespełnionych wymagań · ${conflicts.card_fields.length} sprzecznych pól karty — kliknij`}
+                    onClick={() => setConflictsOpen(true)}
+                  >
+                    ⚠ Sprzeczności {conflicts.count}
+                  </button>
+                )}
                 {canEdit && catalogPurchase() != null && (
                   <button
                     type="button"
@@ -3840,8 +3900,34 @@ function ItemRow({
         <ProductVerifyModal
           productId={previewId}
           query={item.requirement ?? ''}
-          onClose={() => setPreviewId(null)}
+          initialFind={verifyFind || undefined}
+          onClose={() => {
+            setPreviewId(null)
+            setVerifyFind('')
+          }}
         />
+        {savedProductId != null && (
+          <CardConflictsModal
+            open={conflictsOpen}
+            onClose={() => setConflictsOpen(false)}
+            productId={savedProductId}
+            productName={
+              item.main_product ? `${item.main_product.sku} ${productDisplayName(item.main_product)}` : undefined
+            }
+            check={conflictsCheck}
+            loading={conflictsCheck == null && !conflictsError}
+            onOpenVerify={() => {
+              setConflictsOpen(false)
+              setVerifyFind('')
+              setPreviewId(savedProductId)
+            }}
+            onFind={(phrase) => {
+              setConflictsOpen(false)
+              setVerifyFind(phrase)
+              setPreviewId(savedProductId)
+            }}
+          />
+        )}
         </section>
       </div>
     {(item.main_product_id ?? item.main_product?.id) ? (

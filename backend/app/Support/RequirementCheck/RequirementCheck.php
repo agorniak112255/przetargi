@@ -25,7 +25,7 @@ final class RequirementCheck
 
     public function __construct(
         DimensionChecker $dimensions,
-        LevelChecker $levels,
+        private readonly LevelChecker $levels,
         FeatureFlagChecker $flags,
         ColorChecker $color,
     ) {
@@ -33,17 +33,22 @@ final class RequirementCheck
     }
 
     /**
-     * @return array{groups: list<array{key: string, label: string, rows: list<array<string, mixed>>}>}
+     * @return array{
+     *     groups: list<array{key: string, label: string, rows: list<array<string, mixed>>}>,
+     *     conflicts: array{count: int, requirement: list<string>, card_fields: list<array<string, mixed>>}
+     * }
      */
     public function compare(string $requirement, Product $product): array
     {
         $sources = CardSources::fromProduct($product);
         $groups = [];
+        $allRows = [];
         foreach ($this->checkers as $checker) {
             $rows = $checker->check($requirement, $sources);
             if ($rows === []) {
                 continue;
             }
+            array_push($allRows, ...$rows);
             $groups[] = [
                 'key' => $checker->group(),
                 'label' => self::GROUP_LABELS[$checker->group()] ?? $checker->group(),
@@ -51,6 +56,21 @@ final class RequirementCheck
             ];
         }
 
-        return ['groups' => $groups];
+        return [
+            'groups' => $groups,
+            'conflicts' => ConflictSummary::build($allRows, $this->cardConflicts($sources)),
+        ];
+    }
+
+    /**
+     * Sprzeczności między polami karty, także w parametrach, o które przetarg nie pyta. Na razie tylko poziomy
+     * z LevelChecker — cechy tak/nie w pomiarze dawały same fałszywe alarmy.
+     *
+     * @param  list<CardSource>  $sources
+     * @return list<CardConflict>
+     */
+    private function cardConflicts(array $sources): array
+    {
+        return $this->levels->cardConflicts($sources);
     }
 }

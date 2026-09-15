@@ -25,6 +25,7 @@ use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\PriceListController;
 use App\Http\Controllers\Api\PriceListImportController;
 use App\Http\Controllers\Api\ProductAiSearchController;
+use App\Http\Controllers\Api\ProductCardConflictsAiController;
 use App\Http\Controllers\Api\ProductCatalogHealthController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductCrossRefController;
@@ -40,6 +41,7 @@ use App\Http\Controllers\Api\TenderActivityController;
 use App\Http\Controllers\Api\TenderBattlecardController;
 use App\Http\Controllers\Api\TenderCommentController;
 use App\Http\Controllers\Api\TenderConditionController;
+use App\Http\Controllers\Api\TenderConflictsController;
 use App\Http\Controllers\Api\TenderController;
 use App\Http\Controllers\Api\TenderCoverageController;
 use App\Http\Controllers\Api\TenderDocumentController;
@@ -79,6 +81,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::delete('/tenders/{tender}', [TenderController::class, 'destroy'])->middleware('permission:tenders.delete');
         Route::post('/tenders/{tender}/transition', [TenderController::class, 'transition']);
         Route::get('/tenders/{tender}/coverage', TenderCoverageController::class);
+        Route::get('/tenders/{tender}/conflicts', TenderConflictsController::class);
         Route::get('/tenders/{tender}/activities', [TenderActivityController::class, 'index']);
         Route::get('/tenders/{tender}/comments', [TenderCommentController::class, 'index']);
         Route::post('/tenders/{tender}/comments', [TenderCommentController::class, 'store'])->middleware('permission:tenders.comment');
@@ -142,6 +145,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:products.view');
     Route::post('/products/requirement-terms', ProductRequirementTermsController::class)->middleware('permission:products.view');
     Route::post('/products/{product}/requirement-check', ProductRequirementCheckController::class)->middleware('permission:products.view');
+    Route::post('/products/{product}/conflicts/ai', ProductCardConflictsAiController::class)->middleware('permission:products.view');
     Route::post('/products/enrich', [ProductEnrichmentController::class, 'enrichProducts'])
         ->middleware('permission:price_lists.import');
     Route::post('/products/delete', [ProductController::class, 'destroyMany'])

@@ -61,6 +61,90 @@ final class LevelChecker implements ParameterChecker
     }
 
     /**
+     * Poziomy, dla których pola samej karty podają różne wartości — niezależnie od wymagania. Tylko poziomy
+     * (kategoria, EN 388, EN 407, klasa obuwia, FFP, SNR): cechy tak/nie dały w pomiarze na 21 613 kartach same
+     * fałszywe alarmy. Pole wymieniające kilka wartości („kat. I–III”, „FFP1, FFP2 i FFP3”) to warianty, nie
+     * sprzeczność; kody przeczą sobie tylko na tej samej pozycji — „1241” i „1241B” albo „X1XXXX” i „ciepło
+     * kontaktowe: poziom 1” to zgodne zapisy. Klucze jak wiersze check(), żeby sprzeczność dała się połączyć z wierszem.
+     *
+     * @param  list<CardSource>  $cardSources
+     * @return list<CardConflict>
+     */
+    public function cardConflicts(array $cardSources): array
+    {
+        $footwear = static fn (string $literal): string => preg_replace('/\s+/u', '', $literal) ?? $literal;
+        $labels = ['ppe_category' => 'Kategoria ŚOI', 'en388' => 'EN 388', 'en407' => 'EN 407', 'footwear_class' => 'Klasa obuwia', 'ffp' => 'Klasa FFP', 'snr' => 'Tłumienie SNR'];
+        // [pole, zapis, wartość, pozycje kodu]
+        $hits = array_fill_keys(array_keys($labels), []);
+        $seen = [];
+        foreach ($cardSources as $source) {
+            foreach (PpeCategory::allIn($source->text) as $category) {
+                if (! $category->isList() && ! $this->seen($seen, $source, "ppe_category\0".$category->text)) {
+                    $hits['ppe_category'][] = [$source, $category->text, $category->roman(), []];
+                }
+            }
+            $values = [
+                'footwear_class' => $this->valuesIn($source->text, self::FOOTWEAR, $footwear),
+                // te same odczyty co ffp() i snr(): bez klasy/SNR wg normalizatora trafienie wzorca się nie liczy
+                'ffp' => $this->attributes->ffpClass($source->text) === null ? null
+                    : $this->valuesIn($source->text, self::FFP, static fn (string $digit): string => 'FFP'.$digit),
+                'snr' => $this->attributes->snrRating($source->text) === null ? null
+                    : $this->valuesIn($source->text, self::SNR, static fn (string $n): ?string => (int) $n >= 15 && (int) $n <= 45 ? (string) (int) $n : null),
+            ];
+            foreach ($values as $key => $have) {
+                // kilka wartości w jednym polu to warianty
+                if ($have !== null && count($have['values']) === 1 && ! $this->seen($seen, $source, $key."\0".$have['text'])) {
+                    $hits[$key][] = [$source, $have['text'], $have['values'][0], []];
+                }
+            }
+            foreach (['en388' => En388Code::allIn($source->text), 'en407' => En407Code::allIn($source->text)] as $key => $found) {
+                foreach ($found as $code) {
+                    if (! $this->seen($seen, $source, $key."\0".$code->text)) {
+                        $hits[$key][] = [$source, $code->text, $code->canonical(), $code->levels];
+                    }
+                }
+            }
+        }
+
+        $out = [];
+        foreach ($hits as $key => $keyHits) {
+            $conflict = $key === 'en388' || $key === 'en407'
+                ? $this->codesConflict(array_column($keyHits, 3))
+                : count(array_unique(array_column($keyHits, 2))) > 1;
+            if (! $conflict) {
+                continue;
+            }
+            $grouped = [];
+            foreach ($keyHits as [$source, $text, $value]) {
+                $grouped[$value][] = CheckRow::finding($source, $text, Status::Unclear);
+            }
+            $values = [];
+            foreach ($grouped as $value => $findings) {
+                $values[] = ['value' => (string) $value, 'findings' => $findings];
+            }
+            $out[] = new CardConflict($key, $key === 'footwear_class' ? $this->footwearConflictLabel(array_keys($grouped)) : $labels[$key], $values);
+        }
+
+        return $out;
+    }
+
+    /**
+     * „S1P” i „S1PL” różnią się tylko literą typu wkładki (EN ISO 20345:2022) — to raczej inny zapis tej samej
+     * klasy niż inna klasa, więc etykieta to mówi.
+     *
+     * @param  list<string|int>  $classes
+     */
+    private function footwearConflictLabel(array $classes): string
+    {
+        $bases = array_unique(array_map(
+            static fn (string|int $class): string => preg_replace('/^(S1P|S[357])[LS]$/', '$1', (string) $class) ?? (string) $class,
+            $classes,
+        ));
+
+        return count($bases) === 1 ? 'Klasa obuwia (różne zapisy)' : 'Klasa obuwia';
+    }
+
+    /**
      * @param  list<CardSource>  $sources
      */
     private function en388(string $requirement, array $sources): ?CheckRow

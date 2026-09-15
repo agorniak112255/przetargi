@@ -30,6 +30,8 @@ enum AiTask: string
 
     case KitSuggest = 'kit_suggest';
 
+    case CardConflicts = 'card_conflicts';
+
     public function label(): string
     {
         return match ($this) {
@@ -43,6 +45,7 @@ enum AiTask: string
             self::SpreadsheetExtract => 'Ekstrakcja pozycji z arkusza',
             self::ClientInquiry => 'Odpowiedzi na zapytania mailowe',
             self::KitSuggest => 'Dobór zestawu / wariantów',
+            self::CardConflicts => 'Sprzeczności w karcie',
         };
     }
 
@@ -60,6 +63,7 @@ enum AiTask: string
             self::SpreadsheetExtract => 'Długie arkusze — liczy się duży kontekst.',
             self::ClientInquiry => 'Krótki list handlowy + karty niuansów. Zyskuje na sprawnym modelu z JSON.',
             self::KitSuggest => 'Wybór akcesoriów do zestawu z krótkiej puli katalogu. Wystarczy sprawny model z JSON.',
+            self::CardConflicts => 'Szuka sprzeczności między polami jednej karty. Wystarczy sprawny model z JSON — każdy cytat serwer sprawdza w karcie.',
         };
     }
 

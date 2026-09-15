@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react'
-import { api } from '../lib/api'
+import { useState } from 'react'
 
 export type CheckStatus = 'ok' | 'fail' | 'missing' | 'unclear'
 
@@ -27,13 +26,45 @@ export type CheckRow = {
   gate: string | null
 }
 
+/** Wartość parametru podana w kilku polach karty — np. „S1P” w nazwie i specyfikacji. */
+export type CardFieldConflict = {
+  key: string
+  label: string
+  /** klucz wiersza w `groups`, gdy przetarg pyta o ten parametr */
+  row: string | null
+  values: { value: string; findings: Omit<CheckFinding, 'verdict'>[] }[]
+}
+
+/** Źródło przycisku „Sprzeczności (N)”: klucze wierszy fail + sprzeczne pola karty. Liczone regułami. */
+export type RequirementConflicts = {
+  count: number
+  requirement: string[]
+  card_fields: CardFieldConflict[]
+}
+
 export type RequirementCheck = {
   groups: { key: 'dimensions' | 'levels' | 'flags' | 'color'; label: string; rows: CheckRow[] }[]
+  conflicts: RequirementConflicts
+}
+
+/** POST /products/{id}/conflicts/ai — sprzeczności znalezione przez model; każdy cytat sprawdzony w polach karty. */
+export type AiCardConflicts = {
+  conflicts: { parameter: string; explanation: string; quotes: CheckFinding[] }[]
+  rejected: number
+  checked_at: string
+  cached: boolean
+  prompt_version: string
+}
+
+/** GET /tenders/{id}/conflicts — skrót dla listy pozycji przetargu. */
+export type TenderConflicts = {
+  items: Record<string, { product_id: number; count: number; requirement: string[]; card_fields: string[] }>
 }
 
 type Props = {
-  productId: number
-  query: string
+  /** wynik `useRequirementCheck`; null — wyłączone, w trakcie albo błąd */
+  check: RequirementCheck | null
+  error: boolean
   onFind: (phrase: string) => void
   findHitCount: (phrase: string) => number
 }
@@ -79,41 +110,17 @@ const POSITION_CLASS: Record<CheckPosition['status'], string> = {
  * nad opisem pełną szerokością zasłaniało połowę tekstu, który handlowiec właśnie sprawdza.
  * `data-requirement-check` pozwala oknu zmniejszyć zdjęcie, gdy lista jest widoczna.
  */
-export function RequirementCheckList({ productId, query, onFind, findHitCount }: Props) {
-  const key = `${productId}|${query}`
-  const enabled = query.trim().length >= 3
-  // Wynik i przełączniki trzymane z kluczem, dla którego powstały — jak w oknie weryfikacji.
-  const [result, setResult] = useState<{ key: string; check: RequirementCheck | null } | null>(null)
-  const [showOkFor, setShowOkFor] = useState<string | null>(null)
+export function RequirementCheckList({ check, error, onFind, findHitCount }: Props) {
+  // Przełącznik trzymany z wynikiem, dla którego powstał — nowy wynik (inny produkt/zapytanie) zwija ✓.
+  const [showOkFor, setShowOkFor] = useState<RequirementCheck | null>(null)
 
-  useEffect(() => {
-    if (!enabled) return
-    let cancelled = false
-    void api<RequirementCheck>(`/products/${productId}/requirement-check`, {
-      method: 'POST',
-      body: JSON.stringify({ query }),
-    })
-      .then((check) => {
-        if (!cancelled) setResult({ key: `${productId}|${query}`, check })
-      })
-      .catch(() => {
-        if (!cancelled) setResult({ key: `${productId}|${query}`, check: null })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [enabled, productId, query])
-
-  if (!enabled) return null
-
-  const current = result?.key === key ? result : null
-  // Porównanie to same reguły i wraca w milisekundach — linia „Porównuję…” tylko by migała.
-  if (!current) return null
-  if (!current.check) {
+  if (error) {
     return <p className="text-xs text-slate-500">Porównanie parametrów niedostępne</p>
   }
+  // Porównanie to same reguły i wraca w milisekundach — linia „Porównuję…” tylko by migała.
+  if (!check) return null
 
-  const rows = (current.check.groups ?? []).flatMap((g) => g.rows)
+  const rows = (check.groups ?? []).flatMap((g) => g.rows)
   if (rows.length === 0) return null
 
   const counts = rows.reduce<Record<CheckStatus, number>>(
@@ -123,7 +130,7 @@ export function RequirementCheckList({ productId, query, onFind, findHitCount }:
   const sorted = [...rows].sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status))
   const needsAttention = counts.fail + counts.unclear + counts.missing > 0
   // Same ✓ pokazujemy od razu; przy problemach zwijamy je do jednej linii, żeby lista była krótka.
-  const showOk = !needsAttention || showOkFor === key
+  const showOk = !needsAttention || showOkFor === check
   const visible = showOk ? sorted : sorted.filter((r) => r.status !== 'ok')
 
   return (
@@ -149,7 +156,7 @@ export function RequirementCheckList({ productId, query, onFind, findHitCount }:
       {needsAttention && counts.ok > 0 && (
         <button
           type="button"
-          onClick={() => setShowOkFor(showOk ? null : key)}
+          onClick={() => setShowOkFor(showOk ? null : check)}
           className="w-full border-t border-slate-100 px-2.5 py-1 text-left text-[11px] font-medium text-emerald-700 hover:bg-emerald-50"
         >
           {showOk ? '▾ zwiń spełnione' : `▸ spełnia (${counts.ok})`}
@@ -226,25 +233,35 @@ function CheckItem({
   )
 }
 
-function Finding({
+/** Wartość z karty z etykietą pola; klikalna, gdy da się ją znaleźć w opisie. */
+export function Finding({
   finding,
   onFind,
   findHitCount,
+  sourceOnly = false,
 }: {
-  finding: CheckFinding
-  onFind: (phrase: string) => void
-  findHitCount: (phrase: string) => number
+  finding: Pick<CheckFinding, 'text' | 'source' | 'quote' | 'find'>
+  /** brak — znalezisko nieklikalne */
+  onFind?: (phrase: string) => void
+  /** brak — klikalne każde znalezisko z `find` (np. w oknie sprzeczności, bez opisu pod ręką) */
+  findHitCount?: (phrase: string) => number
+  /** sama etykieta pola — gdy wartość stoi już obok (sprzeczne pola karty) */
+  sourceOnly?: boolean
 }) {
   const { text, source, quote, find } = finding
   // Klik tylko wtedy, gdy wyszukiwarka okna naprawdę coś znajdzie — inaczej pokazałaby 0 trafień.
-  const phrase = find != null && findHitCount(find) > 0 ? find : null
-  const content = (
+  const phrase = onFind && find != null && (!findHitCount || findHitCount(find) > 0) ? find : null
+  const content = sourceOnly ? (
+    <span className={phrase != null ? 'text-violet-700 group-hover:underline' : 'text-slate-600'}>
+      {SOURCE_LABEL[source] ?? source}
+    </span>
+  ) : (
     <>
       <span className={phrase != null ? 'text-violet-700 group-hover:underline' : 'text-slate-800'}>{text}</span>{' '}
       <span className="text-[10px] text-slate-400">{SOURCE_LABEL[source] ?? source}</span>
     </>
   )
-  return phrase != null ? (
+  return phrase != null && onFind ? (
     <button type="button" onClick={() => onFind(phrase)} title={quote} className="group text-left">
       {content}
     </button>

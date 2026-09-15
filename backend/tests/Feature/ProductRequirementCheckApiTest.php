@@ -39,10 +39,13 @@ final class ProductRequirementCheckApiTest extends TestCase
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $product = $this->seededCard('11202000');
 
-        $groups = $this->postJson("/api/products/{$product->id}/requirement-check", ['query' => Opisowy15Fixture::requirement(1)])
+        $response = $this->postJson("/api/products/{$product->id}/requirement-check", ['query' => Opisowy15Fixture::requirement(1)])
             ->assertOk()
-            ->assertJsonStructure(['groups'])
-            ->json('groups');
+            ->assertJsonStructure(['groups', 'conflicts' => ['count', 'requirement', 'card_fields']]);
+        $groups = $response->json('groups');
+
+        // migawka karty, z której spisano wymaganie poz. 1: nic nie jest fail i pola sobie nie przeczą
+        $this->assertSame(['count' => 0, 'requirement' => [], 'card_fields' => []], $response->json('conflicts'));
 
         foreach ($groups as $group) {
             $this->assertContains($group['key'], ['dimensions', 'levels', 'flags', 'color']);
@@ -55,6 +58,26 @@ final class ProductRequirementCheckApiTest extends TestCase
                 }
             }
         }
+    }
+
+    public function test_conflicts_list_card_fields_that_contradict_each_other(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->seededCard('ARMEN 9007 6660 S1 P');
+
+        $conflicts = $this->postJson("/api/products/{$product->id}/requirement-check", ['query' => Opisowy15Fixture::requirement(3)])
+            ->assertOk()
+            ->json('conflicts');
+
+        // nazwa „S1 P”, specyfikacja „Klasa ochrony: S1” — jeden wpis powiązany z wierszem klasy obuwia
+        $this->assertSame(1, $conflicts['count']);
+        $this->assertSame([], $conflicts['requirement']);
+        $this->assertCount(1, $conflicts['card_fields']);
+        $entry = $conflicts['card_fields'][0];
+        $this->assertSame(['key', 'label', 'row', 'values'], array_keys($entry));
+        $this->assertSame(['footwear_class', 'footwear_class'], [$entry['key'], $entry['row']]);
+        $this->assertSame(['S1P', 'S1'], array_column($entry['values'], 'value'));
+        $this->assertSame(['name', 'ARMEN 9007 6660 S1 P', null], [$entry['values'][0]['findings'][0]['source'], $entry['values'][0]['findings'][0]['quote'], $entry['values'][0]['findings'][0]['find']]);
     }
 
     public function test_query_is_validated(): void
