@@ -47,6 +47,8 @@ use Throwable;
  *   source_description_hash niepusty tylko wtedy, gdy ten opis jest tłumaczeniem — wtedy to sha1 tekstu źródła.
  *   Źródło bez zmian i tłumaczenie na karcie nietknięte → import nie przywraca oryginału i nie zleca ponownie;
  *   zapis tekstu źródła zeruje source_description_hash. Oryginalnego opisu nie przechowujemy.
+ *   Karta, która wciąż ma nieprzetłumaczony tekst źródła (TranslateB2bProductTextJob::pending), dostaje zlecenie
+ *   przy każdym przebiegu — ponowne pobranie nadrabia tłumaczenia odrzucone, nieudane albo nadpisane.
  *
  * Łącznik z wersjami (B2bVariantConnector): karta ma cenę 0 („brak ceny”), ceny konta i ich historia są w
  * product_variants / product_variant_price_history; jedna transakcja na produkt; wersje zniknięte z pełnej
@@ -469,7 +471,7 @@ final class B2bCatalogSync
         if ($sourceTextTaken) {
             $linkValues['source_description_hash'] = null;
         }
-        B2bProductLink::query()->updateOrCreate(
+        $savedLink = B2bProductLink::query()->updateOrCreate(
             ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
             $linkValues,
         );
@@ -477,10 +479,20 @@ final class B2bCatalogSync
         // po zapisie powiązania — job czyta z niego hashe i nazwę ze źródła
         $created = $existing === null;
         $translationQueued = false;
-        // nazwa ze źródła jest tylko na karcie utworzonej w tym przebiegu — tylko wtedy tłumaczymy też nazwę
-        if ($connector instanceof B2bForeignLanguageSource && (isset($payload['description']) || $created)) {
-            TranslateB2bProductTextJob::dispatch((int) $product->id, (int) $account->id, $created);
-            $translationQueued = true;
+        if ($connector instanceof B2bForeignLanguageSource) {
+            // Karta, która wciąż ma tekst źródła (tłumaczenie odrzucone, nieudane albo nadpisane — 15.09.2026 ponowne
+            // pobranie niczego nie nadrabiało), dostaje zlecenie przy każdym przebiegu; czekający job nie jest
+            // dublowany (ShouldBeUniqueUntilProcessing). Nazwa istniejącej karty tylko gdy to wciąż nazwa ze źródła
+            // i łącznik zachowuje nazwy — jak b2b:translate.
+            $pending = TranslateB2bProductTextJob::pending(
+                $product,
+                $savedLink,
+                $created || $connector instanceof B2bKeepsExistingNames,
+            );
+            if (isset($payload['description']) || $created || $pending['description'] || $pending['name']) {
+                TranslateB2bProductTextJob::dispatch((int) $product->id, (int) $account->id, $created || $pending['name']);
+                $translationQueued = true;
+            }
         }
 
         [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];

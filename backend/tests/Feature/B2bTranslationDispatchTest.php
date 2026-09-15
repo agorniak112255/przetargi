@@ -206,6 +206,44 @@ final class B2bTranslationDispatchTest extends TestCase
         Queue::assertNotPushed(TranslateB2bProductTextJob::class);
     }
 
+    public function test_rerun_queues_translation_again_for_card_still_in_source_language(): void
+    {
+        // 15.09.2026: tłumaczenia padły (uprawnienia cache), a ponowne pobranie cennika niczego nie nadrabiało
+        $shop = $this->shop(new TranslationForeignConnector);
+        $this->runSync($shop);
+        Queue::fake();
+
+        $second = $this->runSync($shop);
+
+        $product = Product::query()->where('sku', 'BOL-1')->sole();
+        $this->assertSame(1, $second['unchanged']);
+        $this->assertSame(1, $second['translations_queued']);
+        $this->assertSame(self::SOURCE_DESCRIPTION, $product->description);
+        $this->assertNull($this->link()->source_description_hash);
+        // nazwa karty to wciąż nazwa ze źródła — job tłumaczy też ją
+        Queue::assertPushed(
+            TranslateB2bProductTextJob::class,
+            fn (TranslateB2bProductTextJob $job): bool => $job->productId === (int) $product->id && $job->translateName === true,
+        );
+    }
+
+    public function test_rerun_of_existing_card_with_polish_name_queues_description_without_name(): void
+    {
+        $existing = $this->existingCard();
+        $shop = $this->shop(new TranslationForeignConnector);
+        $this->runSync($shop);
+        Queue::fake();
+
+        $second = $this->runSync($shop);
+
+        $this->assertSame(1, $second['translations_queued']);
+        $this->assertSame(self::POLISH_NAME, $existing->refresh()->name);
+        Queue::assertPushed(
+            TranslateB2bProductTextJob::class,
+            fn (TranslateB2bProductTextJob $job): bool => $job->productId === (int) $existing->id && $job->translateName === false,
+        );
+    }
+
     public function test_run_result_and_log_count_queued_translations(): void
     {
         $shop = new TranslationForeignConnector;
@@ -220,12 +258,15 @@ final class B2bTranslationDispatchTest extends TestCase
         Queue::assertPushed(TranslateB2bProductTextJob::class, 2);
         $this->assertTrue($this->logHas($result, 'Opisy zlecone do tłumaczenia na polski: 2'));
 
-        // drugi przebieg: nic nowego do tłumaczenia — licznik 0 i bez linii dziennika
+        // drugi przebieg po wykonanych tłumaczeniach: nic do tłumaczenia — licznik 0 i bez linii dziennika
+        $this->simulateTranslation('BOL-1', '1');
+        $this->simulateTranslation('BOL-2', '2');
         Queue::fake();
         $second = $this->runSync($shop);
 
         $this->assertSame(0, $second['translations_queued']);
         $this->assertFalse($this->logHas($second, 'Opisy zlecone do tłumaczenia na polski'));
+        Queue::assertNotPushed(TranslateB2bProductTextJob::class);
     }
 
     /**
@@ -248,15 +289,22 @@ final class B2bTranslationDispatchTest extends TestCase
         );
     }
 
-    /** Stan po wykonanym jobie tłumaczenia: opis karty i hashe powiązania ustawione ręcznie. */
-    private function simulateTranslation(): Product
+    /**
+     * Stan po wykonanym jobie tłumaczenia nowej karty (job z nazwą): polski opis i nazwa, hashe powiązania
+     * ustawione ręcznie.
+     */
+    private function simulateTranslation(string $sku = 'BOL-1', string $remoteId = '1'): Product
     {
-        $product = Product::query()->where('sku', 'BOL-1')->sole();
-        $product->forceFill(['description' => self::TRANSLATION])->save();
-        $this->link()->forceFill([
-            'description_hash' => sha1(self::TRANSLATION),
-            'source_description_hash' => sha1(self::SOURCE_DESCRIPTION),
-        ])->save();
+        $product = Product::query()->where('sku', $sku)->sole();
+        $product->forceFill(['description' => self::TRANSLATION, 'name' => self::POLISH_NAME])->save();
+        B2bProductLink::query()
+            ->where('b2b_account_id', $this->account->id)
+            ->where('remote_id', $remoteId)
+            ->sole()
+            ->forceFill([
+                'description_hash' => sha1(self::TRANSLATION),
+                'source_description_hash' => sha1(self::SOURCE_DESCRIPTION),
+            ])->save();
 
         return $product;
     }

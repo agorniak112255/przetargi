@@ -172,37 +172,46 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
     }
 
     /**
+     * Co na karcie wciąż jest tekstem źródła do przetłumaczenia: opis zapisany przez import i nietknięty od tamtej
+     * pory, nazwa ze źródła (tylko gdy $withName). Karta z tłumaczeniem (source_description_hash) — nic.
+     * Wspólne dla joba, importu (zaległe karty przy każdym przebiegu) i b2b:translate.
+     *
+     * @return array{description: bool, name: bool}
+     */
+    public static function pending(Product $product, B2bProductLink $link, bool $withName): array
+    {
+        if ($link->source_description_hash !== null) {
+            return ['description' => false, 'name' => false];
+        }
+
+        $current = (string) ($product->description ?? '');
+
+        return [
+            'description' => trim($current) !== ''
+                && $link->description_hash !== null
+                && hash_equals($link->description_hash, sha1($current)),
+            'name' => $withName
+                && $link->remote_name !== null
+                && trim($link->remote_name) !== ''
+                && (string) $product->name === $link->remote_name,
+        ];
+    }
+
+    /**
      * Co tłumaczyć i stan karty/linku, który musi przetrwać do zapisu. Null = nic do tłumaczenia.
      *
      * @return array{description: string|null, name: string|null, description_hash: string|null, remote_name: string|null, product_description: string|null, product_name: string}|null
      */
     private function snapshot(Product $product, B2bProductLink $link): ?array
     {
-        if ($link->source_description_hash !== null) {
-            return null;
-        }
-
-        $current = (string) ($product->description ?? '');
-        $description = trim($current) !== ''
-            && $link->description_hash !== null
-            && hash_equals($link->description_hash, sha1($current))
-            ? $current
-            : null;
-
-        $name = $this->translateName
-            && $link->remote_name !== null
-            && trim($link->remote_name) !== ''
-            && (string) $product->name === $link->remote_name
-            ? (string) $product->name
-            : null;
-
-        if ($description === null && $name === null) {
+        $pending = self::pending($product, $link, $this->translateName);
+        if (! $pending['description'] && ! $pending['name']) {
             return null;
         }
 
         return [
-            'description' => $description,
-            'name' => $name,
+            'description' => $pending['description'] ? (string) $product->description : null,
+            'name' => $pending['name'] ? (string) $product->name : null,
             'description_hash' => $link->description_hash,
             'remote_name' => $link->remote_name,
             'product_description' => $product->description,

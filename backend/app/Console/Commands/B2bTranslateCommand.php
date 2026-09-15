@@ -123,21 +123,13 @@ final class B2bTranslateCommand extends Command
                         continue;
                     }
 
-                    $current = (string) ($product->description ?? '');
-                    $description = trim($current) !== ''
-                        && $link->description_hash !== null
-                        && hash_equals($link->description_hash, sha1($current));
-                    $name = $keepsNames
-                        && $link->remote_name !== null
-                        && trim($link->remote_name) !== ''
-                        && (string) $product->name === $link->remote_name;
-
-                    if ($description || $name) {
+                    $pending = TranslateB2bProductTextJob::pending($product, $link, $keepsNames);
+                    if ($pending['description'] || $pending['name']) {
                         $candidates[$product->id] = [
                             'product_id' => (int) $product->id,
                             'sku' => (string) $product->sku,
-                            'description' => $description,
-                            'name' => $name,
+                            'description' => $pending['description'],
+                            'name' => $pending['name'],
                         ];
                     }
                 }

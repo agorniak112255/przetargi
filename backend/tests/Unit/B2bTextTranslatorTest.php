@@ -236,6 +236,55 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function keeps_uppercase_only_segment_verbatim_without_sending_it_to_model(): void
+    {
+        // Bollé featureddescription: ucięte znaczniki kategorii z nazwą modelu (15.09.2026 odrzucone: „zgubiony token: KIT, SAFETY, SPARE”)
+        $translator = $this->translatorReturning([
+            'name' => null,
+            'segments' => ['Zestaw pianki i paska', 'Zestaw pianki i paska NESS+'],
+        ]);
+        $source = "Foam and strap kit\n\nNESS+ Foam and Strap Kit\n\nRUSH+ - KIT SAFETY SPARE\n\nParametry:\n- Materiał oprawki: HYTREL - SBR";
+
+        $result = $translator->translate($source);
+
+        $this->assertSame(
+            "Zestaw pianki i paska\n\nZestaw pianki i paska NESS+\n\nRUSH+ - KIT SAFETY SPARE\n\nParametry:\n- Materiał oprawki: HYTREL - SBR",
+            $result['description']
+        );
+        $payload = json_decode((string) $this->calls[0]['messages'][1]['content'], true);
+        $this->assertSame(['Foam and strap kit', 'NESS+ Foam and Strap Kit'], $payload['segments']);
+    }
+
+    #[Test]
+    public function accepts_units_dimensions_and_number_words_written_in_polish(): void
+    {
+        $translator = $this->translatorReturning([
+            'name' => null,
+            'segments' => ["Regulacja opóźnienia: 0,05 ms\nEkran LED: 96 x 39 mm\nOdporność na uderzenia (typ B: 120 m/s)\nNagłowie 3-punktowe z pamięcią kształtu"],
+        ]);
+
+        $result = $translator->translate(
+            "Delay adjustment: 0.05ms\nLED screen: 96x39mm\nHigh impact resistance (type B: 120m/s)\nShape-memory 3-points headgear"
+        );
+
+        $this->assertStringContainsString('Ekran LED: 96 x 39 mm', $result['description']);
+    }
+
+    #[Test]
+    public function rejects_changed_number_inside_dimensions(): void
+    {
+        $translator = $this->translatorReturning([
+            'name' => null,
+            'segments' => ['Ekran LED: 96 x 38 mm'],
+        ]);
+
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zgubiona liczba: 39');
+
+        $translator->translate('LED screen: 96x39mm');
+    }
+
+    #[Test]
     public function rejects_markdown_in_result(): void
     {
         $translator = $this->translatorReturning([

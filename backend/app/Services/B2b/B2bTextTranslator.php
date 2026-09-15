@@ -39,8 +39,14 @@ class B2bTextTranslator
      */
     private const NORM_PATTERN = '/(?<![\p{L}\p{N}])(ANSI(?:\/ISEA)?|DIN|EN|IEC|ISO)((?:[ \x{00A0}]+(?:EN|IEC|ISO))*)[ \x{00A0}]*([A-Z]?\d+(?:[.:\-–]\d+)*)/u';
 
-    /** Liczba z wymiarem sklejonym z jednostką („17.5CM”) — jednostkę wolno zapisać po polsku, liczbę pilnuje kontrola liczb. */
-    private const MEASUREMENT_PATTERN = '/^\d+(?:[.,]\d+)?(?:mm|cm|m|km|mg|g|kg|ml|l|nm|µm|h|min|s|v|kv|w|hz|db|°c|°f|pa|kpa)$/iu';
+    /**
+     * Liczba (albo wymiary „96x39”) sklejona z jednostką („17.5CM”, „0.05ms”, „96x39mm”, „120m/s”) — jednostkę wolno
+     * zapisać po polsku („96 x 39 mm”), liczby pilnuje kontrola liczb.
+     */
+    private const MEASUREMENT_PATTERN = '/^\d+(?:[.,]\d+)?(?:[x×]\d+(?:[.,]\d+)?)*(?:mm|cm|m|km|mg|g|kg|ml|l|nm|µm|h|min|ms|s|m\/s|km\/h|v|kv|w|hz|db|°c|°f|pa|kpa)$/iu';
+
+    /** Liczba złączona łącznikiem ze zwykłym słowem („3-point”, „5-points”) — po polsku „3-punktowe”; liczby pilnuje kontrola liczb. */
+    private const NUMBER_WORD_PATTERN = '/^\d+(?:[.,]\d+)?-\p{Ll}+$/u';
 
     public function __construct(private readonly OpenAiCompatibleClient $llm) {}
 
@@ -61,7 +67,7 @@ class B2bTextTranslator
         /** @var array<int, string> $translatable  indeks segmentu => tekst źródła */
         $translatable = [];
         foreach ($segments as $index => $segment) {
-            if (! str_starts_with($segment, self::PARAMETERS_PREFIX)) {
+            if (! str_starts_with($segment, self::PARAMETERS_PREFIX) && ! self::isUppercaseOnly($segment)) {
                 $translatable[$index] = $segment;
             }
         }
@@ -134,6 +140,16 @@ SYS;
         }
 
         return $segments;
+    }
+
+    /**
+     * Akapit bez małych liter (Bollé featureddescription: ucięte znaczniki kategorii „CASES ACCESSORIES CASES N”,
+     * „RUSH+ - KIT SAFETY SPARE”) zostaje dosłownie i nie idzie do modelu — miesza nazwy modeli ze zwykłymi słowami,
+     * więc tłumaczenie gubiłoby nazwę własną albo było odrzucane (15.09.2026: 5 kart).
+     */
+    private static function isUppercaseOnly(string $segment): bool
+    {
+        return preg_match('/\p{L}/u', $segment) === 1 && preg_match('/\p{Ll}/u', $segment) !== 1;
     }
 
     /**
@@ -339,7 +355,8 @@ SYS;
 
     /**
      * Słowa, które muszą przejść do wyniku dosłownie (jako całe słowo):
-     * - z cyfrą i literą (B809, FLEX160°, PSSTRYOC13B), poza liczbą sklejoną z jednostką (17.5CM),
+     * - z cyfrą i literą (B809, FLEX160°, PSSTRYOC13B), poza liczbą albo wymiarami sklejonymi z jednostką
+     *   (17.5CM, 96x39mm, 120m/s) i liczbą złączoną ze słowem (3-point),
      * - ze znakiem ® lub ™,
      * - pisane w całości wielkimi literami, co najmniej 3 litery (PLATINUM, TRYON, RUSH+), poza TRANSLATABLE_UPPERCASE,
      * - liczba dziesiętna tuż po takim słowie, bez interpunkcji między nimi („2.0” w „RUSH+ 2.0”) — to część nazwy modelu,
@@ -355,7 +372,8 @@ SYS;
             $word = (string) preg_replace('/^\p{P}+|\p{P}+$/u', '', $raw);
             $protected = $word !== '' && ! in_array($word, self::TRANSLATABLE_UPPERCASE, true) && (
                 (preg_match('/\p{N}/u', $word) === 1 && preg_match('/\p{L}/u', $word) === 1
-                    && preg_match(self::MEASUREMENT_PATTERN, $word) !== 1)
+                    && preg_match(self::MEASUREMENT_PATTERN, $word) !== 1
+                    && preg_match(self::NUMBER_WORD_PATTERN, $word) !== 1)
                 || preg_match('/[®™]/u', $word) === 1
                 || (preg_match('/\p{Ll}/u', $word) !== 1 && preg_match_all('/\p{Lu}/u', $word) >= 3)
                 || ($previousProtected && preg_match('/^\d+[.,]\d+$/', $word) === 1)
