@@ -1112,15 +1112,16 @@ export function Products() {
                       {p.sku}
                     </Link>
                   </td>
-                  <td className="p-2 min-w-[14rem] max-w-[27rem]">
+                  <td className="p-2 min-w-[14rem] max-w-[26rem]">
                     {/* Długa nazwa do trzech linii (wiersz i tak ma wysokość zdjęcia i przycisków); pełna w podpowiedzi.
-                        Z opisem: kafelek otwiera ten sam podgląd co „Opis” — tekst bez zmiany koloru i rozmiaru. */}
+                        Z opisem: kliknięcie nazwy otwiera ten sam podgląd co „Opis” — wygląd tekstu bez zmian,
+                        podkreślenie tylko pod myszką. */}
                     {hasDescription(p) ? (
                       <button
                         type="button"
                         onClick={() => setPreviewId(p.id)}
                         title={`${p.name} — kliknij, aby zobaczyć opis`}
-                        className="block w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-left text-slate-800 hover:border-sky-400 hover:bg-sky-50"
+                        className="block w-full cursor-pointer text-left hover:underline focus-visible:underline"
                       >
                         <span className="line-clamp-3 break-words">{p.name}</span>
                       </button>
