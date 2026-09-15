@@ -157,7 +157,8 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
             </div>
             {/* Użytkownik mylił „AI nie znalazło” z „karta spełnia przetarg” — AI dostaje samą kartę, bez wymagania. */}
             <p className="mt-0.5 text-[11px] text-violet-700/80">
-              AI sprawdza tylko, czy karta przeczy sama sobie — nie porównuje jej z wymaganiem przetargu.
+              Sprawdza specyfikację, normy i opis karty pod kątem sprzeczności — np. różnych norm lub klas podanych w
+              różnych miejscach.
             </p>
             {aiState?.loading ? (
               <p className="mt-1.5 flex items-center gap-1.5 text-violet-700">
