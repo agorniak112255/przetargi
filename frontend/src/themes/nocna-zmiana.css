@@ -36,29 +36,43 @@
   --t-sidebar-shadow: none;
 }
 
-/* Dzień na ekranie: ciepła szarość („papier”) zamiast bieli, miękki cień z nutą brązu. */
+/* Dzień na ekranie: ciepłe tło strony, treść na białych kartach, ciemny i odrobinę grubszy tekst,
+   miękki cień z nutą brązu. */
 @media screen {
   :root[data-template="nocna-zmiana"][data-scheme="light"] {
-    --t-bg: #e9e6e0;
-    --t-surface: #f8f6f2;
-    --t-surface-2: #efebe4;
-    --t-border: #dbd5cb;
-    --t-border-strong: #c9c1b4;
-    --t-text: #1f2326;
-    --t-muted: #5d5a54;
-    --t-dim: #8f8a82;
-    /* ciemniej niż #0b7d6a: na tle #e9e6e0 kontrast ok. 4,9:1 */
+    --t-bg: #e6e2da;
+    --t-surface: #ffffff;
+    --t-surface-2: #f5f2ed;
+    --t-border: #dcd5ca;
+    --t-border-strong: #c4bcaf;
+    --t-text: #0f1215;
+    --t-muted: #4a4741;
+    --t-dim: #7d786f;
+    /* ciemniej niż #0b7d6a: na tle #e6e2da kontrast ok. 4,8:1 */
     --t-accent: #0a6f61;
-    --t-card-drop: 0 1px 1px rgb(70 55 35 / 0.05), 0 6px 18px -10px rgb(70 55 35 / 0.22);
-    --t-card-shadow: 0 0 0 1px rgb(70 55 35 / 0.07), var(--t-card-drop);
+    --t-card-drop: 0 1px 1px rgb(70 55 35 / 0.06), 0 6px 18px -10px rgb(70 55 35 / 0.25);
+    --t-card-shadow: 0 0 0 1px rgb(70 55 35 / 0.08), var(--t-card-drop);
     --t-sidebar-shadow: 4px 0 16px -10px rgb(70 55 35 / 0.18);
 
-    /* Jasne slate z komponentów (tła 50–100, ramki 200–300) w tej samej ciepłej gamie;
-       tekst slate 400–950 bez zmian. */
-    --color-slate-50: #f3f0eb;
+    /* Slate z komponentów w tej samej ciepłej gamie: tła 50–100, ramki 200–300,
+       tekst 400–950 ciemniejszy niż chłodne slate Tailwinda (lepszy kontrast na papierze).
+       Ciemne tła bg-slate-700/800 stają się ciepłą czernią — jasny tekst na nich zostaje czytelny. */
+    --color-slate-50: #faf8f5;
     --color-slate-100: var(--t-surface-2);
     --color-slate-200: var(--t-border);
     --color-slate-300: var(--t-border-strong);
+    --color-slate-400: var(--t-dim);
+    --color-slate-500: #5c5850;
+    --color-slate-600: var(--t-muted);
+    --color-slate-700: #2e2c28;
+    --color-slate-800: #1f1e1b;
+    --color-slate-900: var(--t-text);
+    --color-slate-950: #08090a;
+  }
+
+  /* Tekst odrobinę grubszy (Geist jest zmienny); klasy font-* nadal wygrywają. */
+  :root[data-template="nocna-zmiana"][data-scheme="light"] body {
+    font-weight: 450;
   }
 
   /* Białe tła kart → powierzchnia. W @layer utilities z :where(), jak w dark-scheme.css,
