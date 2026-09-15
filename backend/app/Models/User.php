@@ -17,6 +17,9 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, HasRoles, Notifiable;
 
+    /** Dozwolone tryby wyglądu zapisywane w ui_preferences.mode. */
+    public const UI_MODES = ['light', 'dark', 'system'];
+
     protected string $guard_name = 'web';
 
     /**
@@ -42,6 +45,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'ui_preferences' => 'array',
         ];
     }
 
@@ -56,7 +60,7 @@ class User extends Authenticatable
     }
 
     /**
-     * @return array{id: int, name: string, email: string, role: string, roles: list<string>, permissions: list<string>}
+     * @return array{id: int, name: string, email: string, role: string, roles: list<string>, permissions: list<string>, ui_preferences: array{template: ?string, mode: ?string}}
      */
     public function toAuthArray(): array
     {
@@ -70,6 +74,24 @@ class User extends Authenticatable
             'role' => $primaryRole,
             'roles' => $roles,
             'permissions' => $this->getAllPermissions()->pluck('name')->values()->all(),
+            'ui_preferences' => $this->normalizedUiPreferences(),
+        ];
+    }
+
+    /**
+     * Zwraca zawsze oba klucze; wartość spoza dozwolonego formatu (np. ręcznie wpisana w bazie) staje się null.
+     *
+     * @return array{template: ?string, mode: ?string}
+     */
+    private function normalizedUiPreferences(): array
+    {
+        $stored = is_array($this->ui_preferences) ? $this->ui_preferences : [];
+        $template = $stored['template'] ?? null;
+        $mode = $stored['mode'] ?? null;
+
+        return [
+            'template' => is_string($template) && preg_match('/^[a-z0-9-]{1,40}$/', $template) === 1 ? $template : null,
+            'mode' => in_array($mode, self::UI_MODES, true) ? $mode : null,
         ];
     }
 

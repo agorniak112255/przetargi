@@ -1,0 +1,327 @@
+/*
+ * Wspólny tryb ciemny dla KAŻDEGO szablonu, który ustawia <html data-scheme="dark">.
+ *
+ * Komponenty używają klas Tailwind (bg-white, text-slate-700, bg-red-50 …), więc
+ * tryb ciemny robimy w CSS, bez przepisywania TSX:
+ *  1. Przemapowanie zmiennych palety (--color-slate-*, jasne odcienie barw 50–300)
+ *     na tokeny szablonu (--t-*). Utility Tailwinda czytają te zmienne, więc tła,
+ *     ramki, ringi i gradienty ciemnieją same.
+ *  2. Nadpisania klas, których nie da się obsłużyć zmienną, bo ta sama zmienna
+ *     służy i za tło, i za tekst: białe tła, ciemny tekst (600–950) i jasny tekst
+ *     slate/barw (50–300) stojący na ciemnych wyspach.
+ *
+ * Zasady:
+ *  - Wszystko w @media screen — wydruk zostaje jasny.
+ *  - Barwy wpisane literalnie (oklch z tailwindcss/theme.css), bo Tailwind v4 wycina
+ *    z builda nieużywane zmienne palety (np. --color-red-400 może nie istnieć).
+ *  - Odcienie barw 400–950 i --color-white zostają bez zmian (przyciski, plakietki).
+ *  - Selektory :where(:root[data-scheme="dark"]) .klasa mają specyficzność (0,1,0)
+ *    i leżą w @layer utilities za klasami Tailwinda, więc wygrywają z bazową klasą,
+ *    a przegrywają z hover:/focus: (0,2,0) — tak jak w jasnym motywie.
+ *  - Nową klasę koloru tekstu użytą w komponentach trzeba tu dopisać;
+ *    pilnuje tego `npm run check:themes` (scripts/check-theme-coverage.mjs).
+ *  - Szablon może podać sygnały --t-signal-amber/red/blue; bez nich barwy Tailwinda.
+ */
+@media screen {
+  :root[data-scheme="dark"] {
+    color-scheme: dark;
+
+    /* slate: 50–100 powierzchnie, 200–300 ramki, 400–500 tekst drugoplanowy,
+       600–950 „podniesione ciemne” (ciemne przyciski, pasek boczny, nakładki) */
+    --color-slate-50: color-mix(in oklab, var(--t-surface-2) 55%, var(--t-surface));
+    --color-slate-100: var(--t-surface-2);
+    --color-slate-200: var(--t-border);
+    --color-slate-300: var(--t-border-strong);
+    --color-slate-400: color-mix(in oklab, var(--t-muted) 55%, var(--t-dim));
+    --color-slate-500: var(--t-muted);
+    --color-slate-600: color-mix(in oklab, var(--t-border-strong) 65%, var(--t-dim));
+    --color-slate-700: var(--t-border-strong);
+    --color-slate-800: var(--t-border);
+    --color-slate-900: var(--t-bg);
+    --color-slate-950: color-mix(in oklab, var(--t-bg) 70%, #000);
+
+    /* jasne odcienie barw = odcień 500 wmieszany w powierzchnię (12/18/30/45%) */
+    --color-red-50: color-mix(in oklab, var(--t-signal-red, oklch(63.7% 0.237 25.331)) 12%, var(--t-surface));
+    --color-red-100: color-mix(in oklab, var(--t-signal-red, oklch(63.7% 0.237 25.331)) 18%, var(--t-surface));
+    --color-red-200: color-mix(in oklab, var(--t-signal-red, oklch(63.7% 0.237 25.331)) 30%, var(--t-surface));
+    --color-red-300: color-mix(in oklab, var(--t-signal-red, oklch(63.7% 0.237 25.331)) 45%, var(--t-surface));
+    --color-orange-50: color-mix(in oklab, oklch(70.5% 0.213 47.604) 12%, var(--t-surface));
+    --color-orange-100: color-mix(in oklab, oklch(70.5% 0.213 47.604) 18%, var(--t-surface));
+    --color-orange-200: color-mix(in oklab, oklch(70.5% 0.213 47.604) 30%, var(--t-surface));
+    --color-orange-300: color-mix(in oklab, oklch(70.5% 0.213 47.604) 45%, var(--t-surface));
+    --color-amber-50: color-mix(in oklab, var(--t-signal-amber, oklch(76.9% 0.188 70.08)) 12%, var(--t-surface));
+    --color-amber-100: color-mix(in oklab, var(--t-signal-amber, oklch(76.9% 0.188 70.08)) 18%, var(--t-surface));
+    --color-amber-200: color-mix(in oklab, var(--t-signal-amber, oklch(76.9% 0.188 70.08)) 30%, var(--t-surface));
+    --color-amber-300: color-mix(in oklab, var(--t-signal-amber, oklch(76.9% 0.188 70.08)) 45%, var(--t-surface));
+    --color-green-50: color-mix(in oklab, oklch(72.3% 0.219 149.579) 12%, var(--t-surface));
+    --color-green-100: color-mix(in oklab, oklch(72.3% 0.219 149.579) 18%, var(--t-surface));
+    --color-green-200: color-mix(in oklab, oklch(72.3% 0.219 149.579) 30%, var(--t-surface));
+    --color-green-300: color-mix(in oklab, oklch(72.3% 0.219 149.579) 45%, var(--t-surface));
+    --color-emerald-50: color-mix(in oklab, oklch(69.6% 0.17 162.48) 12%, var(--t-surface));
+    --color-emerald-100: color-mix(in oklab, oklch(69.6% 0.17 162.48) 18%, var(--t-surface));
+    --color-emerald-200: color-mix(in oklab, oklch(69.6% 0.17 162.48) 30%, var(--t-surface));
+    --color-emerald-300: color-mix(in oklab, oklch(69.6% 0.17 162.48) 45%, var(--t-surface));
+    --color-teal-50: color-mix(in oklab, oklch(70.4% 0.14 182.503) 12%, var(--t-surface));
+    --color-teal-100: color-mix(in oklab, oklch(70.4% 0.14 182.503) 18%, var(--t-surface));
+    --color-teal-200: color-mix(in oklab, oklch(70.4% 0.14 182.503) 30%, var(--t-surface));
+    --color-teal-300: color-mix(in oklab, oklch(70.4% 0.14 182.503) 45%, var(--t-surface));
+    --color-sky-50: color-mix(in oklab, oklch(68.5% 0.169 237.323) 12%, var(--t-surface));
+    --color-sky-100: color-mix(in oklab, oklch(68.5% 0.169 237.323) 18%, var(--t-surface));
+    --color-sky-200: color-mix(in oklab, oklch(68.5% 0.169 237.323) 30%, var(--t-surface));
+    --color-sky-300: color-mix(in oklab, oklch(68.5% 0.169 237.323) 45%, var(--t-surface));
+    --color-blue-50: color-mix(in oklab, var(--t-signal-blue, oklch(62.3% 0.214 259.815)) 12%, var(--t-surface));
+    --color-blue-100: color-mix(in oklab, var(--t-signal-blue, oklch(62.3% 0.214 259.815)) 18%, var(--t-surface));
+    --color-blue-200: color-mix(in oklab, var(--t-signal-blue, oklch(62.3% 0.214 259.815)) 30%, var(--t-surface));
+    --color-blue-300: color-mix(in oklab, var(--t-signal-blue, oklch(62.3% 0.214 259.815)) 45%, var(--t-surface));
+    --color-indigo-50: color-mix(in oklab, oklch(58.5% 0.233 277.117) 12%, var(--t-surface));
+    --color-indigo-100: color-mix(in oklab, oklch(58.5% 0.233 277.117) 18%, var(--t-surface));
+    --color-indigo-200: color-mix(in oklab, oklch(58.5% 0.233 277.117) 30%, var(--t-surface));
+    --color-indigo-300: color-mix(in oklab, oklch(58.5% 0.233 277.117) 45%, var(--t-surface));
+    --color-violet-50: color-mix(in oklab, oklch(60.6% 0.25 292.717) 12%, var(--t-surface));
+    --color-violet-100: color-mix(in oklab, oklch(60.6% 0.25 292.717) 18%, var(--t-surface));
+    --color-violet-200: color-mix(in oklab, oklch(60.6% 0.25 292.717) 30%, var(--t-surface));
+    --color-violet-300: color-mix(in oklab, oklch(60.6% 0.25 292.717) 45%, var(--t-surface));
+    --color-rose-50: color-mix(in oklab, oklch(64.5% 0.246 16.439) 12%, var(--t-surface));
+    --color-rose-100: color-mix(in oklab, oklch(64.5% 0.246 16.439) 18%, var(--t-surface));
+    --color-rose-200: color-mix(in oklab, oklch(64.5% 0.246 16.439) 30%, var(--t-surface));
+    --color-rose-300: color-mix(in oklab, oklch(64.5% 0.246 16.439) 45%, var(--t-surface));
+  }
+
+  @layer utilities {
+    /* Białe tła → powierzchnia szablonu (--color-white zostaje biały dla text-white) */
+    :where(:root[data-scheme="dark"]) .bg-white { background-color: var(--t-surface); }
+    :where(:root[data-scheme="dark"]) .bg-white\/60 { background-color: color-mix(in oklab, var(--t-surface) 60%, transparent); }
+    :where(:root[data-scheme="dark"]) .bg-white\/80 { background-color: color-mix(in oklab, var(--t-surface) 80%, transparent); }
+    :where(:root[data-scheme="dark"]) .bg-white\/90 { background-color: color-mix(in oklab, var(--t-surface) 90%, transparent); }
+    :where(:root[data-scheme="dark"]) .via-white { --tw-gradient-via: var(--t-surface); }
+    :where(:root[data-scheme="dark"]) .border-white\/70 { border-color: var(--t-border); }
+
+    /* Tekst slate: 50–300 (na ciemnych wyspach) i 600–950 (główny tekst) → jasne tokeny */
+    :where(:root[data-scheme="dark"]) .text-slate-50 { color: var(--t-text); }
+    :where(:root[data-scheme="dark"]) .text-slate-100 { color: var(--t-text); }
+    :where(:root[data-scheme="dark"]) .text-slate-200 { color: color-mix(in oklab, var(--t-text) 85%, var(--t-muted)); }
+    :where(:root[data-scheme="dark"]) .text-slate-300 { color: color-mix(in oklab, var(--t-text) 60%, var(--t-muted)); }
+    :where(:root[data-scheme="dark"]) .text-slate-600 { color: color-mix(in oklab, var(--t-muted) 60%, var(--t-text)); }
+    :where(:root[data-scheme="dark"]) .text-slate-700 { color: color-mix(in oklab, var(--t-text) 80%, var(--t-muted)); }
+    :where(:root[data-scheme="dark"]) .text-slate-800 { color: var(--t-text); }
+    :where(:root[data-scheme="dark"]) .text-slate-900 { color: color-mix(in oklab, var(--t-text) 60%, #fff); }
+    :where(:root[data-scheme="dark"]) .text-slate-950 { color: color-mix(in oklab, var(--t-text) 60%, #fff); }
+
+    /* Tekst barw: 50–300 → oryginalne jasne literały; 600→400, 700→300, 800→200, 900/950→100 */
+    :where(:root[data-scheme="dark"]) .text-red-50 { color: oklch(97.1% 0.013 17.38); }
+    :where(:root[data-scheme="dark"]) .text-red-100 { color: oklch(93.6% 0.032 17.717); }
+    :where(:root[data-scheme="dark"]) .text-red-200 { color: oklch(88.5% 0.062 18.334); }
+    :where(:root[data-scheme="dark"]) .text-red-300 { color: oklch(80.8% 0.114 19.571); }
+    :where(:root[data-scheme="dark"]) .text-red-600 { color: var(--t-signal-red, oklch(70.4% 0.191 22.216)); }
+    :where(:root[data-scheme="dark"]) .text-red-700 { color: var(--t-signal-red, oklch(80.8% 0.114 19.571)); }
+    :where(:root[data-scheme="dark"]) .text-red-800 { color: oklch(88.5% 0.062 18.334); }
+    :where(:root[data-scheme="dark"]) .text-red-900 { color: oklch(93.6% 0.032 17.717); }
+    :where(:root[data-scheme="dark"]) .text-red-950 { color: oklch(93.6% 0.032 17.717); }
+    :where(:root[data-scheme="dark"]) .text-orange-50 { color: oklch(98% 0.016 73.684); }
+    :where(:root[data-scheme="dark"]) .text-orange-100 { color: oklch(95.4% 0.038 75.164); }
+    :where(:root[data-scheme="dark"]) .text-orange-200 { color: oklch(90.1% 0.076 70.697); }
+    :where(:root[data-scheme="dark"]) .text-orange-300 { color: oklch(83.7% 0.128 66.29); }
+    :where(:root[data-scheme="dark"]) .text-orange-600 { color: oklch(75% 0.183 55.934); }
+    :where(:root[data-scheme="dark"]) .text-orange-700 { color: oklch(83.7% 0.128 66.29); }
+    :where(:root[data-scheme="dark"]) .text-orange-800 { color: oklch(90.1% 0.076 70.697); }
+    :where(:root[data-scheme="dark"]) .text-orange-900 { color: oklch(95.4% 0.038 75.164); }
+    :where(:root[data-scheme="dark"]) .text-orange-950 { color: oklch(95.4% 0.038 75.164); }
+    :where(:root[data-scheme="dark"]) .text-amber-50 { color: oklch(98.7% 0.022 95.277); }
+    :where(:root[data-scheme="dark"]) .text-amber-100 { color: oklch(96.2% 0.059 95.617); }
+    :where(:root[data-scheme="dark"]) .text-amber-200 { color: oklch(92.4% 0.12 95.746); }
+    :where(:root[data-scheme="dark"]) .text-amber-300 { color: oklch(87.9% 0.169 91.605); }
+    :where(:root[data-scheme="dark"]) .text-amber-600 { color: var(--t-signal-amber, oklch(82.8% 0.189 84.429)); }
+    :where(:root[data-scheme="dark"]) .text-amber-700 { color: var(--t-signal-amber, oklch(87.9% 0.169 91.605)); }
+    :where(:root[data-scheme="dark"]) .text-amber-800 { color: oklch(92.4% 0.12 95.746); }
+    :where(:root[data-scheme="dark"]) .text-amber-900 { color: oklch(96.2% 0.059 95.617); }
+    :where(:root[data-scheme="dark"]) .text-amber-950 { color: oklch(96.2% 0.059 95.617); }
+    :where(:root[data-scheme="dark"]) .text-green-50 { color: oklch(98.2% 0.018 155.826); }
+    :where(:root[data-scheme="dark"]) .text-green-100 { color: oklch(96.2% 0.044 156.743); }
+    :where(:root[data-scheme="dark"]) .text-green-200 { color: oklch(92.5% 0.084 155.995); }
+    :where(:root[data-scheme="dark"]) .text-green-300 { color: oklch(87.1% 0.15 154.449); }
+    :where(:root[data-scheme="dark"]) .text-green-600 { color: oklch(79.2% 0.209 151.711); }
+    :where(:root[data-scheme="dark"]) .text-green-700 { color: oklch(87.1% 0.15 154.449); }
+    :where(:root[data-scheme="dark"]) .text-green-800 { color: oklch(92.5% 0.084 155.995); }
+    :where(:root[data-scheme="dark"]) .text-green-900 { color: oklch(96.2% 0.044 156.743); }
+    :where(:root[data-scheme="dark"]) .text-green-950 { color: oklch(96.2% 0.044 156.743); }
+    :where(:root[data-scheme="dark"]) .text-emerald-50 { color: oklch(97.9% 0.021 166.113); }
+    :where(:root[data-scheme="dark"]) .text-emerald-100 { color: oklch(95% 0.052 163.051); }
+    :where(:root[data-scheme="dark"]) .text-emerald-200 { color: oklch(90.5% 0.093 164.15); }
+    :where(:root[data-scheme="dark"]) .text-emerald-300 { color: oklch(84.5% 0.143 164.978); }
+    :where(:root[data-scheme="dark"]) .text-emerald-600 { color: oklch(76.5% 0.177 163.223); }
+    :where(:root[data-scheme="dark"]) .text-emerald-700 { color: oklch(84.5% 0.143 164.978); }
+    :where(:root[data-scheme="dark"]) .text-emerald-800 { color: oklch(90.5% 0.093 164.15); }
+    :where(:root[data-scheme="dark"]) .text-emerald-900 { color: oklch(95% 0.052 163.051); }
+    :where(:root[data-scheme="dark"]) .text-emerald-950 { color: oklch(95% 0.052 163.051); }
+    :where(:root[data-scheme="dark"]) .text-teal-50 { color: oklch(98.4% 0.014 180.72); }
+    :where(:root[data-scheme="dark"]) .text-teal-100 { color: oklch(95.3% 0.051 180.801); }
+    :where(:root[data-scheme="dark"]) .text-teal-200 { color: oklch(91% 0.096 180.426); }
+    :where(:root[data-scheme="dark"]) .text-teal-300 { color: oklch(85.5% 0.138 181.071); }
+    :where(:root[data-scheme="dark"]) .text-teal-600 { color: oklch(77.7% 0.152 181.912); }
+    :where(:root[data-scheme="dark"]) .text-teal-700 { color: oklch(85.5% 0.138 181.071); }
+    :where(:root[data-scheme="dark"]) .text-teal-800 { color: oklch(91% 0.096 180.426); }
+    :where(:root[data-scheme="dark"]) .text-teal-900 { color: oklch(95.3% 0.051 180.801); }
+    :where(:root[data-scheme="dark"]) .text-teal-950 { color: oklch(95.3% 0.051 180.801); }
+    :where(:root[data-scheme="dark"]) .text-sky-50 { color: oklch(97.7% 0.013 236.62); }
+    :where(:root[data-scheme="dark"]) .text-sky-100 { color: oklch(95.1% 0.026 236.824); }
+    :where(:root[data-scheme="dark"]) .text-sky-200 { color: oklch(90.1% 0.058 230.902); }
+    :where(:root[data-scheme="dark"]) .text-sky-300 { color: oklch(82.8% 0.111 230.318); }
+    :where(:root[data-scheme="dark"]) .text-sky-600 { color: oklch(74.6% 0.16 232.661); }
+    :where(:root[data-scheme="dark"]) .text-sky-700 { color: oklch(82.8% 0.111 230.318); }
+    :where(:root[data-scheme="dark"]) .text-sky-800 { color: oklch(90.1% 0.058 230.902); }
+    :where(:root[data-scheme="dark"]) .text-sky-900 { color: oklch(95.1% 0.026 236.824); }
+    :where(:root[data-scheme="dark"]) .text-sky-950 { color: oklch(95.1% 0.026 236.824); }
+    :where(:root[data-scheme="dark"]) .text-blue-50 { color: oklch(97% 0.014 254.604); }
+    :where(:root[data-scheme="dark"]) .text-blue-100 { color: oklch(93.2% 0.032 255.585); }
+    :where(:root[data-scheme="dark"]) .text-blue-200 { color: oklch(88.2% 0.059 254.128); }
+    :where(:root[data-scheme="dark"]) .text-blue-300 { color: oklch(80.9% 0.105 251.813); }
+    :where(:root[data-scheme="dark"]) .text-blue-600 { color: var(--t-signal-blue, oklch(70.7% 0.165 254.624)); }
+    :where(:root[data-scheme="dark"]) .text-blue-700 { color: var(--t-signal-blue, oklch(80.9% 0.105 251.813)); }
+    :where(:root[data-scheme="dark"]) .text-blue-800 { color: oklch(88.2% 0.059 254.128); }
+    :where(:root[data-scheme="dark"]) .text-blue-900 { color: oklch(93.2% 0.032 255.585); }
+    :where(:root[data-scheme="dark"]) .text-blue-950 { color: oklch(93.2% 0.032 255.585); }
+    :where(:root[data-scheme="dark"]) .text-indigo-50 { color: oklch(96.2% 0.018 272.314); }
+    :where(:root[data-scheme="dark"]) .text-indigo-100 { color: oklch(93% 0.034 272.788); }
+    :where(:root[data-scheme="dark"]) .text-indigo-200 { color: oklch(87% 0.065 274.039); }
+    :where(:root[data-scheme="dark"]) .text-indigo-300 { color: oklch(78.5% 0.115 274.713); }
+    :where(:root[data-scheme="dark"]) .text-indigo-600 { color: oklch(67.3% 0.182 276.935); }
+    :where(:root[data-scheme="dark"]) .text-indigo-700 { color: oklch(78.5% 0.115 274.713); }
+    :where(:root[data-scheme="dark"]) .text-indigo-800 { color: oklch(87% 0.065 274.039); }
+    :where(:root[data-scheme="dark"]) .text-indigo-900 { color: oklch(93% 0.034 272.788); }
+    :where(:root[data-scheme="dark"]) .text-indigo-950 { color: oklch(93% 0.034 272.788); }
+    :where(:root[data-scheme="dark"]) .text-violet-50 { color: oklch(96.9% 0.016 293.756); }
+    :where(:root[data-scheme="dark"]) .text-violet-100 { color: oklch(94.3% 0.029 294.588); }
+    :where(:root[data-scheme="dark"]) .text-violet-200 { color: oklch(89.4% 0.057 293.283); }
+    :where(:root[data-scheme="dark"]) .text-violet-300 { color: oklch(81.1% 0.111 293.571); }
+    :where(:root[data-scheme="dark"]) .text-violet-600 { color: oklch(70.2% 0.183 293.541); }
+    :where(:root[data-scheme="dark"]) .text-violet-700 { color: oklch(81.1% 0.111 293.571); }
+    :where(:root[data-scheme="dark"]) .text-violet-800 { color: oklch(89.4% 0.057 293.283); }
+    :where(:root[data-scheme="dark"]) .text-violet-900 { color: oklch(94.3% 0.029 294.588); }
+    :where(:root[data-scheme="dark"]) .text-violet-950 { color: oklch(94.3% 0.029 294.588); }
+    :where(:root[data-scheme="dark"]) .text-rose-50 { color: oklch(96.9% 0.015 12.422); }
+    :where(:root[data-scheme="dark"]) .text-rose-100 { color: oklch(94.1% 0.03 12.58); }
+    :where(:root[data-scheme="dark"]) .text-rose-200 { color: oklch(89.2% 0.058 10.001); }
+    :where(:root[data-scheme="dark"]) .text-rose-300 { color: oklch(81% 0.117 11.638); }
+    :where(:root[data-scheme="dark"]) .text-rose-600 { color: oklch(71.2% 0.194 13.428); }
+    :where(:root[data-scheme="dark"]) .text-rose-700 { color: oklch(81% 0.117 11.638); }
+    :where(:root[data-scheme="dark"]) .text-rose-800 { color: oklch(89.2% 0.058 10.001); }
+    :where(:root[data-scheme="dark"]) .text-rose-900 { color: oklch(94.1% 0.03 12.58); }
+    :where(:root[data-scheme="dark"]) .text-rose-950 { color: oklch(94.1% 0.03 12.58); }
+
+    /* Tekst z przezroczystością (/NN) — tylko klasy używane w komponentach */
+    :where(:root[data-scheme="dark"]) .text-indigo-600\/80 { color: color-mix(in oklab, oklch(67.3% 0.182 276.935) 80%, transparent); }
+    :where(:root[data-scheme="dark"]) .text-violet-700\/80 { color: color-mix(in oklab, oklch(81.1% 0.111 293.571) 80%, transparent); }
+    :where(:root[data-scheme="dark"]) .text-amber-800\/70 { color: color-mix(in oklab, oklch(92.4% 0.12 95.746) 70%, transparent); }
+    :where(:root[data-scheme="dark"]) .text-emerald-800\/80 { color: color-mix(in oklab, oklch(90.5% 0.093 164.15) 80%, transparent); }
+    :where(:root[data-scheme="dark"]) .text-violet-800\/70 { color: color-mix(in oklab, oklch(89.4% 0.057 293.283) 70%, transparent); }
+    :where(:root[data-scheme="dark"]) .text-violet-800\/80 { color: color-mix(in oklab, oklch(89.4% 0.057 293.283) 80%, transparent); }
+    :where(:root[data-scheme="dark"]) .text-amber-900\/80 { color: color-mix(in oklab, oklch(96.2% 0.059 95.617) 80%, transparent); }
+
+    /* Ciemny tekst na jasnych, nieprzemapowanych tłach 400/500 (np. licznik bg-sky-400 text-slate-900)
+       zostaje ciemny — (0,2,0) wygrywa z nadpisaniem wyżej */
+    :where(:root[data-scheme="dark"]) .text-red-900:is(.bg-red-400, .bg-red-500) { color: oklch(39.6% 0.141 25.723); }
+    :where(:root[data-scheme="dark"]) .text-red-950:is(.bg-red-400, .bg-red-500) { color: oklch(25.8% 0.092 26.042); }
+    :where(:root[data-scheme="dark"]) .text-orange-900:is(.bg-orange-400, .bg-orange-500) { color: oklch(40.8% 0.123 38.172); }
+    :where(:root[data-scheme="dark"]) .text-orange-950:is(.bg-orange-400, .bg-orange-500) { color: oklch(26.6% 0.079 36.259); }
+    :where(:root[data-scheme="dark"]) .text-amber-900:is(.bg-amber-400, .bg-amber-500) { color: oklch(41.4% 0.112 45.904); }
+    :where(:root[data-scheme="dark"]) .text-amber-950:is(.bg-amber-400, .bg-amber-500) { color: oklch(27.9% 0.077 45.635); }
+    :where(:root[data-scheme="dark"]) .text-green-900:is(.bg-green-400, .bg-green-500) { color: oklch(39.3% 0.095 152.535); }
+    :where(:root[data-scheme="dark"]) .text-green-950:is(.bg-green-400, .bg-green-500) { color: oklch(26.6% 0.065 152.934); }
+    :where(:root[data-scheme="dark"]) .text-emerald-900:is(.bg-emerald-400, .bg-emerald-500) { color: oklch(37.8% 0.077 168.94); }
+    :where(:root[data-scheme="dark"]) .text-emerald-950:is(.bg-emerald-400, .bg-emerald-500) { color: oklch(26.2% 0.051 172.552); }
+    :where(:root[data-scheme="dark"]) .text-teal-900:is(.bg-teal-400, .bg-teal-500) { color: oklch(38.6% 0.063 188.416); }
+    :where(:root[data-scheme="dark"]) .text-teal-950:is(.bg-teal-400, .bg-teal-500) { color: oklch(27.7% 0.046 192.524); }
+    :where(:root[data-scheme="dark"]) .text-sky-900:is(.bg-sky-400, .bg-sky-500) { color: oklch(39.1% 0.09 240.876); }
+    :where(:root[data-scheme="dark"]) .text-sky-950:is(.bg-sky-400, .bg-sky-500) { color: oklch(29.3% 0.066 243.157); }
+    :where(:root[data-scheme="dark"]) .text-blue-900:is(.bg-blue-400, .bg-blue-500) { color: oklch(37.9% 0.146 265.522); }
+    :where(:root[data-scheme="dark"]) .text-blue-950:is(.bg-blue-400, .bg-blue-500) { color: oklch(28.2% 0.091 267.935); }
+    :where(:root[data-scheme="dark"]) .text-indigo-900:is(.bg-indigo-400, .bg-indigo-500) { color: oklch(35.9% 0.144 278.697); }
+    :where(:root[data-scheme="dark"]) .text-indigo-950:is(.bg-indigo-400, .bg-indigo-500) { color: oklch(25.7% 0.09 281.288); }
+    :where(:root[data-scheme="dark"]) .text-violet-900:is(.bg-violet-400, .bg-violet-500) { color: oklch(38% 0.189 293.745); }
+    :where(:root[data-scheme="dark"]) .text-violet-950:is(.bg-violet-400, .bg-violet-500) { color: oklch(28.3% 0.141 291.089); }
+    :where(:root[data-scheme="dark"]) .text-rose-900:is(.bg-rose-400, .bg-rose-500) { color: oklch(41% 0.159 10.272); }
+    :where(:root[data-scheme="dark"]) .text-rose-950:is(.bg-rose-400, .bg-rose-500) { color: oklch(27.1% 0.105 12.094); }
+    :where(:root[data-scheme="dark"]) .text-slate-800:is(
+      .bg-red-400, .bg-red-500, .bg-orange-400, .bg-orange-500, .bg-amber-400, .bg-amber-500,
+      .bg-green-400, .bg-green-500, .bg-emerald-400, .bg-emerald-500, .bg-teal-400, .bg-teal-500,
+      .bg-sky-400, .bg-sky-500, .bg-blue-400, .bg-blue-500, .bg-indigo-400, .bg-indigo-500,
+      .bg-violet-400, .bg-violet-500, .bg-rose-400, .bg-rose-500
+    ) { color: oklch(27.9% 0.041 260.031); }
+    :where(:root[data-scheme="dark"]) .text-slate-900:is(
+      .bg-red-400, .bg-red-500, .bg-orange-400, .bg-orange-500, .bg-amber-400, .bg-amber-500,
+      .bg-green-400, .bg-green-500, .bg-emerald-400, .bg-emerald-500, .bg-teal-400, .bg-teal-500,
+      .bg-sky-400, .bg-sky-500, .bg-blue-400, .bg-blue-500, .bg-indigo-400, .bg-indigo-500,
+      .bg-violet-400, .bg-violet-500, .bg-rose-400, .bg-rose-500
+    ) { color: oklch(20.8% 0.042 265.755); }
+    :where(:root[data-scheme="dark"]) .text-slate-950:is(
+      .bg-red-400, .bg-red-500, .bg-orange-400, .bg-orange-500, .bg-amber-400, .bg-amber-500,
+      .bg-green-400, .bg-green-500, .bg-emerald-400, .bg-emerald-500, .bg-teal-400, .bg-teal-500,
+      .bg-sky-400, .bg-sky-500, .bg-blue-400, .bg-blue-500, .bg-indigo-400, .bg-indigo-500,
+      .bg-violet-400, .bg-violet-500, .bg-rose-400, .bg-rose-500
+    ) { color: oklch(12.9% 0.042 264.695); }
+
+    @media (hover: hover) {
+      :where(:root[data-scheme="dark"]) .hover\:bg-white:hover { background-color: var(--t-surface); }
+      :where(:root[data-scheme="dark"]) .hover\:text-slate-600:hover { color: color-mix(in oklab, var(--t-muted) 60%, var(--t-text)); }
+      :where(:root[data-scheme="dark"]) .hover\:text-slate-700:hover { color: color-mix(in oklab, var(--t-text) 80%, var(--t-muted)); }
+      :where(:root[data-scheme="dark"]) .hover\:text-slate-800:hover { color: var(--t-text); }
+      :where(:root[data-scheme="dark"]) .hover\:text-slate-900:hover { color: color-mix(in oklab, var(--t-text) 60%, #fff); }
+      :where(:root[data-scheme="dark"]) .hover\:text-slate-950:hover { color: color-mix(in oklab, var(--t-text) 60%, #fff); }
+      :where(:root[data-scheme="dark"]) .hover\:text-red-600:hover { color: var(--t-signal-red, oklch(70.4% 0.191 22.216)); }
+      :where(:root[data-scheme="dark"]) .hover\:text-red-700:hover { color: var(--t-signal-red, oklch(80.8% 0.114 19.571)); }
+      :where(:root[data-scheme="dark"]) .hover\:text-red-800:hover { color: oklch(88.5% 0.062 18.334); }
+      :where(:root[data-scheme="dark"]) .hover\:text-red-900:hover { color: oklch(93.6% 0.032 17.717); }
+      :where(:root[data-scheme="dark"]) .hover\:text-red-950:hover { color: oklch(93.6% 0.032 17.717); }
+      :where(:root[data-scheme="dark"]) .hover\:text-orange-600:hover { color: oklch(75% 0.183 55.934); }
+      :where(:root[data-scheme="dark"]) .hover\:text-orange-700:hover { color: oklch(83.7% 0.128 66.29); }
+      :where(:root[data-scheme="dark"]) .hover\:text-orange-800:hover { color: oklch(90.1% 0.076 70.697); }
+      :where(:root[data-scheme="dark"]) .hover\:text-orange-900:hover { color: oklch(95.4% 0.038 75.164); }
+      :where(:root[data-scheme="dark"]) .hover\:text-orange-950:hover { color: oklch(95.4% 0.038 75.164); }
+      :where(:root[data-scheme="dark"]) .hover\:text-amber-600:hover { color: var(--t-signal-amber, oklch(82.8% 0.189 84.429)); }
+      :where(:root[data-scheme="dark"]) .hover\:text-amber-700:hover { color: var(--t-signal-amber, oklch(87.9% 0.169 91.605)); }
+      :where(:root[data-scheme="dark"]) .hover\:text-amber-800:hover { color: oklch(92.4% 0.12 95.746); }
+      :where(:root[data-scheme="dark"]) .hover\:text-amber-900:hover { color: oklch(96.2% 0.059 95.617); }
+      :where(:root[data-scheme="dark"]) .hover\:text-amber-950:hover { color: oklch(96.2% 0.059 95.617); }
+      :where(:root[data-scheme="dark"]) .hover\:text-green-600:hover { color: oklch(79.2% 0.209 151.711); }
+      :where(:root[data-scheme="dark"]) .hover\:text-green-700:hover { color: oklch(87.1% 0.15 154.449); }
+      :where(:root[data-scheme="dark"]) .hover\:text-green-800:hover { color: oklch(92.5% 0.084 155.995); }
+      :where(:root[data-scheme="dark"]) .hover\:text-green-900:hover { color: oklch(96.2% 0.044 156.743); }
+      :where(:root[data-scheme="dark"]) .hover\:text-green-950:hover { color: oklch(96.2% 0.044 156.743); }
+      :where(:root[data-scheme="dark"]) .hover\:text-emerald-600:hover { color: oklch(76.5% 0.177 163.223); }
+      :where(:root[data-scheme="dark"]) .hover\:text-emerald-700:hover { color: oklch(84.5% 0.143 164.978); }
+      :where(:root[data-scheme="dark"]) .hover\:text-emerald-800:hover { color: oklch(90.5% 0.093 164.15); }
+      :where(:root[data-scheme="dark"]) .hover\:text-emerald-900:hover { color: oklch(95% 0.052 163.051); }
+      :where(:root[data-scheme="dark"]) .hover\:text-emerald-950:hover { color: oklch(95% 0.052 163.051); }
+      :where(:root[data-scheme="dark"]) .hover\:text-teal-600:hover { color: oklch(77.7% 0.152 181.912); }
+      :where(:root[data-scheme="dark"]) .hover\:text-teal-700:hover { color: oklch(85.5% 0.138 181.071); }
+      :where(:root[data-scheme="dark"]) .hover\:text-teal-800:hover { color: oklch(91% 0.096 180.426); }
+      :where(:root[data-scheme="dark"]) .hover\:text-teal-900:hover { color: oklch(95.3% 0.051 180.801); }
+      :where(:root[data-scheme="dark"]) .hover\:text-teal-950:hover { color: oklch(95.3% 0.051 180.801); }
+      :where(:root[data-scheme="dark"]) .hover\:text-sky-600:hover { color: oklch(74.6% 0.16 232.661); }
+      :where(:root[data-scheme="dark"]) .hover\:text-sky-700:hover { color: oklch(82.8% 0.111 230.318); }
+      :where(:root[data-scheme="dark"]) .hover\:text-sky-800:hover { color: oklch(90.1% 0.058 230.902); }
+      :where(:root[data-scheme="dark"]) .hover\:text-sky-900:hover { color: oklch(95.1% 0.026 236.824); }
+      :where(:root[data-scheme="dark"]) .hover\:text-sky-950:hover { color: oklch(95.1% 0.026 236.824); }
+      :where(:root[data-scheme="dark"]) .hover\:text-blue-600:hover { color: var(--t-signal-blue, oklch(70.7% 0.165 254.624)); }
+      :where(:root[data-scheme="dark"]) .hover\:text-blue-700:hover { color: var(--t-signal-blue, oklch(80.9% 0.105 251.813)); }
+      :where(:root[data-scheme="dark"]) .hover\:text-blue-800:hover { color: oklch(88.2% 0.059 254.128); }
+      :where(:root[data-scheme="dark"]) .hover\:text-blue-900:hover { color: oklch(93.2% 0.032 255.585); }
+      :where(:root[data-scheme="dark"]) .hover\:text-blue-950:hover { color: oklch(93.2% 0.032 255.585); }
+      :where(:root[data-scheme="dark"]) .hover\:text-indigo-600:hover { color: oklch(67.3% 0.182 276.935); }
+      :where(:root[data-scheme="dark"]) .hover\:text-indigo-700:hover { color: oklch(78.5% 0.115 274.713); }
+      :where(:root[data-scheme="dark"]) .hover\:text-indigo-800:hover { color: oklch(87% 0.065 274.039); }
+      :where(:root[data-scheme="dark"]) .hover\:text-indigo-900:hover { color: oklch(93% 0.034 272.788); }
+      :where(:root[data-scheme="dark"]) .hover\:text-indigo-950:hover { color: oklch(93% 0.034 272.788); }
+      :where(:root[data-scheme="dark"]) .hover\:text-violet-600:hover { color: oklch(70.2% 0.183 293.541); }
+      :where(:root[data-scheme="dark"]) .hover\:text-violet-700:hover { color: oklch(81.1% 0.111 293.571); }
+      :where(:root[data-scheme="dark"]) .hover\:text-violet-800:hover { color: oklch(89.4% 0.057 293.283); }
+      :where(:root[data-scheme="dark"]) .hover\:text-violet-900:hover { color: oklch(94.3% 0.029 294.588); }
+      :where(:root[data-scheme="dark"]) .hover\:text-violet-950:hover { color: oklch(94.3% 0.029 294.588); }
+      :where(:root[data-scheme="dark"]) .hover\:text-rose-600:hover { color: oklch(71.2% 0.194 13.428); }
+      :where(:root[data-scheme="dark"]) .hover\:text-rose-700:hover { color: oklch(81% 0.117 11.638); }
+      :where(:root[data-scheme="dark"]) .hover\:text-rose-800:hover { color: oklch(89.2% 0.058 10.001); }
+      :where(:root[data-scheme="dark"]) .hover\:text-rose-900:hover { color: oklch(94.1% 0.03 12.58); }
+      :where(:root[data-scheme="dark"]) .hover\:text-rose-950:hover { color: oklch(94.1% 0.03 12.58); }
+    }
+  }
+}

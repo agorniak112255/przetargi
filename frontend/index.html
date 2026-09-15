@@ -9,6 +9,33 @@
         document.head.insertAdjacentHTML('afterbegin', '<base href="' + href + '">')
       })()
     </script>
+    <script>
+      // Ustawia wygląd przed pierwszym malowaniem (bez mignięcia jasnego motywu).
+      // Kopia logiki resolveAppearance z src/lib/appearance.ts — skrypt nie importuje TS.
+      // Dodając nowy szablon do TEMPLATES, dopisz tu jego id i schematy.
+      (function () {
+        var schemes = { klasyczny: ['light'], 'nocna-zmiana': ['dark', 'light'] }
+        var template = 'klasyczny'
+        var mode = 'system'
+        try {
+          var c = JSON.parse(localStorage.getItem('supon_appearance') || 'null')
+          if (c && typeof c.template === 'string' && Object.prototype.hasOwnProperty.call(schemes, c.template)) {
+            template = c.template
+          }
+          if (c && (c.mode === 'light' || c.mode === 'dark' || c.mode === 'system')) mode = c.mode
+        } catch (e) {}
+        var list = schemes[template]
+        var scheme
+        if (list.length === 1) scheme = list[0]
+        else if (mode === 'system')
+          scheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        else scheme = mode
+        var root = document.documentElement
+        root.setAttribute('data-template', template)
+        root.setAttribute('data-scheme', scheme)
+        root.style.colorScheme = scheme
+      })()
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Przetargi Supon</title>

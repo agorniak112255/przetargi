@@ -33,23 +33,25 @@ export function Layout() {
   })
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="w-60 shrink-0 bg-slate-800 text-slate-100">
-        <div className="border-b border-slate-700 p-4 text-xl font-bold">
+    <div className="app-shell flex min-h-screen">
+      <aside className="app-sidebar w-60 shrink-0 bg-slate-800 text-slate-100">
+        <div className="app-brand border-b border-slate-700 p-4 text-xl font-bold">
           Przetargi Supon
-          <small className="mt-1 block text-xs font-normal text-slate-400">
+          <small className="app-brand-sub mt-1 block text-xs font-normal text-slate-400">
             {user?.name} · {user?.role}
           </small>
         </div>
-        <nav>
+        <nav className="app-nav">
           {visible.map((l) => (
             <NavLink
               key={l.to}
               to={l.to}
               end={l.to === '/'}
               className={({ isActive }) =>
-                `block border-b border-slate-700 px-4 py-3 text-sm ${
-                  isActive ? 'border-l-4 border-l-sky-400 bg-slate-700 pl-3' : 'hover:bg-slate-700'
+                `app-nav-link block border-b border-slate-700 px-4 py-3 text-sm ${
+                  isActive
+                    ? 'app-nav-link--active border-l-4 border-l-sky-400 bg-slate-700 pl-3'
+                    : 'hover:bg-slate-700'
                 }`
               }
             >
@@ -57,16 +59,28 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
-        <NotificationBell />
-        <button
-          type="button"
-          onClick={() => void logout()}
-          className="mx-4 mb-4 rounded bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600"
-        >
-          Wyloguj
-        </button>
+        <div className="app-sidebar-footer">
+          <NavLink
+            to="/account"
+            className={({ isActive }) =>
+              `app-sidebar-btn mx-4 mt-4 block rounded bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600${
+                isActive ? ' app-sidebar-btn--active ring-1 ring-sky-400' : ''
+              }`
+            }
+          >
+            Moje konto
+          </NavLink>
+          <NotificationBell />
+          <button
+            type="button"
+            onClick={() => void logout()}
+            className="app-sidebar-btn mx-4 mb-4 rounded bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600"
+          >
+            Wyloguj
+          </button>
+        </div>
       </aside>
-      <main className="flex-1 overflow-auto p-5">
+      <main className="app-main flex-1 overflow-auto p-5">
         <Outlet />
       </main>
     </div>

@@ -49,6 +49,11 @@ export type User = {
   role: string
   roles: string[]
   permissions: string[]
+  /** Wybrany wygląd; null = użytkownik jeszcze nie wybrał (obowiązuje zapis z tego komputera). */
+  ui_preferences?: {
+    template: string | null
+    mode: 'light' | 'dark' | 'system' | null
+  }
 }
 
 export function can(user: User | null | undefined, permission: string): boolean {

@@ -1,0 +1,149 @@
+@import "@fontsource-variable/geist";
+
+/*
+ * Szablon „Nocna zmiana” (<html data-template="nocna-zmiana">), schematy dark i light.
+ *
+ * - Tokeny --t-* czytają body (index.css) i wspólny tryb ciemny (dark-scheme.css).
+ * - Wartości jasne są bazą, a ciemne nadpisują je tylko w @media screen —
+ *   wydruk zawsze dostaje jasne tokeny (dark-scheme.css też działa tylko na ekranie).
+ * - Schemat light NIE przemapowuje palety Tailwinda: zmienia tylko tokeny, font
+ *   i pasek boczny.
+ * - Stylizacja po znacznikach app-* (Layout, NotificationBell, Login). Reguły są
+ *   poza warstwami, więc wygrywają z klasami Tailwinda (@layer utilities), także
+ *   z hover:bg-slate-700 na linkach menu.
+ */
+:root[data-template="nocna-zmiana"] {
+  --t-font: "Geist Variable", "Segoe UI", system-ui, sans-serif;
+  --t-bg: #f3f6f8;
+  --t-surface: #ffffff;
+  --t-surface-2: #e4f1ee;
+  --t-border: #dce3e8;
+  --t-border-strong: #bcdcd4;
+  --t-text: #15222c;
+  --t-muted: #566673;
+  --t-dim: #8594a0;
+  --t-accent: #0b7d6a;
+  --t-on-accent: #ffffff;
+}
+
+@media screen {
+  :root[data-template="nocna-zmiana"][data-scheme="dark"] {
+    --t-bg: #0c1318;
+    --t-surface: #111a20;
+    --t-surface-2: #18232b;
+    --t-border: #22303b;
+    --t-border-strong: #2c3d4a;
+    --t-text: #e2e9ee;
+    --t-muted: #8797a3;
+    --t-dim: #5d6d79;
+    --t-accent: #4ccbb3;
+    --t-on-accent: #0c1318;
+    --t-signal-amber: #efb443;
+    --t-signal-red: #f06b5f;
+    --t-signal-blue: #7caef3;
+  }
+}
+
+/* Pasek boczny */
+:root[data-template="nocna-zmiana"] .app-sidebar {
+  background-color: var(--t-surface);
+  color: var(--t-text);
+  border-right: 1px solid var(--t-border);
+}
+
+:root[data-template="nocna-zmiana"] .app-brand {
+  border-bottom-color: var(--t-border);
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-brand-sub {
+  color: var(--t-muted);
+}
+
+:root[data-template="nocna-zmiana"] .app-nav {
+  padding-block: 0.5rem;
+}
+
+:root[data-template="nocna-zmiana"] .app-nav-link {
+  margin: 1px 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-width: 0;
+  border-radius: 0.375rem;
+  background-color: transparent;
+  color: var(--t-muted);
+}
+
+:root[data-template="nocna-zmiana"] .app-nav-link:hover {
+  background-color: var(--t-surface-2);
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-nav-link.app-nav-link--active {
+  background-color: color-mix(in oklab, var(--t-accent) 14%, var(--t-surface));
+  color: var(--t-accent);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--t-accent);
+}
+
+:root[data-template="nocna-zmiana"] .app-sidebar-btn {
+  border: 1px solid var(--t-border);
+  background-color: var(--t-surface-2);
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-sidebar-btn:hover {
+  border-color: var(--t-border-strong);
+  background-color: var(--t-surface-2);
+}
+
+:root[data-template="nocna-zmiana"] .app-sidebar-btn.app-sidebar-btn--active {
+  border-color: var(--t-accent);
+  --tw-ring-color: var(--t-accent);
+}
+
+/* Licznik nieprzeczytanych powiadomień (bg-sky-400 text-slate-900) */
+:root[data-template="nocna-zmiana"] .app-sidebar-btn > span {
+  background-color: var(--t-accent);
+  color: var(--t-on-accent);
+}
+
+/* Lista powiadomień */
+:root[data-template="nocna-zmiana"] .app-popover {
+  border-color: var(--t-border);
+  background-color: var(--t-surface);
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-popover .text-slate-200 {
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-popover .text-sky-300 {
+  color: var(--t-accent);
+}
+
+:root[data-template="nocna-zmiana"] .app-popover .text-slate-400 {
+  color: var(--t-muted);
+}
+
+:root[data-template="nocna-zmiana"] .app-popover-item {
+  background-color: var(--t-surface-2);
+  color: var(--t-text);
+}
+
+/* przeczytane: bg-slate-800/60 text-slate-400 */
+:root[data-template="nocna-zmiana"] .app-popover-item.text-slate-400 {
+  background-color: transparent;
+  color: var(--t-muted);
+}
+
+/* Logowanie */
+:root[data-template="nocna-zmiana"] .app-login {
+  background-color: var(--t-bg);
+}
+
+:root[data-template="nocna-zmiana"] .app-login-card {
+  border: 1px solid var(--t-border);
+  background-color: var(--t-surface);
+  color: var(--t-text);
+}

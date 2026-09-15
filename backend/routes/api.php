@@ -60,6 +60,7 @@ Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class,
 
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
+    Route::patch('/me/preferences', [AuthController::class, 'updatePreferences']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::get('/dashboard', DashboardController::class)->middleware('permission:dashboard.view');

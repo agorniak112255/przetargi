@@ -9,9 +9,11 @@
     "build:prod": "tsc -b && vite build --mode production",
     "build:xampp": "tsc -b && vite build --mode xampp",
     "lint": "oxlint",
+    "check:themes": "node scripts/check-theme-coverage.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1"

@@ -67,6 +67,28 @@ class AuthController extends Controller
         return response()->json($user->toAuthArray());
     }
 
+    /**
+     * Zapisuje preferencje wyglądu na koncie. Oba klucze są wymagane, a zapis nadpisuje cały obiekt.
+     */
+    public function updatePreferences(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'template' => ['present', 'nullable', 'string', 'regex:/^[a-z0-9-]{1,40}$/'],
+            'mode' => ['present', 'nullable', 'in:'.implode(',', User::UI_MODES)],
+        ]);
+
+        /** @var User $user */
+        $user = $request->user();
+        $user->forceFill([
+            'ui_preferences' => [
+                'template' => $validated['template'] ?? null,
+                'mode' => $validated['mode'] ?? null,
+            ],
+        ])->save();
+
+        return response()->json($user->toAuthArray());
+    }
+
     public function logout(Request $request): JsonResponse
     {
         /** @var User|null $user */

@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { AppearanceProvider } from './appearance'
 import { AuthProvider, useAuth } from './auth'
 import { Layout } from './components/Layout'
+import { Account } from './pages/Account'
 import { AdminActivityLog } from './pages/AdminActivityLog'
 import { AdminEnrichmentLogs } from './pages/AdminEnrichmentLogs'
 import { AdminLayout } from './pages/AdminLayout'
@@ -49,158 +51,161 @@ function PermissionGuard({ permission, children }: { permission: string; childre
 export default function App() {
   return (
     <AuthProvider>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route
-          element={
-            <Guard>
-              <Layout />
-            </Guard>
-          }
-        >
-          <Route index element={<Dashboard />} />
-          <Route path="tenders" element={<Tenders />} />
-          <Route path="tenders/:id" element={<TenderDetail />} />
-          <Route path="products" element={<Products />} />
-          <Route path="products/compare" element={<ProductCompare />} />
-          <Route path="products/:id" element={<ProductDetail />} />
-          <Route path="price-lists" element={<PriceLists />} />
+      <AppearanceProvider>
+        <Routes>
+          <Route path="/login" element={<Login />} />
           <Route
-            path="price-lists/b2b"
             element={
-              <PermissionGuard permission="b2b_accounts.view">
-                <PriceListsB2b />
-              </PermissionGuard>
-            }
-          />
-          <Route
-            path="reports"
-            element={
-              <PermissionGuard permission="reports.view">
-                <Reports />
-              </PermissionGuard>
-            }
-          />
-
-          <Route
-            path="ai-settings"
-            element={
-              <PermissionGuard permission="ai_settings.manage">
-                <AiSettingsPage />
-              </PermissionGuard>
-            }
-          />
-          <Route path="substitutes" element={<Substitutes />} />
-          <Route path="clients" element={<Clients />} />
-          <Route
-            path="inquiries"
-            element={
-              <PermissionGuard permission="inquiries.use">
-                <Inquiries />
-              </PermissionGuard>
-            }
-          />
-          <Route
-            path="inquiries/:id"
-            element={
-              <PermissionGuard permission="inquiries.use">
-                <InquiryReply />
-              </PermissionGuard>
-            }
-          />
-          <Route
-            path="admin"
-            element={
-              <PermissionGuard permission="admin.access">
-                <AdminLayout />
-              </PermissionGuard>
+              <Guard>
+                <Layout />
+              </Guard>
             }
           >
+            <Route index element={<Dashboard />} />
+            <Route path="tenders" element={<Tenders />} />
+            <Route path="tenders/:id" element={<TenderDetail />} />
+            <Route path="products" element={<Products />} />
+            <Route path="products/compare" element={<ProductCompare />} />
+            <Route path="products/:id" element={<ProductDetail />} />
+            <Route path="price-lists" element={<PriceLists />} />
             <Route
-              index
+              path="price-lists/b2b"
               element={
-                <PermissionGuard permission="admin.users.manage">
-                  <AdminUsers />
+                <PermissionGuard permission="b2b_accounts.view">
+                  <PriceListsB2b />
                 </PermissionGuard>
               }
             />
             <Route
-              path="roles"
+              path="reports"
               element={
-                <PermissionGuard permission="admin.roles.manage">
-                  <AdminRoles />
+                <PermissionGuard permission="reports.view">
+                  <Reports />
+                </PermissionGuard>
+              }
+            />
+
+            <Route
+              path="ai-settings"
+              element={
+                <PermissionGuard permission="ai_settings.manage">
+                  <AiSettingsPage />
+                </PermissionGuard>
+              }
+            />
+            <Route path="substitutes" element={<Substitutes />} />
+            <Route path="clients" element={<Clients />} />
+            <Route
+              path="inquiries"
+              element={
+                <PermissionGuard permission="inquiries.use">
+                  <Inquiries />
                 </PermissionGuard>
               }
             />
             <Route
-              path="logs"
+              path="inquiries/:id"
               element={
-                <PermissionGuard permission="admin.activity.view">
-                  <AdminActivityLog />
+                <PermissionGuard permission="inquiries.use">
+                  <InquiryReply />
                 </PermissionGuard>
               }
             />
             <Route
-              path="enrichment"
+              path="admin"
               element={
-                <PermissionGuard permission="admin.enrichment.view">
-                  <AdminEnrichmentLogs />
+                <PermissionGuard permission="admin.access">
+                  <AdminLayout />
                 </PermissionGuard>
               }
-            />
-            <Route
-              path="smtp"
-              element={
-                <PermissionGuard permission="admin.mail.manage">
-                  <AdminSmtp />
-                </PermissionGuard>
-              }
-            />
-            <Route
-              path="presta"
-              element={
-                <PermissionGuard permission="admin.presta.manage">
-                  <AdminPresta />
-                </PermissionGuard>
-              }
-            />
-            <Route
-              path="strony-wyszukiwarka"
-              element={
-                <PermissionGuard permission="admin.search_sites.manage">
-                  <AdminSearchSites />
-                </PermissionGuard>
-              }
-            />
-            <Route
-              path="strojenie-ai"
-              element={
-                <PermissionGuard permission="admin.ai_tuning.manage">
-                  <AdminAiTuning />
-                </PermissionGuard>
-              }
-            />
-            <Route
-              path="zargon"
-              element={
-                <PermissionGuard permission="admin.catalog_slang.manage">
-                  <AdminCatalogSlang />
-                </PermissionGuard>
-              }
-            />
-            <Route
-              path="szablony-opisow"
-              element={
-                <PermissionGuard permission="admin.description_templates.manage">
-                  <AdminDescriptionTemplates />
-                </PermissionGuard>
-              }
-            />
+            >
+              <Route
+                index
+                element={
+                  <PermissionGuard permission="admin.users.manage">
+                    <AdminUsers />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="roles"
+                element={
+                  <PermissionGuard permission="admin.roles.manage">
+                    <AdminRoles />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="logs"
+                element={
+                  <PermissionGuard permission="admin.activity.view">
+                    <AdminActivityLog />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="enrichment"
+                element={
+                  <PermissionGuard permission="admin.enrichment.view">
+                    <AdminEnrichmentLogs />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="smtp"
+                element={
+                  <PermissionGuard permission="admin.mail.manage">
+                    <AdminSmtp />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="presta"
+                element={
+                  <PermissionGuard permission="admin.presta.manage">
+                    <AdminPresta />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="strony-wyszukiwarka"
+                element={
+                  <PermissionGuard permission="admin.search_sites.manage">
+                    <AdminSearchSites />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="strojenie-ai"
+                element={
+                  <PermissionGuard permission="admin.ai_tuning.manage">
+                    <AdminAiTuning />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="zargon"
+                element={
+                  <PermissionGuard permission="admin.catalog_slang.manage">
+                    <AdminCatalogSlang />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="szablony-opisow"
+                element={
+                  <PermissionGuard permission="admin.description_templates.manage">
+                    <AdminDescriptionTemplates />
+                  </PermissionGuard>
+                }
+              />
+            </Route>
+            <Route path="help" element={<Help />} />
+            <Route path="account" element={<Account />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
-          <Route path="help" element={<Help />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
+        </Routes>
+      </AppearanceProvider>
     </AuthProvider>
   )
 }

@@ -67,7 +67,8 @@ final class LogApiActivity
             $path = substr($path, 4);
         }
 
-        if ($path === 'logout' || str_starts_with($path, 'admin/activity-logs')) {
+        // Zmiana wyglądu (me/preferences) to ustawienie osobiste, nie akcja biznesowa — nie zaśmieca dziennika.
+        if ($path === 'logout' || $path === 'me/preferences' || str_starts_with($path, 'admin/activity-logs')) {
             return false;
         }
 

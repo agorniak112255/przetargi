@@ -1,10 +1,14 @@
 @import "tailwindcss";
+/* Szablony wyglądu (<html data-template data-scheme>): wspólny tryb ciemny, potem szablony. */
+@import "./themes/dark-scheme.css";
+@import "./themes/nocna-zmiana.css";
 
+/* Bez tokenów --t-* (szablon „klasyczny”) zostają dotychczasowe wartości. */
 body {
   margin: 0;
-  font-family: "Segoe UI", system-ui, sans-serif;
-  background: #edf1f5;
-  color: #1e293b;
+  font-family: var(--t-font, "Segoe UI", system-ui, sans-serif);
+  background: var(--t-bg, #edf1f5);
+  color: var(--t-text, #1e293b);
 }
 
 #root {

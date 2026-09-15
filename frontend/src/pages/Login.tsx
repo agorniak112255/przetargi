@@ -25,8 +25,8 @@ export function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-900 p-4">
-      <form onSubmit={onSubmit} className="w-full max-w-sm rounded-xl bg-white p-6 shadow-lg">
+    <div className="app-login flex min-h-screen items-center justify-center bg-slate-900 p-4">
+      <form onSubmit={onSubmit} className="app-login-card w-full max-w-sm rounded-xl bg-white p-6 shadow-lg">
         <h1 className="mb-1 text-xl font-bold text-slate-900">Przetargi Supon</h1>
         <p className="mb-4 text-sm text-slate-500">Logowanie — dział handlowy</p>
         {error && <p className="mb-3 rounded bg-red-50 p-2 text-sm text-red-700">{error}</p>}

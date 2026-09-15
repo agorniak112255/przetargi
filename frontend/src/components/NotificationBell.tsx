@@ -66,7 +66,7 @@ export function NotificationBell() {
           setOpen((v) => !v)
           void load()
         }}
-        className="relative w-full rounded bg-slate-700 px-3 py-2 text-left text-xs hover:bg-slate-600"
+        className="app-sidebar-btn relative w-full rounded bg-slate-700 px-3 py-2 text-left text-xs hover:bg-slate-600"
       >
         Powiadomienia
         {unread > 0 && (
@@ -76,7 +76,7 @@ export function NotificationBell() {
         )}
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 z-40 mb-2 w-72 rounded-xl border border-slate-600 bg-slate-900 p-2 shadow-xl">
+        <div className="app-popover absolute bottom-full left-0 z-40 mb-2 w-72 rounded-xl border border-slate-600 bg-slate-900 p-2 shadow-xl">
           <div className="mb-2 flex items-center justify-between px-1">
             <span className="text-[11px] font-semibold text-slate-200">Ostatnie</span>
             {unread > 0 && (
@@ -91,7 +91,7 @@ export function NotificationBell() {
               const tenderId = n.data.tender_id
               const body = (
                 <div
-                  className={`rounded-lg px-2 py-2 text-[11px] ${
+                  className={`app-popover-item rounded-lg px-2 py-2 text-[11px] ${
                     n.read_at ? 'bg-slate-800/60 text-slate-400' : 'bg-slate-800 text-slate-100'
                   }`}
                 >
