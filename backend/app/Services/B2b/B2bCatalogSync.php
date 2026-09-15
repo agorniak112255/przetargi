@@ -50,6 +50,10 @@ use Throwable;
  *   Karta, która wciąż ma nieprzetłumaczony tekst źródła (TranslateB2bProductTextJob::pending), dostaje zlecenie
  *   przy każdym przebiegu — ponowne pobranie nadrabia tłumaczenia odrzucone, nieudane albo nadpisane.
  *
+ * Grupa pozycji scalonych przez łącznik (B2bRemoteProduct::members, np. rozmiary o tej samej cenie — decyzja
+ * użytkownika 15.09.2026): jedna karta, powiązanie dla każdej pozycji; kartę użytą w przebiegu przez inną grupę
+ * pomijamy. Dostępność ze źródła tylko w slocie konta (product_source_prices.availability), dosłownie.
+ *
  * Łącznik z wersjami (B2bVariantConnector): karta ma cenę 0 („brak ceny”), ceny konta i ich historia są w
  * product_variants / product_variant_price_history; jedna transakcja na produkt; wersje zniknięte z pełnej
  * listy dostawcy dostają removed_at; formaty/podłoża trafiają do products.variant_summary (wyszukiwanie).
@@ -150,6 +154,17 @@ final class B2bCatalogSync
         // a nie processed, które dawało stałe 100%. Na końcu przebiegu setTotal($progressTotal()).
         $liveTotal = static fn (): ?int => $variantConnector !== null && $limit !== null ? null : $progressTotal();
         $runId = $progress?->run()->id;
+        // karty użyte w tym przebiegu (id → true, kod karty małymi literami → id; null = nowa karta w dry-run) —
+        // grupa rozmiarów (members) nie trafia na kartę innej pozycji z tego samego przebiegu
+        $claimed = ['products' => [], 'skus' => []];
+
+        // długie pobieranie listy przed pierwszym produktem — komunikaty są sygnałem życia przebiegu
+        if ($connector instanceof B2bListProgressAware) {
+            $connector->onListProgress(static function (string $message) use ($progress): void {
+                $progress?->log('info', $message);
+                $progress?->flush();
+            });
+        }
 
         foreach ($connector->products() as $remote) {
             if ($limit !== null && $stats['seen'] >= $limit) {
@@ -166,7 +181,7 @@ final class B2bCatalogSync
             try {
                 $outcome = $variantConnector !== null
                     ? $this->syncVariantProduct($account, $variantConnector, $remote, $dryRun, $withImages, $runId, $priceListId)
-                    : $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId, $priceListId);
+                    : $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId, $priceListId, $claimed);
             } catch (B2bFatalException $e) {
                 // utrata sesji / blokada — kolejne produkty zapisałyby złe ceny; przebieg kończy się jako „failed”
                 throw $e;
@@ -353,6 +368,14 @@ final class B2bCatalogSync
     }
 
     /**
+     * Pozycja pojedyncza (members = []) — karta po powiązaniu remoteId, inaczej po kodzie; jedno powiązanie.
+     * Grupa pozycji scalonych przez łącznik (members, np. rozmiary o tej samej cenie — decyzja użytkownika 15.09.2026):
+     * karta wg resolveGroupCard, powiązanie dla KAŻDEJ pozycji grupy (kod i nazwa pozycji dosłownie); karta, która
+     * straciła wszystkie powiązania konta, dostaje ostrzeżenie — nic nie jest kasowane.
+     * Dostępność ze źródła (niepusta wartość) tylko w slocie konta; variant_summary łącznika tylko na kartę bez
+     * aktywnych wersji. Błąd pobrania opisu nie wstrzymuje ceny (ostrzeżenie w dzienniku, jak w ścieżce z wersjami).
+     *
+     * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed  karty użyte w tym przebiegu
      * @return array<string, mixed>
      */
     private function syncProduct(
@@ -363,18 +386,32 @@ final class B2bCatalogSync
         bool $withImages,
         ?int $runId,
         ?int $priceListId,
+        array &$claimed,
     ): array {
         if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
             return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
         }
 
-        $link = B2bProductLink::query()
-            ->where('b2b_account_id', $account->id)
-            ->where('remote_id', $remote->remoteId)
-            ->with('product')
-            ->first();
-        $linked = $link?->product;
-        $existing = $linked ?? Product::query()->where('sku', $remote->sku)->first();
+        $members = $remote->members !== [] ? $this->memberRows($remote) : [];
+        $memberLinks = null;
+        if ($members === []) {
+            $link = B2bProductLink::query()
+                ->where('b2b_account_id', $account->id)
+                ->where('remote_id', $remote->remoteId)
+                ->with('product')
+                ->first();
+            $linked = $link?->product;
+            $existing = $linked ?? Product::query()->where('sku', $remote->sku)->first();
+        } else {
+            $group = $this->resolveGroupCard($account, $remote, $members, $claimed);
+            if ($group['reason'] !== null) {
+                return ['status' => 'skipped', 'reason' => $group['reason']];
+            }
+            $link = $group['link'];
+            $linked = $group['linked'];
+            $existing = $group['existing'];
+            $memberLinks = $group['member_links'];
+        }
         $manufacturer = mb_substr(trim($connector->manufacturer($remote)), 0, 100);
 
         if ($existing !== null && $linked === null && $this->foreignManufacturer($existing, $manufacturer)) {
@@ -396,6 +433,11 @@ final class B2bCatalogSync
         if ($existing !== null) {
             unset($payload['name']);
         }
+        // lista rozmiarów/kodów z łącznika ('' = wyczyść); karta z aktywnymi wersjami ma podsumowanie wersji — bez zmian
+        if ($remote->variantSummary !== null && ($existing === null || ! $this->hasActiveVariants($existing))) {
+            $summary = trim($remote->variantSummary);
+            $payload['variant_summary'] = $summary === '' ? null : mb_substr($summary, 0, self::VARIANT_SUMMARY_LIMIT);
+        }
         $prices = [
             // cena konta (po rabacie) = zakup; cena bazowa dostawcy = katalogowa
             'catalog_price_net' => $price->base ?? $price->net,
@@ -404,7 +446,9 @@ final class B2bCatalogSync
             'currency' => $price->currency,
         ];
         $slotKey = ProductSourcePrice::b2bKey((int) $account->id);
-        [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote);
+        // błąd pobrania opisu nie wstrzymuje ceny: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
+        $warnings = [];
+        [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
 
         $priceChange = null;
         $updateSummary = null;
@@ -421,15 +465,32 @@ final class B2bCatalogSync
             $compared = [...$payload, ...$prices];
             $priceChange = $this->priceLists->detectPriceChange($previous, $compared, $remote->sku);
             $updateSummary = $this->priceLists->summarizeUpdate($previous, $compared, $remote->sku, $priceChange !== null);
+            // dostępność tylko w slocie (poza $prices — te idą na nową kartę i do detectPriceChange); null = źródło
+            // jej nie podaje, zapisana wartość zostaje
+            $availabilityChanged = $remote->availability !== null && $slot?->availability !== $remote->availability;
             $slotChanged = $slot === null
                 || $priceChange !== null
-                || strtoupper((string) $slot->currency) !== strtoupper($price->currency);
+                || strtoupper((string) $slot->currency) !== strtoupper($price->currency)
+                || $availabilityChanged;
             $existing->fill($payload);
             $dirty = $existing->isDirty();
+            // summarizeUpdate nie zna tych pól — jak „wersje” w ścieżce z wersjami
+            $extraFields = [
+                ...($existing->isDirty('variant_summary') ? ['rozmiary'] : []),
+                ...($availabilityChanged ? ['dostępność'] : []),
+            ];
+            if ($extraFields !== []) {
+                $updateSummary['fields'] = [
+                    ...array_values(array_diff($updateSummary['fields'], ['bez zmian wartości'])),
+                    ...$extraFields,
+                ];
+            }
         }
         $status = $existing === null ? 'created' : (($dirty || $slotChanged) ? 'updated' : 'unchanged');
 
         if ($dryRun) {
+            $this->claim($claimed, $existing !== null ? (int) $existing->id : null, $existing !== null ? (string) $existing->sku : $remote->sku);
+
             return ['status' => $status, 'description' => isset($payload['description'])];
         }
 
@@ -443,10 +504,14 @@ final class B2bCatalogSync
             $product = Product::query()->create(['sku' => $remote->sku, ...$payload, ...$prices]);
         }
 
+        $this->claim($claimed, (int) $product->id, (string) $product->sku);
+
         // zapis slotu także bez zmiany ceny — checked_at wyznacza najświeższe konto przy kilku kontach
         $slot = $this->effectivePrices->saveSlot($product, $slotKey, [
             ...$prices,
             'b2b_account_id' => $account->id,
+            // null = źródło nie podaje dostępności — zapisana wartość zostaje
+            ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
         ])['slot'];
 
         if ($existing === null || $priceChange !== null) {
@@ -471,10 +536,27 @@ final class B2bCatalogSync
         if ($sourceTextTaken) {
             $linkValues['source_description_hash'] = null;
         }
-        $savedLink = B2bProductLink::query()->updateOrCreate(
-            ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
-            $linkValues,
-        );
+        if ($members === []) {
+            $savedLink = B2bProductLink::query()->updateOrCreate(
+                ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
+                $linkValues,
+            );
+        } else {
+            // powiązanie dla każdej pozycji grupy — kod i nazwa pozycji dosłownie; memberRows zaczyna od remoteId
+            $savedLink = null;
+            foreach ($members as $member) {
+                $saved = B2bProductLink::query()->updateOrCreate(
+                    ['b2b_account_id' => $account->id, 'remote_id' => $member['remote_id']],
+                    [
+                        ...$linkValues,
+                        'remote_sku' => mb_substr($member['sku'], 0, 255),
+                        'remote_name' => mb_substr($member['name'], 0, 1000),
+                    ],
+                );
+                $savedLink ??= $saved;
+            }
+            $warnings = [...$warnings, ...$this->orphanedCardWarnings($account, $memberLinks, (int) $product->id)];
+        }
 
         // po zapisie powiązania — job czyta z niego hashe i nazwę ze źródła
         $created = $existing === null;
@@ -506,7 +588,167 @@ final class B2bCatalogSync
             'image' => $image,
             'image_error' => $imageError,
             'translation_queued' => $translationQueued,
+            'warnings' => $warnings,
         ];
+    }
+
+    /**
+     * Pozycje grupy bez pustych i powtórzonych ID; pozycja remoteId zawsze pierwsza (gdy łącznik jej nie podał —
+     * z kodu i nazwy produktu). Kod i nazwa pozycji dosłownie.
+     *
+     * @return list<array{remote_id: string, sku: string, name: string}>
+     */
+    private function memberRows(B2bRemoteProduct $remote): array
+    {
+        $rows = ['#'.$remote->remoteId => ['remote_id' => $remote->remoteId, 'sku' => $remote->sku, 'name' => $remote->name]];
+        foreach ($remote->members as $member) {
+            $id = (string) ($member['remote_id'] ?? '');
+            if (trim($id) === '') {
+                continue;
+            }
+            $row = ['remote_id' => $id, 'sku' => (string) ($member['sku'] ?? ''), 'name' => (string) ($member['name'] ?? '')];
+            if ($id === $remote->remoteId) {
+                $rows['#'.$id] = [
+                    'remote_id' => $id,
+                    'sku' => $row['sku'] !== '' ? $row['sku'] : $remote->sku,
+                    'name' => $row['name'] !== '' ? $row['name'] : $remote->name,
+                ];
+
+                continue;
+            }
+            $rows['#'.$id] ??= $row;
+        }
+
+        return array_values($rows);
+    }
+
+    /**
+     * Karta grupy pozycji: (a) powiązanie remoteId → jego karta; (b) karta o kodzie remote->sku; (c) karta, na którą
+     * wskazuje najwięcej powiązań pozostałych pozycji grupy (remis → najniższe id); (d) brak → nowa karta.
+     * Karta użyta w tym przebiegu przez inną pozycję ($claimed) jest pomijana na każdym kroku. Gdy kod jest już SKU
+     * takiej karty, nowa karta złamałaby UNIQUE products.sku — pozycja pominięta z powodem.
+     * „linked” = karta, na którą wskazuje powiązanie pozycji grupy (bez reguły producenta); „link” = to powiązanie
+     * (hashe opisu) albo null przy dopasowaniu po samym kodzie. member_links — powiązania pozycji sprzed zapisu.
+     *
+     * @param  list<array{remote_id: string, sku: string, name: string}>  $members
+     * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed
+     * @return array{reason: string|null, link: B2bProductLink|null, linked: Product|null, existing: Product|null, member_links: Collection<int, B2bProductLink>}
+     */
+    private function resolveGroupCard(B2bAccount $account, B2bRemoteProduct $remote, array $members, array $claimed): array
+    {
+        /** @var Collection<int, B2bProductLink> $memberLinks */
+        $memberLinks = B2bProductLink::query()
+            ->where('b2b_account_id', $account->id)
+            ->whereIn('remote_id', array_column($members, 'remote_id'))
+            ->with('product')
+            ->orderBy('id')
+            ->get()
+            ->values();
+        $isClaimed = static fn (int $productId): bool => isset($claimed['products'][$productId]);
+        $found = static fn (?B2bProductLink $link, ?Product $card, ?string $reason = null): array => [
+            'reason' => $reason,
+            'link' => $link,
+            'linked' => $link !== null ? $card : null,
+            'existing' => $card,
+            'member_links' => $memberLinks,
+        ];
+        $conflict = static fn (?int $productId): string => $productId !== null
+            ? 'kod '.$remote->sku.' jest już SKU karty #'.$productId.' użytej w tym przebiegu przez inną grupę rozmiarów'
+            : 'kod '.$remote->sku.' jest już SKU nowej karty z tego przebiegu (inna grupa rozmiarów)';
+
+        // (a)
+        $own = $memberLinks->first(static fn (B2bProductLink $l): bool => (string) $l->remote_id === $remote->remoteId);
+        if ($own?->product !== null && ! $isClaimed((int) $own->product_id)) {
+            return $found($own, $own->product);
+        }
+
+        // (b)
+        $skuKey = mb_strtolower($remote->sku);
+        if (array_key_exists($skuKey, $claimed['skus'])) {
+            return $found(null, null, $conflict($claimed['skus'][$skuKey]));
+        }
+        $bySku = Product::query()->where('sku', $remote->sku)->first();
+        if ($bySku !== null) {
+            if ($isClaimed((int) $bySku->id)) {
+                return $found(null, null, $conflict((int) $bySku->id));
+            }
+
+            return $found(
+                $memberLinks->first(static fn (B2bProductLink $l): bool => (int) $l->product_id === (int) $bySku->id),
+                $bySku,
+            );
+        }
+
+        // (c)
+        $counts = [];
+        foreach ($memberLinks as $memberLink) {
+            if ($memberLink->product === null || $isClaimed((int) $memberLink->product_id)) {
+                continue;
+            }
+            $counts[(int) $memberLink->product_id] = ($counts[(int) $memberLink->product_id] ?? 0) + 1;
+        }
+        if ($counts !== []) {
+            ksort($counts);
+            $best = (int) array_search(max($counts), $counts, true);
+            $link = $memberLinks->first(static fn (B2bProductLink $l): bool => (int) $l->product_id === $best);
+
+            return $found($link, $link?->product);
+        }
+
+        // (d)
+        return $found(null, null);
+    }
+
+    /**
+     * Karty, na które wskazywały powiązania pozycji grupy przed zapisem, a które po przepięciu nie mają już żadnego
+     * powiązania tego konta. Niczego nie kasujemy — slot ceny konta zostaje do decyzji użytkownika.
+     *
+     * @param  Collection<int, B2bProductLink>|null  $memberLinks
+     * @return list<string>
+     */
+    private function orphanedCardWarnings(B2bAccount $account, ?Collection $memberLinks, int $productId): array
+    {
+        if ($memberLinks === null) {
+            return [];
+        }
+        $warnings = [];
+        $seen = [];
+        foreach ($memberLinks as $memberLink) {
+            $cardId = (int) $memberLink->product_id;
+            if ($cardId === $productId || isset($seen[$cardId])) {
+                continue;
+            }
+            $seen[$cardId] = true;
+            $left = B2bProductLink::query()
+                ->where('b2b_account_id', $account->id)
+                ->where('product_id', $cardId)
+                ->exists();
+            if (! $left) {
+                $warnings[] = sprintf(
+                    'karta #%d (%s) nie ma już kodów w B2B tego konta — jej cena z konta zostaje do decyzji',
+                    $cardId,
+                    (string) ($memberLink->product?->sku ?? '?'),
+                );
+            }
+        }
+
+        return $warnings;
+    }
+
+    /**
+     * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed
+     */
+    private function claim(array &$claimed, ?int $productId, string $sku): void
+    {
+        if ($productId !== null) {
+            $claimed['products'][$productId] = true;
+        }
+        $claimed['skus'][mb_strtolower($sku)] ??= $productId;
+    }
+
+    private function hasActiveVariants(Product $product): bool
+    {
+        return ProductVariant::query()->where('product_id', $product->id)->whereNull('removed_at')->exists();
     }
 
     /**
@@ -1096,8 +1338,8 @@ final class B2bCatalogSync
      * tłumaczenia). Tłumaczenie na karcie (source_description_hash = sha1 niezmienionego źródła, description_hash =
      * sha1 opisu karty, czyli nietknięte ręcznie) zostaje: opis nie jest nadpisywany, hash bez zmian, false
      * (15.09.2026). Opis z łącznika pobierany jest raz.
-     * Z $warnings (łącznik wersji) błąd pobrania opisu nie przerywa produktu: opis i jego hash zostają bez zmian.
-     * Bez $warnings (dotychczasowe łączniki) wyjątek leci dalej jak wcześniej.
+     * Z $warnings błąd pobrania opisu nie przerywa produktu: opis i jego hash zostają bez zmian. Od 15.09.2026 obie
+     * ścieżki (z wersjami i bez) przekazują $warnings — cena konta nie czeka na opis; bez $warnings wyjątek leci dalej.
      *
      * @param  array<string, mixed>  $payload
      * @param  list<string>|null  $warnings

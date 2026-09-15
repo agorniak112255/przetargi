@@ -24,6 +24,7 @@ class B2bAccount extends Model
 
     protected $fillable = [
         'username',
+        'contractor_code',
         'password',
         'sites',
         'note',

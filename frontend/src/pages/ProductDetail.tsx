@@ -655,6 +655,7 @@ export function ProductDetail() {
                   <th className="p-2 text-right">Zakup</th>
                   <th className="p-2 text-right">Rabat</th>
                   <th className="p-2">Waluta</th>
+                  <th className="p-2">Dostępność</th>
                   <th className="p-2">Sprawdzono</th>
                   <th className="p-2">Status</th>
                 </tr>
@@ -674,6 +675,7 @@ export function ProductDetail() {
                         : '—'}
                     </td>
                     <td className="p-2">{s.currency ?? '—'}</td>
+                    <td className="p-2">{s.availability ?? '—'}</td>
                     <td className="whitespace-nowrap p-2 tabular-nums">
                       {s.checked_at ? formatDateTime(s.checked_at) : '—'}
                     </td>
@@ -690,6 +692,11 @@ export function ProductDetail() {
             </table>
           </div>
         </div>
+      )}
+      {variants === null && p.variant_summary && (
+        <p className="mt-2 text-xs text-slate-600">
+          Rozmiary / kody: <span className="text-slate-800">{p.variant_summary}</span>
+        </p>
       )}
       <p className="mb-4 mt-2 text-xs text-slate-600">
         {p.last_price_change ? (

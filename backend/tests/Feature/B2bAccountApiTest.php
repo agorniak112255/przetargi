@@ -221,6 +221,71 @@ final class B2bAccountApiTest extends TestCase
         $this->assertSame('haslo-bez-zmian', $account->fresh()->password);
     }
 
+    public function test_contractor_code_is_trimmed_saved_and_returned(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $id = $this->postJson('/api/b2b-accounts', [
+            'username' => 'jan',
+            'contractor_code' => '  K-12345  ',
+            'password' => 'haslo-testowe',
+            'sites' => ['izam.system-b2b.pl'],
+        ])
+            ->assertCreated()
+            ->assertJsonPath('contractor_code', 'K-12345')
+            ->json('id');
+
+        $this->assertSame('K-12345', DB::table('b2b_accounts')->where('id', $id)->value('contractor_code'));
+        $this->getJson('/api/b2b-accounts')->assertOk()->assertJsonPath('0.contractor_code', 'K-12345');
+
+        $this->postJson('/api/b2b-accounts', [
+            'username' => 'bez-kodu',
+            'password' => 'haslo-testowe',
+            'sites' => ['b2b.example.test'],
+        ])
+            ->assertCreated()
+            ->assertJsonPath('contractor_code', null);
+    }
+
+    public function test_update_with_empty_contractor_code_clears_it(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $account = B2bAccount::query()->create([
+            'username' => 'jan',
+            'contractor_code' => 'K-12345',
+            'password' => 'sekret',
+            'sites' => ['izam.system-b2b.pl'],
+        ]);
+
+        $this->patchJson("/api/b2b-accounts/{$account->id}", [
+            'username' => 'jan',
+            'contractor_code' => '   ',
+            'password' => '',
+            'sites' => ['izam.system-b2b.pl'],
+        ])
+            ->assertOk()
+            ->assertJsonPath('contractor_code', null);
+
+        $this->assertNull($account->fresh()->contractor_code);
+    }
+
+    public function test_contractor_code_longer_than_100_characters_is_rejected(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->postJson('/api/b2b-accounts', [
+            'username' => 'jan',
+            'contractor_code' => str_repeat('K', 101),
+            'password' => 'haslo-testowe',
+            'sites' => ['izam.system-b2b.pl'],
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['contractor_code']);
+
+        $this->assertSame(0, B2bAccount::query()->count());
+    }
+
     public function test_create_requires_password_and_site(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

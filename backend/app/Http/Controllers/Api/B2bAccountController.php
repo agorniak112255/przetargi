@@ -228,6 +228,8 @@ class B2bAccountController extends Controller
     {
         $data = $request->validate([
             'username' => ['required', 'string', 'max:255'],
+            // Trzecie pole logowania — tylko dla witryn, które go wymagają (np. UVEX).
+            'contractor_code' => ['nullable', 'string', 'max:100'],
             'password' => [$creating ? 'required' : 'nullable', 'string', 'max:1000'],
             'sites' => ['required', 'array', 'min:1', 'max:20'],
             // Puste wiersze (ConvertEmptyStringsToNull → null) pomijamy, nie odrzucamy formularza.
@@ -237,6 +239,10 @@ class B2bAccountController extends Controller
             'sync_frequency' => ['sometimes', 'string', Rule::in(B2bAccount::FREQUENCIES)],
             'sync_images' => ['sometimes', 'boolean'],
         ]);
+
+        if (array_key_exists('contractor_code', $data)) {
+            $data['contractor_code'] = trim((string) $data['contractor_code']) ?: null;
+        }
 
         $data['sites'] = array_values(array_unique(array_filter(
             array_map(static fn (?string $site): string => trim((string) $site), $data['sites']),
@@ -262,6 +268,7 @@ class B2bAccountController extends Controller
         return [
             'id' => $account->id,
             'username' => $account->username,
+            'contractor_code' => $account->contractor_code,
             'has_password' => is_string($raw) && $raw !== '',
             'sites' => $account->sites ?? [],
             'note' => $account->note,

@@ -27,6 +27,8 @@ class ProductSourcePrice extends Model
         'discount_percent',
         'currency',
         'pack_qty',
+        // dostępność u dostawcy dosłownie ze źródła (tylko sloty B2B; null = źródło jej nie podaje)
+        'availability',
         'checked_at',
         'migrated',
     ];

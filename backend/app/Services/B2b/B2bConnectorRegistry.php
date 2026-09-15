@@ -19,6 +19,7 @@ final class B2bConnectorRegistry
         SignProjectB2bConnector::class,
         JspB2bConnector::class,
         BolleB2bConnector::class,
+        UvexB2bConnector::class,
     ];
 
     /**

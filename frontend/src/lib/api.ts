@@ -210,6 +210,8 @@ export type Product = {
   category: string | null
   assortment_group_id?: number | null
   description?: string | null
+  /** Rozmiary/kody albo formaty wersji karty (ze źródła, do wyszukiwania); null = brak. */
+  variant_summary?: string | null
   norms: string | null
   catalog_price_net: string
   purchase_price: string
@@ -312,6 +314,8 @@ export type ProductSourcePrice = {
   purchase_price: string | null
   discount_percent: string | null
   currency: string | null
+  /** Dostępność u dostawcy dosłownie ze źródła; null = źródło jej nie podaje. */
+  availability: string | null
   checked_at: string | null
   migrated: boolean
   is_effective: boolean

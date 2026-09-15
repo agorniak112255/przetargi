@@ -473,6 +473,7 @@ class ProductController extends Controller
                 'purchase_price' => $slot->purchase_price,
                 'discount_percent' => $slot->discount_percent,
                 'currency' => $slot->currency,
+                'availability' => $slot->availability,
                 'checked_at' => $slot->checked_at?->toISOString(),
                 'migrated' => (bool) $slot->migrated,
                 'is_effective' => $effectiveKey !== null && $slot->source_key === $effectiveKey,

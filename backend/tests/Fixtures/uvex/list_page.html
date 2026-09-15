@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>UVEX - Zamówienia B2B</title>
+    <meta name="csrf-token" content="TOKEN-SESJI-SYNTETYCZNY">
+</head>
+<body class="hold-transition skin-blue sidebar-mini">
+<!-- Układ strony wyszukiwania „%” z izam.system-b2b.pl (15.09.2026), skrócony; wiersze wstawia test ({{ROWS}}). -->
+<header class="main-header">
+    <ul class="dropdown-menu">
+        <li><a href="https://izam.system-b2b.pl/public/account">Moje dane</a></li>
+        <li><a href="https://izam.system-b2b.pl/public/logout">Wyloguj</a></li>
+    </ul>
+    <a href="https://izam.system-b2b.pl/public/basket">Przejdź do koszyka</a>
+</header>
+<aside class="main-sidebar">
+    <a href="https://izam.system-b2b.pl/public/group/8">OBUWIE</a>
+    <a href="https://izam.system-b2b.pl/public/group/17">RĘKAWICE</a>
+</aside>
+<div class="content-wrapper">
+<section class="content">
+<div class="box box-default" style="border-top: 0px;">
+<div class="box-header with-border"> <h3 class="box-title"> Dostępne produkty </h3> </div>
+<div class="box-body">
+<div class="table-responsive double-scroll">
+<table class="table">
+<thead> <tr> <th scope="col"></th> <th scope="col" style="min-width: 150px;"></th> <th scope="col" style="max-width: 150px;">Nazwa produktu</th> <th scope="col" class="text-right" style="min-width: 150px;">Twoja cena netto</th> <th scope="col" class="text-center">Dostępność</th> <th scope="col" style="min-width: 250px;max-width:250px;"></th> </tr> </thead>
+<tbody>
+{{ROWS}}
+</tbody>
+</table>
+</div>
+<div class="row">
+    <div class="col-xs-4 text-left"> <span class="pagination-info" style=" display: block; margin-top: 15px; ">{{INFO}}</span> </div>
+    <div class="col-xs-8 text-right"> <ul class="pagination"> <li class="page-item active"><span class="page-link">1</span></li> <li class="page-item"><a class="page-link" href="https://izam.system-b2b.pl/public/product?query=%25&amp;page=2">2</a></li> </ul> </div>
+</div>
+</div>
+</div>
+</section>
+</div>
+<div class="modal fade" id="avlbConfirmModal" tabindex="-1" role="dialog"><h4 class="modal-title">Kontrola dostępności</h4></div>
+<script>
+var urlChangeProductViewCart = 'https://izam.system-b2b.pl/public/zmianaWariantuProduktu';
+var szablon = '<tr><td class="codeViewProductDane_1">ZE-SKRYPTU</td></tr>';
+</script>
+</body>
+</html>

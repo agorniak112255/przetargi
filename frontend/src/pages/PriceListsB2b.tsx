@@ -9,6 +9,7 @@ type SyncFrequency = 'off' | 'daily' | 'weekly'
 type B2bAccount = {
   id: number
   username: string
+  contractor_code: string | null
   has_password: boolean
   sites: string[]
   note: string | null
@@ -32,6 +33,7 @@ type Connector = { key: string; label: string; host: string }
 type FormState = {
   id: number | null
   username: string
+  contractor_code: string
   password: string
   sites: string
   note: string
@@ -43,6 +45,7 @@ type FormState = {
 const EMPTY_FORM: FormState = {
   id: null,
   username: '',
+  contractor_code: '',
   password: '',
   sites: '',
   note: '',
@@ -140,6 +143,7 @@ export function PriceListsB2b() {
     setForm({
       id: row.id,
       username: row.username,
+      contractor_code: row.contractor_code ?? '',
       password: '',
       sites: row.sites.join('\n'),
       note: row.note ?? '',
@@ -158,6 +162,7 @@ export function PriceListsB2b() {
     try {
       const body = JSON.stringify({
         username: form.username,
+        contractor_code: form.contractor_code.trim() || null,
         password: form.password,
         sites: form.sites.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
         note: form.note.trim() || null,
@@ -284,6 +289,15 @@ export function PriceListsB2b() {
           <h2 className="mb-3 font-semibold">{form.id === null ? 'Nowe konto B2B' : 'Edycja konta B2B'}</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block text-xs">
+              Kod kontrahenta <span className="text-slate-400">(tylko gdy witryna go wymaga, np. UVEX)</span>
+              <input
+                autoComplete="off"
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                value={form.contractor_code}
+                onChange={(e) => setForm({ ...form, contractor_code: e.target.value })}
+              />
+            </label>
+            <label className="block text-xs">
               Nazwa użytkownika *
               <input
                 required
@@ -392,6 +406,22 @@ export function PriceListsB2b() {
           <div key={row.id} className="rounded-xl bg-white shadow-sm">
             <div className="grid gap-4 p-4 sm:grid-cols-2">
               <div className="space-y-3">
+                {row.contractor_code && (
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-slate-600">Kod kontrahenta</p>
+                    <div className={fieldBox}>
+                      <span className="min-w-0 flex-1 truncate">{row.contractor_code}</span>
+                      <button
+                        type="button"
+                        className={iconBtn}
+                        title="Kopiuj kod kontrahenta"
+                        onClick={() => void copy(row.contractor_code ?? '', 'kod kontrahenta')}
+                      >
+                        Kopiuj
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div>
                   <p className="mb-1 text-xs font-medium text-slate-600">Nazwa użytkownika</p>
                   <div className={fieldBox}>
