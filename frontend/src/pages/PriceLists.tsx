@@ -1706,7 +1706,7 @@ export function PriceLists() {
             </tr>
           </thead>
           <tbody>
-            {visibleHistory.map((r) => {
+            {visibleHistory.map((r, i) => {
               const cached = historyCache[r.id] ?? r
               const kind = expandedHistory?.id === r.id ? expandedHistory.kind : null
               const enrichBatch = enrichBatches[r.id]
@@ -1720,7 +1720,8 @@ export function PriceLists() {
               const editing = editId === r.id
               return (
               <Fragment key={r.id}>
-                <tr className={batchActive ? 'border-b bg-amber-50' : 'border-b'}>
+                {/* Zebra po indeksie, nie :nth-child — rozwinięte wiersze szczegółów nie przesuwają pasków. */}
+                <tr className={batchActive ? 'border-b bg-amber-50' : i % 2 === 1 ? 'border-b bg-slate-100/60' : 'border-b'}>
                   <td className="p-2">{new Date(r.created_at).toLocaleString('pl-PL')}</td>
                   <td className="p-2 min-w-[10rem]">
                     {editing ? (

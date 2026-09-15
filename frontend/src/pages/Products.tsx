@@ -1034,7 +1034,10 @@ export function Products() {
               const status = p.enrichment_status ?? 'none'
               const thumb = p.images?.find((img) => img.is_primary) ?? p.images?.[0]
               return (
-                <tr key={p.id} className={`border-b ${selected[p.id] ? 'bg-blue-50/40' : ''}`}>
+                <tr
+                  key={p.id}
+                  className={`border-b ${selected[p.id] ? 'bg-blue-50/40' : i % 2 === 1 ? 'bg-slate-100/60' : ''}`}
+                >
                   {canSelect && (
                     <td className="p-2 select-none">
                       <input
@@ -1109,8 +1112,11 @@ export function Products() {
                       {p.sku}
                     </Link>
                   </td>
-                  <td className="p-2 max-w-[14rem] truncate" title={p.name}>
-                    {p.name}
+                  <td className="p-2 min-w-[14rem] max-w-[26rem]">
+                    {/* Długa nazwa w dwóch liniach; pełna w podpowiedzi. */}
+                    <span className="line-clamp-2 break-words" title={p.name}>
+                      {p.name}
+                    </span>
                   </td>
                   <td className="p-2">{p.manufacturer}</td>
                   <td className="p-2 whitespace-nowrap">
