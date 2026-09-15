@@ -1,0 +1,6 @@
+{
+    "errorStatusCode": "401",
+    "errorCode": "ERR_USER_NOT_LOGGED_IN",
+    "errorMessage": "Not logged In",
+    "errorDetails": null
+}

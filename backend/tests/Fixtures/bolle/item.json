@@ -1,0 +1,27 @@
+{
+    "internalid": 101,
+    "itemid": "PSSTRYOC13B",
+    "storedisplayname2": "TRYON BSSI",
+    "displayname": "TRYON BSSI",
+    "storedescription": "<p>Copper safety glasses</p>",
+    "storedetaileddescription": "<p>The TRYON BSSI offers&nbsp;a wraparound design.</p><ul><li>EN 166 1FT</li><li>Anti-scratch &amp; anti-fog</li></ul>",
+    "featureddescription": "<p>Copper safety glasses</p>",
+    "onlinecustomerprice_detail": {
+        "onlinecustomerprice": 30.15,
+        "onlinecustomerprice_formatted": "€30.15"
+    },
+    "onlinecustomerprice": 30.15,
+    "pricelevel1": 67,
+    "dontshowprice": false,
+    "ispurchasable": true,
+    "urlcomponent": "TRYON_BSSI_PSSTRYOC13B",
+    "custitem_atlas_item_image": "https://b2b.bolle-safety.com/core/media/media.nl?id=123456&c=5230881&h=0123456789abcdef0123",
+    "matrixchilditems_detail": [],
+    "custitem_bb_fm_product_material": "Nylon",
+    "custitem_bb_specific_technology": "&nbsp;",
+    "custitem_bb_safety_lens_coating": "Platinum&reg;",
+    "custitem_bb_safety_lens_shade": "Copper",
+    "custitem_item_customersegments": "SEGMENT-WEWNETRZNY",
+    "custitem_c25_web_nextdelivery": "2026-10-01",
+    "isinstock": true
+}

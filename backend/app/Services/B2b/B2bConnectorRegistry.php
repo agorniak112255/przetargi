@@ -18,6 +18,7 @@ final class B2bConnectorRegistry
         AnroB2bConnector::class,
         SignProjectB2bConnector::class,
         JspB2bConnector::class,
+        BolleB2bConnector::class,
     ];
 
     /**

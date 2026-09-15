@@ -30,7 +30,8 @@ use Throwable;
  *   (jeden na konto, B2bAccountPriceList) pokazuje wynik ostatniego przebiegu;
  * - opis ze źródła, gdy karta go nie ma albo ma opis zapisany wcześniej przez synchronizację i
  *   niezmieniony od tamtej pory — opisu poprawionego ręcznie nie nadpisujemy;
- * - kategoria, link i zdjęcie tylko gdy puste; produktów znikniętych z B2B nie kasujemy.
+ * - kategoria, link i zdjęcie tylko gdy puste; produktów znikniętych z B2B nie kasujemy;
+ * - łącznik B2bKeepsExistingNames nie zmienia nazwy istniejącej karty (nazwa ze źródła tylko na nowej).
  *
  * Łącznik z wersjami (B2bVariantConnector): karta ma cenę 0 („brak ceny”), ceny konta i ich historia są w
  * product_variants / product_variant_price_history; jedna transakcja na produkt; wersje zniknięte z pełnej
@@ -365,6 +366,11 @@ final class B2bCatalogSync
             'discount_percent' => $price->discountPercent,
             'currency' => $price->currency,
         ];
+        // łącznik ze znacznikiem: nazwa ze źródła tylko na nową kartę — przed detectPriceChange/summarizeUpdate,
+        // żeby zachowana nazwa nie liczyła się jako zmiana
+        if ($existing !== null && $connector instanceof B2bKeepsExistingNames) {
+            unset($payload['name']);
+        }
         $descriptionHash = $this->applyCardDetails($payload, $existing, $link, $connector, $remote);
 
         $priceChange = null;

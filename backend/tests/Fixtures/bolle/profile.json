@@ -1,0 +1,18 @@
+{
+    "isLoggedIn": "T",
+    "isGuest": "F",
+    "isRecognized": "T",
+    "internalid": "999999",
+    "email": "jan@example.com",
+    "firstname": "Jan",
+    "lastname": "Testowy",
+    "companyname": "Firma Testowa",
+    "currency": {
+        "internalid": "2",
+        "code": "EUR",
+        "name": "Euro",
+        "symbol": "€",
+        "currencyname": "Euro"
+    },
+    "priceLevel": "46"
+}
