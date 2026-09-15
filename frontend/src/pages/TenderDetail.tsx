@@ -329,6 +329,8 @@ type MatchReport = {
   no_match: number
   /** pozycje, dla których model nie odpowiedział — czekają albo zostały z poprzednią kartą (≤ 70%) */
   model_unavailable?: number
+  /** wszystkie pozycje, przy których zapytanie do modelu padło (limit tempa, timeout, błąd API) */
+  model_failed?: number
   /** tryb „tylko puste”: pozycje z produktem ≥ progu lub własne — nie wysłane do modelu */
   left_as_is?: number
   /** paczki, których wynik dokończył serwer po zerwaniu żądania — liczby wyżej ich nie obejmują */
@@ -1375,6 +1377,7 @@ export function TenderDetail() {
       skipped_custom?: number
       no_match?: number
       model_unavailable?: number
+      model_failed?: number
       changes?: MatchChange[]
     }
     const merged: MatchApiRes = {
@@ -1388,6 +1391,7 @@ export function TenderDetail() {
       skipped_custom: 0,
       no_match: 0,
       model_unavailable: 0,
+      model_failed: 0,
       changes: [],
     }
     const scoreParts: number[] = []
@@ -1424,6 +1428,7 @@ export function TenderDetail() {
           merged.skipped_custom = (merged.skipped_custom ?? 0) + (res.skipped_custom ?? 0)
           merged.no_match = (merged.no_match ?? 0) + (res.no_match ?? 0)
           merged.model_unavailable = (merged.model_unavailable ?? 0) + (res.model_unavailable ?? 0)
+          merged.model_failed = (merged.model_failed ?? 0) + (res.model_failed ?? 0)
           merged.changes = [...(merged.changes ?? []), ...(res.changes ?? [])]
           if (res.matched > 0) {
             scoreParts.push(res.avg_score)
@@ -1477,6 +1482,7 @@ export function TenderDetail() {
         skipped_custom: merged.skipped_custom ?? 0,
         no_match: merged.no_match ?? 0,
         model_unavailable: merged.model_unavailable ?? 0,
+        model_failed: merged.model_failed ?? 0,
         left_as_is: onlyEmpty ? leftAsIs : 0,
         finished_in_background: finishedInBackground,
         avg_score: merged.avg_score,
@@ -1495,8 +1501,18 @@ export function TenderDetail() {
           : `Dopasowanie zakończone: brak zmian w ofercie (${report.processed} przerobionych, ${report.unchanged} bez zmiany, ${report.skipped_custom} własnych, ${report.no_match} bez produktu).`,
       )
       setTab('pozycje')
-      if (errors.length > 0) {
-        setErr(`Część paczek nie przeszła (${errors.length}): ${errors[0]}`)
+      // Awaria dostawcy modelu wygląda na liście jak spadek jakości: karty zostają, ale procenty lecą
+      // do 70%. Bez tego komunikatu trzeba było zaglądać do logów, żeby to odróżnić (15.09, HTTP 429).
+      const modelFailed = report.model_failed ?? 0
+      const modelWarning =
+        modelFailed > 0
+          ? `Model nie odpowiedział przy ${modelFailed} z ${report.processed} pozycji (limit zapytań albo błąd API). ` +
+            'Te pozycje nie mają świeżej oceny — zostały z poprzednią kartą (najwyżej 70%) albo czekają bez produktu. ' +
+            'Zmniejsz „Ile zapytań AI naraz” w Ustawieniach AI i uruchom dopasowanie ponownie.'
+          : ''
+      const batchWarning = errors.length > 0 ? `Część paczek nie przeszła (${errors.length}): ${errors[0]}` : ''
+      if (modelWarning !== '' || batchWarning !== '') {
+        setErr([modelWarning, batchWarning].filter((part) => part !== '').join(' '))
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd dopasowania')
@@ -1780,11 +1796,15 @@ export function TenderDetail() {
                 Przerobiono {matchReport.processed} · zmieniono {matchReport.changed} · bez zmiany{' '}
                 {matchReport.unchanged} · zdjęto produkt {matchReport.cleared} · własne pominięte{' '}
                 {matchReport.skipped_custom} · bez produktu {matchReport.no_match}
-                {(matchReport.model_unavailable ?? 0) > 0 && (
+                {(matchReport.model_failed ?? matchReport.model_unavailable ?? 0) > 0 && (
                   <>
                     {' '}
-                    · <strong>model nie odpowiedział {matchReport.model_unavailable}</strong> (pozycja czeka
-                    albo została z poprzednią kartą, najwyżej 70% — uruchom dopasowanie ponownie)
+                    ·{' '}
+                    <strong>
+                      model nie odpowiedział {matchReport.model_failed ?? matchReport.model_unavailable}
+                    </strong>{' '}
+                    (pozycja czeka albo została z poprzednią kartą, najwyżej 70% — uruchom dopasowanie
+                    ponownie)
                   </>
                 )}
                 {(matchReport.left_as_is ?? 0) > 0 && (

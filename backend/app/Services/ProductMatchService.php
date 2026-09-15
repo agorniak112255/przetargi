@@ -173,6 +173,7 @@ final class ProductMatchService
      *     cleared: int,
      *     skipped_custom: int,
      *     no_match: int,
+     *     model_failed: int,
      *     changes: list<array{id: int, line_no: int, action: string, from_sku: ?string, to_sku: ?string}>
      * }
      */
@@ -197,6 +198,7 @@ final class ProductMatchService
             'cleared' => 0,
             'skipped_custom' => 0,
             'no_match' => 0,
+            'model_failed' => 0,
             'changes' => [],
         ];
 
@@ -272,6 +274,7 @@ final class ProductMatchService
 
         $changes = [];
         $modelUnavailable = 0;
+        $modelFailed = 0;
         foreach ($items as $item) {
             $beforeId = $item->main_product_id !== null ? (int) $item->main_product_id : null;
             $beforeSku = $item->mainProduct?->sku;
@@ -285,6 +288,12 @@ final class ProductMatchService
                 $this->lastUndescribedSku = null;
                 $this->lastUndescribedCodePickId = null;
                 $pick = $this->resolveBestPick($item->requirement, $products);
+                // Zapytanie do modelu padło (limit tempa, timeout, błąd API). Liczymy każdą taką pozycję,
+                // także tę, która zachowała poprzednią kartę — inaczej awaria dostawcy wygląda w raporcie
+                // jak spadek jakości dopasowania (15.09: wszystkie pozycje po 70% przy HTTP 429).
+                if ($this->modelStateFor($item->requirement) === ProductAiSearchService::MODEL_STATE_UNAVAILABLE) {
+                    $modelFailed++;
+                }
                 $applied = $pick !== null && ! $this->heuristicWouldReplaceModelPick($item, $pick) && $this->applyProduct(
                     $item,
                     $pick['product'],
@@ -384,6 +393,8 @@ final class ProductMatchService
             'no_match' => count(array_filter($changes, static fn (array $r): bool => $r['action'] === 'no_match')),
             // pozycje bez produktu, bo model nie odpowiedział — do ponowienia, nie „brak w katalogu”
             'model_unavailable' => $modelUnavailable,
+            // wszystkie pozycje, przy których model nie odpowiedział — także te z zachowaną kartą
+            'model_failed' => $modelFailed,
             'changes' => $changedRows,
             'processed_item_ids' => $processedIds,
         ];

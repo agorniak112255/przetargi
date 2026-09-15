@@ -63,6 +63,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertNull($item->ai_match_percent);
         $this->assertSame('model_unavailable', $item->ai_match_reasons[0]['code'] ?? null);
         $this->assertSame(1, $result['model_unavailable']);
+        $this->assertSame(1, $result['model_failed']);
     }
 
     public function test_descriptive_line_gets_capped_heuristic_when_model_found_nothing(): void
@@ -82,6 +83,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertGreaterThanOrEqual(app(ProductMatchService::class)->minMatchScore(), (int) $item->ai_match_percent);
         $this->assertSame('heuristic_only', $item->ai_match_reasons[0]['code'] ?? null);
         $this->assertSame(0, $result['model_unavailable']);
+        $this->assertSame(0, $result['model_failed'], 'model odpowiedział „nic nie pasuje” — to nie awaria');
     }
 
     public function test_line_with_sku_code_matches_without_model(): void
@@ -125,6 +127,24 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertStringContainsString('Model nie odpowiedział', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
         $this->assertNotContains('Wynik sprzed poprawek', array_column($item->ai_match_reasons, 'label'));
         $this->assertSame(1, $result['model_unavailable']);
+        $this->assertSame(1, $result['model_failed'], 'pozycja z zachowaną kartą też jest skutkiem awarii modelu');
+    }
+
+    /** Ostrzeżenie o awarii modelu ma się nie pojawiać, gdy model normalnie odpowiedział. */
+    public function test_failed_model_counter_stays_zero_when_model_answers(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $gloveId = (int) $glove->id;
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => [['id' => $gloveId, 'score' => 95, 'reason' => 'nitryl ze ściągaczem']]]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+
+        $result = app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertSame($gloveId, (int) $item->main_product_id);
+        $this->assertSame(0, $result['model_failed']);
     }
 
     public function test_manual_pick_is_not_capped_when_run_does_not_confirm_it(): void
