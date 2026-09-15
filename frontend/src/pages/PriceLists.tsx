@@ -1721,7 +1721,7 @@ export function PriceLists() {
               return (
               <Fragment key={r.id}>
                 {/* Zebra po indeksie, nie :nth-child — rozwinięte wiersze szczegółów nie przesuwają pasków. */}
-                <tr className={batchActive ? 'border-b bg-amber-50' : i % 2 === 1 ? 'border-b bg-slate-100/60' : 'border-b'}>
+                <tr className={`border-b hover:bg-sky-50 ${batchActive ? 'bg-amber-50' : i % 2 === 1 ? 'bg-slate-100/60' : ''}`}>
                   <td className="p-2">{new Date(r.created_at).toLocaleString('pl-PL')}</td>
                   <td className="p-2 min-w-[10rem]">
                     {editing ? (

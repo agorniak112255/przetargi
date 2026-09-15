@@ -114,8 +114,9 @@
   border-color: var(--t-border);
 }
 
+/* Wiersz pod myszką: lekki odcień akcentu — inny niż zebra (slate-100) i powierzchnia. */
 :where(:root[data-template="nocna-zmiana"] .app-main) table:not(:where(.fixed, form) table) tbody tr:hover {
-  background-color: var(--t-surface-2);
+  background-color: color-mix(in oklab, var(--t-accent) 9%, var(--t-surface));
 }
 
 /* ---------- Komórki list przetargów ---------- */

@@ -1036,7 +1036,7 @@ export function Products() {
               return (
                 <tr
                   key={p.id}
-                  className={`border-b ${selected[p.id] ? 'bg-blue-50/40' : i % 2 === 1 ? 'bg-slate-100/60' : ''}`}
+                  className={`border-b hover:bg-sky-50 ${selected[p.id] ? 'bg-blue-50/40' : i % 2 === 1 ? 'bg-slate-100/60' : ''}`}
                 >
                   {canSelect && (
                     <td className="p-2 select-none">
