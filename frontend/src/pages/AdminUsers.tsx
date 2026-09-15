@@ -1,7 +1,44 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, type User } from '../lib/api'
+import { TEMPLATES } from '../lib/appearance'
 
 type RoleOption = { name: string; label?: string }
+
+/** Wartość pola „Wygląd”: "szablon|tryb" (puste = brak). */
+const NO_APPEARANCE = '|'
+/** Wygląd wybrany na start przy dodawaniu użytkownika (administrator może zmienić). */
+const DEFAULT_NEW_USER_APPEARANCE = 'nocna-zmiana|light'
+
+const appearanceOptions: { value: string; label: string }[] = [
+  ...TEMPLATES.flatMap((t) =>
+    t.schemes.length === 1
+      ? [{ value: `${t.id}|`, label: t.label }]
+      : [
+          { value: `${t.id}|light`, label: `${t.label} — Dzień` },
+          { value: `${t.id}|dark`, label: `${t.label} — Noc` },
+          { value: `${t.id}|system`, label: `${t.label} — jak w systemie` },
+        ],
+  ),
+  { value: NO_APPEARANCE, label: 'Nie ustawiaj (użytkownik wybierze sam)' },
+]
+
+function appearanceValue(u: User): string {
+  const template = u.ui_preferences?.template ?? null
+  if (!template) return NO_APPEARANCE
+  const known = TEMPLATES.find((t) => t.id === template)
+  // Szablon z jednym schematem nie ma trybu — zapisany tryb nie zmienia wyglądu.
+  if (known && known.schemes.length === 1) return `${template}|`
+  return `${template}|${u.ui_preferences?.mode ?? ''}`
+}
+
+function appearanceLabel(value: string): string {
+  return appearanceOptions.find((o) => o.value === value)?.label ?? value.replace('|', ' — ')
+}
+
+function appearancePayload(value: string): { ui_template: string | null; ui_mode: string | null } {
+  const [template, mode] = value.split('|')
+  return { ui_template: template || null, ui_mode: template && mode ? mode : null }
+}
 
 export function AdminUsers() {
   const [users, setUsers] = useState<User[]>([])
@@ -13,10 +50,12 @@ export function AdminUsers() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<string>('handlowiec')
+  const [appearance, setAppearance] = useState(DEFAULT_NEW_USER_APPEARANCE)
   const [editId, setEditId] = useState<number | null>(null)
   const [editRole, setEditRole] = useState('handlowiec')
   const [editEmail, setEditEmail] = useState('')
   const [editPassword, setEditPassword] = useState('')
+  const [editAppearance, setEditAppearance] = useState(NO_APPEARANCE)
 
   async function load() {
     const [usersData, rolesData] = await Promise.all([
@@ -47,11 +86,12 @@ export function AdminUsers() {
     try {
       await api('/admin/users', {
         method: 'POST',
-        body: JSON.stringify({ name, email, password, role }),
+        body: JSON.stringify({ name, email, password, role, ...appearancePayload(appearance) }),
       })
       setName('')
       setEmail('')
       setPassword('')
+      setAppearance(DEFAULT_NEW_USER_APPEARANCE)
       setMsg('Użytkownik utworzony.')
       await load()
     } catch (ex) {
@@ -66,9 +106,10 @@ export function AdminUsers() {
     setErr('')
     setMsg('')
     try {
-      const body: Record<string, string> = {
+      const body: Record<string, string | null> = {
         role: editRole,
         email: editEmail.trim(),
+        ...appearancePayload(editAppearance),
       }
       if (editPassword) body.password = editPassword
       await api(`/admin/users/${userId}`, {
@@ -140,6 +181,20 @@ export function AdminUsers() {
             </option>
           ))}
         </select>
+        <label className="sm:col-span-2 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-slate-600">Wygląd</span>
+          <select
+            className="min-w-[16rem] flex-1 rounded border px-2 py-1.5 text-sm"
+            value={appearance}
+            onChange={(e) => setAppearance(e.target.value)}
+          >
+            {appearanceOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           type="submit"
           disabled={busy}
@@ -155,6 +210,7 @@ export function AdminUsers() {
             <th className="p-2">Nazwa</th>
             <th className="p-2">E-mail</th>
             <th className="p-2">Rola</th>
+            <th className="p-2">Wygląd</th>
             <th className="p-2">Akcje</th>
           </tr>
         </thead>
@@ -190,6 +246,28 @@ export function AdminUsers() {
                   </select>
                 ) : (
                   roleLabel(u.role)
+                )}
+              </td>
+              <td className="p-2">
+                {editId === u.id ? (
+                  <select
+                    className="rounded border px-2 py-1 text-xs"
+                    value={editAppearance}
+                    onChange={(e) => setEditAppearance(e.target.value)}
+                  >
+                    {!appearanceOptions.some((o) => o.value === editAppearance) && (
+                      <option value={editAppearance}>{appearanceLabel(editAppearance)}</option>
+                    )}
+                    {appearanceOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className={appearanceValue(u) === NO_APPEARANCE ? 'text-slate-500' : undefined}>
+                    {appearanceValue(u) === NO_APPEARANCE ? 'nie ustawiony' : appearanceLabel(appearanceValue(u))}
+                  </span>
                 )}
               </td>
               <td className="p-2">
@@ -231,6 +309,7 @@ export function AdminUsers() {
                         setEditRole(u.role)
                         setEditEmail(u.email)
                         setEditPassword('')
+                        setEditAppearance(appearanceValue(u))
                       }}
                       className="rounded bg-slate-200 px-2 py-1 text-xs"
                     >

@@ -29,6 +29,8 @@ class UpdateUserRequest extends FormRequest
             'email' => ['sometimes', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
             'password' => ['nullable', 'string', 'min:8'],
             'role' => ['sometimes', 'string', new ExistingWebRole],
+            'ui_template' => ['sometimes', 'nullable', 'string', 'regex:/^[a-z0-9-]{1,40}$/'],
+            'ui_mode' => ['sometimes', 'nullable', Rule::in(User::UI_MODES)],
         ];
     }
 }

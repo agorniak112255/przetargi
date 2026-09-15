@@ -36,6 +36,7 @@ class UserController extends Controller
             'role' => $data['role'],
         ]);
         $user->syncPrimaryRole($data['role']);
+        $this->applyAppearance($user, $data);
 
         return response()->json($user->toAuthArray(), 201);
     }
@@ -58,6 +59,7 @@ class UserController extends Controller
         if (isset($data['role'])) {
             $user->syncPrimaryRole($data['role']);
         }
+        $this->applyAppearance($user, $data);
 
         return response()->json($user->fresh()->toAuthArray());
     }
@@ -71,5 +73,25 @@ class UserController extends Controller
         $user->delete();
 
         return response()->json(['message' => 'OK']);
+    }
+
+    /**
+     * Wygląd ustawiony przez administratora — zapis tylko, gdy żądanie niesie którykolwiek klucz.
+     * Nadpisuje cały obiekt jak PATCH /me/preferences; null w obu = użytkownik wybierze sam.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function applyAppearance(User $user, array $data): void
+    {
+        if (! array_key_exists('ui_template', $data) && ! array_key_exists('ui_mode', $data)) {
+            return;
+        }
+
+        $user->forceFill([
+            'ui_preferences' => [
+                'template' => $data['ui_template'] ?? null,
+                'mode' => $data['ui_mode'] ?? null,
+            ],
+        ])->save();
     }
 }
