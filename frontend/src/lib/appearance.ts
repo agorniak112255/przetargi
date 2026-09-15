@@ -33,7 +33,7 @@ export const TEMPLATES: AppearanceTemplate[] = [
     schemes: ['dark', 'light'],
     swatches: {
       dark: ['#0C1318', '#18232B', '#E2E9EE', '#4CCBB3', '#EFB443'],
-      light: ['#F3F6F8', '#FFFFFF', '#15222C', '#0B7D6A', '#9A6200'],
+      light: ['#E9E6E0', '#F8F6F2', '#1F2326', '#0A6F61', '#9A6200'],
     },
   },
 ]

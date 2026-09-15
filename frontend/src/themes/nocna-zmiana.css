@@ -29,6 +29,51 @@
   --t-dim: #8594a0;
   --t-accent: #0b7d6a;
   --t-on-accent: #ffffff;
+  /* Cienie: karta bez ramki, dodatek dla kart z własną ramką, pasek boczny.
+     Domyślnie płasko (obrys 1px) — tak zostaje tryb nocny i wydruk. */
+  --t-card-shadow: 0 0 0 1px var(--t-border);
+  --t-card-drop: 0 0 #0000;
+  --t-sidebar-shadow: none;
+}
+
+/* Dzień na ekranie: ciepła szarość („papier”) zamiast bieli, miękki cień z nutą brązu. */
+@media screen {
+  :root[data-template="nocna-zmiana"][data-scheme="light"] {
+    --t-bg: #e9e6e0;
+    --t-surface: #f8f6f2;
+    --t-surface-2: #efebe4;
+    --t-border: #dbd5cb;
+    --t-border-strong: #c9c1b4;
+    --t-text: #1f2326;
+    --t-muted: #5d5a54;
+    --t-dim: #8f8a82;
+    /* ciemniej niż #0b7d6a: na tle #e9e6e0 kontrast ok. 4,9:1 */
+    --t-accent: #0a6f61;
+    --t-card-drop: 0 1px 1px rgb(70 55 35 / 0.05), 0 6px 18px -10px rgb(70 55 35 / 0.22);
+    --t-card-shadow: 0 0 0 1px rgb(70 55 35 / 0.07), var(--t-card-drop);
+    --t-sidebar-shadow: 4px 0 16px -10px rgb(70 55 35 / 0.18);
+
+    /* Jasne slate z komponentów (tła 50–100, ramki 200–300) w tej samej ciepłej gamie;
+       tekst slate 400–950 bez zmian. */
+    --color-slate-50: #f3f0eb;
+    --color-slate-100: var(--t-surface-2);
+    --color-slate-200: var(--t-border);
+    --color-slate-300: var(--t-border-strong);
+  }
+
+  /* Białe tła kart → powierzchnia. W @layer utilities z :where(), jak w dark-scheme.css,
+     żeby hover:/focus: dalej wygrywały. */
+  @layer utilities {
+    :where(:root[data-template="nocna-zmiana"][data-scheme="light"]) .bg-white { background-color: var(--t-surface); }
+    :where(:root[data-template="nocna-zmiana"][data-scheme="light"]) .bg-white\/60 { background-color: color-mix(in oklab, var(--t-surface) 60%, transparent); }
+    :where(:root[data-template="nocna-zmiana"][data-scheme="light"]) .bg-white\/80 { background-color: color-mix(in oklab, var(--t-surface) 80%, transparent); }
+    :where(:root[data-template="nocna-zmiana"][data-scheme="light"]) .bg-white\/90 { background-color: color-mix(in oklab, var(--t-surface) 90%, transparent); }
+    :where(:root[data-template="nocna-zmiana"][data-scheme="light"]) .via-white { --tw-gradient-via: var(--t-surface); }
+
+    @media (hover: hover) {
+      :where(:root[data-template="nocna-zmiana"][data-scheme="light"]) .hover\:bg-white:hover { background-color: var(--t-surface); }
+    }
+  }
 }
 
 @media screen {

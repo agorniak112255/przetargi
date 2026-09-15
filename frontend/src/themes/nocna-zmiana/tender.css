@@ -127,6 +127,7 @@
   border-radius: 10px;
   background: var(--t-surface);
   color: var(--t-text);
+  box-shadow: var(--t-card-drop);
 }
 
 :root[data-template="nocna-zmiana"] .app-coverage > div > strong::before {
@@ -176,24 +177,25 @@
   border: 1px solid var(--t-border);
   border-radius: 10px;
   background: var(--t-surface);
+  box-shadow: var(--t-card-drop);
 }
 
 /* Stany karty (klasyczny: fiolet/pomarańcz/morski) jako pasek po lewej */
 :root[data-template="nocna-zmiana"] .app-item.ring-2 {
   border-color: var(--t-accent);
-  box-shadow: 0 0 0 2px var(--t-accent);
+  box-shadow: 0 0 0 2px var(--t-accent), var(--t-card-drop);
 }
 
 :root[data-template="nocna-zmiana"] .app-item.border-orange-400 {
-  box-shadow: inset 3px 0 0 var(--t-signal-amber, #9a6200);
+  box-shadow: inset 3px 0 0 var(--t-signal-amber, #9a6200), var(--t-card-drop);
 }
 
 :root[data-template="nocna-zmiana"] .app-item.border-teal-300 {
-  box-shadow: inset 3px 0 0 var(--t-signal-blue, #2d6bc4);
+  box-shadow: inset 3px 0 0 var(--t-signal-blue, #2d6bc4), var(--t-card-drop);
 }
 
 :root[data-template="nocna-zmiana"] .app-item.border-violet-200 {
-  box-shadow: inset 3px 0 0 var(--t-accent);
+  box-shadow: inset 3px 0 0 var(--t-accent), var(--t-card-drop);
 }
 
 :root[data-template="nocna-zmiana"] .app-item-siwz {

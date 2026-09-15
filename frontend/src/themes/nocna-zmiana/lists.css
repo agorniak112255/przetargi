@@ -10,6 +10,7 @@
   border: 1px solid var(--t-border);
   border-radius: 10px;
   background-color: var(--t-surface);
+  box-shadow: var(--t-card-drop);
 }
 
 @container app-main (max-width: 1000px) {

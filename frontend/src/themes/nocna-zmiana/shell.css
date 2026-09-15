@@ -7,6 +7,10 @@
   background-color: var(--t-surface);
   color: var(--t-text);
   font-size: 13.5px;
+  /* nad obszarem głównym, żeby jego tło nie zasłaniało cienia paska */
+  position: relative;
+  z-index: 1;
+  box-shadow: var(--t-sidebar-shadow);
 }
 
 /* Logo: kwadrat w akcencie (::before) obok nazwy, podpis pod nazwą */
@@ -176,14 +180,15 @@
   container: app-main / inline-size;
 }
 
-/* Karty: zamiast cienia obrys 1px. Przez --tw-shadow, żeby ring-* na tym samym
-   elemencie dalej działał; karty z własną ramką (.border) tracą tylko cień. */
+/* Karty: cień z tokenów (nocą obrys 1px, w dzień obrys + miękki cień). Przez --tw-shadow,
+   żeby ring-* na tym samym elemencie dalej działał; karty z własną ramką (.border)
+   dostają tylko miękki cień (nocą żaden). */
 :root[data-template="nocna-zmiana"] .app-main .shadow-sm {
-  --tw-shadow: 0 0 0 1px var(--t-border);
+  --tw-shadow: var(--t-card-shadow);
 }
 
 :root[data-template="nocna-zmiana"] .app-main .shadow-sm.border {
-  --tw-shadow: 0 0 transparent;
+  --tw-shadow: var(--t-card-drop);
 }
 
 :root[data-template="nocna-zmiana"] .app-main .rounded-xl {
