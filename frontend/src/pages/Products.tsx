@@ -1113,8 +1113,8 @@ export function Products() {
                     </Link>
                   </td>
                   <td className="p-2 min-w-[14rem] max-w-[26rem]">
-                    {/* Długa nazwa w dwóch liniach; pełna w podpowiedzi. */}
-                    <span className="line-clamp-2 break-words" title={p.name}>
+                    {/* Długa nazwa do trzech linii (wiersz i tak ma wysokość zdjęcia i przycisków); pełna w podpowiedzi. */}
+                    <span className="line-clamp-3 break-words" title={p.name}>
                       {p.name}
                     </span>
                   </td>
