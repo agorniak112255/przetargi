@@ -189,4 +189,45 @@ final class OpenAiRateLimitTest extends TestCase
             $this->assertStringContainsString('nie Tavily', $e->getMessage());
         }
     }
+
+    public function test_402_tells_where_to_top_up_credits(): void
+    {
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response(
+                ['error' => ['message' => 'Insufficient credits. Add more using https://openrouter.ai/settings/credits']],
+                402
+            ),
+        ]);
+
+        try {
+            app(OpenAiCompatibleClient::class)->chatJson([
+                ['role' => 'user', 'content' => 'ping'],
+            ]);
+            $this->fail('Oczekiwano wyjątku 402');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('402', $e->getMessage());
+            $this->assertStringContainsString('nie ma środków', $e->getMessage());
+            $this->assertStringContainsString('openrouter.ai/settings/credits', $e->getMessage());
+            $this->assertStringContainsString('Ustawieniach AI', $e->getMessage());
+        }
+    }
+
+    public function test_402_in_web_search_tells_where_to_top_up_credits(): void
+    {
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response(
+                ['error' => ['message' => 'Insufficient credits.']],
+                402
+            ),
+        ]);
+
+        try {
+            app(OpenAiCompatibleClient::class)->chatWithProviderWebSearch('Znajdź kartę AFD230-001-100');
+            $this->fail('Oczekiwano wyjątku 402');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('402', $e->getMessage());
+            $this->assertStringContainsString('nie ma środków', $e->getMessage());
+            $this->assertStringContainsString('openrouter.ai/settings/credits', $e->getMessage());
+        }
+    }
 }

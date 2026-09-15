@@ -1209,7 +1209,7 @@ class OpenAiCompatibleClient
                 $detail = is_array($body)
                     ? (string) data_get($body, 'error.message', $response->body())
                     : $response->body();
-                throw new RuntimeException('Web search AI HTTP '.$response->status().': '.$detail);
+                throw new RuntimeException($this->webSearchHttpError($response->status(), $detail));
             }
 
             $data = $response->json();
@@ -1288,7 +1288,7 @@ class OpenAiCompatibleClient
             $detail = is_array($body)
                 ? (string) data_get($body, 'error.message', $response->body())
                 : $response->body();
-            throw new RuntimeException('Web search AI HTTP '.$response->status().': '.$detail);
+            throw new RuntimeException($this->webSearchHttpError($response->status(), $detail));
         }
 
         $data = $response->json();
@@ -1798,12 +1798,33 @@ class OpenAiCompatibleClient
             return $who.' odrzuciło klucz (HTTP 401: '.$detail.'). '
                 .'Wklej nowy klucz sk-or-v1-… w tym profilu i zapisz ustawienia — nie zmieniaj klucza w konfiguracji głównej.';
         }
+        if ($status === 402) {
+            return $who.' odmówiło (HTTP 402: '.$detail.'). '.$this->outOfCreditsHint();
+        }
         if ($status === 429) {
             return 'Limit zapytań modelu AI (HTTP 429). To OpenRouter/dostawca modelu, nie Tavily. '
                 .'Poczekaj ok. minutę i ponów opis produktu.';
         }
 
         return $who.' zwróciło błąd HTTP '.$status.': '.$detail;
+    }
+
+    private function webSearchHttpError(int $status, string $detail): string
+    {
+        $message = 'Web search AI HTTP '.$status.': '.$detail;
+
+        return $status === 402 ? $message.' '.$this->outOfCreditsHint() : $message;
+    }
+
+    /**
+     * OpenRouter przy pustym saldzie odpowiada 402 „Insufficient credits” — samo
+     * to nie mówi, gdzie problem naprawić, a błąd widzi handlowiec przy opisie
+     * produktu, nie administrator.
+     */
+    private function outOfCreditsHint(): string
+    {
+        return 'Konto modelu AI nie ma środków. Doładuj konto OpenRouter na '
+            .'https://openrouter.ai/settings/credits albo wpisz w Ustawieniach AI klucz innego dostawcy.';
     }
 
     /**
