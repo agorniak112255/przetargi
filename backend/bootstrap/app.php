@@ -36,8 +36,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('search-events:prune')->dailyAt('02:25');
         $schedule->command('storage:prune')->hourly();
         // cenniki B2B: konta z harmonogramem (od 02:00) i „Sprawdź teraz”; każde konto rusza we własnym procesie w tle
-        // (pełny przebieg trwa > 1 h), a samo b2b:sync-due kończy się w kilka sekund — stąd krótka blokada
-        $schedule->command('b2b:sync-due')->everyFiveMinutes()->withoutOverlapping(10)->runInBackground();
+        // (pełny przebieg trwa > 1 h), a samo b2b:sync-due kończy się w kilka sekund — stąd krótka blokada; co minutę,
+        // żeby „Sprawdź teraz” ruszało bez czekania do 5 min (decyzja użytkownika 15.09.2026)
+        $schedule->command('b2b:sync-due')->everyMinute()->withoutOverlapping(10)->runInBackground();
         // sygnał, że cron serwera (schedule:run) działa — okno „Sprawdź teraz” ostrzega, gdy go brak
         $schedule->call(static function (): void {
             Cache::forever(B2bSyncRun::SCHEDULER_HEARTBEAT_KEY, now()->toIso8601String());

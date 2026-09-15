@@ -22,7 +22,7 @@ final class B2bSyncDueCommand extends Command
 {
     /**
      * Blokada ponownego uruchomienia konta, dopóki proces w tle nie zajmie konta (wtedy isSyncDue = false).
-     * Dłuższa niż odstęp harmonogramu (5 min), żeby następne wywołanie nie uruchomiło drugiego procesu; zdejmuje
+     * Dłuższa niż odstęp harmonogramu (1 min), żeby następne wywołanie nie uruchomiło drugiego procesu; zdejmuje
      * ją b2b:sync po zakończeniu. Gdy proces padnie przed zajęciem konta, konto ruszy ponownie po wygaśnięciu.
      * Podwójnego przebiegu i tak nie będzie — zajęcie konta w runnerze jest atomowe; blokada oszczędza procesy.
      */

@@ -209,7 +209,7 @@ export function PriceListsB2b() {
     setMsg('')
     try {
       await api(`/b2b-accounts/${row.id}/sync`, { method: 'POST' })
-      setMsg('Zlecono sprawdzenie cennika — ruszy w ciągu kilku minut i działa w tle.')
+      setMsg('Zlecono sprawdzenie cennika — ruszy w ciągu minuty i działa w tle.')
       setProgressAccount(row)
       await load()
     } catch (ex) {
@@ -224,7 +224,7 @@ export function PriceListsB2b() {
       return <p className="text-blue-700">Trwa pobieranie cennika (od {formatDate(row.last_sync_started_at)}).</p>
     }
     if (row.sync_requested_at) {
-      return <p className="text-blue-700">Zlecono sprawdzenie — ruszy w ciągu kilku minut.</p>
+      return <p className="text-blue-700">Zlecono sprawdzenie — ruszy w ciągu minuty.</p>
     }
     if (!row.last_sync_status) {
       return <p className="text-slate-500">Cennik nie był jeszcze pobierany.</p>

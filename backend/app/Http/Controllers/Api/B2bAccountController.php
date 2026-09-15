@@ -114,7 +114,7 @@ class B2bAccountController extends Controller
     }
 
     /**
-     * „Sprawdź teraz” — przebieg rusza z harmonogramu (b2b:sync-due) w ciągu kilku minut.
+     * „Sprawdź teraz” — przebieg rusza z harmonogramu (b2b:sync-due, co minutę) w ciągu minuty.
      */
     public function requestSync(B2bAccount $b2bAccount): JsonResponse
     {

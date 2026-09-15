@@ -293,7 +293,7 @@ export function B2bSyncProgressModal({ account, canManage, onClose, onChanged }:
 
           {data?.sync_requested_at && !running && (
             <p className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-blue-900">
-              Zlecono {formatWhen(data.sync_requested_at)} — czeka na harmonogram (sprawdza co 5 min).
+              Zlecono {formatWhen(data.sync_requested_at)} — czeka na harmonogram (sprawdza co minutę).
             </p>
           )}
 
