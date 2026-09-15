@@ -9,7 +9,7 @@ import {
 } from '../lib/descriptionHighlight'
 import { productDisplayName } from '../lib/productLabel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
-import { RequirementCheckTable } from './RequirementCheckTable'
+import { RequirementCheckList } from './RequirementCheckList'
 
 type Props = {
   productId: number | null
@@ -324,17 +324,10 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
           )
         )}
 
-        {product && (
-          <RequirementCheckTable
-            productId={productId}
-            query={query}
-            onFind={setFind}
-            findHitCount={(p) => countFindHits(bodyText, p)}
-          />
-        )}
-
         <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(280px,38%)_1fr]">
-          <div className="flex flex-col gap-3 border-b border-slate-100 bg-slate-50 p-4 lg:border-b-0 lg:border-r">
+          {/* Lewa kolumna przewija się sama: lista parametrów pod zdjęciem nie wypycha opisu. Gdy lista
+              jest, zdjęcie maleje (:has), żeby parametry były widoczne bez przewijania. */}
+          <div className="flex max-h-[45vh] min-h-0 flex-col gap-3 overflow-y-auto border-b border-slate-100 bg-slate-50 p-4 lg:max-h-none lg:border-b-0 lg:border-r [&:has([data-requirement-check])>img]:max-h-[28vh]">
             {image ? (
               <img
                 src={image.url}
@@ -377,6 +370,14 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
                   ) : null}
                 </span>
               </div>
+            )}
+            {product && (
+              <RequirementCheckList
+                productId={productId}
+                query={query}
+                onFind={setFind}
+                findHitCount={(p) => countFindHits(bodyText, p)}
+              />
             )}
           </div>
 
