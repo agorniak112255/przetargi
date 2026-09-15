@@ -559,7 +559,7 @@ final class PpeAssortment
      *
      * @return list<string>
      */
-    private function cutLevelsIn(string $text): array
+    public function cutLevelsIn(string $text): array
     {
         $levels = [];
         if (preg_match_all('/388[^a-z]{0,1}.{0,80}?\b(?=[0-5x\s]*\d)([0-5x])\s?([0-5x])\s?([0-5x])\s?([0-5x])\s?([a-f])\b/u', $this->normalize($text), $m) > 0) {

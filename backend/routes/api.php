@@ -31,6 +31,7 @@ use App\Http\Controllers\Api\ProductCrossRefController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
 use App\Http\Controllers\Api\ProductImageThumbController;
 use App\Http\Controllers\Api\ProductKitController;
+use App\Http\Controllers\Api\ProductRequirementCheckController;
 use App\Http\Controllers\Api\ProductRequirementTermsController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
@@ -140,6 +141,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::post('/products/ai-search/{searchEvent}/action', [SearchEventActionController::class, 'store'])
         ->middleware('permission:products.view');
     Route::post('/products/requirement-terms', ProductRequirementTermsController::class)->middleware('permission:products.view');
+    Route::post('/products/{product}/requirement-check', ProductRequirementCheckController::class)->middleware('permission:products.view');
     Route::post('/products/enrich', [ProductEnrichmentController::class, 'enrichProducts'])
         ->middleware('permission:price_lists.import');
     Route::post('/products/delete', [ProductController::class, 'destroyMany'])

@@ -9,6 +9,7 @@ import {
 } from '../lib/descriptionHighlight'
 import { productDisplayName } from '../lib/productLabel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
+import { RequirementCheckTable } from './RequirementCheckTable'
 
 type Props = {
   productId: number | null
@@ -321,6 +322,15 @@ export function ProductVerifyModal({ productId, query = '', onClose }: Props) {
               )}
             </div>
           )
+        )}
+
+        {product && (
+          <RequirementCheckTable
+            productId={productId}
+            query={query}
+            onFind={setFind}
+            findHitCount={(p) => countFindHits(bodyText, p)}
+          />
         )}
 
         <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(280px,38%)_1fr]">

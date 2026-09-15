@@ -1,0 +1,95 @@
+{
+    "sku": "11202000",
+    "name": "HyFlex 11202 SIZE 19''/47,5 cm",
+    "manufacturer": "Ansell",
+    "category": null,
+    "norms": "EN 388:2016+A1:2018 (1X42C), EN 407:2020 (X1XXXX), EN ISO 21420:2020, kat. II, EN ISO 13997: odporność na przecięcia poziom C, ANSI/ISEA 105: poziom A3",
+    "description": "Rękawy ochronne HyFlex 11-202 to lekkie osłony ramion przeznaczone do prac, w których występuje ryzyko przecięć, otarć oraz kontaktu z gorącymi elementami. Model o długości 19 cali (47,5 cm) w kolorze wysokiej widoczności zapewnia ochronę przedramion i części ramion podczas obróbki metali, szkła, w tłoczniach oraz przy naprawach pojazdów. Dzięki anatomicznemu kształtowi i elastycznemu mankietowi typu ściągacz rękawy dobrze przylegają do ciała, nie krępując ruchów, a zapięcie na paski VELCRO™ umożliwia pewne i szybkie dopasowanie.\n\nRękawy wykonano z nylonu, poliestru i włókna szklanego, bez dodatku lateksu, co czyni je odpowiednimi dla osób z alergią na lateks. Konstrukcja cięta i szyta zapewnia trwałość, a właściwości antyelektrostatyczne zwiększają bezpieczeństwo w środowiskach zagrożonych wyładowaniami. Produkt spełnia normę EN 407 w zakresie ochrony termicznej (poziom 1, do 100°C) oraz posiada odporność na przecięcia na poziomie ANSI A3 / EN ISO C, co potwierdza skuteczną ochronę mechaniczną.\n\nRękawy HyFlex 11-202 znajdują zastosowanie przy chwytaniu elementów strukturalnych i korpusów, drobnych naprawach, pracach w tłoczni, obróbce metali i szkła, przenoszeniu komponentów, kontroli i sortowaniu części oraz naprawie i wymianie szyb i paneli nadwozia. Są lekkie i przewiewne, co zmniejsza pocenie i swędzenie skóry podczas długotrwałego noszenia. Pranie w temperaturze 40°C ułatwia utrzymanie higieny i przedłuża żywotność produktu.",
+    "enrichment_payload": {
+        "features": [
+            "Ochrona przed przecięciami (ANSI A3 / EN ISO C)",
+            "Odporność termiczna do 100°C (EN 407 poziom 1)",
+            "Wysoka widoczność – kolor ostrzegawczy",
+            "Bez lateksu – odpowiednie dla alergików",
+            "Anatomiczny krój i elastyczny mankiet dla komfortu",
+            "Zapięcie VELCRO™ – pewne dopasowanie"
+        ],
+        "norms": [
+            "EN 407 (poziom 1 – odporność termiczna)",
+            "ANSI A3 / EN ISO C (odporność na przecięcia)"
+        ],
+        "certificates": [
+            "CE",
+            "Deklaracja zgodności UE",
+            "Certyfikat producenta"
+        ],
+        "materials": [
+            "Nylon",
+            "Poliester",
+            "Włókno szklane"
+        ],
+        "use_cases": [
+            "Chwytanie elementów strukturalnych i korpusów",
+            "Drobne naprawy",
+            "Prace w tłoczni",
+            "Obróbka metali i szkła",
+            "Przenoszenie komponentów",
+            "Kontrola i sortowanie części",
+            "Naprawa i wymiana szkła oraz paneli nadwozia"
+        ],
+        "specs": [
+            "SKU: 11202000",
+            "Model: 11-202",
+            "Długość: 19 cali (47,5 cm)",
+            "Kolor: wysoka widoczność",
+            "Opakowanie: 12 sztuk/torebka, 6 torebek/karton",
+            "Pranie: 40°C"
+        ],
+        "attributes": {
+            "kategoria_bhp": null,
+            "kod_producenta": "11-202",
+            "material": "nylon, poliester, włókno szklane",
+            "materialy": [
+                "nylon, poliester, włókno szklane",
+                "nylon",
+                "poliester",
+                "włókno szklane",
+                "Nylon",
+                "Poliester",
+                "Włókno szklane"
+            ],
+            "normy_en": [
+                "EN 407",
+                "EN ISO C",
+                "EN 407 (poziom 1 – odporność termiczna)",
+                "ANSI A3 / EN ISO C (odporność na przecięcia)",
+                "EN 407: poziom 1 (ochrona termiczna do 100°C)",
+                "EN ISO 13997: odporność na przecięcia poziom C",
+                "ANSI/ISEA 105: poziom A3 (przecięcia)"
+            ],
+            "klasa_ochrony": null,
+            "rozmiar": null,
+            "poziomy_en388": null,
+            "typ_wyrobu": null,
+            "przeznaczenie": null,
+            "oznaczenia": [],
+            "rodzina_materialu": "lateks"
+        },
+        "source_urls": [
+            "https://www.ansell.com/pl/pl/products/hyflex-11-202"
+        ],
+        "confidence": 0.9,
+        "from_cache": false,
+        "document_urls": [
+            "https://www.ansell.com/pl/pl/products/hyflex-11-202/doc/HUnNwgaf8a0tZFG59aFFgw",
+            "https://www.ansell.com/pl/pl/products/hyflex-11-202/pds/HUnNwgaf8a0tZFG59aFFgw",
+            "https://www.ansell.com/-/media/projects/ansell/website/pim/ppwr---declaration-of-conformity/ppwr_declaration_of_conformity.ashx"
+        ]
+    },
+    "_meta": {
+        "source": "local_db",
+        "local_id": 8681,
+        "exported_at": "2026-09-15",
+        "note": "Karta po ponownym pobraniu opisu (EN 388 1X42C, kat. II, cieta i szyta) - inna niz migawka opisowy15 (2.X.4.2.C, kat. III), z ktorej spisano wymaganie poz. 1."
+    }
+}
