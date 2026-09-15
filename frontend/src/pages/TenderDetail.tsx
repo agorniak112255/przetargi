@@ -12,7 +12,7 @@ import { isDualRequirement } from '../lib/productAiSearch'
 import { SiwzItemTile, SiwzRequirementBlock, splitSiwzRequirement } from '../components/SiwzRequirementBlock'
 import { CardConflictsModal } from '../components/CardConflictsModal'
 import type { TenderConflicts } from '../components/RequirementCheckList'
-import { useRequirementCheck } from '../lib/useRequirementCheck'
+import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -3666,7 +3666,7 @@ function ItemRow({
                     title={`${conflicts.requirement.length} niespełnionych wymagań · ${conflicts.card_fields.length} sprzecznych pól karty — kliknij`}
                     onClick={() => setConflictsOpen(true)}
                   >
-                    ⚠ Sprzeczności {conflicts.count}
+                    ⚠ {conflictsLabel(conflicts.requirement.length, conflicts.card_fields.length)}
                   </button>
                 )}
                 {canEdit && catalogPurchase() != null && (

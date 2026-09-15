@@ -8,7 +8,7 @@ import {
   queryHighlightTokens,
 } from '../lib/descriptionHighlight'
 import { productDisplayName } from '../lib/productLabel'
-import { useRequirementCheck } from '../lib/useRequirementCheck'
+import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { CardConflictsModal } from './CardConflictsModal'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 import { RequirementCheckList } from './RequirementCheckList'
@@ -226,7 +226,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                 title={conflictsTitle(check.conflicts.requirement.length, check.conflicts.card_fields.length)}
                 className="rounded-full border border-rose-200 bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-800 hover:bg-rose-200"
               >
-                ⚠ Sprzeczności ({check.conflicts.count})
+                ⚠ {conflictsLabel(check.conflicts.requirement.length, check.conflicts.card_fields.length)}
               </button>
             ) : check ? (
               <button
@@ -234,7 +234,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                 onClick={() => setConflictsOpen(true)}
                 className="px-1 text-[11px] text-white/70 hover:text-white hover:underline"
               >
-                sprawdź sprzeczności modelem
+                sprawdź kartę AI
               </button>
             ) : null}
             <a

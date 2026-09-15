@@ -3,6 +3,18 @@ import { api } from './api'
 import type { RequirementCheck } from '../components/RequirementCheckList'
 
 /**
+ * Etykieta przycisku i plakietki: „Nie spełnia 3 · sprzeczna karta 1”. Niespełnione wymaganie
+ * i karta przecząca sama sobie to różne problemy — jedno słowo „Sprzeczności” myliło handlowca
+ * (AI „nie znalazło sprzeczności”, a przycisk pokazywał 3).
+ */
+export function conflictsLabel(requirement: number, cardFields: number): string {
+  const parts: string[] = []
+  if (requirement > 0) parts.push(`Nie spełnia ${requirement}`)
+  if (cardFields > 0) parts.push(`${parts.length > 0 ? 'sprzeczna karta' : 'Sprzeczna karta'} ${cardFields}`)
+  return parts.join(' · ')
+}
+
+/**
  * Porównanie parametrów wymagania z kartą (reguły, bez modelu) — wspólne dla listy parametrów
  * i przycisku „Sprzeczności”. Wynik trzymany z kluczem, dla którego powstał: po zmianie
  * produktu/zapytania stary przestaje obowiązywać bez resetu w efekcie i bez migania.

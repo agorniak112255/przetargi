@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { conflictsLabel } from '../lib/useRequirementCheck'
 import {
   Finding,
   type AiCardConflicts,
@@ -101,18 +102,10 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-slate-100 px-4 py-3">
-          <p id="card-conflicts-title" className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            Sprzeczności
-            {conflicts && (
-              <span
-                className={`rounded-full px-1.5 py-0.5 text-[11px] tabular-nums ${
-                  count > 0 ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-600'
-                }`}
-                title="Liczone regułami — bez wyniku modelu"
-              >
-                {count}
-              </span>
-            )}
+          <p id="card-conflicts-title" className="text-sm font-semibold text-slate-900" title="Liczone regułami — bez wyniku AI">
+            {conflicts && count > 0
+              ? `⚠ ${conflictsLabel(conflicts.requirement.length, conflicts.card_fields.length)}`
+              : 'Sprawdzenie karty'}
           </p>
           {productName && (
             <p className="mt-0.5 truncate text-xs text-slate-500" title={productName}>
@@ -125,7 +118,7 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
           {!conflicts ? (
             <p className="text-slate-500">{loading ? 'Wczytuję porównanie z wymaganiem…' : 'Porównanie regułami niedostępne.'}</p>
           ) : count === 0 ? (
-            <p className="text-slate-600">Reguły nie znalazły sprzeczności.</p>
+            <p className="text-slate-600">Reguły nie znalazły niespełnionych wymagań ani sprzecznych pól karty.</p>
           ) : (
             <>
               {conflicts.requirement.length > 0 && (
@@ -158,14 +151,18 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
           <section className="rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-2">
             <div className="flex flex-wrap items-baseline justify-between gap-x-2">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-violet-800">
-                Znalezione przez model
+                Sprawdzenie karty przez AI
               </h3>
-              <span className="text-[10px] italic text-violet-600">wniosek modelu — sprawdź cytaty</span>
+              <span className="text-[10px] italic text-violet-600">wniosek AI — sprawdź cytaty</span>
             </div>
+            {/* Użytkownik mylił „AI nie znalazło” z „karta spełnia przetarg” — AI dostaje samą kartę, bez wymagania. */}
+            <p className="mt-0.5 text-[11px] text-violet-700/80">
+              AI sprawdza tylko, czy karta przeczy sama sobie — nie porównuje jej z wymaganiem przetargu.
+            </p>
             {aiState?.loading ? (
               <p className="mt-1.5 flex items-center gap-1.5 text-violet-700">
                 <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-violet-600 border-t-transparent" />
-                Sprawdzam…
+                AI sprawdza kartę…
               </p>
             ) : aiState?.data ? (
               <AiResult data={aiState.data} onFind={handleFind} onRefresh={() => runAi(true)} />
@@ -175,7 +172,7 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
                 onClick={() => runAi(false)}
                 className="mt-1.5 rounded bg-violet-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-violet-700"
               >
-                Sprawdź modelem
+                Sprawdź kartę AI
               </button>
             )}
             {aiState?.error && !aiState.loading && <p className="mt-1.5 text-rose-700">{aiState.error}</p>}
@@ -291,7 +288,10 @@ function AiResult({
   return (
     <div className="mt-1.5 space-y-1.5">
       {data.conflicts.length === 0 ? (
-        <p className="text-slate-600">Model nie znalazł sprzeczności.</p>
+        <p className="text-slate-600">
+          AI nie znalazło sprzeczności w samej karcie — nazwa, normy, specyfikacja i opis podają te same wartości. To nie
+          znaczy, że karta spełnia wymagania przetargu.
+        </p>
       ) : (
         <ul className="space-y-1.5">
           {data.conflicts.map((c, i) => (
