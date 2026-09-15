@@ -211,14 +211,19 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
     }
 
     /**
-     * Zdjęcie z custitem_atlas_item_image. Adres zapisujemy w pełni, z parametrem h — to hash pliku w NetSuite
-     * (bez niego HTTP 403), nie token sesji: plik pobiera się bez logowania.
+     * Zdjęcie z custitem_atlas_item_image. API podaje ścieżkę bez domeny („/core/media/media.nl?id=…&c=…&h=…”,
+     * sprawdzone na żywym sklepie 15.09.2026 — przebiegi #14 i #16 odrzuciły przez to wszystkie zdjęcia), więc ścieżkę
+     * zaczynającą się od „/” uzupełniamy adresem sklepu; pełny adres innego hosta dalej odrzuca klient. Adres zapisujemy
+     * w pełni, z parametrem h — to hash pliku w NetSuite (bez niego HTTP 403), nie token sesji: plik pobiera się bez logowania.
      */
     public function image(B2bRemoteProduct $product): ?B2bRemoteImage
     {
         $url = trim((string) ($product->raw['custitem_atlas_item_image'] ?? ''));
         if ($url === '') {
             return null;
+        }
+        if (str_starts_with($url, '/') && ! str_starts_with($url, '//')) {
+            $url = BolleB2bClient::BASE.$url;
         }
         $file = $this->client->imageBytes($url);
         if ($file['bytes'] === '' || ! str_starts_with($file['mime'], 'image/')) {

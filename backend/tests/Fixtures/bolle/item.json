@@ -15,7 +15,7 @@
     "dontshowprice": false,
     "ispurchasable": true,
     "urlcomponent": "TRYON_BSSI_PSSTRYOC13B",
-    "custitem_atlas_item_image": "https://b2b.bolle-safety.com/core/media/media.nl?id=123456&c=5230881&h=0123456789abcdef0123",
+    "custitem_atlas_item_image": "/core/media/media.nl?id=123456&c=5230881&h=0123456789abcdef0123",
     "matrixchilditems_detail": [],
     "custitem_bb_fm_product_material": "Nylon",
     "custitem_bb_specific_technology": "&nbsp;",

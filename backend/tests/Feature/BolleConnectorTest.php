@@ -403,8 +403,20 @@ final class BolleConnectorTest extends TestCase
         $this->assertNotNull($image);
         $this->assertSame(self::JPEG, $image->bytes);
         $this->assertSame('image/jpeg', $image->mime);
+        // API podaje ścieżkę bez domeny (fixture jak żywy sklep 15.09.2026) — zapisany adres jest pełny
         $this->assertSame(self::IMAGE_URL, $image->sourceUrl);
         $this->assertNull($connector->image(new B2bRemoteProduct('1', 'X', 'X', raw: ['status' => 'ok', 'custitem_atlas_item_image' => ''])));
+
+        // pełny adres sklepu też działa
+        $full = $connector->image(new B2bRemoteProduct('3', 'Z', 'Z', raw: ['status' => 'ok', 'custitem_atlas_item_image' => self::IMAGE_URL]));
+        $this->assertSame(self::IMAGE_URL, $full?->sourceUrl);
+        // ścieżka protokołu względnego („//host/…”) to obcy host, nie ścieżka sklepu
+        try {
+            $connector->image(new B2bRemoteProduct('4', 'W', 'W', raw: ['status' => 'ok', 'custitem_atlas_item_image' => '//obcy.example.com/zdjecie.jpg']));
+            $this->fail('Adres protokołu względnego powinien być odrzucony');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('odrzucony', $e->getMessage());
+        }
 
         try {
             $connector->image(new B2bRemoteProduct('2', 'Y', 'Y', raw: ['status' => 'ok', 'custitem_atlas_item_image' => 'https://obcy.example.com/zdjecie.jpg']));
