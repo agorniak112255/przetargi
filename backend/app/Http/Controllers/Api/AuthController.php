@@ -11,6 +11,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
+use Laravel\Sanctum\PersonalAccessToken;
+use Symfony\Component\HttpFoundation\Response;
 
 class AuthController extends Controller
 {
@@ -44,7 +46,18 @@ class AuthController extends Controller
             ]);
         }
 
-        $token = $user->createToken('spa')->plainTextToken;
+        $newToken = $user->createToken('spa');
+        $newToken->accessToken->forceFill([
+            'ip_address' => $request->ip(),
+            'user_agent' => $this->truncateUserAgent($request->userAgent()),
+            'presence_path' => null,
+            'presence_at' => now(),
+        ])->save();
+
+        $user->forceFill([
+            'last_login_at' => now(),
+            'last_seen_at' => now(),
+        ])->save();
 
         $this->activityLogger->log(
             action: 'login',
@@ -54,7 +67,7 @@ class AuthController extends Controller
         );
 
         return response()->json([
-            'token' => $token,
+            'token' => $newToken->plainTextToken,
             'user' => $user->toAuthArray(),
         ]);
     }
@@ -89,6 +102,35 @@ class AuthController extends Controller
         return response()->json($user->toAuthArray());
     }
 
+    /**
+     * Sygnał obecności z SPA: zapisuje bieżącą podstronę na tokenie tej sesji i czas ostatniej aktywności konta.
+     */
+    public function presence(Request $request): Response
+    {
+        $validated = $request->validate([
+            // Sama ścieżka: bez ?query i #hash, bo tam bywają wpisane wyszukiwane frazy.
+            'path' => ['required', 'string', 'max:255', 'regex:#^/[^\s?\#]*$#'],
+        ]);
+
+        /** @var User $user */
+        $user = $request->user();
+
+        // Przy Sanctum::actingAs w testach bieżący „token” nie jest rekordem z bazy — wtedy zapisujemy tylko konto.
+        $token = $user->currentAccessToken();
+        if ($token instanceof PersonalAccessToken) {
+            $token->forceFill([
+                'presence_path' => $validated['path'],
+                'presence_at' => now(),
+                'ip_address' => $request->ip(),
+                'user_agent' => $this->truncateUserAgent($request->userAgent()),
+            ])->save();
+        }
+
+        $user->forceFill(['last_seen_at' => now()])->save();
+
+        return response()->noContent();
+    }
+
     public function logout(Request $request): JsonResponse
     {
         /** @var User|null $user */
@@ -105,5 +147,10 @@ class AuthController extends Controller
         $user?->currentAccessToken()?->delete();
 
         return response()->json(['message' => 'OK']);
+    }
+
+    private function truncateUserAgent(?string $userAgent): ?string
+    {
+        return $userAgent === null ? null : mb_substr($userAgent, 0, 512);
     }
 }

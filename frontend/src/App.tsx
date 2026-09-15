@@ -9,6 +9,7 @@ import { AdminLayout } from './pages/AdminLayout'
 import { AdminRoles } from './pages/AdminRoles'
 import { AdminPresta } from './pages/AdminPresta'
 import { AdminSearchSites } from './pages/AdminSearchSites'
+import { AdminSessions } from './pages/AdminSessions'
 import { AdminAiTuning } from './pages/AdminAiTuning'
 import { AdminCatalogSlang } from './pages/AdminCatalogSlang'
 import { AdminDescriptionTemplates } from './pages/AdminDescriptionTemplates'
@@ -140,6 +141,14 @@ export default function App() {
                 element={
                   <PermissionGuard permission="admin.activity.view">
                     <AdminActivityLog />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="sesje"
+                element={
+                  <PermissionGuard permission="admin.sessions.view">
+                    <AdminSessions />
                   </PermissionGuard>
                 }
               />

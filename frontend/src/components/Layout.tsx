@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { can, canAny } from '../lib/api'
+import { usePresence } from '../lib/usePresence'
 import { NavIcon, type NavIconName } from './NavIcon'
 import { NotificationBell } from './NotificationBell'
 
@@ -28,6 +29,7 @@ const links: NavLinkItem[] = [
 
 export function Layout() {
   const { user, logout } = useAuth()
+  usePresence(Boolean(user))
   const visible = links.filter((l) => {
     if (l.permission) return can(user, l.permission)
     if (l.anyOf) return canAny(user, l.anyOf)

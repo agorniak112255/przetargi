@@ -67,8 +67,9 @@ final class LogApiActivity
             $path = substr($path, 4);
         }
 
-        // Zmiana wyglądu (me/preferences) to ustawienie osobiste, nie akcja biznesowa — nie zaśmieca dziennika.
-        if ($path === 'logout' || $path === 'me/preferences' || str_starts_with($path, 'admin/activity-logs')) {
+        // Zmiana wyglądu (me/preferences) to ustawienie osobiste, a sygnał obecności (me/presence) leci co minutę —
+        // żadne z nich nie jest akcją biznesową, więc nie zaśmiecają dziennika.
+        if ($path === 'logout' || $path === 'me/preferences' || $path === 'me/presence' || str_starts_with($path, 'admin/activity-logs')) {
             return false;
         }
 

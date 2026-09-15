@@ -31,6 +31,12 @@ const tiles: Tile[] = [
     permission: 'admin.activity.view',
   },
   {
+    to: '/admin/sesje',
+    label: 'Aktywne sesje',
+    description: 'Kto teraz korzysta i ostatnie wizyty',
+    permission: 'admin.sessions.view',
+  },
+  {
     to: '/admin/enrichment',
     label: 'Logi AI',
     description: 'Zakończone pobierania opisów',

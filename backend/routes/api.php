@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\Admin\MailSettingsController as AdminMailSettingsCo
 use App\Http\Controllers\Api\Admin\PrestaCategoryController as AdminPrestaCategoryController;
 use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaShopSettingsController;
 use App\Http\Controllers\Api\Admin\RoleController as AdminRoleController;
+use App\Http\Controllers\Api\Admin\SessionController as AdminSessionController;
 use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Api\AiSettingsController;
 use App\Http\Controllers\Api\AuthController;
@@ -61,6 +62,7 @@ Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class,
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
     Route::patch('/me/preferences', [AuthController::class, 'updatePreferences']);
+    Route::post('/me/presence', [AuthController::class, 'presence']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::get('/dashboard', DashboardController::class)->middleware('permission:dashboard.view');
@@ -261,6 +263,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
         Route::get('/activity-logs', [AdminActivityLogController::class, 'index'])
             ->middleware('permission:admin.activity.view');
+        Route::get('/sessions', [AdminSessionController::class, 'index'])->middleware('permission:admin.sessions.view');
+        Route::get('/users-activity', [AdminSessionController::class, 'users'])->middleware('permission:admin.sessions.view');
 
         Route::get('/mail-settings', [AdminMailSettingsController::class, 'show'])
             ->middleware('permission:admin.mail.manage');
