@@ -1,9 +1,19 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type CSSProperties, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { api, can, type Tender } from '../lib/api'
+import { tenderStatusLabel } from '../lib/tenderStatus'
 
 type Client = { id: number; name: string }
+
+/** Termin w ciągu 7 dni i nie w przeszłości. */
+function isDeadlineSoon(deadline: string | null): boolean {
+  return (
+    !!deadline &&
+    new Date(deadline) <= new Date(Date.now() + 7 * 86400000) &&
+    new Date(deadline) >= new Date(new Date().toDateString())
+  )
+}
 
 export function Tenders() {
   const { user } = useAuth()
@@ -78,8 +88,8 @@ export function Tenders() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Przetargi</h1>
+      <div className="app-page-head mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="app-page-title text-xl font-semibold">Przetargi</h1>
         <div className="flex flex-wrap items-center gap-2">
           <select
             className="rounded border border-slate-300 px-2 py-1.5 text-xs"
@@ -173,8 +183,8 @@ export function Tenders() {
 
       {err && !open ? <p className="mb-2 text-xs text-red-600">{err}</p> : null}
 
-      <div className="rounded-xl bg-white p-4 shadow-sm">
-        <table className="w-full text-left text-xs">
+      <div className="app-card rounded-xl bg-white p-4 shadow-sm">
+        <table className="app-table w-full text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50">
               <th className="p-2">Numer</th>
@@ -189,47 +199,58 @@ export function Tenders() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((t) => (
-              <tr key={t.id} className="border-b hover:bg-slate-50">
-                <td className="p-2">
-                  <Link className="font-medium text-blue-600 hover:underline" to={`/tenders/${t.id}`}>
-                    {t.number}
-                  </Link>
-                </td>
-                <td className="p-2">{t.client?.name}</td>
-                <td className="p-2">
-                  {t.deadline ?? '—'}
-                  {t.deadline &&
-                    new Date(t.deadline) <= new Date(Date.now() + 7 * 86400000) &&
-                    new Date(t.deadline) >= new Date(new Date().toDateString()) && (
-                      <span className="ml-1 font-semibold text-red-600" title="Termin w ciągu 7 dni">
-                        !
-                      </span>
-                    )}
-                </td>
-                <td className="p-2">
-                  {t.offer_value_net
-                    ? `${Number(t.offer_value_net).toLocaleString('pl-PL')} zł`
-                    : '—'}
-                </td>
-                <td className="p-2">{t.items_count ?? 0}</td>
-                <td className="p-2">{t.status}</td>
-                <td className="p-2">{t.ai_percent}%</td>
-                <td className="p-2">{t.owner?.name}</td>
-                {canDeleteTender ? (
-                  <td className="p-2 text-right">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      className="rounded bg-red-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
-                      onClick={() => void deleteTender(t)}
-                    >
-                      Usuń
-                    </button>
+            {rows.map((t) => {
+              const soon = isDeadlineSoon(t.deadline)
+              return (
+                <tr key={t.id} className="border-b hover:bg-slate-50">
+                  <td className="p-2">
+                    <Link className="app-code font-medium text-blue-600 hover:underline" to={`/tenders/${t.id}`}>
+                      {t.number}
+                    </Link>
                   </td>
-                ) : null}
-              </tr>
-            ))}
+                  <td className="p-2">{t.client?.name}</td>
+                  <td className="p-2">
+                    <span className="app-deadline" data-soon={soon ? 'true' : undefined}>
+                      {t.deadline ?? '—'}
+                      {soon && (
+                        <span className="app-deadline-flag ml-1 font-semibold text-red-600" title="Termin w ciągu 7 dni">
+                          !
+                        </span>
+                      )}
+                    </span>
+                  </td>
+                  <td className="app-num p-2">
+                    {t.offer_value_net
+                      ? `${Number(t.offer_value_net).toLocaleString('pl-PL')} zł`
+                      : '—'}
+                  </td>
+                  <td className="app-num p-2">{t.items_count ?? 0}</td>
+                  <td className="p-2">
+                    <span className="app-status" data-status={t.status}>
+                      {tenderStatusLabel(t.status)}
+                    </span>
+                  </td>
+                  <td className="p-2">
+                    <span className="app-ai" style={{ '--ai': `${t.ai_percent}%` } as CSSProperties}>
+                      {t.ai_percent}%
+                    </span>
+                  </td>
+                  <td className="p-2">{t.owner?.name}</td>
+                  {canDeleteTender ? (
+                    <td className="p-2 text-right">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        className="rounded bg-red-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                        onClick={() => void deleteTender(t)}
+                      >
+                        Usuń
+                      </button>
+                    </td>
+                  ) : null}
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

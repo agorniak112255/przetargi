@@ -1,5 +1,6 @@
 @import "tailwindcss";
 /* Szablony wyglądu (<html data-template data-scheme>): wspólny tryb ciemny, potem szablony. */
+@import "./themes/base.css";
 @import "./themes/dark-scheme.css";
 @import "./themes/nocna-zmiana.css";
 

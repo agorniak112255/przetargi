@@ -13,6 +13,8 @@ import { SiwzItemTile, SiwzRequirementBlock, splitSiwzRequirement } from '../com
 import { CardConflictsModal } from '../components/CardConflictsModal'
 import type { TenderConflicts } from '../components/RequirementCheckList'
 import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
+import { TENDER_STATUS_LABEL } from '../lib/tenderStatus'
+import { StatusFlow } from '../components/StatusFlow'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -536,17 +538,6 @@ function itemMatchesQuery(item: Item, query: string): boolean {
       .join(' '),
   )
   return tokens.every((t) => hay.includes(t))
-}
-
-const statusLabel: Record<string, string> = {
-  draft: 'Szkic',
-  wycena: 'Wycena',
-  akceptacja_km: 'Akceptacja kierownika',
-  akceptacja_dyrektor: 'Akceptacja dyrektora',
-  zatwierdzona: 'Zatwierdzona',
-  exported: 'Wyeksportowana',
-  odrzucony: 'Odrzucony',
-  archiwum: 'Archiwum',
 }
 
 const actionLabel: Record<string, string> = {
@@ -1237,7 +1228,7 @@ export function TenderDetail() {
       setTransitionNote('')
       await load()
       await loadMeta()
-      setMsg(`Status: ${statusLabel[status] ?? status}`)
+      setMsg(`Status: ${TENDER_STATUS_LABEL[status] ?? status}`)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd statusu')
     } finally {
@@ -1640,20 +1631,20 @@ export function TenderDetail() {
 
   return (
     <div>
-      <Link to="/tenders" className="text-xs text-blue-600 hover:underline">
+      <Link to="/tenders" className="app-back text-xs text-blue-600 hover:underline">
         ← Lista przetargów
       </Link>
-      <h1 className="mt-2 text-xl font-semibold">
+      <h1 className="app-title mt-2 text-xl font-semibold">
         {tender.number} · {tender.title}
       </h1>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-slate-500">
+        <p className="app-meta text-xs text-slate-500">
           {tender.client?.name} · opiekun {tender.owner?.name ?? '—'} ·{' '}
-          <strong>{statusLabel[tender.status] ?? tender.status}</strong> · AI {tender.ai_percent}% · narzut{' '}
+          <strong>{TENDER_STATUS_LABEL[tender.status] ?? tender.status}</strong> · AI {tender.ai_percent}% · narzut{' '}
           {tender.target_margin_percent ?? 18}% · marża zreal. {tender.margin_percent ?? '—'}% ·{' '}
           {can_edit ? 'edycja włączona' : 'tylko podgląd'}
         </p>
-        <div className="flex flex-wrap gap-1">
+        <div className="app-actions flex flex-wrap gap-1">
           {can_edit && (
             <>
               <button
@@ -1746,6 +1737,7 @@ export function TenderDetail() {
           )}
         </div>
       </div>
+      <StatusFlow status={tender.status} />
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
@@ -1919,7 +1911,8 @@ export function TenderDetail() {
 
       {coverage && (
         <div
-          className={`mb-3 rounded-xl border p-3 text-xs ${
+          data-ready={coverage.ready ? 'true' : 'false'}
+          className={`app-coverage mb-3 rounded-xl border p-3 text-xs ${
             coverage.ready ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'
           }`}
         >
@@ -1949,7 +1942,7 @@ export function TenderDetail() {
                   setCoverageFilter((f) => (f === key ? null : key))
                   setTab('pozycje')
                 }}
-                className={`rounded px-2 py-1 ${
+                className={`app-chip rounded px-2 py-1 ${coverageFilter === key ? 'app-chip--active ' : ''}${
                   coverageFilter === key
                     ? 'bg-slate-800 text-white'
                     : coverage[key] === 0
@@ -2033,7 +2026,7 @@ export function TenderDetail() {
           )}
       </div>
 
-      <div className="mb-3 flex flex-wrap gap-1 border-b border-slate-200 pb-2">
+      <div className="app-tabs mb-3 flex flex-wrap gap-1 border-b border-slate-200 pb-2">
         {tabs.map((t) => {
           const badge =
             t === 'historia'
@@ -2048,12 +2041,12 @@ export function TenderDetail() {
               key={t}
               type="button"
               onClick={() => setTab(t)}
-              className={`rounded-t px-3 py-2 text-xs capitalize ${
-                tab === t ? 'bg-sky-100 font-semibold text-blue-700' : 'bg-slate-100 text-slate-600'
+              className={`app-tab rounded-t px-3 py-2 text-xs capitalize ${
+                tab === t ? 'app-tab--active bg-sky-100 font-semibold text-blue-700' : 'bg-slate-100 text-slate-600'
               }`}
             >
               {t}
-              {badge != null && badge > 0 ? ` (${badge})` : ''}
+              {badge != null && badge > 0 ? <span className="app-tab-count">{` (${badge})`}</span> : null}
             </button>
           )
         })}
@@ -2062,7 +2055,7 @@ export function TenderDetail() {
       {tab === 'pozycje' && (
         <div className="space-y-3">
           {can_edit && (
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="app-actions app-actions--end flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 disabled={busy}
@@ -2186,7 +2179,7 @@ export function TenderDetail() {
             </div>
           </div>
           {can_edit && (
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="app-actions app-actions--end flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 disabled={busy}
@@ -2985,7 +2978,7 @@ export function TenderDetail() {
           <div className="rounded-xl bg-white p-4 shadow-sm">
             <h2 className="mb-2 text-sm font-semibold">Zmiana statusu</h2>
             <p className="mb-3 text-xs text-slate-500">
-              Teraz: <strong>{statusLabel[tender.status] ?? tender.status}</strong>
+              Teraz: <strong>{TENDER_STATUS_LABEL[tender.status] ?? tender.status}</strong>
             </p>
             <label className="mb-3 block text-xs">
               Notatka (wymagana przy odrzuceniu / cofnięciu z akceptacji)
@@ -3006,7 +2999,7 @@ export function TenderDetail() {
                   onClick={() => void transition(s)}
                   className="rounded bg-blue-600 px-3 py-2 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
                 >
-                  → {statusLabel[s] ?? s}
+                  → {TENDER_STATUS_LABEL[s] ?? s}
                 </button>
               ))}
               {next_statuses.length === 0 && (
@@ -3246,7 +3239,7 @@ function ItemRow({
   return (
     <article
       id={`tender-item-${item.id}`}
-      className={`rounded-xl border p-2 ${
+      className={`app-item rounded-xl border p-2 ${
         focused
           ? 'border-violet-600 bg-violet-50 ring-2 ring-violet-600'
           : isExternal
@@ -3286,7 +3279,7 @@ function ItemRow({
             </>
           }
         />
-        <section className="flex min-h-full min-w-0 flex-col rounded-lg border border-sky-200 bg-sky-50/80 p-2">
+        <section className="app-item-offer flex min-h-full min-w-0 flex-col rounded-lg border border-sky-200 bg-sky-50/80 p-2">
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-sky-900">Oferta</div>
         {canEdit ? (
           <div className="flex flex-col gap-1">
@@ -3623,7 +3616,7 @@ function ItemRow({
         ) : null}
 
         {(canEdit || selectedProduct || item.main_product || isExternal) && (
-          <div className="mt-2 flex min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
+          <div className="app-item-product mt-2 flex min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
             <button
               type="button"
               className="shrink-0 self-stretch bg-slate-50 p-2"
@@ -3931,7 +3924,7 @@ function ItemRow({
         </section>
       </div>
     {(item.main_product_id ?? item.main_product?.id) ? (
-      <div className="mt-2">
+      <div className="app-item-subs mt-2">
           <ItemBattlecard
             tenderId={tenderId}
             itemId={item.id}

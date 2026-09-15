@@ -1,0 +1,256 @@
+/* Nocna zmiana — ramy aplikacji: pasek boczny z ikonami, obszar główny, karty, nagłówki. */
+
+/* Pasek boczny (w-60 → 224px jak w makiecie) */
+:root[data-template="nocna-zmiana"] .app-sidebar {
+  width: 224px;
+  border-right: 1px solid var(--t-border);
+  background-color: var(--t-surface);
+  color: var(--t-text);
+  font-size: 13.5px;
+}
+
+/* Logo: kwadrat w akcencie (::before) obok nazwy, podpis pod nazwą */
+:root[data-template="nocna-zmiana"] .app-brand {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom-color: var(--t-border);
+  color: var(--t-text);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+:root[data-template="nocna-zmiana"] .app-brand::before {
+  content: "S";
+  content: "S" / "";
+  grid-row: span 2;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background-color: var(--t-accent);
+  color: var(--t-on-accent);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+:root[data-template="nocna-zmiana"] .app-brand-sub {
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--t-muted);
+  font-size: 11.5px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-template="nocna-zmiana"] .app-nav {
+  padding-block: 8px;
+}
+
+/* Linki menu i przyciski w stopce paska — ten sam styl */
+:root[data-template="nocna-zmiana"] .app-nav-link,
+:root[data-template="nocna-zmiana"] .app-sidebar-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 1px 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background-color: transparent;
+  color: var(--t-muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: left;
+}
+
+:root[data-template="nocna-zmiana"] .app-sidebar-btn {
+  width: calc(100% - 16px);
+}
+
+:root[data-template="nocna-zmiana"] .app-nav-icon {
+  display: block;
+  flex-shrink: 0;
+  color: var(--t-dim);
+}
+
+:root[data-template="nocna-zmiana"] .app-nav-link:hover,
+:root[data-template="nocna-zmiana"] .app-sidebar-btn:hover {
+  background-color: var(--t-surface-2);
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-nav-link:hover .app-nav-icon,
+:root[data-template="nocna-zmiana"] .app-sidebar-btn:hover .app-nav-icon {
+  color: inherit;
+}
+
+:root[data-template="nocna-zmiana"] .app-nav-link:focus-visible,
+:root[data-template="nocna-zmiana"] .app-sidebar-btn:focus-visible {
+  outline: 2px solid var(--t-accent);
+  outline-offset: -2px;
+}
+
+/* Aktywny: tło akcentu zmieszane z powierzchnią; bez paska z lewej i bez ringu z klasycznego */
+:root[data-template="nocna-zmiana"] .app-nav-link.app-nav-link--active,
+:root[data-template="nocna-zmiana"] .app-sidebar-btn.app-sidebar-btn--active {
+  background-color: color-mix(in oklab, var(--t-accent) 14%, var(--t-surface));
+  box-shadow: none;
+  color: var(--t-accent);
+}
+
+:root[data-template="nocna-zmiana"] .app-nav-link--active .app-nav-icon,
+:root[data-template="nocna-zmiana"] .app-sidebar-btn--active .app-nav-icon {
+  color: var(--t-accent);
+}
+
+:root[data-template="nocna-zmiana"] .app-sidebar-footer {
+  margin-top: 8px;
+  padding-block: 8px 12px;
+  border-top: 1px solid var(--t-border);
+}
+
+/* Opakowanie NotificationBell (m-4) — odstępy daje sam przycisk */
+:root[data-template="nocna-zmiana"] .app-sidebar-footer > div {
+  margin: 0;
+}
+
+/* Licznik nieprzeczytanych powiadomień: pigułka na końcu wiersza zamiast w rogu */
+:root[data-template="nocna-zmiana"] .app-sidebar-btn .app-badge {
+  position: static;
+  min-width: 18px;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background-color: var(--t-accent);
+  color: var(--t-on-accent);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* Lista powiadomień */
+:root[data-template="nocna-zmiana"] .app-popover {
+  border-color: var(--t-border);
+  background-color: var(--t-surface);
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-popover .text-slate-200 {
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-popover .text-sky-300 {
+  color: var(--t-accent);
+}
+
+:root[data-template="nocna-zmiana"] .app-popover .text-slate-400 {
+  color: var(--t-muted);
+}
+
+:root[data-template="nocna-zmiana"] .app-popover-item {
+  background-color: var(--t-surface-2);
+  color: var(--t-text);
+}
+
+/* przeczytane: bg-slate-800/60 text-slate-400 */
+:root[data-template="nocna-zmiana"] .app-popover-item.text-slate-400 {
+  background-color: transparent;
+  color: var(--t-muted);
+}
+
+/* Obszar główny */
+:root[data-template="nocna-zmiana"] .app-main {
+  padding: 20px 24px;
+  background-color: var(--t-bg);
+  /* Szerokość obszaru głównego dla @container (np. pasek wskaźników w lists.css). */
+  container: app-main / inline-size;
+}
+
+/* Karty: zamiast cienia obrys 1px. Przez --tw-shadow, żeby ring-* na tym samym
+   elemencie dalej działał; karty z własną ramką (.border) tracą tylko cień. */
+:root[data-template="nocna-zmiana"] .app-main .shadow-sm {
+  --tw-shadow: 0 0 0 1px var(--t-border);
+}
+
+:root[data-template="nocna-zmiana"] .app-main .shadow-sm.border {
+  --tw-shadow: 0 0 transparent;
+}
+
+:root[data-template="nocna-zmiana"] .app-main .rounded-xl {
+  border-radius: 10px;
+}
+
+:root[data-template="nocna-zmiana"] .app-main h1 {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+:root[data-template="nocna-zmiana"] .app-main h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Pola formularzy z ramką (.border). Kolor ramki tylko dla ramek domyślnych/slate —
+   czerwone, bursztynowe itp. zostają; tło tylko gdy pole nie ma własnego bg-*. */
+:root[data-template="nocna-zmiana"] :is(.app-main, .app-login-card) :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea).border:is(.rounded, .rounded-md, .rounded-lg) {
+  border-radius: 8px;
+}
+
+:root[data-template="nocna-zmiana"] :is(.app-main, .app-login-card) :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea).border:where(:not([class*="border-"]), [class*="border-slate-"]) {
+  border-color: var(--t-border);
+}
+
+:root[data-template="nocna-zmiana"] :is(.app-main, .app-login-card) :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea).border:not([class*="bg-"]) {
+  background-color: var(--t-surface);
+}
+
+:root[data-template="nocna-zmiana"] :is(.app-main, .app-login-card) :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea).border:focus {
+  border-color: var(--t-accent);
+  outline: 2px solid transparent;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--t-accent) 20%, transparent);
+}
+
+/* Suwaki w ciemnym schemacie */
+@media screen {
+  :root[data-template="nocna-zmiana"][data-scheme="dark"] {
+    scrollbar-color: var(--t-border-strong) transparent;
+  }
+}
+
+/* Logowanie: jak w reszcie szablonu, z kwadratem-logo nad tytułem */
+:root[data-template="nocna-zmiana"] .app-login {
+  background-color: var(--t-bg);
+}
+
+:root[data-template="nocna-zmiana"] .app-login-card {
+  border: 1px solid var(--t-border);
+  background-color: var(--t-surface);
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-login-card::before {
+  content: "S";
+  content: "S" / "";
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 16px;
+  border-radius: 9px;
+  background-color: var(--t-accent);
+  color: var(--t-on-accent);
+  font-size: 16px;
+  font-weight: 700;
+}

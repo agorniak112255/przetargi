@@ -190,7 +190,7 @@ export function ProductSearchSelect({
           ) : null}
         </div>
       )}
-      {hint && <p className="mt-0.5 text-[10px] text-violet-700">{hint}</p>}
+      {hint && <p className="app-item-ai mt-0.5 text-[10px] text-violet-700">{hint}</p>}
       {open && !disabled && (
         <ul className="absolute z-30 mt-0.5 max-h-56 w-[min(360px,80vw)] overflow-y-auto rounded border border-slate-200 bg-white shadow-lg">
           <li>

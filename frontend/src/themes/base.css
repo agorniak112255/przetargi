@@ -1,0 +1,12 @@
+/*
+ * Wspólne zasady dla wszystkich szablonów wyglądu.
+ *
+ * Elementy dodawane w komponentach tylko na potrzeby szablonów (ikony menu, pasek
+ * etapów przetargu) są domyślnie ukryte — szablon „klasyczny” wygląda jak dawniej.
+ * Szablon, który ich używa, pokazuje je we własnym pliku, np.
+ * :root[data-template="nocna-zmiana"] .app-flow { display: grid; }
+ */
+.app-nav-icon,
+.app-flow {
+  display: none;
+}
