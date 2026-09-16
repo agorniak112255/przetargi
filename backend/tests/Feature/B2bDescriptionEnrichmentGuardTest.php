@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Jobs\PrefetchProductSourcesJob;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\B2b\B2bDescriptionSource;
@@ -133,6 +134,33 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
 
         $this->assertSame(Product::ENRICHMENT_NONE, $fromB2b->fresh()?->enrichment_status);
         $this->assertSame(Product::ENRICHMENT_QUEUED, $pending->fresh()?->enrichment_status);
+    }
+
+    public function test_price_list_coverage_counts_b2b_description_as_ready(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $fromB2b = $this->b2bProduct('UVEX-1');
+        $pending = $this->product('OTHER-1', null);
+
+        PriceList::query()->create([
+            'manufacturer' => 'UVEX',
+            'version' => 'v-b2b',
+            'original_filename' => 'uvex.xlsx',
+            'rows_total' => 2,
+            'products_created' => 2,
+            'products_updated' => 0,
+            'rows_skipped' => 0,
+            'product_ids' => [$fromB2b->id, $pending->id],
+        ]);
+
+        $this->getJson('/api/price-lists')
+            ->assertOk()
+            ->assertJsonFragment([
+                'version' => 'v-b2b',
+                'enrichment_done' => 0,
+                'enrichment_from_b2b' => 1,
+                'enrichment_total' => 2,
+            ]);
     }
 
     private function product(string $sku, ?string $description): Product

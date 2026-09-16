@@ -99,6 +99,7 @@ type PriceList = {
   enrichment_failed?: number
   enrichment_queued?: number
   enrichment_running?: number
+  enrichment_from_b2b?: number
   enrichment_total?: number
   enrichment_batch_status?: string | null
   enrichment_current_sku?: string | null
@@ -250,19 +251,33 @@ const HISTORY_SORT_DESC_FIRST: ReadonlySet<HistorySortKey> = new Set([
   'enrichment',
 ])
 
+// karty z opisem z cennika B2B liczą się jako gotowe — zbiorcze AI ich nie rusza (serwer je pomija)
 function enrichmentCoverage(
   row: PriceList,
   cached: PriceList | undefined,
-): { total: number; done: number; failed: number; remaining: number; queued: number; running: number } {
+): {
+  total: number
+  done: number
+  fromB2b: number
+  covered: number
+  failed: number
+  remaining: number
+  queued: number
+  running: number
+} {
   const total = row.enrichment_total ?? (row.product_ids ?? cached?.product_ids ?? []).length
   const done = row.enrichment_done ?? 0
+  const fromB2b = row.enrichment_from_b2b ?? 0
   const failed = row.enrichment_failed ?? 0
+  const covered = Math.min(total, done + fromB2b)
 
   return {
     total,
     done,
+    fromB2b,
+    covered,
     failed,
-    remaining: Math.max(0, total - done),
+    remaining: Math.max(0, total - covered),
     queued: row.enrichment_queued ?? 0,
     running: row.enrichment_running ?? 0,
   }
@@ -341,7 +356,7 @@ function compareHistoryRows(
       const eb = enrichmentCoverage(b, cache[b.id])
       const da = isPriceListDownloading(a, batches[a.id]) ? 1 : 0
       const db = isPriceListDownloading(b, batches[b.id]) ? 1 : 0
-      cmp = da - db || ea.remaining - eb.remaining || ea.done - eb.done || ea.total - eb.total
+      cmp = da - db || ea.remaining - eb.remaining || ea.covered - eb.covered || ea.total - eb.total
       break
     }
   }
@@ -672,10 +687,19 @@ export function PriceLists() {
     }
   }
 
-  function openEnrichConfirm(row: PriceList, productCount: number, enrichDone: number) {
-    const pending = Math.max(0, productCount - enrichDone)
-    const force = pending === 0 && productCount > 0
-    const toQueue = force ? productCount : pending
+  function openEnrichConfirm(row: PriceList, productCount: number, remaining: number, fromB2b: number) {
+    const force = remaining === 0 && productCount > 0
+    // także z force serwer pomija karty z opisem z cennika B2B
+    const toQueue = force ? Math.max(0, productCount - fromB2b) : remaining
+    if (toQueue === 0) {
+      setErr(
+        'Cały cennik ma opisy z cennika B2B (ze sklepu dostawcy) — zbiorcze AI ich nie nadpisuje. ' +
+          'Pojedynczą kartę można nadpisać na liście produktów przyciskiem „Pobierz”.',
+      )
+
+      return
+    }
+    setErr('')
     setEnrichConfirmAck(false)
     setEnrichConfirm({ row, pending: toQueue, force })
   }
@@ -1710,11 +1734,20 @@ export function PriceLists() {
               const cached = historyCache[r.id] ?? r
               const kind = expandedHistory?.id === r.id ? expandedHistory.kind : null
               const enrichBatch = enrichBatches[r.id]
-              const { total: productCount, done: enrichDone, failed: enrichFailed, remaining, queued, running } =
-                enrichmentCoverage(r, cached)
+              const {
+                total: productCount,
+                done: enrichDone,
+                fromB2b: enrichFromB2b,
+                covered: enrichCovered,
+                failed: enrichFailed,
+                remaining,
+                queued,
+                running,
+              } = enrichmentCoverage(r, cached)
               const batchActive = isPriceListDownloading(r, enrichBatch)
               const missing = remaining
               const donePct = productCount > 0 ? (enrichDone / productCount) * 100 : 0
+              const b2bPct = productCount > 0 ? (enrichFromB2b / productCount) * 100 : 0
               const failPct = productCount > 0 ? (enrichFailed / productCount) * 100 : 0
               const nowSku = enrichBatch?.current_sku || r.enrichment_current_sku
               const editing = editId === r.id
@@ -1785,12 +1818,18 @@ export function PriceLists() {
                           <div
                             className="flex h-2 overflow-hidden rounded bg-slate-200"
                             title={`Ściągnięte ${enrichDone} z ${productCount}, zostało ${remaining}${
-                              enrichFailed > 0 ? `, błędy ${enrichFailed}` : ''
-                            }`}
+                              enrichFromB2b > 0
+                                ? `, opis z cennika B2B ${enrichFromB2b} (AI ich nie rusza)`
+                                : ''
+                            }${enrichFailed > 0 ? `, błędy ${enrichFailed}` : ''}`}
                           >
                             <div
                               className="bg-emerald-500 transition-all"
                               style={{ width: `${donePct}%` }}
+                            />
+                            <div
+                              className="bg-indigo-400 transition-all"
+                              style={{ width: `${b2bPct}%` }}
                             />
                             <div
                               className="bg-red-400 transition-all"
@@ -1800,7 +1839,7 @@ export function PriceLists() {
                           <p
                             className={
                               'mt-1 tabular-nums text-[11px] ' +
-                              (enrichDone >= productCount
+                              (enrichCovered >= productCount
                                 ? 'font-medium text-emerald-700'
                                 : enrichDone > 0
                                   ? 'text-emerald-700'
@@ -1810,6 +1849,14 @@ export function PriceLists() {
                             ściągnięte {enrichDone}
                             <span className="font-normal text-slate-400"> / {productCount}</span>
                           </p>
+                          {enrichFromB2b > 0 && (
+                            <p
+                              className="tabular-nums text-[11px] text-indigo-700"
+                              title="Opis ze sklepu dostawcy (cennik B2B) — zbiorcze AI go nie nadpisuje"
+                            >
+                              opis z B2B {enrichFromB2b}
+                            </p>
+                          )}
                           <p
                             className={
                               remaining > 0
@@ -1846,7 +1893,7 @@ export function PriceLists() {
                           productCount === 0 ||
                           batchActive
                         }
-                        onClick={() => openEnrichConfirm(r, productCount, enrichDone)}
+                        onClick={() => openEnrichConfirm(r, productCount, remaining, enrichFromB2b)}
                         className="rounded border border-slate-300 px-2 py-1 text-[11px] disabled:opacity-50"
                         title={
                           productCount === 0
@@ -1862,9 +1909,9 @@ export function PriceLists() {
                             ? 'Pobieranie…'
                             : enrichFailed > 0
                               ? `Ponów err (${enrichFailed})`
-                              : enrichDone >= productCount && productCount > 0
+                              : enrichCovered >= productCount && productCount > 0
                                 ? 'Pobierz ponownie'
-                                : missing > 0 && enrichDone > 0
+                                : missing > 0 && enrichCovered > 0
                                   ? `Pobierz brak (${missing})`
                                   : 'Pobierz'}
                       </button>

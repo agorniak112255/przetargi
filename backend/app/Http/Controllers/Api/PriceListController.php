@@ -10,6 +10,7 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Services\B2b\B2bAccountPriceList;
+use App\Services\B2b\B2bDescriptionSource;
 use App\Services\PriceListDeletionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,7 @@ class PriceListController extends Controller
     public function __construct(
         private readonly PriceListDeletionService $deletion,
         private readonly B2bAccountPriceList $b2bLists,
+        private readonly B2bDescriptionSource $b2bDescriptions,
     ) {}
 
     public function index(): JsonResponse
@@ -58,6 +60,17 @@ class PriceListController extends Controller
             }
         }
 
+        // karty z opisem z cennika B2B nie idą do zbiorczego AI (ProductEnrichmentService::enqueueProductIds),
+        // więc w pokryciu cennika liczą się jako gotowe — inaczej „zostało” nigdy nie zeszłoby do zera
+        $fromB2b = [];
+        $notDone = array_values(array_filter(
+            $allIds,
+            static fn (int $id): bool => ! isset($statusSets[Product::ENRICHMENT_DONE][$id]),
+        ));
+        if ($notDone !== []) {
+            $fromB2b = $this->b2bDescriptions->productIds($notDone);
+        }
+
         $latestBatchMsg = [];
         $batchRows = ProductEnrichmentBatch::query()
             ->where('scope', ProductEnrichmentBatch::SCOPE_PRICE_LIST)
@@ -82,7 +95,7 @@ class PriceListController extends Controller
             }
         }
 
-        $payload = $lists->map(function (PriceList $list) use ($statusSets, $latestBatchMsg, $owners): array {
+        $payload = $lists->map(function (PriceList $list) use ($statusSets, $fromB2b, $latestBatchMsg, $owners): array {
             $ids = array_map('intval', $list->product_ids ?? []);
             $countStatus = static function (array $set) use ($ids): int {
                 $n = 0;
@@ -99,6 +112,7 @@ class PriceListController extends Controller
             $row['enrichment_failed'] = $countStatus($statusSets[Product::ENRICHMENT_FAILED]);
             $row['enrichment_queued'] = $countStatus($statusSets[Product::ENRICHMENT_QUEUED]);
             $row['enrichment_running'] = $countStatus($statusSets[Product::ENRICHMENT_RUNNING]);
+            $row['enrichment_from_b2b'] = $countStatus($fromB2b);
             $row['enrichment_total'] = count($ids);
             $batch = $latestBatchMsg[$list->id] ?? null;
             $row['enrichment_batch_status'] = $batch?->status;
