@@ -571,8 +571,8 @@ final class UvexConnectorTest extends TestCase
         // wstęp przy cenie dokłada fakty, których nie ma w zakładce (maksymalny rozmiar, grubość)
         $this->assertStringContainsString('user specific available up to a size of 1219x915mm', $description);
         $this->assertStringContainsString('Jednostka: szt.', $description);
-        // parametry ze strony producenta wchodzą do opisu (idą do tłumaczenia razem z nim)
-        $this->assertStringContainsString('Filter material: Plastic', $description);
+        // parametry ze strony producenta jako osobny blok (idą do tłumaczenia razem z opisem)
+        $this->assertStringContainsString("Dane techniczne:\nFilter material: Plastic", $description);
         $this->assertStringContainsString('Protection Class / Norm: EN 207 full protection', $description);
         // boczny blok z granicami widma — bez niego karta ma same nazwy zakresów, bez liczb
         $this->assertStringContainsString(

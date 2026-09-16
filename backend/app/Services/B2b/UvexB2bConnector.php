@@ -57,6 +57,12 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     /** Nagłówek sekcji, pod którą na karcie ląduje opis wzięty ze strony producenta. */
     private const MANUFACTURER_SECTION = 'Opis ze strony producenta';
 
+    /** Nagłówek bloku z parametrami wyrobu — karta pogrubia to, co stoi przed dwukropkiem. */
+    private const SPECIFICATION_SECTION = 'Dane techniczne:';
+
+    /** Nagłówek wierszy tabeli poziomów ochrony (w segmencie „Parametry:”, którego tłumaczenie nie rusza). */
+    private const PROTECTION_SECTION = 'Poziomy ochrony';
+
     /** Koniec tekstu opisu na stronie producenta — nagłówek tabeli parametrów, którą czytamy osobno. */
     private const MANUFACTURER_TAIL_HEADINGS = ['specifications', 'spezifikationen'];
 
@@ -344,13 +350,20 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         $intro = $page->query('//*['.JspB2bClient::classPredicate('product-detail-short-description').']')->item(0);
         $lines = self::withoutRepeatedText($intro !== null ? self::blockLines($intro) : [], $lines);
 
-        $lines = [...$lines, ...self::specificationLines($page), ...self::protectionRangeLines($page)];
-        if ($lines === []) {
+        $parameters = [...self::specificationLines($page), ...self::protectionRangeLines($page)];
+        if ($lines === [] && $parameters === []) {
             return '';
         }
 
         $this->foreignDescriptionFor = $product->remoteId;
-        $sections = [self::MANUFACTURER_SECTION.' ('.parse_url($url, PHP_URL_HOST).'):'."\n".implode("\n", $lines)];
+        $sections = [];
+        if ($lines !== []) {
+            $sections[] = self::MANUFACTURER_SECTION.' ('.parse_url($url, PHP_URL_HOST).'):'."\n".implode("\n", $lines);
+        }
+        if ($parameters !== []) {
+            // osobny akapit: karta pokazuje go jako blok, a nie jako ciąg dalszy opisu
+            $sections[] = self::SPECIFICATION_SECTION."\n".implode("\n", $parameters);
+        }
 
         $levels = self::protectionLines($page);
         if ($levels !== []) {
@@ -1007,6 +1020,8 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             if (count($cells) < 2) {
                 continue;
             }
+
+            // Kolumny rozdzielone „|” — panel składa z takich wierszy prawdziwą tabelę na karcie
             $lines[] = implode(' | ', $cells);
             if (count($lines) >= self::PROTECTION_ROWS_LIMIT) {
                 break;
