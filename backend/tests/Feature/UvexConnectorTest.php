@@ -549,7 +549,7 @@ final class UvexConnectorTest extends TestCase
 
     public function test_description_comes_from_the_manufacturer_page_when_the_shop_only_links_to_it(): void
     {
-        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/000P1P102001');
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/9970.005');
         $this->fakeSite();
         $connector = $this->connector();
         $connector->login();
@@ -560,10 +560,53 @@ final class UvexConnectorTest extends TestCase
         $this->assertStringContainsString('Opis ze strony producenta (www.uvex-laservision.de):', $description);
         $this->assertStringContainsString('The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.', $description);
         $this->assertStringContainsString('Jednostka: szt.', $description);
-        // tabela parametrów zostaje na stronie producenta — nagłówek bez treści nie jest opisem
-        $this->assertStringNotContainsString('Specifications', $description);
+        // parametry ze strony producenta wchodzą do opisu (idą do tłumaczenia razem z nim)
+        $this->assertStringContainsString('Filter material: Plastic', $description);
+        $this->assertStringContainsString('Protection Class / Norm: EN 207 full protection', $description);
+        // poziomy ochrony dosłownie, w segmencie, którego tłumaczenie nie rusza
+        $this->assertStringContainsString(
+            "Parametry:\nWAVELENGTH (NM) | OD | OPERATING MODE / TESTED PROTECTION LEVEL"
+                ."\n180 - 315 | (OD10+) | D LB10 + IR LB4 + M LB6",
+            $description,
+        );
+        $this->assertStringContainsString('>315 - 385 | (OD8+) | D LB6 + IRM LB8', $description);
+        // sam nagłówek tabeli nie jest zdaniem opisu
+        $this->assertStringNotContainsString("\nSpecifications", $description);
         $this->assertTrue($connector->hasForeignDescription($product), 'opis po angielsku idzie do tłumaczenia');
         $this->assertCount(1, $this->manufacturerHits);
+    }
+
+    public function test_link_to_another_product_page_is_refused(): void
+    {
+        // sklep odsyła część kart pod adres innego filtra — opis z cudzej karty nie może trafić na naszą
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/000P1P102001');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        try {
+            $connector->description($product);
+            $this->fail('Opis z innego wyrobu powinien zostać odrzucony');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('prowadzi do innego wyrobu', $e->getMessage());
+        }
+        $this->assertSame([], $this->manufacturerHits, 'strony innego wyrobu nawet nie pobieramy');
+        $this->assertFalse($connector->hasForeignDescription($product));
+    }
+
+    public function test_product_code_decides_whether_the_manufacturer_page_belongs_to_the_card(): void
+    {
+        // ten sam wyrób, inny rozmiar albo wariant
+        $this->assertTrue(UvexB2bConnector::sameProduct('000P1P102001', '000P1P102004'));
+        $this->assertTrue(UvexB2bConnector::sameProduct('000P1P102607', '000P1P102602'));
+        $this->assertTrue(UvexB2bConnector::sameProduct('9970.005', '9970.005'));
+        // inny filtr: P621 i P1N01 pod adresem P1P10
+        $this->assertFalse(UvexB2bConnector::sameProduct('000P1P102001', '000P6P212003'));
+        $this->assertFalse(UvexB2bConnector::sameProduct('000P1P102001', '000P1N011005'));
+        // krótkie numery muszą zgadzać się w całości
+        $this->assertFalse(UvexB2bConnector::sameProduct('9970.005', '9970.006'));
+        $this->assertFalse(UvexB2bConnector::sameProduct('', '9970.005'));
     }
 
     public function test_link_outside_the_manufacturer_domains_is_not_followed(): void
@@ -584,7 +627,7 @@ final class UvexConnectorTest extends TestCase
     public function test_sync_orders_a_translation_only_for_the_card_with_the_english_description(): void
     {
         Storage::fake('public');
-        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/000P1P102001');
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/9970.005');
         $this->fakeSite();
 
         app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
@@ -609,7 +652,10 @@ final class UvexConnectorTest extends TestCase
         );
     }
 
-    /** Skrócona strona produktu uvex-laservision.de (Shopware) — opis w bloku itemprop="description". */
+    /**
+     * Skrócona strona produktu uvex-laservision.de (Shopware): opis w bloku itemprop="description", tabela
+     * „Specifications” i zakładka z poziomami ochrony.
+     */
     private function manufacturerPage(): string
     {
         return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
@@ -619,7 +665,16 @@ final class UvexConnectorTest extends TestCase
             .'<p>A broadband laser protection exists from 635nm to 11,500nm.</p>'
             .'<h2>Specifications</h2>'
             .'</div>'
-            .'<div class="product-detail-properties">Protection range</div>'
+            .'<table class="product-detail-properties-table">'
+            .'<tr><th>Filter material:</th><td>Plastic</td></tr>'
+            .'<tr><th>Protection Class / Norm:</th><td>EN 207 full protection, EN 208 Alignment protection, EN 60825</td></tr>'
+            .'<tr><th>VLT (approx.):</th><td>16%</td></tr>'
+            .'</table>'
+            .'<div id="protection-levels-tab-pane"><table>'
+            .'<tr><th>WAVELENGTH (NM)</th><th>OD</th><th>OPERATING MODE / TESTED PROTECTION LEVEL</th></tr>'
+            .'<tr><td>180 - 315</td><td>(OD10+)</td><td>D LB10 + IR LB4 + M LB6</td></tr>'
+            .'<tr><td>&gt;315 - 385</td><td>(OD8+)</td><td>D LB6 + IRM LB8</td></tr>'
+            .'</table></div>'
             .'</body></html>';
     }
 

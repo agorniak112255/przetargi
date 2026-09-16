@@ -29,6 +29,11 @@ use RuntimeException;
  * bazowej); 0,00 PLN (np. pozycje „Cenniki”, „Karty charakterystyki”) = brak ceny. Dostępność dosłownie
  * („Dostępny” / „Na zamówienie”), dla grupy z podziałem na rozmiary, gdy się różni.
  *
+ * Karta bez opisu w panelu ma tam odnośnik do strony producenta (uvex-laservision.de) — opis, tabelę
+ * „Specifications” i poziomy ochrony bierzemy stamtąd, ale tylko gdy numer katalogowy strony zgadza się z kodem
+ * karty; sklep bywa nierzetelny i odsyła kilka filtrów pod jeden adres. Tekst jest po angielsku i idzie
+ * do tłumaczenia (B2bForeignTextCards).
+ *
  * Pliki do pobrania (zakładka „Pliki do pobrania”, tabela #p-files-table): karta techniczna „SST …” i instrukcje.
  * Adresy w tabeli są względne wobec <base href> strony; nazwa pliku dosłownie z tabeli. Strona produktu pobierana
  * jest raz na kartę — ten sam HTML służy opisowi i liście plików.
@@ -52,8 +57,22 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     /** Nagłówek sekcji, pod którą na karcie ląduje opis wzięty ze strony producenta. */
     private const MANUFACTURER_SECTION = 'Opis ze strony producenta';
 
-    /** Koniec opisu na stronie producenta — dalej idzie tabela parametrów, której nie bierzemy. */
+    /** Koniec tekstu opisu na stronie producenta — nagłówek tabeli parametrów, którą czytamy osobno. */
     private const MANUFACTURER_TAIL_HEADINGS = ['specifications', 'spezifikationen'];
+
+    /**
+     * Tyle pierwszych znaków numeru katalogowego musi się zgadzać ze stroną producenta, żeby uznać ją za stronę
+     * tego wyrobu. Sklep bywa nierzetelny: karty filtra P621 (000P6P21…) i P1N01 (000P1N01…) odsyłają do strony
+     * filtra P1P10 (000P1P10…) — opis, normy i poziomy ochrony byłyby z cudzego wyrobu (sprawdzone 16.09.2026).
+     * Osiem znaków to „000” + oznaczenie filtra; różnią się dopiero wariant i rozmiar, a te opisu nie zmieniają.
+     */
+    private const MANUFACTURER_CODE_PREFIX = 8;
+
+    /** Tyle wierszy tabeli poziomów ochrony trafia na kartę. */
+    private const PROTECTION_ROWS_LIMIT = 30;
+
+    /** Nagłówek segmentu, którego tłumaczenie nie rusza (kody i liczby zostają dosłownie). */
+    private const PARAMETERS_PREFIX = 'Parametry:';
 
     private const INCONSISTENT = 7001;
 
@@ -248,6 +267,14 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             return '';
         }
 
+        $code = (string) ($product->raw['code'] ?? $product->sku);
+        $pageCode = basename((string) parse_url($url, PHP_URL_PATH));
+        if (! self::sameProduct($pageCode, $code)) {
+            throw new RuntimeException(
+                'odnośnik ze sklepu prowadzi do innego wyrobu (strona '.$pageCode.' przy karcie '.$code.') — opis pominięty'
+            );
+        }
+
         $page = JspB2bClient::dom($this->client->manufacturerPage($url));
         $description = $page->query('//*[@itemprop="description"]')->item(0);
         if ($description === null) {
@@ -255,17 +282,25 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         }
 
         $lines = self::blockLines($description);
-        // ostatni wiersz to nagłówek tabeli parametrów, która została na stronie
+        // ostatni wiersz to nagłówek tabeli parametrów — samą tabelę czytamy niżej
         while ($lines !== [] && in_array(mb_strtolower(end($lines)), self::MANUFACTURER_TAIL_HEADINGS, true)) {
             array_pop($lines);
         }
+        $lines = [...$lines, ...self::specificationLines($page)];
         if ($lines === []) {
             return '';
         }
 
         $this->foreignDescriptionFor = $product->remoteId;
+        $sections = [self::MANUFACTURER_SECTION.' ('.parse_url($url, PHP_URL_HOST).'):'."\n".implode("\n", $lines)];
 
-        return self::MANUFACTURER_SECTION.' ('.parse_url($url, PHP_URL_HOST).'):'."\n".implode("\n", $lines);
+        $levels = self::protectionLines($page);
+        if ($levels !== []) {
+            // kody i liczby (długości fal, stopnie ochrony) zostają dosłownie — tłumaczenie omija ten segment
+            $sections[] = self::PARAMETERS_PREFIX."\n".implode("\n", $levels);
+        }
+
+        return implode("\n\n", $sections);
     }
 
     /**
@@ -734,6 +769,78 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         }
 
         return $xpath;
+    }
+
+    /**
+     * Czy strona producenta opisuje ten sam wyrób co karta: ten sam numer katalogowy albo wspólny początek
+     * numeru (wariant i rozmiar mogą się różnić, oznaczenie wyrobu nie).
+     */
+    public static function sameProduct(string $pageCode, string $cardCode): bool
+    {
+        $page = mb_strtolower((string) preg_replace('/[^a-z0-9]/i', '', $pageCode));
+        $card = mb_strtolower((string) preg_replace('/[^a-z0-9]/i', '', $cardCode));
+        if ($page === '' || $card === '') {
+            return false;
+        }
+        if ($page === $card) {
+            return true;
+        }
+
+        $length = min(self::MANUFACTURER_CODE_PREFIX, mb_strlen($page), mb_strlen($card));
+
+        // krótkie numery muszą się zgadzać w całości — sam początek nie mówi jeszcze, że to ten sam wyrób
+        return $length >= 6 && mb_substr($page, 0, $length) === mb_substr($card, 0, $length);
+    }
+
+    /**
+     * Tabela „Specifications” ze strony producenta jako wiersze „Nazwa: wartość” (powłoka, materiał filtra,
+     * klasa ochrony i normy). Tekst jest po angielsku i idzie do tłumaczenia razem z opisem.
+     *
+     * @return list<string>
+     */
+    private static function specificationLines(DOMXPath $page): array
+    {
+        $lines = [];
+        foreach ($page->query('//table[contains(@class, "product-detail-properties-table")]//tr') ?: [] as $row) {
+            $cells = $page->query('.//th|.//td', $row);
+            $label = rtrim(self::text($cells->item(0)), ':');
+            $value = self::text($cells->item(1));
+            if ($label === '' || $value === '') {
+                continue;
+            }
+            $lines[] = $label.': '.$value;
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Zakładka „Protection Level”: długość fali, gęstość optyczna i badany stopień ochrony — przy doborze do
+     * przetargu to najważniejsza tabela. Wiersze zostają dosłownie (kody i liczby).
+     *
+     * @return list<string>
+     */
+    private static function protectionLines(DOMXPath $page): array
+    {
+        $lines = [];
+        foreach ($page->query('//*[@id="protection-levels-tab-pane"]//tr') ?: [] as $row) {
+            $cells = [];
+            foreach ($page->query('.//th|.//td', $row) ?: [] as $cell) {
+                $text = self::text($cell);
+                if ($text !== '') {
+                    $cells[] = $text;
+                }
+            }
+            if (count($cells) < 2) {
+                continue;
+            }
+            $lines[] = implode(' | ', $cells);
+            if (count($lines) >= self::PROTECTION_ROWS_LIMIT) {
+                break;
+            }
+        }
+
+        return $lines;
     }
 
     /** <base href> strony; bez niego adresy z tabeli plików są względne wobec /public/. */

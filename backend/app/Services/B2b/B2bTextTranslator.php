@@ -319,13 +319,15 @@ SYS;
 
     /**
      * Multizbiór liczb po ujednoliceniu zapisu: przecinek dziesiętny = kropka, bez zer wiodących i końcowych
-     * („17,50” i „17.5” to ta sama liczba). „1,000” w stylu angielskim da inną liczbę niż „1000” — takie
-     * tłumaczenie zostanie odrzucone, co jest bezpieczne (zostaje źródło).
+     * („17,50” i „17.5” to ta sama liczba). Separator tysięcy — angielski przecinek („11,500”) i polska spacja
+     * („11 500”) — znika po obu stronach; bez tego każdy opis z takimi liczbami byłby odrzucany (16.09.2026
+     * karty UVEX ze strony producenta: „from 635nm to 11,500nm”).
      *
      * @return array<string, int>
      */
     private static function numbers(string $text): array
     {
+        $text = self::withoutThousandsSeparators($text);
         preg_match_all('/(?<!\d)\d+(?:[.,]\d+)?/u', $text, $matches);
         $numbers = [];
         foreach ($matches[0] as $raw) {
@@ -339,12 +341,46 @@ SYS;
         return $numbers;
     }
 
+    /**
+     * Separator tysięcy znika tylko w pełnym zapisie grup po trzy cyfry i tylko gdy liczba nie zaczyna się od
+     * zera: „1,030” i „11 500” dają 1030 i 11500, a ułamek „0,125” zostaje ułamkiem.
+     */
+    private static function withoutThousandsSeparators(string $text): string
+    {
+        $pattern = '/(?<![\d.,])[1-9]\d{0,2}(?:,\d{3})+(?![\d.,])'
+            .'|(?<![\d.,])[1-9]\d{0,2}(?:[ \x{00A0}]\d{3})+(?![\d.,])/u';
+
+        return (string) preg_replace_callback(
+            $pattern,
+            static fn (array $m): string => str_replace([',', ' ', "\u{00A0}"], '', $m[0]),
+            $text,
+        );
+    }
+
+    /**
+     * Zapis liczbowy bez separatora tysięcy i bez odstępu między liczbą a tym, co po niej („1030-1400 nm”
+     * → „1030-1400nm”) — do porównania tokenów źródła i tłumaczenia. Pozostałych odstępów nie ruszamy:
+     * granice słów decydują o dopasowaniu tokenu.
+     */
+    private static function compactNumbers(string $text): string
+    {
+        return (string) preg_replace(
+            '/(\d)[ \x{00A0}]+(?=[\p{L}\d])/u',
+            '$1',
+            self::withoutThousandsSeparators($text),
+        );
+    }
+
     private static function assertProtectedTokensKept(string $source, string $result): void
     {
+        // ten sam token mimo innego separatora tysięcy i odstępu przed jednostką:
+        // „1,030-1,400nm” ze źródła i „1030-1400 nm” po polsku to jedno i to samo
+        $haystack = self::compactNumbers($result);
         $missing = [];
         foreach (self::protectedTokens($source) as $token) {
-            $pattern = '/(?<![\p{L}\p{N}])'.preg_quote($token, '/').'(?![\p{L}\p{N}])/u';
-            if (preg_match($pattern, $result) !== 1) {
+            $needle = self::compactNumbers($token);
+            $pattern = '/(?<![\p{L}\p{N}])'.preg_quote($needle, '/').'(?![\p{L}\p{N}])/u';
+            if (preg_match($pattern, $haystack) !== 1) {
                 $missing[] = $token;
             }
         }

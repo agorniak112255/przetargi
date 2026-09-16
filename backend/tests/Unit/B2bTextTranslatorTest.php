@@ -88,6 +88,20 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function keeps_translation_when_only_the_thousands_separator_changes(): void
+    {
+        // strona producenta UVEX pisze tysiące z przecinkiem („11,500nm”), po polsku piszemy je ze spacją
+        $source = 'A broadband laser protection exists from 635nm to 11,500nm, especially at 1,030-1,400nm.';
+        $translator = $this->translatorReturning([
+            'segments' => ['Szerokopasmowa ochrona laserowa od 635 nm do 11 500 nm, zwłaszcza przy 1030-1400 nm.'],
+        ]);
+
+        $result = $translator->translate($source);
+
+        $this->assertSame('Szerokopasmowa ochrona laserowa od 635 nm do 11 500 nm, zwłaszcza przy 1030-1400 nm.', $result['description']);
+    }
+
+    #[Test]
     public function rejects_lost_number(): void
     {
         $this->assertRejected(
