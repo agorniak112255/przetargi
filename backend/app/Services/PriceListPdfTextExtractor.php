@@ -192,17 +192,56 @@ final class PriceListPdfTextExtractor
             return null;
         }
 
-        $mode = $layout ? '-layout' : '-raw';
-        $cmd = escapeshellarg($bin).' '.$mode.' '.escapeshellarg($path).' -';
-        $out = [];
-        $code = 0;
-        exec($cmd.' 2>NUL', $out, $code);
-        if ($code !== 0 && $out === []) {
+        $out = $this->runPdfToText($bin, $layout ? '-layout' : '-raw', $path);
+        if ($out === null) {
             return null;
         }
-        $text = trim(implode("\n", $out));
+        $text = $this->joinProcessLines($out);
 
         return $text !== '' ? $text : null;
+    }
+
+    /**
+     * proc_open z tablicą argumentów — z pominięciem powłoki. escapeshellarg na Windows zamienia
+     * `!` i `%` w argumencie na spacje (ochrona przed rozwijaniem zmiennych cmd.exe), więc ścieżki
+     * typu „…/!Wojtek/ALWIT_cennik.pdf” czy „PROS cennik 2016 25%.pdf” docierały do pdftotext
+     * uszkodzone, a extract() cicho schodził na słabszy fallback smalot/pdfparser.
+     *
+     * @return string|null stdout procesu albo null, gdy nie ruszył lub nic nie zwrócił
+     */
+    private function runPdfToText(string $bin, string $mode, string $path): ?string
+    {
+        if (! function_exists('proc_open')) {
+            return null;
+        }
+
+        $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+        $pipes = [];
+        $proc = @proc_open(
+            [$bin, $mode, $path, '-'],
+            [0 => ['file', $null, 'r'], 1 => ['pipe', 'w'], 2 => ['file', $null, 'w']],
+            $pipes
+        );
+        if (! is_resource($proc)) {
+            return null;
+        }
+
+        $out = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        $code = proc_close($proc);
+        $out = is_string($out) ? $out : '';
+
+        return ($code !== 0 && $out === '') ? null : $out;
+    }
+
+    /**
+     * Zachowuje kształt wyjścia exec(): linie bez końcowych białych znaków, CRLF → LF.
+     */
+    private function joinProcessLines(string $out): string
+    {
+        $lines = preg_split("/\r\n|\n|\r/", $out) ?: [];
+
+        return trim(implode("\n", array_map(static fn (string $line): string => rtrim($line), $lines)));
     }
 
     private function findPdfToText(): ?string
