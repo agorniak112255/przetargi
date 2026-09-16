@@ -64,7 +64,7 @@ class CatalogSearchSiteController extends Controller
             $host,
             (string) ($data['q'] ?? ''),
             (int) ($data['page'] ?? 1),
-            (int) ($data['per_page'] ?? 40),
+            (int) ($data['per_page'] ?? 100),
         ));
     }
 

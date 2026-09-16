@@ -212,7 +212,7 @@ class ProductEnrichmentController extends Controller
             $query->where('status', $status);
         }
 
-        $paginator = $query->paginate((int) ($data['per_page'] ?? 40));
+        $paginator = $query->paginate((int) ($data['per_page'] ?? 100));
         $ctx = $this->batchLinkContext($paginator->getCollection());
 
         return response()->json([

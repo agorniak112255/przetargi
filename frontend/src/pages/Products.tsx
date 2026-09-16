@@ -280,7 +280,7 @@ export function Products() {
   const [aiBusy, setAiBusy] = useState<'catalog' | 'web' | false>(false)
   const [externalHints, setExternalHints] = useState<{ url: string; title: string }[]>([])
   const [page, setPage] = useState(1)
-  const [perPage, setPerPage] = useState<PerPageChoice>('500')
+  const [perPage, setPerPage] = useState<PerPageChoice>('100')
   const [sort, setSort] = useState<SortKey>('name')
   const [dir, setDir] = useState<'asc' | 'desc'>('asc')
   const [result, setResult] = useState<Page | null>(null)

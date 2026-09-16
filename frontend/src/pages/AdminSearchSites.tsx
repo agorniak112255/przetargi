@@ -1110,7 +1110,7 @@ function CatalogPagesModal({
   const [q, setQ] = useState('')
   const [page, setPage] = useState(1)
   const [rows, setRows] = useState<CatalogPageRow[]>([])
-  const [meta, setMeta] = useState({ current_page: 1, last_page: 1, per_page: 40, total: 0 })
+  const [meta, setMeta] = useState({ current_page: 1, last_page: 1, per_page: 100, total: 0 })
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -1120,7 +1120,7 @@ function CatalogPagesModal({
     try {
       const params = new URLSearchParams()
       params.set('page', String(nextPage))
-      params.set('per_page', '40')
+      params.set('per_page', '100')
       if (nextQ.trim() !== '') {
         params.set('q', nextQ.trim())
       }

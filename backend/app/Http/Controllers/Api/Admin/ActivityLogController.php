@@ -23,7 +23,7 @@ class ActivityLogController extends Controller
             'per_page' => ['nullable', 'integer', 'min:10', 'max:100'],
         ]);
 
-        $perPage = (int) ($validated['per_page'] ?? 50);
+        $perPage = (int) ($validated['per_page'] ?? 100);
 
         $query = ActivityLog::query()
             ->with(['user:id,name,email'])

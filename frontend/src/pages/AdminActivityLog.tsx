@@ -69,7 +69,7 @@ export function AdminActivityLog() {
     try {
       const params = new URLSearchParams()
       params.set('page', String(nextPage))
-      params.set('per_page', '50')
+      params.set('per_page', '100')
       if (userId) params.set('user_id', userId)
       if (action) params.set('action', action)
       if (q.trim()) params.set('q', q.trim())

@@ -196,7 +196,7 @@ class ProductController extends Controller
             $query->orderBy('name', 'asc');
         }
 
-        $rawPerPage = strtolower(trim((string) $request->input('per_page', '500')));
+        $rawPerPage = strtolower(trim((string) $request->input('per_page', '100')));
         if ($rawPerPage === 'all') {
             $perPage = 25000;
         } else {

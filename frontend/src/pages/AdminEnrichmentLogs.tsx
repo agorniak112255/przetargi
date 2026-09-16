@@ -55,7 +55,7 @@ export function AdminEnrichmentLogs() {
     try {
       const params = new URLSearchParams()
       params.set('page', String(nextPage))
-      params.set('per_page', '40')
+      params.set('per_page', '100')
       if (nextStatus !== '') {
         params.set('status', nextStatus)
       }
