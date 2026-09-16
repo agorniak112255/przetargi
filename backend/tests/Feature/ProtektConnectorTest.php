@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\B2bAccount;
 use App\Models\B2bDiscountRule;
+use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\ProtektB2bClient;
@@ -154,6 +155,45 @@ final class ProtektConnectorTest extends TestCase
         $this->assertSame('70.00', (string) Product::query()->where('sku', 'RX10020')->firstOrFail()->purchase_price);
     }
 
+    public function test_kolory_trafiaja_na_jedna_karte_jako_lista_wersji(): void
+    {
+        // Protekt daje każdemu kolorowi osobny adres, ale ten sam numer katalogowy i tę samą cenę.
+        // Ma z tego powstać jedna karta z listą kolorów, a nie pięć kart ani karta z losowym kolorem.
+        $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
+        foreach (['czarny', 'czerwony', 'niebieski'] as $i => $colour) {
+            $this->page('/amortyzator-'.$i.'~p'.(100 + $i).'~c5341', $this->card(
+                name: 'BW140 - Amortyzator bezpieczeństwa',
+                catalogNo: 'BW140',
+                price: '76,00',
+                colours: ['czarny', 'czerwony', 'niebieski'],
+            ));
+        }
+        $this->fakeSite();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame(1, Product::query()->where('sku', 'BW140')->count());
+        $this->assertSame('czarny, czerwony, niebieski', Product::query()->where('sku', 'BW140')->value('variant_summary'));
+    }
+
+    public function test_ten_sam_numer_z_rozna_cena_nie_jest_przemilczany(): void
+    {
+        // Gdyby Protekt kiedyś zróżnicował ceny kolorami, karta może mieć tylko jedną cenę.
+        // Zapisujemy pierwszą i mówimy o tym w dzienniku, zamiast po cichu brać ostatnią.
+        $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
+        $this->page('/amortyzator-a~p100~c5341', $this->card(name: 'BW140', catalogNo: 'BW140', price: '76,00'));
+        $this->page('/amortyzator-b~p101~c5341', $this->card(name: 'BW140', catalogNo: 'BW140', price: '99,00'));
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame('76.00', (string) Product::query()->where('sku', 'BW140')->value('catalog_price_net'));
+        $log = collect(B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log ?? [])
+            ->pluck('text')
+            ->implode(' | ');
+        $this->assertStringContainsString('różnymi cenami', $log, $log);
+    }
+
     public function test_liczniki_trafien_regul_trafiaja_do_konfiguracji(): void
     {
         $matched = $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
@@ -167,7 +207,11 @@ final class ProtektConnectorTest extends TestCase
         $this->assertSame(0, $empty->refresh()->last_matched_count);
     }
 
-    private function card(string $name, ?string $catalogNo, ?string $price, ?string $ean = null, ?string $stock = null): string
+    /**
+     * @param  list<string>  $colours  wersje kolorystyczne karty (każda ma u Protektu osobny adres,
+     *                                 ten sam numer katalogowy i tę samą cenę)
+     */
+    private function card(string $name, ?string $catalogNo, ?string $price, ?string $ean = null, ?string $stock = null, array $colours = []): string
     {
         $html = '<!DOCTYPE html><html><body><div class="single-products-content__dsc"><div class="product-desc">'
             .'<h1 itemprop="name" class="product-desc__name">'.$name.'</h1>'
@@ -194,6 +238,17 @@ final class ProtektConnectorTest extends TestCase
         if ($stock !== null) {
             $html .= '<div class="container-data-codes inventory"><div class="product-desc__cat left-contain">'
                 .'<p>Stan magazynowy:</p><p><span class="stan_niski">'.$stock.'</span></p></div></div>';
+        }
+
+        if ($colours !== []) {
+            $html .= '<div class="product-desc__sizes"><div class="row"><h4>Kolor </h4><div class="col-data">'
+                .'<ul class="variants-grid variants-grid-color">';
+            foreach ($colours as $colour) {
+                $html .= '<li class="variant color"><a href="/x~p1~c1">'
+                    .'<div class="color" style="background-color: #000000"></div>'
+                    .'<p class="color--warn">'.$colour.'</p></a></li>';
+            }
+            $html .= '</ul></div></div></div>';
         }
 
         $html .= '</div></div>'

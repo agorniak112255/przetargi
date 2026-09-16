@@ -26,6 +26,12 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
 {
     private int $total = 0;
 
+    /** @var array<string, float> numer katalogowy => pierwsza cena odczytana w tym przebiegu */
+    private array $firstPrice = [];
+
+    /** @var list<string> numery katalogowe, które na różnych adresach miały różne ceny */
+    private array $priceConflicts = [];
+
     public function __construct(
         private readonly ProtektB2bClient $client,
         private readonly B2bDiscountRuleResolver $discounts,
@@ -97,6 +103,20 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
         $currency = strtoupper(trim((string) ($product->raw['currency'] ?? '')));
         if ($currency === '') {
             throw new RuntimeException('strona nie podała waluty ceny („'.$priceText.'”)');
+        }
+
+        // Ten sam numer katalogowy bywa pod kilkoma adresami (wersje kolorystyczne). U Protektu cena
+        // wisi przy numerze katalogowym, więc powinny być identyczne — gdyby nie były, karta może mieć
+        // tylko jedną cenę, a ciche przyjęcie ostatniej byłaby zgadywanką. Trzymamy pierwszą i mówimy o tym.
+        $first = $this->firstPrice[$product->sku] ?? null;
+        if ($first === null) {
+            $this->firstPrice[$product->sku] = $amount;
+        } elseif (abs($first - $amount) >= 0.01) {
+            if (! in_array($product->sku, $this->priceConflicts, true)) {
+                $this->priceConflicts[] = $product->sku.' ('.number_format($first, 2, ',', ' ')
+                    .' vs '.number_format($amount, 2, ',', ' ').')';
+            }
+            $amount = $first;
         }
 
         $match = $this->discounts->resolve($product->sku, $product->category, $product->name);
@@ -181,6 +201,11 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
         if ($this->discounts->missedCount() > 0) {
             $lines[] = 'Kart bez pasującej reguły: '.$this->discounts->missedCount().' — sprawdź listę pominiętych.';
         }
+        if ($this->priceConflicts !== []) {
+            $lines[] = 'Ten sam numer katalogowy z różnymi cenami na różnych adresach (zapisano pierwszą): '
+                .implode('; ', array_slice($this->priceConflicts, 0, 20))
+                .(count($this->priceConflicts) > 20 ? ' i '.(count($this->priceConflicts) - 20).' więcej' : '');
+        }
 
         return $lines;
     }
@@ -221,6 +246,7 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
             name: $name,
             category: $category,
             sourceUrl: $url,
+            variantSummary: self::colourSummary($xpath),
             raw: [
                 'status' => 'ok',
                 'price_text' => self::text($xpath->query('//*[@itemprop="price"]')->item(0)),
@@ -297,6 +323,20 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
         }
 
         return $rows;
+    }
+
+    /**
+     * Kolory karty jako podsumowanie wersji. Protekt daje każdemu kolorowi osobny adres, ale ten sam numer
+     * katalogowy i tę samą cenę (sprawdzone 16.09.2026), więc to jedna karta z listą kolorów — nie kilka kart.
+     * Lista jest taka sama na każdym z tych adresów, dzięki czemu kolejne odwiedziny nie zmieniają karty.
+     *
+     * null = karta bez wyboru koloru (nie czyścimy wtedy podsumowania ustawionego skądinąd).
+     */
+    private static function colourSummary(DOMXPath $xpath): ?string
+    {
+        $colours = self::texts($xpath, '//ul['.self::classPredicate('variants-grid-color').']//p['.self::classPredicate('color--warn').']');
+
+        return $colours !== [] ? implode(', ', $colours) : null;
     }
 
     private static function imageUrl(DOMXPath $xpath): string
