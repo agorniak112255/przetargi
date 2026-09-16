@@ -16,6 +16,9 @@ use App\Services\Ai\OpenAiCompatibleClient;
  */
 class B2bTextTranslator
 {
+    /** Łącznik i półpauzy są w zakresach wymienne — „1030-1400nm” i „1030–1400 nm” to ten sam token. */
+    private const DASHES = '[-–—]';
+
     /** Segment z listą parametrów z łącznika (BolleB2bConnector::description) — zostaje dosłownie. */
     private const PARAMETERS_PREFIX = 'Parametry:';
 
@@ -56,7 +59,7 @@ class B2bTextTranslator
      * @throws B2bTranslationRejected tłumaczenie odrzucone przez walidację (tekst źródła zostaje)
      * @throws \RuntimeException błąd wywołania modelu (job ponawia)
      */
-    public function translate(string $description, ?string $name = null): array
+    public function translate(string $description, ?string $name = null, ?string $cardName = null): array
     {
         if (! mb_check_encoding($description, 'UTF-8') || ($name !== null && ! mb_check_encoding($name, 'UTF-8'))) {
             throw new B2bTranslationRejected('tekst źródła nie jest poprawnym UTF-8');
@@ -76,8 +79,9 @@ class B2bTextTranslator
         }
 
         $sources = array_values($translatable);
+        $context = $cardName !== null && trim($cardName) !== '' ? trim($cardName) : null;
         $payload = json_encode(
-            ['name' => $sourceName, 'segments' => $sources],
+            ['product' => $context, 'name' => $sourceName, 'segments' => $sources],
             JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
         );
         // Zapas tokenów: chatJson przy finish_reason=length ponawia ze skróconym wejściem — tego nie chcemy.
@@ -104,7 +108,7 @@ class B2bTextTranslator
     {
         return <<<'SYS'
 Jesteś tłumaczem kart produktów BHP na język polski.
-Dostajesz JSON {"name": nazwa produktu albo null, "segments": [fragmenty opisu]}.
+Dostajesz JSON {"product": nazwa karty w katalogu (po polsku) albo null, "name": nazwa produktu albo null, "segments": [fragmenty opisu]}.
 Zadanie: WIERNE TŁUMACZENIE na polski — segment po segmencie, zdanie po zdaniu. Nie piszesz nowego opisu.
 
 ZASADY:
@@ -112,6 +116,8 @@ ZASADY:
 - Układ bez zmian: każda linia źródła = dokładnie jedna linia wyniku, w tej samej kolejności. Nie łącz i nie dziel linii. Znaczniki list („- ”) zostają.
 - BEZ ZMIAN, dosłownie i z tą samą wielkością liter: nazwy marek, rodzin i modeli (np. Bollé, TRYON BSSI, RUSH+ 2.0, VOLT, MY6), kody i numery artykułów (B809, PSSTRYOC13B), znaki ® i ™, oznaczenia norm (EN 166, EN ISO 16321-1, ANSI Z87.1), nazwy technologii i powłok pisane wielkimi literami (PLATINUM, ASAF, FLEX160°), oznaczenia rozmiarów (S, L, XL, Extra Large, One size).
 - Liczby: każda liczba ze źródła zostaje; wolno zapisać przecinek dziesiętny i polską jednostkę (17.5CM → 17,5 cm). Liczb zapisanych słownie nie zamieniaj na cyfry i odwrotnie. Nie dopisuj żadnej nowej liczby.
+- product to nazwa tej samej karty po polsku — tylko kontekst: trzymaj się jej słownictwa (gdy karta mówi „szyba chroniąca przed laserem”, nie pisz „okno ochronne”). Nie tłumacz jej i nie dopisuj do wyniku.
+- Terminologia ochrony przed laserem: laser safety window → szyba chroniąca przed laserem, laser protection filter → filtr chroniący przed laserem, laser radiation → promieniowanie laserowe, within the bulk material → w samym materiale, daylight transmission → przepuszczalność światła dziennego, visual brightness → jasność widzenia, colour recognition → rozpoznawanie barw, alignment protection → ochrona przy justowaniu, optical density (OD) → gęstość optyczna (OD), coating → powłoka, anti-scratch → odporna na zarysowania.
 - Terminologia okularów i ŚOI (spójnie w całym tekście): temples → zauszniki, nose bridge → mostek nosowy, nose pads → noski, sideshields / side shields → osłony boczne, frame → oprawka, lens → soczewka, lens tint → odcień soczewki, anti-fog → przeciwmgielna, anti-scratch → odporna na zarysowania, wrap-around → panoramiczna (owijająca).
 - Tekst już po polsku zwróć bez zmian.
 - name: człon przed pierwszym „ – ” (albo „ - ”, gdy nie ma „ – ”) zostaw dosłownie, przetłumacz resztę. name=null → zwróć null.
@@ -365,7 +371,16 @@ SYS;
     private static function tokenPattern(string $token): string
     {
         $parts = preg_split('/(?<=\d)(?=\p{L})/u', self::withoutThousandsSeparators($token)) ?: [$token];
-        $quoted = array_map(static fn (string $part): string => preg_quote($part, '/'), $parts);
+        // zakres po polsku bywa pisany półpauzą („1030–1400 nm”), a w źródle łącznikiem
+        $quoted = array_map(
+            // strtr, nie str_replace: podmiany nie mogą wejść w siebie nawzajem (klasa zawiera myślniki)
+            static fn (string $part): string => strtr(preg_quote($part, '/'), [
+                '\-' => self::DASHES,
+                '–' => self::DASHES,
+                '—' => self::DASHES,
+            ]),
+            $parts,
+        );
 
         return '/(?<![\p{L}\p{N}])'.implode('[ \x{00A0}]?', $quoted).'(?![\p{L}\p{N}])/u';
     }

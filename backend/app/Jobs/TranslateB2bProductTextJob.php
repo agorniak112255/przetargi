@@ -104,7 +104,8 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
 
         try {
             // Sama nazwa (opis edytowany ręcznie) — opis pusty, jego tłumaczenie ignorujemy.
-            $translated = $translator->translate($start['description'] ?? '', $start['name']);
+            // nazwa karty w katalogu jako kontekst terminologiczny — tłumaczenie ma mówić tak samo jak katalog
+            $translated = $translator->translate($start['description'] ?? '', $start['name'], $product->name);
         } catch (B2bTranslationRejected $e) {
             $this->logRejected($product, $e->getMessage());
 

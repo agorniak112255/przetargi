@@ -72,7 +72,8 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame(sha1(self::POLISH_DESCRIPTION), $link->description_hash);
         $this->assertSame(sha1(self::SOURCE_DESCRIPTION), $link->source_description_hash);
         $this->assertSame(self::SOURCE_NAME, $link->remote_name);
-        $this->assertSame([[self::SOURCE_DESCRIPTION, null]], $this->translator->calls);
+        // trzeci element to nazwa karty w katalogu — kontekst terminologiczny dla modelu
+        $this->assertSame([[self::SOURCE_DESCRIPTION, null, self::SOURCE_NAME]], $this->translator->calls);
         // haki modelu przebudowały indeks tekstowy (małe litery, bez polskich znaków)
         $this->assertStringContainsString('soczewka miedziana, powloka', (string) $product->search_blob);
     }
@@ -88,7 +89,7 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame(self::POLISH_NAME, $product->name);
         $this->assertSame(self::POLISH_DESCRIPTION, $product->description);
         $this->assertSame(self::SOURCE_NAME, $link->remote_name, 'Nazwa u dostawcy zostaje jako proweniencja');
-        $this->assertSame([[self::SOURCE_DESCRIPTION, self::SOURCE_NAME]], $this->translator->calls);
+        $this->assertSame([[self::SOURCE_DESCRIPTION, self::SOURCE_NAME, self::SOURCE_NAME]], $this->translator->calls);
     }
 
     public function test_translates_only_name_when_description_was_edited(): void
@@ -104,7 +105,7 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame('Opis poprawiony ręcznie', $product->description);
         $this->assertSame(sha1(self::SOURCE_DESCRIPTION), $link->description_hash);
         $this->assertNull($link->source_description_hash, 'Opis karty nie jest tłumaczeniem');
-        $this->assertSame([['', self::SOURCE_NAME]], $this->translator->calls);
+        $this->assertSame([['', self::SOURCE_NAME, self::SOURCE_NAME]], $this->translator->calls);
     }
 
     public function test_name_changed_by_hand_is_not_translated(): void
@@ -117,7 +118,8 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $product->refresh();
         $this->assertSame('Okulary Tryon — nazwa nadana ręcznie', $product->name);
         $this->assertSame(self::POLISH_DESCRIPTION, $product->description);
-        $this->assertSame([[self::SOURCE_DESCRIPTION, null]], $this->translator->calls);
+        // trzeci element to nazwa karty w katalogu — kontekst terminologiczny dla modelu
+        $this->assertSame([[self::SOURCE_DESCRIPTION, null, 'Okulary Tryon — nazwa nadana ręcznie']], $this->translator->calls);
     }
 
     public function test_description_edited_by_hand_is_not_sent_to_translator(): void
@@ -279,9 +281,9 @@ final class FakeB2bTextTranslator extends B2bTextTranslator
     /** Bez klienta modelu — translate() jest w całości podmienione. */
     public function __construct() {}
 
-    public function translate(string $description, ?string $name = null): array
+    public function translate(string $description, ?string $name = null, ?string $cardName = null): array
     {
-        $this->calls[] = [$description, $name];
+        $this->calls[] = [$description, $name, $cardName];
         if ($this->during !== null) {
             ($this->during)();
         }

@@ -222,7 +222,7 @@ final class B2bTextTranslatorTest extends TestCase
 
         $this->assertSame(['description' => '', 'name' => 'VOLT – Filtr elektrooptyczny'], $result);
         $payload = json_decode((string) $this->calls[0]['messages'][1]['content'], true);
-        $this->assertSame(['name' => 'VOLT – Electro-optical filter', 'segments' => []], $payload);
+        $this->assertSame(['product' => null, 'name' => 'VOLT – Electro-optical filter', 'segments' => []], $payload);
     }
 
     #[Test]
