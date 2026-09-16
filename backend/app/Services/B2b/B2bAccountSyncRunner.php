@@ -61,6 +61,7 @@ final class B2bAccountSyncRunner
         if (! $dryRun) {
             $progress = $this->claim($account, $trigger);
             $this->closeRunOnFatalError($account, $progress, $live);
+            $this->closeRunOnSignal($account, $progress, $live);
         }
         $priceList = null;
         $priceListCreated = false;
@@ -204,6 +205,67 @@ final class B2bAccountSyncRunner
     public static function isFatalError(?array $error): bool
     {
         return $error !== null && in_array($error['type'] ?? null, self::FATAL_ERRORS, true);
+    }
+
+    /**
+     * Proces zatrzymany z zewnątrz (Ctrl+C, zamknięcie terminala, kill) — bez tego wpis przebiegu zostawał
+     * „w toku”, a panel pokazywał „Zatrzymywanie…” aż do sprzątania po B2bSyncRun::STALE_MINUTES.
+     * Pobranie uruchomione z panelu idzie w tle i sygnału nie dostaje.
+     *
+     * @param  bool  $live  przez referencję: false = przebieg domknięty, nie ma czego sprzątać
+     */
+    private function closeRunOnSignal(B2bAccount $account, B2bSyncProgress $progress, bool &$live): void
+    {
+        if (PHP_SAPI !== 'cli' || ! function_exists('pcntl_async_signals') || ! function_exists('pcntl_signal')) {
+            return;
+        }
+
+        pcntl_async_signals(true);
+        $handler = function (int $signal) use ($account, $progress, &$live): void {
+            if ($live) {
+                $live = false;
+                $this->cancelRunAfterSignal($account, $progress, $signal);
+            }
+            // kod wyjścia jak w powłoce: 128 + numer sygnału
+            exit(128 + $signal);
+        };
+        foreach ([SIGINT, SIGTERM, SIGHUP] as $signal) {
+            pcntl_signal($signal, $handler);
+        }
+    }
+
+    /**
+     * Zatrzymanie z zewnątrz to nie błąd — przebieg kończy się jako „zatrzymany”, tak samo jak po „Zatrzymaj”
+     * w panelu; zapisane do tej pory produkty i ceny zostają.
+     */
+    public function cancelRunAfterSignal(B2bAccount $account, B2bSyncProgress $progress, int $signal): void
+    {
+        // numery zamiast stałych SIG* — te istnieją tylko z rozszerzeniem pcntl (lokalnie na Windows go nie ma)
+        $name = match ($signal) {
+            2 => 'Ctrl+C',
+            1 => 'zamknięcie terminala',
+            15 => 'polecenie zatrzymania procesu',
+            default => 'sygnał '.$signal,
+        };
+        $sku = $progress->run()->current_sku;
+        $message = 'Zatrzymane — proces przerwany ('.$name.')'
+            .($sku !== null ? ', ostatni produkt: '.$sku : ', przed pierwszym produktem')
+            .'. Pobranie uruchomione z panelu działa w tle i nie ginie po zamknięciu terminala.';
+        try {
+            $progress->log('warn', $message);
+            $progress->finish(B2bSyncRun::STATUS_CANCELLED, $message);
+            $account->forceFill([
+                'last_sync_status' => B2bSyncRun::STATUS_CANCELLED,
+                'last_sync_finished_at' => now(),
+                'last_sync_message' => mb_substr($message, 0, 2000),
+            ])->save();
+        } catch (Throwable $e) {
+            Log::warning('B2B: nie zapisano przebiegu przerwanego sygnałem', [
+                'b2b_account_id' => $account->id,
+                'signal' => $signal,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

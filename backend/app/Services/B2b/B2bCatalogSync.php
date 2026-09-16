@@ -181,15 +181,19 @@ final class B2bCatalogSync
         // grupa rozmiarów (members) nie trafia na kartę innej pozycji z tego samego przebiegu
         $claimed = ['products' => [], 'skus' => []];
 
-        // długie pobieranie listy przed pierwszym produktem — komunikaty są sygnałem życia przebiegu
+        // długie pobieranie listy przed pierwszym produktem — komunikaty są sygnałem życia przebiegu,
+        // a przy okazji jedynym miejscem, w którym widać prośbę o zatrzymanie (pętli produktów jeszcze nie ma)
         if ($connector instanceof B2bListProgressAware) {
             $connector->onListProgress(static function (string $message) use ($progress): void {
                 $progress?->log('info', $message);
                 $progress?->flush();
+                if ($progress?->cancelRequested()) {
+                    throw new B2bCancelledException('Zatrzymano w trakcie pobierania listy dostawcy');
+                }
             });
         }
 
-        foreach ($connector->products() as $remote) {
+        foreach ($this->listedProducts($connector, $cancelled) as $remote) {
             if ($limit !== null && $stats['seen'] >= $limit) {
                 break;
             }
@@ -376,6 +380,22 @@ final class B2bCatalogSync
             'progress_total' => $progressTotal(),
             'variants_removed' => $variantsRemoved,
         ];
+    }
+
+    /**
+     * Produkty z listy dostawcy; „Zatrzymaj” w trakcie pobierania samej listy kończy przebieg jako zatrzymany
+     * (bez błędu) — pełna lista potrafi schodzić kilka minut, a pętli produktów jeszcze wtedy nie ma.
+     *
+     * @param  bool  $cancelled  przez referencję — ustawiane, gdy lista została przerwana
+     * @return iterable<B2bRemoteProduct>
+     */
+    private function listedProducts(B2bConnector $connector, bool &$cancelled): iterable
+    {
+        try {
+            yield from $connector->products();
+        } catch (B2bCancelledException) {
+            $cancelled = true;
+        }
     }
 
     /**

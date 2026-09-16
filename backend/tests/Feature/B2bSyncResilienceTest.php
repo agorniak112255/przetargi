@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnector;
+use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bRemoteImage;
 use App\Services\B2b\B2bRemotePrice;
 use App\Services\B2b\B2bRemoteProduct;
@@ -138,6 +139,45 @@ final class B2bSyncResilienceTest extends TestCase
         $this->assertStringContainsString('Allowed memory size', (string) B2bSyncRun::query()->findOrFail($run->id)->message);
     }
 
+    public function test_stopping_during_the_supplier_list_ends_the_run_as_cancelled(): void
+    {
+        // „Zatrzymaj” wciśnięte, zanim ruszyła pętla produktów — pełna lista UVEX schodzi kilka minut
+        $this->connector->count = 3;
+        $this->connector->listMessages = ['Lista: strona 20/288', 'Lista: strona 40/288'];
+        $this->connector->cancelAfterFirstMessage = true;
+
+        $result = $this->sync();
+
+        $this->assertTrue($result['cancelled']);
+        $this->assertSame(0, $result['seen'], 'po zatrzymaniu nie zaczynamy przetwarzać produktów');
+
+        $run = B2bSyncRun::query()->findOrFail($result['sync_run_id']);
+        $this->assertSame(B2bSyncRun::STATUS_CANCELLED, $run->status);
+        $this->assertStringContainsString('Zatrzymano ręcznie', (string) $run->message);
+        $this->assertSame('cancelled', $this->account->fresh()?->last_sync_status);
+    }
+
+    public function test_process_killed_from_outside_closes_the_run_as_cancelled(): void
+    {
+        $progress = B2bSyncProgress::start($this->account, B2bSyncRun::TRIGGER_CLI);
+        $progress->advance('U0100', ['processed' => 100]);
+        $this->account->forceFill(['last_sync_status' => 'running'])->save();
+
+        app(B2bAccountSyncRunner::class)->cancelRunAfterSignal($this->account, $progress, 2);
+
+        $run = B2bSyncRun::query()->findOrFail($progress->run()->id);
+        $this->assertSame(B2bSyncRun::STATUS_CANCELLED, $run->status);
+        $this->assertNotNull($run->finished_at);
+        $this->assertStringContainsString('Ctrl+C', (string) $run->message);
+        $this->assertStringContainsString('U0100', (string) $run->message);
+        $this->assertSame('cancelled', $this->account->fresh()?->last_sync_status);
+
+        // przebieg jest domknięty — b2b:sync-due nie ma go za co uznać za „bez postępu”
+        $this->travel(B2bSyncRun::STALE_MINUTES + 1)->minutes();
+        $this->artisan('b2b:sync-due')->assertSuccessful();
+        $this->assertSame(B2bSyncRun::STATUS_CANCELLED, (string) B2bSyncRun::query()->findOrFail($run->id)->status);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -152,9 +192,23 @@ final class B2bSyncResilienceTest extends TestCase
 }
 
 /** Łącznik testowy bez sieci: pozycje, których ceny nie da się odczytać (każda kończy się pominięciem). */
-final class ResilienceFakeConnector implements B2bConnector
+final class ResilienceFakeConnector implements B2bConnector, B2bListProgressAware
 {
     public int $count = 0;
+
+    /** @var list<string> komunikaty „pobieram listę” przed pierwszym produktem */
+    public array $listMessages = [];
+
+    /** Po pierwszym komunikacie listy zapisuje prośbę o zatrzymanie — jak kliknięcie „Zatrzymaj” w panelu. */
+    public bool $cancelAfterFirstMessage = false;
+
+    /** @var (callable(string): void)|null */
+    private $listProgress = null;
+
+    public function onListProgress(callable $callback): void
+    {
+        $this->listProgress = $callback;
+    }
 
     public static function key(): string
     {
@@ -180,6 +234,16 @@ final class ResilienceFakeConnector implements B2bConnector
 
     public function products(): iterable
     {
+        foreach ($this->listMessages as $index => $message) {
+            if ($this->listProgress !== null) {
+                ($this->listProgress)($message);
+            }
+            if ($index === 0 && $this->cancelAfterFirstMessage) {
+                B2bSyncRun::query()->latest('id')->firstOrFail()
+                    ->forceFill(['cancel_requested_at' => now()])->save();
+            }
+        }
+
         for ($i = 1; $i <= $this->count; $i++) {
             $sku = sprintf('U%04d', $i);
             yield new B2bRemoteProduct(remoteId: $sku, sku: $sku, name: 'Pozycja '.$sku);
