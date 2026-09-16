@@ -102,6 +102,20 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function keeps_product_code_followed_by_a_word(): void
+    {
+        // kod kończy się cyfrą, a zaraz po nim idzie słowo — to nadal ten sam token
+        $source = 'The laser safety window P6P21 with ESD coating consists of a gold-colored plastic.';
+        $translator = $this->translatorReturning([
+            'segments' => ['Okno ochronne do laserow P6P21 z powloka ESD sklada sie ze zlotego tworzywa sztucznego.'],
+        ]);
+
+        $result = $translator->translate($source);
+
+        $this->assertStringContainsString('P6P21', $result['description']);
+    }
+
+    #[Test]
     public function rejects_lost_number(): void
     {
         $this->assertRejected(

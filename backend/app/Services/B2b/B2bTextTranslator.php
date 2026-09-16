@@ -358,29 +358,25 @@ SYS;
     }
 
     /**
-     * Zapis liczbowy bez separatora tysięcy i bez odstępu między liczbą a tym, co po niej („1030-1400 nm”
-     * → „1030-1400nm”) — do porównania tokenów źródła i tłumaczenia. Pozostałych odstępów nie ruszamy:
-     * granice słów decydują o dopasowaniu tokenu.
+     * Wzorzec tokenu, który ma przejść do tłumaczenia dosłownie. Odstęp między liczbą a tym, co po niej,
+     * jest dozwolony („1,030-1,400nm” w źródle i „1030-1400 nm” po polsku to ten sam token), ale samego
+     * tekstu nie sklejamy — „P6P21 z powłoką” musi zostać dwoma słowami, inaczej token wygląda na zgubiony.
      */
-    private static function compactNumbers(string $text): string
+    private static function tokenPattern(string $token): string
     {
-        return (string) preg_replace(
-            '/(\d)[ \x{00A0}]+(?=[\p{L}\d])/u',
-            '$1',
-            self::withoutThousandsSeparators($text),
-        );
+        $parts = preg_split('/(?<=\d)(?=\p{L})/u', self::withoutThousandsSeparators($token)) ?: [$token];
+        $quoted = array_map(static fn (string $part): string => preg_quote($part, '/'), $parts);
+
+        return '/(?<![\p{L}\p{N}])'.implode('[ \x{00A0}]?', $quoted).'(?![\p{L}\p{N}])/u';
     }
 
     private static function assertProtectedTokensKept(string $source, string $result): void
     {
-        // ten sam token mimo innego separatora tysięcy i odstępu przed jednostką:
-        // „1,030-1,400nm” ze źródła i „1030-1400 nm” po polsku to jedno i to samo
-        $haystack = self::compactNumbers($result);
+        // po obu stronach ten sam zapis separatora tysięcy — reszta zostaje bez zmian
+        $haystack = self::withoutThousandsSeparators($result);
         $missing = [];
         foreach (self::protectedTokens($source) as $token) {
-            $needle = self::compactNumbers($token);
-            $pattern = '/(?<![\p{L}\p{N}])'.preg_quote($needle, '/').'(?![\p{L}\p{N}])/u';
-            if (preg_match($pattern, $haystack) !== 1) {
+            if (preg_match(self::tokenPattern($token), $haystack) !== 1) {
                 $missing[] = $token;
             }
         }
