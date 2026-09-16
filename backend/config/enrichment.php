@@ -542,6 +542,15 @@ return [
     ],
 
     /*
+    | Hosty wykluczone jako źródło opisu i zdjęć. Własne środowisko migracyjne opisuje
+    | dokładnie te dane, które do tej bazy migrujemy — opis przepisany stamtąd wygląda
+    | na nowe źródło, a nim nie jest. Wykluczenie działa na host i jego subdomeny.
+    */
+    'blocked_source_hosts' => [
+        'migracja.supon.rzeszow.pl',
+    ],
+
+    /*
     | Preferowane domeny przy wyszukiwaniu kart produktu (producent + sklepy).
     */
     'preferred_domains' => [

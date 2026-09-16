@@ -128,6 +128,32 @@ final class BlockedPageReaderTest extends TestCase
         $this->assertNull((new BlockedPageReader)->fetch('https://shop.ansell.com/eu/s/product/x'));
     }
 
+    public function test_fetch_skips_shop_paperwork_pdfs_from_reader(): void
+    {
+        // reader oddaje całą stronę razem ze stopką — bez filtru do „Plików PDF” trafiała
+        // polityka prywatności sklepu zamiast dokumentów wyrobu
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                "Title: Rękawice uvex C300 dry\n\nMarkdown Content:\n"
+                ."# uvex C300 dry 60549\n\n"
+                .str_repeat('Rękawice ochronne uvex C300 dry, EN 388, powłoka nitrylowa. ', 5)
+                ."\n\n[Deklaracja zgodności UE](https://sklep.pl/pliki/deklaracja-zgodnosci-60549.pdf)\n"
+                ."[Polityka prywatności](https://sklep.pl/pliki/polityka-prywatnosci.pdf)\n"
+                ."[Regulamin](https://sklep.pl/pliki/regulamin-sklepu.pdf)\n"
+                .'[Formularz zwrotu](https://sklep.pl/pliki/odstapienie-od-umowy.pdf)',
+                200
+            ),
+        ]);
+
+        $page = (new BlockedPageReader)->fetch('https://sklep.pl/produkt/uvex-c300-dry');
+
+        $this->assertIsArray($page);
+        $this->assertSame(
+            ['https://sklep.pl/pliki/deklaracja-zgodnosci-60549.pdf'],
+            $page['document_urls']
+        );
+    }
+
     public function test_fetch_does_not_retry_missing_page(): void
     {
         Http::fake(['https://r.jina.ai/*' => Http::response('Not found', 404)]);

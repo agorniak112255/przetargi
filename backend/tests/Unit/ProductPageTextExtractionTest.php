@@ -493,6 +493,81 @@ HTML;
         $this->assertFalse(collect($docs)->contains(fn (string $u): bool => str_contains($u, 'sustainability')));
     }
 
+    public function test_skips_polish_shop_paperwork_pdfs(): void
+    {
+        // zgłoszenie testerki: w „Plikach PDF” lądowała polityka prywatności ze stopki sklepu
+        $html = <<<'HTML'
+<html><body>
+<a href="/pliki/deklaracja-zgodnosci-60549.pdf">Deklaracja zgodności UE</a>
+<footer>
+<a href="/pliki/polityka-prywatnosci.pdf">Polityka prywatności</a>
+<a href="/pliki/regulamin.pdf">Regulamin sklepu</a>
+<a href="/pliki/formularz-odstapienia-od-umowy.pdf">Formularz zwrotu</a>
+<a href="/pliki/download.pdf">Klauzula informacyjna RODO</a>
+</footer>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractDocumentUrls');
+        $method->setAccessible(true);
+        /** @var list<string> $docs */
+        $docs = $method->invoke($fetcher, $html, 'https://sklep.pl/produkt/c300-dry', '60549', false);
+
+        $this->assertCount(1, $docs);
+        $this->assertStringContainsString('deklaracja-zgodnosci-60549.pdf', $docs[0]);
+    }
+
+    public function test_skips_foreign_declarations_when_page_lists_many(): void
+    {
+        // lista deklaracji całego sklepu: żadna nie wiąże się z naszym wyrobem, więc nie bierzemy żadnej
+        $html = <<<'HTML'
+<html><body>
+<a href="/dok/deklaracja-zgodnosci-rekawice.pdf">Deklaracja zgodności — rękawice</a>
+<a href="/dok/deklaracja-zgodnosci-kaski.pdf">Deklaracja zgodności — kaski</a>
+<a href="/dok/certyfikat-okulary.pdf">Certyfikat — okulary</a>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractDocumentUrls');
+        $method->setAccessible(true);
+        /** @var list<string> $docs */
+        $docs = $method->invoke($fetcher, $html, 'https://sklep.pl/produkt/c300-dry', '60549', false);
+
+        $this->assertSame([], $docs);
+    }
+
+    public function test_manufacturer_domain_no_longer_takes_any_pdf(): void
+    {
+        // domena producenta daje pierwszeństwo, ale nie immunitet: katalog marki i cennik to nie dokument wyrobu
+        $html = <<<'HTML'
+<html><body>
+<a href="/media/deklaracja-zgodnosci.pdf">Deklaracja zgodności</a>
+<a href="/media/katalog-2024.pdf">Katalog 2024</a>
+<a href="/media/cennik-detaliczny.pdf">Cennik detaliczny</a>
+</body></html>
+HTML;
+
+        $fetcher = new ProductPageFetcher;
+        $ref = new ReflectionClass($fetcher);
+        $method = $ref->getMethod('extractDocumentUrls');
+        $method->setAccessible(true);
+        /** @var list<string> $docs */
+        $docs = $method->invoke(
+            $fetcher,
+            $html,
+            'https://www.uvex-safety.com/en/products/glove-60549/',
+            '60549',
+            true
+        );
+
+        $this->assertCount(1, $docs);
+        $this->assertStringContainsString('deklaracja-zgodnosci.pdf', $docs[0]);
+    }
+
     public function test_image_search_hit_is_not_read_as_product_page(): void
     {
         $imageUrl = 'https://balticbhp.pl/33141-large_default/buty-robocze-jalas-zenit-1718.jpg';

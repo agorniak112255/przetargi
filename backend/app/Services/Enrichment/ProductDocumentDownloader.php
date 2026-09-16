@@ -6,6 +6,7 @@ namespace App\Services\Enrichment;
 
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Services\B2b\B2bDocumentText;
 use Dompdf\Dompdf;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -24,8 +25,51 @@ final class ProductDocumentDownloader
         'image/png' => 'png',
     ];
 
+    /**
+     * Hasła dopasowywane jako fragment (po normalizacji adresu/etykiety).
+     *
+     * @var list<string>
+     */
+    private const JUNK_DOCUMENT_PHRASES = [
+        // korporacyjne / marketingowe
+        'sustainability', 'nachhaltig', 'annual report', 'jahresbericht',
+        'privacy', 'datenschutz', 'cookie', 'terms of', 'imprint', 'impressum',
+        'newsletter', 'press release', 'investor', 'code of conduct', 'compliance report',
+        'return policy', 'refund', 'shipping policy',
+        // polskie / konsumenckie
+        'polityka', 'regulamin', 'prywatnosc', 'ciasteczk',
+        'ochrona danych', 'ochrony danych', 'dane osobowe', 'danych osobowych',
+        'klauzula informacyjna', 'przetwarzania danych', 'przetwarzanie danych',
+        'reklamacj', 'odstapien', 'zwrot towaru', 'zwrotu towaru', 'zwroty', 'zwrotow',
+        'formularz', 'platnosci', 'warunki dostawy', 'zasady dostawy', 'koszty dostawy',
+        'sposoby dostawy', 'czas dostawy', 'warunki sprzedazy', 'warunki wspolpracy',
+        'ogolne warunki',
+    ];
+
+    /**
+     * Hasła dopasowywane całym słowem — „rodo” jako fragment siedzi w „środowisko”,
+     * a deklaracja środowiskowa jest dokumentem wyrobu.
+     *
+     * @var list<string>
+     */
+    private const JUNK_DOCUMENT_WORDS = ['rodo', 'gdpr', 'agb', 'platnosc', 'dostawa'];
+
+    /**
+     * Krótszy tekst z PDF to skan bez warstwy tekstowej albo sama metryczka — wtedy o przyjęciu
+     * dokumentu decyduje jak dawniej adres. Prawdziwy certyfikat ze skanu nie może wypaść.
+     */
+    private const MIN_TEXT_FOR_MATCH = 400;
+
+    /** Ile plików na jeden przebieg wolno przepuścić przez pdftotext (podproces z limitem czasu). */
+    private const TEXT_CHECK_BUDGET_FACTOR = 2;
+
+    /** Zostaje z downloadMany: ile jeszcze plików wolno odczytać w tym przebiegu. */
+    private int $textBudget = 0;
+
     public function __construct(
         private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
+        private readonly ProductSearchIdentity $identity = new ProductSearchIdentity,
+        private readonly B2bDocumentText $documentText = new B2bDocumentText,
     ) {}
 
     public static function looksLikePdfUrl(string $url): bool
@@ -40,6 +84,55 @@ final class ProductDocumentDownloader
             || str_contains($full, '.pdf?')
             || str_contains($full, '/pdf/')
             || str_contains($full, 'filetype=pdf');
+    }
+
+    /**
+     * Dokumenty „obsługi klienta” i korporacyjne: polityka prywatności, regulamin, RODO,
+     * reklamacje, zwroty, warunki dostawy, raport CSR. Do zakładki „Pliki PDF” trafiały,
+     * bo filtr znał wyłącznie hasła angielskie i niemieckie — polskie przechodziły.
+     *
+     * Jedna lista dla karty HTML (ProductPageFetcher) i dla readera (BlockedPageReader):
+     * dwie kopie takiej listy już raz w tym projekcie rozjechały się między miejscami.
+     *
+     * @param  string  $hay  adres URL i/lub etykieta linku (dowolna wielkość liter)
+     */
+    public static function looksLikeJunkDocument(string $hay): bool
+    {
+        $norm = self::normalizeDocumentHay($hay);
+        if (trim($norm) === '') {
+            return false;
+        }
+        foreach (self::JUNK_DOCUMENT_PHRASES as $needle) {
+            if (str_contains($norm, $needle)) {
+                return true;
+            }
+        }
+        foreach (self::JUNK_DOCUMENT_WORDS as $word) {
+            if (str_contains($norm, ' '.$word.' ')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Adres i etykieta do porównania z listą haseł: bez kodowania %20, bez polskich znaków
+     * (URL-e bywają w ASCII), z myślnikiem/podkreśleniem/ukośnikiem zamienionym na spację —
+     * „polityka-prywatnosci.pdf”, „polityka_prywatności” i „polityka%20prywatności” to jedno.
+     * Spacje po bokach pozwalają dopasować hasła całym słowem (RODO vs „środowisko”).
+     */
+    private static function normalizeDocumentHay(string $hay): string
+    {
+        $low = mb_strtolower(urldecode($hay));
+        $low = strtr($low, [
+            'ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n',
+            'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z',
+            'ä' => 'a', 'ö' => 'o', 'ü' => 'u', 'ß' => 'ss',
+        ]);
+        $low = preg_replace('/[^a-z0-9]+/u', ' ', $low) ?? $low;
+
+        return ' '.trim((string) preg_replace('/\s+/u', ' ', $low)).' ';
     }
 
     /**
@@ -156,12 +249,18 @@ final class ProductDocumentDownloader
     {
         $saved = [];
         $sort = 0;
+        $this->textBudget = max(1, $max * self::TEXT_CHECK_BUDGET_FACTOR);
 
         foreach ($this->rankUrls($urls) as $url) {
             if (count($saved) >= $max) {
                 break;
             }
             if (! is_string($url) || ! self::looksLikeDocumentUrl($url)) {
+                continue;
+            }
+            // adresy przychodzą też z wyszukiwarki, nie tylko z karty — regulamin sklepu
+            // odsiewamy w jednym miejscu dla wszystkich źródeł
+            if (self::looksLikeJunkDocument($url)) {
                 continue;
             }
 
@@ -257,7 +356,116 @@ final class ProductDocumentDownloader
             throw new \RuntimeException('Plik nie wygląda na PDF');
         }
 
-        return $this->storePdfBytes($product, $bytes, $url, $sortOrder);
+        $text = $this->readPdfText($bytes);
+        $reason = $this->textRejects($text, $url, $product);
+        if ($reason !== null) {
+            Log::info('Product PDF rejected by content', [
+                'product_id' => $product->id,
+                'url' => $url,
+                'reason' => $reason,
+            ]);
+
+            return null;
+        }
+
+        return $this->storePdfBytes($product, $bytes, $url, $sortOrder, $text !== '' ? $text : null);
+    }
+
+    /**
+     * Tekst pliku tą samą drogą co karty techniczne z paneli B2B (pdftotext w osobnym procesie
+     * z limitem czasu). Wyjątek albo timeout nie może wywrócić wzbogacania: pusty tekst = decyduje adres.
+     */
+    private function readPdfText(string $bytes): string
+    {
+        if ($this->textBudget <= 0) {
+            return '';
+        }
+        $this->textBudget--;
+
+        try {
+            return $this->documentText->fromFile($bytes, 'application/pdf');
+        } catch (Throwable $e) {
+            Log::info('Product PDF text extraction failed', ['error' => $e->getMessage()]);
+
+            return '';
+        }
+    }
+
+    /**
+     * Powód odrzucenia dokumentu po treści albo null, gdy dokument zostaje.
+     *
+     * Dwie bramki: treść regulaminu/polityki prywatności wyrzuca plik zawsze, a brak jakiejkolwiek
+     * wzmianki o wyrobie — tylko gdy tekst w ogóle się wyciągnął i jest sensownej długości ORAZ gdy
+     * sam adres też nie wiąże pliku z wyrobem. Skan bez warstwy tekstowej zostaje: lepiej zachować
+     * niepewny dokument niż wyrzucić prawdziwy certyfikat z obrazka.
+     */
+    private function textRejects(string $text, string $url, Product $product): ?string
+    {
+        if (trim($text) === '') {
+            return null;
+        }
+        if (self::looksLikePolicyText($text)) {
+            return 'treść to polityka prywatności / regulamin';
+        }
+        if (mb_strlen($text) < self::MIN_TEXT_FOR_MATCH) {
+            return null;
+        }
+        if ($this->identity->hayHasProductCode(mb_strtolower(urldecode($url)), $product)) {
+            return null;
+        }
+        if ($this->textMentionsProduct($text, $product)) {
+            return null;
+        }
+
+        return 'treść nie wspomina o tym wyrobie';
+    }
+
+    /** Dokument mówi wprost, czym jest — nagłówek/pierwsza strona regulaminu albo polityki prywatności. */
+    private static function looksLikePolicyText(string $text): bool
+    {
+        $head = self::normalizeDocumentHay(mb_substr($text, 0, 2000));
+        foreach ([
+            'polityka prywatnosci', 'polityki prywatnosci', 'privacy policy', 'privacy notice',
+            'regulamin sklepu', 'regulamin serwisu', 'regulamin swiadczenia uslug',
+            'ogolne warunki sprzedazy', 'ogolne warunki handlowe', 'terms and conditions',
+            'klauzula informacyjna', 'administratorem danych osobowych', 'administratorem panstwa danych',
+            'polityka plikow cookies', 'polityka cookies',
+            'rozporzadzenie parlamentu europejskiego i rady ue 2016 679',
+        ] as $needle) {
+            if (str_contains($head, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Kod artykułu, alias modelu albo wyróżniający token nazwy w treści pliku — narzędzia tożsamości
+     * z ProductSearchIdentity, te same co przy ocenie kart i wyników wyszukiwania.
+     */
+    private function textMentionsProduct(string $text, Product $product): bool
+    {
+        $hay = mb_strtolower($text);
+        if ($this->identity->hayHasProductCode($hay, $product)) {
+            return true;
+        }
+        if ($this->identity->hayHasSpecificNameToken($hay, $product)) {
+            return true;
+        }
+        $compact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
+        foreach ($this->identity->modelAliases($product) as $alias) {
+            $alias = mb_strtolower(trim($alias));
+            if (mb_strlen($alias) < 3) {
+                continue;
+            }
+            $aliasCompact = preg_replace('/[^a-z0-9]+/iu', '', $alias) ?? $alias;
+            if (str_contains($hay, $alias) || ($aliasCompact !== '' && str_contains($compact, $aliasCompact))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function downloadBlockedDocument(
@@ -298,11 +506,15 @@ final class ProductDocumentDownloader
         return $dompdf->output();
     }
 
+    /**
+     * @param  string|null  $text  tekst odczytany z pliku; null = nie udało się odczytać (skan, timeout)
+     */
     private function storePdfBytes(
         Product $product,
         string $bytes,
         string $sourceUrl,
         int $sortOrder,
+        ?string $text = null,
     ): ProductDocument {
         $size = strlen($bytes);
         if (! str_starts_with($bytes, '%PDF') || $size === 0 || $size > self::MAX_BYTES) {
@@ -315,6 +527,11 @@ final class ProductDocumentDownloader
             ->where('checksum', $checksum)
             ->first();
         if ($existing !== null) {
+            // ten sam plik — uzupełniamy tylko tekst, gdy wcześniej go nie odczytano
+            if ($text !== null && $existing->text === null) {
+                $existing->forceFill(['text' => $text])->save();
+            }
+
             return $existing;
         }
 
@@ -329,6 +546,7 @@ final class ProductDocumentDownloader
             'path' => $relative,
             'source_url' => mb_substr($sourceUrl, 0, 2000),
             'title' => $title,
+            'text' => $text,
             'kind' => $kind,
             'sort_order' => $sortOrder,
             'checksum' => $checksum,

@@ -36,7 +36,11 @@ final class PrestaDescriptionHtmlTest extends TestCase
         $this->assertStringContainsString('rękawice', $html);
         $this->assertStringContainsString('072007141E', $html);
         $this->assertStringContainsString('polichloropren', $html);
-        $this->assertStringContainsString('EN 374, EN 388', $html);
+        // Normy stoją raz — w sekcji „Normy”, jako suma listy i atrybutu `normy_en`.
+        // Ramka atrybutów ich nie powtarza; wcześniej wychodziły na karcie dwa razy.
+        $this->assertSame(1, substr_count($html, 'EN 388'));
+        $this->assertSame(1, substr_count($html, 'EN 374'));
+        $this->assertStringContainsString('Normy', $html);
         $this->assertStringContainsString('Specyfikacja', $html);
         $this->assertStringContainsString('<ul', $html);
         $this->assertStringContainsString('odporność chemiczna', $html);

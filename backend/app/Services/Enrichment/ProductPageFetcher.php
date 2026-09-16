@@ -1431,6 +1431,8 @@ final class ProductPageFetcher
         }
 
         $out = [];
+        /** @var array<string, true> $unbound */
+        $unbound = [];
         $skuTokens = $this->skuTokens($skuNorm);
         foreach ($raw as $item) {
             $abs = $this->absolutize($item['href'], $pageUrl);
@@ -1441,7 +1443,7 @@ final class ProductPageFetcher
             $label = $item['label'];
             $hay = $meta.' '.$label;
 
-            if ($this->looksLikeJunkManufacturerPdf($hay)) {
+            if (ProductDocumentDownloader::looksLikeJunkDocument($hay)) {
                 continue;
             }
 
@@ -1456,18 +1458,32 @@ final class ProductPageFetcher
             if (! $matched && $this->hayMentionsNameTokens($meta, $skuNorm)) {
                 $matched = true;
             }
-            // na karcie produktu: „deklaracja / certyfikat / DoC” bez SKU w nazwie pliku
-            if (! $matched && $this->looksLikeCertificateDocument($hay)) {
-                $matched = true;
-            }
-            // strona producenta: każdy sensowny PDF (zazwyczaj certyfikat / karta)
-            if (! $matched && $fromManufacturer) {
-                $matched = true;
-            }
-            if (! $matched) {
+            if ($matched) {
+                $out[] = $abs;
+
                 continue;
             }
-            $out[] = $abs;
+            // Nic w adresie ani w etykiecie nie wiąże pliku z tym wyrobem. Zostaje tylko pytanie,
+            // czy plik w ogóle wygląda na dokument wyrobu (deklaracja, certyfikat, karta) —
+            // katalog całej marki, cennik czy broszura odpadają także u producenta. Domena
+            // producenta daje pierwszeństwo (niżej), ale nie immunitet na dowolny PDF.
+            if (! $this->looksLikeCertificateDocument($hay)) {
+                continue;
+            }
+            if ($fromManufacturer) {
+                $out[] = $abs;
+
+                continue;
+            }
+            $unbound[$abs] = true;
+        }
+
+        // Sklep: „deklaracja zgodności” bez kodu i nazwy bierzemy tylko wtedy, gdy na stronie jest
+        // DOKŁADNIE JEDNA taka pozycja. Karta jednego wyrobu ma przy sobie swoją deklarację i to
+        // przyjęcie jest sensowne; lista deklaracji całego sklepu (albo stopka z dokumentami)
+        // ma ich wiele i żadna nie musi dotyczyć tego wyrobu — to była skarga testerki.
+        if (count($unbound) === 1) {
+            $out[] = (string) array_key_first($unbound);
         }
 
         return array_values(array_unique($out));
@@ -1478,25 +1494,11 @@ final class ProductPageFetcher
         foreach ([
             'deklarac', 'declaration', 'conformity', 'certyfik', 'certificate',
             'datasheet', 'datenblatt', 'karta-katalog', 'karta_katalog', 'karta produktu',
+            'karta techniczn', 'karta-techniczn', 'karta_techniczn',
+            'product-info', 'product_info', 'productinfo', 'produktinfo',
+            'informacje o produkcie', 'product information',
             'doc_', '_doc', '/doc/', 'doctype', 'ue-type', 'eu-type',
             'examination', 'attestation', 'swiadectw', 'świadectw', 'pdb_', '_pdb',
-        ] as $needle) {
-            if (str_contains($hay, $needle)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /** Raporty CSR / regulaminy — nie certyfikaty produktu. */
-    private function looksLikeJunkManufacturerPdf(string $hay): bool
-    {
-        foreach ([
-            'sustainability', 'nachhaltig', 'annual-report', 'jahresbericht',
-            'privacy', 'datenschutz', 'cookie', 'terms-of', 'agb', 'imprint',
-            'newsletter', 'press-release', 'investor', 'code-of-conduct',
-            'code_of_conduct', 'compliance-report',
         ] as $needle) {
             if (str_contains($hay, $needle)) {
                 return true;

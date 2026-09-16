@@ -23,6 +23,7 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\B2b\B2bDescriptionSource;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\NormCode;
 use App\Support\PpeAssortment;
 use App\Support\ProductDescriptionText;
 use App\Support\ProductSizeVariant;
@@ -46,6 +47,12 @@ final class ProductEnrichmentService
 
     /** Krótszy fragment z wyszukiwarki nie wystarczy na opis — nie traktujemy go jak karty. */
     private const SNIPPET_CARD_MIN_CHARS = 500;
+
+    /** Tyle treści musi mieć karta producenta, żeby wejść przed karty sklepów. */
+    private const MFR_CARD_MIN_CHARS = 400;
+
+    /** Ile ostatnich kroków przebiegu zostaje przy karcie, gdy wzbogacanie się udało. */
+    private const TRACE_STEPS_ON_SUCCESS = 12;
 
     /**
      * Job wzbogacania trwa do ~7 min (timeout 420 s + slot). Po tym czasie produkt
@@ -358,8 +365,60 @@ final class ProductEnrichmentService
             $pack['results'] = $this->search->searchMappedRetailers($product);
             $pack['errors'] = $pack['errors'] ?? [];
         }
+        $pack['results'] = $this->dropBlockedSourceHosts(
+            is_array($pack['results'] ?? null) ? $pack['results'] : []
+        );
 
         return $this->withHintedShopResult($product, $pack);
+    }
+
+    /**
+     * Hosty wykluczone jako źródło (config `enrichment.blocked_source_hosts`) — przede
+     * wszystkim własne środowisko migracyjne. Ręcznie wskazany adres sklepu dopisujemy
+     * później i on wykluczeniu nie podlega: to świadoma decyzja człowieka.
+     *
+     * @param  list<array<string, mixed>>  $results
+     * @return list<array<string, mixed>>
+     */
+    private function dropBlockedSourceHosts(array $results): array
+    {
+        $blocked = array_values(array_filter(array_map(
+            static fn ($host): string => is_string($host)
+                ? preg_replace('/^www\./', '', mb_strtolower(trim($host))) ?? ''
+                : '',
+            (array) config('enrichment.blocked_source_hosts', [])
+        )));
+        if ($blocked === []) {
+            return array_values($results);
+        }
+        $dropped = [];
+        $out = [];
+        foreach ($results as $row) {
+            $url = (string) ($row['url'] ?? '');
+            $host = preg_replace(
+                '/^www\./',
+                '',
+                mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))
+            ) ?? '';
+            $hit = false;
+            foreach ($blocked as $needle) {
+                if ($host === $needle || str_ends_with($host, '.'.$needle)) {
+                    $hit = true;
+                    break;
+                }
+            }
+            if ($hit) {
+                $dropped[] = ['url' => $url, 'reason' => CandidateRejection::BLOCKED_HOST];
+
+                continue;
+            }
+            $out[] = $row;
+        }
+        if ($dropped !== []) {
+            $this->attemptLog()->addRejections('host wykluczony', $dropped);
+        }
+
+        return $out;
     }
 
     /**
@@ -682,9 +741,13 @@ final class ProductEnrichmentService
             }
             $timing['fetch_ms'] = $this->elapsedMs($t);
 
-            $pageSnippets = $this->keepConfirmedCardPages(
+            $pageSnippets = $this->orderPagesForDescription(
+                $this->keepConfirmedCardPages(
+                    $product,
+                    $this->mergePageSnippets($pageSnippets, $mfrPageSnippets)
+                ),
                 $product,
-                $this->mergePageSnippets($pageSnippets, $mfrPageSnippets)
+                $mfrDomains
             );
             $rawCardPages = $pageSnippets;
             $openWebCardsUnreachable = false;
@@ -1023,10 +1086,17 @@ final class ProductEnrichmentService
                 $descPages,
                 $product
             );
-            if ($imageUrls === []) {
+            // Zdjęcie bez kodu/modelu w adresie nie jest niczym potwierdzone — „og:image”
+            // sklepu bywa logo, budynkiem firmy albo zupełnie innym wyrobem (kurtka przy
+            // płatku zaworu). Takie kandydatury ogląda model; przechodzą bez oglądania
+            // tylko pliki, których adres sam nazywa produkt.
+            $proven = $this->provenProductImages($imageUrls, $product);
+            if ($proven !== []) {
+                $imageUrls = $proven;
+            } else {
                 $imageUrls = $this->imageVerifier->select(
                     $product,
-                    $fromCards['all'],
+                    $fromCards['all'] !== [] ? $fromCards['all'] : $imageUrls,
                     $descPages,
                     3,
                     $fromCards['trusted']
@@ -1040,10 +1110,18 @@ final class ProductEnrichmentService
                 $this->stringList($extracted['features'] ?? null),
                 $description
             );
-            $norms = $this->stringList($extracted['norms'] ?? null);
-            $certificates = $this->stringList($extracted['certificates'] ?? null);
-            $materials = $this->stringList($extracted['materials'] ?? null);
-            $useCases = $this->stringList($extracted['use_cases'] ?? null);
+            // „EN 388”, „EN 388:2016” i „EN388:2016+A1:2018” z trzech kart to jedna norma,
+            // a nie trzy pozycje na liście — zwijamy do zapisu najbogatszego w informacje.
+            $norms = NormCode::dedupe($this->stringList($extracted['norms'] ?? null));
+            $certificates = NormCode::dedupe($this->stringList($extracted['certificates'] ?? null));
+            $materials = ProductDescriptionText::dropDuplicatedListItems(
+                $this->stringList($extracted['materials'] ?? null),
+                $description
+            );
+            $useCases = ProductDescriptionText::dropDuplicatedListItems(
+                $this->stringList($extracted['use_cases'] ?? null),
+                $description
+            );
             $specs = ProductDescriptionText::dropDuplicatedListItems(
                 $this->stringList($extracted['specs'] ?? null),
                 $description
@@ -1193,7 +1271,11 @@ final class ProductEnrichmentService
                 'enrichment_error' => $cachedImageUrls === []
                     ? 'Opis OK, nie udało się pobrać zdjęcia'.($imageFailure !== '' ? ' ('.$imageFailure.')' : ' (karty nie miały zdjęcia produktu)').'.'
                     : null,
-                'enrichment_trace' => $cachedImageUrls === [] ? $this->attemptLog()->snapshot($product) : null,
+                // Ślad zapisujemy też po udanym przebiegu (skrócony) — bez niego nie da się
+                // sprawdzić, z której karty powstał opis, a właśnie to zgłasza tester.
+                'enrichment_trace' => $cachedImageUrls === []
+                    ? $this->attemptLog()->snapshot($product)
+                    : $this->attemptLog()->snapshot($product, self::TRACE_STEPS_ON_SUCCESS),
             ];
             if ($packaging !== null) {
                 $saved['packaging'] = $packaging;
@@ -2418,7 +2500,11 @@ final class ProductEnrichmentService
         $documentUrls = [];
         if ($extraResults !== []) {
             $extraFetched = $this->pages->fetch($extraResults, (string) $product->sku, 3, [], $product);
-            $extraPages = $this->sanitizePagesWithLlm($product, $extraFetched['pages']);
+            // Druga tura przechodzi TĘ SAMĄ bramkę tożsamości co pierwsza. Bez niej karta
+            // innego wyrobu (zestaw SECURA 3100 przy nagłowiu, karta półmaski przy pierścieniu
+            // zaczepowym) dokładała „bogatszy” opis i podmieniała ten z właściwej karty.
+            $extraCards = $this->keepConfirmedCardPages($product, $extraFetched['pages']);
+            $extraPages = $extraCards !== [] ? $this->sanitizePagesWithLlm($product, $extraCards) : [];
             foreach ($extraPages as $page) {
                 $pageSnippets[] = $page;
             }
@@ -2432,19 +2518,19 @@ final class ProductEnrichmentService
                 $documentUrls[] = $url;
             }
 
-            $extraExtracted = $this->extractWithLlm(
-                $product,
-                array_slice($extraResults, 0, 4),
-                array_slice($pageSnippets, -3)
-            );
-            $extraDesc = $this->composeFullDescription($extraExtracted);
-            if (! $this->isUsableProductDescription($extraDesc, $product, array_column(array_slice($pageSnippets, -3), 'url'))) {
-                $extraDesc = '';
-            }
-            if ($this->isRicherDescription($extraDesc, $description)) {
-                $description = $extraDesc;
-                $extracted = $this->mergeExtracted($extracted, $extraExtracted);
-            } else {
+            if ($extraPages !== []) {
+                $extraExtracted = $this->extractWithLlm(
+                    $product,
+                    array_slice($extraResults, 0, 4),
+                    $extraPages
+                );
+                $extraDesc = $this->composeFullDescription($extraExtracted);
+                if (! $this->isUsableProductDescription($extraDesc, $product, array_column($extraPages, 'url'))) {
+                    $extraDesc = '';
+                }
+                if ($this->isRicherDescription($extraDesc, $description)) {
+                    $description = $extraDesc;
+                }
                 $extracted = $this->mergeExtracted($extracted, $extraExtracted);
             }
         }
@@ -2488,7 +2574,11 @@ final class ProductEnrichmentService
             return false;
         }
 
-        return mb_strlen($candidate) >= mb_strlen($current) + 60;
+        // Dłuższy tekst nie jest „lepszy” sam z siebie — karta całego zestawu zawsze bije
+        // kartę pojedynczej części. Kompletnego opisu z właściwej karty nie podmieniamy;
+        // dłuższy kandydat wygrywa tylko z opisem bez cech technicznych i norm.
+        return $this->looksLikeIncompleteDescription($current)
+            && mb_strlen($candidate) >= mb_strlen($current) + 60;
     }
 
     /** Opis bez cech technicznych / norm — warto doszukać na innych stronach. */
@@ -2533,6 +2623,51 @@ final class ProductEnrichmentService
         }
 
         return $filled < 2;
+    }
+
+    /**
+     * Zdjęcia, których adres sam nazywa produkt (kod albo model w nazwie pliku). Tylko one
+     * trafiają na kartę bez obejrzenia przez model — reszta, łącznie z „og:image” sklepu,
+     * idzie do weryfikacji wizualnej, bo bywa logo, budynkiem firmy albo innym wyrobem.
+     *
+     * @param  list<string>  $urls
+     * @return list<string>
+     */
+    private function provenProductImages(array $urls, Product $product): array
+    {
+        return array_values(array_filter(
+            $urls,
+            fn ($url): bool => is_string($url) && $this->identity->imageUrlMentionsProduct($url, $product)
+        ));
+    }
+
+    /**
+     * Karta producenta idzie na początek listy — model dostaje do opisu pierwsze 5 stron,
+     * a budżet 20 000 znaków wyczerpują po kolei. Przy MAPIE karty sklepów zjadały cały
+     * budżet i parametry (grubość, kategoria, normy) brały się z hurtowni zamiast z mapa-pro.
+     * Landing serii bez treści zostaje z tyłu — liczy się karta z opisem, nie sama domena.
+     *
+     * @param  list<array{url: string, text: string}>  $pages
+     * @param  list<string>  $mfrDomains
+     * @return list<array{url: string, text: string}>
+     */
+    private function orderPagesForDescription(array $pages, Product $product, array $mfrDomains): array
+    {
+        $manufacturer = [];
+        $rest = [];
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            $text = trim((string) ($page['text'] ?? ''));
+            if ($url !== '' && mb_strlen($text) >= self::MFR_CARD_MIN_CHARS
+                && $this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
+                $manufacturer[] = $page;
+
+                continue;
+            }
+            $rest[] = $page;
+        }
+
+        return array_values(array_merge($manufacturer, $rest));
     }
 
     /**
@@ -2898,7 +3033,12 @@ final class ProductEnrichmentService
         foreach (['features', 'specs', 'norms', 'certificates', 'materials', 'use_cases', 'image_urls', 'document_urls', 'source_urls'] as $key) {
             $a = $this->stringList($base[$key] ?? null);
             $b = $this->stringList($extra[$key] ?? null);
-            $base[$key] = array_values(array_unique(array_merge($a, $b)));
+            $merged = array_values(array_unique(array_merge($a, $b)));
+            // Normy z dwóch kart różnią się zwykle samym zapisem (rok, poprawka, spacja)
+            // — bez kanonizacji karta dostawała każdą z nich po dwa razy.
+            $base[$key] = in_array($key, ['norms', 'certificates'], true)
+                ? NormCode::dedupe($merged)
+                : $merged;
         }
         if (is_array($extra['attributes'] ?? null)) {
             $base['attributes'] = $this->bhpAttributes->normalize(
@@ -3387,8 +3527,9 @@ final class ProductEnrichmentService
      */
     private function fallbackDescriptionFromPages(array $pageSnippets, Product $product): string
     {
-        $candidates = [];
+        $byPage = [];
         foreach ($pageSnippets as $page) {
+            $url = (string) ($page['url'] ?? '');
             $text = ProductPageFetcher::stripExpandLinkChrome(trim((string) ($page['text'] ?? '')));
             if ($text === '') {
                 continue;
@@ -3408,10 +3549,18 @@ final class ProductEnrichmentService
                     continue;
                 }
                 if (mb_strlen($part) >= 40 && $this->descriptionMentionsProduct($part, $product)) {
-                    $candidates[] = $part;
+                    $byPage[$url][] = $part;
                 }
             }
-            if ($candidates === []) {
+        }
+        if ($byPage === []) {
+            // Żadna karta nie dała akapitu — dopiero wtedy bierzemy całą treść strony.
+            foreach ($pageSnippets as $page) {
+                $url = (string) ($page['url'] ?? '');
+                $text = ProductPageFetcher::stripExpandLinkChrome(trim((string) ($page['text'] ?? '')));
+                if ($text === '') {
+                    continue;
+                }
                 $flat = ProductDescriptionText::stripShopUi(
                     ProductPageFetcher::stripExpandLinkChrome(trim(preg_replace('/\s+/u', ' ', $text) ?? $text))
                 );
@@ -3420,23 +3569,87 @@ final class ProductEnrichmentService
                     && ! ProductPageFetcher::looksLikeShopOfferDump($flat)
                     && mb_strlen($flat) >= 220
                     && $this->descriptionMentionsProduct($flat, $product)) {
-                    $candidates[] = $flat;
+                    $byPage[$url][] = $flat;
                 }
             }
         }
-        $candidates = array_values(array_unique($candidates));
-        if ($candidates === []) {
+        $out = $this->composeFromSingleCard($byPage, $pageSnippets, $product);
+
+        return $out !== '' && $this->isUsableProductDescription($out, $product) ? $out : '';
+    }
+
+    /**
+     * Opis składamy z akapitów JEDNEJ karty — nigdy z kilku naraz. Sklejone akapity z dwóch
+     * stron opisywały dwa różne wyroby jako jeden produkt (płatek zaworu + półmaska), a przy
+     * wyborze „najdłuższego” akapitu karta całego zestawu zawsze biła kartę pojedynczej części.
+     *
+     * @param  array<string, list<string>>  $byPage  akapity w kolejności strony, klucz = URL karty
+     * @param  list<array{url?: string, text?: string, title?: string}>  $pageSnippets
+     */
+    private function composeFromSingleCard(array $byPage, array $pageSnippets, ?Product $product): string
+    {
+        $bestParts = [];
+        $bestRank = -1;
+        $bestLength = -1;
+        foreach ($byPage as $url => $parts) {
+            $parts = array_values(array_unique($parts));
+            if ($parts === []) {
+                continue;
+            }
+            $rank = $product !== null
+                ? $this->cardIdentityRank((string) $url, $pageSnippets, $product)
+                : 0;
+            $length = array_sum(array_map(static fn (string $p): int => mb_strlen($p), $parts));
+            if ($rank > $bestRank || ($rank === $bestRank && $length > $bestLength)) {
+                $bestRank = $rank;
+                $bestLength = $length;
+                $bestParts = $parts;
+            }
+        }
+        if ($bestParts === []) {
             return '';
         }
-        usort($candidates, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
-        $best = $candidates[0];
-        if (! $this->looksLikeIncompleteDescription($best) || count($candidates) === 1) {
-            $out = mb_substr($best, 0, 12000);
-        } else {
-            $out = mb_substr(implode("\n\n", $candidates), 0, 12000);
+        $longest = $bestParts;
+        usort($longest, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
+        $head = $longest[0];
+        // Akapity tej samej karty łączymy w kolejności strony — dopiero gdy sam najdłuższy
+        // akapit nie niesie ani cech technicznych, ani norm.
+        $out = ! $this->looksLikeIncompleteDescription($head) || count($bestParts) === 1
+            ? $head
+            : implode("\n\n", $bestParts);
+
+        return mb_substr($out, 0, 12000);
+    }
+
+    /**
+     * Siła potwierdzenia karty: 3 = adres wskazany ręcznie, 2 = kod lub pełna nazwa razem
+     * z marką, 1 = karta potwierdzona słabszą przesłanką, 0 = reszta. Decyduje, z której
+     * karty piszemy opis — zamiast dawnego „wygrywa dłuższy tekst”.
+     *
+     * @param  list<array{url?: string, text?: string, title?: string}>  $pageSnippets
+     */
+    private function cardIdentityRank(string $url, array $pageSnippets, Product $product): int
+    {
+        if ($url === '') {
+            return 0;
+        }
+        if ($product->isHintedShopUrl($url)) {
+            return 3;
+        }
+        $title = '';
+        $text = '';
+        foreach ($pageSnippets as $page) {
+            if (mb_strtolower((string) ($page['url'] ?? '')) === mb_strtolower($url)) {
+                $title = (string) ($page['title'] ?? '');
+                $text = (string) ($page['text'] ?? '');
+                break;
+            }
+        }
+        if ($this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $product)) {
+            return 2;
         }
 
-        return $this->isUsableProductDescription($out, $product) ? $out : '';
+        return $this->identity->isConfirmedProductCard($url, $title, $text, $product) ? 1 : 0;
     }
 
     /**
@@ -3453,15 +3666,16 @@ final class ProductEnrichmentService
      */
     private function usableCardDescription(array $pages, Product $product): string
     {
-        $fromCard = $this->descriptionFromConfirmedCards($pages);
+        $fromCard = $this->descriptionFromConfirmedCards($pages, $product);
 
         return $fromCard !== '' && $this->isUsableProductDescription($fromCard, $product) ? $fromCard : '';
     }
 
-    private function descriptionFromConfirmedCards(array $pageSnippets): string
+    private function descriptionFromConfirmedCards(array $pageSnippets, ?Product $product = null): string
     {
-        $candidates = [];
+        $byPage = [];
         foreach ($pageSnippets as $page) {
+            $url = (string) ($page['url'] ?? '');
             $text = ProductPageFetcher::stripExpandLinkChrome(trim((string) ($page['text'] ?? '')));
             if ($text === '') {
                 continue;
@@ -3484,22 +3698,20 @@ final class ProductEnrichmentService
                     continue;
                 }
                 if (mb_strlen($part) >= 40) {
-                    $candidates[] = $part;
+                    $byPage[$url][] = $part;
                 }
             }
         }
-        $candidates = array_values(array_filter(
-            array_unique($candidates),
-            fn (string $part): bool => ! $this->looksLikeRawLocaleDump($part)
-        ));
-        if ($candidates === []) {
+        foreach ($byPage as $url => $parts) {
+            $byPage[$url] = array_values(array_filter(
+                $parts,
+                fn (string $part): bool => ! $this->looksLikeRawLocaleDump($part)
+            ));
+        }
+        $out = $this->composeFromSingleCard($byPage, $pageSnippets, $product);
+        if ($out === '') {
             return '';
         }
-        usort($candidates, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
-        $best = $candidates[0];
-        $out = ! $this->looksLikeIncompleteDescription($best) || count($candidates) === 1
-            ? mb_substr($best, 0, 12000)
-            : mb_substr(implode("\n\n", $candidates), 0, 12000);
         $out = ProductDescriptionText::stripShopUi($out);
         if ($this->looksLikeThinDescription($out) || $this->looksLikeMissingCardMeta($out)
             || $this->looksLikeRawLocaleDump($out)

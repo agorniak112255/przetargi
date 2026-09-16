@@ -44,6 +44,8 @@ final class CandidateRejection
 
     public const SCRIPT_SHELL = 'script_shell';
 
+    public const BLOCKED_HOST = 'blocked_host';
+
     private const LABELS = [
         self::NOISE_URL => 'adres kontaktu/kuponu, nie karta',
         self::MANUFACTURER_CONFLICT => 'strona innego producenta',
@@ -62,6 +64,7 @@ final class CandidateRejection
         self::UNCONFIRMED => 'treść nie potwierdza produktu',
         self::UNCONFIRMED_STRICT => 'brak dokładnego SKU albo pełnej nazwy',
         self::SCRIPT_SHELL => 'sklep rysowany skryptem, bez treści karty',
+        self::BLOCKED_HOST => 'host wykluczony jako źródło',
     ];
 
     public static function label(string $reason): string

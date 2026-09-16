@@ -112,16 +112,24 @@ final class EnrichmentAttemptLog
     }
 
     /**
+     * @param  int|null  $maxSteps  ostatnie N kroków — ślad udanego przebiegu zapisujemy skrócony,
+     *                              żeby dało się odtworzyć pochodzenie opisu bez pełnego dziennika
+     *                              przy każdej z kilkudziesięciu tysięcy kart
      * @return array{at: string, sku: string, name: string, manufacturer: string, steps: list<array<string, mixed>>}
      */
-    public function snapshot(Product $product): array
+    public function snapshot(Product $product, ?int $maxSteps = null): array
     {
+        $steps = $this->steps;
+        if ($maxSteps !== null && $maxSteps > 0 && count($steps) > $maxSteps) {
+            $steps = array_values(array_slice($steps, -$maxSteps));
+        }
+
         return [
             'at' => now()->toIso8601String(),
             'sku' => (string) $product->sku,
             'name' => (string) $product->name,
             'manufacturer' => (string) $product->manufacturer,
-            'steps' => $this->steps,
+            'steps' => $steps,
         ];
     }
 }

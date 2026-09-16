@@ -2563,7 +2563,11 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(['nitryl', 'antypoślizgowe'], $product->enrichment_payload['features'] ?? null);
         $this->assertSame(1, ProductImage::query()->where('product_id', $product->id)->count());
         $this->assertSame(1, ProductDocument::query()->where('product_id', $product->id)->count());
-        $this->assertNull($product->enrichment_trace);
+        // Udany przebieg też zostawia ślad (skrócony) — bez niego nie da się sprawdzić,
+        // z której karty powstał opis, a to jest główne zgłoszenie z testów ręcznych.
+        $this->assertIsArray($product->enrichment_trace);
+        $this->assertLessThanOrEqual(12, count($product->enrichment_trace['steps'] ?? []));
+        $this->assertNull($product->enrichment_error);
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
     }
 

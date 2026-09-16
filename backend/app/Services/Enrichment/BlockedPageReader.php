@@ -425,26 +425,34 @@ final class BlockedPageReader
      */
     private function extractDocumentUrls(string $markdown, string $pageUrl): array
     {
+        /** @var list<array{url: string|null, label: string}> $found */
         $found = [];
-        if (preg_match_all('#\[[^\]]*\]\((https?://[^)\s]+)\)#i', $markdown, $m)) {
-            foreach ($m[1] as $u) {
-                $found[] = $this->cleanUrl((string) $u);
+        if (preg_match_all('#\[([^\]]*)\]\((https?://[^)\s]+)\)#i', $markdown, $m, PREG_SET_ORDER)) {
+            foreach ($m as $row) {
+                $found[] = [
+                    'url' => $this->cleanUrl((string) ($row[2] ?? '')),
+                    'label' => trim((string) ($row[1] ?? '')),
+                ];
             }
         }
         if (preg_match_all('#https?://[^\s\)\"\']+\.pdf(?:\?[^\s\)\"\']*)?#i', $markdown, $m)) {
             foreach ($m[0] as $u) {
-                $found[] = $this->cleanUrl((string) $u);
+                $found[] = ['url' => $this->cleanUrl((string) $u), 'label' => ''];
             }
         }
 
         $out = [];
-        foreach ($found as $url) {
-            if ($url === null) {
+        foreach ($found as $item) {
+            $url = $item['url'];
+            if ($url === null || ! ProductDocumentDownloader::looksLikeDocumentUrl($url)) {
                 continue;
             }
-            if (ProductDocumentDownloader::looksLikeDocumentUrl($url)) {
-                $out[] = $url;
+            // reader oddaje całą stronę razem ze stopką — bez tego filtru do „Plików PDF”
+            // trafiała polityka prywatności i regulamin sklepu
+            if (ProductDocumentDownloader::looksLikeJunkDocument($url.' '.$item['label'])) {
+                continue;
             }
+            $out[] = $url;
         }
 
         return array_values(array_unique($out));

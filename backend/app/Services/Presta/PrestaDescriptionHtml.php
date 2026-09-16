@@ -6,6 +6,7 @@ namespace App\Services\Presta;
 
 use App\Models\Product;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
+use App\Support\NormCode;
 use App\Support\ProductDescriptionText;
 
 /**
@@ -47,7 +48,16 @@ final class PrestaDescriptionHtml
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         $rawDescription = (string) ($product->description ?? '');
         $prose = $this->prose($rawDescription);
-        $attrPairs = $this->attributePairs(is_array($payload['attributes'] ?? null) ? $payload['attributes'] : []);
+        $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
+        // Normy siedzą i w payloadzie, i w atrybutach. Sekcja „Normy” pokazuje ich sumę
+        // (bez powtórek po kanonizacji), a ramka atrybutów wtedy ich nie powtarza —
+        // wcześniej ta sama norma wychodziła na karcie dwa razy.
+        $normsList = NormCode::dedupe(array_merge(
+            $this->stringList($payload['norms'] ?? null),
+            $this->stringList($attrs['normy_en'] ?? null)
+        ));
+        $normsBlockShown = $normsList !== [] && $this->blockVisible($this->exportBlocks($product), 'norms');
+        $attrPairs = $this->attributePairs($attrs, ! $normsBlockShown);
         $hasLists = false;
         foreach (array_keys(self::LIST_KEYS) as $key) {
             if ($this->stringList($payload[$key] ?? null) !== []) {
@@ -75,7 +85,7 @@ final class PrestaDescriptionHtml
                     ? $this->listSection(
                         self::LIST_KEYS[$id],
                         ProductDescriptionText::dropDuplicatedListItems(
-                            $this->stringList($payload[$id] ?? null),
+                            $id === 'norms' ? $normsList : $this->stringList($payload[$id] ?? null),
                             $prose
                         ),
                         $emphasis
@@ -121,10 +131,25 @@ final class PrestaDescriptionHtml
     }
 
     /**
+     * @param  list<array<string, mixed>>  $blocks
+     */
+    private function blockVisible(array $blocks, string $id): bool
+    {
+        foreach ($blocks as $block) {
+            if ((string) ($block['id'] ?? '') === $id) {
+                return (bool) ($block['visible'] ?? true);
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @param  array<string, mixed>  $attrs
+     * @param  bool  $withNorms  normy w ramce atrybutów tylko wtedy, gdy nie ma osobnej sekcji
      * @return list<array{0: string, 1: string}>
      */
-    private function attributePairs(array $attrs): array
+    private function attributePairs(array $attrs, bool $withNorms = true): array
     {
         $pairs = [];
         foreach (
@@ -141,7 +166,7 @@ final class PrestaDescriptionHtml
                 $pairs[] = [$label, $value];
             }
         }
-        $normy = $this->stringList($attrs['normy_en'] ?? null);
+        $normy = $withNorms ? $this->stringList($attrs['normy_en'] ?? null) : [];
         if ($normy !== []) {
             $pairs[] = ['Normy', implode(', ', $normy)];
         }

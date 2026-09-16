@@ -116,14 +116,36 @@ export function cardBlocksFor(product: Product): DescriptionLayoutBlock[] {
   return Array.isArray(blocks) && blocks.length > 0 ? blocks : DEFAULT_CARD_BLOCKS
 }
 
+/** Klucz porównania oznaczeń norm: „EN 388”, „en388” i „EN-388” to jedna pozycja. */
+function normKey(value: string): string {
+  return value.toLocaleLowerCase('pl').replace(/[^a-z0-9]+/g, '')
+}
+
+/** Normy z atrybutu `normy_en` dokładamy do listy, ale bez powtórzeń tego, co już w niej jest. */
+function mergeNorms(items: string[], extra: unknown): string[] {
+  if (!Array.isArray(extra)) return items
+  const out = [...items]
+  for (const value of extra) {
+    if (typeof value !== 'string' || value.trim() === '') continue
+    const key = normKey(value)
+    const known = out.some((s) => {
+      const k = normKey(s)
+      return k === key || k.includes(key) || key.includes(k)
+    })
+    if (!known) out.push(value.trim())
+  }
+  return out
+}
+
 export function listItems(product: Product, id: string): string[] {
   const payload = product.enrichment_payload
   const raw = payload?.[id as 'specs' | 'features' | 'materials' | 'norms' | 'certificates' | 'use_cases']
   const items = Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s.trim() !== '') : []
+  const merged = id === 'norms' ? mergeNorms(items, payload?.attributes?.normy_en) : items
   const withNorms =
-    id === 'norms' && product.norms && !items.some((s) => s.includes(product.norms ?? ''))
-      ? [product.norms, ...items]
-      : items
+    id === 'norms' && product.norms && !merged.some((s) => s.includes(product.norms ?? ''))
+      ? [product.norms, ...merged]
+      : merged
   const prose = descriptionProse(product.description)
   if (!prose) {
     return withNorms
@@ -173,7 +195,11 @@ export function layoutSections(product: Product, blocks = cardBlocksFor(product)
     }
     if (block.id === 'attributes') {
       const pairs = attributePairs(product)
-      const extra = attributeNorms(product)
+      // Normy z atrybutów pokazujemy tylko wtedy, gdy nie ma widocznej sekcji „Normy”
+      // — inaczej ta sama lista stoi na karcie dwa razy.
+      const normsSectionShown =
+        blocks.some((b) => b.id === 'norms' && b.visible) && listItems(product, 'norms').length > 0
+      const extra = normsSectionShown ? '' : attributeNorms(product)
       if (pairs.length > 0 || extra) {
         out.push({ id: block.id, kind: 'attributes', title, pairs, extra, emphasis })
       }
