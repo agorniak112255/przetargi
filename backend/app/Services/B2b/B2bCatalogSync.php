@@ -83,8 +83,11 @@ final class B2bCatalogSync
 
     private const REMOVAL_CHUNK = 2000;
 
-    /** Największy plik dostawcy trafiający na kartę — karty techniczne mają setki kB, nie MB. */
-    private const DOCUMENT_MAX_BYTES = 5_000_000;
+    /**
+     * Największy plik dostawcy trafiający na kartę. Karty techniczne mają setki kB, ale wielojęzyczne instrukcje
+     * bywają grubsze (16.09.2026 „instrukcja obsługi rękawic HexArmor.pdf” to 7,4 MB) — przy 5 MB odpadały.
+     */
+    private const DOCUMENT_MAX_BYTES = 12_000_000;
 
     /** Tyle powodów pominięcia wraca w wyniku przebiegu (panel i CLI pokazują kilka pierwszych). */
     private const ERRORS_LIMIT = 200;
