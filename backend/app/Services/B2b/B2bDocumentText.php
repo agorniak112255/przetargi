@@ -43,10 +43,33 @@ final class B2bDocumentText
         '/^(www\.)?[\w-]+\.(pl|com|eu|de|net)(\/\S*)?$/iu',
         '/^(ul|al|pl)\.\s/u',
         '/^Strona\s+\d+\s+z\s+\d+/iu',
+        // kontakt na początku wiersza: „tel.+48 42 29-29-500, handlowy@… , Fax:+48 …” (Protekt)
+        '/^(tel|fax|faks|kom|e-?mail)\b/iu',
+        // adres z etykietą działu przed nim: „DZIAŁ HANDLOWY ul. Skromna 6, 93-405 Łódź, POLSKA”
+        '/\b(ul|al)\.\s.*\b\d{2}-\d{3}\b/u',
+        // adres e-mail w dowolnym miejscu wiersza — na karcie wyrobu to zawsze kontakt handlowy
+        '/[\w.+-]+@[\w.-]+\.[a-z]{2,}/iu',
     ];
 
     /** Wiersz z nazwą firmy poprzedzony taką etykietą to fakt o wyrobie (kto go robi) — zostaje. */
     private const KEPT_COMPANY_LABELS = '/^(producent|importer|dystrybutor|wytwórca|marka|jednostka notyfikowana)\b/iu';
+
+    /**
+     * Nagłówek cennika producenta. Od niego w dół karta katalogowa opisuje już nie ten jeden wyrób, tylko całą
+     * rodzinę: tabelę cen katalogowych z numerami wszystkich wersji (u Protektu DOR × długość), nazwę rodziny
+     * i stopkę. Na karcie pojedynczego wyrobu to szum, a przy cenach wręcz mylące — cena karty pochodzi z cennika
+     * konta B2B (z rabatem) i jest inna niż katalogowa. Numery innych wersji mają własne karty, każdy ze swoją ceną.
+     */
+    private const PRICE_LIST_HEADING = '/^(CENNIK|CENY)\b/u';
+
+    /** Dowód, że za nagłówkiem naprawdę idzie tabela cen; bez niego nagłówek nie jest granicą i nic nie ucinamy. */
+    private const PRICE_LIST_EVIDENCE = '/\d+,\d{2}\s*(\/|zł|PLN)|cena\s+(netto|brutto)/iu';
+
+    /**
+     * Etykiety sekcji układu karty katalogowej. W tekście z PDF-a lądują obok treści, do której się odnoszą,
+     * więc na końcu zostają same — bez niczego pod spodem nie mówią nic i tylko je wtedy zdejmujemy.
+     */
+    private const SECTION_LABELS = '/^(CECHY SZCZEGÓLNE|PARAMETRY|CENNIK|CENY|ZDJĘCIA DODATKOWE)$/u';
 
     /** Tekst z pliku; '' gdy nie da się go odczytać. */
     public function fromFile(string $bytes, string $mime): string
@@ -73,14 +96,22 @@ final class B2bDocumentText
     }
 
     /**
-     * Tekst pliku przygotowany do opisu karty: bez stopki firmowej sprzedawcy i bez pustych akapitów.
-     * Surowy tekst zostaje przy dokumencie (product_documents.text) — czyścimy tylko to, co widać na karcie.
+     * Tekst pliku przygotowany do opisu karty: bez cennika rodziny, bez stopki firmowej sprzedawcy i bez pustych
+     * akapitów. Surowy tekst zostaje przy dokumencie (product_documents.text) — czyścimy tylko to, co widać na karcie.
      */
     public static function forCard(string $text): string
     {
+        $source = array_map(
+            static fn (string $line): string => trim((string) preg_replace('/[\s\x{00A0}]+/u', ' ', $line)),
+            preg_split('/\R/u', $text) ?: [],
+        );
+        $priceList = self::priceListStart($source);
+        if ($priceList !== null) {
+            $source = array_slice($source, 0, $priceList);
+        }
+
         $lines = [];
-        foreach (preg_split('/\R/u', $text) ?: [] as $line) {
-            $line = trim((string) preg_replace('/[\s\x{00A0}]+/u', ' ', $line));
+        foreach ($source as $line) {
             if ($line !== '' && self::isCompanyFooter($line)) {
                 continue;
             }
@@ -91,23 +122,50 @@ final class B2bDocumentText
             $lines[] = $line;
         }
 
+        while ($lines !== [] && (end($lines) === '' || preg_match(self::SECTION_LABELS, (string) end($lines)) === 1)) {
+            array_pop($lines);
+        }
+
         return trim(implode("\n", $lines));
+    }
+
+    /**
+     * Numer wiersza, od którego zaczyna się cennik rodziny; null gdy karta go nie ma.
+     *
+     * @param  list<string>  $lines
+     */
+    private static function priceListStart(array $lines): ?int
+    {
+        foreach ($lines as $index => $line) {
+            if (preg_match(self::PRICE_LIST_HEADING, $line) !== 1) {
+                continue;
+            }
+            $rest = implode("\n", array_slice($lines, $index + 1));
+            if (preg_match(self::PRICE_LIST_EVIDENCE, $rest) === 1) {
+                return $index;
+            }
+        }
+
+        return null;
     }
 
     private static function isCompanyFooter(string $line): bool
     {
+        // etykieta wygrywa z każdym wzorcem stopki: „Producent: X Sp. z o.o., ul. …” to fakt o wyrobie
+        if (preg_match(self::KEPT_COMPANY_LABELS, $line) === 1) {
+            return false;
+        }
+
         foreach (self::CONTACT_PATTERNS as $pattern) {
             if (preg_match($pattern, $line) === 1) {
                 return true;
             }
         }
-        if (preg_match(self::KEPT_COMPANY_LABELS, $line) === 1) {
-            return false;
-        }
 
         // nazwa firmy z formą prawną razem z adresem albo sama — nagłówek papieru firmowego
         // bez \b na końcu — po kropce granica słowa nie zachodzi („Sp. z o.o. ul. …”)
-        return preg_match('/(\bsp\.\s?z\s?o\.\s?o\.|\bsp\.\s?k\.|\bs\.a\.|\bgmbh\b|\bltd\b)/iu', $line) === 1
+        // forma prawna także rozpisana słowem — Protekt podpisuje się „Spółka z o.o.”
+        return preg_match('/(\bsp(\.|ółka)\s?z\s?o\.\s?o\.|\bsp\.\s?k\.|\bspółka\s+(akcyjna|jawna|komandytowa)|\bs\.a\.|\bgmbh\b|\bltd\b)/iu', $line) === 1
             && (preg_match('/\b(ul|al)\.\s|\d{2}-\d{3}/u', $line) === 1 || mb_strlen($line) <= 60);
     }
 

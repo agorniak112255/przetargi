@@ -67,6 +67,59 @@ final class B2bDocumentTextTest extends TestCase
 ', $text, 'puste akapity zwijamy');
     }
 
+    /**
+     * Karta katalogowa Protektu (tekst z pliku „Karta produktowa”, 16.09.2026): opisuje całą rodzinę WS, więc
+     * poniżej nagłówka „CENNIK” idzie tabela cen katalogowych z numerami wszystkich długości, nazwa rodziny
+     * i stopka firmowa. Na karcie jednego wyrobu ma zostać tylko to, co mówi o wyrobie.
+     */
+    public function test_manufacturer_price_list_and_footer_are_left_out_of_the_card_description(): void
+    {
+        $raw = implode("\n", [
+            'PODSTAWOWE ZALETY ZAWIESI TAŚMOWYCH',
+            '• szeroki zakres temperatur użytkowania (-40˚C do +100˚C)',
+            'Taśma poliester',
+            'EN 1492-1',
+            'CECHY SZCZEGÓLNE',
+            'PARAMETRY',
+            'CENNIK',
+            'WS Zawiesia taśmowe dwuwarstwowe',
+            'PROTEKT Grzegorz Łaszkiewicz Spółka z o.o.ul. Starorudzka 9, 93-403 Łodź, POLSKA',
+            'KRS: 0001009727 | REGON: 524047958 | NIP: 7292747932',
+            'DZIAŁ HANDLOWY ul. Skromna 6, 93-405 Łódź, POLSKA',
+            'tel.+48 42 29-29-500, handlowy@protekt.com.pl, Fax:+48 42 680-20-93',
+            'WWW.PROTEKT.PL',
+            'CENNIK',
+            'L - Długość',
+            '0,5 m 1 m 2 m 3 m 4 m 5 m 6 m 8 m 10 m 12 m',
+            '23,80 /',
+            'szt.',
+            'WS 005 50',
+            '100,40 /',
+            'WS 020 08',
+        ]);
+
+        $text = B2bDocumentText::forCard($raw);
+
+        foreach (['23,80', '100,40', 'WS 005 50', 'WS 020 08', 'L - Długość', 'Starorudzka', 'Skromna',
+            'handlowy@protekt.com.pl', 'KRS', 'NIP', 'WWW.PROTEKT.PL', 'CENNIK'] as $noise) {
+            $this->assertStringNotContainsString($noise, $text, 'cennik rodziny i stopka nie należą do opisu wyrobu');
+        }
+
+        $this->assertStringContainsString('PODSTAWOWE ZALETY ZAWIESI TAŚMOWYCH', $text);
+        $this->assertStringContainsString('szeroki zakres temperatur użytkowania (-40˚C do +100˚C)', $text);
+        $this->assertStringContainsString('Taśma poliester', $text);
+        $this->assertStringContainsString('EN 1492-1', $text);
+    }
+
+    /** Nagłówek bez tabeli cen pod spodem nie jest granicą — treść pod nim zostaje. */
+    public function test_a_heading_without_prices_below_does_not_cut_the_text(): void
+    {
+        $text = B2bDocumentText::forCard("Waga 20 g\nCENNIK\nMateriał poliester\nKolor czarny");
+
+        $this->assertStringContainsString('Materiał poliester', $text);
+        $this->assertStringContainsString('Kolor czarny', $text);
+    }
+
     public function test_file_that_is_not_a_readable_pdf_gives_no_text(): void
     {
         $service = new B2bDocumentText;
