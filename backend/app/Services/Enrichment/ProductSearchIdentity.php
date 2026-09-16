@@ -80,6 +80,22 @@ final class ProductSearchIdentity
             '/(?<![\p{L}\p{N}])E\.A\.R\b/u',
         ],
         'msa' => ['/(?<![\p{L}\p{N}])MSA(?![\p{L}\p{N}])/u'],
+        // Dystrybutor wystawia kombinezony Ansella pod swoją marką: „Kombinezon AlphaTec 2000”
+        // w cenniku SECURA. Bez tego karta szukała się na stronie dystrybutora i zostawała pusta.
+        // Marki w cenniku NIE zmieniamy — zmiana zerwałaby aktualizację cen (import pomija kod
+        // należący do karty innego producenta).
+        'ansell' => [
+            '/(?<![\p{L}\p{N}])Ansell(?![\p{L}\p{N}])/iu',
+            '/(?<![\p{L}\p{N}])AlphaTec(?![\p{L}\p{N}])/iu',
+            '/(?<![\p{L}\p{N}])HyFlex(?![\p{L}\p{N}])/iu',
+            '/(?<![\p{L}\p{N}])Microflex(?![\p{L}\p{N}])/iu',
+            '/(?<![\p{L}\p{N}])TouchNTuff(?![\p{L}\p{N}])/iu',
+        ],
+        // Canis sprzedaje kombinezony i rękawy Tyvek — to wyrób DuPonta.
+        'dupont' => [
+            '/(?<![\p{L}\p{N}])DuPont(?![\p{L}\p{N}])/iu',
+            '/(?<![\p{L}\p{N}])Tyvek(?![\p{L}\p{N}])/iu',
+        ],
     ];
 
     /** „Visor for 3M helmet”, „pasuje do hełmu MSA” — marka urządzenia, nie tego towaru. */

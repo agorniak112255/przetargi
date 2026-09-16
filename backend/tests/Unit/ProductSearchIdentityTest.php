@@ -361,6 +361,34 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    /**
+     * Dystrybutor wystawia cudzy wyrób pod swoją marką: „Kombinezon AlphaTec 2000” w cenniku
+     * SECURA to Ansell, „Coverall Tyvek 500” u Canisa to DuPont. Marki w cenniku nie zmieniamy
+     * (import pomija kod należący do karty innego producenta), więc rozpoznanie marki TOWARU
+     * jest jedyną drogą, żeby karta producenta w ogóle została przyjęta.
+     */
+    public function test_goods_brand_recognises_ansell_and_dupont_sold_by_a_distributor(): void
+    {
+        $id = new ProductSearchIdentity;
+
+        $this->assertSame(['ansell'], $id->goodsBrandKeys(new Product([
+            'sku' => 'T5329000', 'name' => 'Kombinezon AlphaTec 2000 Standard', 'manufacturer' => 'SECURA',
+        ])));
+        $this->assertSame(['dupont'], $id->goodsBrandKeys(new Product([
+            'sku' => '1160-005-100-00', 'name' => 'Coverall Tyvek 500 Xpert, size M-3XL', 'manufacturer' => 'Canis',
+        ])));
+        // własna marka nie jest „marką towaru”
+        $this->assertSame([], $id->goodsBrandKeys(new Product([
+            'sku' => '19024100', 'name' => 'AlphaTec 19024', 'manufacturer' => 'Ansell',
+        ])));
+        // człon zgodności to nie marka towaru
+        $this->assertSame([], $id->goodsBrandKeys(new Product([
+            'sku' => 'S56212-50',
+            'name' => 'Pierścień z zaczepami zaworu wydechowego do półmaski SECURA 3000',
+            'manufacturer' => 'SECURA',
+        ])));
+    }
+
     public function test_full_name_confirms_mat_card_without_sku(): void
     {
         $id = new ProductSearchIdentity;
