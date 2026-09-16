@@ -585,7 +585,7 @@ final class UvexConnectorTest extends TestCase
         );
         // poziomy ochrony dosłownie, w segmencie, którego tłumaczenie nie rusza
         $this->assertStringContainsString(
-            "Parametry:\nWAVELENGTH (NM) | OD | OPERATING MODE / TESTED PROTECTION LEVEL"
+            "Parametry:\nDługość fali (nm) | OD | Tryb pracy / badany stopień ochrony"
                 ."\n180 - 315 | (OD10+) | D LB10 + IR LB4 + M LB6",
             $description,
         );

@@ -74,6 +74,19 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     /** Tyle zakresów ochrony (UV, VIS, IR…) bierzemy z bocznego bloku strony producenta. */
     private const PROTECTION_RANGE_LIMIT = 8;
 
+    /**
+     * Nagłówki tabeli poziomów ochrony po polsku. Sama tabela zostaje dosłownie (kody, długości fal i stopnie
+     * ochrony omijają tłumaczenie), ale nagłówek to etykieta kolumny, nie dana wyrobu — nieznanego nagłówka
+     * nie zmieniamy.
+     */
+    private const PROTECTION_HEADINGS = [
+        'wavelength (nm)' => 'Długość fali (nm)',
+        'wavelength' => 'Długość fali',
+        'od' => 'OD',
+        'operating mode / tested protection level' => 'Tryb pracy / badany stopień ochrony',
+        'operating mode' => 'Tryb pracy',
+    ];
+
     /** Nagłówek segmentu, którego tłumaczenie nie rusza (kody i liczby zostają dosłownie). */
     private const PARAMETERS_PREFIX = 'Parametry:';
 
@@ -983,9 +996,13 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             $cells = [];
             foreach ($page->query('.//th|.//td', $row) ?: [] as $cell) {
                 $text = self::text($cell);
-                if ($text !== '') {
-                    $cells[] = $text;
+                if ($text === '') {
+                    continue;
                 }
+                if (strtolower($cell->nodeName) === 'th') {
+                    $text = self::PROTECTION_HEADINGS[mb_strtolower($text)] ?? $text;
+                }
+                $cells[] = $text;
             }
             if (count($cells) < 2) {
                 continue;
