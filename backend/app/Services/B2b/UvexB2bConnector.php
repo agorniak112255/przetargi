@@ -328,7 +328,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         }
 
         // wstęp przy cenie: zwykle mówi to samo innymi słowami, ale dokłada fakty (maksymalny rozmiar, grubość, normy)
-        $intro = $page->query('//*['.JspB2bClient::classPredicate('product-detail-short').']')->item(0);
+        $intro = $page->query('//*['.JspB2bClient::classPredicate('product-detail-short-description').']')->item(0);
         $lines = self::withoutRepeatedText($intro !== null ? self::blockLines($intro) : [], $lines);
 
         $lines = [...$lines, ...self::specificationLines($page), ...self::protectionRangeLines($page)];

@@ -768,7 +768,7 @@ final class UvexConnectorTest extends TestCase
     private function manufacturerPage(): string
     {
         return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
-            .'<div class="product-detail-short">'.($this->manufacturerIntroRepeatsDescription
+            .'<div class="product-detail-short-description">'.($this->manufacturerIntroRepeatsDescription
                 ? 'The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.'
                 : 'The laservision plastic laser safety window P1P10 is a window for green laser systems'
                     .' and is user specific available up to a size of 1219x915mm. The thickness is 3mm.').'</div>'
