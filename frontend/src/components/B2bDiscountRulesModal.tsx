@@ -55,13 +55,12 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
 
   useEffect(() => {
     let alive = true
-    api
-      .get(`/b2b-accounts/${account.id}/discount-rules`)
+    api<{ rules: Rule[] }>(`/b2b-accounts/${account.id}/discount-rules`)
       .then((r) => {
-        if (alive) setRules(r.data.rules as Rule[])
+        if (alive) setRules(r.rules)
       })
-      .catch((e) => {
-        if (alive) setErr(e?.response?.data?.message ?? 'Nie udało się wczytać rabatów.')
+      .catch((e: unknown) => {
+        if (alive) setErr(e instanceof Error ? e.message : 'Nie udało się wczytać rabatów.')
       })
       .finally(() => {
         if (alive) setLoading(false)
@@ -105,11 +104,14 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
         pattern: r.match_type === 'any' ? '' : r.pattern,
         discount_percent: Number(r.discount_percent) || 0,
       }))
-      const res = await api.put(`/b2b-accounts/${account.id}/discount-rules`, { rules: payload })
-      setRules(res.data.rules as Rule[])
+      const res = await api<{ rules: Rule[] }>(`/b2b-accounts/${account.id}/discount-rules`, {
+        method: 'PUT',
+        body: JSON.stringify({ rules: payload }),
+      })
+      setRules(res.rules)
       setMsg('Rabaty zapisane. Obowiązują od następnego pobrania cennika.')
-    } catch (e: any) {
-      setErr(e?.response?.data?.message ?? 'Nie udało się zapisać rabatów.')
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Nie udało się zapisać rabatów.')
     } finally {
       setBusy(false)
     }
