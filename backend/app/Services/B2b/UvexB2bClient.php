@@ -330,6 +330,15 @@ final class UvexB2bClient
                 continue;
             }
 
+            // Potknięcie sieci (16.09.2026: „Resolving timed out after 10000 milliseconds” na stronie 240 z 288)
+            // przewracało cały przebieg — próbujemy jeszcze raz, tak samo jak przy 429/503.
+            if ($response === null && $retries < count(self::BACKOFF_MS)) {
+                ($this->sleep)(self::BACKOFF_MS[$retries]);
+                $retries++;
+
+                continue;
+            }
+
             $error ??= self::HOST.' odpowiedziało HTTP '.$response?->status();
             $this->consecutiveFailures++;
             if ($this->consecutiveFailures >= self::MAX_CONSECUTIVE_FAILURES) {

@@ -402,6 +402,21 @@ final class UvexConnectorTest extends TestCase
         $this->assertFalse(UvexB2bClient::hasLoggedInMarker($this->fixture('login.html')));
     }
 
+    public function test_network_hiccup_is_retried_instead_of_failing_the_run(): void
+    {
+        Http::fake(['izam.system-b2b.pl/*' => Http::sequence()
+            ->pushFailedConnection()
+            ->push(self::PNG, 200, ['Content-Type' => 'image/png'])]);
+        $client = new UvexB2bClient('K123', 'jan', 'dobre-haslo', 0, function (int $ms): void {
+            $this->sleeps[] = $ms;
+        });
+
+        $file = $client->fileBytes('https://izam.system-b2b.pl/get-preview/zdjecie.jpg');
+
+        $this->assertSame(self::PNG, $file['bytes'], 'po zerwanym połączeniu próbujemy jeszcze raz');
+        $this->assertSame([2000], $this->sleeps, 'i czekamy przed ponowieniem');
+    }
+
     public function test_rate_limit_retry_after_is_capped_at_two_minutes(): void
     {
         Http::fake(['izam.system-b2b.pl/*' => Http::sequence()
