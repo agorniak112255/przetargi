@@ -244,29 +244,51 @@ final class PriceListPdfTextExtractor
         return trim(implode("\n", array_map(static fn (string $line): string => rtrim($line), $lines)));
     }
 
+    /**
+     * Ścieżka do pdftotext: znane lokalizacje, potem katalogi z PATH — bez powłoki.
+     * Ostatnią szansą było `where pdftotext 2>NUL`, a `where` nie istnieje w powłoce Linuksa
+     * (przekierowanie zostawiało tam jeszcze plik NUL w katalogu roboczym). Na serwerze pdftotext
+     * nigdy się więc nie znajdował i każdy cennik szedł przez fallback smalot/pdfparser.
+     */
     private function findPdfToText(): ?string
     {
-        $candidates = [
-            'C:\\Program Files\\Git\\mingw64\\bin\\pdftotext.exe',
-            'C:\\Program Files\\Git\\usr\\bin\\pdftotext.exe',
-            'pdftotext',
-        ];
-        foreach ($candidates as $c) {
-            if ($c === 'pdftotext') {
-                $which = [];
-                exec('where pdftotext 2>NUL', $which);
-                if ($which !== []) {
-                    return $which[0];
-                }
+        $windows = PHP_OS_FAMILY === 'Windows';
+        $known = $windows
+            ? [
+                'C:\\Program Files\\Git\\mingw64\\bin\\pdftotext.exe',
+                'C:\\Program Files\\Git\\usr\\bin\\pdftotext.exe',
+            ]
+            : ['/usr/bin/pdftotext', '/usr/local/bin/pdftotext', '/opt/poppler/bin/pdftotext'];
 
+        foreach ($known as $candidate) {
+            if ($this->isExecutableFile($candidate)) {
+                return $candidate;
+            }
+        }
+
+        $names = $windows ? ['pdftotext.exe', 'pdftotext'] : ['pdftotext'];
+        foreach (explode(PATH_SEPARATOR, (string) getenv('PATH')) as $dir) {
+            $dir = rtrim(trim($dir), '/'.DIRECTORY_SEPARATOR);
+            if ($dir === '') {
                 continue;
             }
-            if (is_file($c)) {
-                return $c;
+            foreach ($names as $name) {
+                $candidate = $dir.DIRECTORY_SEPARATOR.$name;
+                if ($this->isExecutableFile($candidate)) {
+                    return $candidate;
+                }
             }
         }
 
         return null;
+    }
+
+    /**
+     * is_executable na Windows bywa fałszywie ujemne (prawa NTFS) — tam wystarczy sam plik.
+     */
+    private function isExecutableFile(string $path): bool
+    {
+        return is_file($path) && (PHP_OS_FAMILY === 'Windows' || is_executable($path));
     }
 
     private function extractViaSmalot(string $path): string
