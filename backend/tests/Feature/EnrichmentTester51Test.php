@@ -34,11 +34,13 @@ use Tests\TestCase;
 final class EnrichmentTester51Test extends TestCase
 {
     /**
-     * Ile źródeł `wrong` bramka odrzuca dziś. Pomiar z 2026-09-16 to ZERO na 14 obcych
-     * kart — bramka przepuszcza w tym zestawie wszystko. Podnosić po każdej poprawce;
-     * lista przepuszczonych adresów jest w komunikacie błędu i w README.
+     * Ile źródeł `wrong` bramka odrzuca. Pomiar z 2026-09-16: ZERO na 14 obcych kart.
+     * Po etapie 2 (części zamienne i rodzaj wyrobu): 12 na 14. Zostają dwa przypadki —
+     * karta płatka do SECURA 2000 (rozstrzyga dopiero kod z treści strony) i pokrywa
+     * zaworu z ręcznie przypiętym złym adresem, którego bramka celowo nie ocenia.
+     * Podnosić po każdej poprawce; lista przepuszczonych adresów jest w komunikacie błędu.
      */
-    private const MIN_WRONG_REJECTED = 0;
+    private const MIN_WRONG_REJECTED = 12;
 
     /** Ile źródeł `expected` bramka zachowuje dziś (39 z 39). Nigdy nie może spaść. */
     private const MIN_EXPECTED_KEPT = 39;
@@ -53,6 +55,17 @@ final class EnrichmentTester51Test extends TestCase
      * zaczepowy S56212-50. Po poprawce: 18 z 18. Podnosić po każdej kolejnej zmianie.
      */
     private const MIN_SINGLE_CARD_ITEMS = 18;
+
+    /**
+     * Miara końcowa: z jakiej karty naprawdę powstaje opis, po przejściu przez bramkę.
+     * Pomiary: przed etapem 1 — 3 opisy z obcej karty; po etapie 1 — 4 (opis przestał być
+     * sklejanką, więc dało się w ogóle wskazać jego źródło); po etapie 2 — 0 z obcej karty
+     * i 11 z karty ręcznie potwierdzonej jako właściwa.
+     */
+    private const MIN_DESC_FROM_EXPECTED_CARD = 11;
+
+    /** Opisy napisane z karty obcego wyrobu — ta liczba ma tylko spadać. */
+    private const MAX_DESC_FROM_WRONG_CARD = 0;
 
     public function test_bramka_tozsamosci_nie_cofa_sie_na_zestawie_testerki(): void
     {
@@ -117,6 +130,78 @@ final class EnrichmentTester51Test extends TestCase
                 $expectedDroppedList,
                 $unknownKept
             )
+        );
+    }
+
+    public function test_opis_pochodzi_z_wlasciwej_karty(): void
+    {
+        $service = app(ProductEnrichmentService::class);
+        $compose = new ReflectionMethod($service, 'descriptionFromConfirmedCards');
+        $compose->setAccessible(true);
+
+        $fromExpected = 0;
+        $fromWrong = [];
+
+        foreach (Tester51Fixture::items() as $item) {
+            $sku = (string) $item['sku'];
+            $verdicts = [];
+            foreach ($item['sources'] as $source) {
+                $verdicts[mb_strtolower((string) $source['url'])] = (string) $source['verdict'];
+            }
+            $pages = Tester51Fixture::pagesFor($sku);
+            if (count($pages) < 2) {
+                continue;
+            }
+            $product = Tester51Fixture::makeProduct($sku);
+            $snippets = array_map(static fn (array $page): array => [
+                'url' => (string) $page['url'],
+                'title' => (string) $page['title'],
+                'text' => (string) $page['text'],
+            ], $pages);
+
+            // najpierw bramka tożsamości, tak jak w prawdziwym przebiegu, dopiero potem opis
+            $keep = new ReflectionMethod($service, 'keepConfirmedCardPages');
+            $keep->setAccessible(true);
+            $snippets = $keep->invoke($service, $product, $snippets);
+            if (count($snippets) < 1) {
+                continue;
+            }
+
+            $joint = (string) $compose->invoke($service, $snippets, $product);
+            if ($joint === '') {
+                continue;
+            }
+            foreach ($snippets as $snippet) {
+                if ((string) $compose->invoke($service, [$snippet], $product) !== $joint) {
+                    continue;
+                }
+                $verdict = $verdicts[mb_strtolower($snippet['url'])] ?? 'unknown';
+                if ($verdict === 'expected') {
+                    $fromExpected++;
+                } elseif ($verdict === 'wrong') {
+                    $fromWrong[] = $sku.' -> '.$snippet['url'];
+                }
+                break;
+            }
+        }
+
+        $this->assertLessThanOrEqual(
+            self::MAX_DESC_FROM_WRONG_CARD,
+            count($fromWrong),
+            $this->report(
+                'Opis powstaje z karty innego wyrobu — regresja.',
+                count($fromWrong),
+                self::MAX_DESC_FROM_WRONG_CARD,
+                'Pozycje z opisem z obcej karty',
+                $fromWrong,
+                0
+            )
+        );
+        $this->assertGreaterThanOrEqual(
+            self::MIN_DESC_FROM_EXPECTED_CARD,
+            $fromExpected,
+            'Opis rzadziej pochodzi z właściwej karty niż dotąd: '.$fromExpected
+                .', próg: '.self::MIN_DESC_FROM_EXPECTED_CARD.'.'
         );
     }
 

@@ -3622,9 +3622,13 @@ final class ProductEnrichmentService
     }
 
     /**
-     * Siła potwierdzenia karty: 3 = adres wskazany ręcznie, 2 = kod lub pełna nazwa razem
-     * z marką, 1 = karta potwierdzona słabszą przesłanką, 0 = reszta. Decyduje, z której
-     * karty piszemy opis — zamiast dawnego „wygrywa dłuższy tekst”.
+     * Siła potwierdzenia karty: 4 = adres wskazany ręcznie, 3 = kod produktu na karcie,
+     * 2 = pełna nazwa razem z marką, 1 = karta potwierdzona słabszą przesłanką, 0 = reszta.
+     * Decyduje, z której karty piszemy opis — zamiast dawnego „wygrywa dłuższy tekst”.
+     *
+     * Kod stoi wyżej niż nazwa, bo nazwa części bywa wspólna dla całej serii: karta płatka
+     * do SECURA 2000 i karta płatka do SECURA 3000 mają tę samą nazwę wyrobu i tylko kod
+     * rozstrzyga, która jest nasza.
      *
      * @param  list<array{url?: string, text?: string, title?: string}>  $pageSnippets
      */
@@ -3634,7 +3638,7 @@ final class ProductEnrichmentService
             return 0;
         }
         if ($product->isHintedShopUrl($url)) {
-            return 3;
+            return 4;
         }
         $title = '';
         $text = '';
@@ -3644,6 +3648,9 @@ final class ProductEnrichmentService
                 $text = (string) ($page['text'] ?? '');
                 break;
             }
+        }
+        if ($this->identity->hayHasProductCode(mb_strtolower($url.' '.$title.' '.$text), $product)) {
+            return 3;
         }
         if ($this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $product)) {
             return 2;

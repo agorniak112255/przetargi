@@ -2429,6 +2429,8 @@ final class ProductSearchIdentity
     {
         if (self::isJunkSearchHost($url) || $this->looksLikeUnrelatedRetailHost($url, $product)
             || $this->looksLikeNonProductCardUrl($url) || $this->pageLooksLikeMultiProductListing($text)
+            || $this->accessoryCardDisagrees($url, $title, $product)
+            || $this->cardNamesAnotherSubtype($url, $title, $product)
             || $this->looksLikeUnrelatedHandToolPage($url.' '.$title.' '.$text, $product)) {
             return false;
         }
@@ -2476,6 +2478,208 @@ final class ProductSearchIdentity
         }
 
         return $this->pageAgreesWithBrandAndName($hay, $url, $product);
+    }
+
+    /**
+     * Rodzaje wykluczające się w obrębie jednej rodziny wyrobów. Tabela TYPE_STEMS trzyma
+     * całą rodzinę razem („obuwie”, „mata”), więc karta półbutów 20 kV przechodziła jako karta
+     * kaloszy 5 kV, a karta dywanika 0,75 × 0,75 m jako karta chodnika — oba zgłoszone z testów.
+     * Świadomie NIE ma tu par, które w handlu znaczą to samo (wodery = spodniobuty).
+     *
+     * @var array<string, list<string>>
+     */
+    private const SUBTYPE_GROUPS = [
+        'footwear' => ['kalosz', 'polbut', 'trzewik', 'sandal'],
+        'mat' => ['chodnik', 'dywanik', 'wycieraczk'],
+    ];
+
+    /**
+     * Karta nazywa inny rodzaj wyrobu z tej samej rodziny niż nasza nazwa. Działa tylko, gdy
+     * nasza nazwa wskazuje dokładnie jeden rodzaj i gdy karta w adresie lub tytule nazywa
+     * któryś z rodzajów tej grupy — wtedy musi to być nasz. Kod produktu na karcie rozstrzyga
+     * mocniej: cennik bywa mniej dokładny niż karta producenta.
+     */
+    public function cardNamesAnotherSubtype(string $url, string $title, Product $product): bool
+    {
+        $name = $this->foldForNameMatch($this->usableProductName($product));
+        if (trim($name) === '') {
+            return false;
+        }
+        $plain = urldecode($url).' '.$title;
+        if ($this->hayHasProductCode(mb_strtolower($plain), $product)) {
+            return false;
+        }
+        $hay = $this->foldForNameMatch($plain);
+        foreach (self::SUBTYPE_GROUPS as $stems) {
+            $ours = [];
+            $onCard = [];
+            foreach ($stems as $stem) {
+                if (str_contains($name, $stem)) {
+                    $ours[] = $stem;
+                }
+                if (str_contains($hay, $stem)) {
+                    $onCard[] = $stem;
+                }
+            }
+            if (count($ours) !== 1 || $onCard === []) {
+                continue;
+            }
+            if (! in_array($ours[0], $onCard, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Karta urządzenia nadrzędnego podszywająca się pod kartę części zamiennej.
+     *
+     * Nazwa części niesie człon zgodności: „Płatek zaworu wydechowego DO PÓŁMASKI SECURA 3000”.
+     * Ten człon mówi, z czym część współpracuje, a nie czym ona jest — a karta całej półmaski
+     * zawiera go w całości, więc dotąd przechodziła jako karta części. Stąd zgłoszenia testerki:
+     * pierścień zaczepowy opisany treścią półmaski, nagłowie treścią zestawu SECURA 3100.
+     *
+     * Dwa powody odrzucenia, oba tylko na adresie i tytule (to, czym karta się NAZYWA):
+     * - nazwa wyrobu z głowy nazwy („płatek”, „pierścień”, „nagłowie”) nie pada wcale,
+     * - karta dotyczy innego urządzenia z tej samej serii (SECURA 2000 przy części do 3000).
+     *
+     * Kod produktu na karcie rozstrzyga mocniej niż jedno i drugie — wtedy nie odrzucamy.
+     */
+    public function accessoryCardDisagrees(string $url, string $title, Product $product): bool
+    {
+        $parts = $this->compatibilityNameParts($product);
+        if ($parts === null) {
+            return false;
+        }
+        $hay = $this->foldForNameMatch(urldecode($url).' '.$title);
+        if ($this->hayHasProductCode(mb_strtolower(urldecode($url).' '.$title), $product)) {
+            return false;
+        }
+        $noun = $this->accessoryHeadNoun($parts['head']);
+        if ($noun !== '' && ! str_contains($hay, $noun)) {
+            return true;
+        }
+
+        return $this->cardNamesAnotherDevice($hay, $parts['tail']);
+    }
+
+    /**
+     * Nazwa rozbita na głowę (czym wyrób jest) i człon zgodności (z czym współpracuje).
+     * Ucinamy ostrożnie: człon musi wskazywać konkretne urządzenie (marka/model z cyfrą),
+     * przed nim musi zostać sensowna nazwa wyrobu, a spójnik tuż na początku nazwy
+     * („Pierścień Z zaczepami…”) nie jest członem zgodności.
+     *
+     * @return array{head: string, tail: string}|null
+     */
+    private function compatibilityNameParts(Product $product): ?array
+    {
+        $name = $this->usableProductName($product);
+        if ($name === '') {
+            return null;
+        }
+        $words = preg_split('/\s+/u', trim($name)) ?: [];
+        if (count($words) < 4) {
+            return null;
+        }
+        foreach ($words as $i => $word) {
+            if ($i < 2) {
+                continue;
+            }
+            $clean = trim(mb_strtolower((string) $word), " \t.,;:()[]\"'");
+            if ($clean === '' || preg_match(self::GOODS_BRAND_COMPATIBILITY_WORD, $clean) !== 1) {
+                continue;
+            }
+            $tailWords = array_slice($words, $i + 1);
+            if (count($tailWords) < 2) {
+                return null;
+            }
+            $head = trim(implode(' ', array_slice($words, 0, $i)));
+            $tail = trim(implode(' ', $tailWords));
+            if (mb_strlen($head) < 6 || ! $this->tailNamesDevice($tail)) {
+                return null;
+            }
+
+            return ['head' => $head, 'tail' => $tail];
+        }
+
+        return null;
+    }
+
+    /**
+     * Człon zgodności wskazuje urządzenie, a nie rodzaj pracy: „półmaski SECURA 3000” ma markę
+     * z numerem, „prac montażowych” nie ma nic. Bez tego warunku ucinalibyśmy zwykłe nazwy
+     * opisowe i osłabiali tożsamość tam, gdzie nic nie szkodziła.
+     */
+    private function tailNamesDevice(string $tail): bool
+    {
+        return preg_match('/(?:^|\s)(\p{Lu}[\p{Lu}\d-]{2,})\s+\d{2,4}(?![\p{L}\d])/u', $tail) === 1
+            || preg_match('/(?:^|\s)(\p{Lu}[\p{Lu}-]{2,}\d{2,4})(?![\p{L}\d])/u', $tail) === 1;
+    }
+
+    /**
+     * Nazwa wyrobu z głowy nazwy, złożona do porównania z adresem: „Pierścień z zaczepami…”
+     * → „pierscie”. Rdzeń, bo polska odmiana zmienia końcówkę („pierścienia”, „płatki”).
+     */
+    private function accessoryHeadNoun(string $head): string
+    {
+        foreach (preg_split('/[^\p{L}\p{N}]+/u', $head) ?: [] as $word) {
+            $word = trim((string) $word);
+            if (mb_strlen($word) < 4 || $this->isGenericCatalogNameWord($word)) {
+                continue;
+            }
+            $folded = $this->foldForNameMatch($word);
+            if (mb_strlen($folded) < 4) {
+                continue;
+            }
+
+            return mb_substr($folded, 0, max(4, mb_strlen($folded) - 2));
+        }
+
+        return '';
+    }
+
+    /**
+     * Karta nazywa inne urządzenie z tej samej serii: część pasuje do SECURA 3000,
+     * a karta mówi „secura 2000”. Numery z członu zgodności są dla nas dobre — gdy na karcie
+     * stoi wyłącznie inny numer przy tej samej marce, to nie jest karta naszej części.
+     */
+    private function cardNamesAnotherDevice(string $foldedHay, string $tail): bool
+    {
+        if (preg_match('/(?:^|\s)(\p{Lu}[\p{Lu}\d-]{2,})(?:\s+|-)?(\d{2,4})(?![\p{L}\d])/u', $tail, $m) !== 1) {
+            return false;
+        }
+        $brand = $this->foldForNameMatch($m[1]);
+        if (mb_strlen($brand) < 3) {
+            return false;
+        }
+        $ours = [];
+        foreach (preg_split('/[^\p{N}]+/u', $tail) ?: [] as $number) {
+            if (preg_match('/^\d{2,4}$/u', (string) $number) === 1) {
+                $ours[] = (string) $number;
+            }
+        }
+        if ($ours === []) {
+            return false;
+        }
+        $found = preg_match_all('/'.preg_quote($brand, '/').'\s?(\d{2,4})(?![\d])/u', $foldedHay, $hits);
+        if ($found === false || $found === 0) {
+            return false;
+        }
+        $onCard = array_values(array_unique($hits[1] ?? []));
+        if ($onCard === []) {
+            return false;
+        }
+
+        return array_intersect($onCard, $ours) === [];
+    }
+
+    /** Adres i nazwa do porównania: bez polskich znaków (slug bywa „platek-zaworu”) i bez interpunkcji. */
+    private function foldForNameMatch(string $text): string
+    {
+        $ascii = mb_strtolower(Str::ascii($text));
+
+        return (string) preg_replace('/[^a-z0-9]+/u', ' ', $ascii);
     }
 
     /**

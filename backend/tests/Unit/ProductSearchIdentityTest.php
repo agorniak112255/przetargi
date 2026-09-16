@@ -369,13 +369,23 @@ final class ProductSearchIdentityTest extends TestCase
             'name' => 'Dywanik elektroizolacyjny 20 KV',
             'manufacturer' => 'SECURA',
         ]);
-        $url = 'https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1,1-x-2-m-Secura/48601';
-        $title = 'Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 2 m) Secura';
+        $url = 'https://centrumelektronarzedzi.pl/pl/p/Dywanik-elektroizolacyjny-20-KV-wymiary-0,75-x-0,75-m-Secura/48600';
+        $title = 'Dywanik elektroizolacyjny 20 KV (wymiary 0,75 x 0,75 m) Secura';
 
         $this->assertTrue($id->hayHasDistinctiveNamePhrase($url.' '.$title, $product));
         $this->assertTrue($id->hayHasRequiredTypeFromName($url.' '.$title, $product));
         $this->assertFalse($id->pageClaimsAnotherCode($url, $title, $product));
         $this->assertTrue($id->isConfirmedProductCard($url, $title, '', $product));
+        // Karta chodnika (1,1 × 2 m) NIE jest kartą dywanika (0,75 × 0,75 m) — obie są matą
+        // elektroizolacyjną, ale w przetargu liczą się wymiary. Wcześniej ten sam adres stał
+        // wyżej jako dowód, że pełna nazwa wystarcza; dowodem jest teraz karta tego wyrobu.
+        $chodnik = 'https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1,1-x-2-m-Secura/48601';
+        $this->assertFalse($id->isConfirmedProductCard(
+            $chodnik,
+            'Chodnik elektroizolacyjny 20 KV (wymiary 1,1 x 2 m) Secura',
+            '',
+            $product
+        ));
         $this->assertFalse($id->hayHasDistinctiveNamePhrase(
             'https://shop.pl/pl/p/Chodnik-elektroizolacyjny-30-KV-Secura/1',
             $product
