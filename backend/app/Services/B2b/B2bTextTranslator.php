@@ -46,10 +46,25 @@ class B2bTextTranslator
      * Liczba (albo wymiary „96x39”) sklejona z jednostką („17.5CM”, „0.05ms”, „96x39mm”, „120m/s”) — jednostkę wolno
      * zapisać po polsku („96 x 39 mm”), liczby pilnuje kontrola liczb.
      */
-    private const MEASUREMENT_PATTERN = '/^\d+(?:[.,]\d+)?(?:[x×]\d+(?:[.,]\d+)?)*(?:mm|cm|m|km|mg|g|kg|ml|l|nm|µm|h|min|ms|s|m\/s|km\/h|v|kv|w|hz|db|°c|°f|pa|kpa)$/iu';
+    private const UNITS = 'mm|cm|m|km|mg|g|kg|ml|l|nm|µm|h|min|ms|s|m\/s|km\/h|v|kv|w|hz|db|°c|°f|pa|kpa';
+
+    private const MEASUREMENT_PATTERN = '/^\d+(?:[.,]\d+)?(?:[x×]\d+(?:[.,]\d+)?)*(?:'.self::UNITS.')$/iu';
+
+    /**
+     * Zakres z jednostką („855nm-1090nm”, „180-315nm”, „3-5mm”) — po polsku pisze się go inaczej
+     * („od 855 nm do 1090 nm”), więc nie jest to token do przepisania znak w znak. Liczb pilnuje kontrola liczb.
+     */
+    private const MEASUREMENT_RANGE_PATTERN = '/^\d+(?:[.,]\d+)?(?:'.self::UNITS.')?[-–—]\d+(?:[.,]\d+)?(?:'.self::UNITS.')$/iu';
 
     /** Liczba złączona łącznikiem ze zwykłym słowem („3-point”, „5-points”) — po polsku „3-punktowe”; liczby pilnuje kontrola liczb. */
     private const NUMBER_WORD_PATTERN = '/^\d+(?:[.,]\d+)?-\p{Ll}+$/u';
+
+    /**
+     * Krótkie słowo sklejone z liczbą przez literówkę w źródle („from 940 to1055nm” na stronie UVEX,
+     * 16.09.2026) — to nie jest kod wyrobu, więc nie musi przejść dosłownie. Samej liczby i tak pilnuje
+     * kontrola liczb, a nazwy modeli zaczynają się wielką literą (B809, P1P10) albo cyfrą (9970.005).
+     */
+    private const GLUED_WORD_PATTERN = '/^\p{Ll}{1,3}\d/u';
 
     public function __construct(private readonly OpenAiCompatibleClient $llm) {}
 
@@ -417,14 +432,16 @@ SYS;
         $previousProtected = false;
         foreach (preg_split('/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $raw) {
             $word = (string) preg_replace('/^\p{P}+|\p{P}+$/u', '', $raw);
-            $protected = $word !== '' && ! in_array($word, self::TRANSLATABLE_UPPERCASE, true) && (
-                (preg_match('/\p{N}/u', $word) === 1 && preg_match('/\p{L}/u', $word) === 1
-                    && preg_match(self::MEASUREMENT_PATTERN, $word) !== 1
-                    && preg_match(self::NUMBER_WORD_PATTERN, $word) !== 1)
-                || preg_match('/[®™]/u', $word) === 1
-                || (preg_match('/\p{Ll}/u', $word) !== 1 && preg_match_all('/\p{Lu}/u', $word) >= 3)
-                || ($previousProtected && preg_match('/^\d+[.,]\d+$/', $word) === 1)
-            );
+            $protected = $word !== '' && ! in_array($word, self::TRANSLATABLE_UPPERCASE, true)
+                && preg_match(self::GLUED_WORD_PATTERN, $word) !== 1 && (
+                    (preg_match('/\p{N}/u', $word) === 1 && preg_match('/\p{L}/u', $word) === 1
+                        && preg_match(self::MEASUREMENT_PATTERN, $word) !== 1
+                        && preg_match(self::MEASUREMENT_RANGE_PATTERN, $word) !== 1
+                        && preg_match(self::NUMBER_WORD_PATTERN, $word) !== 1)
+                    || preg_match('/[®™]/u', $word) === 1
+                    || (preg_match('/\p{Ll}/u', $word) !== 1 && preg_match_all('/\p{Lu}/u', $word) >= 3)
+                    || ($previousProtected && preg_match('/^\d+[.,]\d+$/', $word) === 1)
+                );
             if ($protected) {
                 $tokens[$word] = true;
             }

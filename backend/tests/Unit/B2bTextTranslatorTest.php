@@ -116,6 +116,44 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function typo_in_source_does_not_block_the_translation(): void
+    {
+        // strona producenta ma „from 940 to1055nm” bez spacji — to literówka, nie kod wyrobu
+        $source = 'It offers OD10+ from 940 to1055nm and OD8+ from 880nm to 1075nm.';
+        $translator = $this->translatorReturning([
+            'segments' => ['Zapewnia OD10+ od 940 do 1055 nm oraz OD8+ od 880 nm do 1075 nm.'],
+        ]);
+
+        $result = $translator->translate($source);
+
+        $this->assertSame('Zapewnia OD10+ od 940 do 1055 nm oraz OD8+ od 880 nm do 1075 nm.', $result['description']);
+    }
+
+    #[Test]
+    public function range_with_a_unit_may_be_written_the_polish_way(): void
+    {
+        $source = 'There is broad protection in the NIR range from 855nm-1090nm (OD5+).';
+        $translator = $this->translatorReturning([
+            'segments' => ['Szeroka ochrona w zakresie NIR od 855 nm do 1090 nm (OD5+).'],
+        ]);
+
+        $result = $translator->translate($source);
+
+        $this->assertSame('Szeroka ochrona w zakresie NIR od 855 nm do 1090 nm (OD5+).', $result['description']);
+    }
+
+    #[Test]
+    public function rejects_a_number_lost_from_a_range(): void
+    {
+        $translator = $this->translatorReturning([
+            'segments' => ['Szeroka ochrona w zakresie NIR od 855 nm (OD5+).'],
+        ]);
+
+        $this->expectException(B2bTranslationRejected::class);
+        $translator->translate('There is broad protection in the NIR range from 855nm-1090nm (OD5+).');
+    }
+
+    #[Test]
     public function rejects_lost_number(): void
     {
         $this->assertRejected(
