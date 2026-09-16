@@ -154,6 +154,20 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function quantity_multiplier_may_be_written_the_polish_way(): void
+    {
+        // „(5x eyelets / linear meter)” to krotność, nie kod wyrobu — po polsku „5 przelotek na metr bieżący”
+        $source = 'Eyelet tape on upper edge (5x eyelets / linear meter).';
+        $translator = $this->translatorReturning([
+            'segments' => ['Taśma z przelotkami na górnej krawędzi (5 przelotek na metr bieżący).'],
+        ]);
+
+        $result = $translator->translate($source);
+
+        $this->assertSame('Taśma z przelotkami na górnej krawędzi (5 przelotek na metr bieżący).', $result['description']);
+    }
+
+    #[Test]
     public function rejects_lost_number(): void
     {
         $this->assertRejected(
