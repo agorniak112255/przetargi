@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Api\AiSettingsController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\B2bAccountController;
+use App\Http\Controllers\Api\B2bDiscountRuleController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
@@ -240,6 +241,10 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/b2b-accounts/{b2bAccount}/sync-progress', [B2bAccountController::class, 'syncProgress'])
         ->middleware('permission:b2b_accounts.view');
     Route::post('/b2b-accounts/{b2bAccount}/sync-cancel', [B2bAccountController::class, 'cancelSync'])
+        ->middleware('permission:b2b_accounts.manage');
+    Route::get('/b2b-accounts/{b2bAccount}/discount-rules', [B2bDiscountRuleController::class, 'index'])
+        ->middleware('permission:b2b_accounts.view');
+    Route::put('/b2b-accounts/{b2bAccount}/discount-rules', [B2bDiscountRuleController::class, 'update'])
         ->middleware('permission:b2b_accounts.manage');
     Route::get('/b2b-connectors', [B2bAccountController::class, 'connectors'])->middleware('permission:b2b_accounts.view');
 

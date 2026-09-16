@@ -24,7 +24,7 @@ final class B2bConnectorRegistry
     ];
 
     /**
-     * @return list<array{key: string, label: string, host: string, requires_password: bool}>
+     * @return list<array{key: string, label: string, host: string, requires_password: bool, uses_discount_rules: bool}>
      */
     public function options(): array
     {
@@ -33,8 +33,10 @@ final class B2bConnectorRegistry
                 'key' => $class::key(),
                 'label' => $class::label(),
                 'host' => $class::host(),
-                // Witryna publiczna (protekt.pl) nie ma konta u dostawcy — formularz ukrywa pole hasła.
+                // Witryna publiczna (protekt.pl) nie ma konta u dostawcy — formularz ukrywa pole hasła,
+                // a cena zakupu powstaje z ceny katalogowej i rabatów zapisanych przy koncie.
                 'requires_password' => ! is_a($class, B2bPublicSite::class, true),
+                'uses_discount_rules' => is_a($class, B2bPublicSite::class, true),
             ],
             self::CONNECTORS,
         );

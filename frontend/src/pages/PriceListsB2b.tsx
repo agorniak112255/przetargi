@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../auth'
+import { B2bDiscountRulesModal } from '../components/B2bDiscountRulesModal'
 import { B2bSyncProgressModal } from '../components/B2bSyncProgressModal'
 import { PriceListsTabs } from '../components/PriceListsTabs'
 import { api, can } from '../lib/api'
@@ -28,7 +29,15 @@ type B2bAccount = {
   updated_at: string | null
 }
 
-type Connector = { key: string; label: string; host: string }
+type Connector = {
+  key: string
+  label: string
+  host: string
+  /** Witryna publiczna (protekt.pl) nie ma konta u dostawcy — bez hasła. */
+  requires_password: boolean
+  /** Ceny ze strony to ceny katalogowe; cena zakupu powstaje z rabatów zapisanych przy koncie. */
+  uses_discount_rules: boolean
+}
 
 type FormState = {
   id: number | null
@@ -75,6 +84,21 @@ function formatDate(value: string | null): string {
 export function PriceListsB2b() {
   const { user } = useAuth()
   const canManage = can(user, 'b2b_accounts.manage')
+  /** Rabaty konfiguruje się tylko dla witryn, które podają samą cenę katalogową (protekt.pl). */
+  const usesDiscountRules = (key: string | null) =>
+    connectors.some((c) => c.key === key && c.uses_discount_rules)
+
+  /**
+   * Łącznik wybrany w formularzu albo wykryty z wpisanych witryn — tak samo jak na serwerze,
+   * żeby pole hasła znikało od razu po wpisaniu adresu witryny publicznej.
+   */
+  const formConnector = (f: FormState): Connector | undefined => {
+    if (f.connector) return connectors.find((c) => c.key === f.connector)
+    const sites = f.sites.toLowerCase()
+    return connectors.find((c) => sites.includes(c.host))
+  }
+
+  const formNeedsPassword = (f: FormState) => formConnector(f)?.requires_password ?? true
   const [rows, setRows] = useState<B2bAccount[]>([])
   const [connectors, setConnectors] = useState<Connector[]>([])
   const [loading, setLoading] = useState(true)
@@ -83,6 +107,7 @@ export function PriceListsB2b() {
   const [revealed, setRevealed] = useState<Record<number, string>>({})
   const [visible, setVisible] = useState<Record<number, boolean>>({})
   const [progressAccount, setProgressAccount] = useState<B2bAccount | null>(null)
+  const [discountAccount, setDiscountAccount] = useState<B2bAccount | null>(null)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
 
@@ -307,18 +332,25 @@ export function PriceListsB2b() {
                 onChange={(e) => setForm({ ...form, username: e.target.value })}
               />
             </label>
-            <label className="block text-xs">
-              Hasło {form.id === null ? '*' : ''}
-              <input
-                type="password"
-                required={form.id === null}
-                autoComplete="new-password"
-                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                placeholder={form.id === null ? '' : 'zostaw puste, aby nie zmieniać'}
-              />
-            </label>
+            {formNeedsPassword(form) ? (
+              <label className="block text-xs">
+                Hasło {form.id === null ? '*' : ''}
+                <input
+                  type="password"
+                  required={form.id === null}
+                  autoComplete="new-password"
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  placeholder={form.id === null ? '' : 'zostaw puste, aby nie zmieniać'}
+                />
+              </label>
+            ) : (
+              <p className="self-end rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                Ta witryna jest publiczna — nie ma logowania, więc hasło nie jest potrzebne. Ceny na stronie
+                są katalogowe; upusty ustawisz przyciskiem „Rabaty" przy koncie.
+              </p>
+            )}
             <label className="block text-xs">
               Witryny * <span className="text-slate-400">(jedna w linii)</span>
               <textarea
@@ -507,6 +539,15 @@ export function PriceListsB2b() {
                       >
                         Postęp i log
                       </button>
+                      {usesDiscountRules(row.connector) && (
+                        <button
+                          type="button"
+                          className="text-blue-700 underline"
+                          onClick={() => setDiscountAccount(row)}
+                        >
+                          Rabaty
+                        </button>
+                      )}
                       {canManage && (
                         <button
                           type="button"
@@ -552,6 +593,14 @@ export function PriceListsB2b() {
           canManage={canManage}
           onClose={() => setProgressAccount(null)}
           onChanged={() => void load().catch(() => {})}
+        />
+      )}
+
+      {discountAccount && (
+        <B2bDiscountRulesModal
+          account={discountAccount}
+          canManage={canManage}
+          onClose={() => setDiscountAccount(null)}
         />
       )}
     </div>
