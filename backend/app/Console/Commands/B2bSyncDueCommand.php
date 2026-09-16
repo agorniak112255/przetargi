@@ -40,6 +40,7 @@ final class B2bSyncDueCommand extends Command
     public function handle(B2bSyncLauncher $launcher): int
     {
         $this->sweepStaleRuns();
+        $this->releaseStuckAccounts();
 
         foreach (B2bAccount::query()->orderBy('id')->get() as $account) {
             // stan mógł się zmienić (przebieg poprzedniego konta w tym procesie, proces w tle, panel)
@@ -84,6 +85,41 @@ final class B2bSyncDueCommand extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Konto zostaje „w toku”, choć żaden jego przebieg już nie trwa — przebieg domknięto inną drogą
+     * (ręcznie w bazie, sygnałem, sprzątaniem po braku postępu), a status konta został jak był. Bez tego
+     * konto nie byłoby sprawdzane już nigdy: isSyncDue i zajęcie konta w runnerze pomijają konto w toku.
+     * Zwalniamy dopiero po B2bSyncRun::STALE_MINUTES od startu, żeby nie ruszyć świeżo zajętego konta.
+     */
+    private function releaseStuckAccounts(): void
+    {
+        $message = 'Zwolnione — konto zostało „w toku”, choć żaden przebieg nie trwał';
+
+        $accounts = B2bAccount::query()
+            ->where('last_sync_status', 'running')
+            ->where(static function ($query): void {
+                $query->whereNull('last_sync_started_at')
+                    ->orWhere('last_sync_started_at', '<', now()->subMinutes(B2bSyncRun::STALE_MINUTES));
+            })
+            ->get();
+
+        foreach ($accounts as $account) {
+            $running = B2bSyncRun::query()
+                ->where('b2b_account_id', $account->id)
+                ->where('status', B2bSyncRun::STATUS_RUNNING)
+                ->exists();
+            if ($running) {
+                continue;
+            }
+            $account->forceFill([
+                'last_sync_status' => 'failed',
+                'last_sync_finished_at' => now(),
+                'last_sync_message' => $message,
+            ])->save();
+            $this->warn("Konto #{$account->id}: {$message}");
+        }
     }
 
     /**

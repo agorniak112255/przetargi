@@ -178,6 +178,35 @@ final class B2bSyncResilienceTest extends TestCase
         $this->assertSame(B2bSyncRun::STATUS_CANCELLED, (string) B2bSyncRun::query()->findOrFail($run->id)->status);
     }
 
+    public function test_account_left_in_progress_without_a_run_is_released(): void
+    {
+        // przebieg domknięty inną drogą (ręcznie, sygnałem), status konta został jak był
+        $this->account->forceFill([
+            'last_sync_status' => 'running',
+            'last_sync_started_at' => now()->subMinutes(B2bSyncRun::STALE_MINUTES + 5),
+        ])->save();
+
+        $this->artisan('b2b:sync-due')->assertSuccessful();
+
+        $account = $this->account->fresh();
+        $this->assertSame('failed', $account?->last_sync_status);
+        $this->assertStringContainsString('żaden przebieg nie trwał', (string) $account?->last_sync_message);
+    }
+
+    public function test_account_with_a_running_sync_is_left_alone(): void
+    {
+        $progress = B2bSyncProgress::start($this->account, B2bSyncRun::TRIGGER_SCHEDULE);
+        $this->account->forceFill([
+            'last_sync_status' => 'running',
+            'last_sync_started_at' => now()->subMinutes(B2bSyncRun::STALE_MINUTES + 5),
+        ])->save();
+        $progress->advance('U0001', ['processed' => 1]);
+
+        $this->artisan('b2b:sync-due')->assertSuccessful();
+
+        $this->assertSame('running', $this->account->fresh()?->last_sync_status);
+    }
+
     /**
      * @return array<string, mixed>
      */
