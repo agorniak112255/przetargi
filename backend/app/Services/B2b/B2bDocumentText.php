@@ -28,6 +28,26 @@ final class B2bDocumentText
     /** Osobny proces dostaje własny limit pamięci — parser PDF wczytuje cały plik. */
     private const SUBPROCESS_MEMORY = '256M';
 
+    /**
+     * Wiersze stopki firmowej z karty technicznej: dane sprzedawcy, nie produktu (adres, telefon, e-mail,
+     * NIP/REGON/KRS, sąd rejestrowy, numer strony). Na karcie produktu to czysty szum — przy wyszukiwaniu
+     * pod przetargi mieszałby dane firmy z danymi wyrobu.
+     */
+    private const CONTACT_PATTERNS = [
+        '/^(NIP|REGON|Regon)\b/u',
+        '/^KRS\b/u',
+        '/^(S[ąa]d Rejonowy|SR\s+w\s)/iu',
+        '/Wydz\.?\s*Gosp/iu',
+        '/^[TFEIP]\s+(\+?\d[\d\s()-]{6,}|[\w.+-]+@[\w.-]+|(www\.)?[\w-]+\.[a-z]{2,4})$/u',
+        '/^[\w.+-]+@[\w.-]+$/u',
+        '/^(www\.)?[\w-]+\.(pl|com|eu|de|net)(\/\S*)?$/iu',
+        '/^(ul|al|pl)\.\s/u',
+        '/^Strona\s+\d+\s+z\s+\d+/iu',
+    ];
+
+    /** Wiersz z nazwą firmy poprzedzony taką etykietą to fakt o wyrobie (kto go robi) — zostaje. */
+    private const KEPT_COMPANY_LABELS = '/^(producent|importer|dystrybutor|wytwórca|marka|jednostka notyfikowana)\b/iu';
+
     /** Tekst z pliku; '' gdy nie da się go odczytać. */
     public function fromFile(string $bytes, string $mime): string
     {
@@ -50,6 +70,45 @@ final class B2bDocumentText
         } finally {
             @unlink($path);
         }
+    }
+
+    /**
+     * Tekst pliku przygotowany do opisu karty: bez stopki firmowej sprzedawcy i bez pustych akapitów.
+     * Surowy tekst zostaje przy dokumencie (product_documents.text) — czyścimy tylko to, co widać na karcie.
+     */
+    public static function forCard(string $text): string
+    {
+        $lines = [];
+        foreach (preg_split('/\R/u', $text) ?: [] as $line) {
+            $line = trim((string) preg_replace('/[\s\x{00A0}]+/u', ' ', $line));
+            if ($line !== '' && self::isCompanyFooter($line)) {
+                continue;
+            }
+            // najwyżej jedna pusta linia pod rząd — karta techniczna bywa poprzetykana pustymi wierszami
+            if ($line === '' && ($lines === [] || end($lines) === '')) {
+                continue;
+            }
+            $lines[] = $line;
+        }
+
+        return trim(implode("\n", $lines));
+    }
+
+    private static function isCompanyFooter(string $line): bool
+    {
+        foreach (self::CONTACT_PATTERNS as $pattern) {
+            if (preg_match($pattern, $line) === 1) {
+                return true;
+            }
+        }
+        if (preg_match(self::KEPT_COMPANY_LABELS, $line) === 1) {
+            return false;
+        }
+
+        // nazwa firmy z formą prawną razem z adresem albo sama — nagłówek papieru firmowego
+        // bez \b na końcu — po kropce granica słowa nie zachodzi („Sp. z o.o. ul. …”)
+        return preg_match('/(\bsp\.\s?z\s?o\.\s?o\.|\bsp\.\s?k\.|\bs\.a\.|\bgmbh\b|\bltd\b)/iu', $line) === 1
+            && (preg_match('/\b(ul|al)\.\s|\d{2}-\d{3}/u', $line) === 1 || mb_strlen($line) <= 60);
     }
 
     /**

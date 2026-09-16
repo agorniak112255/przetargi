@@ -1488,7 +1488,7 @@ final class B2bCatalogSync
     {
         $sections = $description !== '' ? [$description] : [];
         foreach ($card['documents'] as $document) {
-            $text = trim($card['texts'][$document->sourceUrl] ?? '');
+            $text = B2bDocumentText::forCard($card['texts'][$document->sourceUrl] ?? '');
             if ($text === '') {
                 continue;
             }

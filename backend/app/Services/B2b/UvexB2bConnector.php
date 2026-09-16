@@ -46,6 +46,9 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bList
     /** Tyle plików z jednej strony produktu trafia na kartę (UVEX: karta techniczna i instrukcja). */
     private const DOCUMENTS_LIMIT = 5;
 
+    /** Sklep wstawia to zamiast opisu części kart — to zachęta do kliknięcia, nie opis wyrobu. */
+    private const DESCRIPTION_PLACEHOLDERS = ['kliknij i przejdź do pełnego opisu'];
+
     private const INCONSISTENT = 7001;
 
     private const SKIPPED_TAGS = ['input', 'button', 'select', 'option', 'textarea', 'img', 'iframe', 'svg', 'script', 'style', 'noscript'];
@@ -197,7 +200,10 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bList
 
         $sections = [];
         $node = $xpath->query('//*[@id="description"]')->item(0);
-        $lines = $node !== null ? self::blockLines($node) : [];
+        $lines = array_values(array_filter(
+            $node !== null ? self::blockLines($node) : [],
+            static fn (string $line): bool => ! in_array(mb_strtolower($line), self::DESCRIPTION_PLACEHOLDERS, true),
+        ));
         if ($lines !== []) {
             $sections[] = implode("\n", $lines);
         }

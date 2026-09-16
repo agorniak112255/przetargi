@@ -300,6 +300,23 @@ final class UvexConnectorTest extends TestCase
         }
     }
 
+    public function test_shop_invitation_is_not_taken_as_the_description(): void
+    {
+        // część kart ma w miejscu opisu zachętę do kliknięcia — to nie jest opis wyrobu
+        $this->details['4713'] = str_replace(
+            '<p>Stacja czyszcząca do okularów i gogli. Zawiera: 2x chusteczki czyszczące (700 szt. w opakowaniu) 9971.000, 1x płyn czyszczący 9972.103, 1x pompkę dozującą 9973.101</p>',
+            '<p>Kliknij i przejdź do pełnego opisu</p>',
+            $this->details['4713'],
+        );
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+
+        $description = $connector->description($this->productsByCode($connector)['9970.005']);
+
+        $this->assertSame('Jednostka: szt.', $description);
+    }
+
     public function test_empty_description_gives_only_unit_and_other_code_on_page_is_rejected(): void
     {
         $this->details['4713'] = str_replace(
