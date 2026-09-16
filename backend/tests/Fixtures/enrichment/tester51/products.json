@@ -1,0 +1,2808 @@
+[
+    {
+        "sku": "34260038",
+        "name": "ALTO 260",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawice ochronne MAPA ALTO 260 to chemoodporne rękawice wykonane z naturalnego lateksu, przeznaczone do prac wymagających długotrwałej ochrony przed chemikaliami przy zachowaniu dobrej manualności. Stanowią kompromis pomiędzy zręcznością a skuteczną barierą chemiczną, co czyni je odpowiednimi do zadań, gdzie konieczna jest precyzja i jednocześnie narażenie na substancje chemiczne. Rękawice mają kolor czarny, a ich wewnętrzna strona pokryta jest flokiem, co zwiększa komfort noszenia i ułatwia zakładanie oraz zdejmowanie. Zewnętrzna powierzchnia została poddana chlorowaniu i wyposażona w tłoczoną teksturę, która zapewnia pewny chwyt nawet w kontakcie z mokrymi lub śliskimi przedmiotami. Długość rękawicy wynosi 32 cm, co zapewnia ochronę przedramienia, a grubość materiału to 0,8 mm, co daje wyczucie dotyku przy zachowaniu odporności na przebicie i ścieranie. Rękawice dostępne są w rozmiarach od 7 do 11, co pozwala na dopasowanie do różnych dłoni. Produkt pakowany jest w opakowania zbiorcze: 1 para w worku, 10 par w worku lub 50 par w kartonie, co ułatwia magazynowanie i dystrybucję. Rękawice ALTO 260 znajdują zastosowanie w przemyśle chemicznym, przy pracach laboratoryjnych, w przetwórstwie tworzyw sztucznych, a także w branżach, gdzie występuje kontakt z rozpuszczalnikami, kwasami i zasadami. Dzięki naturalnemu lateksowi rękawice charakteryzują się wysoką elastycznością i odpornością na wiele substancji chemicznych, co czyni je uniwersalnym wyborem dla profesjonalistów.",
+            "source_urls": [
+                "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/alto-260",
+                "https://www.mapa-pro.com/our-gloves/chemical-protection/product-page/alto-260"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [
+                "naturalny lateks"
+            ],
+            "specs": [
+                "Materiał: naturalny lateks",
+                "Kolor: czarny",
+                "Wykończenie wewnętrzne: flokowane",
+                "Wykończenie zewnętrzne: tłoczona tekstura, chlorowane",
+                "Długość: 32 cm",
+                "Grubość: 0,8 mm",
+                "Rozmiary: 7, 8, 9, 10, 11",
+                "Opakowanie: 1 para/worek, 10 par/worek, 50 par/karton"
+            ],
+            "use_cases": [
+                "Prace z chemikaliami",
+                "Przemysł chemiczny",
+                "Laboratoria",
+                "Przetwórstwo tworzyw sztucznych",
+                "Kontakt z rozpuszczalnikami, kwasami i zasadami"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "34260038",
+                "material": "naturalny lateks",
+                "materialy": [
+                    "naturalny lateks"
+                ],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": "7-11",
+                "poziomy_en388": null,
+                "typ_wyrobu": "chemical",
+                "przeznaczenie": "chemical",
+                "oznaczenia": [],
+                "rodzina_materialu": "lateks"
+            },
+            "document_urls": [
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf"
+            ],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://assets.ppe-analytics.com/mapa/50/37/50371d69-853c-49ea-b64d-85a190d51c30/50371d69-853c-49ea-b64d-85a190d51c30-0-300.png",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "title": "Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "title": "CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "title": "MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "34650008",
+        "name": "BUTOFLEX 650",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 388: 1.1.2.1.X, EN 374: -1, -5, A.B.C.I.L.M.N.O.S, Type A",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawice ochronne chemiczne MAPA Butoflex 650 wykonane z kauczuku butylowego, przeznaczone do pracy z agresywnymi substancjami chemicznymi. Charakteryzują się wyjątkowym komfortem noszenia dzięki wklejonej wewnętrznej dzianinie bawełnianej, która jest pierwszą tego typu konstrukcją w rękawicach butylowych. Brak tłoczących szwów zwiększa wygodę i elastyczność. Rękawice mają profil Z na dłoni zapewniający optymalną przyczepność. Są odporne na bardzo żrące kwasy, ketony, estry i pochodne amin. Długość około 35 cm i grubość około 1,5 mm zapewniają dobrą ochronę przedramienia. Produkt spełnia normy EN 388 i EN 374, posiada certyfikat kategorii III. Znajduje zastosowanie w przemyśle chemicznym, kosmetycznym, farmaceutycznym, laboratoryjnym oraz mechanicznym i elektronicznym. Idealne do prac z farbami, lakierami, żywicami, tuszami, a także do pobierania próbek i obsługi substancji chemicznych. Dostępne w rozmiarach 7-11, pakowane po 6 par.",
+            "source_urls": [
+                "https://cas-technik.eu/hand-protect/chemical-protection-gloves/mapa-butoflex-650-butyl-chemical-protective-gloves/mp-650-7",
+                "https://cas-technik.eu/hand-protect/chemical-protection-gloves/mapa-butoflex-650-butyl-chemical-protective-gloves/mp-650-10",
+                "https://www.manutan.pl/pl/mpl/rekawice-chemiczne-mapa-professional-butoflex-650-czarne"
+            ],
+            "norms": [
+                "EN 388: 1.1.2.1.X",
+                "EN 374: -1, -5, A.B.C.I.L.M.N.O.S, Type A"
+            ],
+            "certificates": [
+                "Kategoria III PPE",
+                "CE"
+            ],
+            "materials": [
+                "Kauczuk butylowy",
+                "Bawełniana dzianina wewnętrzna"
+            ],
+            "specs": [
+                "Materiał: kauczuk butylowy",
+                "Grubość: ok. 1,5 mm",
+                "Długość: ok. 35 cm",
+                "Kolor: czarny",
+                "Rozmiary: 7, 8, 9, 10, 11",
+                "Opakowanie: 6 par",
+                "Wewnętrzna dzianina bawełniana",
+                "Profilowana dłoń"
+            ],
+            "use_cases": [
+                "Przemysł chemiczny – produkcja farb, lakierów, żywic i tuszów",
+                "Obsługa i pobieranie próbek substancji chemicznych",
+                "Przemysł kosmetyczny i farmaceutyczny – prace laboratoryjne",
+                "Przemysł mechaniczny i elektroniczny",
+                "Obróbka i odtłuszczanie metali",
+                "Prace laboratoryjne"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "34650008",
+                "material": "butyl",
+                "materialy": [
+                    "butyl",
+                    "kauczuk butylowy",
+                    "bawełniana dzianina",
+                    "Kauczuk butylowy",
+                    "Bawełniana dzianina wewnętrzna"
+                ],
+                "normy_en": [
+                    "EN 388",
+                    "EN 374",
+                    "EN 388: 1.1.2.1.X",
+                    "EN 374: -1, -5, A.B.C.I.L.M.N.O.S, Type A"
+                ],
+                "klasa_ochrony": "kat. III",
+                "rozmiar": "7-11",
+                "poziomy_en388": "1.1.2.1.X",
+                "typ_wyrobu": "chemical",
+                "przeznaczenie": "agriculture",
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://cas-technik.eu/media/d9/6d/33/1689002717/butoflex650cb21b.jpg?ts=1756237710",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "34603182",
+        "name": "KRYTECH 603",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawy ochronne KRYTECH 603 firmy MAPA przeznaczone są do ochrony przed przecięciami podczas prac precyzyjnych. Wykonano je jako bezszwową dzianą podporę tekstylną z włókien HDPE i kompozytowych, co zapewnia wysoki komfort noszenia i swobodę ruchów. Długość rękawa wynosi 53 cm, co zapewnia ochronę przedramienia i części ramienia. Produkt charakteryzuje się odpornością na przecięcie na poziomie C według norm ISO, co czyni go odpowiednim do pracy z ostrymi narzędziami i materiałami. Kolorystyka niebiesko-żółta ułatwia identyfikację i poprawia widoczność. Rękawy są lekkie i elastyczne, dzięki czemu nie krępują ruchów podczas precyzyjnych czynności. Wykończenie bezszwowe minimalizuje podrażnienia skóry i zwiększa trwałość. Produkt pakowany jest w worki po 6 par, a karton zawiera 72 pary, co ułatwia magazynowanie i dystrybucję. Rękawy KRYTECH 603 znajdują zastosowanie w branżach takich jak przemysł metalowy, szklarski, motoryzacyjny oraz przy pracach montażowych i sortowaniu. Zapewniają skuteczną ochronę mechaniczną przy zachowaniu wysokiej zręczności manualnej.",
+            "source_urls": [
+                "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-603"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [
+                "HDPE",
+                "włókna kompozytowe",
+                "tekstylia"
+            ],
+            "specs": [
+                "SKU: 34603182",
+                "Producent: MAPA",
+                "Nazwa: KRYTECH 603",
+                "Długość: 53 cm",
+                "Kolor: niebieski, żółty",
+                "Materiał: HDPE, włókna kompozytowe",
+                "Opakowanie: 6 par/worek, 72 pary/karton"
+            ],
+            "use_cases": [
+                "prace precyzyjne",
+                "przemysł metalowy",
+                "przemysł szklarski",
+                "motoryzacja",
+                "montaż",
+                "sortowanie"
+            ],
+            "attributes": {
+                "kategoria_bhp": "inne",
+                "kod_producenta": "34603182",
+                "material": "HDPE",
+                "materialy": [
+                    "HDPE",
+                    "włókna kompozytowe",
+                    "tekstylia"
+                ],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": "tkanina"
+            },
+            "document_urls": [
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf"
+            ],
+            "confidence": 0.8,
+            "image_source_urls": [
+                {
+                    "source_url": "https://assets.ppe-analytics.com/mapa/1e/c7/1ec71065-c704-48fe-ae7b-fa808523f9c0/1ec71065-c704-48fe-ae7b-fa808523f9c0-0-300.png",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "title": "Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "title": "CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "34375018",
+        "name": "TITAN 375",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawice TITAN 375 to profesjonalne rękawice ochronne przeznaczone do lekkich czynności manipulacyjnych w przemyśle. Wykonane są z nitrylu, co zapewnia dobrą odporność na oleje i tłuszcze oraz trwałość. Wewnętrzna strona rękawicy wyposażona jest w tekstylny wkład, który zwiększa komfort noszenia i pochłania wilgoć. Zewnętrzna powierzchnia jest gładka, co ułatwia precyzyjne chwytanie przedmiotów. Rękawice mają długość 27 cm, co zapewnia ochronę nadgarstka i części przedramienia. Dostępne są w rozmiarach od 6 do 9, co pozwala na dopasowanie do różnych dłoni. Produkt pakowany jest w worki po 1 parze, pudełka po 5 par oraz kartony po 50 par. Rękawice charakteryzują się dobrą elastycznością i zręcznością, co czyni je idealnymi do prac wymagających precyzji. Są odpowiednie do zastosowań w logistyce, magazynach, przemyśle lekkim oraz pracach montażowych. Brak informacji o normach i certyfikatach w dostępnych źródłach.",
+            "source_urls": [
+                "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/titan-375",
+                "https://www.mapa-pro.com/our-gloves/handling-protection/gloves-for-heavy-duty-handling/product-page/titan-375"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [
+                "nitryl",
+                "wkład tekstylny"
+            ],
+            "specs": [
+                "Materiał: nitryl",
+                "Kolor: żółty",
+                "Wykończenie wewnętrzne: wkład tekstylny",
+                "Wykończenie zewnętrzne: gładka",
+                "Długość: 27 cm (10,6 cala)",
+                "Rozmiary: 6, 7, 8, 9",
+                "Opakowanie: 1 para/worek, 5 par/pudełko, 50 par/karton"
+            ],
+            "use_cases": [
+                "Lekkie czynności manipulacyjne",
+                "Prace montażowe",
+                "Logistyka i magazynowanie",
+                "Przemysł lekki"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "34375018",
+                "material": "nitryl",
+                "materialy": [
+                    "nitryl",
+                    "wkład tekstylny"
+                ],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": "6-9",
+                "poziomy_en388": null,
+                "typ_wyrobu": "nitrile",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": "nitryl"
+            },
+            "document_urls": [
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf"
+            ],
+            "confidence": 0.6,
+            "image_source_urls": [
+                {
+                    "source_url": "https://assets.ppe-analytics.com/mapa/89/9b/899b016f-386c-435b-b6dd-0c9b530c3bd2/899b016f-386c-435b-b6dd-0c9b530c3bd2-0-300.png",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "title": "Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "title": "CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "title": "MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "34553088",
+        "name": "ULTRANE 553 UNIT.",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 388:4121X, EN ISO 21420:2020",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawice ochronne MAPA ULTRANE 553 to cienkie rękawice z powłoką nitrylową, przeznaczone do prac precyzyjnych w środowiskach brudnych i oleistych. Zapewniają wyjątkową precyzję w końcówkach palców, łącząc doskonałą manualność, odporność na ścieranie i ochronę przed tłustymi zanieczyszczeniami. Wykonane są z bezszwowego wkładu tekstylnego pokrytego nitrylem, co gwarantuje optymalne wyczucie dotykowe. Wentylowany grzbiet zwiększa oddychalność, a elastyczny mankiet dobrze dopasowuje się do nadgarstka. Rękawice nie zawierają silikonu, co zapobiega powstawaniu śladów na powierzchniach takich jak blacha czy szkło przed malowaniem. Posiadają kody kolorystyczne na mankiecie ułatwiające identyfikację rozmiaru i długości. Spełniają normy EN 388 (poziom 4121X) oraz EN ISO 21420:2020. Są przeznaczone do prac montażowych, konserwacyjnych i serwisowych w przemyśle samochodowym, mechanicznym, budownictwie oraz samorządach. Idealne do instalowania elementów metalowych, przygotowania powierzchni, pakowania, montażu elementów precyzyjnych, sortowania części i gwintowania. Dostępne w rozmiarach 5-10, w opakowaniach po 1, 10 i 100 par. Opakowania zawierają 30% materiałów z recyklingu.",
+            "source_urls": [
+                "https://icd.pl/rekawice-mapa-ultrane-553.html",
+                "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-553",
+                "https://www.mapa-pro.com/our-gloves/handling-protection/gloves-for-precision-work/product-page/ultrane-553"
+            ],
+            "norms": [
+                "EN 388:4121X",
+                "EN ISO 21420:2020"
+            ],
+            "certificates": [],
+            "materials": [
+                "Nitryl",
+                "Wkład tekstylny bez szwów"
+            ],
+            "specs": [
+                "Materiał: nitryl",
+                "Kolor: czarny, szary",
+                "Wykończenie wewnętrzne: wkład tekstylny bez szwów",
+                "Wykończenie zewnętrzne: wentylowany grzbiet",
+                "Długość: 22-26 cm (8.7-10.2 cala)",
+                "Rozmiary: 5, 6, 7, 8, 9, 10",
+                "Opakowanie: 1 para/worek, 10 par/worek, 100 par/karton"
+            ],
+            "use_cases": [
+                "Prace montażowe, konserwacyjne i serwisowe",
+                "Przemysł samochodowy i mechaniczny",
+                "Budownictwo i samorządy",
+                "Instalowanie elementów metalowych",
+                "Przygotowanie powierzchni",
+                "Pakowanie i montaż elementów precyzyjnych",
+                "Sortowanie części i gwintowanie"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "34553088",
+                "material": "Nitryl",
+                "materialy": [
+                    "Nitryl",
+                    "Wkład tekstylny bez szwów"
+                ],
+                "normy_en": [
+                    "EN 388",
+                    "EN ISO 21420:2020",
+                    "EN 388:4121X"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "5-10",
+                "poziomy_en388": "4121X",
+                "typ_wyrobu": "nitrile",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": "nitryl"
+            },
+            "document_urls": [
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf"
+            ],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://icd.pl/media/catalog/product/r/e/rekawice-mapa-ultrane-553.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "title": "Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "title": "CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "title": "MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "34525098",
+        "name": "ULTRANE 525 Polybag",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 388, EN 407:2020, EN ISO 18889:2019, EN ISO 21420:2020",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawice ochronne MAPA ULTRANE 525 z powłoką nitrylową Grip & Proof zapewniają pewny chwyt, ochronę dłoni i knykci w zaolejonym środowisku pracy. Łączą wysoką trwałość, odporność na ścieranie oraz komfort użytkowania, dzięki czemu doskonale sprawdzają się w wymagających zadaniach mechanicznych i montażowych. Nie zawierają silikonu, a kody kolorystyczne ułatwiają identyfikację. Przeznaczone do prac w przemyśle samochodowym i mechanicznym, elektronice, kosmetyce i farmacji – takich jak montaż małych części, prace montażowe w pojazdach i mechanika precyzyjna, a także do pakowania, magazynowania, produkcji kosmetyków i leków. Cienka konstrukcja tekstylna bez szwów zapewnia optymalną manualność i wyczucie dotykowe. Nitrylowa powłoka Grip & Proof zapewnia doskonały chwyt w środowisku olejowym oraz redukuje zmęczenie mięśni i poprawia wydajność pracy. Olejoodporność na powierzchni dłoniowej i knykciach, wentylowany grzbiet zapewnia lepszą oddychalność. Bardzo dobra odporność na ścieranie pozwala na długotrwałe użytkowanie, a ochrona przed ciepłem kontaktowym do 100°C (przez 15s) zwiększa bezpieczeństwo. Szczelna konstrukcja chroni dłonie przed kontaktem z olejem i problemami dermatologicznymi. Brak silikonu zapobiega powstawaniu śladów na powierzchniach przed malowaniem. Produkt jest wolny od szkodliwych substancji, posiada certyfikat Oeko-Tex® Standard 100. Opakowania zawierają 30% materiałów z recyklingu.",
+            "source_urls": [
+                "https://icd.pl/rekawice-mapa-ultrane525.html"
+            ],
+            "norms": [
+                "EN 388",
+                "EN 407:2020",
+                "EN ISO 18889:2019",
+                "EN ISO 21420:2020"
+            ],
+            "certificates": [
+                "Oeko-Tex® Standard 100"
+            ],
+            "materials": [
+                "Nitryl (powłoka)",
+                "Tekstylia (podszewka)"
+            ],
+            "specs": [
+                "SKU: 34525098",
+                "Klasyfikacja EN 388: 4121A",
+                "Klasyfikacja EN 407: X1XXXX",
+                "Odporność na ścieranie: 4",
+                "Odporność na przecięcie (Coup Test): 1",
+                "Odporność na rozerwanie: 2",
+                "Odporność na przekłucie: 1",
+                "Odporność na przecięcie wg ISO 13977: A",
+                "Odporność na ciepło kontaktowe: 1 (do 100°C przez 15s)",
+                "Pakowanie: worek 1 para, worek 12 par, karton 96 par"
+            ],
+            "use_cases": [
+                "Przemysł samochodowy",
+                "Przemysł mechaniczny",
+                "Elektronika",
+                "Kosmetyka",
+                "Farmacja",
+                "Montaż małych części",
+                "Prace montażowe w pojazdach",
+                "Mechanika precyzyjna",
+                "Pakowanie",
+                "Magazynowanie",
+                "Produkcja kosmetyków i leków"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "34525098",
+                "material": "nitryl",
+                "materialy": [
+                    "nitryl",
+                    "tekstylia",
+                    "Nitryl (powłoka)",
+                    "Tekstylia (podszewka)"
+                ],
+                "normy_en": [
+                    "EN 388",
+                    "EN 407:2020",
+                    "EN ISO 18889:2019",
+                    "EN ISO 21420:2020"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": "4121A",
+                "typ_wyrobu": "nitrile",
+                "przeznaczenie": "agriculture",
+                "oznaczenia": [],
+                "rodzina_materialu": "nitryl"
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://icd.pl/media/catalog/product/r/e/rekawice-mapa-ultrane-525.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "34540358",
+        "name": "VITAL 540",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawice ochronne VITAL 540 marki MAPA to wodoodporne rękawice wykonane z naturalnego lateksu, przeznaczone do pracy w środowisku mokrym i przy kontakcie z cieczami. Ich beżowy kolor i gładka, elastyczna struktura zapewniają komfort noszenia oraz dobrą czułość dotykową. Wnętrze rękawic jest wykończone proszkiem, co ułatwia ich zakładanie i zdejmowanie, nawet przy wilgotnych dłoniach. Zewnętrzna powierzchnia została wyposażona w chwyt przeciwpoślizgowy, który zwiększa bezpieczeństwo podczas manipulowania mokrymi lub śliskimi przedmiotami. Rękawice mają długość 31 cm, co zapewnia ochronę przedramienia, oraz grubość 0,4 mm, która gwarantuje wytrzymałość przy zachowaniu elastyczności. Dostępne są w rozmiarach 8, 9 i 10, co pozwala na dopasowanie do różnych dłoni. Produkt pakowany jest w worki po 1 parze, 10 par lub kartony po 100 par, co ułatwia magazynowanie i dystrybucję. Rękawice VITAL 540 znajdują zastosowanie w przemyśle, rolnictwie, przetwórstwie spożywczym oraz w pracach porządkowych, gdzie wymagana jest ochrona przed wilgocią i substancjami chemicznymi. Dzięki naturalnemu lateksowi zapewniają dobrą odporność na wiele roztworów wodnych i detergentów. Produkt nie posiada deklarowanych norm ani certyfikatów w dostępnych źródłach, ale spełnia podstawowe wymagania dla rękawic roboczych kategorii I.",
+            "source_urls": [
+                "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-540",
+                "https://www.mapa-pro.com/our-gloves/liquidproof-protection/product-page/vital-540"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [
+                "Naturalny lateks"
+            ],
+            "specs": [
+                "Długość: 31 cm",
+                "Grubość: 0,4 mm",
+                "Rozmiary: 8, 9, 10",
+                "Opakowanie: 1 para/worek, 10 par/worek, 100 par/karton",
+                "Kolor: beżowy",
+                "SKU: 34540358"
+            ],
+            "use_cases": [
+                "Prace w środowisku mokrym",
+                "Przemysł chemiczny (kontakt z roztworami wodnymi)",
+                "Przetwórstwo spożywcze",
+                "Rolnictwo",
+                "Prace porządkowe i sprzątanie",
+                "Manipulowanie śliskimi przedmiotami"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "34540358",
+                "material": "naturalny lateks",
+                "materialy": [
+                    "naturalny lateks",
+                    "Naturalny lateks"
+                ],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": "8-10",
+                "poziomy_en388": null,
+                "typ_wyrobu": "chemical",
+                "przeznaczenie": "agriculture",
+                "oznaczenia": [],
+                "rodzina_materialu": "lateks"
+            },
+            "document_urls": [
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf"
+            ],
+            "confidence": 0.8,
+            "image_source_urls": [
+                {
+                    "source_url": "https://assets.ppe-analytics.com/mapa/2f/c3/2fc3839c-444b-4515-bdaa-5d65ba987e42/2fc3839c-444b-4515-bdaa-5d65ba987e42-1-300.png",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "title": "Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "title": "CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "title": "MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "34780049",
+        "name": "TEMPICE 780",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 388 3221X, EN 511 121, EN 374-5, EN 374-1 KPT",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawice Mapa Temp-Ice 780 to szczelne rękawice ochronne przeznaczone do prac w niskich temperaturach, zapewniające elastyczność nawet przy -10°C. Wykonane są z powłoki PVC, która charakteryzuje się dobrą odpornością na działanie olejów, smarów i węglowodorów. Wewnętrzna wkładka z akrylowej wełny zapewnia doskonałą izolację termiczną oraz komfort użytkowania. Rękawice nie zawierają silikonu, co zapobiega powstawaniu śladów i defektów na blasze i szkle przed malowaniem. Wykończenie zewnętrzne jest chropowate, co poprawia chwyt, a prosty mankiet ułatwia zakładanie. Długość rękawic wynosi 30 cm, co zapewnia ochronę przedramion. Produkt jest przystosowany do kontaktu z artykułami spożywczymi, dzięki czemu znajduje zastosowanie w przemyśle spożywczym. Rękawice spełniają wymagania norm EN 388, EN 511, EN 374-5 oraz EN 374-1, co potwierdza ich odporność mechaniczną, termiczną i chemiczną. Zalecane są do manipulowania płynami w niskich temperaturach, prac w chłodniach, rybołówstwie oraz pracach morskich. Dostępne są w rozmiarach 9 i 10, pakowane po jednej parze w worek, a 48 par w karton.",
+            "source_urls": [
+                "https://www.supon.rzeszow.pl/rkawice-ocieplane/4952-rekawice-ocieplane-pvc-do-niskich-temperatur-mapa-tempice-780.html"
+            ],
+            "norms": [
+                "EN 388 3221X",
+                "EN 511 121",
+                "EN 374-5",
+                "EN 374-1 KPT"
+            ],
+            "certificates": [
+                "CE"
+            ],
+            "materials": [
+                "PVC",
+                "akrylowa wełna"
+            ],
+            "specs": [
+                "Materiał: PVC",
+                "Wkład wewnętrzny: dziany, pokryty wełną",
+                "Wykończenie zewnętrzne: chropowate",
+                "Mankiet: prosty",
+                "Długość: 30 cm",
+                "Rozmiary: 9, 10",
+                "Pakowanie: 1 para/worek, 48 par/karton",
+                "Normy: EN 388 3221X, EN 511 121, EN 374-5, EN 374-1 KPT"
+            ],
+            "use_cases": [
+                "Prace w niskich temperaturach",
+                "Manipulowanie płynami (woda, olej, węglowodory)",
+                "Prace w chłodniach",
+                "Prace z artykułami spożywczymi",
+                "Rybołówstwo",
+                "Prace morskie"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "34780049",
+                "material": "PVC",
+                "materialy": [
+                    "PVC",
+                    "akrylowa wełna"
+                ],
+                "normy_en": [
+                    "EN 388",
+                    "EN 511",
+                    "EN 374-5",
+                    "EN 374-1",
+                    "EN 388 3221X",
+                    "EN 511 121",
+                    "EN 374-1 KPT"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "9-10",
+                "poziomy_en388": "3221X",
+                "typ_wyrobu": "chemical",
+                "przeznaczenie": "food",
+                "oznaczenia": [],
+                "rodzina_materialu": "guma"
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://www.supon.rzeszow.pl/10164-thickbox_default/rekawice-ocieplane-pvc-do-niskich-temperatur-mapa-tempice-780.webp",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "34300058",
+        "name": "JERSETTE 300",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawice lateksowe MAPA JERSETTE 300 przeznaczone są do długotrwałej pracy w wymagających warunkach, zapewniając ochronę przed rozcieńczonymi kwasami oraz uszkodzeniami mechanicznymi, takimi jak rozdarcia. Wykonane z lateksu, charakteryzują się anatomicznym kształtem, który gwarantuje swobodę ruchu i precyzję podczas wykonywania zadań. Wnętrze rękawicy zostało zaprojektowane z myślą o wygodzie użytkownika, co pozwala na komfortowe noszenie przez dłuższy czas. Produkt oferuje wysoką odporność na rozdarcia, co zwiększa trwałość i bezpieczeństwo w kontakcie z ostrymi lub szorstkimi materiałami. Rękawice sprawdzają się w pracach budowlanych, szczególnie przy murarstwie i tynkowaniu, a także podczas przygotowywania zapraw, cementu i odlewów. Znajdują zastosowanie w przemyśle lotniczym, gdzie używane są do pracy z materiałami kompozytowymi, w tym żywicami. Są również odpowiednie dla władz lokalnych podczas sprzątania oraz przy obsłudze domowych środków czyszczących. Dostępne są w rozmiarach 7, 8, 9 i 10, co umożliwia dopasowanie do różnych dłoni. Kolor niebieski ułatwia identyfikację i zwiększa widoczność w środowisku pracy. Rękawice te łączą ochronę chemiczną i mechaniczną z ergonomią, stanowiąc uniwersalne rozwiązanie dla wielu branż.",
+            "source_urls": [
+                "https://www.manutan.pl/pl/mpl/rekawiczki-lateksowe-mapa-jersette-300-w-kolorze-niebieskim"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [
+                "lateks"
+            ],
+            "specs": [
+                "SKU: 34300058",
+                "Producent: MAPA",
+                "Model: JERSETTE 300",
+                "Materiał: lateks",
+                "Kolor: niebieski",
+                "Rozmiary: 7, 8, 9, 10"
+            ],
+            "use_cases": [
+                "Budownictwo (murarze/tynkarze)",
+                "Przygotowanie zapraw, cementu i odlewów",
+                "Przemysł lotniczy – praca z materiałami kompozytowymi (żywice)",
+                "Władze lokalne – sprzątanie",
+                "Obsługa domowych środków czyszczących"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "34300058",
+                "material": "lateks",
+                "materialy": [
+                    "lateks"
+                ],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": "7-10",
+                "poziomy_en388": null,
+                "typ_wyrobu": "chemical",
+                "przeznaczenie": "chemical",
+                "oznaczenia": [],
+                "rodzina_materialu": "lateks"
+            },
+            "document_urls": [],
+            "confidence": 0.8,
+            "image_source_urls": [
+                {
+                    "source_url": "https://www.manutan.pl/img/S/GRP/ST/AIG2001277.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "34990458",
+        "name": "SOLO 990",
+        "manufacturer": "MAPA",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Rękawice jednorazowe MAPA SOLO 990 to lekkie rękawice ochronne wykonane z PCV (polichlorku winylu), przeznaczone do krótkotrwałego użytkowania w warunkach wymagających higieny i precyzji. Ich zmniejszona grubość zapewnia doskonałą zręczność i czucie w opuszkach palców, co ułatwia wykonywanie delikatnych czynności. Rękawice są bezpudrowe (powder-free), co eliminuje ryzyko zanieczyszczenia produktów i skraca czas zakładania. Zewnętrzna powierzchnia jest gładka, a wewnętrzna – również gładka, co ułatwia zakładanie i zdejmowanie. Długość rękawicy wynosi 24 cm, a grubość 0,07 mm, co zapewnia lekkość i komfort noszenia. Dostępne są w rozmiarach 6, 7, 8 i 9, pakowane po 100 sztuk w pudełku i 1000 sztuk w kartonie. Współczynnik AQL dla wodoodporności wynosi 4.0, co oznacza akceptowalny poziom jakości pod względem szczelności. Rękawice nie posiadają deklarowanych norm EN, ale są odpowiednie do zastosowań, gdzie wymagana jest ochrona przed lekkimi zabrudzeniami i kontaktem z substancjami nieagresywnymi. Sprawdzają się w przemyśle spożywczym, laboratoriach, przemyśle lekkim, a także w pracach porządkowych i higienicznych. Dzięki swojej konstrukcji zapewniają wysoką precyzję manualną, co czyni je idealnym wyborem do prac wymagających delikatnego dotyku.",
+            "source_urls": [
+                "https://kps.com.pl/pl/rekawice-mapa-solo-990.html",
+                "https://www.mapa-pro.com/our-gloves/disposable/product-page/solo-990",
+                "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-990"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [
+                "PCV (polichlorek winylu)"
+            ],
+            "specs": [
+                "Materiał: PCV (polichlorek winylu)",
+                "Kolor: biały, przezroczysty",
+                "Długość: 24 cm",
+                "Grubość: 0,07 mm",
+                "Rozmiary: 6, 7, 8, 9",
+                "Opakowanie: 100 rękawic/pudełko, 1000 rękawic/karton",
+                "AQL wodoodporność: 4.0"
+            ],
+            "use_cases": [
+                "Prace wymagające higieny i precyzji",
+                "Przemysł spożywczy",
+                "Laboratoria",
+                "Przemysł lekki",
+                "Prace porządkowe",
+                "Krótkotrwałe czynności ochronne"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "SOLO 990",
+                "material": "PCV",
+                "materialy": [
+                    "PCV",
+                    "PCV (polichlorek winylu)"
+                ],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": "s-m",
+                "poziomy_en388": null,
+                "typ_wyrobu": "disposable",
+                "przeznaczenie": "food",
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf"
+            ],
+            "confidence": 0.8,
+            "image_source_urls": [
+                {
+                    "source_url": "https://img.kps.com.pl/tmp/f/7/8/8/rekawice-mapa-solo-990-936e.2000x2000q80.jpg.webp",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "title": "Maquette_leaflet_norme_388_retenu-PL.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.pl/fileadmin/documentation/PL/Norms_PL/CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "title": "CHEMICAL-Brochure-EN374-MAPA-PRO-PL-WEB-page.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://www.mapa-pro.com/fileadmin/common/Documentation/MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "title": "MAPA_PROFESSIONAL_EN_374_EN.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "T5921002",
+        "name": "Chodnik elektroizolacyjny 20 KV",
+        "manufacturer": "SECURA",
+        "category": "11.2 DYWANIKI I CHODNIKI ELEKTROIZOLACYJNE",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Chodnik elektroizolacyjny 20 kV to mata podłogowa przeznaczona do ochrony pracowników przed porażeniem prądem elektrycznym podczas prac przy instalacjach i urządzeniach elektrycznych. Produkt oferowany jest przez firmę SECURA w kilku wariantach długości: 2 m, 5 m i 6 m, przy stałej szerokości 1,1 m. Mata zapewnia izolację elektryczną do napięcia 20 kV, co czyni ją odpowiednią do stosowania w rozdzielniach, stacjach transformatorowych i innych miejscach o podwyższonym ryzyku elektrycznym. Wykonana jest z materiału izolacyjnego, który ma zapobiegać przepływowi prądu między pracownikiem a podłożem. Produkt należy do kategorii środków ochrony indywidualnej (PPE) i powinien być stosowany zgodnie z obowiązującymi przepisami BHP. Brak jest szczegółowych informacji o materiale wykonania, normach czy certyfikatach w dostępnych źródłach. Zaleca się zapoznanie z pełną dokumentacją techniczną przed użyciem. Mata może być stosowana zarówno wewnątrz, jak i na zewnątrz, w zależności od warunków pracy. Jej głównym zadaniem jest zapewnienie bezpiecznej strefy pracy dla elektryków i personelu utrzymania ruchu. Produkt dostępny jest w sprzedaży w sklepie Centrum Elektronarzędzi.",
+            "source_urls": [
+                "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-2-m-Secura/48601",
+                "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-5-m-Secura/48604",
+                "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-6-m-Secura/48605"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [
+                "Wymiary: 1,1 x 2 m / 1,1 x 5 m / 1,1 x 6 m",
+                "Napięcie izolacji: 20 kV",
+                "SKU: T5921002",
+                "Producent: SECURA"
+            ],
+            "use_cases": [
+                "Prace przy instalacjach elektrycznych",
+                "Rozdzielnie",
+                "Stacje transformatorowe",
+                "Obsługa urządzeń pod napięciem",
+                "Prace konserwacyjne"
+            ],
+            "attributes": {
+                "kategoria_bhp": "inne",
+                "kod_producenta": "T5921002",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": 0.4,
+            "image_source_urls": [
+                {
+                    "source_url": "https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_46764_500_500/Chodnik-i-dywanik-elektroizolacyjny.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "T5921003",
+        "name": "Chodnik elektroizolacyjny 20 KV",
+        "manufacturer": "SECURA",
+        "category": "11.2 DYWANIKI I CHODNIKI ELEKTROIZOLACYJNE",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Chodnik elektroizolacyjny 20 kV marki SECURA to mata ochronna przeznaczona do wykładania podłóg w miejscach pracy przy urządzeniach elektrycznych. Produkt należy do klasy 2, co oznacza, że zapewnia ochronę przed napięciem przemiennym do 17 000 V oraz stałym do 25 500 V. Mata ma kolor brązowy, z wierzchnią stroną ryflowaną i spodnią moletowaną odciskiem tkaniny, co zwiększa przyczepność i stabilność. Grubość całkowita wynosi 5 mm, a wysokość ryfli 1,6 mm. Dostępne są różne wymiary, m.in. 0,75 x 0,75 m, 1,1 x 2 m oraz 1,1 x 5 m, a także inne długości do 8 m przy szerokości 1100 mm. Mata charakteryzuje się twardością 66–75 °Sh, wytrzymałością na rozciąganie min. 5 MPa i wydłużeniem względnym min. 250%. Wytrzymałość dielektryczna wynosi 20 kV, a odporność na przekłucie min. 70 N. Produkt jest odporny na starzenie cieplne, działanie kwasu siarkowego i oleju nr 1, a także na niskie temperatury do -25°C. Mata nie pali się (odporność na palenie max 50 mm) i ma niską odporność na poślizg (max 15 mm). Znajduje zastosowanie w elektrowniach, rozdzielniach, stacjach transformatorowych oraz wszędzie tam, gdzie pracownicy narażeni są na kontakt z urządzeniami pod napięciem. Produkt spełnia wymagania klasy 2 dla sprzętu ochrony elektrycznej.",
+            "source_urls": [
+                "https://centrumelektronarzedzi.pl/pl/p/Dywanik-elektroizolacyjny-20-KV-wymiary-0%2C75-x-0%2C75-m-Secura/48600",
+                "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-2-m-Secura/48601",
+                "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-5-m-Secura/48604"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [
+                "Wymiary: 0,75 x 0,75 m; 1,1 x 2 m; 1,1 x 5 m (inne na zamówienie)",
+                "Grubość: 5 mm",
+                "Wysokość ryfli: 1,6 mm",
+                "Twardość: 66–75 °Sh",
+                "Wytrzymałość na rozciąganie: min. 5 MPa",
+                "Wydłużenie względne: min. 250%",
+                "Wytrzymałość na rozdzielanie: min. 20 kV/m",
+                "Odporność na przekłucie: min. 70 N",
+                "Odporność na starzenie cieplne: 56 N (po 168 h w 70°C)",
+                "Odporność na poślizg: max 15 mm",
+                "Odporność na palenie: max 50 mm",
+                "Odporność na niskie temperatury: -25°C (brak pęknięć)",
+                "Odporność na kwas siarkowy: min. 53 N",
+                "Odporność na olej nr 1: min. 35 N",
+                "Wytrzymałość dielektryczna: 20 kV"
+            ],
+            "use_cases": [
+                "Prace przy urządzeniach elektrycznych do 17 kV AC i 25,5 kV DC",
+                "Rozdzielnie i stacje transformatorowe",
+                "Elektrownie i zakłady przemysłowe",
+                "Prace konserwacyjne i serwisowe instalacji elektrycznych",
+                "Podłogi w pomieszczeniach zagrożonych porażeniem prądem"
+            ],
+            "attributes": {
+                "kategoria_bhp": "inne",
+                "kod_producenta": "T5921003",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "pants",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://centrumelektronarzedzi.pl/userdata/public/gfx/46763/Chodnik-i-dywanik-elektroizolacyjny.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S56322S2",
+        "name": "Filtr dwustronny SECAIR 3000.02 klasy P2",
+        "manufacturer": "SECURA",
+        "category": "7.4ZESTAWY FILTRÓW DO PÓŁMASEK I PEŁNYCH MASEK",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 143:2000, EN 143:2000+A1",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Filtry SECAIR 3000.02 P2 R po skompletowaniu z dwufiltrową półmaską lub maską, chronią układ oddechowy przed aerozolami z cząstek stałych (pyły, dymy) i ciekłych (mgły), o ile stężenie fazy rozproszonej nie przekracza wartości 10 x NDS (Najwyższe Dopuszczalne Stężenie).\n\nDopuszczalne stężenie fazy rozproszonej aerozolu nie może przekraczać wartości:\n\n10 x NDS w przypadku skompletowania z półmaską\n\n16,5 x NDS w przypadku skompletowania z maską\n\nFiltry przechowywane w opakowaniach fabrycznych zachowują swoje własności użytkowe (ochronne) przez 60 miesięcy od daty produkcji\n\nNORMY I CERTYFIKATY:\n\nCE\n\nEN 143:2000\n\nEN 143:2000+A1:2006",
+            "source_urls": [
+                "https://migracja.supon.rzeszow.pl/4853-filtr-dwustronny-do-maski-secura-secair-300002-p2r.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "drogi_oddechowe",
+                "kod_producenta": "SFILTR300002",
+                "material": null,
+                "materialy": [],
+                "normy_en": [
+                    "EN 143:2000",
+                    "EN 143:2000+A1"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "reusable_half",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/8/9538.jpg",
+                    "is_primary": true
+                },
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/8/9538-large_default.jpg",
+                    "is_primary": false
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "T5911400",
+        "name": "Kalosze elektroizolacyjne 5 kV - ANTYAMPER",
+        "manufacturer": "SECURA",
+        "category": "11.1 OBUWIE ELEKTROIZOLACYJNE",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN ISO 20347:2012, EN 50321-1",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Półbuty gumowe elektroizolacyjne ANTYAMPER 20 kV (klasa 2 AC) są przeznaczone do pracy przy urządzeniach elektrycznych o napięciu przemiennym (AC) do 17 kV jako dodatkowy sprzęt ochronny, mający na celu zabezpieczenie użytkownika przed przepływem niebezpiecznego prądu rażenia przez ciało człowieka, w szczególności poprzez stopy.\r\nObuwie to zmniejsza ryzyko porażenia prądem elektrycznym. Powinno być stosowane jako nakładane na standardowe obuwie używane w pracy.\r\nObuwie oferowane jest w następujących rozmiarach:\r\n\r\n4 – (dopasowane do obuwia wewnętrznego w rozmiarze od 42 do 45), długość wewnętrzna: 340 mm,\r\n5 – (dopasowane do obuwia wewnętrznego w rozmiarze od 46 do 49), długość wewnętrzna: 360 mm.\r\n\r\nWysokość obuwia wynosi:\r\n\r\ndla rozmiaru 4: 220 mm,\r\ndla rozmiaru 5: 222 mm.\r\n\r\nPółbuty elektroizolacyjne 20 kV - ANTYAMPER rozmiar 4 Secura\r\nButy gumowe elektroizolacyjne są środkiem ochrony indywidualnej kategorii III, spełniającym odpowiednie wymagania zgodnie z Rozporządzeniem Parlamentu Europejskiego i Rady (UE) 2016/425 oraz normami:\r\n\r\nPN-EN ISO 20347:2012 „Środki ochrony indywidualnej. Obuwie zawodowe” OB SRC,\r\nPN-EN 50321-1:2018 „Prace pod napięciem. Obuwie do ochrony przed porażeniem prądem elektrycznym. Obuwie i kalosze elektroizolacyjne”.",
+            "source_urls": [
+                "https://centrumelektronarzedzi.pl/pl/p/Polbuty-elektroizolacyjne-20-kV-ANTYAMPER-rozmiar-5-Secura/55440"
+            ],
+            "norms": [
+                "EN ISO 20347:2012",
+                "EN 50321-1"
+            ],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [
+                "przemysł metalowy"
+            ],
+            "attributes": {
+                "kategoria_bhp": "obuwie",
+                "kod_producenta": "T5911400",
+                "material": null,
+                "materialy": [],
+                "normy_en": [
+                    "EN ISO 20347:2012",
+                    "EN 50321-1"
+                ],
+                "klasa_ochrony": "OB",
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "kalosz",
+                "przeznaczenie": null,
+                "oznaczenia": [
+                    "SRC"
+                ],
+                "rodzina_materialu": "guma"
+            },
+            "document_urls": [],
+            "confidence": 0,
+            "image_source_urls": [
+                {
+                    "source_url": "https://centrumelektronarzedzi.pl/environment/cache/images/productGfx_63787_0_0/756740d6-ea55-4d7f-9793-e42baffd4192.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S56212-10",
+        "name": "Płatek zaworu wydechowego",
+        "manufacturer": "SECURA",
+        "category": "RĘKAWICE ELEKTROIZOLACYJNE",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Płatek zaworu wydechowego Secura 2000 (1-89-0011). nr. S5321240. Płatek zaworu wydechowego do masek Secura 2000.\n\nPłatek zaworu wydechowego SECURA 3000 do półmasek (S5621210). Dostępne rozmiary: 75.",
+            "source_urls": [
+                "https://domtechniczny24.pl/p%C5%82atek-zaworu-wydechowego-secura-3000-do-p%C3%B3%C5%82masek.html",
+                "https://domtechniczny24.pl/p%C5%82atek-zaworu-wydechowego-secura-2000.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "inne",
+                "kod_producenta": "S56212-10",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": 0,
+            "image_source_urls": [
+                {
+                    "source_url": "https://domtechniczny24.pl/work/images/Secura/350/platek-zaworu-maski-secura-3000.webp",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S53211",
+        "name": "Płatek zaworu wdechowego",
+        "manufacturer": "SECURA",
+        "category": "CZĘŚCI DO PÓŁMASEK SECURA 3000 i 3100",
+        "model_name": null,
+        "enrichment_status": "none",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "",
+            "source_urls": [],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": null,
+                "kod_producenta": "S53211",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://ventabebhp.com/wp-content/uploads/2026/03/S532GRR-8.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S5621203",
+        "name": "Płatki zaworów do półmasek serii SECURA 3000, komplet (3 sztuki)",
+        "manufacturer": "SECURA",
+        "category": "CZĘŚCI DO PÓŁMASEK SECURA 3000 i 3100",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 140:2004, EN 140:1998",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Półmaska SECURA 3000 po skompletowaniu z odpowiednimi elementami oczyszczającymi, których wyłącznym producentem jest firma SECURA, stanowi sprzęt ochrony układu oddechowego przed szkodliwymi substancjami występującymi pod postacią: aerozoli (pyły, dymy, mgły), par i gazów oraz obu tych postaci łącznie.\n\nPółmaska SECURA 3000 składa się z korpusu, dwóch zaworów wdechowych z łącznikami bagnetowymi umożliwiającymi montaż elementów oczyszczających, zaworu wydechowego oraz nagłowia.\n\nW półmasce SECURA 3000 stosowane jest jednoczęściowe nagłowie tekstylne, które łączy się z półmaską za pośrednictwem zapinek i zaczepów pierścienia.\n\nCzęści składowe półmaski SECURA 3000:\n\n1. Pokrywa zaworu wydechowego.\n\n2. Płatek zaworu wydechowego\n\n3. Zapinki nagłowia\n\n4. Pierścień z zaczepami.\n\n5. Korpus\n\n6. Wkładka zaworowa\n\n7. Płatkizaworów wdechowych\n\n8. Część nagłowna\n\n9. Taśma nagłowia\n\n10. Sprzączka\n\nKONSERWACJA:\n\nPółmaska SECURA 3000 wymaga niewielkiego zakresu konserwacji, jakkolwiek po każdym użyciu zaleca się jej oczyszczenie.\n\nZwykłe czyszczenie można wykonać przez wytarcie ściereczką specjalnie przeznaczoną do sprzętu ochrony osobistej.\n\nJeżeli potrzebne jest dokładniejsze oczyszczenie, należy najpierw rozłożyć półmaskę, zdejmując elementy oczyszczające, nagłowie i inne części. Oczyścić i odkazić półmaskę i pozostałe elementy (za wyjątkiem elementów oczyszczających) używając ciepłej wody z mydłem (< 50°C), przetrzeć do czysta miękką ściereczką, spłukać w czystej wodzie i wysuszyć strumieniem czystego powietrza. Nie stosować środków zawierających lanolinę, lub inne oleje, albo rozpuszczalniki. Części półmaski, a szczególnie zawór wydechowy i jego gniazdo powinny być sprawdzane po każdym użyciu. Jeżeli zauważone zostanie jakiekolwiek uszkodzenie, element powinien być zdjęty i zastąpiony nowym.\n\nPRZECHOWYWANIE:\n\nPółmaskę należy przechowywać w sposób zabezpieczający przed uszkodzeniami mechanicznymi, w pomieszczeniach suchych, pozbawionych szkodliwych par i gazów, zapewniających utrzymanie temperatury – 5°C +40°C i wilgotności względnej poniżej 80%. Półmaska nie powinna być przechowywana razem z substancjami toksycznymi, wydzielającymi nieprzyjemne zapachy i działającymi agresywnie na materiały, z których jest wykonana.\n\nTRWAŁOŚĆ:\n\nPółmaska zachowuje parametry użytkowe przez okres 5 lat przechowywania w opakowaniu fabrycznym. Producent gwarantuje czas bezpiecznego użytkowania półmaski po rozpakowaniu przez okres 3 lat, jednak nie dłużej niż 5 lat od daty produkcji.\n\nNORMY I CERTYFIKATY:\n\nWyrób spełnia wymagania zgodnie z Rozporządzeniem Parlamentu Europejskiego i Rady (UE) 2016/425 z dnia 9 marca 2016 r. w sprawie środków ochrony indywidualnej oraz uchylenia dyrektywy Rady 89/686/EWG.\n\nWyrób spełnia wymagania normy zharmonizowanej: PN-EN 140:2004 (EN 140:1998)\n\nCE",
+            "source_urls": [
+                "https://migracja.supon.rzeszow.pl/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "drogi_oddechowe",
+                "kod_producenta": "Secura - 3000 S56T",
+                "material": null,
+                "materialy": [],
+                "normy_en": [
+                    "EN 140:2004",
+                    "EN 140:1998"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "reusable_half",
+                "przeznaczenie": "chemical",
+                "oznaczenia": [],
+                "rodzina_materialu": "tkanina"
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/2/9532.jpg",
+                    "is_primary": true
+                },
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/2/9532-large_default.jpg",
+                    "is_primary": false
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S5621220",
+        "name": "Pokrywa zaworu wydechowego",
+        "manufacturer": "SECURA",
+        "category": "RĘKAWICE ELEKTROIZOLACYJNE",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": "https://domtechniczny24.pl/p%C5%82atek-zaworu-wydechowego-secura-3000-do-p%C3%B3%C5%82masek.html",
+        "produced": {
+            "description": "Płatek zaworu wydechowego do półmasek Secura 3000. Dostępny rozmiar: 75. Jest to element wymienny zaworu wydechowego, stosowany w półmaskach ochronnych Secura 3000. Przeznaczony do odprowadzania wydychanego powietrza. Wymiana płatka zaworu jest konieczna w przypadku zużycia lub uszkodzenia, aby zapewnić prawidłowe działanie maski. Produkt przeznaczony do użytku w ochronie dróg oddechowych.",
+            "source_urls": [
+                "https://domtechniczny24.pl/p%C5%82atek-zaworu-wydechowego-secura-3000-do-p%C3%B3%C5%82masek.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [
+                "SKU: S5621220",
+                "Produkt: Płatek zaworu wydechowego",
+                "Rozmiar: 75",
+                "Kompatybilność: Secura 3000"
+            ],
+            "use_cases": [
+                "Półmaski ochronne Secura 3000"
+            ],
+            "attributes": {
+                "kategoria_bhp": "drogi_oddechowe",
+                "kod_producenta": "S5621220",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": "75",
+                "poziomy_en388": null,
+                "typ_wyrobu": "reusable_half",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": 0.3,
+            "image_source_urls": [
+                {
+                    "source_url": "https://domtechniczny24.pl/work/images/Secura/350/platek-zaworu-maski-secura-3000.webp",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "T5912200",
+        "name": "Półbuty elektroizolacyjne 30 kV - ANTYAMPER",
+        "manufacturer": "SECURA",
+        "category": "11.1 OBUWIE ELEKTROIZOLACYJNE",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Półbuty elektroizolacyjne ANTYAMPER 30 kV marki SECURA to specjalistyczne obuwie ochronne przeznaczone do pracy w środowisku zagrożonym porażeniem prądem elektrycznym. Produkt zapewnia izolację elektryczną do napięcia 30 kV, co czyni go odpowiednim dla elektryków, serwisantów i pracowników utrzymania ruchu pracujących przy instalacjach i urządzeniach pod napięciem. Obuwie zostało zaprojektowane z myślą o bezpieczeństwie i komforcie podczas długotrwałego noszenia, a jego konstrukcja ogranicza ryzyko przepływu prądu przez ciało użytkownika. Półbuty dostępne są w rozmiarach 42, 43, 44 i 45, co pozwala na dopasowanie do różnych stóp. Produkt należy do kategorii środków ochrony indywidualnej i powinien być stosowany zgodnie z przeznaczeniem oraz instrukcją producenta. Dzięki właściwościom elektroizolacyjnym sprawdza się w pracach przy rozdzielniach, stacjach transformatorowych, liniach przesyłowych oraz w serwisie urządzeń elektrycznych. Obuwie ANTYAMPER 30 kV stanowi kluczowy element wyposażenia ochronnego dla osób narażonych na kontakt z napięciem niebezpiecznym.",
+            "source_urls": [
+                "https://centrumelektronarzedzi.pl/pl/p/Polbuty-elektroizolacyjne-30-kV-ANTYAMPER-rozmiar-4-Secura/48598"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [
+                "Kod producenta: T5912200",
+                "Napięcie izolacji: 30 kV",
+                "Rozmiary: 42, 43, 44, 45",
+                "Typ: półbuty elektroizolacyjne"
+            ],
+            "use_cases": [
+                "Prace elektryczne przy instalacjach pod napięciem",
+                "Serwis rozdzielni i stacji transformatorowych",
+                "Konserwacja linii przesyłowych",
+                "Prace w energetyce zawodowej"
+            ],
+            "attributes": {
+                "kategoria_bhp": "obuwie",
+                "kod_producenta": "T5912200",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": "42-45",
+                "poziomy_en388": null,
+                "typ_wyrobu": "polbut",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": 0.3,
+            "image_source_urls": [
+                {
+                    "source_url": "https://centrumelektronarzedzi.pl/upload/img/seo/centrumelektronarzedzi-pl.png",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S56T0SM0",
+        "name": "Półmaska SECURA 3000 (nagłowie jednoczęściowe)",
+        "manufacturer": "SECURA",
+        "category": "PÓŁMASKA SECURA 3000",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 140:2004, EN 140:1998",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Półmaska SECURA 3000 po skompletowaniu z odpowiednimi elementami oczyszczającymi, których wyłącznym producentem jest firma SECURA, stanowi sprzęt ochrony układu oddechowego przed szkodliwymi substancjami występującymi pod postacią: aerozoli (pyły, dymy, mgły), par i gazów oraz obu tych postaci łącznie.\n\nPółmaska SECURA 3000 składa się z korpusu, dwóch zaworów wdechowych z łącznikami bagnetowymi umożliwiającymi montaż elementów oczyszczających, zaworu wydechowego oraz nagłowia.\n\nW półmasce SECURA 3000 stosowane jest jednoczęściowe nagłowie tekstylne, które łączy się z półmaską za pośrednictwem zapinek i zaczepów pierścienia.\n\nCzęści składowe półmaski SECURA 3000:\n\n1. Pokrywa zaworu wydechowego.\n\n2. Płatek zaworu wydechowego\n\n3. Zapinki nagłowia\n\n4. Pierścień z zaczepami.\n\n5. Korpus\n\n6. Wkładka zaworowa\n\n7. Płatkizaworów wdechowych\n\n8. Część nagłowna\n\n9. Taśma nagłowia\n\n10. Sprzączka\n\nKONSERWACJA:\n\nPółmaska SECURA 3000 wymaga niewielkiego zakresu konserwacji, jakkolwiek po każdym użyciu zaleca się jej oczyszczenie.\n\nZwykłe czyszczenie można wykonać przez wytarcie ściereczką specjalnie przeznaczoną do sprzętu ochrony osobistej.\n\nJeżeli potrzebne jest dokładniejsze oczyszczenie, należy najpierw rozłożyć półmaskę, zdejmując elementy oczyszczające, nagłowie i inne części. Oczyścić i odkazić półmaskę i pozostałe elementy (za wyjątkiem elementów oczyszczających) używając ciepłej wody z mydłem (< 50°C), przetrzeć do czysta miękką ściereczką, spłukać w czystej wodzie i wysuszyć strumieniem czystego powietrza. Nie stosować środków zawierających lanolinę, lub inne oleje, albo rozpuszczalniki. Części półmaski, a szczególnie zawór wydechowy i jego gniazdo powinny być sprawdzane po każdym użyciu. Jeżeli zauważone zostanie jakiekolwiek uszkodzenie, element powinien być zdjęty i zastąpiony nowym.\n\nPRZECHOWYWANIE:\n\nPółmaskę należy przechowywać w sposób zabezpieczający przed uszkodzeniami mechanicznymi, w pomieszczeniach suchych, pozbawionych szkodliwych par i gazów, zapewniających utrzymanie temperatury – 5°C +40°C i wilgotności względnej poniżej 80%. Półmaska nie powinna być przechowywana razem z substancjami toksycznymi, wydzielającymi nieprzyjemne zapachy i działającymi agresywnie na materiały, z których jest wykonana.\n\nTRWAŁOŚĆ:\n\nPółmaska zachowuje parametry użytkowe przez okres 5 lat przechowywania w opakowaniu fabrycznym. Producent gwarantuje czas bezpiecznego użytkowania półmaski po rozpakowaniu przez okres 3 lat, jednak nie dłużej niż 5 lat od daty produkcji.\n\nNORMY I CERTYFIKATY:\n\nWyrób spełnia wymagania zgodnie z Rozporządzeniem Parlamentu Europejskiego i Rady (UE) 2016/425 z dnia 9 marca 2016 r. w sprawie środków ochrony indywidualnej oraz uchylenia dyrektywy Rady 89/686/EWG.\n\nWyrób spełnia wymagania normy zharmonizowanej: PN-EN 140:2004 (EN 140:1998)\n\nCE",
+            "source_urls": [
+                "https://migracja.supon.rzeszow.pl/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "drogi_oddechowe",
+                "kod_producenta": "Secura - 3000 S56T",
+                "material": null,
+                "materialy": [],
+                "normy_en": [
+                    "EN 140:2004",
+                    "EN 140:1998"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "reusable_half",
+                "przeznaczenie": "chemical",
+                "oznaczenia": [],
+                "rodzina_materialu": "tkanina"
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/2/9532.jpg",
+                    "is_primary": true
+                },
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/2/9532-large_default.jpg",
+                    "is_primary": false
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S56T0SL0",
+        "name": "Półmaska SECURA 3000 (nagłowie jednoczęściowe)",
+        "manufacturer": "SECURA",
+        "category": "PÓŁMASKA SECURA 3000",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 140:2004, EN 140:1998",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Półmaska SECURA 3000 po skompletowaniu z odpowiednimi elementami oczyszczającymi, których wyłącznym producentem jest firma SECURA, stanowi sprzęt ochrony układu oddechowego przed szkodliwymi substancjami występującymi pod postacią: aerozoli (pyły, dymy, mgły), par i gazów oraz obu tych postaci łącznie.\n\nPółmaska SECURA 3000 składa się z korpusu, dwóch zaworów wdechowych z łącznikami bagnetowymi umożliwiającymi montaż elementów oczyszczających, zaworu wydechowego oraz nagłowia.\n\nW półmasce SECURA 3000 stosowane jest jednoczęściowe nagłowie tekstylne, które łączy się z półmaską za pośrednictwem zapinek i zaczepów pierścienia.\n\nCzęści składowe półmaski SECURA 3000:\n\n1. Pokrywa zaworu wydechowego.\n\n2. Płatek zaworu wydechowego\n\n3. Zapinki nagłowia\n\n4. Pierścień z zaczepami.\n\n5. Korpus\n\n6. Wkładka zaworowa\n\n7. Płatkizaworów wdechowych\n\n8. Część nagłowna\n\n9. Taśma nagłowia\n\n10. Sprzączka\n\nKONSERWACJA:\n\nPółmaska SECURA 3000 wymaga niewielkiego zakresu konserwacji, jakkolwiek po każdym użyciu zaleca się jej oczyszczenie.\n\nZwykłe czyszczenie można wykonać przez wytarcie ściereczką specjalnie przeznaczoną do sprzętu ochrony osobistej.\n\nJeżeli potrzebne jest dokładniejsze oczyszczenie, należy najpierw rozłożyć półmaskę, zdejmując elementy oczyszczające, nagłowie i inne części. Oczyścić i odkazić półmaskę i pozostałe elementy (za wyjątkiem elementów oczyszczających) używając ciepłej wody z mydłem (< 50°C), przetrzeć do czysta miękką ściereczką, spłukać w czystej wodzie i wysuszyć strumieniem czystego powietrza. Nie stosować środków zawierających lanolinę, lub inne oleje, albo rozpuszczalniki. Części półmaski, a szczególnie zawór wydechowy i jego gniazdo powinny być sprawdzane po każdym użyciu. Jeżeli zauważone zostanie jakiekolwiek uszkodzenie, element powinien być zdjęty i zastąpiony nowym.\n\nPRZECHOWYWANIE:\n\nPółmaskę należy przechowywać w sposób zabezpieczający przed uszkodzeniami mechanicznymi, w pomieszczeniach suchych, pozbawionych szkodliwych par i gazów, zapewniających utrzymanie temperatury – 5°C +40°C i wilgotności względnej poniżej 80%. Półmaska nie powinna być przechowywana razem z substancjami toksycznymi, wydzielającymi nieprzyjemne zapachy i działającymi agresywnie na materiały, z których jest wykonana.\n\nTRWAŁOŚĆ:\n\nPółmaska zachowuje parametry użytkowe przez okres 5 lat przechowywania w opakowaniu fabrycznym. Producent gwarantuje czas bezpiecznego użytkowania półmaski po rozpakowaniu przez okres 3 lat, jednak nie dłużej niż 5 lat od daty produkcji.\n\nNORMY I CERTYFIKATY:\n\nWyrób spełnia wymagania zgodnie z Rozporządzeniem Parlamentu Europejskiego i Rady (UE) 2016/425 z dnia 9 marca 2016 r. w sprawie środków ochrony indywidualnej oraz uchylenia dyrektywy Rady 89/686/EWG.\n\nWyrób spełnia wymagania normy zharmonizowanej: PN-EN 140:2004 (EN 140:1998)\n\nCE",
+            "source_urls": [
+                "https://migracja.supon.rzeszow.pl/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "drogi_oddechowe",
+                "kod_producenta": "Secura - 3000 S56T",
+                "material": null,
+                "materialy": [],
+                "normy_en": [
+                    "EN 140:2004",
+                    "EN 140:1998"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "reusable_half",
+                "przeznaczenie": "chemical",
+                "oznaczenia": [],
+                "rodzina_materialu": "tkanina"
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/2/9532.jpg",
+                    "is_primary": true
+                },
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/2/9532-large_default.jpg",
+                    "is_primary": false
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S56T0SS0",
+        "name": "Półmaska SECURA 3000 (nagłowie jednoczęściowe)",
+        "manufacturer": "SECURA",
+        "category": "PÓŁMASKA SECURA 3000",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 140:2004, EN 140:1998",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Półmaska SECURA 3000 po skompletowaniu z odpowiednimi elementami oczyszczającymi, których wyłącznym producentem jest firma SECURA, stanowi sprzęt ochrony układu oddechowego przed szkodliwymi substancjami występującymi pod postacią: aerozoli (pyły, dymy, mgły), par i gazów oraz obu tych postaci łącznie.\n\nPółmaska SECURA 3000 składa się z korpusu, dwóch zaworów wdechowych z łącznikami bagnetowymi umożliwiającymi montaż elementów oczyszczających, zaworu wydechowego oraz nagłowia.\n\nW półmasce SECURA 3000 stosowane jest jednoczęściowe nagłowie tekstylne, które łączy się z półmaską za pośrednictwem zapinek i zaczepów pierścienia.\n\nCzęści składowe półmaski SECURA 3000:\n\n1. Pokrywa zaworu wydechowego.\n\n2. Płatek zaworu wydechowego\n\n3. Zapinki nagłowia\n\n4. Pierścień z zaczepami.\n\n5. Korpus\n\n6. Wkładka zaworowa\n\n7. Płatkizaworów wdechowych\n\n8. Część nagłowna\n\n9. Taśma nagłowia\n\n10. Sprzączka\n\nKONSERWACJA:\n\nPółmaska SECURA 3000 wymaga niewielkiego zakresu konserwacji, jakkolwiek po każdym użyciu zaleca się jej oczyszczenie.\n\nZwykłe czyszczenie można wykonać przez wytarcie ściereczką specjalnie przeznaczoną do sprzętu ochrony osobistej.\n\nJeżeli potrzebne jest dokładniejsze oczyszczenie, należy najpierw rozłożyć półmaskę, zdejmując elementy oczyszczające, nagłowie i inne części. Oczyścić i odkazić półmaskę i pozostałe elementy (za wyjątkiem elementów oczyszczających) używając ciepłej wody z mydłem (< 50°C), przetrzeć do czysta miękką ściereczką, spłukać w czystej wodzie i wysuszyć strumieniem czystego powietrza. Nie stosować środków zawierających lanolinę, lub inne oleje, albo rozpuszczalniki. Części półmaski, a szczególnie zawór wydechowy i jego gniazdo powinny być sprawdzane po każdym użyciu. Jeżeli zauważone zostanie jakiekolwiek uszkodzenie, element powinien być zdjęty i zastąpiony nowym.\n\nPRZECHOWYWANIE:\n\nPółmaskę należy przechowywać w sposób zabezpieczający przed uszkodzeniami mechanicznymi, w pomieszczeniach suchych, pozbawionych szkodliwych par i gazów, zapewniających utrzymanie temperatury – 5°C +40°C i wilgotności względnej poniżej 80%. Półmaska nie powinna być przechowywana razem z substancjami toksycznymi, wydzielającymi nieprzyjemne zapachy i działającymi agresywnie na materiały, z których jest wykonana.\n\nTRWAŁOŚĆ:\n\nPółmaska zachowuje parametry użytkowe przez okres 5 lat przechowywania w opakowaniu fabrycznym. Producent gwarantuje czas bezpiecznego użytkowania półmaski po rozpakowaniu przez okres 3 lat, jednak nie dłużej niż 5 lat od daty produkcji.\n\nNORMY I CERTYFIKATY:\n\nWyrób spełnia wymagania zgodnie z Rozporządzeniem Parlamentu Europejskiego i Rady (UE) 2016/425 z dnia 9 marca 2016 r. w sprawie środków ochrony indywidualnej oraz uchylenia dyrektywy Rady 89/686/EWG.\n\nWyrób spełnia wymagania normy zharmonizowanej: PN-EN 140:2004 (EN 140:1998)\n\nCE",
+            "source_urls": [
+                "https://migracja.supon.rzeszow.pl/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "drogi_oddechowe",
+                "kod_producenta": "Secura - 3000 S56T",
+                "material": null,
+                "materialy": [],
+                "normy_en": [
+                    "EN 140:2004",
+                    "EN 140:1998"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "reusable_half",
+                "przeznaczenie": "chemical",
+                "oznaczenia": [],
+                "rodzina_materialu": "tkanina"
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/2/9532.jpg",
+                    "is_primary": true
+                },
+                {
+                    "source_url": "https://migracja.supon.rzeszow.pl/img/p/9/5/3/2/9532-large_default.jpg",
+                    "is_primary": false
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "T5329000",
+        "name": "Kombinezon AlphaTec 2000 Standard",
+        "manufacturer": "SECURA",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "none",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "",
+            "source_urls": [],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "ALPHATEC 2000",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "coverall",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S56212-50",
+        "name": "Pierścień z zaczepami zaworu wydechowego do półmaski SECURA 3000",
+        "manufacturer": "SECURA",
+        "category": "RĘKAWICE ELEKTROIZOLACYJNE",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 14387:2004+A1",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Zestaw dla lakiernika Secura 300 LAK stanowi ochronę układu oddechowego przed pyłami, dymami i mgłami, a także parami i gazami organicznymi o temperaturze wrzenia >65st.C. Są to typowe czynniki występujące podczas m.in. lakierowania, malowania, laminowania, szlifowania czy opryskiwania roślin.Producent gwarantuje zachowanie parametrów użytkowych zestawu przez okres 5 lat od daty produkcji pod warunkiem przechowywania elementów zestawu (pochłaniacze, filtry oraz półmaska) w szczelnych opakowaniach fabrycznych.Zestaw SECURA 3000 LAK zawiera:półmaska SECURA 3000dwa pochłaniacze 3021 A1dwa filtry przeciwpyłowe SECAIR 3000.02 P2 RWszystkie elementy zestawu spakowane osobno hermetycznie.Zestaw zapakowany w pojemnik wielorazowy.NORMY I CERTYFIKATY:Półmaska i elementy oczyszczające wchodzące w skład zestawu posiadają pozytywną ocenę typu WE, są oznaczone znakiem CE 1437 oraz spełniają wymagania norm:EN 14387:2004+A1:2008EN 143:2004EN 140:2001\n\nPółmaska SECURA 3000 składa się z korpusu, dwóch zaworów wdechowych z łącznikami bagnetowymi umożliwiającymi montaż elementów oczyszczających, zaworu wydechowego oraz nagłowia. W półmasce SECURA 3000 stosowane jest jednoczęściowe nagłowie tekstylne, które łączy się z półmaską za pośrednictwem zapinek i zaczepów pierścienia. Części składowe półmaski SECURA 3000: 1. Pokrywa zaworu wydechowego. 2. Płatek zaworu wydechowego. 3. Zapinki nagłowia. 4. Pierścień z zaczepami. 5. Korpus. 6. Wkładka zaworowa. 7. Płatki zaworów wdechowych. 8. Część nagłowna. 9. Taśma nagłowia. 10. Sprzączka.\n\nInformujemy, iż w celu realizacji usług dostępnych w naszym sklepie, optymalizacji jego treści oraz dostosowania sklepu do Państwa indywidualnych potrzeb korzystamy z informacji zapisanych za pomocą plików cookies na urządzeniach końcowych użytkowników. Pliki cookies można kontrolować za pomocą ustawień swojej przeglądarki internetowej. Dalsze korzystanie z naszego sklepu internetowego, bez zmiany ustawień przeglądarki internetowej oznacza, iż użytkownik akceptuje stosowanie plików cookies. Więcej informacji zawartych jest w polityce prywatności sklepu.\n\nNiezbędne ciasteczka do zapewnienia prawidłowego działania i świadczenia usług naszego sklepu internetowego. Pozwalają na zapamiętanie ustawień użytkownika, np. języka, waluty, koszyka, wyglądu strony, itp. Funkcjonalne ciasteczka nie zbierają żadnych danych osobowych ani nie przesyłają żadnych informacji do zewnętrznych stron.\n\n* Amortyzatory bezpieczeństwa \n * Gotowe zestawy asekuracyjne \n * Linki asekuracyjne \n * Punkty kotwiczenia \n * Słupołazy / drzewołazy \n * Sprzęt arborystyczny \n * Sprzęt do pracy w podparciu \n * Szelki bezpieczeństwa \n * Urządzenia ewakuacyjne / Prace na g... \n * Zatrzaśniki\n\n* Buty robocze damskie \n * Buty robocze męskie \n * Buty robocze kompozytowe \n * Buty robocze z podnoskiem \n * Buty robocze S1 \n * Buty robocze S1P \n * Buty robocze S3 \n * Buty robocze antyelektrostatyczne E... \n * Buty robocze ocieplane \n * Buty robocze letnie BHP\n\n🇵🇱 Polski 🇬🇧 English 🇧🇬 Български 🇨🇿 Čeština 🇩🇪 Deutsch 🇪🇪 Eesti 🇬🇷 Ελληνικά 🇪🇸 Español 🇫🇷 Français 🇮🇹 Italiano 🇱🇻 Latviešu 🇱🇹 Lietuvių 🇳🇱 Nederlands 🇳🇴 Norsk 🇧🇷 Português (Brasil) 🇷🇴 Română 🇷🇺 Русский 🇸🇰 Slovenčina 🇸🇮 Slovenščina 🇸🇪 Svenska 🇺🇦 Українська\n\nAdministratorem danych osobowych jest EU CO Damian Wypych sp. k.. Przetwarzamy je w celu przesłania odpowiedzi na zapytanie. Więcej informacji dotyczących przetwarzania danych osobowych znajduje się w polityce prywatności.\n\nStatystyczne ciasteczka zbierają anonimowe informacje o użytkownikach, takie jak liczba odwiedzających, źródła odnośników, itp. Te informacje pomagają zrozumieć, jak użytkownicy korzystają z witryny.\n\n* Bluzy robocze \n * Kamizelki robocze \n * Koszule robocze \n * Koszulki robocze \n * Kurtki robocze \n * Ogrodniczki i kombinezony \n * Odzież robocza przeciwdeszczowa \n * Spodnie robocze\n\n* Narzędzia do pomiaru odległości \n * Narzędzia do pomiaru poziomu \n * Narzędzia do pomiaru prądu / napięc... \n * Narzędzia do pomiarów ślusarskich\n\n* Części do uchwytów spawalniczych MI... \n * Części do uchwytów spawalniczych TI... \n * Części do uchwytów przecinarek plaz... \n * Uchwyty masowe\n\n* Akcesoria glazurnicze \n * Klucze \n * Narzędzia do gwintowania \n * Pace / szpachle / kielnie \n * Przecinarki ręczne \n * Szczypce / kombinerki\n\nMarketingowe ciasteczka są używane do śledzenia użytkowników przez witryny. Celem jest pokazywanie bardziej dopasowanych treści reklamowych.\n\nThis website uses a security service to protect against malicious bots. This page is displayed while the website verifies you are not a bot.\n\nWyprzedaż kombinezonów w rozmiarach XXL,XXXL - niższa cena do wyczerpania zapasówRok produkcji 2020/2021\n\n* Mieszarki i mieszalniki \n * Piły i pilarki \n * Pistolety \n * Przecinarki \n * Szlifierki \n * Wiertarki\n\nWarning: This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.\n\n* Elektronarzędzia \n * Narzędzia pomiarowe \n * Narzędzia ręczne \n * Wyposażenie domu i ogrodu\n\n* Uchwyty spawalnicze \n * C",
+            "source_urls": [
+                "https://www.supon.rzeszow.pl/maski-i-polmaski-wielokrotnego-uzytku/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html",
+                "https://centrumelektronarzedzi.pl/pl/p/Zestaw-SECURA-3000-LAK-w-pudelku%2C-maska-rozmiar-M/48403",
+                "https://www.supon.rzeszow.pl/zestawy-do-pracy/301-zestaw-dla-lakiernika-secura-3000-lak-maska-pochlaniacze-filtry.html"
+            ],
+            "norms": [
+                "EN 14387:2004+A1"
+            ],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [
+                "montaż precyzyjny"
+            ],
+            "attributes": {
+                "kategoria_bhp": "inne",
+                "kod_producenta": "S56212-50",
+                "material": null,
+                "materialy": [],
+                "normy_en": [
+                    "EN 14387:2004+A1"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "s-l",
+                "poziomy_en388": null,
+                "typ_wyrobu": "welding",
+                "przeznaczenie": "welding",
+                "oznaczenia": [],
+                "rodzina_materialu": "tkanina"
+            },
+            "document_urls": [],
+            "confidence": 0,
+            "image_source_urls": [
+                {
+                    "source_url": "https://www.supon.rzeszow.pl/9532-thickbox_default/polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.webp",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "S5621300",
+        "name": "Nagłowie tekstylne kompletne do półmaski SECURA 3100",
+        "manufacturer": "SECURA",
+        "category": "CZĘŚCI DO PÓŁMASEK SECURA 3000 i 3100",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN14387, EN140 Kolor, EN14387Przeznaczenie",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Opis produktu\r\n \r\n \r\n Zestaw SECURA 3100 LAKZestaw SECURA 3100 LAK to kompletny zestaw ochronny dla układu oddechowego. Składa się on z silikonowej półmaski SECURA 3100, dwóch pochłaniaczy 3021 A1 oraz dwóch filtrów 3000.02 P2 R. Wszystkie elementy zestawu są spakowane osobno, a pochłaniacze są hermetycznie zapakowane.Półmaska SECURA 3100 zapewnia skuteczną ochronę przed pyłami, dymami, mgłami oraz parami i gazami organicznymi o temperaturze wrzenia powyżej 65 °C. Jest wyposażona we wszystkie wymienne elementy, co ułatwia jej demontaż i nie utrudnia pracy. Dostępna jest w rozmiarze M.Zestaw SECURA 3100 LAK jest idealny do zastosowań takich jak lakierowanie, malowanie, laminowanie, obróbka mechaniczna czy opryskiwanie roślin. Spełnia on wymagania norm: półmaska - EN140, pochłaniacze - EN14387, filtry - EN143.Cechy produktu:Marka: SECURAKolor: niebiesko-szary NSRozmiar: MNormy: EN140, EN143, EN14387Przeznaczenie:Obróbka metali oraz operatorzy maszyn i urządzeń oraz ich naprawaPrace budowlane i remontowe/Prace montażowo-instalacyjne/Budowa drógPrzemysł samochodowy w tym budowa, mechanika i naprawa pojazdów oraz lakiernictwoPrzemysł spożywczy w tym obsługa restauracji oraz służby zdrowia i lecznictwaRolnictwo/Ogrodnictwo/Leśnictwo/Łowiectwo/RybactwoRzemiosło w tym produkcja i obróbka szkła, ceramiki, drewna oraz drukarnieKod EAN: 5907553324070",
+            "source_urls": [
+                "https://roboczebhp.pl/polmaska-filtrujaca-maska-lakiernicza-3100-dust-secura",
+                "https://roboczebhp.pl/pochlaniacz-do-maski-maska-ochronna-chemiczna-chem-secura3100-chem-ns",
+                "https://www.bhp-gabi.pl/p26093,maska-ochronna-secura3100-lak.html"
+            ],
+            "norms": [
+                "EN14387",
+                "EN140 Kolor",
+                "EN14387Przeznaczenie"
+            ],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [
+                "montaż precyzyjny",
+                "logistyka i magazyn"
+            ],
+            "attributes": {
+                "kategoria_bhp": "drogi_oddechowe",
+                "kod_producenta": "S5621300",
+                "material": null,
+                "materialy": [],
+                "normy_en": [
+                    "EN14387",
+                    "EN140 Kolor",
+                    "EN14387Przeznaczenie"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "s-m",
+                "poziomy_en388": null,
+                "typ_wyrobu": "reusable_half",
+                "przeznaczenie": "agriculture",
+                "oznaczenia": [],
+                "rodzina_materialu": "tkanina"
+            },
+            "document_urls": [
+                "https://www.shoper.pl/static/dokumenty/polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf"
+            ],
+            "confidence": 0,
+            "image_source_urls": [
+                {
+                    "source_url": "https://www.bhp-gabi.pl/galerie/103/3/maska-ochronna-secura3100-lak_103341.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://www.shoper.pl/static/dokumenty/polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf",
+                    "title": "polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "S5621230",
+        "name": "Pierścień z zaczepami zaworu wydechowego do półmaski SECURA 3100 i 3200",
+        "manufacturer": "SECURA",
+        "category": "RĘKAWICE ELEKTROIZOLACYJNE",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN14387, EN14387Przeznaczenie",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Opis produktu\r\n \r\n \r\n Zestaw SECURA 3100 LAKZestaw SECURA 3100 LAK to kompletny zestaw ochronny dla układu oddechowego. Składa się on z silikonowej półmaski SECURA 3100, dwóch pochłaniaczy 3021 A1 oraz dwóch filtrów 3000.02 P2 R. Wszystkie elementy zestawu są spakowane osobno, a pochłaniacze są hermetycznie zapakowane.Półmaska SECURA 3100 zapewnia skuteczną ochronę przed pyłami, dymami, mgłami oraz parami i gazami organicznymi o temperaturze wrzenia powyżej 65 °C. Jest wyposażona we wszystkie wymienne elementy, co ułatwia jej demontaż i nie utrudnia pracy. Dostępna jest w rozmiarze M.Zestaw SECURA 3100 LAK jest idealny do zastosowań takich jak lakierowanie, malowanie, laminowanie, obróbka mechaniczna czy opryskiwanie roślin. Spełnia on wymagania norm: półmaska - EN140, pochłaniacze - EN14387, filtry - EN143.Cechy produktu:Marka: SECURAKolor: niebiesko-szary NSRozmiar: MNormy: EN140, EN143, EN14387Przeznaczenie:Obróbka metali oraz operatorzy maszyn i urządzeń oraz ich naprawaPrace budowlane i remontowe/Prace montażowo-instalacyjne/Budowa drógPrzemysł samochodowy w tym budowa, mechanika i naprawa pojazdów oraz lakiernictwoPrzemysł spożywczy w tym obsługa restauracji oraz służby zdrowia i lecznictwaRolnictwo/Ogrodnictwo/Leśnictwo/Łowiectwo/RybactwoRzemiosło w tym produkcja i obróbka szkła, ceramiki, drewna oraz drukarnieKod EAN: 5907553324070",
+            "source_urls": [
+                "https://roboczebhp.pl/polmaska-filtrujaca-maska-lakiernicza-3100-dust-secura",
+                "https://www.bhp-gabi.pl/p26093,maska-ochronna-secura3100-lak.html",
+                "https://bogarobhp.pl/strona-glowna/pelnotwarzowa-maska-advantage-3200-secura"
+            ],
+            "norms": [
+                "EN14387",
+                "EN14387Przeznaczenie"
+            ],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [
+                "montaż precyzyjny",
+                "logistyka i magazyn"
+            ],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "S5621230",
+                "material": null,
+                "materialy": [],
+                "normy_en": [
+                    "EN14387",
+                    "EN14387Przeznaczenie"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "s-m",
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": "agriculture",
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [
+                "https://www.shoper.pl/static/dokumenty/polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf"
+            ],
+            "confidence": 0,
+            "image_source_urls": [
+                {
+                    "source_url": "https://www.bhp-gabi.pl/galerie/103/3/maska-ochronna-secura3100-lak_103341.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://www.shoper.pl/static/dokumenty/polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf",
+                    "title": "polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "T596T",
+        "name": "Torba do rękawic",
+        "manufacturer": "SECURA",
+        "category": "Rękawice",
+        "model_name": null,
+        "enrichment_status": "none",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "",
+            "source_urls": [],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": "T596T",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "WRM02 FLUO",
+        "name": "Wodery Max ze wzmocnieniem kalosz typ S5 w kolorach fluo",
+        "manufacturer": "AJ GROUP",
+        "category": "Obuwie",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN ISO 20345 – obuwie bezpieczne, typ ochrony S5 SRC, EN 343 – materiał Plavitex heavy duty fluo® spełnia wymogi normy",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Wodery PROS MAX S5 FLUO to profesjonalne obuwie ochronne typu woder z trwale wgrzanymi kaloszami, przeznaczone do pracy w trudnych warunkach atmosferycznych i przy ograniczonej widoczności. Wykonano je z materiału Plavitex heavy duty fluo® – tkaniny na podkładzie poliestrowym, jednostronnie powlekanej PVC, która zapewnia skuteczną ochronę przed wodą i rozdarciem. Materiał charakteryzuje się zwiększoną widzialnością, wodoszczelnością szwów oraz odpornością na zginanie w temperaturach do -50°C. Wodery mają wzmocnienia na kolanach, regulację w pasie za pomocą sznurka oraz wymienne, szerokie, elastyczne szelki. Obustronnie zgrzewane szwy zwiększają wytrzymałość i szczelność produktu. Wbudowane na stałe kalosze typu S5 wyposażono w wkładkę antyprzebiciową, a całość spełnia wymagania normy EN ISO 20345 dla obuwia bezpiecznego w typie ochrony S5 SRC. Oznaczenie SRC potwierdza podwyższoną odporność na poślizg na podłożach ceramicznych i stalowych. Materiał Plavitex heavy duty fluo® spełnia również wymogi normy EN 343, co potwierdzono w badaniach akredytowanego instytutu badań materiałów włókienniczych. Produkt dostępny jest w wersjach fluo pomarańczowej i żółtej, w rozmiarach od 39 do 48. Wodery znajdują zastosowanie w pracach zewnętrznych, w środowisku mokrym i zimnym, gdzie wymagana jest widoczność oraz ochrona stóp przed wodą, przebiciem i poślizgiem.",
+            "source_urls": [
+                "https://icd.pl/wodery-pros-wrm02fluo-pomaranczowy.html",
+                "https://icd.pl/wodery-pros-wrm"
+            ],
+            "norms": [
+                "EN ISO 20345 – obuwie bezpieczne, typ ochrony S5 SRC",
+                "EN 343 – materiał Plavitex heavy duty fluo® spełnia wymogi normy"
+            ],
+            "certificates": [
+                "Zgodność z EN ISO 20345 (obuwie bezpieczne S5 SRC)",
+                "Badania materiału Plavitex heavy duty fluo® wg EN 343 w akredytowanym instytucie badań materiałów włókienniczych"
+            ],
+            "materials": [
+                "Plavitex heavy duty fluo® – tkanina poliestrowa powlekana PVC",
+                "Wkładka antyprzebiciowa",
+                "Kalosze typu S5",
+                "Elastyczna guma (szelki)",
+                "Sznurek regulacyjny w pasie",
+                "Zgrzewane szwy"
+            ],
+            "specs": [
+                "Kod / SKU: WRM02 FLUO",
+                "Warianty: PROS-WRM02fluo-pomarańczowy, PROS-WRM02fluo-zolty",
+                "Typ: wodery ochronne z kaloszami S5",
+                "Materiał: Plavitex heavy duty fluo® – tkanina poliestrowa powlekana PVC",
+                "Kolor: pomarańczowy fluo / żółty fluo",
+                "Rozmiary: 39, 40, 41, 42, 43, 44, 45, 46, 47, 48",
+                "Długość wkładek: 25,1–32 cm (w zależności od rozmiaru)",
+                "Długość wewnętrzna z butem: 86–90 cm",
+                "Długość zewnętrzna z butem: 90–94 cm",
+                "Obwód nogawki: 74–78 cm",
+                "Klasa ochrony: S5 SRC",
+                "Odporność na zginanie: do -50°C"
+            ],
+            "use_cases": [
+                "Praca w warunkach ograniczonej widoczności",
+                "Praca w środowisku mokrym i wodoodpornym",
+                "Prace zewnętrzne w niskich temperaturach",
+                "Prace wymagające ochrony przed wodą, przebiciem i poślizgiem",
+                "Prace w trudnych warunkach atmosferycznych"
+            ],
+            "attributes": {
+                "kategoria_bhp": "obuwie",
+                "kod_producenta": "WRM02 FLUO",
+                "material": "Plavitex heavy duty fluo® (PVC na poliestrze)",
+                "materialy": [
+                    "Plavitex heavy duty fluo® (PVC na poliestrze)",
+                    "Plavitex heavy duty fluo® – tkanina poliestrowa powlekana PVC",
+                    "Wkładka antyprzebiciowa",
+                    "Kalosze typu S5",
+                    "Elastyczna guma (szelki)",
+                    "Sznurek regulacyjny w pasie",
+                    "Zgrzewane szwy"
+                ],
+                "normy_en": [
+                    "EN ISO 20345",
+                    "EN 343",
+                    "EN ISO 20345 – obuwie bezpieczne, typ ochrony S5 SRC",
+                    "EN 343 – materiał Plavitex heavy duty fluo® spełnia wymogi normy"
+                ],
+                "klasa_ochrony": "S5",
+                "rozmiar": "39-48",
+                "poziomy_en388": null,
+                "typ_wyrobu": "kalosz",
+                "przeznaczenie": "rain",
+                "oznaczenia": [
+                    "SRC"
+                ],
+                "rodzina_materialu": "guma"
+            },
+            "document_urls": [],
+            "confidence": 0,
+            "image_source_urls": [
+                {
+                    "source_url": "https://icd.pl/media/catalog/product/cache/aa69c2be92cae7e9c97cb544ca63fc52/w/o/wodery_pros-wrm02fluo-1.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "750",
+        "name": "Wodoodporny worek",
+        "manufacturer": "AJ GROUP",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Lekki, poręczny i pakowny worek na buty i sprzęt sportowy. Wykonany z wodoodpornego materiału, dzięki czemu zawartość wnętrza pozostanie zawsze sucha, niezależnie od pogody. Dla lepszego komfortu noszenia posiada dwa sznurki po bokach, dzięki czemu można go używać jako plecak. Praktyczne, regulowane otwarcie zapobiega zgubieniu przedmiotów. Wymiary: wysokość 40 cm, szerokość 34 cm. Rozmiar: onesize. Kolor: szary. Model 750.",
+            "source_urls": [
+                "https://sportpros.pl/no/tilbehor/17-wodoodporny-worek-pros-szary-model-750.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [
+                "wodoodporny materiał"
+            ],
+            "specs": [
+                "Wysokość: 40 cm",
+                "Szerokość: 34 cm",
+                "Kolor: szary",
+                "Model: 750",
+                "Rozmiar: onesize"
+            ],
+            "use_cases": [
+                "Przechowywanie butów",
+                "Transport sprzętu sportowego",
+                "Siłownia",
+                "Basen",
+                "Treningi plenerowe",
+                "Podróże"
+            ],
+            "attributes": {
+                "kategoria_bhp": "inne",
+                "kod_producenta": "750",
+                "material": "wodoodporny materiał",
+                "materialy": [
+                    "wodoodporny materiał"
+                ],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": "onesize",
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://sportpros.pl/1801-thickbox_default/wodoodporny-worek-pros-szary-model-750.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "508",
+        "name": "Nogawice wodoochronne ze wzmocnieniem na kolanach",
+        "manufacturer": "AJ GROUP",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN ISO 13688, EN 343",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Nogawice wodoochronne PROS 508 marki AJ GROUP to profesjonalna odzież ochronna przeznaczona do prac budowlanych, ogrodowych oraz przy zbiorach warzyw i owoców. Wykonane z materiału Plavitex heavy duty®, który składa się z podkładu poliestrowego jednostronnie powlekanego PVC, zapewniającego skuteczną ochronę przed wodą i rozdarciem. Materiał charakteryzuje się zwiększoną odpornością na rozdzieranie oraz wodoszczelnością szwów, a także wyjątkową odpornością na niekorzystne warunki atmosferyczne i zginanie przy temperaturach do -50°C. Nogawice posiadają obustronnie zgrzewane szwy, co zwiększa ich wytrzymałość i szczelność. Wyposażone są w miękkie nakolanniki, które umożliwiają komfortowe podparcie kolana podczas pracy. Mocowane są do paska za pomocą regulowanych zapięć, co zapewnia wygodne i elastyczne dopasowanie. Zachowują elastyczność, dzięki czemu zginanie nie powoduje pękania materiału. Skutecznie chronią przed wilgocią i brudem, a także zachowują właściwości użytkowe w niskich temperaturach. Produkt spełnia wymogi normy EN 343, a także normy EN ISO 13688 dotyczącej ogólnych wymagań dla odzieży ochronnej. Dostępny jest w rozmiarach od 48 do 62 (XS-XXXXL), co odpowiada wzrostowi od 158 do 200 cm. Nogawice są zalecane dla branż budowlanej i ogrodniczej.",
+            "source_urls": [
+                "https://icd.pl/nogawice-wodoochronne-pros-508-czarny.html",
+                "https://bogarobhp.pl/buty-gumowe-wodery-spodniobuty/nogawice-wodoochronne-pros-508-aj-group-czarne"
+            ],
+            "norms": [
+                "EN ISO 13688",
+                "EN 343"
+            ],
+            "certificates": [],
+            "materials": [
+                "Plavitex heavy duty (poliester + PVC)",
+                "PVC",
+                "poliester"
+            ],
+            "specs": [
+                "Model: PROS 508",
+                "Producent: AJ GROUP",
+                "Materiał: Plavitex heavy duty (poliester + PVC)",
+                "Rozmiary: 48-62 (XS-XXXXL)",
+                "Wzrost: 158-200 cm",
+                "Obwód w pasie: 86-118 cm",
+                "Kolor: czarny",
+                "Normy: EN ISO 13688, EN 343"
+            ],
+            "use_cases": [
+                "Prace budowlane",
+                "Prace ogrodowe",
+                "Zbiory warzyw i owoców",
+                "Ochrona przed wilgocią i brudem",
+                "Praca w niskich temperaturach"
+            ],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "PROS 508",
+                "material": "Plavitex heavy duty (PVC na poliestrze)",
+                "materialy": [
+                    "Plavitex heavy duty (PVC na poliestrze)",
+                    "Plavitex heavy duty",
+                    "PVC",
+                    "poliester",
+                    "Plavitex heavy duty (poliester + PVC)"
+                ],
+                "normy_en": [
+                    "EN ISO 13688",
+                    "EN 343"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "48-62",
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": "rain",
+                "oznaczenia": [],
+                "rodzina_materialu": "guma"
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://icd.pl/media/catalog/product/cache/aa69c2be92cae7e9c97cb544ca63fc52/n/o/nogawice_pros-508-1_-_czarny.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "KL09/S FILC",
+        "name": "Ocieplacze filcowe krótkie 28 cm ( damskie )",
+        "manufacturer": "AJ GROUP",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "none",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "",
+            "source_urls": [],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": null,
+                "kod_producenta": "KL09/S FILC",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://roboczystyl.pl/wp-content/uploads/2022/11/spodniobuty-damskie-sb01-d-niebieski-_bratek_aj-sb01d-n-36_37.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "906",
+        "name": "PŁASZCZ MĘSKI",
+        "manufacturer": "AJ GROUP",
+        "category": null,
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "Brak deklarowanych norm EN",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Męski płaszcz przeciwdeszczowy BEMOREGREEN 906 to wytrzymała i funkcjonalna odzież ochronna zaprojektowana i wyprodukowana w Polsce. Wykonany zgodnie z ideą zdrowego funkcjonowania w naturze, zapewnia skuteczną ochronę przed deszczem i wiatrem, a jednocześnie jest komfortowy w noszeniu i zapewnia pełną swobodę ruchów. Płaszcz ma prosty, męski fason o długości do kolan, co sprawia, że pasuje do różnych typów sylwetek. Główne zapięcie oparto na zatrzaskach, a obszerny kaptur można regulować za pomocą bawełnianego sznurka. W części przedniej znajdują się dwie duże zewnętrzne kieszenie przykryte patkami, a biały nadruk zdobi linię zapięcia oraz plecy. Zgrzewane szwy wykonano w technologii Solar Welding, co zwiększa wodoodporność i trwałość produktu. Płaszcz można łączyć ze spodniami z tej samej kolekcji, tworząc kompletny zestaw przeciwdeszczowy. Materiał Plavitex Eco to miękki i przyjemny w dotyku poliester pochodzący w 100% z recyklingu, powlekany jednostronnie PVC. Jest wolny od zakazanych plastyfikatorów (ftalanów) i barwników, a jego pH jest obojętne dla skóry, co minimalizuje ryzyko reakcji alergicznych. Produkt spełnia obowiązujące normy UE i USA, a jego komponenty są bezpieczne dla użytkowników i środowiska. Płaszcz sprawdzi się w codziennym użytkowaniu, zachęcając do aktywności na zewnątrz, na spacery, wycieczki i inne zajęcia na świeżym powietrzu. Do każdego zakupu dołączona jest saszetka z nasionami sosny, co podkreśla ekologiczną misję marki BEMOREGREEN.",
+            "source_urls": [
+                "https://behapownia.pl/meski-plaszcz-przeciwdeszczowy-bemoregreen-906"
+            ],
+            "norms": [
+                "Brak deklarowanych norm EN"
+            ],
+            "certificates": [
+                "Brak deklarowanych certyfikatów"
+            ],
+            "materials": [
+                "Plavitex Eco – poliester z recyklingu (100%)",
+                "Powłoka PVC (jednostronna)",
+                "Bawełniany sznurek do regulacji kaptura",
+                "Plavitex Eco",
+                "poliestrowy podkład z recyklingu",
+                "powłoka PVC"
+            ],
+            "specs": [
+                "Kod producenta: 906",
+                "Marka: BEMOREGREEN (AJ Group)",
+                "Kolor: zielony z białym nadrukiem",
+                "Rozmiary: XS, S, M, L, XL, XXL, XXXL, XXXXL",
+                "Materiał: Plavitex Eco (poliester z recyklingu, powlekany PVC)",
+                "Długość: do kolan",
+                "Zapięcie: zatrzaski",
+                "Kaptur: regulowany sznurkiem",
+                "Kieszenie: 2 zewnętrzne z patkami",
+                "Szwy: zgrzewane (Solar Welding)",
+                "Pielęgnacja: suszyć pionowo, nie czyścić chemicznie, bez zmiękczaczy, łagodny detergent",
+                "Kod produktu: 906",
+                "Producent: AJ GROUP (marka BEMOREGREEN)",
+                "Materiał: Plavitex Eco (poliestrowy podkład z recyklingu, powłoka PVC)",
+                "Rozmiary: XS, S, M, L, XL, XXL, XXXL, XXXXL (XS-4XL)",
+                "Kaptur: obszerny, z regulacją na bawełniany sznurek",
+                "Kieszenie: dwie zewnętrzne, z patkami",
+                "Szwy: zgrzewane technologią Solar Welding",
+                "Pielęgnacja: suszyć w pozycji pionowej, nie czyścić chemicznie, nie używać środków zmiękczających, używać tylko łagodnego detergentu"
+            ],
+            "use_cases": [
+                "Codzienne użytkowanie na zewnątrz",
+                "Spacery i wycieczki",
+                "Aktywność na świeżym powietrzu w deszczowe i wietrzne dni",
+                "Ochrona przed deszczem i wiatrem podczas prac terenowych",
+                "Codzienne użytkowanie",
+                "Spacery",
+                "Wycieczki",
+                "Aktywności na świeżym powietrzu",
+                "Ochrona przed deszczem i wiatrem"
+            ],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "906",
+                "material": "Plavitex Eco (poliestrowy podkład z recyklingu, powłoka PVC)",
+                "materialy": [
+                    "Plavitex Eco (poliestrowy podkład z recyklingu, powłoka PVC)",
+                    "Plavitex Eco",
+                    "poliestrowy podkład z recyklingu",
+                    "powłoka PVC",
+                    "Plavitex Eco – poliester z recyklingu (100%)",
+                    "Powłoka PVC (jednostronna)",
+                    "Bawełniany sznurek do regulacji kaptura"
+                ],
+                "normy_en": [
+                    "Brak deklarowanych norm EN"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "xs-xxxxl",
+                "poziomy_en388": null,
+                "typ_wyrobu": "pants",
+                "przeznaczenie": "welding",
+                "oznaczenia": [],
+                "rodzina_materialu": "guma"
+            },
+            "document_urls": [
+                "https://static.thesafetysupplycompany.co.uk/datasheet3.pdf",
+                "https://www.shoper.pl/static/dokumenty/polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf",
+                "https://static.thesafetysupplycompany.co.uk/fff1.pdf"
+            ],
+            "confidence": 1,
+            "image_source_urls": [
+                {
+                    "source_url": "https://behapownia.pl/environment/cache/images/productGfx_17568_500_500/Meski-plaszcz-przeciwdeszczowy-BEMOREGREEN-906.webp?overlay=1",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://static.thesafetysupplycompany.co.uk/datasheet3.pdf",
+                    "title": "datasheet3.pdf",
+                    "kind": "datasheet"
+                },
+                {
+                    "source_url": "https://www.shoper.pl/static/dokumenty/polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf",
+                    "title": "polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf",
+                    "kind": "other"
+                },
+                {
+                    "source_url": "https://static.thesafetysupplycompany.co.uk/fff1.pdf",
+                    "title": "fff1.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "101/112",
+        "name": "Ubranie wodoochronne [kurtka 3/4 i spodnie do pasa]",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 343 – odzież ochronna przed deszczem",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Dostępne rozmiary: 48, 50, 52, 54, 56, 58, 60, 62. Ubranie składające się z kurtki o długości ¾ oraz wygodnych spodni do pasa, niezastąpione w pracy w trudnych warunkach pogodowych. Kurtka zaopatrzona w funkcjonalny, regulowany kaptur. Wiatrołapy w rękawach zapobiegają dostawaniu się wody do wnętrza. Ubranie wykonane techniką obustronnego zgrzewania, co skutecznie zwiększa wytrzymałość szwów. Model sugerowany dla branż: przemysł metalurgiczny, elektromaszynowy, spożywczy, budownictwo, rolnictwo, ogrodnictwo, wędkarstwo, rybołówstwo i wiele innych. PLAVITEX - materiał na podkładzie poliestrowym, jednostronnie powlekany PVC. Charakteryzuje się odpornością na rozdzieranie i wodoszczelnością szwów. Skład chemiczny powleczenia gwarantuje odporność tkaniny na niekorzystne warunki atmosferyczne oraz zginanie przy temperaturach do -50° C. Materiał spełnia wymogi normy EN 343, co potwierdzono w badaniach przeprowadzonych przez akredytowany instytut badań materiałów włókienniczych.",
+            "source_urls": [
+                "https://www.bhp-gabi.pl/p34119,ubranie-101-112-pros-aj-group.html",
+                "https://pros.pl/pl/odziez-wodoochronna-standard/244-ubranie-model-101112.html"
+            ],
+            "norms": [
+                "EN 343 – odzież ochronna przed deszczem"
+            ],
+            "certificates": [
+                "Badania przeprowadzone przez akredytowany instytut badań materiałów włókienniczych"
+            ],
+            "materials": [
+                "PLAVITEX – podkład poliestrowy",
+                "Powłoka PVC"
+            ],
+            "specs": [
+                "SKU: 101/112",
+                "Producent: AJ GROUP",
+                "Typ: ubranie wodoochronne (kurtka 3/4 + spodnie do pasa)",
+                "Materiał: PLAVITEX (podkład poliestrowy, powłoka PVC)",
+                "Rozmiary: 48, 50, 52, 54, 56, 58, 60, 62",
+                "Technika wykonania: obustronne zgrzewanie szwów"
+            ],
+            "use_cases": [
+                "Przemysł metalurgiczny",
+                "Przemysł elektromaszynowy",
+                "Przemysł spożywczy",
+                "Budownictwo",
+                "Rolnictwo",
+                "Ogrodnictwo",
+                "Wędkarstwo",
+                "Rybołówstwo"
+            ],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "101/112",
+                "material": "PLAVITEX (PVC na poliestrze)",
+                "materialy": [
+                    "PLAVITEX (PVC na poliestrze)",
+                    "Poliestrowy podkład",
+                    "Powłoka PVC",
+                    "PLAVITEX – podkład poliestrowy"
+                ],
+                "normy_en": [
+                    "EN 343",
+                    "EN 343 – odzież ochronna przed deszczem"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "48-62",
+                "poziomy_en388": null,
+                "typ_wyrobu": "set",
+                "przeznaczenie": "agriculture",
+                "oznaczenia": [],
+                "rodzina_materialu": "guma"
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://www.bhp-gabi.pl/SUCRO/images/building-a.webp",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "903",
+        "name": "KURTKA DAMSKA",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN471 Class 3 EN343 Class 3, EN471 Class 3 EN343 Class3",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Damska kurtka przeciwdeszczowa BEMOREGREEN 903 to zaprojektowana i wyprodukowana w Polsce odzież wodoochronna marki AJ Group. Przeznaczona jest do codziennego użytku, na spacery, wyjścia z psem oraz jako lekka kurtka turystyczna na deszczową pogodę. Wykonano ją z miękkiego i przyjemnego w dotyku materiału Plavitex Eco – tkaniny na podkładzie poliestrowym w 100% z recyklingu, powlekanej jednostronnie PVC. Materiał jest nieprzemakalny i wiatroszczelny, a zgrzewane szwy wykonane technologią Solar Welding dodatkowo zwiększają ochronę przed wilgocią. Kurtka ma prosty, przedłużony fason o długości 3/4, zapinana jest na zatrzaski, a obszerny kaptur można regulować bawełnianym sznurkiem. W części przedniej znajdują się dwie duże zewnętrzne kieszenie przykryte patkami. Na dolnym brzegu, części piersiowej i plecach umieszczono biały nadruk. Produkt występuje w kolorze zielonym z białym nadrukiem i jest dostępny w rozmiarach od XS do 4XL. Plavitex Eco jest wolny od zakazanych ftalanów i barwników, ma pH obojętne dla skóry i nie powoduje reakcji alergicznych. Materiał jest produkowany w Unii Europejskiej i badany w akredytowanych laboratoriach. Kurtkę można łączyć ze spodniami z tej samej kolekcji BEMOREGREEN.",
+            "source_urls": [
+                "https://behapownia.pl/damska-kurtka-przeciwdeszczowa-bemoregreen-903"
+            ],
+            "norms": [
+                "EN471 Class 3 EN343 Class 3",
+                "EN471 Class 3 EN343 Class3"
+            ],
+            "certificates": [
+                "Badany w akredytowanych laboratoriach",
+                "Spełnia obowiązujące normy UE i USA (deklaracja producenta)"
+            ],
+            "materials": [
+                "Plavitex Eco",
+                "poliester z recyklingu",
+                "PVC"
+            ],
+            "specs": [
+                "Kod produktu: BMG-903-00001-34/XS",
+                "Materiał: Plavitex Eco – poliester z recyklingu powlekany PVC",
+                "Kolor: zielony z białym nadrukiem",
+                "Rozmiary: XS, S, M, L, XL, XXL, XXXL, XXXXL (XS–4XL)",
+                "Długość: 3/4",
+                "Zapięcie: zatrzaski",
+                "Kaptur: obszerny, regulowany sznurkiem",
+                "Kieszenie: 2 przednie z patkami",
+                "Pielęgnacja: suszyć pionowo, nie czyścić chemicznie, nie używać zmiękczaczy, tylko łagodny detergent"
+            ],
+            "use_cases": [
+                "Codzienne użytkowanie",
+                "Spacery",
+                "Wyjście z psem",
+                "Turystyka / szlak w deszczu",
+                "Stylizacje z wodoodpornymi botkami lub kaloszami",
+                "Wizyty w szkółce leśnej"
+            ],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "BMG-903-00001-34/XS",
+                "material": "Plavitex Eco (poliester z recyklingu powlekany PVC)",
+                "materialy": [
+                    "Plavitex Eco (poliester z recyklingu powlekany PVC)",
+                    "Plavitex Eco",
+                    "poliester z recyklingu",
+                    "PVC"
+                ],
+                "normy_en": [
+                    "EN471 Class 3 EN343 Class 3",
+                    "EN471 Class 3 EN343 Class3"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "xs-xxxxl",
+                "poziomy_en388": null,
+                "typ_wyrobu": "jacket",
+                "przeznaczenie": "welding",
+                "oznaczenia": [],
+                "rodzina_materialu": "guma"
+            },
+            "document_urls": [
+                "https://static.thesafetysupplycompany.co.uk/P191PULSARPaddedBomberJacketSpecSheet.pdf",
+                "https://static.thesafetysupplycompany.co.uk/PR496PULSARRailSpecPaddedBomberJacketSpecSheet.pdf",
+                "https://www.shoper.pl/static/dokumenty/polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf"
+            ],
+            "confidence": 0.85,
+            "image_source_urls": [
+                {
+                    "source_url": "https://behapownia.pl/environment/cache/images/productGfx_17565_500_500/Damska-kurtka-przeciwdeszczowa-BEMOREGREEN-903-id-2674.webp?overlay=1",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": [
+                {
+                    "source_url": "https://static.thesafetysupplycompany.co.uk/P191PULSARPaddedBomberJacketSpecSheet.pdf",
+                    "title": "P191PULSARPaddedBomberJacketSpecSheet.pdf",
+                    "kind": "datasheet"
+                },
+                {
+                    "source_url": "https://static.thesafetysupplycompany.co.uk/PR496PULSARRailSpecPaddedBomberJacketSpecSheet.pdf",
+                    "title": "PR496PULSARRailSpecPaddedBomberJacketSpecSheet.pdf",
+                    "kind": "datasheet"
+                },
+                {
+                    "source_url": "https://www.shoper.pl/static/dokumenty/polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf",
+                    "title": "polityka-prywatnosci-dla-osob-odwiedzajacych-sklepy-internetowe.pdf",
+                    "kind": "other"
+                }
+            ]
+        }
+    },
+    {
+        "sku": "4486",
+        "name": "Spodnie do pasa z dopuszczeniem do spożywki ( dla przem. spożywczego )",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 1186",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Spodnie do pasa model 4486 marki Pros (AJ Group) to wodoodporne spodnie ochronne przeznaczone do pracy w przemyśle spożywczym oraz rolnictwie. Wykonane z materiału AQUAPROOF FOOD, który dzięki odpowiednio dobranej mieszance składników powleczenia jest odporny na przenikanie tłuszczów, enzymów, soków trawiennych oraz działanie roztworów kwasów i zasad. Materiał spełnia wymogi normy EN 1186, co potwierdzono w badaniach przeprowadzonych przez akredytowany instytut badań materiałów włókienniczych. Spodnie charakteryzują się zwiększoną wytrzymałością szwów dzięki technice obustronnego zgrzewania, co zapewnia długotrwałą szczelność i trwałość. Wygodna guma w pasie dopasowuje się do obwodu ciała użytkownika, zwiększając komfort noszenia. Praktyczne pionowe wpusty po bokach, przykryte patkami, umożliwiają dostęp do kieszeni w odzieży noszonej pod spodniami. Regulacja obwodów nogawek za pomocą nap pozwala na idealne dopasowanie do sylwetki i obuwia. Model sugerowany jest dla branż: przetwórstwo owocowo-warzywne, przetwórstwo mięsne, przetwórstwo rybne, rolnictwo, weterynaria, chów i hodowla zwierząt. Spodnie dostępne są w rozmiarach od 48 do 62.",
+            "source_urls": [
+                "https://www.bhp-gabi.pl/p34140,spodnie-do-pasa-4486-pros-aj-group.html",
+                "https://pros.pl/pl/aquapros/161-spodnie-do-pasa-model-4486.html",
+                "https://pol-paw.pl/spodnie-do-pasa-dla-przemyslu-spozywczego-pros-4486-p-2822.html",
+                "https://pros.pl/en/aquapros/161-waist-pants-model-4486.html"
+            ],
+            "norms": [
+                "EN 1186"
+            ],
+            "certificates": [
+                "Badania materiału zgodnie z EN 1186 przeprowadzone przez akredytowany instytut badań materiałów włókienniczych"
+            ],
+            "materials": [
+                "AQUAPROOF FOOD (materiał powlekany, odporny na tłuszcze, enzymy, soki trawienne, kwasy i zasady)"
+            ],
+            "specs": [
+                "Model: 4486",
+                "Producent: AJ GROUP / Pros",
+                "Materiał: AQUAPROOF FOOD",
+                "Rozmiary: 48, 50, 52, 54, 56, 58, 60, 62",
+                "Typ: spodnie do pasa",
+                "Zapięcie: guma w pasie, napy przy nogawkach"
+            ],
+            "use_cases": [
+                "Przetwórstwo owocowo-warzywne",
+                "Przetwórstwo mięsne",
+                "Przetwórstwo rybne",
+                "Rolnictwo",
+                "Weterynaria",
+                "Chów i hodowla zwierząt"
+            ],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "4486",
+                "material": "AQUAPROOF FOOD",
+                "materialy": [
+                    "AQUAPROOF FOOD",
+                    "AQUAPROOF FOOD (materiał powlekany, odporny na tłuszcze, enzymy, soki trawienne, kwasy i zasady)"
+                ],
+                "normy_en": [
+                    "EN 1186"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "48-62",
+                "poziomy_en388": null,
+                "typ_wyrobu": "pants",
+                "przeznaczenie": "agriculture",
+                "oznaczenia": [],
+                "rodzina_materialu": "guma"
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://www.bhp-gabi.pl/galerie/128/2/spodnie-do-pasa-4486-pros-aj-group_128288.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "904",
+        "name": "SPODNIE OGRODNICZKI",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "none",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "",
+            "source_urls": [],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "904",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "pants",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://imagedelivery.net/ICWTp6FWPGokq8hKKaA1Qg/6815caab-b73f-46d7-7a98-0d289404c500/large",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "SB04 AIR",
+        "name": "Spodniobuty oddychające AIR",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "none",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "",
+            "source_urls": [],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "SB04 AIR",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "waders",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://icd.pl/media/catalog/product/cache/aa69c2be92cae7e9c97cb544ca63fc52/s/p/spodniobuty_premium-pros-sbp01-1.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "SB04 AIR CARP",
+        "name": "Spodniobuty oddychające AIR CARP",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "none",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "",
+            "source_urls": [],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "SB04 AIR CARP",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "waders",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://icd.pl/media/catalog/product/cache/aa69c2be92cae7e9c97cb544ca63fc52/s/p/spodniobuty_premium-pros-sbp01-1.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": ".048",
+        "name": "Zaciski na rękawice antyprzecięciowe",
+        "manufacturer": "AJ GROUP",
+        "category": "Rękawice",
+        "model_name": null,
+        "enrichment_status": "none",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "",
+            "source_urls": [],
+            "norms": [],
+            "certificates": [],
+            "materials": [],
+            "specs": [],
+            "use_cases": [],
+            "attributes": {
+                "kategoria_bhp": "rekawice",
+                "kod_producenta": ".048",
+                "material": null,
+                "materialy": [],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": null,
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": null,
+            "image_source_urls": [
+                {
+                    "source_url": "https://pros.pl/2204-thickbox_default/glove-clamp-model-048tpu.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "4087",
+        "name": "Spodnie ogrodniczki",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN 343, EN ISO 13688",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Opis produktu\r\n \r\n \r\n Spodnie ogrodniczki 4087 \r\nSpodnie ogrodniczki dedykowane do pracy w wilgotnym środowisku oraz trudnych warunkach pogodowych. Regulacja nogawek za pomocą nap oraz ściągacz z tyłu ułatwiają dopasowanie do indywidualnych potrzeb użytkownika. Usztywnione patką otwory ułatwiają dostęp do kieszeni w odzieży noszonej pod spodniami. Produkt wykonany techniką obustronnego zgrzewania, co skutecznie zwiększa wytrzymałość szwów.\r\nModel sugerowany dla branż: przemysł metalurgiczny, elektromaszynowy, przemysł spożywczy, budownictwo, rolnictwo, ogrodnictwo, wędkarstwo, rybołówstwo i wiele innych.\r\n \r\nAQUAPROOF BASIC - to materiał na podkładzie poliestrowym, jednostronnie powlekany poliuretanem. Materiał o niskiej gramaturze i wysokich parametrach wytrzymałościowych, by zapewniać wysoką ochronę oraz komfort użytkowania podczas ciężkiej pracy. Charakteryzuje się wysoką elastycznością oraz odpornością na rozdzieranie i wodoszczelnością szwów. Skład chemiczny powleczenia gwarantuje wyjątkową odporność tkaniny na niekorzystne warunki atmosferyczne oraz zginanie przy temperaturach do -50°C. Materiał spełnia wymogi norm EN ISO 13688 i EN 343, co potwierdzono w badaniach przeprowadzonych przez akredytowany instytut badań materiałów włókienniczych.",
+            "source_urls": [
+                "https://www.bhp-gabi.pl/p34133,spodnie-ogrodniczki-4087-pros-aj-group.html",
+                "https://pros.pl/pl/aquapros/115-spodnie-ogrodniczki-model-4087.html",
+                "https://pol-paw.pl/spodnie-ogrodniczki-wodoochronne-pros-4087-aquapros-p-2758.html"
+            ],
+            "norms": [
+                "EN 343",
+                "EN ISO 13688"
+            ],
+            "certificates": [
+                "Badania przeprowadzone przez akredytowany instytut badań materiałów włókienniczych"
+            ],
+            "materials": [
+                "AQUAPROOF BASIC – podkład poliestrowy",
+                "Poliuretan (powłoka)"
+            ],
+            "specs": [
+                "Model: 4087",
+                "Producent: AJ GROUP",
+                "Materiał: AQUAPROOF BASIC (podkład poliestrowy, powłoka poliuretanowa)",
+                "Gramatura: niska (nie podano dokładnej wartości)",
+                "Rozmiary: 48, 50, 52, 54, 56, 58, 60, 62",
+                "Kolory: granatowy, niebieski, zielony",
+                "Zgrzewanie: obustronne",
+                "Regulacja: napy na nogawkach, ściągacz z tyłu"
+            ],
+            "use_cases": [
+                "Praca w wilgotnym środowisku",
+                "Trudne warunki pogodowe",
+                "Przemysł metalurgiczny",
+                "Przemysł elektromaszynowy",
+                "Przemysł spożywczy",
+                "Budownictwo",
+                "Rolnictwo",
+                "Ogrodnictwo",
+                "Wędkarstwo",
+                "Rybołówstwo"
+            ],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "4087",
+                "material": "AQUAPROOF BASIC (poliuretan na poliestrze)",
+                "materialy": [
+                    "AQUAPROOF BASIC (poliuretan na poliestrze)",
+                    "poliuretan",
+                    "poliester",
+                    "AQUAPROOF BASIC – podkład poliestrowy",
+                    "Poliuretan (powłoka)"
+                ],
+                "normy_en": [
+                    "EN 343",
+                    "EN ISO 13688"
+                ],
+                "klasa_ochrony": null,
+                "rozmiar": "48-62",
+                "poziomy_en388": null,
+                "typ_wyrobu": "pants",
+                "przeznaczenie": "agriculture",
+                "oznaczenia": [],
+                "rodzina_materialu": "pu"
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://www.bhp-gabi.pl/galerie/128/2/spodnie-ogrodniczki-4087-pros-aj-group_128225.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "CP",
+        "name": "Fartuch wodoochronny 110/75",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Fartuch wodoochronny model 110/75 to przedni fartuch ochronny przeznaczony do prac wymagających kontaktu ze smarami, olejami, chłodziwem oraz środkami dezynfekującymi. Wykonany z wytrzymałego, wodoochronnego materiału powlekanego, który zapewnia zwiększoną odporność na uszkodzenia mechaniczne, tłuszcze, oleje i ich pochodne. Produkt wyposażony jest w praktyczny i wygodny pasek szyjny, który ułatwia zakładanie i zdejmowanie oraz zapewnia stabilne dopasowanie podczas pracy. Fartuch zachowuje swoje właściwości użytkowe również w niskich temperaturach, co czyni go odpowiednim do pracy w chłodnych środowiskach. Model ten jest szczególnie polecany dla branż takich jak przemysł maszynowy, usługi mechaniczne oraz usuwanie odpadów komunalnych. Dzięki swojej konstrukcji skutecznie chroni odzież roboczą przed zabrudzeniem i wilgocią, jednocześnie zapewniając swobodę ruchów. Fartuch ma wymiary 110 cm długości i 75 cm szerokości, co zapewnia dobrą ochronę przedniej części ciała. Jest to produkt uniwersalny, który sprawdzi się w warsztatach, na liniach produkcyjnych oraz podczas prac porządkowych. Brak dodatkowych certyfikatów i norm EN w dostępnych źródłach, jednak materiał i wykonanie odpowiadają standardom odzieży ochronnej do prac technicznych.",
+            "source_urls": [
+                "https://pros.pl/pl/fartuchy-wodoochronne/204-fartuch-olejoodporny-model-110.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [
+                "Materiał powlekany wodoochronny"
+            ],
+            "specs": [
+                "Model: 110/75",
+                "Wymiary: 110 cm (długość) x 75 cm (szerokość)",
+                "Materiał: powlekany, wodoochronny",
+                "Kolor: nie podano",
+                "Rozmiar: uniwersalny (na podstawie wymiarów)"
+            ],
+            "use_cases": [
+                "Przemysł maszynowy",
+                "Usługi mechaniczne",
+                "Usuwanie odpadów komunalnych",
+                "Prace z olejami, smarami i chłodziwem",
+                "Prace w niskich temperaturach"
+            ],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "CP",
+                "material": "materiał powlekany wodoochronny",
+                "materialy": [
+                    "materiał powlekany wodoochronny",
+                    "Materiał powlekany wodoochronny"
+                ],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": null,
+                "poziomy_en388": null,
+                "typ_wyrobu": "coat",
+                "przeznaczenie": "rain",
+                "oznaczenia": [],
+                "rodzina_materialu": null
+            },
+            "document_urls": [],
+            "confidence": 0.8,
+            "image_source_urls": [
+                {
+                    "source_url": "https://pros.pl/3568-thickbox_default/fartuch-olejoodporny-model-110.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "304/K",
+        "name": "Kombinezon wodoochronny dwu kolorowy z wgrzanymi kaloszami typ S5",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": "EN ISO 13688, EN 471, EN 343",
+        "shop_source_url": null,
+        "produced": {
+            "description": "Kombinezon wodoochronny dla kanalarza z wgrzanymi kaloszami typu S5, model 304/K marki PROS (AJ GROUP). Przeznaczony do pracy w kanałach ściekowych, brodzenia w wodzie oraz w niesprzyjających warunkach pogodowych i ograniczonej widoczności. Zapewnia skuteczną ochronę przed wiatrem i deszczem. Wykonany z dwóch rodzajów tkanin: nie krępującej ruchów tkaniny Plavitex oraz wytrzymałej Plavitex Heavy Duty. Plavitex to tkanina na podkładzie poliestrowym powlekana jednostronnie PCV o grubości 0,50 mm i gramaturze 350 g/m², charakteryzująca się wysoką odpornością na zginanie przy ujemnych temperaturach do -50°C. Plavitex Heavy Duty ma gramaturę 680 g/m² i grubość 0,68 mm. Kombinezon posiada kaptur, ściągacze w rękawach, wentylację pod patką na plecach oraz zamek bryzgoszczelny zapinany na plecach. Szwy są obustronnie zgrzewane, co zwiększa ich wytrzymałość i szczelność. Wgrzane na stałe kalosze wyposażono w antyelektrostatyczne podeszwy i metalowe podnoski. Materiał jest odporny na działanie wody, tłuszczów, środków dezynfekujących, soków trawiennych i enzymów. Produkt spełnia wymagania norm EN ISO 13688, EN 471 oraz EN 343. Dostępny w kolorach pomarańczowy fluorescencyjny/czarny oraz żółty fluorescencyjny/czarny. Kombinezon przeznaczony dla branż: przemysł paliwowo-energetyczny, metalurgiczny, elektromaszynowy, budownictwo, branża wodno-kanalizacyjna, instalatorstwo sanitarne.",
+            "source_urls": [
+                "https://icd.pl/kombinezon-wodoochronny-pros-304-k-pomaranczowy.html",
+                "https://icd.pl/kombinezon-wodoochronny-pros-304-k.html",
+                "https://www.bhp-gabi.pl/p4251,kombinezon-wodoochronny-dla-kanalarza-z-kaloszami-s5-304-k-pros-aj-group.html",
+                "https://pros.pl/pl/odziez-wodoochronna-standard/218-kombinezon-z-bezpiecznymi-kaloszami-model-304k.html"
+            ],
+            "norms": [
+                "EN ISO 13688",
+                "EN 471",
+                "EN 343"
+            ],
+            "certificates": [
+                "CE (kategoria II – odzież ochronna)"
+            ],
+            "materials": [
+                "Plavitex – tkanina poliestrowa powlekana PCV, grubość 0,50 mm, gramatura 350 g/m²",
+                "Plavitex Heavy Duty – tkanina poliestrowa powlekana PCV, grubość 0,68 mm, gramatura 680 g/m²",
+                "Kalosze: guma z antyelektrostatyczną podeszwą i metalowym podnoskiem"
+            ],
+            "specs": [
+                "Model: 304/K",
+                "Producent: AJ GROUP / PROS",
+                "Materiał: Plavitex (PCV na poliestrze) i Plavitex Heavy Duty",
+                "Gramatura: 350 g/m² (Plavitex), 680 g/m² (Plavitex Heavy Duty)",
+                "Grubość: 0,50 mm (Plavitex), 0,68 mm (Plavitex Heavy Duty)",
+                "Kolory: pomarańczowy fluorescencyjny/czarny, żółty fluorescencyjny/czarny",
+                "Rozmiary odzieży: 48-62 (XS-XXXXL)",
+                "Rozmiary obuwia: 40-46",
+                "Zapięcie: zamek bryzgoszczelny z tyłu",
+                "Taśma ostrzegawcza zwiększająca widoczność"
+            ],
+            "use_cases": [
+                "Praca w kanałach ściekowych",
+                "Brodzenie w wodzie",
+                "Prace w niesprzyjających warunkach pogodowych",
+                "Prace przy ograniczonej widoczności",
+                "Przemysł paliwowo-energetyczny",
+                "Metalurgia",
+                "Elektromaszynowy",
+                "Budownictwo",
+                "Branża wodno-kanalizacyjna",
+                "Instalatorstwo sanitarne"
+            ],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "304/K",
+                "material": "Plavitex (PCV na poliestrze)",
+                "materialy": [
+                    "Plavitex (PCV na poliestrze)",
+                    "Plavitex",
+                    "Plavitex Heavy Duty",
+                    "Guma (kalosze)",
+                    "Plavitex – tkanina poliestrowa powlekana PCV, grubość 0,50 mm, gramatura 350 g/m²",
+                    "Plavitex Heavy Duty – tkanina poliestrowa powlekana PCV, grubość 0,68 mm, gramatura 680 g/m²",
+                    "Kalosze: guma z antyelektrostatyczną podeszwą i metalowym podnoskiem"
+                ],
+                "normy_en": [
+                    "EN ISO 13688",
+                    "EN 471",
+                    "EN 343"
+                ],
+                "klasa_ochrony": "S5",
+                "rozmiar": "48-62",
+                "poziomy_en388": null,
+                "typ_wyrobu": "coverall",
+                "przeznaczenie": "hivis",
+                "oznaczenia": [],
+                "rodzina_materialu": "guma"
+            },
+            "document_urls": [],
+            "confidence": 0.9,
+            "image_source_urls": [
+                {
+                    "source_url": "https://pros.pl/4527-large_default/kombinezon-z-bezpiecznymi-kaloszami-model-304k.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    },
+    {
+        "sku": "104/1",
+        "name": "Kombinezon oddychający zapinany na zamek",
+        "manufacturer": "AJ GROUP",
+        "category": "Odzież",
+        "model_name": null,
+        "enrichment_status": "done",
+        "norms_column": null,
+        "shop_source_url": null,
+        "produced": {
+            "description": "Kombinezon ocieplany model 104/1 OC — odzież wodoodporna i oddychająca. Profesjonalny kombinezon przeznaczony do pracy, zwłaszcza w niskich temperaturach i przy wysokiej wilgotności otoczenia. Wykonany z najwyższej jakości wodoodpornego materiału aQuaAir o właściwościach paroprzepuszczalnych, dodatkowo ocieplony od wewnątrz poliestrową watoliną, co zapewnia komfort użytkowania w trudnych warunkach, niezależnie od rodzaju wykonywanej aktywności. Kombinezon sprawdzi się w różnych branżach i usługach, a także będzie ceniony przez hobbystów (wędkarstwo, sporty wodne). Materiał główny: poliester / PU o gramaturze 190 g/m2 +/- 5%. Ocieplenie: poliester 120 g/m2 +/- 5%. Dostępne rozmiary: 48, 50, 52, 54, 56, 58, 60, 62.",
+            "source_urls": [
+                "https://pros.pl/en/breathable-waterproof-clothing/241-insulated-overalls-model-1041-oc.html"
+            ],
+            "norms": [],
+            "certificates": [],
+            "materials": [
+                "Poliester/PU (materiał główny)",
+                "Poliester (ocieplenie – watolina)"
+            ],
+            "specs": [
+                "Model: 104/1 OC",
+                "Producent: AJ GROUP",
+                "Materiał główny: poliester/PU, 190 g/m² ±5%",
+                "Ocieplenie: poliester, 120 g/m² ±5%",
+                "Rozmiary: 48, 50, 52, 54, 56, 58, 60, 62",
+                "Zapięcie: zamek błyskawiczny"
+            ],
+            "use_cases": [
+                "Praca w niskich temperaturach",
+                "Praca w warunkach wysokiej wilgotności",
+                "Wędkarstwo",
+                "Sporty wodne",
+                "Usługi i branże wymagające odzieży wodoodpornej"
+            ],
+            "attributes": {
+                "kategoria_bhp": "odziez",
+                "kod_producenta": "104/1",
+                "material": "poliester/PU",
+                "materialy": [
+                    "poliester/PU",
+                    "poliester",
+                    "Poliester/PU (materiał główny)",
+                    "Poliester (ocieplenie – watolina)"
+                ],
+                "normy_en": [],
+                "klasa_ochrony": null,
+                "rozmiar": "48-62",
+                "poziomy_en388": null,
+                "typ_wyrobu": "coverall",
+                "przeznaczenie": null,
+                "oznaczenia": [],
+                "rodzina_materialu": "pu"
+            },
+            "document_urls": [],
+            "confidence": 0.8,
+            "image_source_urls": [
+                {
+                    "source_url": "https://pros.pl/3750-large_default/insulated-overalls-model-1041-oc.jpg",
+                    "is_primary": true
+                }
+            ],
+            "document_source_urls": []
+        }
+    }
+]

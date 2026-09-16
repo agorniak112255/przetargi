@@ -1,0 +1,12 @@
+{
+    "url": "https://icd.pl/wodery-pros-wrm",
+    "host": "icd.pl",
+    "fetched_at": "2026-09-16",
+    "ok": false,
+    "title": "",
+    "text": "",
+    "image_urls": [],
+    "trusted_image_urls": [],
+    "document_urls": [],
+    "error": "odrzucone/puste: [{\"url\":\"https://icd.pl/wodery-pros-wrm\",\"reason\":\"fetch_failed\",\"detail\":\"status 404\"}]"
+}

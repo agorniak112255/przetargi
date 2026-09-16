@@ -1,0 +1,490 @@
+[
+  {
+    "sku": "34260038",
+    "name": "ALTO 260",
+    "manufacturer": "MAPA",
+    "verdict": "+",
+    "issues": [],
+    "note": "Dane generowane na podstawie strony producenta",
+    "sources": [
+      { "url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/alto-260", "verdict": "expected" },
+      { "url": "https://www.mapa-pro.com/our-gloves/chemical-protection/product-page/alto-260", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "34650008",
+    "name": "BUTOFLEX 650",
+    "manufacturer": "MAPA",
+    "verdict": "-",
+    "issues": ["not_manufacturer", "wrong_values"],
+    "note": "Dane nie zostały wygenerowane na podstawie informacji ze strony MAPA tylko cas.technnik.eu.  Na stronie producenta rękawica posiada wewnętrzny wkład tekstylny - wygenerowało jako dzianina bawełniana / nie zgadza się grubość rękawicy (ok. 1.50 zamiast 1.45mm) || UWAGA OGÓLNA DO MAPY: Nie wiem czy jest taka możliwość ale w przypadku MAPY dobrze by było zawęzić obszar wyszukiwania tylko do strony producenta, w przeciwnym razie na innych stronach nie zawsze pojawiają się parametry zgodne ze secyfikacją, a strona MAPA ma opisane wszystkie swoje produkty",
+    "sources": [
+      { "url": "https://cas-technik.eu/hand-protect/chemical-protection-gloves/mapa-butoflex-650-butyl-chemical-protective-gloves/mp-650-7", "verdict": "expected" },
+      { "url": "https://cas-technik.eu/hand-protect/chemical-protection-gloves/mapa-butoflex-650-butyl-chemical-protective-gloves/mp-650-10", "verdict": "expected" },
+      { "url": "https://www.manutan.pl/pl/mpl/rekawice-chemiczne-mapa-professional-butoflex-650-czarne", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "34603182",
+    "name": "KRYTECH 603",
+    "manufacturer": "MAPA",
+    "verdict": "+",
+    "issues": [],
+    "note": "Dane generowane na podstawie strony producenta",
+    "sources": [
+      { "url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-603", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "34375018",
+    "name": "TITAN 375",
+    "manufacturer": "MAPA",
+    "verdict": "+/-",
+    "issues": ["missing_norms"],
+    "note": "Dane generowane na podstawie strony producenta ALE w opisie pojawia się \" Brak informacji o normach i certyfikatach w dostępnych źródłach\" - a na stronie producenta jest info o normach",
+    "sources": [
+      { "url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/titan-375", "verdict": "expected" },
+      { "url": "https://www.mapa-pro.com/our-gloves/handling-protection/gloves-for-heavy-duty-handling/product-page/titan-375", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "34553088",
+    "name": "ULTRANE 553 UNIT.",
+    "manufacturer": "MAPA",
+    "verdict": "+",
+    "issues": [],
+    "note": "Dane generowane na podstawie strony producenta ALE w opisie pojawia się dziwne zdanie \"Są przeznaczone do prac montażowych, konserwacyjnych i serwisowych w przemyśle samochodowym, mechanicznym, budownictwie oraz samorządach\"",
+    "sources": [
+      { "url": "https://icd.pl/rekawice-mapa-ultrane-553.html", "verdict": "expected" },
+      { "url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-553", "verdict": "expected" },
+      { "url": "https://www.mapa-pro.com/our-gloves/handling-protection/gloves-for-precision-work/product-page/ultrane-553", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "34525098",
+    "name": "ULTRANE 525 Polybag",
+    "manufacturer": "MAPA",
+    "verdict": "+",
+    "issues": ["dup_text", "dup_norms"],
+    "note": "Dane nie zostały wygenerowane na podstawie informacji ze strony producenta, a z ICD więc jest ok ALE w opisie dwa razy jest zawarta i opsana powłoka nitrylowa GRIP&PROOF, dodatkowo w podpunkcie NORMY są podwójnie podane wszytskie normy",
+    "sources": [
+      { "url": "https://icd.pl/rekawice-mapa-ultrane525.html", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "34540358",
+    "name": "VITAL 540",
+    "manufacturer": "MAPA",
+    "verdict": "+/-",
+    "issues": ["missing_norms", "wrong_values"],
+    "note": "Dane generowane na podstawie strony producenta ALE brak informacji na temat spełnianych norm + wygenerowało że spełnia wymagania dla rękawic kategorii I natomiast na stronie producenta są podaane normy i kategoria rękawic III",
+    "sources": [
+      { "url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-540", "verdict": "expected" },
+      { "url": "https://www.mapa-pro.com/our-gloves/liquidproof-protection/product-page/vital-540", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "34780049",
+    "name": "TEMPICE 780",
+    "manufacturer": "MAPA",
+    "verdict": "+",
+    "issues": ["not_manufacturer"],
+    "note": "Dane nie zostały wygenerowane na podstawie informacji ze strony MAPA tylko SUPON RZ",
+    "sources": [
+      { "url": "https://www.supon.rzeszow.pl/rkawice-ocieplane/4952-rekawice-ocieplane-pvc-do-niskich-temperatur-mapa-tempice-780.html", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "34300058",
+    "name": "JERSETTE 300",
+    "manufacturer": "MAPA",
+    "verdict": "+/-",
+    "issues": ["not_manufacturer", "size_wrong"],
+    "note": "Dane nie zostały wygenerowane na podstawie informacji ze strony MAPA tylko MANUTAN / nie zgadzają się rozmiary rękawic,",
+    "sources": [
+      { "url": "https://www.manutan.pl/pl/mpl/rekawiczki-lateksowe-mapa-jersette-300-w-kolorze-niebieskim", "verdict": "unknown" }
+    ]
+  },
+  {
+    "sku": "34990458",
+    "name": "SOLO 990",
+    "manufacturer": "MAPA",
+    "verdict": "+/-",
+    "issues": ["not_manufacturer", "missing_norms"],
+    "note": "Dane nie zostały wygenerowane w całości na podstawie informacji ze strony MAPA, dodatkowo jeszcze ze strony KPS - nie zgadzają się normy. Jest wygenerowane info, że \"Rękawice nie posiadają deklarowanych norm EN\" - na stronie MAPA sa podane normy, które spełnia ten model rękawic",
+    "sources": [
+      { "url": "https://kps.com.pl/pl/rekawice-mapa-solo-990.html", "verdict": "expected" },
+      { "url": "https://www.mapa-pro.com/our-gloves/disposable/product-page/solo-990", "verdict": "expected" },
+      { "url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-990", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "T5921002",
+    "name": "Chodnik elektroizolacyjny 20 KV",
+    "manufacturer": "SECURA",
+    "verdict": null,
+    "issues": ["variant_duplicate"],
+    "note": "Cennik SECURA posiada 7 wariantów chodnika elektroizolacyjnego 20kv o tych samych własciwościach tylko innych wymiarach - u nas wygenerowane są dwie pozycje chodnika z wymiarami, które oferuje ten sklep, z ktrórego dane zostały wygenerowane.  Na stronie SECURA nie ma wszystkich produktów ale podobno są w trakcie aktualizowania swojej strony więc na razie zostawiłabym ten temat.",
+    "sources": [
+      { "url": "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-2-m-Secura/48601", "verdict": "unknown" },
+      { "url": "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-5-m-Secura/48604", "verdict": "unknown" },
+      { "url": "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-6-m-Secura/48605", "verdict": "unknown" }
+    ]
+  },
+  {
+    "sku": "T5921003",
+    "name": "Chodnik elektroizolacyjny 20 KV",
+    "manufacturer": "SECURA",
+    "verdict": null,
+    "issues": ["variant_duplicate"],
+    "note": "Cennik SECURA posiada 7 wariantów chodnika elektroizolacyjnego 20kv o tych samych własciwościach tylko innych wymiarach - u nas wygenerowane są dwie pozycje chodnika z wymiarami, które oferuje ten sklep, z ktrórego dane zostały wygenerowane.  Na stronie SECURA nie ma wszystkich produktów ale podobno są w trakcie aktualizowania swojej strony więc na razie zostawiłabym ten temat.",
+    "sources": [
+      { "url": "https://centrumelektronarzedzi.pl/pl/p/Dywanik-elektroizolacyjny-20-KV-wymiary-0%2C75-x-0%2C75-m-Secura/48600", "verdict": "wrong" },
+      { "url": "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-2-m-Secura/48601", "verdict": "unknown" },
+      { "url": "https://centrumelektronarzedzi.pl/pl/p/Chodnik-elektroizolacyjny-20-KV-wymiary-1%2C1-x-5-m-Secura/48604", "verdict": "unknown" }
+    ]
+  },
+  {
+    "sku": "S56322S2",
+    "name": "Filtr dwustronny SECAIR 3000.02 klasy P2",
+    "manufacturer": "SECURA",
+    "verdict": "+",
+    "issues": ["not_manufacturer"],
+    "note": "Wygenerowane na podstawie supon.rzeszow",
+    "sources": [
+      { "url": "https://migracja.supon.rzeszow.pl/4853-filtr-dwustronny-do-maski-secura-secair-300002-p2r.html", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "T5911400",
+    "name": "Kalosze elektroizolacyjne 5 kV - ANTYAMPER",
+    "manufacturer": "SECURA",
+    "verdict": "+",
+    "issues": ["dup_norms"],
+    "note": "Wygenerowane dane są ok ale Są zdublowane normy",
+    "sources": [
+      { "url": "https://centrumelektronarzedzi.pl/pl/p/Polbuty-elektroizolacyjne-20-kV-ANTYAMPER-rozmiar-5-Secura/55440", "verdict": "wrong" }
+    ]
+  },
+  {
+    "sku": "S56212-10",
+    "name": "Płatek zaworu wydechowego",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["mixed_sources", "wrong_product"],
+    "note": "Źle wygenerowane dane - wzięte z dwóch linków, w których są zuepłnie inne produkty, przez co pojawia się informacja że płatki są przystosowane do dwóch róźnych rodzajów półmasek",
+    "sources": [
+      { "url": "https://domtechniczny24.pl/p%C5%82atek-zaworu-wydechowego-secura-3000-do-p%C3%B3%C5%82masek.html", "verdict": "expected" },
+      { "url": "https://domtechniczny24.pl/p%C5%82atek-zaworu-wydechowego-secura-2000.html", "verdict": "wrong" }
+    ]
+  },
+  {
+    "sku": "S53211",
+    "name": "Płatek zaworu wdechowego",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["desc_missing", "image_wrong"],
+    "note": "Zdjkęcie poglądowe jako zdjęcie kurtki / brak opisu",
+    "sources": []
+  },
+  {
+    "sku": "S5621203",
+    "name": "Płatki zaworów do półmasek serii SECURA 3000, komplet (3 sztuki)",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["wrong_product", "image_wrong"],
+    "note": "migracja.supon.rzeszow - opis i zdjęcie jako półmaska 3000 a nie komplet płatków zaworów",
+    "sources": [
+      { "url": "https://migracja.supon.rzeszow.pl/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html", "verdict": "wrong" }
+    ]
+  },
+  {
+    "sku": "S5621220",
+    "name": "Pokrywa zaworu wydechowego",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["wrong_product", "image_wrong"],
+    "note": "Opis i zdjęcie wygenerowane jako PŁATEK ZAWORU WYDECHOWEGO, a nie pokrywa zaworu",
+    "sources": [
+      { "url": "https://domtechniczny24.pl/p%C5%82atek-zaworu-wydechowego-secura-3000-do-p%C3%B3%C5%82masek.html", "verdict": "wrong" }
+    ]
+  },
+  {
+    "sku": "T5912200",
+    "name": "Półbuty elektroizolacyjne 30 kV - ANTYAMPER",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["wrong_values", "size_wrong", "image_wrong"],
+    "note": "Opis źle wygenerowany - nie zgadzają się rozmiary obuwia i wartość napięcia (chronią przed 26,5kV a nie 30kV) / zdjęcie ścgiągniete jako logo strony z której zostały wygenerowane dane",
+    "sources": [
+      { "url": "https://centrumelektronarzedzi.pl/pl/p/Polbuty-elektroizolacyjne-30-kV-ANTYAMPER-rozmiar-4-Secura/48598", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "S56T0SM0",
+    "name": "Półmaska SECURA 3000 (nagłowie jednoczęściowe)",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["variant_duplicate"],
+    "note": "migracja.supon.rzeszow - 3 razy ta sama pozycja",
+    "sources": [
+      { "url": "https://migracja.supon.rzeszow.pl/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "S56T0SL0",
+    "name": "Półmaska SECURA 3000 (nagłowie jednoczęściowe)",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["variant_duplicate"],
+    "note": "migracja.supon.rzeszow - 3 razy ta sama pozycja",
+    "sources": [
+      { "url": "https://migracja.supon.rzeszow.pl/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html", "verdict": "unknown" }
+    ]
+  },
+  {
+    "sku": "S56T0SS0",
+    "name": "Półmaska SECURA 3000 (nagłowie jednoczęściowe)",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["variant_duplicate"],
+    "note": "migracja.supon.rzeszow - 3 razy ta sama pozycja",
+    "sources": [
+      { "url": "https://migracja.supon.rzeszow.pl/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html", "verdict": "unknown" }
+    ]
+  },
+  {
+    "sku": "T5329000",
+    "name": "Kombinezon AlphaTec 2000 Standard",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["desc_missing", "image_missing"],
+    "note": "brak opisu i zdjęcia",
+    "sources": []
+  },
+  {
+    "sku": "S56212-50",
+    "name": "Pierścień z zaczepami zaworu wydechowego do półmaski SECURA 3000",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["mixed_sources", "wrong_product", "image_wrong"],
+    "note": "Źle wygenerowany opis - wzięty z 3 różnych linków - nie dotyczy pierścienia z zaczepami / ściągniete zupełnie bezsensowne dane",
+    "sources": [
+      { "url": "https://www.supon.rzeszow.pl/maski-i-polmaski-wielokrotnego-uzytku/297-polmaska-ochronna-secura-3000-z-bagnetowym-mocowaniem-pochlaniaczy.html", "verdict": "wrong" },
+      { "url": "https://centrumelektronarzedzi.pl/pl/p/Zestaw-SECURA-3000-LAK-w-pudelku%2C-maska-rozmiar-M/48403", "verdict": "wrong" },
+      { "url": "https://www.supon.rzeszow.pl/zestawy-do-pracy/301-zestaw-dla-lakiernika-secura-3000-lak-maska-pochlaniacze-filtry.html", "verdict": "wrong" }
+    ]
+  },
+  {
+    "sku": "S5621300",
+    "name": "Nagłowie tekstylne kompletne do półmaski SECURA 3100",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["wrong_product", "image_wrong", "pdf_unrelated"],
+    "note": "Żle wygenerowany opis - zamiast nagłowia, opis dotyczy zestawu SECURA 3100",
+    "sources": [
+      { "url": "https://roboczebhp.pl/polmaska-filtrujaca-maska-lakiernicza-3100-dust-secura", "verdict": "wrong" },
+      { "url": "https://roboczebhp.pl/pochlaniacz-do-maski-maska-ochronna-chemiczna-chem-secura3100-chem-ns", "verdict": "wrong" },
+      { "url": "https://www.bhp-gabi.pl/p26093,maska-ochronna-secura3100-lak.html", "verdict": "wrong" }
+    ]
+  },
+  {
+    "sku": "S5621230",
+    "name": "Pierścień z zaczepami zaworu wydechowego do półmaski SECURA 3100 i 3200",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["wrong_product", "image_wrong", "pdf_unrelated"],
+    "note": "Żle wygenerowany opis - zamiast pierścienia dotyczy zestawu SECURA 3100",
+    "sources": [
+      { "url": "https://roboczebhp.pl/polmaska-filtrujaca-maska-lakiernicza-3100-dust-secura", "verdict": "wrong" },
+      { "url": "https://www.bhp-gabi.pl/p26093,maska-ochronna-secura3100-lak.html", "verdict": "wrong" },
+      { "url": "https://bogarobhp.pl/strona-glowna/pelnotwarzowa-maska-advantage-3200-secura", "verdict": "wrong" }
+    ]
+  },
+  {
+    "sku": "T596T",
+    "name": "Torba do rękawic",
+    "manufacturer": "SECURA",
+    "verdict": "-",
+    "issues": ["desc_missing", "image_missing"],
+    "note": "brak opisu i zdjęcia",
+    "sources": []
+  },
+  {
+    "sku": "WRM02 FLUO",
+    "name": "Wodery Max ze wzmocnieniem kalosz typ S5 w kolorach fluo",
+    "manufacturer": "AJ GROUP",
+    "verdict": "+",
+    "issues": [],
+    "note": "ok || UWAGA OGÓLNA DO AJ GROUP: w zakładce Pliki PDF często jest do pobrania polityka prywatności strony z której generowany jest opis albo jakieś deklaracje zgodności nie dotyczące tego konkretnego produktu",
+    "sources": [
+      { "url": "https://icd.pl/wodery-pros-wrm02fluo-pomaranczowy.html", "verdict": "expected" },
+      { "url": "https://icd.pl/wodery-pros-wrm", "verdict": "unknown" }
+    ]
+  },
+  {
+    "sku": "750",
+    "name": "Wodoodporny worek",
+    "manufacturer": "AJ GROUP",
+    "verdict": "+",
+    "issues": [],
+    "note": "ok",
+    "sources": [
+      { "url": "https://sportpros.pl/no/tilbehor/17-wodoodporny-worek-pros-szary-model-750.html", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "508",
+    "name": "Nogawice wodoochronne ze wzmocnieniem na kolanach",
+    "manufacturer": "AJ GROUP",
+    "verdict": "+",
+    "issues": [],
+    "note": "ok",
+    "sources": [
+      { "url": "https://icd.pl/nogawice-wodoochronne-pros-508-czarny.html", "verdict": "expected" },
+      { "url": "https://bogarobhp.pl/buty-gumowe-wodery-spodniobuty/nogawice-wodoochronne-pros-508-aj-group-czarne", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "KL09/S FILC",
+    "name": "Ocieplacze filcowe krótkie 28 cm ( damskie )",
+    "manufacturer": "AJ GROUP",
+    "verdict": "-",
+    "issues": ["desc_missing"],
+    "note": "brak opisu",
+    "sources": []
+  },
+  {
+    "sku": "906",
+    "name": "PŁASZCZ MĘSKI",
+    "manufacturer": "AJ GROUP",
+    "verdict": "-",
+    "issues": ["image_missing"],
+    "note": "brak zdjęcia",
+    "sources": [
+      { "url": "https://behapownia.pl/meski-plaszcz-przeciwdeszczowy-bemoregreen-906", "verdict": "unknown" }
+    ]
+  },
+  {
+    "sku": "101/112",
+    "name": "Ubranie wodoochronne [kurtka 3/4 i spodnie do pasa]",
+    "manufacturer": "AJ GROUP",
+    "verdict": "-",
+    "issues": ["image_wrong", "missing_norms"],
+    "note": "Zdjęcie dodane jako budynek fimry GABI / opis ok ale brakuje normy: EN ISO 13688",
+    "sources": [
+      { "url": "https://www.bhp-gabi.pl/p34119,ubranie-101-112-pros-aj-group.html", "verdict": "expected" },
+      { "url": "https://pros.pl/pl/odziez-wodoochronna-standard/244-ubranie-model-101112.html", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "903",
+    "name": "KURTKA DAMSKA",
+    "manufacturer": "AJ GROUP",
+    "verdict": "-",
+    "issues": ["image_missing"],
+    "note": "brak zdjęcia",
+    "sources": [
+      { "url": "https://behapownia.pl/damska-kurtka-przeciwdeszczowa-bemoregreen-903", "verdict": "unknown" }
+    ]
+  },
+  {
+    "sku": "4486",
+    "name": "Spodnie do pasa z dopuszczeniem do spożywki ( dla przem. spożywczego )",
+    "manufacturer": "AJ GROUP",
+    "verdict": "+",
+    "issues": [],
+    "note": "ok",
+    "sources": [
+      { "url": "https://www.bhp-gabi.pl/p34140,spodnie-do-pasa-4486-pros-aj-group.html", "verdict": "expected" },
+      { "url": "https://pros.pl/pl/aquapros/161-spodnie-do-pasa-model-4486.html", "verdict": "expected" },
+      { "url": "https://pol-paw.pl/spodnie-do-pasa-dla-przemyslu-spozywczego-pros-4486-p-2822.html", "verdict": "expected" },
+      { "url": "https://pros.pl/en/aquapros/161-waist-pants-model-4486.html", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "904",
+    "name": "SPODNIE OGRODNICZKI",
+    "manufacturer": "AJ GROUP",
+    "verdict": "-",
+    "issues": ["desc_missing"],
+    "note": "brak opisu",
+    "sources": []
+  },
+  {
+    "sku": "SB04 AIR",
+    "name": "Spodniobuty oddychające AIR",
+    "manufacturer": "AJ GROUP",
+    "verdict": "-",
+    "issues": ["desc_missing"],
+    "note": "brak opisu",
+    "sources": []
+  },
+  {
+    "sku": "SB04 AIR CARP",
+    "name": "Spodniobuty oddychające AIR CARP",
+    "manufacturer": "AJ GROUP",
+    "verdict": "-",
+    "issues": ["desc_missing"],
+    "note": "brak opisu",
+    "sources": []
+  },
+  {
+    "sku": ".048",
+    "name": "Zaciski na rękawice antyprzecięciowe",
+    "manufacturer": "AJ GROUP",
+    "verdict": "-",
+    "issues": ["desc_missing"],
+    "note": "brak opisu",
+    "sources": []
+  },
+  {
+    "sku": "4087",
+    "name": "Spodnie ogrodniczki",
+    "manufacturer": "AJ GROUP",
+    "verdict": "+",
+    "issues": ["dup_norms"],
+    "note": "ok tylko są podójnie normy",
+    "sources": [
+      { "url": "https://www.bhp-gabi.pl/p34133,spodnie-ogrodniczki-4087-pros-aj-group.html", "verdict": "expected" },
+      { "url": "https://pros.pl/pl/aquapros/115-spodnie-ogrodniczki-model-4087.html", "verdict": "expected" },
+      { "url": "https://pol-paw.pl/spodnie-ogrodniczki-wodoochronne-pros-4087-aquapros-p-2758.html", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "CP",
+    "name": "Fartuch wodoochronny 110/75",
+    "manufacturer": "AJ GROUP",
+    "verdict": "+",
+    "issues": ["size_wrong"],
+    "note": "jest ok ale wygenerował nazwę modelu 110/75 też jako rozmiar, natomiast na stronie jest jeden rozmiar 120 x 120",
+    "sources": [
+      { "url": "https://pros.pl/pl/fartuchy-wodoochronne/204-fartuch-olejoodporny-model-110.html", "verdict": "unknown" }
+    ]
+  },
+  {
+    "sku": "304/K",
+    "name": "Kombinezon wodoochronny dwu kolorowy z wgrzanymi kaloszami typ S5",
+    "manufacturer": "AJ GROUP",
+    "verdict": "+",
+    "issues": [],
+    "note": "ok",
+    "sources": [
+      { "url": "https://icd.pl/kombinezon-wodoochronny-pros-304-k-pomaranczowy.html", "verdict": "expected" },
+      { "url": "https://icd.pl/kombinezon-wodoochronny-pros-304-k.html", "verdict": "expected" },
+      { "url": "https://www.bhp-gabi.pl/p4251,kombinezon-wodoochronny-dla-kanalarza-z-kaloszami-s5-304-k-pros-aj-group.html", "verdict": "expected" },
+      { "url": "https://pros.pl/pl/odziez-wodoochronna-standard/218-kombinezon-z-bezpiecznymi-kaloszami-model-304k.html", "verdict": "expected" }
+    ]
+  },
+  {
+    "sku": "104/1",
+    "name": "Kombinezon oddychający zapinany na zamek",
+    "manufacturer": "AJ GROUP",
+    "verdict": "+",
+    "issues": [],
+    "note": "ok",
+    "sources": [
+      { "url": "https://pros.pl/en/breathable-waterproof-clothing/241-insulated-overalls-model-1041-oc.html", "verdict": "unknown" }
+    ]
+  }
+]
