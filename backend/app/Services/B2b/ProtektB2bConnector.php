@@ -230,6 +230,7 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
         }
 
         $xpath = self::dom($page['html']);
+        $colours = self::colourSummary($xpath);
         $name = self::text($xpath->query('//h1['.self::classPredicate('product-desc__name').']')->item(0));
         $catalogNo = self::text($xpath->query('//*[@itemprop="gtin"]')->item(0));
 
@@ -246,7 +247,7 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
             name: $name,
             category: $category,
             sourceUrl: $url,
-            variantSummary: self::colourSummary($xpath),
+            variantSummary: $colours,
             raw: [
                 'status' => 'ok',
                 'price_text' => self::text($xpath->query('//*[@itemprop="price"]')->item(0)),
@@ -255,7 +256,7 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
                 // „Indeks” producenta — trzymamy do wglądu, kartę identyfikuje numer katalogowy.
                 'supplier_index' => self::text($xpath->query('//*[@itemprop="sku"]')->item(0)),
                 'norms' => self::texts($xpath, '//*['.self::classPredicate('product-desc__norms--bold').']'),
-                'spec' => self::specRows($xpath),
+                'spec' => self::specRows($xpath, $colours),
                 'features' => self::texts($xpath, '//*['.self::classPredicate('product-desc__specific--warn').']'),
                 'image_url' => self::imageUrl($xpath),
             ],
@@ -303,9 +304,13 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
     /**
      * Wiersze specyfikacji jako „nazwa: wartość”; nagłówki podzespołów (spec-col__product) jako osobne linie.
      *
+     * Wiersz „Kolor” dostaje pełną listę kolorów karty zamiast koloru tego jednego adresu: karta obejmuje
+     * wszystkie wersje kolorystyczne, więc pojedynczy kolor byłby w jej opisie nieprawdą. Przy okazji opis
+     * przestaje się różnić między adresami rodzeństwa, więc kolejne odwiedziny nie liczą się jako zmiana.
+     *
      * @return list<string>
      */
-    private static function specRows(DOMXPath $xpath): array
+    private static function specRows(DOMXPath $xpath, ?string $colours = null): array
     {
         $rows = [];
         foreach ($xpath->query('//*['.self::classPredicate('spec-col__row').']') as $row) {
@@ -318,6 +323,9 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
             $label = rtrim(self::text($xpath->query('.//*['.self::classPredicate('spec-col__type').']', $row)->item(0)), ':');
             $value = self::text($xpath->query('.//*['.self::classPredicate('spec-col__type_val').']', $row)->item(0));
             if ($label !== '' && $value !== '') {
+                if ($colours !== null && mb_strtolower($label) === 'kolor') {
+                    $value = $colours;
+                }
                 $rows[] = $label.': '.$value;
             }
         }

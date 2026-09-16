@@ -174,6 +174,11 @@ final class ProtektConnectorTest extends TestCase
 
         $this->assertSame(1, Product::query()->where('sku', 'BW140')->count());
         $this->assertSame('czarny, czerwony, niebieski', Product::query()->where('sku', 'BW140')->value('variant_summary'));
+        // Opis karty wymienia wszystkie kolory, bo karta obejmuje je wszystkie — nie kolor jednego adresu.
+        $this->assertStringContainsString(
+            'Kolor: czarny, czerwony, niebieski',
+            (string) Product::query()->where('sku', 'BW140')->value('description'),
+        );
     }
 
     public function test_ten_sam_numer_z_rozna_cena_nie_jest_przemilczany(): void
@@ -255,6 +260,7 @@ final class ProtektConnectorTest extends TestCase
             .'<div class="product-spec"><div class="spec-tech"><div class="spec-tech__info"><div class="spec-col">'
             .'<div class="spec-col__row"><p class="spec-col__type">Materiał:</p><p class="spec-col__type_val">poliester/poliamid</p></div>'
             .'<div class="spec-col__row"><p class="spec-col__type">Waga:</p><p class="spec-col__type_val">300 g</p></div>'
+            .($colours !== [] ? '<div class="spec-col__row"><p class="spec-col__type">Kolor:</p><p class="spec-col__type_val">'.$colours[0].'</p></div>' : '')
             .'</div></div></div></div>'
             .'<div class="product-desc__specific"><p class="product-desc__specific--warn">Dopuszczone do prac w strefach zagrożonych wybuchem</p></div>'
             .'</body></html>';
