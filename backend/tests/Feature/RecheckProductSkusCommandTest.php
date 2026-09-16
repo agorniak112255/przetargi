@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\AiSetting;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\User;
@@ -136,6 +137,48 @@ final class RecheckProductSkusCommandTest extends TestCase
         $this->artisan('products:recheck-skus')
             ->expectsOutputToContain('Podaj kody')
             ->assertFailed();
+    }
+
+    /** Cały cennik od nowa: wybór po producencie, bez wypisywania kodów. */
+    public function test_whole_manufacturer_can_be_selected(): void
+    {
+        $this->artisan('products:recheck-skus', ['--manufacturer' => 'SECURA'])
+            ->expectsOutputToContain('Do ponownego wzbogacenia: 3 kart')
+            ->assertSuccessful();
+
+        $this->artisan('products:recheck-skus', ['--manufacturer' => 'NIE MA TAKIEGO'])
+            ->expectsOutputToContain('nie ma żadnej karty')
+            ->assertFailed();
+    }
+
+    /** Wybór po cenniku — bierzemy karty zapisane przy tym imporcie. */
+    public function test_whole_price_list_can_be_selected(): void
+    {
+        $ids = Product::query()->whereIn('sku', ['S56212-50', 'S5621300'])->pluck('id')->all();
+        $priceList = PriceList::query()->create([
+            'original_filename' => 'secura-2026.xlsx',
+            'manufacturer' => 'SECURA',
+            'version' => '2026',
+            'rows_total' => 2,
+            'products_created' => 2,
+            'product_ids' => $ids,
+        ]);
+
+        $this->artisan('products:recheck-skus', ['--price-list' => $priceList->id])
+            ->expectsOutputToContain('Do ponownego wzbogacenia: 2 kart')
+            ->assertSuccessful();
+
+        $this->artisan('products:recheck-skus', ['--price-list' => 9999])
+            ->expectsOutputToContain('Nie ma cennika numer 9999')
+            ->assertFailed();
+    }
+
+    /** Podgląd dużego zbioru nie wypisuje tysiąca wierszy. */
+    public function test_preview_table_is_capped(): void
+    {
+        $this->artisan('products:recheck-skus', ['--manufacturer' => 'SECURA', '--limit' => 1])
+            ->expectsOutputToContain('… i jeszcze 2 kart')
+            ->assertSuccessful();
     }
 
     private function card(string $sku, string $name): void

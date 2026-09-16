@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
@@ -14,10 +15,11 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Ponowne wzbogacenie WSKAZANYCH kart — po poprawce w doborze źródeł trzeba przejść jeszcze raz
- * dokładnie tę listę, którą sprawdzał człowiek, i porównać wynik. `products:queue-enrichment`
- * bierze tylko karty bez opisu, a `products:reset-foreign-descriptions` tylko te, które audyt sam
- * rozpozna — żadne z nich nie umie „zrób jeszcze raz te 43 kody”.
+ * Ponowne wzbogacenie wskazanych kart: po kodach (lista z ręcznych testów), po producencie albo
+ * po cenniku. Po poprawce w doborze źródeł trzeba przejść jeszcze raz dokładnie ten sam zbiór
+ * i porównać wynik. `products:queue-enrichment` bierze tylko karty bez opisu, a
+ * `products:reset-foreign-descriptions` tylko te, które audyt sam rozpozna — żadne z nich nie
+ * umie „zrób jeszcze raz te 43 kody” ani „cały cennik od nowa”.
  *
  * Kasowanie opisu przechodzi przez ProductEnrichmentResetter, więc razem z opisem znikają normy,
  * payload, cache SKU, zdjęcia, dokumenty i akcesoria pobrane z sieci, a także ręcznie wskazany
@@ -29,7 +31,9 @@ final class RecheckProductSkusCommand extends Command
     protected $signature = 'products:recheck-skus
                             {--sku=* : Kod produktu; można podać wiele razy}
                             {--file= : Plik z kodami, po jednym w wierszu (# to komentarz)}
-                            {--manufacturer= : Tylko karty tego producenta (gdy kod powtarza się u kilku)}
+                            {--manufacturer= : Karty tego producenta — zawęża listę kodów albo bierze wszystkie jego karty}
+                            {--price-list= : Numer cennika — wszystkie karty z tego importu}
+                            {--limit=30 : Ile wierszy pokazać w podglądzie (0 = wszystkie)}
                             {--user= : E-mail użytkownika, na którego idą partie (domyślnie pierwszy administrator)}
                             {--backup= : Plik kopii zapasowej JSON (domyślnie storage/app/repair-backups)}
                             {--restore= : Przywróć karty z kopii zapasowej i zakończ}
@@ -56,36 +60,58 @@ final class RecheckProductSkusCommand extends Command
         }
 
         $skus = $this->collectSkus();
-        if ($skus === []) {
-            $this->error('Podaj kody: --sku=KOD (można wiele razy) albo --file=lista.txt.');
+        $manufacturer = trim((string) $this->option('manufacturer'));
+        $priceListId = (int) $this->option('price-list');
+        if ($skus === [] && $manufacturer === '' && $priceListId <= 0) {
+            $this->error('Podaj kody (--sku=KOD, --file=lista.txt) albo cały zbiór (--manufacturer=, --price-list=).');
 
             return self::FAILURE;
         }
 
-        $manufacturer = trim((string) $this->option('manufacturer'));
+        $listIds = [];
+        if ($priceListId > 0) {
+            $priceList = PriceList::query()->find($priceListId);
+            if ($priceList === null) {
+                $this->error("Nie ma cennika numer {$priceListId}.");
+
+                return self::FAILURE;
+            }
+            $listIds = array_values(array_unique(array_map('intval', $priceList->product_ids ?? [])));
+            if ($listIds === []) {
+                $this->error('Ten cennik nie ma zapisanych produktów (stary import) — użyj --manufacturer=.');
+
+                return self::FAILURE;
+            }
+        }
+
         $products = Product::query()
-            ->whereIn('sku', $skus)
+            ->when($skus !== [], static fn ($q) => $q->whereIn('sku', $skus))
+            ->when($listIds !== [], static fn ($q) => $q->whereIn('id', $listIds))
             ->when($manufacturer !== '', static fn ($q) => $q->where('manufacturer', $manufacturer))
             ->orderBy('id')
             ->get();
 
-        $found = $products->map(static fn (Product $p): string => mb_strtolower(trim((string) $p->sku)))->all();
-        $missing = array_values(array_filter(
-            $skus,
-            static fn (string $sku): bool => ! in_array(mb_strtolower($sku), $found, true)
-        ));
-        if ($missing !== []) {
-            $this->warn('Nie ma w katalogu: '.implode(', ', $missing));
+        if ($skus !== []) {
+            $found = $products->map(static fn (Product $p): string => mb_strtolower(trim((string) $p->sku)))->all();
+            $missing = array_values(array_filter(
+                $skus,
+                static fn (string $sku): bool => ! in_array(mb_strtolower($sku), $found, true)
+            ));
+            if ($missing !== []) {
+                $this->warn('Nie ma w katalogu: '.implode(', ', $missing));
+            }
         }
         if ($products->isEmpty()) {
-            $this->error('Żaden z podanych kodów nie ma karty w katalogu.');
+            $this->error('Ten wybór nie ma żadnej karty w katalogu.');
 
             return self::FAILURE;
         }
 
+        $limit = max(0, (int) $this->option('limit'));
+        $shown = $limit > 0 ? $products->take($limit) : $products;
         $this->table(
             ['ID', 'SKU', 'Producent', 'Status', 'Opis (znaki)', 'Przypięty adres'],
-            $products->map(static fn (Product $p): array => [
+            $shown->map(static fn (Product $p): array => [
                 (int) $p->id,
                 (string) $p->sku,
                 (string) $p->manufacturer,
@@ -94,6 +120,9 @@ final class RecheckProductSkusCommand extends Command
                 $p->shop_source_url !== null ? 'tak' : '',
             ])->all(),
         );
+        if ($limit > 0 && $products->count() > $limit) {
+            $this->line(sprintf('… i jeszcze %d kart (podgląd skrócony, --limit=0 pokaże wszystkie).', $products->count() - $limit));
+        }
 
         $count = $products->count();
         $batchSize = $settings->enrichmentBatchLimit();
