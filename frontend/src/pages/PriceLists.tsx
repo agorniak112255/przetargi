@@ -100,6 +100,7 @@ type PriceList = {
   enrichment_queued?: number
   enrichment_running?: number
   enrichment_from_b2b?: number
+  enrichment_failed_from_b2b?: number
   enrichment_total?: number
   enrichment_batch_status?: string | null
   enrichment_current_sku?: string | null
@@ -261,6 +262,8 @@ function enrichmentCoverage(
   fromB2b: number
   covered: number
   failed: number
+  failedFromB2b: number
+  failedPending: number
   remaining: number
   queued: number
   running: number
@@ -269,6 +272,8 @@ function enrichmentCoverage(
   const done = row.enrichment_done ?? 0
   const fromB2b = row.enrichment_from_b2b ?? 0
   const failed = row.enrichment_failed ?? 0
+  // karta z błędem AI, ale z opisem z cennika B2B jest gotowa — ponowienie jej nie weźmie
+  const failedFromB2b = Math.min(failed, row.enrichment_failed_from_b2b ?? 0)
   const covered = Math.min(total, done + fromB2b)
 
   return {
@@ -277,6 +282,8 @@ function enrichmentCoverage(
     fromB2b,
     covered,
     failed,
+    failedFromB2b,
+    failedPending: failed - failedFromB2b,
     remaining: Math.max(0, total - covered),
     queued: row.enrichment_queued ?? 0,
     running: row.enrichment_running ?? 0,
@@ -1740,6 +1747,8 @@ export function PriceLists() {
                 fromB2b: enrichFromB2b,
                 covered: enrichCovered,
                 failed: enrichFailed,
+                failedFromB2b: enrichFailedFromB2b,
+                failedPending: enrichFailedPending,
                 remaining,
                 queued,
                 running,
@@ -1748,7 +1757,8 @@ export function PriceLists() {
               const missing = remaining
               const donePct = productCount > 0 ? (enrichDone / productCount) * 100 : 0
               const b2bPct = productCount > 0 ? (enrichFromB2b / productCount) * 100 : 0
-              const failPct = productCount > 0 ? (enrichFailed / productCount) * 100 : 0
+              // tylko błędy do ponowienia — te z opisem z B2B są już w segmencie B2B, pasek nie może przekroczyć 100%
+              const failPct = productCount > 0 ? (enrichFailedPending / productCount) * 100 : 0
               const nowSku = enrichBatch?.current_sku || r.enrichment_current_sku
               const editing = editId === r.id
               return (
@@ -1821,7 +1831,15 @@ export function PriceLists() {
                               enrichFromB2b > 0
                                 ? `, opis z cennika B2B ${enrichFromB2b} (AI ich nie rusza)`
                                 : ''
-                            }${enrichFailed > 0 ? `, błędy ${enrichFailed}` : ''}`}
+                            }${
+                              enrichFailed > 0
+                                ? `, błędy ${enrichFailed}${
+                                    enrichFailedFromB2b > 0
+                                      ? ` (w tym ${enrichFailedFromB2b} z opisem z B2B — bez ponowienia)`
+                                      : ''
+                                  }`
+                                : ''
+                            }`}
                           >
                             <div
                               className="bg-emerald-500 transition-all"
@@ -1867,7 +1885,22 @@ export function PriceLists() {
                             zostało {remaining}
                           </p>
                           {enrichFailed > 0 && (
-                            <p className="text-[10px] text-red-600">błędy {enrichFailed}</p>
+                            <p
+                              className="text-[10px] text-red-600"
+                              title={
+                                enrichFailedFromB2b > 0
+                                  ? `${enrichFailedFromB2b} z tych kart ma opis z cennika B2B — AI ich nie ponawia, do ponowienia zostaje ${enrichFailedPending}`
+                                  : undefined
+                              }
+                            >
+                              błędy {enrichFailed}
+                              {enrichFailedFromB2b > 0 ? (
+                                <span className="text-slate-500">
+                                  {' '}
+                                  · do ponowienia {enrichFailedPending}
+                                </span>
+                              ) : null}
+                            </p>
                           )}
                           {batchActive && (
                             <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800">
@@ -1898,8 +1931,8 @@ export function PriceLists() {
                         title={
                           productCount === 0
                             ? 'Brak product_ids (stary import)'
-                            : enrichFailed > 0
-                              ? `Ponów nieudane (${enrichFailed}), max ${enrichBatchLimit} na raz. ${r.enrichment_last_error ?? ''}`
+                            : enrichFailedPending > 0
+                              ? `Ponów nieudane (${enrichFailedPending}), max ${enrichBatchLimit} na raz. ${r.enrichment_last_error ?? ''}`
                               : `Pobierz opisy/zdjęcia — serwer liczy ${enrichConcurrency} naraz`
                         }
                       >
@@ -1907,8 +1940,8 @@ export function PriceLists() {
                           ? 'Start…'
                           : batchActive
                             ? 'Pobieranie…'
-                            : enrichFailed > 0
-                              ? `Ponów err (${enrichFailed})`
+                            : enrichFailedPending > 0
+                              ? `Ponów err (${enrichFailedPending})`
                               : enrichCovered >= productCount && productCount > 0
                                 ? 'Pobierz ponownie'
                                 : missing > 0 && enrichCovered > 0

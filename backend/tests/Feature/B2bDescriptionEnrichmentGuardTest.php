@@ -140,17 +140,20 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $fromB2b = $this->b2bProduct('UVEX-1');
+        // błąd AI na karcie, która i tak ma opis ze sklepu dostawcy — ponowienie jej nie weźmie
+        $failedFromB2b = $this->b2bProduct('UVEX-2');
+        $failedFromB2b->update(['enrichment_status' => Product::ENRICHMENT_FAILED]);
         $pending = $this->product('OTHER-1', null);
 
         PriceList::query()->create([
             'manufacturer' => 'UVEX',
             'version' => 'v-b2b',
             'original_filename' => 'uvex.xlsx',
-            'rows_total' => 2,
-            'products_created' => 2,
+            'rows_total' => 3,
+            'products_created' => 3,
             'products_updated' => 0,
             'rows_skipped' => 0,
-            'product_ids' => [$fromB2b->id, $pending->id],
+            'product_ids' => [$fromB2b->id, $failedFromB2b->id, $pending->id],
         ]);
 
         $this->getJson('/api/price-lists')
@@ -158,8 +161,10 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
             ->assertJsonFragment([
                 'version' => 'v-b2b',
                 'enrichment_done' => 0,
-                'enrichment_from_b2b' => 1,
-                'enrichment_total' => 2,
+                'enrichment_from_b2b' => 2,
+                'enrichment_failed' => 1,
+                'enrichment_failed_from_b2b' => 1,
+                'enrichment_total' => 3,
             ]);
     }
 

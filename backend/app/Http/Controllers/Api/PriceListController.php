@@ -70,6 +70,8 @@ class PriceListController extends Controller
         if ($notDone !== []) {
             $fromB2b = $this->b2bDescriptions->productIds($notDone);
         }
+        // karta z błędem AI, ale z opisem ze sklepu dostawcy jest gotowa i ponowienie jej nie weźmie
+        $failedFromB2b = array_intersect_key($fromB2b, $statusSets[Product::ENRICHMENT_FAILED]);
 
         $latestBatchMsg = [];
         $batchRows = ProductEnrichmentBatch::query()
@@ -95,7 +97,13 @@ class PriceListController extends Controller
             }
         }
 
-        $payload = $lists->map(function (PriceList $list) use ($statusSets, $fromB2b, $latestBatchMsg, $owners): array {
+        $payload = $lists->map(function (PriceList $list) use (
+            $statusSets,
+            $fromB2b,
+            $failedFromB2b,
+            $latestBatchMsg,
+            $owners,
+        ): array {
             $ids = array_map('intval', $list->product_ids ?? []);
             $countStatus = static function (array $set) use ($ids): int {
                 $n = 0;
@@ -113,6 +121,7 @@ class PriceListController extends Controller
             $row['enrichment_queued'] = $countStatus($statusSets[Product::ENRICHMENT_QUEUED]);
             $row['enrichment_running'] = $countStatus($statusSets[Product::ENRICHMENT_RUNNING]);
             $row['enrichment_from_b2b'] = $countStatus($fromB2b);
+            $row['enrichment_failed_from_b2b'] = $countStatus($failedFromB2b);
             $row['enrichment_total'] = count($ids);
             $batch = $latestBatchMsg[$list->id] ?? null;
             $row['enrichment_batch_status'] = $batch?->status;
