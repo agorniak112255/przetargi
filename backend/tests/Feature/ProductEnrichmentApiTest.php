@@ -26,6 +26,7 @@ use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\HybridWebSearchService;
+use App\Services\Enrichment\ManufacturerCatalogPdf;
 use App\Services\Enrichment\ManufacturerDomainResolver;
 use App\Services\Enrichment\PrefetchSlots;
 use App\Services\Enrichment\ProductDocumentDownloader;
@@ -1092,6 +1093,78 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
         $this->assertSame(1, $product->images()->count());
         $this->assertStringContainsString('userdata/public/gfx/46771', (string) $product->images()->first()?->source_url);
+    }
+
+    public function test_manufacturer_catalog_pdf_describes_product_and_lands_in_source_urls(): void
+    {
+        // SECURA nie ma kart HTML per wyrób — opis niesie katalog PDF całej marki.
+        // Blok przy numerze katalogowym musi wystarczyć za źródło opisu, a adres katalogu
+        // ma trafić do źródeł karty. Sam katalog nie jest dokumentem wyrobu.
+        Storage::fake('public');
+        Storage::fake('local');
+
+        $catalogUrl = 'https://www.securabc.com/img/cms/Katalog%202026%20PL_web.pdf';
+        Storage::disk('local')->put(
+            ManufacturerCatalogPdf::CACHE_DIR.'/'.sha1(mb_strtolower($catalogUrl)).'.txt',
+            (string) file_get_contents(base_path('tests/Fixtures/enrichment/secura-katalog-fragment.txt'))
+        );
+
+        $product = $this->makeProduct([
+            'sku' => 'S56322S2',
+            'name' => 'Filtr przeciwpyłowy SECAIR 3000.02 P2',
+            'manufacturer' => 'SECURA',
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->andReturn(['results' => [], 'errors' => []]);
+
+        $llm = $this->mockLlmWithSanitize([
+            'description' => 'Filtr przeciwpyłowy SECAIR 3000.02 P2 marki SECURA (nr kat. S56322S2) chroni układ '
+                .'oddechowy przed aerozolami z cząstek stałych i ciekłych, o ile stężenie fazy rozproszonej nie '
+                .'przekracza 10 x NDS. Stosowany przy spawaniu elektrycznym, obróbce aluminium oraz przy cięciu '
+                .'i szlifowaniu drewna twardego. Komplet zawiera dwie sztuki filtrów do półmasek SECURA 3000.',
+            'features' => [],
+            'specs' => [],
+            'norms' => [],
+            'certificates' => [],
+            'materials' => [],
+            'use_cases' => ['spawanie elektryczne'],
+            'image_urls' => [],
+            'document_urls' => [$catalogUrl],
+            'source_urls' => [],
+            'confidence' => 0.8,
+        ]);
+
+        Http::fake(['*' => Http::response('', 404)]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        $service->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertStringContainsString('SECAIR 3000.02 P2', (string) $product->description);
+        $this->assertContains($catalogUrl, $product->enrichment_payload['source_urls'] ?? []);
+        // opis nie ma innego źródła — wyszukiwarka nic nie zwróciła
+        $this->assertStringContainsString(
+            'katalog PDF producenta',
+            json_encode($product->enrichment_trace, JSON_UNESCAPED_UNICODE) ?: ''
+        );
+        // broszura całej marki nie jest dokumentem tego wyrobu
+        $this->assertSame(0, $product->documents()->count());
     }
 
     public function test_weak_index_hit_does_not_block_the_open_web_search(): void

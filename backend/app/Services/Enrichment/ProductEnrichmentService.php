@@ -92,6 +92,7 @@ final class ProductEnrichmentService
         private readonly PpeAssortment $assortment,
         private readonly ?EnrichmentAttemptLog $attemptLog = null,
         private readonly ?ProductAccessorySyncService $accessories = null,
+        private readonly ?ManufacturerCatalogPdf $catalogPdf = null,
     ) {}
 
     private function attemptLog(): EnrichmentAttemptLog
@@ -107,6 +108,11 @@ final class ProductEnrichmentService
     private function accessories(): ProductAccessorySyncService
     {
         return $this->accessories ?? app(ProductAccessorySyncService::class);
+    }
+
+    private function catalogPdf(): ManufacturerCatalogPdf
+    {
+        return $this->catalogPdf ?? app(ManufacturerCatalogPdf::class);
     }
 
     private function descriptionTemplates(): EnrichmentDescriptionTemplateService
@@ -690,8 +696,12 @@ final class ProductEnrichmentService
             $searchEmptyDetail = ($searchPack['errors'] ?? []) !== []
                 ? implode(' | ', array_slice($searchPack['errors'], 0, 2))
                 : 'brak wyników';
+            // Katalog PDF producenta dopasowany po numerze katalogowym — źródło równorzędne
+            // karcie producenta. Marki bez kart HTML per wyrób (SECURA) opisuje wyłącznie on,
+            // więc gdy niesie blok tego kodu, brak wyników wyszukiwarki nie kończy przebiegu.
+            $catalogPages = $this->manufacturerCatalogPages($product);
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
-            if ($searchResults === []) {
+            if ($searchResults === [] && $catalogPages === []) {
                 $this->attemptLog()->add('search', $searchEmptyDetail);
                 $outage = $this->engineOutageDetail($searchEmptyDetail);
                 throw new ProductSourcesNotFoundException(
@@ -796,6 +806,12 @@ final class ProductEnrichmentService
                 }
                 $rawCardPages = $pageSnippets;
             }
+            // Blok z katalogu dokładamy dopiero tutaj, po rundach dobierania kart: wcześniej
+            // sam blok czyniłby pulę niepustą i produkt zostawałby bez zdjęcia z karty sklepu.
+            // Nie przechodzi przez keepConfirmedCardPages — jest przypięty do dokładnego kodu
+            // wyrobu, więc potwierdza go mocniej niż heurystyka nazwy na stronie sklepu.
+            $pageSnippets = $this->withCatalogPages($pageSnippets, $catalogPages, $product, $mfrDomains);
+            $rawCardPages = $this->withCatalogPages($rawCardPages, $catalogPages, $product, $mfrDomains);
             if ($pageSnippets === []) {
                 // Gdy po drodze padła wyszukiwarka, „brak karty” jest tylko
                 // skutkiem awarii — produkt wraca do ponowienia, nie do ręki.
@@ -839,6 +855,9 @@ final class ProductEnrichmentService
                 $this->sanitizePagesWithLlm($product, $pageSnippets),
                 $optionSizes
             );
+            // Filtr stron czyści śmieci sklepowe; tekst katalogu ich nie ma, a filtr potrafi
+            // odrzucić całą stronę — wracamy więc z blokiem w postaci wziętej z PDF.
+            $pageSnippets = $this->withCatalogPages($pageSnippets, $catalogPages, $product, $mfrDomains);
             $timing['llm_sanitize_ms'] = $this->elapsedMs($t);
 
             $this->liveProgress()->step('opis produktu');
@@ -1059,6 +1078,11 @@ final class ProductEnrichmentService
             if ($sourceUrls === []) {
                 $sourceUrls = array_column(array_slice($pageSnippets, 0, 3), 'url');
             }
+            // Katalog producenta ma być widoczny jako źródło: z niego wziął się opis, a człowiek
+            // musi mieć czym to sprawdzić. Dopisujemy go tylko wtedy, gdy blok został w puli stron.
+            foreach ($this->catalogUrlsAmongPages($pageSnippets, $catalogPages) as $url) {
+                $sourceUrls[] = $url;
+            }
 
             // Zdjęcie z tej samej karty co opis — nie z innej pobranej strony.
             $this->liveProgress()->step('weryfikacja zdjęć');
@@ -1224,6 +1248,12 @@ final class ProductEnrichmentService
                     $documentUrls[] = $u;
                 }
             }
+            // Katalog marki nie jest dokumentem wyrobu — opisuje setki wyrobów naraz.
+            // Jako źródło opisu owszem, w „Plikach PDF” produktu byłby mylącym załącznikiem.
+            $documentUrls = array_values(array_filter(
+                $documentUrls,
+                fn ($u): bool => is_string($u) && ! $this->catalogPdf()->isConfiguredCatalogUrl($u)
+            ));
             $this->assertBatchNotCancelled($batchId);
 
             $mfrDomains = $this->manufacturers->discoverFromResults($product, array_merge(
@@ -2668,6 +2698,115 @@ final class ProductEnrichmentService
         }
 
         return array_values(array_merge($manufacturer, $rest));
+    }
+
+    /**
+     * Blok z katalogu PDF producenta przypisany numerowi katalogowemu wyrobu.
+     * Katalog czyta się z cache na dysku, ale ani brak sieci, ani PDF bez warstwy tekstowej
+     * nie mogą przerwać wzbogacania — wtedy karta powstaje bez tego źródła.
+     *
+     * @return list<array{url: string, text: string, title: string}>
+     */
+    private function manufacturerCatalogPages(Product $product): array
+    {
+        try {
+            $pages = $this->catalogPdf()->pagesFor($product);
+        } catch (Throwable $e) {
+            Log::info('Katalog PDF producenta pominięty', [
+                'product_id' => $product->id,
+                'sku' => $product->sku,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+        if ($pages !== []) {
+            $this->attemptLog()->add(
+                'page',
+                'katalog PDF producenta — blok przy nr kat. '.$product->sku,
+                urls: array_column($pages, 'url')
+            );
+        }
+
+        return $pages;
+    }
+
+    /**
+     * Katalog producenta wchodzi do puli stron opisowych ZAWSZE, gdy niesie blok przy numerze
+     * katalogowym wyrobu — jest źródłem równorzędnym karcie producenta, bo to ten sam autor
+     * i ten sam poziom wiarygodności; dla marek bez kart HTML (SECURA) jest jedynym źródłem
+     * opisu producenta. Nie zastępuje jednak karty producenta: idzie ZA nią, a przed sklepami,
+     * bo karta wyrobu jest dokładniejsza niż akapit w broszurze całej marki. Pominięcie katalogu,
+     * gdy karta istnieje, kosztowałoby fakty, których karta nie podaje (zastosowania, normy),
+     * a ryzyka nie ma: blok jest przypięty do dokładnego kodu, nie do nazwy.
+     *
+     * @param  list<array{url: string, text: string}>  $pages
+     * @param  list<array{url: string, text: string, title: string}>  $catalogPages
+     * @param  list<string>  $mfrDomains
+     * @return list<array{url: string, text: string}>
+     */
+    private function withCatalogPages(array $pages, array $catalogPages, Product $product, array $mfrDomains): array
+    {
+        if ($catalogPages === []) {
+            return $pages;
+        }
+
+        $seen = [];
+        foreach ($pages as $page) {
+            $seen[mb_strtolower(trim((string) ($page['url'] ?? '')))] = true;
+        }
+        $fresh = [];
+        foreach ($catalogPages as $page) {
+            $url = mb_strtolower(trim((string) ($page['url'] ?? '')));
+            if ($url === '' || isset($seen[$url])) {
+                continue;
+            }
+            $seen[$url] = true;
+            $fresh[] = $page;
+        }
+        if ($fresh === []) {
+            return $pages;
+        }
+
+        $at = 0;
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            $text = trim((string) ($page['text'] ?? ''));
+            if ($url === '' || mb_strlen($text) < self::MFR_CARD_MIN_CHARS
+                || ! $this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
+                break;
+            }
+            $at++;
+        }
+
+        return array_values(array_merge(
+            array_slice($pages, 0, $at),
+            $fresh,
+            array_slice($pages, $at)
+        ));
+    }
+
+    /**
+     * @param  list<array{url: string, text: string}>  $pages
+     * @param  list<array{url: string, text: string, title: string}>  $catalogPages
+     * @return list<string>
+     */
+    private function catalogUrlsAmongPages(array $pages, array $catalogPages): array
+    {
+        $used = [];
+        foreach ($pages as $page) {
+            $used[mb_strtolower(trim((string) ($page['url'] ?? '')))] = true;
+        }
+
+        $out = [];
+        foreach ($catalogPages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && isset($used[mb_strtolower(trim($url))])) {
+                $out[] = $url;
+            }
+        }
+
+        return $out;
     }
 
     /**

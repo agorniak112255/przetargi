@@ -4,6 +4,17 @@ declare(strict_types=1);
 
 return [
     /*
+    | Katalogi PDF producentów — źródło opisu dla marek bez kart HTML per wyrób.
+    | Klucz = znormalizowana nazwa marki (małe litery, myślniki), jak w manufacturer_domains.
+    | Opis bierzemy WYŁĄCZNIE z bloku przypisanego numerowi katalogowemu wyrobu
+    | (App\Services\Enrichment\ManufacturerCatalogPdf). Plik jest broszurą całej marki,
+    | więc nie trafia do „Plików PDF” produktu.
+    */
+    'manufacturer_catalogs' => [
+        'secura' => ['https://www.securabc.com/img/cms/Katalog%202026%20PL_web.pdf'],
+    ],
+
+    /*
     | Oficjalne domeny producentów — certyfikaty / deklaracje / datasheet PDF.
     | Klucz = znormalizowana nazwa marki (małe litery, myślniki).
     */
