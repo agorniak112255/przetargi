@@ -20,15 +20,22 @@ final class B2bConnectorRegistry
         JspB2bConnector::class,
         BolleB2bConnector::class,
         UvexB2bConnector::class,
+        ProtektB2bConnector::class,
     ];
 
     /**
-     * @return list<array{key: string, label: string, host: string}>
+     * @return list<array{key: string, label: string, host: string, requires_password: bool}>
      */
     public function options(): array
     {
         return array_map(
-            static fn (string $class): array => ['key' => $class::key(), 'label' => $class::label(), 'host' => $class::host()],
+            static fn (string $class): array => [
+                'key' => $class::key(),
+                'label' => $class::label(),
+                'host' => $class::host(),
+                // Witryna publiczna (protekt.pl) nie ma konta u dostawcy — formularz ukrywa pole hasła.
+                'requires_password' => ! is_a($class, B2bPublicSite::class, true),
+            ],
             self::CONNECTORS,
         );
     }
@@ -44,6 +51,14 @@ final class B2bConnectorRegistry
     public function has(string $key): bool
     {
         return $this->classFor($key) !== null;
+    }
+
+    /** Czy łącznik loguje się u dostawcy. Witryna publiczna (protekt.pl) hasła nie ma. */
+    public function requiresPassword(?string $key): bool
+    {
+        $class = $key !== null ? $this->classFor($key) : null;
+
+        return $class === null || ! is_a($class, B2bPublicSite::class, true);
     }
 
     public function label(?string $key): ?string

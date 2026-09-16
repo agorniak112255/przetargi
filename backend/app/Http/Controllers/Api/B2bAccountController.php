@@ -226,11 +226,19 @@ class B2bAccountController extends Controller
      */
     private function validated(Request $request, bool $creating): array
     {
+        // Łącznik musimy znać przed walidacją: witryna publiczna (protekt.pl) nie ma hasła,
+        // a klucz ustalany niżej byłby już po sprawdzeniu reguł.
+        $connector = trim((string) $request->input('connector')) ?: (string) $this->connectors->keyForSites(
+            array_map(static fn ($site): string => trim((string) $site), (array) $request->input('sites', []))
+        );
+        $needsPassword = $this->connectors->requiresPassword($connector ?: null);
+
         $data = $request->validate([
+            // Nazwa konta zostaje wymagana także dla witryn bez logowania — jest etykietą konta w panelu i w CLI.
             'username' => ['required', 'string', 'max:255'],
             // Trzecie pole logowania — tylko dla witryn, które go wymagają (np. UVEX).
             'contractor_code' => ['nullable', 'string', 'max:100'],
-            'password' => [$creating ? 'required' : 'nullable', 'string', 'max:1000'],
+            'password' => [$creating && $needsPassword ? 'required' : 'nullable', 'string', 'max:1000'],
             'sites' => ['required', 'array', 'min:1', 'max:20'],
             // Puste wiersze (ConvertEmptyStringsToNull → null) pomijamy, nie odrzucamy formularza.
             'sites.*' => ['nullable', 'string', 'max:255'],

@@ -111,4 +111,10 @@ class B2bAccount extends Model
     {
         return $this->hasMany(B2bSyncRun::class);
     }
+
+    /** Rabaty dla witryn podających tylko cenę katalogową; kolejność sprawdzania = position. */
+    public function discountRules(): HasMany
+    {
+        return $this->hasMany(B2bDiscountRule::class)->orderBy('position')->orderBy('id');
+    }
 }

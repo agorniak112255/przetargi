@@ -311,6 +311,13 @@ final class B2bCatalogSync
             $progress?->log('info', 'Opisy zlecone do tłumaczenia na polski: '.$stats['translations_queued']);
         }
 
+        // Podsumowanie własne łącznika (np. trafienia reguł rabatowych) — po przejściu całej listy.
+        if ($connector instanceof B2bRunSummaryAware) {
+            foreach ($connector->runSummary() as $line) {
+                $progress?->log('info', $line);
+            }
+        }
+
         if ($progress !== null) {
             $progress->setTotal($progressTotal());
             if ($stats['seen'] === 0) {
