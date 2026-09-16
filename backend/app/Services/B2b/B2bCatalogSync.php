@@ -626,7 +626,7 @@ final class B2bCatalogSync
         }
 
         [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
-        $documents = $this->storeDocuments($product, $connector, $card, $warnings);
+        $documents = $this->storeDocuments($account, $product, $connector, $card, $warnings);
 
         return [
             'status' => $status,
@@ -1547,6 +1547,7 @@ final class B2bCatalogSync
      * @return int liczba plików zapisanych albo uzupełnionych przy karcie
      */
     private function storeDocuments(
+        B2bAccount $account,
         Product $product,
         B2bConnector $connector,
         array $card,
@@ -1595,6 +1596,7 @@ final class B2bCatalogSync
                     $document->kind,
                     ++$sortOrder,
                     $text,
+                    (int) $account->id,
                     self::DOCUMENT_MAX_BYTES,
                 );
                 if ($written !== null) {

@@ -18,6 +18,7 @@ class ProductDocument extends Model
 
     protected $fillable = [
         'product_id',
+        'b2b_account_id',
         'path',
         'source_url',
         'title',
@@ -31,6 +32,7 @@ class ProductDocument extends Model
     protected function casts(): array
     {
         return [
+            'b2b_account_id' => 'integer',
             'sort_order' => 'integer',
             'size_bytes' => 'integer',
         ];

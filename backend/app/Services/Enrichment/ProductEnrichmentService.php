@@ -1347,10 +1347,18 @@ final class ProductEnrichmentService
         }
     }
 
+    /**
+     * Pliki znalezione w internecie ustępują nowej karcie produktu. Plików z panelu B2B to nie dotyczy:
+     * przyszły od dostawcy razem z ceną, są dowodem pochodzenia danych karty i nie da się ich odtworzyć
+     * z sieci — kolejne pobranie cennika pobrałoby je jeszcze raz niepotrzebnie.
+     */
     private function clearProductDocuments(Product $product): void
     {
-        $product->loadMissing('documents');
-        foreach ($product->documents as $doc) {
+        $documents = ProductDocument::query()
+            ->where('product_id', $product->id)
+            ->whereNull('b2b_account_id')
+            ->get();
+        foreach ($documents as $doc) {
             try {
                 Storage::disk('public')->delete($doc->path);
             } catch (Throwable) {
@@ -1358,6 +1366,7 @@ final class ProductEnrichmentService
             }
             $doc->delete();
         }
+        $product->unsetRelation('documents');
     }
 
     private function applyFromSkuCache(Product $product): bool

@@ -78,6 +78,7 @@ final class ProductDocumentDownloader
      *
      * @param  string  $kind  ProductDocument::KIND_*
      * @param  string|null  $text  tekst odczytany z pliku; null = nie próbowano odczytać
+     * @param  int|null  $b2bAccountId  konto, z którego panelu plik pochodzi — uzupełnianie AI takich nie kasuje
      * @return ProductDocument|null null = typ pliku nieobsługiwany albo rozmiar poza limitem
      */
     public function storeBytes(
@@ -89,6 +90,7 @@ final class ProductDocumentDownloader
         string $kind,
         int $sortOrder,
         ?string $text = null,
+        ?int $b2bAccountId = null,
         int $maxBytes = self::MAX_BYTES,
     ): ?ProductDocument {
         $mime = strtolower(trim(explode(';', $mime)[0] ?? ''));
@@ -122,6 +124,7 @@ final class ProductDocumentDownloader
         Storage::disk('public')->put($relative, $bytes);
         $values = [
             'product_id' => $product->id,
+            'b2b_account_id' => $b2bAccountId,
             'path' => $relative,
             'source_url' => $url,
             'title' => mb_substr($title, 0, 255),

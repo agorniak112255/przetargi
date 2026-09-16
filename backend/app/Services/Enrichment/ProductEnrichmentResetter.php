@@ -157,7 +157,9 @@ final class ProductEnrichmentResetter
         $key = ProductEnrichmentCache::normalizeKey((string) $product->manufacturer, (string) $product->sku);
         ProductEnrichmentCache::query()->where('manufacturer', $key['manufacturer'])->where('sku', $key['sku'])->delete();
         ProductImage::query()->where('product_id', $product->id)->whereNotNull('source_url')->where('source_url', '!=', '')->delete();
-        ProductDocument::query()->where('product_id', $product->id)->whereNotNull('source_url')->where('source_url', '!=', '')->delete();
+        // pliki z paneli B2B zostają — nie pochodzą z internetu i wracają tylko przez pobranie cennika
+        ProductDocument::query()->where('product_id', $product->id)->whereNull('b2b_account_id')
+            ->whereNotNull('source_url')->where('source_url', '!=', '')->delete();
         ProductAccessory::query()->where('product_id', $product->id)->where('source', ProductAccessory::SOURCE_ENRICHMENT)->delete();
     }
 }

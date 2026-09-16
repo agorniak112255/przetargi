@@ -8,6 +8,7 @@ use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\EnrichProductJob;
 use App\Jobs\PrefetchProductSourcesJob;
 use App\Models\AiSetting;
+use App\Models\B2bAccount;
 use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\PriceList;
@@ -209,6 +210,28 @@ final class ProductEnrichmentApiTest extends TestCase
             'https://cdn.example.com/*' => Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']),
         ]);
 
+        $account = B2bAccount::query()->create([
+            'username' => 'jan',
+            'password' => 'sekret',
+            'sites' => ['izam.system-b2b.pl'],
+            'connector' => 'uvex',
+        ]);
+        $fromB2b = ProductDocument::query()->create([
+            'product_id' => $product->id,
+            'b2b_account_id' => $account->id,
+            'path' => 'products/'.$product->id.'/docs/sst.pdf',
+            'source_url' => 'https://izam.system-b2b.pl/public/assets/resources/products/1/SST.pdf',
+            'title' => 'SST.pdf',
+            'kind' => ProductDocument::KIND_DATASHEET,
+        ]);
+        $fromWeb = ProductDocument::query()->create([
+            'product_id' => $product->id,
+            'path' => 'products/'.$product->id.'/docs/cert.pdf',
+            'source_url' => 'https://example.com/cert.pdf',
+            'title' => 'cert.pdf',
+            'kind' => ProductDocument::KIND_CERTIFICATE,
+        ]);
+
         $this->postJson("/api/products/{$product->id}/enrich", ['force' => true])
             ->assertOk()
             ->assertJsonPath('product.enrichment_status', Product::ENRICHMENT_DONE)
@@ -216,6 +239,10 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $product->refresh();
         $this->assertStringContainsString('Nowy opis po force', (string) $product->description);
+
+        // karta techniczna z panelu dostawcy zostaje, plik znaleziony w internecie ustępuje nowej karcie
+        $this->assertTrue(ProductDocument::query()->whereKey($fromB2b->id)->exists());
+        $this->assertFalse(ProductDocument::query()->whereKey($fromWeb->id)->exists());
 
         Queue::assertNotPushed(EnrichProductJob::class);
         Queue::assertNotPushed(PrefetchProductSourcesJob::class);

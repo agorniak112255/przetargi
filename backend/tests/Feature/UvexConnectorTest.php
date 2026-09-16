@@ -490,6 +490,11 @@ final class UvexConnectorTest extends TestCase
             $documents->pluck('title')->all(),
         );
         $this->assertSame(['datasheet', 'other'], $documents->pluck('kind')->all());
+        $this->assertSame(
+            [(int) $this->account()->id, (int) $this->account()->id],
+            $documents->pluck('b2b_account_id')->all(),
+            'plik z panelu dostawcy ma wskazywać konto B2B — uzupełnianie AI takich nie kasuje',
+        );
         foreach ($documents as $document) {
             $this->assertTrue(Storage::disk('public')->exists((string) $document->path));
             $this->assertStringStartsWith('https://izam.system-b2b.pl/public/assets/resources/products/4713/', (string) $document->source_url);
