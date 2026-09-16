@@ -196,7 +196,7 @@ final class PriceListPdfTextExtractor
         $cmd = escapeshellarg($bin).' '.$mode.' '.escapeshellarg($path).' -';
         $out = [];
         $code = 0;
-        exec($cmd.' 2>NUL', $out, $code);
+        exec($cmd.' '.self::redirectStderr(PHP_OS_FAMILY), $out, $code);
         if ($code !== 0 && $out === []) {
             return null;
         }
@@ -207,27 +207,56 @@ final class PriceListPdfTextExtractor
 
     private function findPdfToText(): ?string
     {
-        $candidates = [
-            'C:\\Program Files\\Git\\mingw64\\bin\\pdftotext.exe',
-            'C:\\Program Files\\Git\\usr\\bin\\pdftotext.exe',
-            'pdftotext',
-        ];
-        foreach ($candidates as $c) {
-            if ($c === 'pdftotext') {
-                $which = [];
-                exec('where pdftotext 2>NUL', $which);
-                if ($which !== []) {
-                    return $which[0];
-                }
-
-                continue;
-            }
+        foreach (self::binaryCandidates(PHP_OS_FAMILY) as $c) {
             if (is_file($c)) {
                 return $c;
             }
         }
 
+        $which = [];
+        exec(self::whichCommand(PHP_OS_FAMILY).' '.self::redirectStderr(PHP_OS_FAMILY), $which);
+        foreach ($which as $line) {
+            $line = trim($line);
+            if ($line !== '' && is_file($line)) {
+                return $line;
+            }
+        }
+
         return null;
+    }
+
+    /**
+     * Znane lokalizacje binarki — sprawdzane bez uruchamiania powłoki.
+     *
+     * @return list<string>
+     */
+    private static function binaryCandidates(string $osFamily): array
+    {
+        if ($osFamily === 'Windows') {
+            return [
+                'C:\\Program Files\\Git\\mingw64\\bin\\pdftotext.exe',
+                'C:\\Program Files\\Git\\usr\\bin\\pdftotext.exe',
+            ];
+        }
+
+        return ['/usr/bin/pdftotext', '/usr/local/bin/pdftotext'];
+    }
+
+    /**
+     * `where` to polecenie cmd.exe — w sh na serwerze nie istnieje.
+     */
+    private static function whichCommand(string $osFamily): string
+    {
+        return $osFamily === 'Windows' ? 'where pdftotext' : 'command -v pdftotext';
+    }
+
+    /**
+     * `2>NUL` w sh tworzy plik NUL w katalogu roboczym (albo kończy się błędem praw) —
+     * przez to na produkcji pdftotext nigdy nie był znajdowany.
+     */
+    private static function redirectStderr(string $osFamily): string
+    {
+        return $osFamily === 'Windows' ? '2>NUL' : '2>/dev/null';
     }
 
     private function extractViaSmalot(string $path): string
