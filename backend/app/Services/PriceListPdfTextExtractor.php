@@ -207,6 +207,10 @@ final class PriceListPdfTextExtractor
      * typu „…/!Wojtek/ALWIT_cennik.pdf” czy „PROS cennik 2016 25%.pdf” docierały do pdftotext
      * uszkodzone, a extract() cicho schodził na słabszy fallback smalot/pdfparser.
      *
+     * `-enc UTF-8` jest konieczne: Xpdf 4 (ten z Git for Windows) domyślnie wypisuje Latin1
+     * i po cichu gubi polskie znaki („żaroodporny” → „aroodporny”). Poppler na serwerze ma UTF-8
+     * domyślnie, więc flaga niczego tam nie zmienia — wyrównuje tylko dev do produkcji.
+     *
      * @return string|null stdout procesu albo null, gdy nie ruszył lub nic nie zwrócił
      */
     private function runPdfToText(string $bin, string $mode, string $path): ?string
@@ -218,7 +222,7 @@ final class PriceListPdfTextExtractor
         $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
         $pipes = [];
         $proc = @proc_open(
-            [$bin, $mode, $path, '-'],
+            [$bin, $mode, '-enc', 'UTF-8', $path, '-'],
             [0 => ['file', $null, 'r'], 1 => ['pipe', 'w'], 2 => ['file', $null, 'w']],
             $pipes
         );

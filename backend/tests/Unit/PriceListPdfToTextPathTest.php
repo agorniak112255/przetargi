@@ -46,17 +46,37 @@ final class PriceListPdfToTextPathTest extends TestCase
     }
 
     /**
+     * Xpdf 4 (Git for Windows) bez `-enc UTF-8` wypisuje Latin1 i gubi polskie znaki.
+     */
+    public function test_keeps_polish_characters(): void
+    {
+        $extractor = new PriceListPdfTextExtractor;
+        $line = self::LINE.' KRAK'.chr(0xD3).'W SZELKI '.chr(0xD3).'SEMKA';
+        $path = $this->writeTextPdf(sys_get_temp_dir().'/pdftotext_pl_'.getmypid().'.pdf', $line);
+
+        try {
+            $text = $extractor->extractLayout($path);
+            if ($text === null) {
+                $this->markTestSkipped('Brak pdftotext w systemie');
+            }
+            $this->assertStringContainsString('KRAKÓW', $text);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    /**
      * Minimalny PDF z warstwą tekstową (Helvetica, strumień bez kompresji).
      */
-    private function writeTextPdf(string $path): string
+    private function writeTextPdf(string $path, ?string $line = null): string
     {
-        $content = 'BT /F1 12 Tf 40 800 Td ('.self::LINE.') Tj ET'."\n";
+        $content = 'BT /F1 12 Tf 40 800 Td ('.($line ?? self::LINE).') Tj ET'."\n";
         $objects = [
             1 => "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
             2 => "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
             3 => "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842]"
                 ." /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
-            4 => "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+            4 => "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n",
             5 => '5 0 obj'."\n".'<< /Length '.strlen($content).' >>'."\nstream\n".$content."endstream\nendobj\n",
         ];
 
