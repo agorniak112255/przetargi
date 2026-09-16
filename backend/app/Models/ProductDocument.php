@@ -21,6 +21,7 @@ class ProductDocument extends Model
         'path',
         'source_url',
         'title',
+        'text',
         'kind',
         'sort_order',
         'checksum',

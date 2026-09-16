@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
+use App\Models\ProductDocument;
 use DOMElement;
 use DOMNode;
 use DOMXPath;
@@ -28,15 +29,22 @@ use RuntimeException;
  * bazowej); 0,00 PLN (np. pozycje „Cenniki”, „Karty charakterystyki”) = brak ceny. Dostępność dosłownie
  * („Dostępny” / „Na zamówienie”), dla grupy z podziałem na rozmiary, gdy się różni.
  *
+ * Pliki do pobrania (zakładka „Pliki do pobrania”, tabela #p-files-table): karta techniczna „SST …” i instrukcje.
+ * Adresy w tabeli są względne wobec <base href> strony; nazwa pliku dosłownie z tabeli. Strona produktu pobierana
+ * jest raz na kartę — ten sam HTML służy opisowi i liście plików.
+ *
  * Producent — ZAŁOŻENIE (sklep nie ma pola producenta): „HECKEL” gdy kod lub nazwa zawiera heckel, „HexArmor” gdy
  * nazwa zawiera hexarmor, inaczej „UVEX” (sklep firmy UVEX; większość nazw zawiera „uvex”).
  */
-final class UvexB2bConnector implements B2bConnector, B2bListProgressAware
+final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bListProgressAware
 {
     /** Nieprzerwane pobieranie listy dłużej = błąd (przebieg bez postępu uznałby b2b:sync-due za przerwany). */
     private const LIST_BUDGET_SECONDS = 25 * 60;
 
     private const PROGRESS_EVERY_PAGES = 20;
+
+    /** Tyle plików z jednej strony produktu trafia na kartę (UVEX: karta techniczna i instrukcja). */
+    private const DOCUMENTS_LIMIT = 5;
 
     private const INCONSISTENT = 7001;
 
@@ -45,6 +53,18 @@ final class UvexB2bConnector implements B2bConnector, B2bListProgressAware
     private const BLOCK_TAGS = ['p', 'div', 'section', 'article', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'dl', 'dt', 'dd', 'table', 'thead', 'tbody', 'tr', 'blockquote', 'pre', 'hr'];
 
     private int $total = 0;
+
+    /** Strona produktu bieżącej karty — opis i pliki czytają ten sam HTML (jedno pobranie na kartę). */
+    private ?string $pageUrl = null;
+
+    private ?string $pageHtml = null;
+
+    /**
+     * Ostatnio pobrany plik karty — tekst karty technicznej i zapis dokumentu biorą te same bajty.
+     *
+     * @var array{url: string, bytes: string, mime: string}|null
+     */
+    private ?array $file = null;
 
     /** @var (callable(string): void)|null */
     private $listProgress = null;
@@ -170,19 +190,9 @@ final class UvexB2bConnector implements B2bConnector, B2bListProgressAware
      */
     public function description(B2bRemoteProduct $product): string
     {
-        $url = (string) ($product->raw['detail_url'] ?? '');
-        if (($product->raw['status'] ?? null) !== 'ok' || $url === '') {
+        $xpath = $this->productXpath($product);
+        if ($xpath === null) {
             return '';
-        }
-
-        $xpath = JspB2bClient::dom($this->client->productPage($url));
-        $shownCode = self::text($xpath->query('//td['.JspB2bClient::classPredicate('codeViewProductDane').']')->item(0));
-        $code = (string) ($product->raw['code'] ?? '');
-        if ($shownCode === '') {
-            throw new RuntimeException('brak kodu na stronie produktu '.$code);
-        }
-        if ($shownCode !== $code) {
-            throw new RuntimeException('kod na stronie produktu ('.$shownCode.') inny niż kod z listy ('.$code.')');
         }
 
         $sections = [];
@@ -197,6 +207,64 @@ final class UvexB2bConnector implements B2bConnector, B2bListProgressAware
         }
 
         return mb_substr(implode("\n\n", $sections), 0, 10000);
+    }
+
+    /**
+     * Pliki z zakładki „Pliki do pobrania” strony produktu pierwszej pozycji karty (rozmiary tego samego wyrobu
+     * mają te same pliki). Nazwa dosłownie z tabeli; adres względny rozwijany po <base href> strony i sprawdzany,
+     * czy prowadzi do sklepu. PDF traktujemy jako kartę techniczną, resztę (np. skan instrukcji) jako inny plik.
+     *
+     * @return list<B2bRemoteDocument>
+     */
+    public function documents(B2bRemoteProduct $product): array
+    {
+        $xpath = $this->productXpath($product);
+        if ($xpath === null) {
+            return [];
+        }
+
+        $base = self::baseUrl($xpath);
+        $documents = [];
+        foreach ($xpath->query('//*[@id="p-files-table"]//tr') ?: [] as $row) {
+            $link = $xpath->query('.//a[@href]', $row)->item(0);
+            if (! $link instanceof DOMElement) {
+                continue;
+            }
+            $url = self::fileUrl($base, $link->getAttribute('href'));
+            if ($url === null || isset($documents[$url])) {
+                continue;
+            }
+            $title = self::text($xpath->query('.//strong', $row)->item(0));
+            if ($title === '') {
+                $title = rawurldecode(basename((string) parse_url($url, PHP_URL_PATH)));
+            }
+            $documents[$url] = new B2bRemoteDocument(
+                title: mb_substr($title, 0, 255),
+                sourceUrl: $url,
+                kind: self::isPdfUrl($url) ? ProductDocument::KIND_DATASHEET : ProductDocument::KIND_OTHER,
+            );
+            if (count($documents) >= self::DOCUMENTS_LIMIT) {
+                break;
+            }
+        }
+
+        return array_values($documents);
+    }
+
+    /**
+     * @return array{bytes: string, mime: string}
+     */
+    public function documentBytes(B2bRemoteDocument $document): array
+    {
+        if (($this->file['url'] ?? null) === $document->sourceUrl) {
+            return ['bytes' => $this->file['bytes'], 'mime' => $this->file['mime']];
+        }
+
+        $file = $this->client->fileBytes($document->sourceUrl, 'pliku produktu');
+        // jeden plik w pamięci: te same bajty idą na tekst karty technicznej i na dokument karty
+        $this->file = ['url' => $document->sourceUrl, ...$file];
+
+        return $file;
     }
 
     /**
@@ -575,6 +643,76 @@ final class UvexB2bConnector implements B2bConnector, B2bListProgressAware
         $flush();
 
         return $lines;
+    }
+
+    /**
+     * Strona produktu pierwszej pozycji karty, pobrana raz na kartę (opis i pliki). Strona z innym kodem niż lista
+     * = wyjątek (opis i pliki innego produktu nie mogą trafić na kartę). null = pozycja bez strony produktu.
+     */
+    private function productXpath(B2bRemoteProduct $product): ?DOMXPath
+    {
+        $url = (string) ($product->raw['detail_url'] ?? '');
+        if (($product->raw['status'] ?? null) !== 'ok' || $url === '') {
+            return null;
+        }
+
+        if ($this->pageUrl !== $url) {
+            $this->pageHtml = $this->client->productPage($url);
+            $this->pageUrl = $url;
+            // plik poprzedniej karty nie jest już potrzebny
+            $this->file = null;
+        }
+
+        $xpath = JspB2bClient::dom((string) $this->pageHtml);
+        $shownCode = self::text($xpath->query('//td['.JspB2bClient::classPredicate('codeViewProductDane').']')->item(0));
+        $code = (string) ($product->raw['code'] ?? '');
+        if ($shownCode === '') {
+            throw new RuntimeException('brak kodu na stronie produktu '.$code);
+        }
+        if ($shownCode !== $code) {
+            throw new RuntimeException('kod na stronie produktu ('.$shownCode.') inny niż kod z listy ('.$code.')');
+        }
+
+        return $xpath;
+    }
+
+    /** <base href> strony; bez niego adresy z tabeli plików są względne wobec /public/. */
+    private static function baseUrl(DOMXPath $xpath): string
+    {
+        $base = $xpath->query('//base[@href]')->item(0);
+        $href = $base instanceof DOMElement ? trim($base->getAttribute('href')) : '';
+
+        return $href !== '' ? $href : UvexB2bClient::BASE.'/public/';
+    }
+
+    /**
+     * Adres pliku z tabeli (względny wobec <base>) → pełny adres sklepu; null = adres spoza sklepu albo pusty.
+     * Nazwy plików mają spacje i polskie znaki — segmenty ścieżki kodujemy raz (dekodowanie przed kodowaniem).
+     */
+    public static function fileUrl(string $base, string $href): ?string
+    {
+        $href = trim(html_entity_decode($href, ENT_QUOTES | ENT_HTML5));
+        if ($href === '' || str_starts_with($href, '#')) {
+            return null;
+        }
+
+        $url = preg_match('#^https?://#i', $href) === 1 ? $href : rtrim($base, '/').'/'.ltrim($href, '/');
+        $parts = parse_url($url);
+        if (! is_array($parts) || ! isset($parts['scheme'], $parts['host'], $parts['path'])) {
+            return null;
+        }
+        $path = implode('/', array_map(
+            static fn (string $segment): string => rawurlencode(rawurldecode($segment)),
+            explode('/', $parts['path']),
+        ));
+        $url = $parts['scheme'].'://'.$parts['host'].$path.(isset($parts['query']) ? '?'.$parts['query'] : '');
+
+        return UvexB2bClient::isShopUrl($url) ? $url : null;
+    }
+
+    private static function isPdfUrl(string $url): bool
+    {
+        return str_ends_with(mb_strtolower(rawurldecode((string) parse_url($url, PHP_URL_PATH))), '.pdf');
     }
 
     private function progress(string $message): void

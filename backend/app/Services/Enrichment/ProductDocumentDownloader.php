@@ -17,6 +17,13 @@ final class ProductDocumentDownloader
 {
     private const MAX_BYTES = 15_000_000;
 
+    /** Pliki z panelu B2B: tylko te typy trafiają na kartę (wartość = rozszerzenie pliku na dysku). */
+    private const ALLOWED_MIME = [
+        'application/pdf' => 'pdf',
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+    ];
+
     public function __construct(
         private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
     ) {}
@@ -60,6 +67,82 @@ final class ProductDocumentDownloader
         }
 
         return false;
+    }
+
+    /**
+     * Plik z zalogowanego panelu dostawcy — bajty przynosi łącznik B2B, bo adres wymaga sesji konta (tu nie ma
+     * jak go pobrać samemu). Nazwa i rodzaj pochodzą ze strony dostawcy, nie ze zgadywania z adresu.
+     *
+     * Ten sam plik pod tym samym adresem = nic nie pobieramy ponownie; plik zmieniony u dostawcy (inna suma
+     * kontrolna) podmienia poprzedni, razem z odczytanym tekstem.
+     *
+     * @param  string  $kind  ProductDocument::KIND_*
+     * @param  string|null  $text  tekst odczytany z pliku; null = nie próbowano odczytać
+     * @return ProductDocument|null null = typ pliku nieobsługiwany albo rozmiar poza limitem
+     */
+    public function storeBytes(
+        Product $product,
+        string $bytes,
+        string $mime,
+        string $sourceUrl,
+        string $title,
+        string $kind,
+        int $sortOrder,
+        ?string $text = null,
+        int $maxBytes = self::MAX_BYTES,
+    ): ?ProductDocument {
+        $mime = strtolower(trim(explode(';', $mime)[0] ?? ''));
+        $extension = self::ALLOWED_MIME[$mime] ?? null;
+        $size = strlen($bytes);
+        if ($extension === null || $size === 0 || $size > $maxBytes) {
+            return null;
+        }
+
+        $checksum = hash('sha256', $bytes);
+        $url = mb_substr($sourceUrl, 0, 2000);
+        $existing = ProductDocument::query()
+            ->where('product_id', $product->id)
+            ->where('source_url', $url)
+            ->first()
+            ?? ProductDocument::query()
+                ->where('product_id', $product->id)
+                ->where('checksum', $checksum)
+                ->first();
+
+        if ($existing !== null && (string) $existing->checksum === $checksum) {
+            // ten sam plik — uzupełniamy tylko tekst, gdy wcześniej go nie odczytano
+            if ($text !== null && $existing->text === null) {
+                $existing->forceFill(['text' => $text])->save();
+            }
+
+            return $existing;
+        }
+
+        $relative = 'products/'.$product->id.'/docs/'.Str::lower(Str::random(16)).'.'.$extension;
+        Storage::disk('public')->put($relative, $bytes);
+        $values = [
+            'product_id' => $product->id,
+            'path' => $relative,
+            'source_url' => $url,
+            'title' => mb_substr($title, 0, 255),
+            'text' => $text,
+            'kind' => $kind,
+            'sort_order' => $sortOrder,
+            'checksum' => $checksum,
+            'size_bytes' => $size,
+        ];
+
+        if ($existing === null) {
+            return ProductDocument::query()->create($values);
+        }
+
+        $previous = (string) $existing->path;
+        $existing->forceFill($values)->save();
+        if ($previous !== '' && $previous !== $relative) {
+            Storage::disk('public')->delete($previous);
+        }
+
+        return $existing;
     }
 
     /**

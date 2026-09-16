@@ -8,6 +8,7 @@ use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
+use App\Models\ProductDocument;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
@@ -48,6 +49,12 @@ final class UvexConnectorTest extends TestCase
 
     /** @var list<string> */
     private array $validSessions = [];
+
+    /** Adresy pobranych plików produktu (karty techniczne, instrukcje) — po jednym wpisie na pobranie. */
+    private array $fileHits = [];
+
+    /** Ile razy atrapa wydala stronę produktu (opis i pliki mają czytać jedno pobranie). */
+    private int $detailHits = 0;
 
     private int $logins = 0;
 
@@ -423,6 +430,97 @@ final class UvexConnectorTest extends TestCase
         $this->assertContains('Lista UVEX: 13 pozycji → 8 kart (4 grup rozmiarów o tej samej cenie)', $log);
     }
 
+    public function test_product_files_are_listed_with_absolute_addresses_and_kinds(): void
+    {
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $cleaner = null;
+        foreach ($connector->products() as $product) {
+            if ($product->sku === '9970.005') {
+                $cleaner = $product;
+            }
+        }
+        $this->assertNotNull($cleaner);
+
+        $documents = $connector->documents($cleaner);
+
+        $this->assertSame(
+            ['SST stacja czyszcząca mini 9970.005.pdf', 'instrukcja obuwia uvex.JPG'],
+            array_map(static fn ($d): string => $d->title, $documents),
+        );
+        $this->assertSame(
+            [
+                'https://izam.system-b2b.pl/public/assets/resources/products/4713/SST%20stacja%20czyszcz%C4%85ca%20mini%209970.005.pdf',
+                'https://izam.system-b2b.pl/public/assets/resources/products/4713/instrukcja%20obuwia%20uvex.JPG',
+            ],
+            array_map(static fn ($d): string => $d->sourceUrl, $documents),
+        );
+        $this->assertSame(['datasheet', 'other'], array_map(static fn ($d): string => $d->kind, $documents));
+        // strona produktu pobrana raz — lista plików korzysta z tego samego HTML co opis
+        $this->assertSame(1, $this->detailHits);
+    }
+
+    public function test_file_address_outside_the_shop_is_rejected(): void
+    {
+        $this->assertNull(UvexB2bConnector::fileUrl('https://izam.system-b2b.pl/public/', 'https://example.test/karta.pdf'));
+        $this->assertNull(UvexB2bConnector::fileUrl('https://izam.system-b2b.pl/public/', ''));
+        $this->assertSame(
+            'https://izam.system-b2b.pl/public/assets/karta%20techniczna.pdf',
+            UvexB2bConnector::fileUrl('https://izam.system-b2b.pl/public/', 'assets/karta techniczna.pdf'),
+        );
+        // adres już zakodowany nie jest kodowany drugi raz
+        $this->assertSame(
+            'https://izam.system-b2b.pl/public/assets/karta%20techniczna.pdf',
+            UvexB2bConnector::fileUrl('https://izam.system-b2b.pl/public/', 'assets/karta%20techniczna.pdf'),
+        );
+    }
+
+    public function test_sync_saves_product_files_and_reads_description_from_the_datasheet(): void
+    {
+        Storage::fake('public');
+        $this->fakeSite();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $cleaner = Product::query()->where('sku', '9970.005')->sole();
+        $documents = ProductDocument::query()->where('product_id', $cleaner->id)->orderBy('sort_order')->get();
+        $this->assertSame(
+            ['SST stacja czyszcząca mini 9970.005.pdf', 'instrukcja obuwia uvex.JPG'],
+            $documents->pluck('title')->all(),
+        );
+        $this->assertSame(['datasheet', 'other'], $documents->pluck('kind')->all());
+        foreach ($documents as $document) {
+            $this->assertTrue(Storage::disk('public')->exists((string) $document->path));
+            $this->assertStringStartsWith('https://izam.system-b2b.pl/public/assets/resources/products/4713/', (string) $document->source_url);
+        }
+
+        // tekst karty technicznej: zapisany przy pliku i dopisany do opisu ze wskazaniem źródła
+        $datasheet = $documents->firstOrFail();
+        $this->assertStringContainsString('EN ISO 20345:2011 S1 P SRC', (string) $datasheet->text);
+        $this->assertNull($documents->last()->text, 'skan bez warstwy tekstowej nie dostaje tekstu');
+
+        $this->assertStringStartsWith('Stacja czyszcząca do okularów i gogli.', (string) $cleaner->description);
+        $this->assertStringContainsString('Z karty technicznej (SST stacja czyszcząca mini 9970.005.pdf):', (string) $cleaner->description);
+        $this->assertStringContainsString('EN ISO 20345:2011 S1 P SRC', (string) $cleaner->description);
+
+        // opis z synchronizacji jest rozpoznawany jako opis z B2B (kolejny przebieg może go poprawić)
+        $link = B2bProductLink::query()->where('remote_id', '9970.005')->sole();
+        $this->assertSame(sha1((string) $cleaner->description), (string) $link->description_hash);
+
+        $downloads = count($this->fileHits);
+        $this->assertSame(2, $downloads);
+
+        // drugi przebieg: pliki są już przy karcie, więc nie pobieramy ich ponownie
+        $this->fileHits = [];
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame([], $this->fileHits);
+        $this->assertSame(2, ProductDocument::query()->where('product_id', $cleaner->id)->count());
+        $this->assertSame(0, $second['created']);
+        $this->assertSame($cleaner->description, (string) $cleaner->fresh()?->description);
+    }
+
     private function client(): UvexB2bClient
     {
         return new UvexB2bClient('K123', 'jan', 'dobre-haslo', 0, function (int $ms): void {
@@ -540,11 +638,23 @@ final class UvexConnectorTest extends TestCase
                     return Http::response($this->listHtml((int) ($query['page'] ?? 1)));
                 }
                 $id = (string) ($query['first_id'] ?? '');
+                $this->detailHits++;
 
                 return isset($this->details[$id]) ? Http::response($this->details[$id]) : Http::response('brak strony', 404);
             }
             if (str_starts_with($path, '/get-preview/')) {
                 return Http::response(self::PNG, 200, ['Content-Type' => 'image/png']);
+            }
+            if (str_starts_with($path, '/public/assets/resources/products/')) {
+                if (! $loggedIn) {
+                    return $toLogin;
+                }
+                $this->fileHits[] = $path;
+                $name = rawurldecode(basename($path));
+
+                return str_ends_with(mb_strtolower($name), '.pdf')
+                    ? Http::response($this->fixture('sst_9970005.pdf'), 200, ['Content-Type' => 'application/pdf'])
+                    : Http::response(self::PNG, 200, ['Content-Type' => 'image/jpeg']);
             }
 
             return Http::response('nieznany adres w teście: '.$url, 404);

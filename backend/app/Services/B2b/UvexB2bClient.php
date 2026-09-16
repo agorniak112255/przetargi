@@ -151,8 +151,18 @@ final class UvexB2bClient
      */
     public function imageBytes(string $url): array
     {
+        return $this->fileBytes($url, 'zdjęcia');
+    }
+
+    /**
+     * Plik ze strony produktu (karta techniczna, instrukcja) — adres z panelu, pobierany sesją konta.
+     *
+     * @return array{bytes: string, mime: string}
+     */
+    public function fileBytes(string $url, string $label = 'pliku'): array
+    {
         if (! self::isShopUrl($url)) {
-            throw new RuntimeException('adres zdjęcia spoza '.self::HOST.': '.$url);
+            throw new RuntimeException('adres '.$label.' spoza '.self::HOST.': '.$url);
         }
         $response = $this->send(static fn (PendingRequest $http): Response => $http->get($url));
         $mime = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));

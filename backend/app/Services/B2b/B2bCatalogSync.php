@@ -10,10 +10,12 @@ use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
+use App\Models\ProductDocument;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantPriceHistory;
+use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\PriceListImportService;
 use App\Services\Pricing\ProductEffectivePrice;
@@ -81,6 +83,9 @@ final class B2bCatalogSync
 
     private const REMOVAL_CHUNK = 2000;
 
+    /** Największy plik dostawcy trafiający na kartę — karty techniczne mają setki kB, nie MB. */
+    private const DOCUMENT_MAX_BYTES = 5_000_000;
+
     /** Tyle powodów pominięcia wraca w wyniku przebiegu (panel i CLI pokazują kilka pierwszych). */
     private const ERRORS_LIMIT = 200;
 
@@ -91,6 +96,8 @@ final class B2bCatalogSync
         private readonly PriceListImportService $priceLists,
         private readonly ProductImageDownloader $images,
         private readonly ProductEffectivePrice $effectivePrices,
+        private readonly ProductDocumentDownloader $documents = new ProductDocumentDownloader,
+        private readonly B2bDocumentText $documentText = new B2bDocumentText,
     ) {}
 
     /**
@@ -136,7 +143,7 @@ final class B2bCatalogSync
         $stats = [
             'total_remote' => 0, 'seen' => 0, 'created' => 0, 'updated' => 0,
             'unchanged' => 0, 'skipped' => 0, 'descriptions' => 0, 'images' => 0,
-            'translations_queued' => 0,
+            'documents' => 0, 'translations_queued' => 0,
         ];
         $errors = [];
         $errorsOverLimit = 0;
@@ -235,6 +242,7 @@ final class B2bCatalogSync
                 if ($outcome['image'] ?? false) {
                     $stats['images']++;
                 }
+                $stats['documents'] += (int) ($outcome['documents'] ?? 0);
                 if ($outcome['translation_queued'] ?? false) {
                     $stats['translations_queued']++;
                 }
@@ -487,7 +495,8 @@ final class B2bCatalogSync
         $slotKey = ProductSourcePrice::b2bKey((int) $account->id);
         // błąd pobrania opisu nie wstrzymuje ceny: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
         $warnings = [];
-        [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
+        $card = $this->cardDocuments($connector, $remote, $existing, $warnings);
+        [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings, $card);
 
         $priceChange = null;
         $updateSummary = null;
@@ -617,10 +626,12 @@ final class B2bCatalogSync
         }
 
         [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
+        $documents = $this->storeDocuments($product, $connector, $card, $warnings);
 
         return [
             'status' => $status,
             'product_id' => (int) $product->id,
+            'documents' => $documents,
             'price_change' => $priceChange,
             'update_summary' => $status === 'updated' ? $updateSummary : null,
             'description' => isset($payload['description']),
@@ -1391,6 +1402,7 @@ final class B2bCatalogSync
         B2bConnector $connector,
         B2bRemoteProduct $remote,
         ?array &$warnings = null,
+        array $card = ['documents' => [], 'texts' => []],
     ): array {
         if ($remote->category !== null && trim((string) ($existing?->category ?? '')) === '') {
             $payload['category'] = mb_substr($remote->category, 0, 255);
@@ -1412,6 +1424,7 @@ final class B2bCatalogSync
                 $warnings[] = 'opis nie został pobrany ('.$e->getMessage().') — opis bez zmian, ceny zaktualizowane';
                 $description = '';
             }
+            $description = self::withDatasheet($description, $card);
             if ($description !== '') {
                 if ($this->keepsTranslation($existing, $link, $description)) {
                     return [$descriptionHash, false];
@@ -1443,6 +1456,161 @@ final class B2bCatalogSync
     private function foreignManufacturer(Product $existing, string $manufacturer): bool
     {
         return mb_strtolower(trim((string) $existing->manufacturer)) !== mb_strtolower($manufacturer);
+    }
+
+    /**
+     * Opis karty ze sklepu dostawcy + dosłowny tekst z karty technicznej (PDF z zakładki „Pliki do pobrania”),
+     * z nazwą pliku jako źródłem. Nic nie jest dopisywane od siebie: bez tekstu w pliku nie ma sekcji.
+     *
+     * @param  array{documents: list<B2bRemoteDocument>, texts: array<string, string>}  $card
+     */
+    private static function withDatasheet(string $description, array $card): string
+    {
+        $sections = $description !== '' ? [$description] : [];
+        foreach ($card['documents'] as $document) {
+            $text = trim($card['texts'][$document->sourceUrl] ?? '');
+            if ($text === '') {
+                continue;
+            }
+            $sections[] = 'Z karty technicznej ('.$document->title.'):'."\n".$text;
+        }
+
+        return implode("\n\n", $sections);
+    }
+
+    /**
+     * Pliki karty u dostawcy i tekst karty technicznej. Tekst raz odczytany zostaje przy dokumencie
+     * (product_documents.text), więc kolejne przebiegi nie pobierają PDF-ów ponownie — pobieramy tylko to,
+     * czego karta jeszcze nie ma.
+     *
+     * @param  list<string>|null  $warnings
+     * @return array{documents: list<B2bRemoteDocument>, texts: array<string, string>}
+     */
+    private function cardDocuments(
+        B2bConnector $connector,
+        B2bRemoteProduct $remote,
+        ?Product $existing,
+        ?array &$warnings = null,
+    ): array {
+        $empty = ['documents' => [], 'texts' => []];
+        if (! $connector instanceof B2bDocumentSource) {
+            return $empty;
+        }
+
+        try {
+            $documents = $connector->documents($remote);
+        } catch (B2bFatalException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            $warnings[] = 'pliki produktu nie zostały odczytane ('.$e->getMessage().')';
+
+            return $empty;
+        }
+
+        $texts = [];
+        foreach ($documents as $document) {
+            // do opisu bierzemy pierwszą kartę techniczną; reszta plików zostaje załącznikiem
+            if ($document->kind !== ProductDocument::KIND_DATASHEET) {
+                continue;
+            }
+            $stored = $existing === null ? null : ProductDocument::query()
+                ->where('product_id', $existing->id)
+                ->where('source_url', mb_substr($document->sourceUrl, 0, 2000))
+                ->first();
+            if ($stored !== null && $stored->text !== null) {
+                $texts[$document->sourceUrl] = (string) $stored->text;
+
+                break;
+            }
+            try {
+                $file = $connector->documentBytes($document);
+                $texts[$document->sourceUrl] = $this->documentText->fromFile($file['bytes'], $file['mime']);
+            } catch (B2bFatalException $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                $warnings[] = 'karta techniczna nie została pobrana ('.$e->getMessage().')';
+            }
+
+            break;
+        }
+
+        return ['documents' => $documents, 'texts' => $texts];
+    }
+
+    /**
+     * Pliki dostawcy przy karcie (ProductDocument): pobieramy tylko te, których karta jeszcze nie ma pod tym
+     * adresem. Tekst odczytany dla opisu zapisujemy razem z plikiem; z pozostałych PDF-ów czytamy go przy zapisie,
+     * bo bajty i tak są w ręku.
+     *
+     * @param  array{documents: list<B2bRemoteDocument>, texts: array<string, string>}  $card
+     * @param  list<string>|null  $warnings
+     * @return int liczba plików zapisanych albo uzupełnionych przy karcie
+     */
+    private function storeDocuments(
+        Product $product,
+        B2bConnector $connector,
+        array $card,
+        ?array &$warnings = null,
+    ): int {
+        if (! $connector instanceof B2bDocumentSource || $card['documents'] === []) {
+            return 0;
+        }
+
+        $urls = array_map(
+            static fn (B2bRemoteDocument $document): string => mb_substr($document->sourceUrl, 0, 2000),
+            $card['documents'],
+        );
+        $stored = ProductDocument::query()
+            ->where('product_id', $product->id)
+            ->whereIn('source_url', $urls)
+            ->get()
+            ->keyBy('source_url');
+        $sortOrder = (int) ProductDocument::query()->where('product_id', $product->id)->max('sort_order');
+
+        $saved = 0;
+        foreach ($card['documents'] as $document) {
+            $url = mb_substr($document->sourceUrl, 0, 2000);
+            $have = $stored->get($url);
+            $text = $card['texts'][$document->sourceUrl] ?? null;
+            if ($have !== null) {
+                // plik już jest przy karcie — bajtów nie pobieramy ponownie, najwyżej uzupełniamy tekst
+                if ($text !== null && $have->text === null) {
+                    $have->forceFill(['text' => $text])->save();
+                    $saved++;
+                }
+
+                continue;
+            }
+            try {
+                $file = $connector->documentBytes($document);
+                $text ??= $document->kind === ProductDocument::KIND_DATASHEET
+                    ? $this->documentText->fromFile($file['bytes'], $file['mime'])
+                    : null;
+                $written = $this->documents->storeBytes(
+                    $product,
+                    $file['bytes'],
+                    $file['mime'],
+                    $document->sourceUrl,
+                    $document->title,
+                    $document->kind,
+                    ++$sortOrder,
+                    $text,
+                    self::DOCUMENT_MAX_BYTES,
+                );
+                if ($written !== null) {
+                    $saved++;
+
+                    continue;
+                }
+                $warnings[] = 'plik „'.$document->title.'” pominięty (typ albo rozmiar poza limitem)';
+            } catch (B2bFatalException $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                $warnings[] = 'plik „'.$document->title.'” nie został zapisany ('.$e->getMessage().')';
+            }
+        }
+
+        return $saved;
     }
 
     /**
