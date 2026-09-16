@@ -179,6 +179,29 @@ final class UvexB2bClient
         )->body();
     }
 
+    /**
+     * Wyszukiwarka producenta po numerze katalogowym — sklep czasem odsyła kartę pod adres innego wyrobu.
+     * Zwraca adres po ewentualnym przekierowaniu (przy jednym trafieniu sklep prowadzi wprost na kartę).
+     *
+     * @return array{url: string, html: string}
+     */
+    public function manufacturerSearch(string $url): array
+    {
+        if (! self::isManufacturerUrl($url)) {
+            throw new RuntimeException('adres wyszukiwarki spoza znanych domen UVEX: '.$url);
+        }
+
+        $response = $this->send(
+            static fn (PendingRequest $http): Response => $http->withHeaders([
+                'User-Agent' => self::USER_AGENT,
+                'Accept-Language' => 'en',
+            ])->get($url),
+            withSession: false,
+        );
+
+        return ['url' => (string) $response->effectiveUri(), 'html' => $response->body()];
+    }
+
     /** Domeny producenta, na które wolno pójść po opis (tylko https). */
     public static function isManufacturerUrl(string $url): bool
     {

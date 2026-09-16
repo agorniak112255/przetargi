@@ -60,6 +60,12 @@ final class UvexConnectorTest extends TestCase
     /** Adresy stron producenta, po które poszedł łącznik. */
     private array $manufacturerHits = [];
 
+    /** Numery katalogowe wpisane w wyszukiwarkę producenta. */
+    private array $searchHits = [];
+
+    /** Czy wyszukiwarka producenta zna kartę o szukanym numerze. */
+    private bool $manufacturerKnowsCode = true;
+
     private int $logins = 0;
 
     private bool $dropSessionOnce = false;
@@ -576,23 +582,81 @@ final class UvexConnectorTest extends TestCase
         $this->assertCount(1, $this->manufacturerHits);
     }
 
-    public function test_link_to_another_product_page_is_refused(): void
+    public function test_wrong_link_is_replaced_by_the_page_found_by_product_code(): void
     {
-        // sklep odsyła część kart pod adres innego filtra — opis z cudzej karty nie może trafić na naszą
+        // sklep odsyła część kart pod adres innego filtra — właściwej karty szukamy po numerze katalogowym
         $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/000P1P102001');
         $this->fakeSite();
         $connector = $this->connector();
         $connector->login();
         $product = $this->productsByCode($connector)['9970.005'];
 
-        try {
-            $connector->description($product);
-            $this->fail('Opis z innego wyrobu powinien zostać odrzucony');
-        } catch (RuntimeException $e) {
-            $this->assertStringContainsString('prowadzi do innego wyrobu', $e->getMessage());
-        }
-        $this->assertSame([], $this->manufacturerHits, 'strony innego wyrobu nawet nie pobieramy');
+        $description = $connector->description($product);
+
+        $this->assertSame(['9970.005'], $this->searchHits, 'szukamy po numerze katalogowym karty');
+        $this->assertSame(
+            ['https://www.uvex-laservision.de/en/laser-safety-windows/cleaning-station/9970.005'],
+            $this->manufacturerHits,
+            'pobieramy tylko stronę o zgodnym numerze',
+        );
+        $this->assertStringContainsString('Opis ze strony producenta (www.uvex-laservision.de):', $description);
+        $this->assertTrue($connector->hasForeignDescription($product));
+        $this->assertSame(
+            ['Odnośnik ze sklepu prowadził do strony innego wyrobu, właściwą znaleziono po numerze katalogowym: 1 kart'],
+            $connector->runSummary(),
+        );
+    }
+
+    public function test_card_stays_without_description_when_the_manufacturer_has_no_such_code(): void
+    {
+        $this->manufacturerKnowsCode = false;
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/000P1P102001');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        $description = $connector->description($product);
+
+        $this->assertSame('Jednostka: szt.', $description, 'karta zostaje bez opisu producenta');
+        $this->assertSame([], $this->manufacturerHits, 'strony innego wyrobu nie pobieramy');
         $this->assertFalse($connector->hasForeignDescription($product));
+        $this->assertSame(
+            ['Odnośnik ze sklepu prowadził do strony innego wyrobu — opisu nie pobrano dla 1 kart (9970.005 → 000P1P102001)'],
+            $connector->runSummary(),
+        );
+    }
+
+    public function test_description_from_a_wrong_page_is_removed_at_the_next_sync(): void
+    {
+        Storage::fake('public');
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/9970.005');
+        $this->fakeSite();
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $cleaner = Product::query()->where('sku', '9970.005')->sole();
+        $this->assertStringContainsString('The laser safety window P1P10', (string) $cleaner->description);
+
+        // sklep zmienił odnośnik na stronę innego wyrobu, a producent nie zna tego numeru — cudzy opis ma zniknąć
+        $this->manufacturerKnowsCode = false;
+        $this->details['4713'] = str_replace(
+            '/laser-safety-window-p1p10-3mm/9970.005',
+            '/laser-safety-window-p1p10-3mm/000P1P102001',
+            $this->details['4713'],
+        );
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $description = (string) Product::query()->whereKey($cleaner->id)->value('description');
+        $this->assertStringNotContainsString('laser safety window', $description);
+        $this->assertStringNotContainsString('Opis ze strony producenta', $description);
+        $this->assertStringContainsString('Jednostka: szt.', $description);
+
+        $log = array_column((array) B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log, 'text');
+        $this->assertContains(
+            'Odnośnik ze sklepu prowadził do strony innego wyrobu — opisu nie pobrano dla 1 kart (9970.005 → 000P1P102001)',
+            $log,
+        );
     }
 
     public function test_product_code_decides_whether_the_manufacturer_page_belongs_to_the_card(): void
@@ -650,6 +714,20 @@ final class UvexConnectorTest extends TestCase
             '<p><br><a href="'.$url.'" target="_blank">Kliknij i przejdź do pełnego opisu</a></p>',
             $this->details['4713'],
         );
+    }
+
+    /** Lista wyników wyszukiwarki producenta: karta o szukanym numerze albo nic pasującego. */
+    private function manufacturerSearchPage(string $code): string
+    {
+        $hit = $this->manufacturerKnowsCode && $code !== ''
+            ? '<a href="https://www.uvex-laservision.de/en/laser-safety-windows/cleaning-station/'.$code.'">'.$code.'</a>'
+            : '';
+
+        return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><div class="cms-listing">'
+            .'<a href="https://www.uvex-laservision.de/en/'.$code.'/details.pdf">SPEC sheet</a>'
+            .'<a href="https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/000P1P102001">laser safety window P1P10</a>'
+            .$hit
+            .'</div></body></html>';
     }
 
     /**
@@ -803,6 +881,11 @@ final class UvexConnectorTest extends TestCase
                 return Http::response(self::PNG, 200, ['Content-Type' => 'image/png']);
             }
             if (str_ends_with((string) parse_url($url, PHP_URL_HOST), 'uvex-laservision.de')) {
+                if ($path === '/en/search') {
+                    $this->searchHits[] = (string) ($query['search'] ?? '');
+
+                    return Http::response($this->manufacturerSearchPage((string) ($query['search'] ?? '')));
+                }
                 $this->manufacturerHits[] = $url;
 
                 return Http::response($this->manufacturerPage());

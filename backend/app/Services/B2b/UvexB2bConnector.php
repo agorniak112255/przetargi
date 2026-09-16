@@ -41,7 +41,7 @@ use RuntimeException;
  * Producent — ZAŁOŻENIE (sklep nie ma pola producenta): „HECKEL” gdy kod lub nazwa zawiera heckel, „HexArmor” gdy
  * nazwa zawiera hexarmor, inaczej „UVEX” (sklep firmy UVEX; większość nazw zawiera „uvex”).
  */
-final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bListProgressAware
+final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bListProgressAware, B2bRunSummaryAware
 {
     /** Nieprzerwane pobieranie listy dłużej = błąd (przebieg bez postępu uznałby b2b:sync-due za przerwany). */
     private const LIST_BUDGET_SECONDS = 25 * 60;
@@ -96,6 +96,16 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
 
     /** remoteId karty, której opis przyszedł ze strony producenta (po angielsku) — do zlecenia tłumaczenia. */
     private ?string $foreignDescriptionFor = null;
+
+    /**
+     * Karty, których odnośnik prowadził do strony innego wyrobu, a właściwej nie udało się znaleźć.
+     *
+     * @var list<string>
+     */
+    private array $wrongLinks = [];
+
+    /** Ile razy właściwa strona producenta znalazła się po numerze katalogowym, mimo błędnego odnośnika. */
+    private int $foundByCode = 0;
 
     /** @var (callable(string): void)|null */
     private $listProgress = null;
@@ -249,6 +259,28 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         return mb_substr(implode("\n\n", $sections), 0, 10000);
     }
 
+    /**
+     * @return list<string>
+     */
+    public function runSummary(): array
+    {
+        $lines = [];
+        if ($this->foundByCode > 0) {
+            $lines[] = 'Odnośnik ze sklepu prowadził do strony innego wyrobu, właściwą znaleziono po numerze katalogowym: '
+                .$this->foundByCode.' kart';
+        }
+        if ($this->wrongLinks === []) {
+            return $lines;
+        }
+
+        return [...$lines, sprintf(
+            'Odnośnik ze sklepu prowadził do strony innego wyrobu — opisu nie pobrano dla %d kart (%s%s)',
+            count($this->wrongLinks),
+            implode('; ', array_slice($this->wrongLinks, 0, 3)),
+            count($this->wrongLinks) > 3 ? '; …' : '',
+        )];
+    }
+
     public function hasForeignDescription(B2bRemoteProduct $product): bool
     {
         return $this->foreignDescriptionFor !== null && $this->foreignDescriptionFor === $product->remoteId;
@@ -268,14 +300,19 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         }
 
         $code = (string) ($product->raw['code'] ?? $product->sku);
-        $pageCode = basename((string) parse_url($url, PHP_URL_PATH));
-        if (! self::sameProduct($pageCode, $code)) {
-            throw new RuntimeException(
-                'odnośnik ze sklepu prowadzi do innego wyrobu (strona '.$pageCode.' przy karcie '.$code.') — opis pominięty'
-            );
+        $found = self::sameProduct(basename((string) parse_url($url, PHP_URL_PATH)), $code)
+            ? ['url' => $url, 'html' => $this->client->manufacturerPage($url)]
+            : $this->manufacturerPageByCode($url, $code);
+        if ($found === null) {
+            // Sam pomijamy sekcję, zamiast przerywać opis wyjątkiem: karta zapisze opis bez treści producenta,
+            // więc cudzy opis z wcześniejszego przebiegu zniknie z katalogu sam.
+            $this->wrongLinks[] = $code.' → '.basename((string) parse_url($url, PHP_URL_PATH));
+
+            return '';
         }
 
-        $page = JspB2bClient::dom($this->client->manufacturerPage($url));
+        $url = $found['url'];
+        $page = JspB2bClient::dom($found['html']);
         $description = $page->query('//*[@itemprop="description"]')->item(0);
         if ($description === null) {
             throw new RuntimeException('strona producenta '.$url.' nie ma opisu w spodziewanym miejscu');
@@ -769,6 +806,56 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         }
 
         return $xpath;
+    }
+
+    /**
+     * Sklep bywa nierzetelny i odsyła kartę pod adres innego wyrobu — właściwej strony szukamy wtedy sami,
+     * po numerze katalogowym, w wyszukiwarce tego samego sklepu producenta. Przy jednym trafieniu sklep
+     * przekierowuje wprost na kartę, inaczej wybieramy z listy wynik o zgodnym numerze.
+     *
+     * @return array{url: string, html: string}|null null = nie znaleziono karty tego wyrobu
+     */
+    private function manufacturerPageByCode(string $linkUrl, string $code): ?array
+    {
+        $host = (string) parse_url($linkUrl, PHP_URL_HOST);
+        if ($host === '' || $code === '') {
+            return null;
+        }
+
+        $search = $this->client->manufacturerSearch('https://'.$host.'/en/search?search='.rawurlencode($code));
+        if (self::sameProduct(basename((string) parse_url($search['url'], PHP_URL_PATH)), $code)) {
+            $this->foundByCode++;
+
+            return $search;
+        }
+
+        $found = self::productLinkFor(JspB2bClient::dom($search['html']), $code);
+        if ($found === null) {
+            return null;
+        }
+        $this->foundByCode++;
+
+        return ['url' => $found, 'html' => $this->client->manufacturerPage($found)];
+    }
+
+    /** Pierwszy odnośnik z listy wyników prowadzący do karty o tym numerze katalogowym (bez plików). */
+    private static function productLinkFor(DOMXPath $results, string $code): ?string
+    {
+        foreach ($results->query('//a[@href]') ?: [] as $link) {
+            if (! $link instanceof DOMElement) {
+                continue;
+            }
+            $href = trim(html_entity_decode($link->getAttribute('href'), ENT_QUOTES | ENT_HTML5));
+            $path = (string) parse_url($href, PHP_URL_PATH);
+            if ($path === '' || str_ends_with(mb_strtolower($path), '.pdf')) {
+                continue;
+            }
+            if (UvexB2bClient::isManufacturerUrl($href) && self::sameProduct(basename($path), $code)) {
+                return $href;
+            }
+        }
+
+        return null;
     }
 
     /**
