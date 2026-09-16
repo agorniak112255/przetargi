@@ -71,8 +71,10 @@ class ProductController extends Controller
                 'prestaExport',
             ]);
 
+        $searchTerm = null;
         if ($request->filled('q')) {
             $term = trim((string) $request->string('q'));
+            $searchTerm = $term;
             $brands = $this->modelFuzzy->catalogBrands($term);
             $modelNeedles = $this->modelFuzzy->catalogModelNeedles($term);
 
@@ -179,6 +181,17 @@ class ProductController extends Controller
         $sortKey = (string) $request->string('sort', 'name');
         $sortCol = $allowedSort[$sortKey] ?? 'name';
         $dir = strtolower((string) $request->string('dir', 'asc')) === 'desc' ? 'desc' : 'asc';
+
+        // Wpisany numer katalogowy wychodzi pierwszy. Zapytanie o numer jest rozbijane na kawałki
+        // („BW200/LB202FLR/AZ003/2AZ029” → „w200”, „lb202flr”, „az003”…) i zwraca całą rodzinę wyrobu, więc
+        // szukana karta stała dotąd w środku listy ułożonej alfabetycznie — na siódmej stronie wyników.
+        // Zbioru wyników to nie zawęża: zmienia się tylko kolejność, wybrane sortowanie zostaje kluczem dalszym.
+        if ($searchTerm !== null && $searchTerm !== '') {
+            $query->orderByRaw(
+                'CASE WHEN sku = ? THEN 0 WHEN sku LIKE ? THEN 1 ELSE 2 END ASC',
+                [$searchTerm, '%'.addcslashes($searchTerm, '%_\\').'%'],
+            );
+        }
 
         if ($sortCol === 'catalog_price_net') {
             $query->orderByRaw($this->fx->priceOrderSql('catalog_price_net', 'currency').' '.$dir);

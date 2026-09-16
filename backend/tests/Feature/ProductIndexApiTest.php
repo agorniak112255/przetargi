@@ -141,6 +141,41 @@ final class ProductIndexApiTest extends TestCase
             ->assertJsonPath('data.0.sku', '10061279');
     }
 
+    /**
+     * Numer katalogowy Protektu („BW200/LB202FLR/AZ003/2AZ029”) rozkłada się na kawałki wspólne dla całej rodziny
+     * wyrobu, więc szukanie zwraca też rodzeństwo. Karta o wpisanym numerze ma stać na pierwszym miejscu, a nie
+     * w środku listy ułożonej alfabetycznie po nazwie.
+     */
+    public function test_products_q_puts_the_card_with_the_typed_catalog_number_first(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        foreach ([
+            'BW200' => 'ABM - Amortyzator bezpieczeństwa bez zatrzaśnika',
+            'BW200/AZ002' => 'ABM - Amortyzator bezpieczeństwa z zatrzaśnikiem AZ002',
+            'BW200/LB202FLR' => 'ABM/LB202 FLR - Amortyzator z podwójną linką bez zatrzaśników',
+            'BW200/LB202FLR/AZ003/2AZ029' => 'ABM/LB202 FLR - Amortyzator z podwójną linką z zatrzaśnikami AZ003, AZ029',
+        ] as $sku => $name) {
+            Product::query()->create([
+                'sku' => $sku,
+                'name' => $name,
+                'manufacturer' => 'PROTEKT',
+                'catalog_price_net' => 100,
+                'purchase_price' => 50,
+                'stock' => 1,
+            ]);
+        }
+
+        $this->getJson('/api/products?q='.rawurlencode('BW200/LB202FLR/AZ003/2AZ029'))
+            ->assertOk()
+            ->assertJsonPath('data.0.sku', 'BW200/LB202FLR/AZ003/2AZ029');
+
+        // fragment numeru też wskazuje kartę, choć rodzeństwo zostaje na liście
+        $this->getJson('/api/products?q='.rawurlencode('LB202FLR/AZ003'))
+            ->assertOk()
+            ->assertJsonPath('data.0.sku', 'BW200/LB202FLR/AZ003/2AZ029');
+    }
+
     public function test_manufacturers_endpoint_returns_distinct_sorted_list(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
