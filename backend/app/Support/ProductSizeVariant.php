@@ -33,6 +33,15 @@ final class ProductSizeVariant
         '130' => '13',
     ];
 
+    /**
+     * Litery rozmiaru dopuszczone WEWNĄTRZ kodu, w kolejności rozmiarów.
+     * Bez cyfr: cyfra w środku kodu bywa wymiarem, wersją albo kolorem
+     * (T5921002 / T5921003 to ten sam chodnik w różnych wymiarach).
+     *
+     * @var list<string>
+     */
+    private const MID_SIZE_LETTERS = ['S', 'M', 'L', 'X'];
+
     /** @var list<string> */
     private const ALPHA_ORDER = [
         'xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl', 'xxxl', 'xxxxl', '5xl', '6xl',
@@ -576,6 +585,123 @@ final class ProductSizeVariant
         }
 
         return null;
+    }
+
+    /**
+     * Warianty z literą rozmiaru WEWNĄTRZ kodu: S56T0SS0 / S56T0SM0 / S56T0SL0
+     * to ta sama półmaska w S/M/L, a żadna z dotychczasowych ścieżek (rozmiar na końcu
+     * kodu albo w nazwie) tego nie widzi.
+     *
+     * Dowód bierze się z rodzeństwa, nie z pojedynczego kodu — grupa powstaje tylko wtedy, gdy
+     * co najmniej dwie karty mają tego samego producenta, identyczną nazwę (po normalizacji
+     * spacji i wielkości liter) oraz kody tej samej długości różniące się dokładnie jedną
+     * pozycją, a znaki na tej pozycji to różne litery rozmiarów. Skrajne znaki kodu zostają
+     * przy istniejących ścieżkach (rozmiar na końcu kodu), a nazwa niosąca rozmiar wyklucza
+     * kartę z tej reguły.
+     *
+     * Produkt trafia najwyżej do jednej grupy — przy dwóch pasujących pozycjach wygrywa
+     * liczniejsza grupa, przy remisie pierwsza alfabetycznie.
+     *
+     * @param  iterable<array{id: int, manufacturer: string, name: string, sku: string}>  $rows
+     * @return array<int, array{key: string, size: string}> id karty => klucz grupy i litera rozmiaru z kodu
+     */
+    public function midCodeSizeVariantGroups(iterable $rows): array
+    {
+        /** @var array<string, array<int, string>> $byMask */
+        $byMask = [];
+        foreach ($rows as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            $manufacturer = trim((string) ($row['manufacturer'] ?? ''));
+            $name = $this->midCodeNameKey((string) ($row['name'] ?? ''));
+            $sku = mb_strtoupper(trim((string) ($row['sku'] ?? '')));
+            $length = mb_strlen($sku);
+            if ($id <= 0 || $manufacturer === '' || $name === '' || $length < 4) {
+                continue;
+            }
+            for ($i = 1; $i < $length - 1; $i++) {
+                $letter = mb_substr($sku, $i, 1);
+                if (! in_array($letter, self::MID_SIZE_LETTERS, true)) {
+                    continue;
+                }
+                $mask = mb_substr($sku, 0, $i).'*'.mb_substr($sku, $i + 1);
+                $key = 'mid:'.mb_strtolower($manufacturer).'|'.$name.'|'.$mask;
+                $byMask[$key][$id] = $letter;
+            }
+        }
+
+        $masks = [];
+        foreach ($byMask as $key => $items) {
+            if (count($items) < 2 || count(array_unique($items)) < 2) {
+                continue;
+            }
+            $masks[] = ['key' => $key, 'items' => $items];
+        }
+        usort(
+            $masks,
+            static fn (array $a, array $b): int => [count($b['items']), $a['key']] <=> [count($a['items']), $b['key']]
+        );
+
+        $chosen = [];
+        foreach ($masks as $mask) {
+            $free = [];
+            foreach ($mask['items'] as $id => $letter) {
+                if (! isset($chosen[$id])) {
+                    $free[$id] = $letter;
+                }
+            }
+            if (count($free) < 2 || count(array_unique($free)) < 2) {
+                continue;
+            }
+            foreach ($free as $id => $letter) {
+                $chosen[$id] = ['key' => $mask['key'], 'size' => $letter];
+            }
+        }
+
+        return $chosen;
+    }
+
+    /**
+     * Lista rozmiarów na kartę zwycięzcy — litery dokładnie takie, jak w kodach dostawcy.
+     * „X” zostaje „X”: rozwinięcie do XL albo XS byłoby zgadywaniem.
+     *
+     * @param  list<string>  $letters
+     */
+    public function midCodeSizeLabel(array $letters): ?string
+    {
+        $found = [];
+        foreach ($letters as $letter) {
+            $letter = mb_strtoupper(trim($letter));
+            if (in_array($letter, self::MID_SIZE_LETTERS, true) && ! in_array($letter, $found, true)) {
+                $found[] = $letter;
+            }
+        }
+        usort(
+            $found,
+            static fn (string $a, string $b): int => array_search($a, self::MID_SIZE_LETTERS, true)
+                <=> array_search($b, self::MID_SIZE_LETTERS, true)
+        );
+
+        return $this->formatPackaging($found);
+    }
+
+    /**
+     * Klucz nazwy dla wariantów z kodu: pusty, gdy nazwa jest za krótka na dowód
+     * albo sama mówi o rozmiarze (wtedy zostaje przy dotychczasowych ścieżkach).
+     */
+    private function midCodeNameKey(string $name): string
+    {
+        $key = trim(preg_replace('/\s+/u', ' ', mb_strtolower(trim($name))) ?? '');
+        if (mb_strlen($key) < 6) {
+            return '';
+        }
+        if (preg_match(
+            '/(?:^|\W)(?:rozmiar\w*|rozm\.|ma[łl]y|ma[łl]a|du[żz]y|du[żz]a|sizes?|small|medium|large|taille|gr[oö]sse)(?:\W|$)/u',
+            $key
+        ) === 1) {
+            return '';
+        }
+
+        return $this->sizeFromName($key) === null ? $key : '';
     }
 
     /**

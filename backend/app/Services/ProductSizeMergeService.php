@@ -63,12 +63,21 @@ final class ProductSizeMergeService
         }
 
         $knownStems = [];
+        $rows = [];
         foreach ((clone $query)->cursor() as $product) {
             $stem = $this->sizes->skuTailStem((string) $product->sku);
             if ($stem !== null) {
                 $knownStems[mb_strtolower($stem)] = $stem;
             }
+            $rows[] = [
+                'id' => (int) $product->id,
+                'manufacturer' => (string) $product->manufacturer,
+                'name' => (string) $product->name,
+                'sku' => (string) $product->sku,
+            ];
         }
+        // Litera rozmiaru w środku kodu — rozpoznawana z rodzeństwa, więc przed grupowaniem.
+        $midGroups = $this->sizes->midCodeSizeVariantGroups($rows);
 
         /** @var array<int, ProductSourcePrice> $fileSlots */
         $fileSlots = ProductSourcePrice::query()
@@ -81,7 +90,7 @@ final class ProductSizeMergeService
         /** @var array<string, list<Product>> $groups */
         $groups = [];
         foreach ($query->cursor() as $product) {
-            $key = $this->mergeGroupKey($product, $knownStems, $fileSlots[(int) $product->id] ?? null);
+            $key = $this->mergeGroupKey($product, $knownStems, $midGroups, $fileSlots[(int) $product->id] ?? null);
             if ($key === null) {
                 continue;
             }
@@ -117,7 +126,11 @@ final class ProductSizeMergeService
             }
             if (! $dryRun) {
                 try {
-                    $this->absorb($winner, $losers);
+                    $this->absorb(
+                        $winner,
+                        $losers,
+                        str_starts_with((string) $key, 'mid:') ? $this->midSizesBySku($items, $midGroups) : null,
+                    );
                 } catch (Throwable $e) {
                     $mergedGroups--;
                     $deleted -= count($losers);
@@ -140,9 +153,14 @@ final class ProductSizeMergeService
 
     /**
      * @param  array<string, string>  $knownStems
+     * @param  array<int, array{key: string, size: string}>  $midGroups
      */
-    private function mergeGroupKey(Product $product, array $knownStems, ?ProductSourcePrice $fileSlot): ?string
-    {
+    private function mergeGroupKey(
+        Product $product,
+        array $knownStems,
+        array $midGroups,
+        ?ProductSourcePrice $fileSlot,
+    ): ?string {
         $price = $this->filePriceBucket($product, $fileSlot);
         $stem = $this->sizes->resolveMergeStem((string) $product->sku, $knownStems);
         if ($stem !== null) {
@@ -155,11 +173,35 @@ final class ProductSizeMergeService
             (string) $product->sku,
             $product->packaging !== null ? (string) $product->packaging : null,
         );
-        if ($key === null) {
-            return null;
+        if ($key !== null) {
+            return $key.'|'.$price;
         }
 
-        return $key.'|'.$price;
+        // Ostatnia szansa: rozmiar literą w środku kodu (ścieżki wyżej mają pierwszeństwo).
+        $mid = $midGroups[(int) $product->id] ?? null;
+
+        return $mid !== null ? $mid['key'].'|'.$price : null;
+    }
+
+    /**
+     * Litery rozmiaru grupy „mid” po SKU — trafiają na kartę zwycięzcy jako lista rozmiarów.
+     *
+     * @param  list<Product>  $items
+     * @param  array<int, array{key: string, size: string}>  $midGroups
+     * @return array<string, string>|null null = grupa spoza ścieżki „litera w środku kodu”
+     */
+    private function midSizesBySku(array $items, array $midGroups): ?array
+    {
+        $sizes = [];
+        foreach ($items as $product) {
+            $mid = $midGroups[(int) $product->id] ?? null;
+            if ($mid === null) {
+                return null;
+            }
+            $sizes[(string) $product->sku] = $mid['size'];
+        }
+
+        return $sizes === [] ? null : $sizes;
     }
 
     /**
@@ -223,8 +265,9 @@ final class ProductSizeMergeService
 
     /**
      * @param  list<Product>  $losers
+     * @param  array<string, string>|null  $midSizes  SKU => litera rozmiaru z kodu (tylko ścieżka „mid”)
      */
-    private function absorb(Product $winner, array $losers): void
+    private function absorb(Product $winner, array $losers, ?array $midSizes = null): void
     {
         $loserIds = array_map(static fn (Product $p): int => (int) $p->id, $losers);
         $map = [];
@@ -232,7 +275,7 @@ final class ProductSizeMergeService
             $map[$id] = (int) $winner->id;
         }
 
-        DB::transaction(function () use ($winner, $losers, $loserIds, $map): void {
+        DB::transaction(function () use ($winner, $losers, $loserIds, $map, $midSizes): void {
             $this->remapTenderItems($map);
             $this->remapSubstitutes((int) $winner->id, $loserIds);
             $this->moveMedia($winner, $loserIds);
@@ -249,13 +292,21 @@ final class ProductSizeMergeService
             }
             $payload['merged_size_skus'] = array_values(array_unique(array_filter($mergedSkus)));
 
+            // Rozmiar odczytany z kodu nie może zniknąć: lista na kartę, przypisanie SKU → rozmiar do payloadu.
+            $sizeLabel = null;
+            if ($midSizes !== null && $midSizes !== []) {
+                $sizeLabel = $this->sizes->midCodeSizeLabel(array_values($midSizes));
+                $knownSizes = is_array($payload['merged_size_variants'] ?? null) ? $payload['merged_size_variants'] : [];
+                $payload['merged_size_variants'] = [...$knownSizes, ...$midSizes];
+            }
+
             $stock = (int) $winner->stock;
             foreach ($losers as $loser) {
                 $stock += (int) $loser->stock;
             }
 
             $updates = [
-                'packaging' => null,
+                'packaging' => $sizeLabel,
                 'stock' => $stock,
                 'enrichment_payload' => $payload,
             ];

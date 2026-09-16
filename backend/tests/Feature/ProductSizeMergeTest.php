@@ -436,6 +436,139 @@ final class ProductSizeMergeTest extends TestCase
         }
     }
 
+    public function test_merges_size_letter_inside_sku_and_keeps_size_list(): void
+    {
+        Queue::fake();
+
+        $small = Product::query()->create([
+            'sku' => 'S56T0SS0',
+            'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)',
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => 80.25,
+            'purchase_price' => 80.25,
+            'stock' => 1,
+        ]);
+        $medium = Product::query()->create([
+            'sku' => 'S56T0SM0',
+            'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)',
+            'manufacturer' => 'SECURA',
+            'description' => str_repeat('Półmaska SECURA 3000 z nagłowiem jednoczęściowym. ', 3),
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'catalog_price_net' => 80.25,
+            'purchase_price' => 80.25,
+            'stock' => 2,
+        ]);
+        $large = Product::query()->create([
+            'sku' => 'S56T0SL0',
+            'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)',
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => 80.25,
+            'purchase_price' => 80.25,
+            'stock' => 4,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('SECURA', false);
+
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(1, $result['groups']);
+        $this->assertSame(2, $result['deleted']);
+        $this->assertNull(Product::query()->find($small->id));
+        $this->assertNull(Product::query()->find($large->id));
+        $kept = Product::query()->find($medium->id);
+        $this->assertNotNull($kept);
+        $this->assertSame('S56T0SM0', $kept->sku);
+        $this->assertSame(7, $kept->stock);
+        $this->assertSame('S, M, L', $kept->packaging);
+        $payload = is_array($kept->enrichment_payload) ? $kept->enrichment_payload : [];
+        $this->assertSame(['S56T0SS0', 'S56T0SL0'], $payload['merged_size_skus']);
+        $this->assertSame(
+            ['S56T0SS0' => 'S', 'S56T0SM0' => 'M', 'S56T0SL0' => 'L'],
+            $payload['merged_size_variants'],
+        );
+    }
+
+    public function test_does_not_merge_dimension_variants_with_digit_codes(): void
+    {
+        Queue::fake();
+
+        // Chodnik 20 KV w dwóch wymiarach — wymiaru nie ma ani w nazwie, ani w kodzie.
+        Product::query()->create([
+            'sku' => 'T5921002',
+            'name' => 'Chodnik elektroizolacyjny 20 KV',
+            'manufacturer' => 'Secura',
+            'catalog_price_net' => 410.00,
+            'purchase_price' => 410.00,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'T5921003',
+            'name' => 'Chodnik elektroizolacyjny 20 KV',
+            'manufacturer' => 'Secura',
+            'catalog_price_net' => 410.00,
+            'purchase_price' => 410.00,
+            'stock' => 1,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('Secura', false);
+
+        $this->assertSame(0, $result['groups']);
+        $this->assertSame(2, Product::query()->count());
+    }
+
+    public function test_does_not_merge_size_letter_inside_sku_when_names_differ(): void
+    {
+        Queue::fake();
+
+        Product::query()->create([
+            'sku' => 'S56T0SS0',
+            'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)',
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => 80.25,
+            'purchase_price' => 80.25,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'S56T0SM0',
+            'name' => 'Półmaska SECURA 4000 (nagłowie dwuczęściowe)',
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => 80.25,
+            'purchase_price' => 80.25,
+            'stock' => 1,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('SECURA', false);
+
+        $this->assertSame(0, $result['groups']);
+        $this->assertSame(2, Product::query()->count());
+    }
+
+    public function test_does_not_merge_size_letter_inside_sku_when_price_differs(): void
+    {
+        Queue::fake();
+
+        Product::query()->create([
+            'sku' => 'S56T0SS0',
+            'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)',
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => 83.69,
+            'purchase_price' => 83.69,
+            'stock' => 1,
+        ]);
+        Product::query()->create([
+            'sku' => 'S56T0SM0',
+            'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)',
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => 74.17,
+            'purchase_price' => 74.17,
+            'stock' => 1,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('SECURA', false);
+
+        $this->assertSame(0, $result['groups']);
+        $this->assertSame(2, Product::query()->count());
+    }
+
     public function test_does_not_merge_when_price_differs(): void
     {
         Product::query()->create([

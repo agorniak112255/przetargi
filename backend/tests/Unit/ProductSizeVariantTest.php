@@ -447,4 +447,92 @@ final class ProductSizeVariantTest extends TestCase
         ]);
         $this->assertSame([], $svc->sizesForProduct($product));
     }
+
+    #[Test]
+    public function groups_size_letter_hidden_inside_supplier_code(): void
+    {
+        $svc = new ProductSizeVariant;
+        $name = 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)';
+
+        $groups = $svc->midCodeSizeVariantGroups([
+            ['id' => 1, 'manufacturer' => 'SECURA', 'name' => $name, 'sku' => 'S56T0SS0'],
+            ['id' => 2, 'manufacturer' => 'SECURA', 'name' => ' półmaska  secura 3000 (NAGŁOWIE jednoczęściowe) ', 'sku' => 'S56T0SM0'],
+            ['id' => 3, 'manufacturer' => 'SECURA', 'name' => $name, 'sku' => 'S56T0SL0'],
+        ]);
+
+        $this->assertCount(3, $groups);
+        $this->assertSame('S', $groups[1]['size']);
+        $this->assertSame('M', $groups[2]['size']);
+        $this->assertSame('L', $groups[3]['size']);
+        $this->assertSame($groups[1]['key'], $groups[2]['key']);
+        $this->assertSame($groups[1]['key'], $groups[3]['key']);
+        $this->assertStringStartsWith('mid:', $groups[1]['key']);
+        $this->assertSame('S, M, L', $svc->midCodeSizeLabel(['M', 'S', 'L', 'M']));
+    }
+
+    #[Test]
+    public function does_not_group_codes_that_differ_outside_a_size_letter(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        // Wymiary chodnika nie są ani w nazwie, ani w kodzie — cyfra to nie rozmiar.
+        $this->assertSame([], $svc->midCodeSizeVariantGroups([
+            ['id' => 1, 'manufacturer' => 'Secura', 'name' => 'Chodnik elektroizolacyjny 20 KV', 'sku' => 'T5921002'],
+            ['id' => 2, 'manufacturer' => 'Secura', 'name' => 'Chodnik elektroizolacyjny 20 KV', 'sku' => 'T5921003'],
+        ]));
+
+        // Dwie różniące się pozycje to już nie jeden rozmiar.
+        $this->assertSame([], $svc->midCodeSizeVariantGroups([
+            ['id' => 1, 'manufacturer' => 'SECURA', 'name' => 'Półmaska SECURA 3000', 'sku' => 'S56T0SS1'],
+            ['id' => 2, 'manufacturer' => 'SECURA', 'name' => 'Półmaska SECURA 3000', 'sku' => 'S56T0SM0'],
+        ]));
+
+        // Różne nazwy = brak dowodu z rodzeństwa.
+        $this->assertSame([], $svc->midCodeSizeVariantGroups([
+            ['id' => 1, 'manufacturer' => 'SECURA', 'name' => 'Półmaska SECURA 3000', 'sku' => 'S56T0SS0'],
+            ['id' => 2, 'manufacturer' => 'SECURA', 'name' => 'Półmaska SECURA 4000', 'sku' => 'S56T0SM0'],
+        ]));
+
+        // Różni producenci.
+        $this->assertSame([], $svc->midCodeSizeVariantGroups([
+            ['id' => 1, 'manufacturer' => 'SECURA', 'name' => 'Półmaska SECURA 3000', 'sku' => 'S56T0SS0'],
+            ['id' => 2, 'manufacturer' => 'Ansell', 'name' => 'Półmaska SECURA 3000', 'sku' => 'S56T0SM0'],
+        ]));
+
+        // Litera na końcu kodu i na jego początku zostaje przy dotychczasowych ścieżkach.
+        $this->assertSame([], $svc->midCodeSizeVariantGroups([
+            ['id' => 1, 'manufacturer' => 'Bolle', 'name' => 'B713 – Prescription safety glasses', 'sku' => 'B713L'],
+            ['id' => 2, 'manufacturer' => 'Bolle', 'name' => 'B713 – Prescription safety glasses', 'sku' => 'B713S'],
+        ]));
+        $this->assertSame([], $svc->midCodeSizeVariantGroups([
+            ['id' => 1, 'manufacturer' => 'Anro', 'name' => 'Znak ewakuacyjny Pchać push', 'sku' => 'S35E/G/P1'],
+            ['id' => 2, 'manufacturer' => 'Anro', 'name' => 'Znak ewakuacyjny Pchać push', 'sku' => 'L35E/G/P1'],
+        ]));
+
+        // Nazwa sama mówi o rozmiarze — to ścieżka nazwy, nie kodu.
+        $this->assertSame([], $svc->midCodeSizeVariantGroups([
+            ['id' => 1, 'manufacturer' => 'Bolle', 'name' => 'Soczewki PC PLATINUM - mały rozmiar', 'sku' => 'RUSPSN11E'],
+            ['id' => 2, 'manufacturer' => 'Bolle', 'name' => 'Soczewki PC PLATINUM - mały rozmiar', 'sku' => 'RUSPMN11E'],
+        ]));
+    }
+
+    #[Test]
+    public function assigns_each_card_to_a_single_mid_code_group(): void
+    {
+        $svc = new ProductSizeVariant;
+        $name = 'Rękawice montażowe ASTRA';
+
+        // ASMA1 pasuje do maski AS*A1 (grupa 3-elementowa) i do A*MA1 — wygrywa liczniejsza.
+        $groups = $svc->midCodeSizeVariantGroups([
+            ['id' => 1, 'manufacturer' => 'Astra', 'name' => $name, 'sku' => 'ASMA1'],
+            ['id' => 2, 'manufacturer' => 'Astra', 'name' => $name, 'sku' => 'ASLA1'],
+            ['id' => 3, 'manufacturer' => 'Astra', 'name' => $name, 'sku' => 'ASSA1'],
+            ['id' => 4, 'manufacturer' => 'Astra', 'name' => $name, 'sku' => 'ALMA1'],
+        ]);
+
+        $this->assertCount(3, $groups);
+        $this->assertSame([1, 2, 3], array_keys($groups));
+        $this->assertSame($groups[1]['key'], $groups[2]['key']);
+        $this->assertSame($groups[1]['key'], $groups[3]['key']);
+    }
 }
