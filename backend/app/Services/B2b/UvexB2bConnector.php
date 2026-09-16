@@ -71,6 +71,9 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     /** Tyle wierszy tabeli poziomów ochrony trafia na kartę. */
     private const PROTECTION_ROWS_LIMIT = 30;
 
+    /** Tyle zakresów ochrony (UV, VIS, IR…) bierzemy z bocznego bloku strony producenta. */
+    private const PROTECTION_RANGE_LIMIT = 8;
+
     /** Nagłówek segmentu, którego tłumaczenie nie rusza (kody i liczby zostają dosłownie). */
     private const PARAMETERS_PREFIX = 'Parametry:';
 
@@ -323,7 +326,12 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         while ($lines !== [] && in_array(mb_strtolower(end($lines)), self::MANUFACTURER_TAIL_HEADINGS, true)) {
             array_pop($lines);
         }
-        $lines = [...$lines, ...self::specificationLines($page)];
+
+        // wstęp przy cenie: zwykle mówi to samo innymi słowami, ale dokłada fakty (maksymalny rozmiar, grubość, normy)
+        $intro = $page->query('//*['.JspB2bClient::classPredicate('product-detail-short').']')->item(0);
+        $lines = self::withoutRepeatedText($intro !== null ? self::blockLines($intro) : [], $lines);
+
+        $lines = [...$lines, ...self::specificationLines($page), ...self::protectionRangeLines($page)];
         if ($lines === []) {
             return '';
         }
@@ -896,6 +904,67 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
                 continue;
             }
             $lines[] = $label.': '.$value;
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Dwa opisy tego samego wyrobu (wstęp przy cenie i tekst z zakładki) obok siebie — chyba że jeden zawiera
+     * się w drugim; wtedy zostaje ten dłuższy, żeby karta nie miała dwa razy tego samego akapitu.
+     *
+     * @param  list<string>  $intro
+     * @param  list<string>  $description
+     * @return list<string>
+     */
+    private static function withoutRepeatedText(array $intro, array $description): array
+    {
+        if ($intro === []) {
+            return $description;
+        }
+        if ($description === []) {
+            return $intro;
+        }
+
+        $plain = static fn (array $lines): string => mb_strtolower(
+            (string) preg_replace('/[^\p{L}\p{N}]+/u', ' ', implode(' ', $lines))
+        );
+        $first = trim($plain($intro));
+        $second = trim($plain($description));
+        if (str_contains($second, $first)) {
+            return $description;
+        }
+        if (str_contains($first, $second)) {
+            return $intro;
+        }
+
+        return [...$intro, ...$description];
+    }
+
+    /**
+     * Boczny blok „Protection range” ze strony producenta: dla każdego zakresu (ultraviolett, visible,
+     * near infrared…) nazwa i zdanie z granicami widma („between 180 and 400nm”). Tabela „Specifications”
+     * podaje same nazwy zakresów, więc granice są tu jedyną liczbą — a przy doborze do przetargu liczą się
+     * właśnie one. Tekst jest po angielsku i idzie do tłumaczenia razem z opisem.
+     *
+     * @return list<string>
+     */
+    private static function protectionRangeLines(DOMXPath $page): array
+    {
+        $lines = [];
+        foreach ($page->query('//*['.JspB2bClient::classPredicate('protectionrange-information-container').']') ?: [] as $row) {
+            $title = self::text($page->query('.//*['.JspB2bClient::classPredicate('uvex-protectionrange-title').']', $row)->item(0));
+            $whole = self::text($row);
+            $detail = $title !== '' && str_starts_with($whole, $title)
+                ? trim(mb_substr($whole, mb_strlen($title)))
+                : $whole;
+            if ($title === '' || $detail === '') {
+                continue;
+            }
+            $lines[] = 'Protection range – '.$title.': '.$detail;
+            if (count($lines) >= self::PROTECTION_RANGE_LIMIT) {
+                break;
+            }
         }
 
         return $lines;

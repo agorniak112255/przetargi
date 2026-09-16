@@ -66,6 +66,9 @@ final class UvexConnectorTest extends TestCase
     /** Czy wyszukiwarka producenta zna kartę o szukanym numerze. */
     private bool $manufacturerKnowsCode = true;
 
+    /** Czy wstęp przy cenie powtarza tekst z zakładki „Description”. */
+    private bool $manufacturerIntroRepeatsDescription = false;
+
     private int $logins = 0;
 
     private bool $dropSessionOnce = false;
@@ -565,10 +568,21 @@ final class UvexConnectorTest extends TestCase
 
         $this->assertStringContainsString('Opis ze strony producenta (www.uvex-laservision.de):', $description);
         $this->assertStringContainsString('The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.', $description);
+        // wstęp przy cenie dokłada fakty, których nie ma w zakładce (maksymalny rozmiar, grubość)
+        $this->assertStringContainsString('user specific available up to a size of 1219x915mm', $description);
         $this->assertStringContainsString('Jednostka: szt.', $description);
         // parametry ze strony producenta wchodzą do opisu (idą do tłumaczenia razem z nim)
         $this->assertStringContainsString('Filter material: Plastic', $description);
         $this->assertStringContainsString('Protection Class / Norm: EN 207 full protection', $description);
+        // boczny blok z granicami widma — bez niego karta ma same nazwy zakresów, bez liczb
+        $this->assertStringContainsString(
+            'Protection range – ultraviolett: Protection within the ultraviolet spectral range between 180 and 400nm',
+            $description,
+        );
+        $this->assertStringContainsString(
+            'Protection range – visible: Protection within the visible spectral range between 400 and 700nm',
+            $description,
+        );
         // poziomy ochrony dosłownie, w segmencie, którego tłumaczenie nie rusza
         $this->assertStringContainsString(
             "Parametry:\nWAVELENGTH (NM) | OD | OPERATING MODE / TESTED PROTECTION LEVEL"
@@ -673,6 +687,23 @@ final class UvexConnectorTest extends TestCase
         $this->assertFalse(UvexB2bConnector::sameProduct('', '9970.005'));
     }
 
+    public function test_repeated_intro_is_not_written_twice(): void
+    {
+        $this->manufacturerIntroRepeatsDescription = true;
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/9970.005');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+
+        $description = $connector->description($this->productsByCode($connector)['9970.005']);
+
+        $this->assertSame(
+            1,
+            mb_substr_count($description, 'blue absorbing laser protection filter'),
+            'ten sam akapit nie może wejść na kartę dwa razy',
+        );
+    }
+
     public function test_link_outside_the_manufacturer_domains_is_not_followed(): void
     {
         $this->linkInsteadOfDescription('https://przypadkowa-domena.test/opis');
@@ -737,6 +768,10 @@ final class UvexConnectorTest extends TestCase
     private function manufacturerPage(): string
     {
         return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
+            .'<div class="product-detail-short">'.($this->manufacturerIntroRepeatsDescription
+                ? 'The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.'
+                : 'The laservision plastic laser safety window P1P10 is a window for green laser systems'
+                    .' and is user specific available up to a size of 1219x915mm. The thickness is 3mm.').'</div>'
             .'<h2 class="product-detail-description-title">Product information "laser safety window P1P10 (3mm)"</h2>'
             .'<div class="product-detail-description-text" itemprop="description">'
             .'<p>The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.</p>'
@@ -753,6 +788,18 @@ final class UvexConnectorTest extends TestCase
             .'<tr><td>180 - 315</td><td>(OD10+)</td><td>D LB10 + IR LB4 + M LB6</td></tr>'
             .'<tr><td>&gt;315 - 385</td><td>(OD8+)</td><td>D LB6 + IRM LB8</td></tr>'
             .'</table></div>'
+            .'<div class="col-lg-4 product-detail-properties-protectionrange-container">'
+            .'<span class="h1 uvex-protectionrange-headline">Protection range</span>'
+            .'<div class="row protectionrange-information-container">'
+            .'<div class="col-3 range-image-container"><img src="uv.png" alt="UV"></div>'
+            .'<div class="col-9"><span class="h2 uvex-protectionrange-title">ultraviolett</span>'
+            .'<p>Protection within the ultraviolet spectral range between 180 and 400nm</p></div>'
+            .'</div>'
+            .'<div class="row protectionrange-information-container">'
+            .'<div class="col-9"><span class="h2 uvex-protectionrange-title">visible</span>'
+            .'<p>Protection within the visible spectral range between 400 and 700nm</p></div>'
+            .'</div>'
+            .'</div>'
             .'</body></html>';
     }
 
