@@ -51,6 +51,14 @@ GROUP="${GROUP:-psacln}"
 HTACCESS="$APP_ROOT/backend/public/.htaccess"
 HTACCESS_BAK=""
 
+# Skrypt zwykle idzie z konta root, więc migracje, cache i testowy schedule:run zostawiają w storage pliki
+# roota — cron i kolejki (jako $OWNER) przestałyby działać. Trap: właściciel wraca także wtedy, gdy skrypt
+# przerwie się w połowie (set -e) albo ktoś go zatrzyma.
+fix_owner() {
+  chown -R "$OWNER:$GROUP" "$APP_ROOT/backend/storage" "$APP_ROOT/backend/bootstrap/cache" 2>/dev/null || true
+}
+trap fix_owner EXIT
+
 cd "$APP_ROOT"
 
 # Zachowaj serwerowy .htaccess (poza gitem) przed pull
@@ -167,10 +175,10 @@ else
   echo "UWAGA: brak deploy/ensure-enrichment-workers.sh — enrichment nie ma kto przetwarzać."
 fi
 
-# migrate / cache / testowy schedule:run szły jako root po chown z początku skryptu —
-# pliki root-owned w storage blokowały cron i aplikację działające jako $OWNER
+# migrate / cache / testowy schedule:run szły jako root — pliki root-owned w storage blokowały cron
+# i aplikację działające jako $OWNER (to samo robi trap na wyjściu)
 echo "==> uprawnienia storage po komendach artisan"
-chown -R "$OWNER:$GROUP" "$APP_ROOT/backend/storage" "$APP_ROOT/backend/bootstrap/cache" || true
+fix_owner
 
 echo "==> gotowe: https://przetargi.supon.rzeszow.pl"
 if [[ "$INDEX_CATALOG" -eq 0 ]]; then

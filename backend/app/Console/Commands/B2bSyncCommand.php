@@ -46,6 +46,15 @@ final class B2bSyncCommand extends Command
             return self::FAILURE;
         }
 
+        // Pliki tworzone w trakcie (cache, zdjęcia, pliki produktów) należą wtedy do roota i równolegle
+        // działające kolejki oraz cron (jako właściciel witryny) zaczynają pomijać produkty. Po zakończeniu
+        // właściciela prostuje StorageOwnership, ale w trakcie przebiegu kolizji nie da się uniknąć.
+        if (PHP_OS_FAMILY !== 'Windows' && function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            $this->warn('Uruchomione jako root — lepiej: sudo -u '.(function_exists('posix_getpwuid')
+                ? (string) (posix_getpwuid((int) fileowner(base_path('artisan')))['name'] ?? 'właściciel-witryny')
+                : 'właściciel-witryny').' … artisan b2b:sync');
+        }
+
         $limit = $this->option('limit') !== null ? max(1, (int) $this->option('limit')) : null;
         $dryRun = (bool) $this->option('dry-run');
         $this->info(sprintf(

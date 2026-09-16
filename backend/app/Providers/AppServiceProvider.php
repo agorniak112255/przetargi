@@ -15,6 +15,7 @@ use App\Services\Presta\PrestaCatalogGateway;
 use App\Services\Presta\PrestaExportGateway;
 use App\Services\Presta\PrestaShopCatalogClient;
 use App\Services\Presta\PrestaShopExportClient;
+use App\Support\StorageOwnership;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
 
@@ -44,6 +45,19 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Polecenie artisan puszczone jako root zostawia w storage pliki należące do roota, a aplikacja
+        // (php-fpm, cron, kolejki) działa jako właściciel witryny i nie może ich nadpisać — po każdym
+        // poleceniu prostujemy właściciela. Nie-root kończy się na sprawdzeniu identyfikatora użytkownika.
+        if ($this->app->runningInConsole() && ! $this->app->runningUnitTests()) {
+            $basePath = $this->app->basePath();
+            register_shutdown_function(static function () use ($basePath): void {
+                $fixed = StorageOwnership::restoreAfterRoot($basePath);
+                if ($fixed > 0 && defined('STDERR')) {
+                    fwrite(STDERR, 'Przywrócono właściciela plików w storage po uruchomieniu jako root: '.$fixed.PHP_EOL);
+                }
+            });
+        }
+
         try {
             $this->app->make(MailSettingsService::class)->applyToConfig();
         } catch (Throwable) {
