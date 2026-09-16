@@ -629,7 +629,9 @@ final class B2bCatalogSync
         // po zapisie powiązania — job czyta z niego hashe i nazwę ze źródła
         $created = $existing === null;
         $translationQueued = false;
-        if ($connector instanceof B2bForeignLanguageSource) {
+        $foreignText = $connector instanceof B2bForeignLanguageSource
+            || ($connector instanceof B2bForeignTextCards && $connector->hasForeignDescription($remote));
+        if ($foreignText) {
             // Karta, która wciąż ma tekst źródła (tłumaczenie odrzucone, nieudane albo nadpisane — 15.09.2026 ponowne
             // pobranie niczego nie nadrabiało), dostaje zlecenie przy każdym przebiegu; czekający job nie jest
             // dublowany (ShouldBeUniqueUntilProcessing). Nazwa istniejącej karty tylko gdy to wciąż nazwa ze źródła

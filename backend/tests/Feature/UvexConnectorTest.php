@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\TranslateB2bProductTextJob;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
@@ -55,6 +56,9 @@ final class UvexConnectorTest extends TestCase
 
     /** Ile razy atrapa wydala stronę produktu (opis i pliki mają czytać jedno pobranie). */
     private int $detailHits = 0;
+
+    /** Adresy stron producenta, po które poszedł łącznik. */
+    private array $manufacturerHits = [];
 
     private int $logins = 0;
 
@@ -543,6 +547,82 @@ final class UvexConnectorTest extends TestCase
         $this->assertSame($cleaner->description, (string) $cleaner->fresh()?->description);
     }
 
+    public function test_description_comes_from_the_manufacturer_page_when_the_shop_only_links_to_it(): void
+    {
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/000P1P102001');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        $description = $connector->description($product);
+
+        $this->assertStringContainsString('Opis ze strony producenta (www.uvex-laservision.de):', $description);
+        $this->assertStringContainsString('The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.', $description);
+        $this->assertStringContainsString('Jednostka: szt.', $description);
+        // tabela parametrów zostaje na stronie producenta — nagłówek bez treści nie jest opisem
+        $this->assertStringNotContainsString('Specifications', $description);
+        $this->assertTrue($connector->hasForeignDescription($product), 'opis po angielsku idzie do tłumaczenia');
+        $this->assertCount(1, $this->manufacturerHits);
+    }
+
+    public function test_link_outside_the_manufacturer_domains_is_not_followed(): void
+    {
+        $this->linkInsteadOfDescription('https://przypadkowa-domena.test/opis');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        $description = $connector->description($product);
+
+        $this->assertSame('Jednostka: szt.', $description);
+        $this->assertFalse($connector->hasForeignDescription($product));
+        $this->assertSame([], $this->manufacturerHits);
+    }
+
+    public function test_sync_orders_a_translation_only_for_the_card_with_the_english_description(): void
+    {
+        Storage::fake('public');
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/000P1P102001');
+        $this->fakeSite();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $cleaner = Product::query()->where('sku', '9970.005')->sole();
+        $this->assertStringContainsString('The laser safety window P1P10', (string) $cleaner->description);
+
+        Queue::assertPushed(
+            TranslateB2bProductTextJob::class,
+            static fn (TranslateB2bProductTextJob $job): bool => $job->productId === $cleaner->id,
+        );
+        Queue::assertPushed(TranslateB2bProductTextJob::class, 1);
+    }
+
+    /** Karta bez opisu w panelu: zamiast treści odnośnik „Kliknij i przejdź do pełnego opisu”. */
+    private function linkInsteadOfDescription(string $url): void
+    {
+        $this->details['4713'] = str_replace(
+            '<p>Stacja czyszcząca do okularów i gogli. Zawiera: 2x chusteczki czyszczące (700 szt. w opakowaniu) 9971.000, 1x płyn czyszczący 9972.103, 1x pompkę dozującą 9973.101</p>',
+            '<p><br><a href="'.$url.'" target="_blank">Kliknij i przejdź do pełnego opisu</a></p>',
+            $this->details['4713'],
+        );
+    }
+
+    /** Skrócona strona produktu uvex-laservision.de (Shopware) — opis w bloku itemprop="description". */
+    private function manufacturerPage(): string
+    {
+        return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
+            .'<h2 class="product-detail-description-title">Product information "laser safety window P1P10 (3mm)"</h2>'
+            .'<div class="product-detail-description-text" itemprop="description">'
+            .'<p>The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.</p>'
+            .'<p>A broadband laser protection exists from 635nm to 11,500nm.</p>'
+            .'<h2>Specifications</h2>'
+            .'</div>'
+            .'<div class="product-detail-properties">Protection range</div>'
+            .'</body></html>';
+    }
+
     private function client(): UvexB2bClient
     {
         return new UvexB2bClient('K123', 'jan', 'dobre-haslo', 0, function (int $ms): void {
@@ -666,6 +746,11 @@ final class UvexConnectorTest extends TestCase
             }
             if (str_starts_with($path, '/get-preview/')) {
                 return Http::response(self::PNG, 200, ['Content-Type' => 'image/png']);
+            }
+            if (str_ends_with((string) parse_url($url, PHP_URL_HOST), 'uvex-laservision.de')) {
+                $this->manufacturerHits[] = $url;
+
+                return Http::response($this->manufacturerPage());
             }
             if (str_starts_with($path, '/public/assets/resources/products/')) {
                 if (! $loggedIn) {

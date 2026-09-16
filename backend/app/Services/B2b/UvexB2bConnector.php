@@ -36,7 +36,7 @@ use RuntimeException;
  * Producent — ZAŁOŻENIE (sklep nie ma pola producenta): „HECKEL” gdy kod lub nazwa zawiera heckel, „HexArmor” gdy
  * nazwa zawiera hexarmor, inaczej „UVEX” (sklep firmy UVEX; większość nazw zawiera „uvex”).
  */
-final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bListProgressAware
+final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bListProgressAware
 {
     /** Nieprzerwane pobieranie listy dłużej = błąd (przebieg bez postępu uznałby b2b:sync-due za przerwany). */
     private const LIST_BUDGET_SECONDS = 25 * 60;
@@ -48,6 +48,12 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bList
 
     /** Sklep wstawia to zamiast opisu części kart — to zachęta do kliknięcia, nie opis wyrobu. */
     private const DESCRIPTION_PLACEHOLDERS = ['kliknij i przejdź do pełnego opisu'];
+
+    /** Nagłówek sekcji, pod którą na karcie ląduje opis wzięty ze strony producenta. */
+    private const MANUFACTURER_SECTION = 'Opis ze strony producenta';
+
+    /** Koniec opisu na stronie producenta — dalej idzie tabela parametrów, której nie bierzemy. */
+    private const MANUFACTURER_TAIL_HEADINGS = ['specifications', 'spezifikationen'];
 
     private const INCONSISTENT = 7001;
 
@@ -68,6 +74,9 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bList
      * @var array{url: string, bytes: string, mime: string}|null
      */
     private ?array $file = null;
+
+    /** remoteId karty, której opis przyszedł ze strony producenta (po angielsku) — do zlecenia tłumaczenia. */
+    private ?string $foreignDescriptionFor = null;
 
     /** @var (callable(string): void)|null */
     private $listProgress = null;
@@ -206,6 +215,12 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bList
         ));
         if ($lines !== []) {
             $sections[] = implode("\n", $lines);
+        } elseif ($node !== null) {
+            // sklep nie ma opisu, tylko odnośnik „Kliknij i przejdź do pełnego opisu” — opis jest u producenta
+            $fromManufacturer = $this->manufacturerDescription($xpath, $node, $product);
+            if ($fromManufacturer !== '') {
+                $sections[] = $fromManufacturer;
+            }
         }
         $unit = (string) ($product->raw['unit'] ?? '');
         if ($unit !== '') {
@@ -213,6 +228,44 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bList
         }
 
         return mb_substr(implode("\n\n", $sections), 0, 10000);
+    }
+
+    public function hasForeignDescription(B2bRemoteProduct $product): bool
+    {
+        return $this->foreignDescriptionFor !== null && $this->foreignDescriptionFor === $product->remoteId;
+    }
+
+    /**
+     * Opis ze strony producenta, do której odsyła karta bez opisu w panelu. Tekst jest po angielsku — kartę
+     * oznaczamy jako obcojęzyczną, żeby synchronizacja zleciła tłumaczenie na polski (jak przy Bollé).
+     * Nagłówek sekcji podaje domenę, z której opis pochodzi.
+     */
+    private function manufacturerDescription(DOMXPath $xpath, DOMNode $node, B2bRemoteProduct $product): string
+    {
+        $link = $xpath->query('.//a[@href]', $node)->item(0);
+        $url = $link instanceof DOMElement ? trim(html_entity_decode($link->getAttribute('href'), ENT_QUOTES | ENT_HTML5)) : '';
+        if ($url === '' || ! UvexB2bClient::isManufacturerUrl($url)) {
+            return '';
+        }
+
+        $page = JspB2bClient::dom($this->client->manufacturerPage($url));
+        $description = $page->query('//*[@itemprop="description"]')->item(0);
+        if ($description === null) {
+            throw new RuntimeException('strona producenta '.$url.' nie ma opisu w spodziewanym miejscu');
+        }
+
+        $lines = self::blockLines($description);
+        // ostatni wiersz to nagłówek tabeli parametrów, która została na stronie
+        while ($lines !== [] && in_array(mb_strtolower(end($lines)), self::MANUFACTURER_TAIL_HEADINGS, true)) {
+            array_pop($lines);
+        }
+        if ($lines === []) {
+            return '';
+        }
+
+        $this->foreignDescriptionFor = $product->remoteId;
+
+        return self::MANUFACTURER_SECTION.' ('.parse_url($url, PHP_URL_HOST).'):'."\n".implode("\n", $lines);
     }
 
     /**
@@ -665,8 +718,9 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bList
         if ($this->pageUrl !== $url) {
             $this->pageHtml = $this->client->productPage($url);
             $this->pageUrl = $url;
-            // plik poprzedniej karty nie jest już potrzebny
+            // plik i znacznik języka poprzedniej karty nie są już potrzebne
             $this->file = null;
+            $this->foreignDescriptionFor = null;
         }
 
         $xpath = JspB2bClient::dom((string) $this->pageHtml);

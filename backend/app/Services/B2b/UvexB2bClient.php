@@ -46,6 +46,12 @@ final class UvexB2bClient
 
     private const MAX_CONSECUTIVE_FAILURES = 20;
 
+    /** Sklepy producenta, do których odsyłają karty bez opisu w panelu (sprawdzone 16.09.2026). */
+    private const MANUFACTURER_HOSTS = ['uvex-laservision.de', 'uvex-safety.com', 'uvex-safety.pl', 'uvex.de'];
+
+    /** Strona producenta odrzuca żądania bez nagłówka przeglądarki. */
+    private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+
     /** Przerwy po 429/503, gdy sklep nie podał Retry-After (ms). */
     private const BACKOFF_MS = [2000, 10000, 60000];
 
@@ -155,6 +161,41 @@ final class UvexB2bClient
     }
 
     /**
+     * Strona producenta, do której część kart odsyła zamiast opisu (uvex-laservision.de i pokrewne). Bez sesji
+     * konta — ciasteczka panelu nie mają czego szukać w obcej domenie. Adres spoza listy = wyjątek.
+     */
+    public function manufacturerPage(string $url): string
+    {
+        if (! self::isManufacturerUrl($url)) {
+            throw new RuntimeException('adres strony producenta spoza znanych domen UVEX: '.$url);
+        }
+
+        return $this->send(
+            static fn (PendingRequest $http): Response => $http->withHeaders([
+                'User-Agent' => self::USER_AGENT,
+                'Accept-Language' => 'en',
+            ])->get($url),
+            withSession: false,
+        )->body();
+    }
+
+    /** Domeny producenta, na które wolno pójść po opis (tylko https). */
+    public static function isManufacturerUrl(string $url): bool
+    {
+        if (strtolower((string) parse_url($url, PHP_URL_SCHEME)) !== 'https') {
+            return false;
+        }
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        foreach (self::MANUFACTURER_HOSTS as $allowed) {
+            if ($host === $allowed || str_ends_with($host, '.'.$allowed)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Plik ze strony produktu (karta techniczna, instrukcja) — adres z panelu, pobierany sesją konta.
      *
      * @return array{bytes: string, mime: string}
@@ -232,8 +273,9 @@ final class UvexB2bClient
 
     /**
      * @param  callable(PendingRequest): Response  $call
+     * @param  bool  $withSession  false = zapytanie poza panelem (strona producenta), bez ciasteczek konta
      */
-    private function send(callable $call): Response
+    private function send(callable $call, bool $withSession = true): Response
     {
         $retries = 0;
         while (true) {
@@ -245,7 +287,7 @@ final class UvexB2bClient
             $error = null;
             try {
                 $response = $call(Http::timeout(30)->withOptions([
-                    'cookies' => $this->jar,
+                    ...($withSession ? ['cookies' => $this->jar] : []),
                     'allow_redirects' => ['max' => 5, 'track_redirects' => true],
                 ]));
             } catch (ConnectionException $e) {
