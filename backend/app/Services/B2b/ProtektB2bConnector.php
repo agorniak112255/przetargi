@@ -29,7 +29,7 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
     /** @var array<string, float> numer katalogowy => pierwsza cena odczytana w tym przebiegu */
     private array $firstPrice = [];
 
-    /** @var list<string> numery katalogowe, które na różnych adresach miały różne ceny */
+    /** @var array<string, string> numer katalogowy => opis rozbieżności (jeden wpis na numer) */
     private array $priceConflicts = [];
 
     public function __construct(
@@ -112,10 +112,8 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
         if ($first === null) {
             $this->firstPrice[$product->sku] = $amount;
         } elseif (abs($first - $amount) >= 0.01) {
-            if (! in_array($product->sku, $this->priceConflicts, true)) {
-                $this->priceConflicts[] = $product->sku.' ('.number_format($first, 2, ',', ' ')
-                    .' vs '.number_format($amount, 2, ',', ' ').')';
-            }
+            $this->priceConflicts[$product->sku] ??= $product->sku.' ('.number_format($first, 2, ',', ' ')
+                .' vs '.number_format($amount, 2, ',', ' ').')';
             $amount = $first;
         }
 
@@ -203,7 +201,7 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
         }
         if ($this->priceConflicts !== []) {
             $lines[] = 'Ten sam numer katalogowy z różnymi cenami na różnych adresach (zapisano pierwszą): '
-                .implode('; ', array_slice($this->priceConflicts, 0, 20))
+                .implode('; ', array_slice(array_values($this->priceConflicts), 0, 20))
                 .(count($this->priceConflicts) > 20 ? ' i '.(count($this->priceConflicts) - 20).' więcej' : '');
         }
 

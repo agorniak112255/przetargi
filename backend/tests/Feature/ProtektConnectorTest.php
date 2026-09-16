@@ -188,6 +188,7 @@ final class ProtektConnectorTest extends TestCase
         $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
         $this->page('/amortyzator-a~p100~c5341', $this->card(name: 'BW140', catalogNo: 'BW140', price: '76,00'));
         $this->page('/amortyzator-b~p101~c5341', $this->card(name: 'BW140', catalogNo: 'BW140', price: '99,00'));
+        $this->page('/amortyzator-c~p102~c5341', $this->card(name: 'BW140', catalogNo: 'BW140', price: '99,00'));
         $this->fakeSite();
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
@@ -197,6 +198,9 @@ final class ProtektConnectorTest extends TestCase
             ->pluck('text')
             ->implode(' | ');
         $this->assertStringContainsString('różnymi cenami', $log, $log);
+        $this->assertStringContainsString('BW140 (76,00 vs 99,00)', $log, $log);
+        // Jeden wpis na numer katalogowy, choćby adresów z rozbieżną ceną było kilka.
+        $this->assertSame(1, substr_count($log, 'BW140 (76,00'), $log);
     }
 
     public function test_liczniki_trafien_regul_trafiaja_do_konfiguracji(): void
