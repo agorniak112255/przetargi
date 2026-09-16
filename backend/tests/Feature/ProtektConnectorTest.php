@@ -8,12 +8,14 @@ use App\Models\B2bAccount;
 use App\Models\B2bDiscountRule;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
+use App\Models\ProductDocument;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\ProtektB2bClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 /**
@@ -203,6 +205,74 @@ final class ProtektConnectorTest extends TestCase
         $this->assertSame(1, substr_count($log, 'BW140 (76,00'), $log);
     }
 
+    public function test_ten_sam_numer_z_rozna_cena_i_kolorem_daje_osobne_karty(): void
+    {
+        // BW200/LB101HV: wersja bez koloru 102 zł, odblaskowe 138 zł. Karta ma jedną cenę, więc wersja
+        // droższa musi być osobną kartą — inaczej wycena na odblaskowej byłaby zaniżona o ponad jedną trzecią.
+        $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
+        $this->page('/hv-zwykly~p433~c5341', $this->card(name: 'ABM/LB101HV', catalogNo: 'BW200/LB101HV', price: '102,00'));
+        $this->page('/hv-pomaranczowy~p434~c5341', $this->card(
+            name: 'ABM/LB101HV', catalogNo: 'BW200/LB101HV', price: '138,00', colours: ['jaskrawy pomarańczowy'],
+        ));
+        $this->fakeSite();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame('102.00', (string) Product::query()->where('sku', 'BW200/LB101HV')->value('catalog_price_net'));
+        $droga = Product::query()->where('sku', 'BW200/LB101HV / jaskrawy pomarańczowy')->first();
+        $this->assertNotNull($droga, 'Wersja o innej cenie ma być osobną kartą z kolorem w kodzie.');
+        $this->assertSame('138.00', (string) $droga->catalog_price_net);
+        $this->assertSame('75.90', (string) $droga->purchase_price);
+    }
+
+    public function test_produkt_wycofany_trafia_do_katalogu_z_ostrzezeniem(): void
+    {
+        $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
+        $this->page('/wycofany~p370~c5341', $this->card(
+            name: 'ABM/2LE111', catalogNo: 'BW200/2LE111', price: '259,00', withdrawn: 'BW100/2LE111',
+        ));
+        $this->fakeSite();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $description = (string) Product::query()->where('sku', 'BW200/2LE111')->value('description');
+        $this->assertStringContainsString('produkt wycofany przez producenta', $description);
+        $this->assertStringContainsString('zastąpiony przez BW100/2LE111', $description);
+    }
+
+    public function test_pliki_do_pobrania_trafiaja_przy_karte(): void
+    {
+        // Deklaracje zgodności to dokument, którego żądają specyfikacje przetargowe — musi być przy karcie
+        // razem z adresem źródła, żeby dało się go sprawdzić u producenta.
+        Storage::fake('public');
+        $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
+        $this->page('/z-plikami~p370~c5341', $this->card(
+            name: 'ABM/2LE111', catalogNo: 'BW200/2LE111', price: '259,00', documents: true,
+        ));
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $product = Product::query()->where('sku', 'BW200/2LE111')->firstOrFail();
+        $documents = ProductDocument::query()->where('product_id', $product->id)->get();
+        $log = collect(B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log ?? [])->pluck('text')->implode(' | ');
+        $this->assertNotEmpty($documents, 'Brak plików. Dziennik: '.$log.' || Błędy: '.implode(' | ', $result['errors']));
+
+        $this->assertSame(
+            ['Deklaracje zgodności - PL', 'Instrukcja użytkownika - PL', 'Karta produktowa'],
+            $documents->pluck('title')->sort()->values()->all(),
+            $log,
+        );
+        $this->assertSame(
+            ProductDocument::KIND_CERTIFICATE,
+            $documents->firstWhere('title', 'Deklaracje zgodności - PL')?->kind,
+        );
+        $this->assertSame(
+            ProductDocument::KIND_DATASHEET,
+            $documents->firstWhere('title', 'Karta produktowa')?->kind,
+        );
+    }
+
     public function test_liczniki_trafien_regul_trafiaja_do_konfiguracji(): void
     {
         $matched = $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
@@ -220,9 +290,14 @@ final class ProtektConnectorTest extends TestCase
      * @param  list<string>  $colours  wersje kolorystyczne karty (każda ma u Protektu osobny adres,
      *                                 ten sam numer katalogowy i tę samą cenę)
      */
-    private function card(string $name, ?string $catalogNo, ?string $price, ?string $ean = null, ?string $stock = null, array $colours = []): string
+    private function card(string $name, ?string $catalogNo, ?string $price, ?string $ean = null, ?string $stock = null, array $colours = [], ?string $withdrawn = null, bool $documents = false): string
     {
-        $html = '<!DOCTYPE html><html><body><div class="single-products-content__dsc"><div class="product-desc">'
+        $html = '<!DOCTYPE html><html><body>'
+            .($withdrawn !== null
+                ? '<div class="single-product-label">Wycofany</div>'
+                .'<div class="replaces-box replaces-box_detail">zastąpiony przez <a href="/x">'.$withdrawn.'</a></div>'
+                : '')
+            .'<div class="single-products-content__dsc"><div class="product-desc">'
             .'<h1 itemprop="name" class="product-desc__name">'.$name.'</h1>'
             .'<div class="product-desc__norms"><p>Normy</p><p class="product-desc__norms--bold">EN 355</p></div>'
             .'<div class="product-desc__cost"><div itemprop="offers" itemscope itemtype="https://schema.org/Offer">';
@@ -267,6 +342,13 @@ final class ProtektConnectorTest extends TestCase
             .($colours !== [] ? '<div class="spec-col__row"><p class="spec-col__type">Kolor:</p><p class="spec-col__type_val">'.$colours[0].'</p></div>' : '')
             .'</div></div></div></div>'
             .'<div class="product-desc__specific"><p class="product-desc__specific--warn">Dopuszczone do prac w strefach zagrożonych wybuchem</p></div>'
+            .($documents
+                ? '<div class="spec-tech__docs"><h4>Do pobrania</h4>'
+                .'<a href="/robokat/datasheet/product?id=354&amp;pdf=true&amp;lang=pl">Karta produktowa</a>'
+                .'<a href="/instrukcje/ABM/ABM_Instrukcja_PL.pdf">Instrukcja użytkownika - PL</a>'
+                .'<a href="/deklaracje/PL/ABM_2LE111_Deklaracja_PL.pdf">Deklaracje zgodności - PL</a>'
+                .'</div>'
+                : '')
             .'</body></html>';
 
         return $html;
@@ -306,6 +388,12 @@ final class ProtektConnectorTest extends TestCase
 
             if (isset($pages[$path])) {
                 return Http::response($pages[$path]);
+            }
+
+            // pliki z sekcji „Do pobrania”
+            if (str_ends_with($path, '.pdf') || str_contains($path, '/robokat/datasheet/')) {
+                // każdy plik musi mieć inną treść — zapis rozpoznaje identyczne pliki jako ten sam
+                return Http::response('%PDF-1.4 '.$path, 200, ['Content-Type' => 'application/pdf']);
             }
 
             return Http::response('Nie znaleziono', 404);

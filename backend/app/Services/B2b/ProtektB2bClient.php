@@ -153,9 +153,11 @@ final class ProtektB2bClient
     }
 
     /**
+     * Zawartość pliku z witryny — zdjęcie produktu albo plik z sekcji „Do pobrania”.
+     *
      * @return array{bytes: string, mime: string}
      */
-    public function imageBytes(string $url): array
+    public function fileBytes(string $url): array
     {
         $response = $this->send(static fn (PendingRequest $http): Response => $http->get($url));
         $mime = strtolower(trim(explode(';', (string) ($response?->header('Content-Type') ?? ''))[0]));

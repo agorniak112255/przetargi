@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
+use App\Models\ProductDocument;
 use DOMNode;
 use DOMXPath;
 use RuntimeException;
@@ -22,12 +23,18 @@ use RuntimeException;
  * jej powiązać z katalogiem, a sklejanie identyfikatora z nazwy byłoby wymyślaniem kodu, którego producent
  * na karcie nie podał.
  */
-final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSummaryAware
+final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bPublicSite, B2bRunSummaryAware
 {
     private int $total = 0;
 
     /** @var array<string, float> numer katalogowy => pierwsza cena odczytana w tym przebiegu */
     private array $firstPrice = [];
+
+    /** @var array<string, string> „numer|cena” => kod karty dla tej ceny (pierwsza cena zachowuje czysty numer) */
+    private array $splitSku = [];
+
+    /** @var array<string, list<string>> „numer|cena” => kolory zebrane dla tej ceny */
+    private array $splitColours = [];
 
     /** @var array<string, string> numer katalogowy => opis rozbieżności (jeden wpis na numer) */
     private array $priceConflicts = [];
@@ -142,6 +149,11 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
         $raw = $product->raw;
         $sections = [];
 
+        $withdrawn = (string) ($raw['withdrawn'] ?? '');
+        if ($withdrawn !== '') {
+            $sections[] = 'UWAGA: produkt wycofany przez producenta — '.$withdrawn.'.';
+        }
+
         $norms = $raw['norms'] ?? [];
         if ($norms !== []) {
             $sections[] = 'Normy: '.implode(', ', $norms);
@@ -176,12 +188,37 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
             $url = ProtektB2bClient::BASE.$url;
         }
 
-        $file = $this->client->imageBytes($url);
+        $file = $this->client->fileBytes($url);
         if ($file['bytes'] === '' || ! str_starts_with($file['mime'], 'image/')) {
             return null;
         }
 
         return new B2bRemoteImage(bytes: $file['bytes'], mime: $file['mime'], sourceUrl: $url);
+    }
+
+    /**
+     * @return list<B2bRemoteDocument>
+     */
+    public function documents(B2bRemoteProduct $product): array
+    {
+        $documents = [];
+        foreach ($product->raw['documents'] ?? [] as $file) {
+            $documents[] = new B2bRemoteDocument(
+                title: (string) $file['title'],
+                sourceUrl: (string) $file['url'],
+                kind: (string) $file['kind'],
+            );
+        }
+
+        return $documents;
+    }
+
+    /**
+     * @return array{bytes: string, mime: string}
+     */
+    public function documentBytes(B2bRemoteDocument $document): array
+    {
+        return $this->client->fileBytes($document->sourceUrl);
     }
 
     /**
@@ -239,27 +276,154 @@ final class ProtektB2bConnector implements B2bConnector, B2bPublicSite, B2bRunSu
             return self::skipped($url, $category, 'karta bez nazwy produktu');
         }
 
+        $priceText = self::text($xpath->query('//*[@itemprop="price"]')->item(0));
+        [$sku, $summary] = $this->identityFor($catalogNo, self::money($priceText), self::ownColour($xpath), $colours);
+
         return new B2bRemoteProduct(
-            remoteId: $catalogNo,
-            sku: $catalogNo,
+            remoteId: $sku,
+            sku: $sku,
             name: $name,
             category: $category,
             sourceUrl: $url,
-            variantSummary: $colours,
+            variantSummary: $summary,
             raw: [
                 'status' => 'ok',
-                'price_text' => self::text($xpath->query('//*[@itemprop="price"]')->item(0)),
+                'price_text' => $priceText,
                 'currency' => self::text($xpath->query('//*[@itemprop="priceCurrency"]')->item(0)),
                 'ean' => self::text($xpath->query('//*[@itemprop="gtin13"]')->item(0)),
                 // „Indeks” producenta — trzymamy do wglądu, kartę identyfikuje numer katalogowy.
                 'supplier_index' => self::text($xpath->query('//*[@itemprop="sku"]')->item(0)),
                 'norms' => self::texts($xpath, '//*['.self::classPredicate('product-desc__norms--bold').']'),
-                'spec' => self::specRows($xpath, $colours),
+                'spec' => self::specRows($xpath, $summary),
+                'withdrawn' => self::withdrawnNote($xpath),
+                'documents' => self::documentList($xpath),
                 'features' => self::texts($xpath, '//*['.self::classPredicate('product-desc__specific--warn').']'),
                 'image_url' => self::imageUrl($xpath),
             ],
             availability: self::availability($xpath),
         );
+    }
+
+    /**
+     * Kod karty i lista wersji dla adresu. Protekt powtarza numer katalogowy na kilku adresach:
+     * najczęściej to warianty kolorystyczne w tej samej cenie (jedna karta z listą kolorów), ale zdarza się,
+     * że kolor zmienia cenę — BW200/LB101HV kosztuje 102 zł bez koloru i 138 zł w odblaskowym. Karta ma jedną
+     * cenę, więc taka wersja musi być osobną kartą; pierwsza cena zachowuje czysty numer, kolejne dostają kod
+     * z dopiskiem koloru. Dopisek jest nasz — Protekt takiego kodu nie używa i dlatego bierzemy go dosłownie
+     * z jego specyfikacji, a nie wymyślamy oznaczeń.
+     *
+     * Bez koloru nie ma czym rozróżnić wersji, więc zostaje jedna karta; rozbieżność zgłasza price().
+     *
+     * @return array{0: string, 1: ?string} kod karty i podsumowanie wersji
+     */
+    private function identityFor(string $catalogNo, ?float $price, string $ownColour, ?string $colours): array
+    {
+        if ($price === null) {
+            return [$catalogNo, $colours];
+        }
+
+        $first = $this->firstPrice[$catalogNo] ?? null;
+        if ($first === null) {
+            $this->firstPrice[$catalogNo] = $price;
+
+            return [$catalogNo, $colours];
+        }
+        if (abs($first - $price) < 0.01 || $ownColour === '') {
+            return [$catalogNo, $colours];
+        }
+
+        $key = $catalogNo.'|'.number_format($price, 2, '.', '');
+        if (! isset($this->splitSku[$key])) {
+            $this->splitSku[$key] = $catalogNo.' / '.$ownColour;
+            $this->splitColours[$key] = [];
+        }
+        if (! in_array($ownColour, $this->splitColours[$key], true)) {
+            $this->splitColours[$key][] = $ownColour;
+        }
+
+        return [$this->splitSku[$key], implode(', ', $this->splitColours[$key])];
+    }
+
+    /** Kolor tego jednego adresu, dosłownie z wiersza „Kolor” specyfikacji; '' gdy karta go nie podaje. */
+    private static function ownColour(DOMXPath $xpath): string
+    {
+        foreach ($xpath->query('//*['.self::classPredicate('spec-col__row').']') as $row) {
+            $label = rtrim(self::text($xpath->query('.//*['.self::classPredicate('spec-col__type').']', $row)->item(0)), ':');
+            if (mb_strtolower($label) === 'kolor') {
+                return self::text($xpath->query('.//*['.self::classPredicate('spec-col__type_val').']', $row)->item(0));
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Informacja o wycofaniu produktu, dosłownie ze strony: etykieta „Wycofany” i zdanie o zastąpieniu.
+     * Produkt wycofany zostaje w katalogu (bywa potrzebny przy starych zapytaniach), ale karta ma o tym mówić
+     * wprost — inaczej trafiłby do oferty jako towar z bieżącej sprzedaży.
+     */
+    private static function withdrawnNote(DOMXPath $xpath): string
+    {
+        $label = self::text($xpath->query('//*['.self::classPredicate('single-product-label').']')->item(0));
+        if (mb_stripos($label, 'wycofan') === false) {
+            return '';
+        }
+
+        $replaced = '';
+        foreach ($xpath->query('//*['.self::classPredicate('replaces-box').']') as $box) {
+            $text = self::text($box);
+            if (mb_stripos($text, 'zastąpiony') !== false) {
+                $replaced = $text;
+                break;
+            }
+        }
+
+        return $replaced !== '' ? $label.' — '.$replaced : $label;
+    }
+
+    /**
+     * Pliki z sekcji „Do pobrania”: karta produktowa, instrukcje i deklaracje zgodności. Rodzaj rozpoznajemy
+     * po nazwie linku ze strony — deklaracje są dla przetargów najważniejsze, więc mają własny rodzaj.
+     *
+     * @return list<array{title: string, url: string, kind: string}>
+     */
+    private static function documentList(DOMXPath $xpath): array
+    {
+        $documents = [];
+        $seen = [];
+        $box = $xpath->query('//*['.self::classPredicate('spec-tech__docs').']')->item(0);
+        if ($box === null) {
+            return [];
+        }
+
+        foreach ($xpath->query('.//a[@href]', $box) as $link) {
+            $href = self::attr($link, 'href');
+            $title = self::text($link);
+            if ($href === '' || $title === '') {
+                continue;
+            }
+            $url = str_starts_with($href, 'http') ? $href : ProtektB2bClient::BASE.$href;
+            if (isset($seen[$url])) {
+                continue;
+            }
+            $seen[$url] = true;
+            $documents[] = ['title' => $title, 'url' => $url, 'kind' => self::documentKind($title)];
+        }
+
+        return $documents;
+    }
+
+    private static function documentKind(string $title): string
+    {
+        $lower = mb_strtolower($title);
+        if (str_contains($lower, 'deklaracj')) {
+            return ProductDocument::KIND_CERTIFICATE;
+        }
+        if (str_contains($lower, 'karta')) {
+            return ProductDocument::KIND_DATASHEET;
+        }
+
+        return ProductDocument::KIND_OTHER;
     }
 
     private static function skipped(string $url, ?string $category, string $reason): B2bRemoteProduct
