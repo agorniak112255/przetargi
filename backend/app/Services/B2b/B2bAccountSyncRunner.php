@@ -21,6 +21,15 @@ final class B2bAccountSyncRunner
 {
     public const ALREADY_RUNNING = 'Pobieranie tego konta już trwa.';
 
+    /**
+     * Pełny cennik (tysiące kart, strony produktu po ~150 KB) nie mieści się w domyślnych 128 MB z php.ini —
+     * przebieg UVEX ginął w połowie listy na „Allowed memory size exhausted”. Limit podnosimy tylko w górę.
+     */
+    private const MEMORY_LIMIT_BYTES = 512 * 1024 * 1024;
+
+    /** Błędy, po których PHP kończy proces — przebieg trzeba domknąć w shutdown, bo catch się nie wykona. */
+    private const FATAL_ERRORS = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+
     public function __construct(
         private readonly B2bConnectorRegistry $connectors,
         private readonly B2bCatalogSync $sync,
@@ -45,9 +54,13 @@ final class B2bAccountSyncRunner
         string $trigger = B2bSyncRun::TRIGGER_CLI,
         ?B2bConnector $connector = null,
     ): array {
+        self::raiseMemoryLimit();
+
         $progress = null;
+        $live = true;
         if (! $dryRun) {
             $progress = $this->claim($account, $trigger);
+            $this->closeRunOnFatalError($account, $progress, $live);
         }
         $priceList = null;
         $priceListCreated = false;
@@ -88,6 +101,9 @@ final class B2bAccountSyncRunner
             }
 
             throw $e;
+        } finally {
+            // przebieg jest już domknięty (albo poleciał wyjątek) — shutdown nie ma czego sprzątać
+            $live = false;
         }
 
         if (! $dryRun) {
@@ -127,6 +143,101 @@ final class B2bAccountSyncRunner
         }
 
         return [...$result, 'sync_run_id' => $progress?->run()->id, 'price_list_id' => $priceList?->id];
+    }
+
+    /**
+     * Limit pamięci procesu — tylko w górę. Tutaj, a nie w poleceniu: ten sam przebieg rusza z b2b:sync,
+     * z b2b:sync-due (na Windows i w testach bez osobnego procesu) i z panelu.
+     */
+    private static function raiseMemoryLimit(): void
+    {
+        if (! function_exists('ini_set')) {
+            return;
+        }
+        $current = self::memoryLimitBytes((string) ini_get('memory_limit'));
+        // null = bez limitu (-1) albo zapis nie do odczytania — nie ruszamy
+        if ($current === null || $current >= self::MEMORY_LIMIT_BYTES) {
+            return;
+        }
+        ini_set('memory_limit', (string) self::MEMORY_LIMIT_BYTES);
+    }
+
+    /** „128M” → bajty; null = bez limitu albo nieznany zapis. */
+    public static function memoryLimitBytes(string $value): ?int
+    {
+        if (preg_match('/^(\d+)([KMG]?)$/i', trim($value), $m) !== 1) {
+            return null;
+        }
+
+        return (int) $m[1] * match (strtoupper($m[2])) {
+            'K' => 1024,
+            'M' => 1024 * 1024,
+            'G' => 1024 * 1024 * 1024,
+            default => 1,
+        };
+    }
+
+    /**
+     * Fatal (np. „Allowed memory size exhausted”) kończy proces bez catch i bez finally — przebieg zostawałby
+     * „w toku”, a panel dopiero po B2bSyncRun::STALE_MINUTES pokazywał „brak postępu ponad 30 min”, bez prawdziwej
+     * przyczyny. Shutdown domyka przebieg i konto komunikatem z błędem PHP i ostatnim produktem.
+     * sweepStaleRuns zostaje zapasem na wypadek, gdy proces ginie bez szansy na shutdown (kill -9, restart serwera).
+     *
+     * @param  bool  $live  przez referencję: false = przebieg domknięty normalnie, shutdown nie ma czego sprzątać
+     */
+    private function closeRunOnFatalError(B2bAccount $account, B2bSyncProgress $progress, bool &$live): void
+    {
+        register_shutdown_function(function () use ($account, $progress, &$live): void {
+            $error = error_get_last();
+            if (! $live || ! self::isFatalError($error)) {
+                return;
+            }
+            $this->failRunAfterFatal($account, $progress, $error);
+        });
+    }
+
+    /**
+     * Błąd, po którym PHP kończy proces — catch ani finally już się nie wykonają.
+     *
+     * @param  array<string, mixed>|null  $error  z error_get_last()
+     */
+    public static function isFatalError(?array $error): bool
+    {
+        return $error !== null && in_array($error['type'] ?? null, self::FATAL_ERRORS, true);
+    }
+
+    /**
+     * @param  array{type: int, message: string, file: string, line: int}  $error  z error_get_last()
+     */
+    public function failRunAfterFatal(B2bAccount $account, B2bSyncProgress $progress, array $error): void
+    {
+        // po wyczerpaniu pamięci nie ma z czego zapisać przebiegu
+        if (function_exists('ini_set')) {
+            ini_set('memory_limit', '-1');
+        }
+        $message = sprintf(
+            'Przebieg przerwany błędem PHP: %s (%s:%d). Ostatni produkt: %s. Szczyt pamięci: %d MB.',
+            $error['message'],
+            basename($error['file']),
+            $error['line'],
+            $progress->run()->current_sku ?? 'brak',
+            (int) round(memory_get_peak_usage(true) / 1024 / 1024),
+        );
+        try {
+            $progress->log('error', $message);
+            $progress->finish(B2bSyncRun::STATUS_FAILED, $message);
+            $account->forceFill([
+                'last_sync_status' => 'failed',
+                'last_sync_finished_at' => now(),
+                'last_sync_message' => mb_substr($message, 0, 2000),
+            ])->save();
+        } catch (Throwable $e) {
+            // nie ma jak zapisać — zostaje sweepStaleRuns w b2b:sync-due
+            Log::warning('B2B: nie zapisano przebiegu przerwanego błędem PHP', [
+                'b2b_account_id' => $account->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

@@ -81,6 +81,12 @@ final class B2bCatalogSync
 
     private const REMOVAL_CHUNK = 2000;
 
+    /** Tyle powodów pominięcia wraca w wyniku przebiegu (panel i CLI pokazują kilka pierwszych). */
+    private const ERRORS_LIMIT = 200;
+
+    /** Co tyle produktów zużycie pamięci trafia do laravel.log — po to, żeby przerwany przebieg dało się zbadać. */
+    private const MEMORY_EVERY_PRODUCTS = 100;
+
     public function __construct(
         private readonly PriceListImportService $priceLists,
         private readonly ProductImageDownloader $images,
@@ -133,6 +139,7 @@ final class B2bCatalogSync
             'translations_queued' => 0,
         ];
         $errors = [];
+        $errorsOverLimit = 0;
         $pricesChanged = 0;
         $cancelled = false;
         $partial = false;
@@ -153,6 +160,15 @@ final class B2bCatalogSync
         // W trakcie próbki z wersjami łączna liczba jest nieznana — null (panel: pasek bez procentu i bez „pozostało”),
         // a nie processed, które dawało stałe 100%. Na końcu przebiegu setTotal($progressTotal()).
         $liveTotal = static fn (): ?int => $variantConnector !== null && $limit !== null ? null : $progressTotal();
+        // pełny cennik potrafi mieć tysiące pominięć — w wyniku zostaje pierwsze ERRORS_LIMIT, reszta jako licznik
+        $addError = static function (string $text) use (&$errors, &$errorsOverLimit): void {
+            if (count($errors) < self::ERRORS_LIMIT) {
+                $errors[] = $text;
+
+                return;
+            }
+            $errorsOverLimit++;
+        };
         $runId = $progress?->run()->id;
         // karty użyte w tym przebiegu (id → true, kod karty małymi literami → id; null = nowa karta w dry-run) —
         // grupa rozmiarów (members) nie trafia na kartę innej pozycji z tego samego przebiegu
@@ -195,7 +211,7 @@ final class B2bCatalogSync
 
             if ($outcome['status'] === 'skipped') {
                 $stats['skipped']++;
-                $errors[] = $label.': '.$outcome['reason'];
+                $addError($label.': '.$outcome['reason']);
                 $progress?->error($label.': '.$outcome['reason']);
                 $progress?->skipped([
                     'reason' => (string) $outcome['reason'],
@@ -223,7 +239,7 @@ final class B2bCatalogSync
                     $stats['translations_queued']++;
                 }
                 if (($outcome['image_error'] ?? null) !== null) {
-                    $errors[] = $label.': zdjęcie — '.$outcome['image_error'];
+                    $addError($label.': zdjęcie — '.$outcome['image_error']);
                     $progress?->error($label.': zdjęcie — '.$outcome['image_error']);
                 }
             }
@@ -282,6 +298,18 @@ final class B2bCatalogSync
                 }
             }
 
+            if ($stats['seen'] % self::MEMORY_EVERY_PRODUCTS === 0) {
+                Log::info('B2B: zużycie pamięci przebiegu', [
+                    'b2b_account_id' => $account->id,
+                    'sync_run_id' => $runId,
+                    'seen' => $stats['seen'],
+                    'total' => $stats['total_remote'],
+                    'memory_mb' => (int) round(memory_get_usage(true) / 1024 / 1024),
+                    'peak_mb' => (int) round(memory_get_peak_usage(true) / 1024 / 1024),
+                    'limit' => ini_get('memory_limit'),
+                ]);
+            }
+
             if ($progress?->cancelRequested()) {
                 $cancelled = true;
                 break;
@@ -305,6 +333,10 @@ final class B2bCatalogSync
             } else {
                 $progress?->log('warn', 'Lista wersji u dostawcy niepełna — wycofanych wersji nie oznaczono.');
             }
+        }
+
+        if ($errorsOverLimit > 0) {
+            $progress?->log('warn', 'Dalszych powodów pominięcia nie wypisujemy: '.$errorsOverLimit);
         }
 
         if ($stats['translations_queued'] > 0) {

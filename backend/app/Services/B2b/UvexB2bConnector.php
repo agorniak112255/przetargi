@@ -110,6 +110,10 @@ final class UvexB2bConnector implements B2bConnector, B2bListProgressAware
             $grouped,
         ));
 
+        // generator żyje do ostatniej karty — wiersze listy (tysiące pozycji) nie są już potrzebne,
+        // karty mają własne kopie kodu i nazwy
+        unset($rows, $skipped);
+
         foreach ($products as $product) {
             yield $product;
         }
@@ -397,14 +401,11 @@ final class UvexB2bConnector implements B2bConnector, B2bListProgressAware
             'sku' => (string) $m['row']['code'],
             'name' => (string) $m['row']['name'],
         ], $group);
+        // tylko kod i nazwa — jedyne, co czyta manufacturer(); pełne wiersze listy (1302 karty × rozmiary)
+        // zostawałyby w pamięci do końca przebiegu
         $rows = array_map(static fn (array $m): array => [
-            'id' => $m['row']['id'],
             'code' => $m['row']['code'],
             'name' => $m['row']['name'],
-            'price_text' => $m['row']['price_text'],
-            'availability' => $m['row']['availability'],
-            'unit' => $m['row']['unit'],
-            'size' => $m['size']['size'] ?? null,
         ], $group);
 
         $name = $first['name'];

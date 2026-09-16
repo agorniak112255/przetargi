@@ -60,6 +60,16 @@ final class B2bSyncCommand extends Command
         // w dzienniku przebiegu w panelu), inaczej plik rósłby o tysiące wierszy co noc.
         $productVerbosity = $trigger === B2bSyncRun::TRIGGER_CLI ? null : 'v';
 
+        if ($trigger !== B2bSyncRun::TRIGGER_CLI) {
+            // fatal (np. brak pamięci) nie wykona finally poniżej — bez tego „Sprawdź teraz” czekałoby
+            // na wygaśnięcie blokady uruchomienia, choć przebieg już się zakończył niepowodzeniem
+            register_shutdown_function(static function () use ($account): void {
+                if (B2bAccountSyncRunner::isFatalError(error_get_last())) {
+                    Cache::forget(B2bSyncDueCommand::launchGuardKey((int) $account->id));
+                }
+            });
+        }
+
         try {
             $result = $runner->run(
                 $account,
