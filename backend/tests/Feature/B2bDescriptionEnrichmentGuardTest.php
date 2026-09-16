@@ -110,6 +110,31 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
         $guard->assertMayOverwrite($fromB2b, false);
     }
 
+    public function test_catalog_health_counts_b2b_description_as_ready(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $fromB2b = $this->b2bProduct('UVEX-1');
+        $pending = $this->product('OTHER-1', null);
+
+        $this->getJson('/api/products/catalog-health')
+            ->assertOk()
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('with_description', 1)
+            ->assertJsonPath('from_b2b', 1)
+            // karta z B2B nie czeka na AI — do kolejki „nie wzbogacone” idzie tylko OTHER-1
+            ->assertJsonPath('not_enriched', 1)
+            ->assertJsonPath('queue_candidates.not_enriched', 1)
+            ->assertJsonPath('sample_ids.not_enriched', [$pending->id]);
+
+        $this->postJson('/api/products/catalog-health/queue', ['reason' => 'not_enriched'])
+            ->assertStatus(202)
+            ->assertJsonPath('queued', 1)
+            ->assertJsonPath('batch.total', 1);
+
+        $this->assertSame(Product::ENRICHMENT_NONE, $fromB2b->fresh()?->enrichment_status);
+        $this->assertSame(Product::ENRICHMENT_QUEUED, $pending->fresh()?->enrichment_status);
+    }
+
     private function product(string $sku, ?string $description): Product
     {
         return Product::query()->create([

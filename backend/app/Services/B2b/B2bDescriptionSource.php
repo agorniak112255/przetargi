@@ -29,21 +29,47 @@ final class B2bDescriptionSource
         $ids = array_values(array_unique(array_filter(array_map('intval', $productIds), static fn (int $id): bool => $id > 0)));
         $out = [];
         foreach (array_chunk($ids, 1000) as $chunk) {
-            $hashes = [];
-            $links = B2bProductLink::query()
+            $linked = B2bProductLink::query()
                 ->whereIn('product_id', $chunk)
+                ->whereNotNull('description_hash')
+                ->pluck('product_id')
+                ->map(static fn ($id): int => (int) $id)
+                ->unique()
+                ->values()
+                ->all();
+            if ($linked === []) {
+                continue;
+            }
+            $descriptions = [];
+            foreach (Product::query()->whereIn('id', $linked)->get(['id', 'description']) as $product) {
+                $descriptions[(int) $product->id] = (string) $product->description;
+            }
+            $out += $this->filterByDescription($descriptions);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Ta sama reguła co productIds(), ale na już wczytanych opisach — dla miejsc, które i tak przechodzą po kartach
+     * (raport jakości katalogu) i nie muszą czytać opisów drugi raz.
+     *
+     * @param  array<int, string>  $descriptions  id karty => jej obecny opis
+     * @return array<int, true> id kart z opisem z B2B
+     */
+    public function filterByDescription(array $descriptions): array
+    {
+        $out = [];
+        foreach (array_chunk($descriptions, 1000, true) as $chunk) {
+            $links = B2bProductLink::query()
+                ->whereIn('product_id', array_keys($chunk))
                 ->whereNotNull('description_hash')
                 ->get(['product_id', 'description_hash']);
             foreach ($links as $link) {
-                $hashes[(int) $link->product_id][(string) $link->description_hash] = true;
-            }
-            if ($hashes === []) {
-                continue;
-            }
-            foreach (Product::query()->whereIn('id', array_keys($hashes))->get(['id', 'description']) as $product) {
-                $description = (string) $product->description;
-                if (trim($description) !== '' && isset($hashes[(int) $product->id][sha1($description)])) {
-                    $out[(int) $product->id] = true;
+                $id = (int) $link->product_id;
+                $description = (string) ($chunk[$id] ?? '');
+                if (trim($description) !== '' && sha1($description) === (string) $link->description_hash) {
+                    $out[$id] = true;
                 }
             }
         }

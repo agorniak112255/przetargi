@@ -8,6 +8,7 @@ use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
+use App\Services\B2b\B2bDescriptionSource;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductSizeVariant;
@@ -26,6 +27,7 @@ final class ProductCatalogHealthService
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly AiSettingsService $aiSettings,
         private readonly ProductSizeVariant $sizes,
+        private readonly B2bDescriptionSource $b2bDescriptions,
     ) {}
 
     /**
@@ -49,9 +51,6 @@ final class ProductCatalogHealthService
         $missingImages = (clone $base)
             ->whereDoesntHave('images')
             ->count();
-        $notEnriched = (clone $queueable)
-            ->where('enrichment_status', '!=', Product::ENRICHMENT_DONE)
-            ->count();
         $manualReview = (clone $base)
             ->where('enrichment_status', Product::ENRICHMENT_MANUAL)
             ->count();
@@ -64,6 +63,8 @@ final class ProductCatalogHealthService
             ->count();
 
         $missingAttributes = 0;
+        $withDescription = 0;
+        $fromB2b = 0;
         $idsMissingDescription = [];
         $idsNotEnriched = [];
         $idsMissingAttributes = [];
@@ -73,18 +74,37 @@ final class ProductCatalogHealthService
             ->orderBy('id')
             ->chunkById(200, function ($products) use (
                 &$missingAttributes,
+                &$withDescription,
+                &$fromB2b,
                 &$idsMissingDescription,
                 &$idsNotEnriched,
                 &$idsMissingAttributes,
             ): void {
+                // karty z opisem z cennika B2B nie idą do zbiorczego AI (ProductEnrichmentService::enqueueProductIds),
+                // więc nie liczymy ich jako „nie wzbogacone” — inaczej licznik kolejki obiecuje pozycje, których AI nie ruszy
+                $b2bDescribed = $this->b2bDescriptions->filterByDescription(
+                    $products
+                        ->mapWithKeys(static fn ($product): array => [
+                            (int) $product->id => (string) ($product->description ?? ''),
+                        ])
+                        ->all()
+                );
+
                 foreach ($products as $product) {
                     /** @var Product $product */
                     $manual = $product->enrichment_status === Product::ENRICHMENT_MANUAL;
                     $desc = trim((string) ($product->description ?? ''));
+                    $b2b = isset($b2bDescribed[(int) $product->id]);
+                    if ($desc !== '') {
+                        $withDescription++;
+                    }
+                    if ($b2b) {
+                        $fromB2b++;
+                    }
                     if ($desc === '' && ! $manual) {
                         $idsMissingDescription[] = (int) $product->id;
                     }
-                    if ($product->enrichment_status !== Product::ENRICHMENT_DONE && ! $manual) {
+                    if ($product->enrichment_status !== Product::ENRICHMENT_DONE && ! $manual && ! $b2b) {
                         $idsNotEnriched[] = (int) $product->id;
                     }
                     if (! $this->hasUsefulAttributes($product)) {
@@ -116,10 +136,11 @@ final class ProductCatalogHealthService
             'missing_description' => $missingDescription,
             'missing_images' => $missingImages,
             'missing_attributes' => $missingAttributes,
-            'not_enriched' => $notEnriched,
+            'not_enriched' => count($idsNotEnriched),
             'manual_review' => $manualReview,
             'empty_packaging' => $emptyPackaging,
-            'with_description' => max(0, $total - $missingDescription),
+            'with_description' => $withDescription,
+            'from_b2b' => $fromB2b,
             'vector' => $this->vectorProgress($base),
             'by_manufacturer' => $byManufacturer,
             'queue_candidates' => [
@@ -325,13 +346,31 @@ final class ProductCatalogHealthService
                 ->pluck('id')
                 ->map(static fn ($id): int => (int) $id)
                 ->all(),
-            'not_enriched' => $query
-                ->where('enrichment_status', '!=', Product::ENRICHMENT_DONE)
-                ->pluck('id')
-                ->map(static fn ($id): int => (int) $id)
-                ->all(),
+            'not_enriched' => $this->withoutB2bDescription(
+                $query->where('enrichment_status', '!=', Product::ENRICHMENT_DONE)
+            ),
             default => throw new RuntimeException('Nieznany powód kolejki: '.$reason),
         };
+    }
+
+    /**
+     * Id z zapytania bez kart z opisem z cennika B2B — zbiorcze AI i tak je pomija.
+     *
+     * @param  Builder<Product>  $query
+     * @return list<int>
+     */
+    private function withoutB2bDescription(Builder $query): array
+    {
+        $descriptions = [];
+        foreach ($query->get(['id', 'description']) as $product) {
+            $descriptions[(int) $product->id] = (string) ($product->description ?? '');
+        }
+        $b2bDescribed = $this->b2bDescriptions->filterByDescription($descriptions);
+
+        return array_values(array_filter(
+            array_keys($descriptions),
+            static fn (int $id): bool => ! isset($b2bDescribed[$id]),
+        ));
     }
 
     private function hasUsefulAttributes(Product $product): bool

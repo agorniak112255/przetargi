@@ -9,6 +9,7 @@ type Report = {
   not_enriched: number
   manual_review?: number
   with_description: number
+  from_b2b?: number
   empty_packaging?: number
   by_manufacturer: Array<{ manufacturer: string; count: number }>
   offer_markup_percent?: number
@@ -200,8 +201,20 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
         <Stat label="Bez opisu" value={report.missing_description} warn />
         <Stat label="Bez zdjęć" value={report.missing_images} warn />
         <Stat label="Bez atrybutów BHP" value={report.missing_attributes} warn />
-        <Stat label="Nie wzbogacone" value={report.not_enriched} warn />
+        <Stat
+          label="Nie wzbogacone"
+          value={report.not_enriched}
+          warn
+          hint="Bez kart z opisem z cennika B2B i bez kart do ręcznego opisu — zbiorcze AI ich nie rusza"
+        />
         <Stat label="Z opisem" value={report.with_description} />
+        {(report.from_b2b ?? 0) > 0 && (
+          <Stat
+            label="Opis z B2B"
+            value={report.from_b2b ?? 0}
+            hint="Opis ze sklepu dostawcy (cennik B2B) — liczony jako gotowy, AI nie nadpisuje go zbiorczo"
+          />
+        )}
         <Stat label="Opis bez rozmiaru w opakowaniu" value={report.empty_packaging ?? 0} warn />
         {(report.manual_review ?? 0) > 0 && (
           <Stat label="Do ręcznego opisu" value={report.manual_review ?? 0} warn />
@@ -272,9 +285,20 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
   )
 }
 
-function Stat({ label, value, warn }: { label: string; value: number | string; warn?: boolean }) {
+function Stat({
+  label,
+  value,
+  warn,
+  hint,
+}: {
+  label: string
+  value: number | string
+  warn?: boolean
+  hint?: string
+}) {
   return (
     <span
+      title={hint}
       className={`rounded border px-2 py-1 ${
         warn && typeof value === 'number' && value > 0
           ? 'border-amber-300 bg-white text-amber-900'
