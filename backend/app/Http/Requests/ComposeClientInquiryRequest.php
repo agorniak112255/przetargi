@@ -23,17 +23,17 @@ class ComposeClientInquiryRequest extends FormRequest
     private function marginRule(): Closure
     {
         return function (string $attribute, mixed $value, Closure $fail): void {
-            $raw = str_replace([',', '%', ' ', "\u{00A0}"], ['.', '', '', ''], trim((string) $value));
-            if ($raw === '') {
+            if (trim((string) $value) === '') {
                 return;
             }
-            if (! is_numeric($raw)) {
+            $percent = OfferPricing::percentFromInput($value);
+            if ($percent === null) {
                 $fail('Marża musi być liczbą, np. 18 albo 12,5.');
 
                 return;
             }
             $max = OfferPricing::marginMax();
-            if ((float) $raw < 0 || (float) $raw > $max) {
+            if ($percent < 0 || $percent > $max) {
                 $fail('Marża musi mieścić się w zakresie 0–'.rtrim(rtrim(number_format($max, 2, '.', ''), '0'), '.').'%.');
             }
         };

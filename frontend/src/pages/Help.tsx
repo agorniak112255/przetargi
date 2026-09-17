@@ -1739,7 +1739,7 @@ function InquiriesHelp() {
                     <span className="rounded-full border border-slate-300 bg-white px-2.5 py-1">Bez cen</span>
                     <span className="rounded-full border border-slate-300 bg-white px-2.5 py-1">Cena katalogowa</span>
                     <span className="rounded-full border border-blue-600 bg-blue-600 px-2.5 py-1 text-white">
-                      Katalog + marża
+                      Zakup + marża
                     </span>
                     <span className="text-slate-700">Marża 18 %</span>
                   </div>

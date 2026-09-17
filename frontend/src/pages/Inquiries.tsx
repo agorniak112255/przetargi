@@ -31,7 +31,7 @@ type DirectoryUser = { id: number; name: string; email: string }
 const priceModeLabel: Record<InquiryPreferences['price_mode'], string> = {
   none: 'bez cen',
   catalog: 'cena katalogowa',
-  catalog_margin: 'katalog + marża',
+  catalog_margin: 'zakup + marża',
 }
 
 const PER_PAGE_CHOICES = [25, 50, 100]

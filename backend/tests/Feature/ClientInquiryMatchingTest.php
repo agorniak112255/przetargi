@@ -241,6 +241,110 @@ final class ClientInquiryMatchingTest extends TestCase
             ->assertJsonPath('items.0.chosen', 'p:'.$waders->id);
     }
 
+    public function test_quoted_sku_below_the_threshold_does_not_push_out_a_rated_candidate(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $glasses = $this->product('SF201AF', 'Okulary 3M SecureFit');
+        $filter = $this->product('2820', 'Filtr do polmaski');
+
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_body' => '20 szt. okulary 3M 2820 bezbarwne',
+            'analysis' => [
+                'line_items' => [[
+                    'id' => 'item_1',
+                    'quote' => '20 szt. okulary 3M 2820 bezbarwne',
+                    'qty' => '20',
+                    'unit' => 'szt.',
+                    'query' => 'okulary 3M 2820 bezbarwne',
+                ]],
+                'matches' => [[
+                    'query' => 'okulary 3M 2820 bezbarwne',
+                    'products' => [
+                        [
+                            'id' => $glasses->id,
+                            'sku' => $glasses->sku,
+                            'name' => $glasses->name,
+                            'manufacturer' => '3M',
+                            'norms' => '',
+                            'score' => 92,
+                            'reason' => 'Zgodny rodzaj',
+                            'catalog_pln' => 30.0,
+                            'offer_pln' => 35.4,
+                            'stock' => 4,
+                        ],
+                        // ten sam ciag znakow co w cytacie, ale model ocenil wiersz nisko
+                        [
+                            'id' => $filter->id,
+                            'sku' => $filter->sku,
+                            'name' => $filter->name,
+                            'manufacturer' => '3M',
+                            'norms' => '',
+                            'score' => 30,
+                            'reason' => 'Inny rodzaj wyrobu',
+                            'catalog_pln' => 12.0,
+                            'offer_pln' => 14.16,
+                            'stock' => 9,
+                        ],
+                    ],
+                ]],
+            ],
+            'reply_subject' => 'Oferta',
+            'reply_body' => 'Tresc listu.',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson("/api/inquiries/{$inquiry->id}")
+            ->assertOk()
+            ->assertJsonPath('items.0.candidates.0.sku', 'SF201AF')
+            ->assertJsonPath('items.0.confidence', 'high')
+            ->assertJsonPath('items.0.chosen', 'p:'.$glasses->id);
+    }
+
+    public function test_old_record_row_with_only_a_size_keeps_the_only_group(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $mat = $this->product('WYC-50', 'Wycieraczka gumowa');
+
+        // zapis sprzed „search_query”: wiersz z samym wymiarem nie ma wlasnej frazy
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_body' => "2 szt. Wycieraczka gumowa rozm: 40x60cm\n3 szt. rozm: 50x100cm",
+            'analysis' => [
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => '2 szt. Wycieraczka gumowa rozm: 40x60cm', 'qty' => '2', 'unit' => 'szt.', 'query' => 'Wycieraczka gumowa', 'size' => '40x60cm'],
+                    ['id' => 'item_2', 'quote' => '3 szt. rozm: 50x100cm', 'qty' => '3', 'unit' => 'szt.', 'query' => '', 'size' => '50x100cm'],
+                ],
+                'matches' => [[
+                    'query' => 'Wycieraczka gumowa',
+                    'products' => [[
+                        'id' => $mat->id,
+                        'sku' => $mat->sku,
+                        'name' => $mat->name,
+                        'manufacturer' => 'Supon',
+                        'norms' => '',
+                        'score' => 88,
+                        'reason' => 'Zgodny rodzaj',
+                        'catalog_pln' => 39.0,
+                        'offer_pln' => 46.02,
+                        'stock' => 3,
+                    ]],
+                ]],
+            ],
+            'reply_subject' => 'Oferta',
+            'reply_body' => 'Tresc listu.',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson("/api/inquiries/{$inquiry->id}")
+            ->assertOk()
+            ->assertJsonPath('items.1.candidates.0.sku', 'WYC-50');
+    }
+
     public function test_item_without_a_query_gets_no_candidates_from_the_only_group(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

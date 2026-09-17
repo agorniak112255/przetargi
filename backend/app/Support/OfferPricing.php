@@ -22,12 +22,30 @@ final class OfferPricing
         return max(0, (float) config('pricing.offer_markup_percent', 18));
     }
 
-    /** Najwyzsza marza, jaka wolno wpisac recznie. */
+    /** Najwyższa marża, jaką wolno wpisać ręcznie. */
     public static function marginMax(): float
     {
-        $max = (float) config('pricing.offer_margin_max', 99);
+        $max = config('pricing.offer_margin_max', 99);
 
-        return $max > 0 ? $max : 99.0;
+        return is_numeric($max) && (float) $max >= 0 ? (float) $max : 99.0;
+    }
+
+    /**
+     * Marża wpisana ręcznie: przecinek, znak procentu i spacje (także twarda spacja
+     * z Worda) to normalny zapis. Jedno miejsce dla walidacji i dla liczenia ceny —
+     * inaczej „30 %” przechodziło walidację, a cenę liczyła marża domyślna.
+     */
+    public static function percentFromInput(mixed $raw): ?float
+    {
+        if (is_float($raw) || is_int($raw)) {
+            return (float) $raw;
+        }
+        if (! is_string($raw)) {
+            return null;
+        }
+        $clean = str_replace([',', '%', ' ', "\u{00A0}", "\u{202F}"], ['.', '', '', '', ''], trim($raw));
+
+        return $clean !== '' && is_numeric($clean) ? (float) $clean : null;
     }
 
     public static function factorFromPercent(?float $percent): float

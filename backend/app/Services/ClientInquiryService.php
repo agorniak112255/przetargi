@@ -713,9 +713,12 @@ final class ClientInquiryService
         usort($products, static fn (array $a, array $b): int => ((int) ($b['score'] ?? 0)) <=> ((int) ($a['score'] ?? 0)));
         $products = array_values(array_slice($products, 0, self::MAX_MATCHES_PER_QUERY));
 
-        // kod z maila na czoło — przy równych wynikach wariantów to on jest domyślny
+        // Kod z maila na czoło — przy równych wynikach wariantów to on jest domyślny.
+        // Ale wiersz oceniony poniżej progu zostaje na swoim miejscu: zgodny bywa sam
+        // ciąg znaków (indeks filtra „2820” przy okularach 3M), a przesunięcie go na
+        // czoło odbierało wybór domyślny kandydatowi, którego model ocenił wysoko.
         $quoted = $this->skuQuotedIndex($item, $products);
-        if ($quoted !== null && $quoted > 0) {
+        if ($quoted !== null && $quoted > 0 && (int) ($products[$quoted]['score'] ?? 0) >= $this->minMatchScore()) {
             [$hit] = array_splice($products, $quoted, 1);
             array_unshift($products, $hit);
         }
@@ -1341,11 +1344,18 @@ final class ClientInquiryService
      */
     private function sizeFromLine(string $line): ?string
     {
-        if (preg_match('/\b(?:rozmiar|rozm\.?)[:\s]+([a-z0-9\/,.\-]+)/iu', $line, $m) !== 1) {
+        if (preg_match('/\b(?:rozmiar|rozm\.?)[:\s]+([\p{L}\d\/,.\-]+)/iu', $line, $m) !== 1) {
             return null;
         }
         $size = trim(trim($m[1]), '.,-');
-        if ($size === '' || preg_match('/^(?:uniwersaln|dowoln)/iu', $size) === 1) {
+
+        // Rozmiarem jest liczba („43”, „40-42”, „1/2”, „40x60cm”) albo oznaczenie
+        // literowe („M”, „2XL”). „Rozmiar do uzgodnienia”, „rozmiar uniwersalny” czy
+        // „rozmiar wg wzoru” to opis, a nie rozmiar — wpisany do nagłówka pozycji
+        // czytałby się jak rozmiar podany przez klienta („rozmiar z zapytania: do”).
+        $looksLikeSize = preg_match('/^\d/u', $size) === 1
+            || preg_match('/^(?:xx?s|s|m|l|xx?x?l|[2-5]xl)$/iu', $size) === 1;
+        if (! $looksLikeSize) {
             return null;
         }
 
@@ -1405,8 +1415,9 @@ final class ClientInquiryService
 
     private function queryFromLine(string $rest): string
     {
-        // „rozm: 40x60cm” zapisują i z dwukropkiem, i ze spacją
-        $q = preg_replace('/\b(?:rozmiar|rozm\.?)[:\s]+[a-z0-9\/,.\-]+/iu', '', $rest) ?? $rest;
+        // „rozm: 40x60cm” zapisują i z dwukropkiem, i ze spacją; klasa znaków obejmuje
+        // polskie litery, bo „rozmiar duży” zostawiał we frazie ogryzek „ży”
+        $q = preg_replace('/\b(?:rozmiar|rozm\.?)[:\s]+[\p{L}\d\/,.\-]+/iu', '', $rest) ?? $rest;
         $q = preg_replace('/^\d+\s*'.self::UNIT_PATTERN.'?[\s.,:–-]+/iu', '', $q) ?? $q;
 
         // cena i numeracja pozycji nie opisują wyrobu, a przeważają w wyszukiwaniu
@@ -1677,8 +1688,12 @@ final class ClientInquiryService
         );
         // Pozycja bez frazy („proszę o wycenę”) niczego w katalogu nie szukała, więc
         // nie wolno jej podstawić wyników jedynej grupy — byliby to kandydaci, których
-        // nikt do tej pozycji nie dopasował.
-        $hasQuery = trim((string) ($item['query'] ?? '')) !== '';
+        // nikt do tej pozycji nie dopasował. Wiersz z samym wymiarem („3 szt. rozm:
+        // 50x100cm”) to co innego: w starych rekordach nie ma dziedziczonej frazy,
+        // a wymiar opisuje wyrób z jedynej grupy zapytania.
+        $quote = (string) ($item['quote'] ?? '');
+        $hasQuery = trim((string) ($item['query'] ?? '')) !== ''
+            || ! InquiryQueryText::hasProductWord($quote);
         $found = $this->productsForQuery($matches, $search, $hasQuery);
         if ($found !== []) {
             return $found;
@@ -1701,7 +1716,7 @@ final class ClientInquiryService
         }
         // Stare rekordy trzymały w kluczu grupy cały cytat („rękawice nitrylowe rozmiar 9”),
         // więc przy jednej grupie bierzemy ją mimo innego klucza.
-        if ($allowOnlyGroup && $key !== '' && count($matches) === 1) {
+        if ($allowOnlyGroup && count($matches) === 1) {
             return $matches[0]['products'];
         }
 
@@ -1933,7 +1948,6 @@ final class ClientInquiryService
      */
     private function offerRow(int $n, array $item, ?array $product, ?array $substitute, string $priceMode, float $margin): array
     {
-        $qtyUnit = $this->qtyUnit($item);
         $size = trim((string) ($item['size'] ?? ''));
         // cytat idzie do klienta — bez ceny z cudzej oferty, reszta słowo w słowo
         $quote = InquiryQueryText::withoutPrice((string) ($item['quote'] ?? ''));
@@ -2227,20 +2241,15 @@ final class ClientInquiryService
      */
     public function marginPercent(array $answers): float
     {
-        $raw = trim((string) ($answers['price']['custom'] ?? ''));
-        $raw = str_replace([',', '%', ' '], ['.', '', ''], $raw);
-        if ($raw === '' || ! is_numeric($raw)) {
+        $value = OfferPricing::percentFromInput($answers['price']['custom'] ?? null);
+        if ($value === null) {
             return OfferPricing::markupPercent();
         }
-        $value = (float) $raw;
-        if ($value < 0) {
-            return 0.0;
-        }
-        if ($value > 99) {
-            return 99.0;
-        }
+        // Granica jest jedna — ta sama, którą sprawdza walidacja przy zapisie.
+        // Twarde 99 zostawiało zapisaną marżę 120% i po cichu liczyło cenę z 99%.
+        $max = OfferPricing::marginMax();
 
-        return $value;
+        return max(0.0, min($value, $max));
     }
 
     /**

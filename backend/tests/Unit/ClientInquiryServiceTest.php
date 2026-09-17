@@ -257,6 +257,18 @@ final class ClientInquiryServiceTest extends TestCase
         // „uniwersalny” to brak rozmiaru, a nie rozmiar podany przez klienta
         $this->assertNull($items[1]['size']);
         $this->assertSame('43', $items[2]['size']);
+
+        // opis to nie rozmiar: w naglowku pozycji czytalby sie jak rozmiar podany przez klienta
+        $opis = $this->service()->parseLineItemsFromBody(
+            '2 pary Buty robocze rozmiar do uzgodnienia'
+            ."\n3 pary Rekawice rozmiar duzy"
+            ."\n4 pary Buty robocze rozmiar 2XL"
+        );
+        $this->assertNull($opis[0]['size']);
+        $this->assertNull($opis[1]['size']);
+        $this->assertSame('2XL', $opis[2]['size']);
+        // polskie litery w klasie znakow: z frazy nie zostaje ogryzek po wycietym rozmiarze
+        $this->assertSame('Rekawice', $opis[1]['query']);
     }
 
     public function test_build_cards_one_block_per_line_item_with_quote(): void
@@ -372,6 +384,21 @@ final class ClientInquiryServiceTest extends TestCase
 
         $this->assertCount(2, $resolved);
         $this->assertSame('10', $resolved[0]['size']);
+    }
+
+    public function test_margin_reads_the_same_input_as_the_validator(): void
+    {
+        $svc = $this->service();
+
+        // twarda spacja z Worda przechodzila walidacje, a cene liczyla marza domyslna
+        $this->assertSame(30.0, $svc->marginPercent(['price' => ['custom' => "30\u{00A0}%"]]));
+        $this->assertSame(12.5, $svc->marginPercent(['price' => ['custom' => '12,5']]));
+        $this->assertSame(18.0, $svc->marginPercent(['price' => ['custom' => 'osiemnascie']]));
+
+        // granica jedna dla walidacji i dla liczenia: twarde 99 przycinalo dozwolona marze
+        config()->set('pricing.offer_margin_max', 150);
+        $this->assertSame(120.0, $svc->marginPercent(['price' => ['custom' => '120']]));
+        $this->assertSame(150.0, $svc->marginPercent(['price' => ['custom' => '400']]));
     }
 
     public function test_confidence_thresholds_high_medium_none(): void
