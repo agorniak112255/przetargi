@@ -802,14 +802,8 @@ export function PriceLists() {
 
   async function ensureHistoryDetails(row: PriceList): Promise<PriceList> {
     if (historyCache[row.id]) return historyCache[row.id]
-    if (
-      (row.price_changes && row.price_changes.length > 0) ||
-      (row.updated_products && row.updated_products.length > 0) ||
-      (row.skipped_details && row.skipped_details.length > 0)
-    ) {
-      setHistoryCache((prev) => ({ ...prev, [row.id]: row }))
-      return row
-    }
+    // Skrótu „wiersz listy ma już szczegóły” tu nie ma: lista nie niesie historii aktualizacji,
+    // a przy cenniku ze zmianami cen skrót przerywał pobieranie i rozwinięcie zostawało puste.
     setHistoryDetailsLoading(row.id)
     try {
       const full = await api<PriceList>(`/price-lists/${row.id}`)

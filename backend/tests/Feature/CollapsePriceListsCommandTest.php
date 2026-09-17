@@ -11,7 +11,9 @@ use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\User;
+use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
@@ -140,6 +142,21 @@ final class CollapsePriceListsCommandTest extends TestCase
             ->assertSuccessful();
 
         $this->assertNull(PriceList::query()->sole()->manufacturer_key);
+    }
+
+    public function test_price_list_card_returns_its_update_history(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        [, $newer] = $this->twoArtraLists();
+        $this->artisan('price-lists:collapse --apply')->assertSuccessful();
+
+        $body = $this->getJson('/api/price-lists/'.$newer->id)->assertOk()->json();
+
+        $this->assertCount(2, $body['imports']);
+        $this->assertEqualsCanonicalizing(['v1', 'v2'], array_column($body['imports'], 'version'));
+        $this->assertSame(2, collect($this->getJson('/api/price-lists')->assertOk()->json())
+            ->firstWhere('id', $newer->id)['imports_count']);
     }
 
     /**
