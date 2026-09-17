@@ -87,9 +87,13 @@ export type InquiryPayload = {
   tone: InquiryTone
   source_subject: string | null
   source_body: string
+  /** Message-ID maila źródłowego — bez niego nie ma na co odpowiedzieć w Thunderbirdzie. */
+  source_message_id: string | null
   questions: string[]
   attention_count: number
   replied_at: string | null
+  /** Ustawione, gdy list czeka na podjęcie przez dodatek do Thunderbirda. */
+  send_requested_at: string | null
   price: InquiryPrice
   items: InquiryItem[]
   global_cards: InquiryCard[]

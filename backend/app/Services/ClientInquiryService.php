@@ -220,6 +220,7 @@ final class ClientInquiryService
             'questions' => $this->stringList($analysis['questions'] ?? null),
             'attention_count' => $this->countAttention($items),
             'replied_at' => $inquiry->replied_at?->toIso8601String(),
+            'send_requested_at' => $inquiry->send_requested_at?->toIso8601String(),
             'price' => [
                 'answer_key' => 'price',
                 'mode' => $this->priceModeOf($answers),

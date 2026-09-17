@@ -448,6 +448,46 @@ export function InquiryReply() {
     }
   }
 
+  /**
+   * Przeglądarka nie sięgnie do poczty na komputerze, więc zostawiamy prośbę
+   * na serwerze — dodatek do Thunderbirda podejmuje ją w ciągu kilkunastu sekund
+   * i otwiera okno odpowiedzi na tym samym mailu.
+   */
+  async function sendViaThunderbird() {
+    if (!inquiry) return
+    setMsg('')
+    try {
+      await saveEdits()
+    } catch {
+      return
+    }
+    try {
+      const res = await api<InquiryPayload>(`/inquiries/${inquiry.id}/queue-reply`, {
+        method: 'POST',
+        body: JSON.stringify({ queued: true }),
+      })
+      setInquiry(res)
+      setMsg('Zapisano. Thunderbird otworzy okno odpowiedzi w ciągu kilkunastu sekund.')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się przekazać listu do Thunderbirda.')
+    }
+  }
+
+  async function cancelThunderbird() {
+    if (!inquiry) return
+    setMsg('')
+    try {
+      const res = await api<InquiryPayload>(`/inquiries/${inquiry.id}/queue-reply`, {
+        method: 'POST',
+        body: JSON.stringify({ queued: false }),
+      })
+      setInquiry(res)
+      setMsg('Prośba o wysyłkę anulowana.')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się anulować.')
+    }
+  }
+
   async function unmarkSent() {
     if (!inquiry) return
     setMsg('')
@@ -527,11 +567,25 @@ export function InquiryReply() {
               />
             </label>
             <div className="mt-3 flex flex-wrap items-center gap-2">
+              {inquiry.source_message_id && (
+                <button
+                  type="button"
+                  disabled={busy || saving}
+                  onClick={() => void sendViaThunderbird()}
+                  className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Zapisz i wyślij w Thunderbirdzie
+                </button>
+              )}
               <button
                 type="button"
                 disabled={busy || saving}
                 onClick={() => void copyAndMarkSent()}
-                className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                className={
+                  inquiry.source_message_id
+                    ? 'rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50'
+                    : 'rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50'
+                }
               >
                 Kopiuj i oznacz jako wysłane
               </button>
@@ -543,6 +597,16 @@ export function InquiryReply() {
               >
                 Kopiuj treść
               </button>
+              {inquiry.send_requested_at && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void cancelThunderbird()}
+                  className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Anuluj wysyłkę
+                </button>
+              )}
               {inquiry.replied_at && (
                 <button
                   type="button"
@@ -562,7 +626,11 @@ export function InquiryReply() {
               {saving && <span className="text-[11px] text-slate-400">Zapisuję…</span>}
             </div>
             <p className="mt-2 text-[11px] text-slate-400">
-              Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.
+              {inquiry.send_requested_at
+                ? 'List czeka na Thunderbirda — otworzy okno odpowiedzi w ciągu kilkunastu sekund. Maila wysyłasz sam, z Thunderbirda.'
+                : inquiry.source_message_id
+                  ? 'Edycje zapisują się po opuszczeniu pola. Thunderbird otworzy odpowiedź na ten mail — wysyłasz ją sam, po sprawdzeniu.'
+                  : 'Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.'}
             </p>
           </div>
 

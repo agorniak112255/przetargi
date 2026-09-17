@@ -356,6 +356,94 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertStringNotContainsString('35-206', json_encode($res->json('items'), JSON_THROW_ON_ERROR));
     }
 
+    public function test_reply_can_be_queued_for_thunderbird_and_picked_up(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_channel' => 'thunderbird',
+            'source_message_id' => 'abc-123@poczta.example',
+            'source_body' => 'Proszę o wycenę rękawic.',
+            'analysis' => [],
+            'answers' => [],
+            'reply_subject' => 'Oferta — rękawice',
+            'reply_body' => 'Dzień dobry, w załączeniu oferta.',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/inquiries/queued')->assertOk()->assertExactJson([]);
+
+        $this->postJson("/api/inquiries/{$inquiry->id}/queue-reply", ['queued' => true])
+            ->assertOk()
+            ->assertJsonPath('id', $inquiry->id);
+        $this->assertNotNull($inquiry->fresh()->send_requested_at);
+
+        $this->getJson('/api/inquiries/queued')
+            ->assertOk()
+            ->assertJsonCount(1)
+            ->assertJsonPath('0.id', $inquiry->id)
+            ->assertJsonPath('0.source_message_id', 'abc-123@poczta.example')
+            ->assertJsonPath('0.reply_body', 'Dzień dobry, w załączeniu oferta.');
+
+        // dodatek podjął prośbę i ją kasuje
+        $this->postJson("/api/inquiries/{$inquiry->id}/queue-reply", ['queued' => false])->assertOk();
+        $this->assertNull($inquiry->fresh()->send_requested_at);
+        $this->getJson('/api/inquiries/queued')->assertOk()->assertExactJson([]);
+    }
+
+    public function test_reply_without_mail_or_body_cannot_be_queued(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $pasted = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_body' => 'Wklejone w przeglądarce.',
+            'analysis' => [],
+            'answers' => [],
+            'reply_body' => 'Gotowa treść.',
+        ]);
+        $empty = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_channel' => 'thunderbird',
+            'source_message_id' => 'pusty@poczta.example',
+            'source_body' => 'Z maila.',
+            'analysis' => [],
+            'answers' => [],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/inquiries/{$pasted->id}/queue-reply", ['queued' => true])->assertStatus(422);
+        $this->postJson("/api/inquiries/{$empty->id}/queue-reply", ['queued' => true])->assertStatus(422);
+        $this->assertNull($pasted->fresh()->send_requested_at);
+        $this->assertNull($empty->fresh()->send_requested_at);
+    }
+
+    public function test_queued_list_does_not_leak_other_users(): void
+    {
+        $mine = User::factory()->withRole('handlowiec')->create();
+        $other = User::factory()->withRole('handlowiec')->create();
+        $theirs = ClientInquiry::query()->create([
+            'user_id' => $other->id,
+            'tone' => 'formal',
+            'source_channel' => 'thunderbird',
+            'source_message_id' => 'cudze@poczta.example',
+            'source_body' => 'Cudze zapytanie.',
+            'analysis' => [],
+            'answers' => [],
+            'reply_body' => 'Treść.',
+            'send_requested_at' => now(),
+        ]);
+
+        Sanctum::actingAs($mine);
+
+        $this->getJson('/api/inquiries/queued')->assertOk()->assertExactJson([]);
+        $this->postJson("/api/inquiries/{$theirs->id}/queue-reply", ['queued' => true])->assertStatus(403);
+    }
+
     public function test_store_without_source_stays_web(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

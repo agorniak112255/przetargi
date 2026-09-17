@@ -23,6 +23,7 @@ class ClientInquiry extends Model
         'reply_subject',
         'reply_body',
         'replied_at',
+        'send_requested_at',
     ];
 
     protected function casts(): array
@@ -31,6 +32,7 @@ class ClientInquiry extends Model
             'analysis' => 'array',
             'answers' => 'array',
             'replied_at' => 'datetime',
+            'send_requested_at' => 'datetime',
         ];
     }
 

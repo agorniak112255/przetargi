@@ -126,6 +126,68 @@ async function insertReply({ inquiryId, messageId }) {
   }
 }
 
+/* ---------------- wysyłka zlecona z aplikacji w przeglądarce ---------------- */
+
+/** Co ile sekund pytamy serwer o listy czekające na wysłanie. */
+const QUEUE_POLL_SECONDS = 15
+
+/** Numeryczne id wiadomości ważne są tylko w tej sesji — mail szukamy po Message-ID. */
+async function findMessageByHeaderId(headerMessageId) {
+  const list = await browser.messages.query({ headerMessageId })
+  const found = list && Array.isArray(list.messages) ? list.messages[0] : null
+
+  return found || null
+}
+
+async function handleQueued(row) {
+  const message = await findMessageByHeaderId(row.source_message_id)
+  if (message === null) {
+    await notify('Nie znalazłem maila', 'Zapytanie #' + row.id + ' — tej wiadomości nie ma w tym Thunderbirdzie.')
+
+    return
+  }
+
+  await insertReply({ inquiryId: row.id, messageId: message.id })
+}
+
+/**
+ * Przycisk „Zapisz i wyślij w Thunderbirdzie” w aplikacji zostawia na serwerze
+ * prośbę — strona w przeglądarce nie ma jak sięgnąć do poczty na komputerze.
+ * Prośbę kasujemy zawsze po podjęciu, żeby nie otwierać okna w kółko.
+ */
+async function pollQueue() {
+  const { token } = await getSettings()
+  if (!token) return
+
+  let rows
+  try {
+    rows = await api('/api/inquiries/queued')
+  } catch (e) {
+    return
+  }
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    try {
+      await api('/api/inquiries/' + row.id + '/queue-reply', {
+        method: 'POST',
+        body: { queued: false },
+      })
+    } catch (e) {
+      continue
+    }
+
+    try {
+      await handleQueued(row)
+    } catch (e) {
+      await notify('Nie udało się otworzyć odpowiedzi', e.message)
+    }
+  }
+}
+
+setInterval(() => {
+  pollQueue().catch((e) => console.warn('Sprawdzenie kolejki się nie powiodło:', e.message))
+}, QUEUE_POLL_SECONDS * 1000)
+
 browser.runtime.onMessage.addListener((request) => {
   if (request && request.type === 'createInquiry') {
     return createInquiry(request)

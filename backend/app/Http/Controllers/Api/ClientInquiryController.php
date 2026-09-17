@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ComposeClientInquiryRequest;
 use App\Http\Requests\MarkClientInquiryRepliedRequest;
+use App\Http\Requests\QueueClientInquiryReplyRequest;
 use App\Http\Requests\StoreClientInquiryRequest;
 use App\Http\Requests\UpdateClientInquiryRequest;
 use App\Models\ClientInquiry;
@@ -154,6 +155,55 @@ class ClientInquiryController extends Controller
         } elseif (! $replied && $inquiry->replied_at !== null) {
             $inquiry->forceFill(['replied_at' => null])->save();
         }
+
+        return response()->json($this->inquiries->present($inquiry->load('client')));
+    }
+
+    /**
+     * Zapytania czekające na wysyłkę z klienta pocztowego. Odpytuje to dodatek
+     * do Thunderbirda — przeglądarka nie ma jak sięgnąć do poczty na komputerze.
+     */
+    public function queued(Request $request): JsonResponse
+    {
+        $rows = ClientInquiry::query()
+            ->where('user_id', $request->user()->id)
+            ->whereNotNull('send_requested_at')
+            ->whereNotNull('source_message_id')
+            // stare prośby pomijamy — dodatek mógł być wtedy wyłączony
+            ->where('send_requested_at', '>=', now()->subDay())
+            ->orderBy('send_requested_at')
+            ->limit(10)
+            ->get()
+            ->map(fn (ClientInquiry $row): array => [
+                'id' => $row->id,
+                'source_message_id' => $row->source_message_id,
+                'reply_subject' => $row->reply_subject,
+                'reply_body' => $row->reply_body,
+                'requested_at' => $row->send_requested_at?->toIso8601String(),
+            ]);
+
+        return response()->json($rows);
+    }
+
+    /** Prośba o wysyłkę z Thunderbirda: true zgłasza, false kasuje po podjęciu. */
+    public function queueReply(QueueClientInquiryReplyRequest $request, ClientInquiry $inquiry): JsonResponse
+    {
+        $this->assertOwner($request, $inquiry);
+
+        $queued = (bool) $request->validated()['queued'];
+
+        if ($queued) {
+            if ($inquiry->source_message_id === null) {
+                return response()->json([
+                    'message' => 'To zapytanie nie pochodzi z maila, więc nie ma na co odpowiedzieć w Thunderbirdzie.',
+                ], 422);
+            }
+            if ((string) $inquiry->reply_body === '') {
+                return response()->json(['message' => 'Najpierw dokończ treść odpowiedzi.'], 422);
+            }
+        }
+
+        $inquiry->forceFill(['send_requested_at' => $queued ? now() : null])->save();
 
         return response()->json($this->inquiries->present($inquiry->load('client')));
     }
