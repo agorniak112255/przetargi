@@ -1907,7 +1907,8 @@ final class ClientInquiryService
     {
         $qtyUnit = $this->qtyUnit($item);
         $size = trim((string) ($item['size'] ?? ''));
-        $quote = trim((string) ($item['quote'] ?? ''));
+        // cytat idzie do klienta — bez ceny z cudzej oferty, reszta słowo w słowo
+        $quote = InquiryQueryText::withoutPrice((string) ($item['quote'] ?? ''));
         $head = (string) $n.'.';
         $meta = array_values(array_filter([
             $this->qtyLabel($item),

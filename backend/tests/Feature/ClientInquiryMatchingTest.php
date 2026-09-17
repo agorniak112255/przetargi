@@ -139,6 +139,40 @@ final class ClientInquiryMatchingTest extends TestCase
         $this->assertStringContainsString('opata do', $items[0]['search_query']);
     }
 
+    public function test_offer_never_repeats_the_price_from_the_customers_mail(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+
+        $this->mockExtractor();
+        $this->mockSearch([]);
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => implode("\n", [
+                'Dzień dobry,',
+                '',
+                '1. Wycieraczka gumowa 40x60cm, c. netto......24,00 PLN/szt',
+                '2. Łopata do śniegu, c. netto......97,00 PLN/szt.',
+            ]),
+            'tone' => 'formal',
+        ])->assertCreated();
+
+        $letter = (string) $res->json('reply_body');
+        $table = (string) $res->json('reply_html');
+
+        // treść pozycji zostaje, cena z cudzej oferty nie
+        $this->assertStringContainsString('Wycieraczka gumowa 40x60cm', $letter);
+        $this->assertStringContainsString('Łopata do śniegu', $letter);
+        $this->assertStringNotContainsString('24,00', $letter);
+        $this->assertStringNotContainsString('PLN/szt', $letter);
+        $this->assertStringNotContainsString('97,00', $table);
+
+        // w zapisie zapytania cytat zostaje nietknięty — to dane źródłowe
+        $this->assertStringContainsString('24,00 PLN/szt', (string) $res->json('source_body'));
+        $this->assertStringContainsString('24,00', (string) $res->json('items.0.quote'));
+    }
+
     public function test_catalog_row_without_model_rating_is_not_offered_to_the_customer(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

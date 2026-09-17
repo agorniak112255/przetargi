@@ -47,6 +47,24 @@ final class InquiryQueryText
     }
 
     /**
+     * Cytat pozycji bez ceny — do listu, który zobaczy klient.
+     *
+     * W mailach hurtowych przy każdej pozycji stoi cena z wcześniejszej oferty.
+     * Odsyłanie jej klientowi w naszej odpowiedzi jest mylące: obok naszej ceny
+     * stałaby cudza. Reszta cytatu zostaje słowo w słowo — to dane źródłowe.
+     */
+    public static function withoutPrice(string $text): string
+    {
+        $clean = self::dropPrices(trim($text));
+        $clean = preg_replace('/\.{2,}/u', ' ', $clean) ?? $clean;
+        $clean = preg_replace('/\s+/u', ' ', $clean) ?? $clean;
+        $clean = trim($clean, " \t\n\r\0\x0B,;:.-–—");
+
+        // Gdyby z cytatu został sam ogryzek, lepszy jest oryginał niż strzępek.
+        return mb_strlen($clean) < 3 ? trim($text) : $clean;
+    }
+
+    /**
      * Sama nazwa wyrobu, bez wymiarów i rozmiarów. Tyle dziedziczy wiersz,
      * w którym stoi wyłącznie rozmiar — inaczej skleiłyby się dwa wymiary
      * („wycieraczka 40x60cm 50x100cm”) i zapytanie przestałoby mieć sens.
