@@ -89,6 +89,32 @@ export type InquiryUserRef = {
 export type InquiryChannel = 'web' | 'thunderbird'
 
 /**
+ * Po czym poznaliśmy, że to ten sam mail:
+ * `message_id` — ten sam identyfikator wiadomości,
+ * `fingerprint` — ta sama treść (np. mail przekazany ręcznie, inny identyfikator).
+ */
+export type InquiryDuplicateMatch = 'message_id' | 'fingerprint'
+
+/**
+ * Inne zapytanie założone z tego samego maila klienta.
+ * `replied_at` niepuste = tamta osoba wysłała już odpowiedź do klienta.
+ */
+export type InquiryDuplicateRef = {
+  id: number
+  user: InquiryUserRef | null
+  created_at: string | null
+  source_subject?: string | null
+  replied_at?: string | null
+  match?: InquiryDuplicateMatch
+}
+
+/** Ciało odpowiedzi 409 z POST /api/inquiries — ten mail prowadzi już ktoś inny. */
+export type InquiryDuplicateConflict = {
+  message: string
+  duplicate: InquiryDuplicateRef
+}
+
+/**
  * Kontakt wyciągnięty ze stopki maila. Puste pole = nie było go w stopce —
  * front niczego nie dopowiada. `null` w miejscu całego obiektu = nic nie wyciągnięto.
  */
@@ -135,6 +161,10 @@ export type InquiryPayload = {
   /** Ta sama treść jako tabela HTML; null po ręcznej poprawce tekstu. */
   reply_html: string | null
   created_at: string | null
+  /** Zapytanie, którego to jest kopia (założone mimo ostrzeżenia); null = oryginał. */
+  duplicate_of?: InquiryDuplicateRef | null
+  /** Inne zapytania z tego samego maila, maks. 5. */
+  duplicates?: InquiryDuplicateRef[]
 }
 
 export type InquiryListItem = {
@@ -154,6 +184,10 @@ export type InquiryListItem = {
   attention_count: number
   contact: InquiryContact | null
   user: InquiryUserRef | null
+  /** Numer zapytania, którego ten wiersz jest kopią; null = oryginał. */
+  duplicate_of_id?: number | null
+  /** Ile innych osób ma zapytanie z tego samego maila; 0 = nikt. */
+  duplicates_count?: number
 }
 
 export type InquiryListMeta = {

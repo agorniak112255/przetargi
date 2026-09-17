@@ -26,9 +26,11 @@ async function setSettings(patch) {
 
 /** Backend odpowiada po polsku, więc jego komunikat pokazujemy wprost. */
 class ApiError extends Error {
-  constructor(status, message) {
+  constructor(status, message, data = null) {
     super(message)
     this.status = status
+    // Całe ciało odpowiedzi — przy 409 jest w nim pole `duplicate`.
+    this.data = data
   }
 }
 
@@ -67,7 +69,7 @@ async function api(path, { method = 'GET', body = null, token = null, baseUrl = 
     const message = data && typeof data.message === 'string' && data.message !== ''
       ? data.message
       : 'Błąd serwera (' + res.status + ').'
-    throw new ApiError(res.status, message)
+    throw new ApiError(res.status, message, data)
   }
 
   return data
@@ -243,4 +245,126 @@ async function knownInquiry(messageId) {
   const found = inquiries[messageId]
 
   return found === undefined ? null : found
+}
+
+/* ------------- ten sam mail u kilku handlowców (odpowiedź 409) ------------- */
+
+/** „17.09.2026 08:15” — czas lokalny, bo tak go czyta handlowiec. */
+function formatDateTime(value) {
+  const iso = toIsoDate(value)
+  if (iso === null) return ''
+
+  const date = new Date(iso)
+  const pad = (number) => String(number).padStart(2, '0')
+
+  return pad(date.getDate()) + '.' + pad(date.getMonth() + 1) + '.' + date.getFullYear()
+    + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
+}
+
+/** Imię i nazwisko osoby, która prowadzi zapytanie; bez zgadywania, gdy go brak. */
+function duplicateOwner(duplicate) {
+  const name = duplicate && duplicate.user ? String(duplicate.user.name || '').trim() : ''
+
+  return name === '' ? 'inna osoba' : name
+}
+
+/**
+ * Komunikat powiadomienia po odpowiedzi 409: kto prowadzi zapytanie i od kiedy.
+ * Wysłana już odpowiedź to najważniejsza informacja — grozi drugą ofertą
+ * u tego samego klienta, więc mówimy o niej wprost.
+ */
+function duplicateNotice(duplicate) {
+  const when = formatDateTime(duplicate && duplicate.created_at)
+  let text = 'Tym zapytaniem zajmuje się już ' + duplicateOwner(duplicate)
+  text += when === '' ? '.' : ' (od ' + when + ').'
+  if (duplicate && duplicate.replied_at) {
+    text += ' Odpowiedź do klienta już poszła — nie wysyłaj drugiej oferty.'
+  }
+
+  return text
+}
+
+/** Skąd wiemy, że to ten sam mail — `message_id` albo ta sama treść. */
+function duplicateMatchNote(duplicate) {
+  return duplicate && duplicate.match === 'fingerprint'
+    ? 'Rozpoznane po treści — ten sam mail dotarł do was osobno.'
+    : 'Rozpoznane po identyfikatorze wiadomości — to ten sam mail.'
+}
+
+/** Zdanie o odpowiedzi tamtej osoby albo pusty łańcuch, gdy jej jeszcze nie ma. */
+function duplicateRepliedNote(duplicate) {
+  if (!duplicate || !duplicate.replied_at) return ''
+
+  const when = formatDateTime(duplicate.replied_at)
+  const owner = duplicateOwner(duplicate)
+
+  return owner + ' wysłał(a) już odpowiedź do klienta'
+    + (when === '' ? '' : ' (' + when + ')')
+    + ' — druga oferta od nas byłaby błędem.'
+}
+
+/** Z odpowiedzi 409 bierzemy tylko pola z kontraktu; resztę pomijamy. */
+function duplicateFromError(error) {
+  const data = error && error.status === 409 ? error.data : null
+  const duplicate = data && typeof data === 'object' ? data.duplicate : null
+  if (!duplicate || typeof duplicate !== 'object' || duplicate.id === undefined) return null
+
+  return {
+    id: duplicate.id,
+    user: duplicate.user && typeof duplicate.user === 'object'
+      ? { id: duplicate.user.id, name: String(duplicate.user.name || '') }
+      : null,
+    created_at: duplicate.created_at || null,
+    source_subject: duplicate.source_subject || null,
+    replied_at: duplicate.replied_at || null,
+    match: duplicate.match || null,
+  }
+}
+
+/* ------------------------- stan analizy dla maila ------------------------- */
+
+/** Po tylu minutach uznajemy, że analiza przepadła, i pozwalamy spróbować ponownie. */
+const PENDING_TIMEOUT_MIN = 15
+
+/**
+ * Wpis z duplikatem czeka na decyzję człowieka, więc nie przedawnia się razem
+ * z zawieszoną analizą — ostrzeżenie „tym zajmuje się już ktoś inny” ma przetrwać
+ * zamknięcie okienka i restart Thunderbirda. Znika dopiero po „Anuluj” albo
+ * po faktycznym założeniu zapytania.
+ */
+function pendingStale(entry, now = Date.now()) {
+  if (!entry) return true
+  if (entry.duplicate) return false
+
+  return now - (entry.startedAt || 0) > PENDING_TIMEOUT_MIN * 60 * 1000
+}
+
+async function getPending() {
+  const { pending } = await browser.storage.local.get({ pending: {} })
+  const now = Date.now()
+  let changed = false
+  for (const [key, entry] of Object.entries(pending)) {
+    if (pendingStale(entry, now)) {
+      delete pending[key]
+      changed = true
+    }
+  }
+  if (changed) await browser.storage.local.set({ pending })
+
+  return pending
+}
+
+async function setPending(messageId, entry) {
+  const pending = await getPending()
+  if (entry === null) delete pending[messageId]
+  else pending[messageId] = entry
+  await browser.storage.local.set({ pending })
+}
+
+async function pendingFor(messageId) {
+  if (!messageId) return null
+  const pending = await getPending()
+  const entry = pending[messageId]
+
+  return entry === undefined ? null : entry
 }

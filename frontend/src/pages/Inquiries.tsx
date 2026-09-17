@@ -11,9 +11,11 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BusyLabel, useBusySeconds } from '../components/Busy'
 import { InquiryContactChip, InquiryContactModal } from '../components/InquiryContact'
 import { useAuth } from '../auth'
-import { api, can } from '../lib/api'
+import { ApiError, api, can } from '../lib/api'
 import type {
   InquiryChannelFilter,
+  InquiryDuplicateConflict,
+  InquiryDuplicateRef,
   InquiryListItem,
   InquiryListResponse,
   InquiryPayload,
@@ -61,6 +63,55 @@ function dateTime(value: string | null): string {
     : d.toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })
 }
 
+/** Wyciąga ciało 409 z POST /inquiries; null dla każdego innego błędu. */
+function duplicateConflict(ex: unknown): InquiryDuplicateConflict | null {
+  if (!(ex instanceof ApiError) || ex.status !== 409) return null
+  const duplicate = ex.body.duplicate as InquiryDuplicateRef | undefined
+  if (!duplicate || typeof duplicate.id !== 'number') return null
+  return { message: ex.message, duplicate }
+}
+
+const matchNote: Record<string, string> = {
+  message_id: 'to ten sam mail',
+  fingerprint: 'ta sama treść maila (inny identyfikator wiadomości)',
+}
+
+/** Odmiana „osoba” przez liczbę — 1 osoba, 2 osoby, 5 osób. */
+function peopleWord(n: number): string {
+  if (n === 1) return 'osoba'
+  const last = n % 10
+  const teen = n % 100
+  return last >= 2 && last <= 4 && (teen < 12 || teen > 14) ? 'osoby' : 'osób'
+}
+
+/** Znacznik kopii na liście: ile innych osób ma ten mail albo czyją kopią jest wiersz. */
+function DuplicateCell({ row }: { row: InquiryListItem }) {
+  const others = row.duplicates_count ?? 0
+  const copyOf = row.duplicate_of_id ?? null
+  if (others === 0 && copyOf == null) return <span className="text-slate-400">—</span>
+  return (
+    <div className="space-y-0.5">
+      {others > 0 && (
+        <span
+          className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+          title={`Ten sam mail ma też ${others} ${peopleWord(others)}`}
+        >
+          też {others} {peopleWord(others)}
+        </span>
+      )}
+      {copyOf != null && (
+        <Link
+          to={`/inquiries/${copyOf}`}
+          className="block text-[11px] text-slate-400 hover:underline"
+          title={`To kopia zapytania #${copyOf}`}
+        >
+          kopia #{copyOf}
+        </Link>
+      )}
+    </div>
+  )
+}
+
 function StatusChip({ row }: { row: InquiryListItem }) {
   if (row.replied_at) {
     return (
@@ -103,6 +154,9 @@ export function Inquiries() {
   const [more, setMore] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // Ten sam mail prowadzi już ktoś inny (409) — zapytanie nie powstało, dopóki
+  // użytkownik nie zdecyduje „Załóż mimo to”.
+  const [dup, setDup] = useState<InquiryDuplicateConflict | null>(null)
   const prepareSec = useBusySeconds(busy)
 
   // Lista
@@ -233,11 +287,13 @@ export function Inquiries() {
 
   const canSubmit = !busy && body.trim().length >= 20
 
-  async function onPrepare(e?: FormEvent) {
+  /** `force` pomija sprawdzenie duplikatu — ustawia je dopiero „Załóż mimo to”. */
+  async function onPrepare(e?: FormEvent, force = false) {
     e?.preventDefault()
     if (!canSubmit) return
     setBusy(true)
     setErr('')
+    setDup(null)
     try {
       const created = await api<InquiryPayload>('/inquiries', {
         method: 'POST',
@@ -246,11 +302,14 @@ export function Inquiries() {
           subject: subject.trim() || null,
           client_id: clientId ? Number(clientId) : null,
           tone,
+          ...(force ? { force: true } : {}),
         }),
       })
       navigate(`/inquiries/${created.id}`)
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Błąd analizy')
+      const conflict = duplicateConflict(ex)
+      if (conflict) setDup(conflict)
+      else setErr(ex instanceof Error ? ex.message : 'Błąd analizy')
       setBusy(false)
     }
   }
@@ -282,6 +341,55 @@ export function Inquiries() {
       </p>
 
       {err && <p className="mb-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+
+      {dup && (
+        <div
+          className={`mb-3 rounded-lg border px-3 py-2.5 ${
+            dup.duplicate.replied_at
+              ? 'border-red-300 bg-red-50 text-red-900'
+              : 'border-amber-300 bg-amber-50 text-amber-900'
+          }`}
+        >
+          <p className="text-sm font-semibold">{dup.message}</p>
+          <p className="mt-1 text-xs">
+            Zapytanie #{dup.duplicate.id}
+            {dup.duplicate.user?.name ? ` · prowadzi ${dup.duplicate.user.name}` : ''}
+            {dup.duplicate.created_at ? ` · od ${dateTime(dup.duplicate.created_at)}` : ''}
+            {dup.duplicate.match ? ` · ${matchNote[dup.duplicate.match] ?? dup.duplicate.match}` : ''}
+          </p>
+          {dup.duplicate.source_subject && (
+            <p className="mt-0.5 text-xs">Temat: {dup.duplicate.source_subject}</p>
+          )}
+          <p className="mt-1 text-xs font-medium">
+            {dup.duplicate.replied_at
+              ? `Odpowiedź do klienta już poszła (${dateTime(dup.duplicate.replied_at)}) — drugie zapytanie grozi wysłaniem drugiej oferty.`
+              : 'Odpowiedź do klienta jeszcze nie poszła.'}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Link
+              to={`/inquiries/${dup.duplicate.id}`}
+              className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+            >
+              Otwórz zapytanie #{dup.duplicate.id}
+            </Link>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void onPrepare(undefined, true)}
+              className="rounded border border-slate-400 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Załóż mimo to
+            </button>
+            <button
+              type="button"
+              onClick={() => setDup(null)}
+              className="text-xs text-slate-600 hover:underline"
+            >
+              Anuluj
+            </button>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={(e) => void onPrepare(e)} className="mb-6 rounded-xl bg-white p-4 shadow-sm">
         <label className="block text-xs">
@@ -525,6 +633,9 @@ export function Inquiries() {
                   <th className="p-2">Data zapytania</th>
                   <th className="p-2">Użytkownik</th>
                   <th className="p-2">Status</th>
+                  <th className="p-2" title="Ten sam mail założony przez kilka osób">
+                    Kopie
+                  </th>
                   <th className="p-2">Kontakt</th>
                   <th className="p-2" />
                 </tr>
@@ -564,6 +675,9 @@ export function Inquiries() {
                     <td className="p-2">{row.user?.name ?? '—'}</td>
                     <td className="p-2">
                       <StatusChip row={row} />
+                    </td>
+                    <td className="p-2 whitespace-nowrap">
+                      <DuplicateCell row={row} />
                     </td>
                     <td className="p-2">
                       <InquiryContactChip contact={row.contact} onOpen={() => setContactRow(row)} />

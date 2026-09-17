@@ -64,6 +64,7 @@ final class ClientInquiryService
         // cytatu, nagłówka przekazania i stopki — inaczej adres albo telefon
         // z podpisu stają się pozycjami zamówienia.
         $analysisBody = InquiryMailText::forAnalysis($body);
+        $fingerprints = $this->fingerprints($analysisBody);
         $extracted = $this->extract($analysisBody);
         $lineItems = $this->resolveLineItems($analysisBody, $extracted['line_items']);
         $queries = $this->uniqueQueries($lineItems, $extracted['product_queries']);
@@ -84,6 +85,9 @@ final class ClientInquiryService
             'source_channel' => $this->nullable($source['channel'] ?? null) ?? 'web',
             'source_subject' => $this->nullable($subject) ?? $extracted['subject'],
             'source_message_id' => $this->normalizeMessageId($source['message_id'] ?? null),
+            'source_fingerprint' => $fingerprints['full'],
+            'source_fingerprint_tail' => $fingerprints['tail'],
+            'duplicate_of_id' => isset($source['duplicate_of_id']) ? (int) $source['duplicate_of_id'] : null,
             'source_from_name' => $sender['name'],
             'source_from_email' => $sender['email'],
             'source_sent_at' => $this->parseSentAt($source['sent_at'] ?? null),
@@ -232,6 +236,155 @@ final class ClientInquiryService
     }
 
     /**
+     * Odcisk treści zapytania: pełny i bez pierwszej linii.
+     *
+     * Mail przekazany ręcznie ze skrzynki ogólnej dostaje nowy Message-ID,
+     * a osoba przekazująca dopisuje zwykle u góry jedno zdanie („zapytanie:”).
+     * Drugi odcisk, liczony bez pierwszej linii, łapie właśnie ten przypadek.
+     *
+     * @return array{full: string|null, tail: string|null}
+     */
+    public function fingerprints(string $analysisBody): array
+    {
+        $normalized = $this->normalizeForFingerprint($analysisBody);
+        if ($normalized === null) {
+            return ['full' => null, 'tail' => null];
+        }
+
+        $lines = preg_split('/\R/u', trim($analysisBody)) ?: [];
+        while ($lines !== [] && trim((string) $lines[0]) === '') {
+            array_shift($lines);
+        }
+        array_shift($lines);
+        $tail = $this->normalizeForFingerprint(implode("\n", $lines));
+
+        return [
+            'full' => hash('sha256', $normalized),
+            'tail' => $tail === null ? null : hash('sha256', $tail),
+        ];
+    }
+
+    /** Same znaki treści: bez wielkości liter, bez powtórzonych spacji. */
+    private function normalizeForFingerprint(string $text): ?string
+    {
+        $flat = preg_replace('/\s+/u', ' ', $text) ?? $text;
+        $flat = trim(mb_strtolower($flat));
+
+        // Zbyt krótki fragment dopasowałby przypadkowe, niezwiązane maile.
+        return mb_strlen($flat) < 40 ? null : $flat;
+    }
+
+    /**
+     * Zapytanie z tego samego maila założone przez KOGOŚ INNEGO. Message-ID jest
+     * pewny (mail na kilka adresów, przekierowanie serwerowe), odcisk treści
+     * ratuje przypadek maila przekazanego ręcznie.
+     *
+     * @param  array{full: string|null, tail: string|null}  $fingerprints
+     * @return array{inquiry: ClientInquiry, match: string}|null
+     */
+    public function findOthersInquiry(User $user, ?string $messageId, array $fingerprints): ?array
+    {
+        $normalizedId = $this->normalizeMessageId($messageId);
+        if ($normalizedId !== null) {
+            $byMessage = ClientInquiry::query()
+                ->where('user_id', '!=', $user->id)
+                ->where('source_message_id', $normalizedId)
+                ->with('user:id,name')
+                ->latest('id')
+                ->first();
+
+            if ($byMessage instanceof ClientInquiry) {
+                return ['inquiry' => $byMessage, 'match' => 'message_id'];
+            }
+        }
+
+        $hashes = array_values(array_filter([$fingerprints['full'] ?? null, $fingerprints['tail'] ?? null]));
+        if ($hashes === []) {
+            return null;
+        }
+
+        $byText = ClientInquiry::query()
+            ->where('user_id', '!=', $user->id)
+            ->where(function ($builder) use ($hashes): void {
+                $builder->whereIn('source_fingerprint', $hashes)
+                    ->orWhereIn('source_fingerprint_tail', $hashes);
+            })
+            ->with('user:id,name')
+            ->latest('id')
+            ->first();
+
+        return $byText instanceof ClientInquiry
+            ? ['inquiry' => $byText, 'match' => 'fingerprint']
+            : null;
+    }
+
+    /**
+     * Krótka wizytówka zapytania do ostrzeżenia o duplikacie.
+     *
+     * @return array<string, mixed>
+     */
+    public function duplicateRef(ClientInquiry $inquiry, ?string $match = null): array
+    {
+        $owner = $inquiry->relationLoaded('user') ? $inquiry->user : $inquiry->user()->first();
+
+        $ref = [
+            'id' => $inquiry->id,
+            'user' => $owner === null ? null : ['id' => $owner->id, 'name' => $owner->name],
+            'created_at' => $inquiry->created_at?->toIso8601String(),
+            'source_subject' => $inquiry->source_subject,
+            'replied_at' => $inquiry->replied_at?->toIso8601String(),
+        ];
+        if ($match !== null) {
+            $ref['match'] = $match;
+        }
+
+        return $ref;
+    }
+
+    /**
+     * Zapytania innych osób z tego samego maila — do paska ostrzeżenia w karcie.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function duplicatesOf(ClientInquiry $inquiry, int $limit = 5): array
+    {
+        $hashes = array_values(array_filter([$inquiry->source_fingerprint, $inquiry->source_fingerprint_tail]));
+        $messageId = $this->normalizeMessageId($inquiry->source_message_id);
+
+        if ($hashes === [] && $messageId === null) {
+            return [];
+        }
+
+        $rows = ClientInquiry::query()
+            ->where('id', '!=', $inquiry->id)
+            ->where(function ($builder) use ($hashes, $messageId): void {
+                if ($messageId !== null) {
+                    $builder->orWhere('source_message_id', $messageId);
+                }
+                if ($hashes !== []) {
+                    $builder->orWhereIn('source_fingerprint', $hashes)
+                        ->orWhereIn('source_fingerprint_tail', $hashes);
+                }
+            })
+            ->with('user:id,name')
+            ->latest('id')
+            ->limit($limit)
+            ->get();
+
+        return $rows->map(fn (ClientInquiry $row): array => $this->duplicateRef($row))->values()->all();
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function duplicateRefById(int $id): ?array
+    {
+        $origin = ClientInquiry::query()->with('user:id,name')->find($id);
+
+        return $origin === null ? null : $this->duplicateRef($origin);
+    }
+
+    /**
      * Pełny payload API zapytania (kontrakt GET /inquiries/{id}).
      *
      * @return array<string, mixed>
@@ -266,6 +419,10 @@ final class ClientInquiryService
             'questions' => $this->stringList($analysis['questions'] ?? null),
             'attention_count' => $this->countAttention($items),
             'replied_at' => $inquiry->replied_at?->toIso8601String(),
+            'duplicate_of' => $inquiry->duplicate_of_id === null
+                ? null
+                : $this->duplicateRefById((int) $inquiry->duplicate_of_id),
+            'duplicates' => $this->duplicatesOf($inquiry),
             'send_requested_at' => $inquiry->send_requested_at?->toIso8601String(),
             'price' => [
                 'answer_key' => 'price',

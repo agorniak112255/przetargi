@@ -63,7 +63,8 @@ final class ClientInquiryListApiTest extends TestCase
         $first->assertJsonPath('meta.per_page', 25);
         $first->assertJsonPath('meta.total', 30);
         $first->assertJsonPath('meta.last_page', 2);
-        $first->assertJsonPath('meta.can_view_all', false);
+        // handlowcy też widzą zespół — ten sam mail trafia do kilku osób
+        $first->assertJsonPath('meta.can_view_all', true);
 
         $second = $this->getJson('/api/inquiries?per_page=25&page=2')->assertOk();
         $second->assertJsonCount(5, 'data');
@@ -162,11 +163,17 @@ final class ClientInquiryListApiTest extends TestCase
 
     public function test_scope_all_is_forbidden_without_permission(): void
     {
+        // rola z odebranym uprawnieniem — tak wygląda konto okrojone w panelu
         $user = User::factory()->withRole('handlowiec')->create();
+        $user->roles->first()?->revokePermissionTo('inquiries.view_all');
+        $user->forgetCachedPermissions();
         $this->makeInquiry($user);
 
         Sanctum::actingAs($user);
 
+        $this->getJson('/api/inquiries')
+            ->assertOk()
+            ->assertJsonPath('meta.can_view_all', false);
         $this->getJson('/api/inquiries?scope=all')->assertForbidden();
     }
 

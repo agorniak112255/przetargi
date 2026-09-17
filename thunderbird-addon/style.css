@@ -89,6 +89,16 @@ p {
   font-size: 12px;
 }
 
+/* Informacja, której nie wolno przeoczyć — np. „odpowiedź już poszła”. */
+.alarm {
+  padding: 6px 8px;
+  border-left: 3px solid var(--error);
+  border-radius: 3px;
+  color: var(--error);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .version {
   margin: 12px 0 0;
   color: var(--muted);

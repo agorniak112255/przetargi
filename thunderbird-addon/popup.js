@@ -5,8 +5,17 @@ const el = (id) => document.getElementById(id)
 let message = null
 let inquiryId = null
 
+/** Cudze zapytanie na ten sam mail (z odpowiedzi 409) albo null. */
+let duplicate = null
+
+/** Treść maila odczytana przy otwarciu okienka — potrzebna przy „Załóż mimo to”. */
+let sourceText = ''
+
+/** Handlowiec zobaczył już cudze zapytanie i mimo to chce założyć własne. */
+let forced = false
+
 function show(section) {
-  for (const name of ['setup', 'known', 'fresh', 'working']) {
+  for (const name of ['setup', 'known', 'fresh', 'working', 'duplicate']) {
     el(name).hidden = name !== section
   }
 }
@@ -56,13 +65,64 @@ function loadKnown(id, replied) {
   show('known')
 }
 
-async function pendingFor(messageId) {
-  const { pending } = await browser.storage.local.get({ pending: {} })
-  const entry = pending[messageId]
-  if (!entry) return null
-  if (Date.now() - (entry.startedAt || 0) > 15 * 60 * 1000) return null
+/**
+ * Ekran duplikatu: kto prowadzi zapytanie, od kiedy, czy już odpowiedział
+ * klientowi. Dane pochodzą z odpowiedzi 409 zapisanej przez tło dodatku,
+ * więc przetrwały zamknięcie okienka.
+ */
+function loadDuplicate(found, text) {
+  duplicate = found
+  sourceText = text
 
-  return entry
+  const when = formatDateTime(found.created_at)
+  el('dupLead').textContent = 'Zapytanie #' + found.id + ' z tego maila prowadzi już '
+    + duplicateOwner(found) + (when === '' ? '.' : ' — od ' + when + '.')
+
+  const replied = duplicateRepliedNote(found)
+  el('dupReplied').hidden = replied === ''
+  el('dupReplied').textContent = replied
+
+  el('dupMatch').textContent = duplicateMatchNote(found)
+
+  const subject = String(found.source_subject || '').trim()
+  el('dupSubject').hidden = subject === ''
+  el('dupSubject').textContent = subject === '' ? '' : 'Mail: „' + subject + '”'
+
+  show('duplicate')
+}
+
+/** Treść otwartego maila; null, gdy nie da się jej odczytać (komunikat już poszedł). */
+async function readBody() {
+  let full
+  try {
+    full = await browser.messages.getFull(message.id)
+  } catch (e) {
+    status('Nie mogę odczytać treści maila (możliwe, że jest zaszyfrowany).', 'error')
+
+    return null
+  }
+
+  return messageText(full)
+}
+
+/** Założenie zapytania prowadzi tło — zamknięcie okienka go nie przerywa. */
+function sendToBackground(body, tone, force) {
+  busy(true)
+  browser.runtime.sendMessage({
+    type: 'createInquiry',
+    headerMessageId: message.headerMessageId || null,
+    subject: message.subject || '',
+    // Nagłówek From i data maila — z listy wiadomości, nie z jego treści.
+    sourceFrom: senderHeader(message.author),
+    sourceSentAt: toIsoDate(message.date),
+    body,
+    tone,
+    force,
+  })
+
+  show('working')
+  status('')
+  busy(false)
 }
 
 function showVersion() {
@@ -105,7 +165,7 @@ async function init() {
   }
 
   const pending = await pendingFor(message.headerMessageId)
-  if (pending && !pending.error) {
+  if (pending && !pending.error && !pending.duplicate) {
     show('working')
 
     return
@@ -114,16 +174,17 @@ async function init() {
     status('Poprzednia próba się nie udała: ' + pending.error, 'error')
   }
 
-  let full
-  try {
-    full = await browser.messages.getFull(message.id)
-  } catch (e) {
-    status('Nie mogę odczytać treści maila (możliwe, że jest zaszyfrowany).', 'error')
+  const text = await readBody()
+  if (text === null) return
+  sourceText = text
+
+  // Ten sam mail prowadzi już kto inny — najpierw pokazujemy jego zapytanie.
+  if (pending && pending.duplicate) {
+    loadDuplicate(pending.duplicate, text)
 
     return
   }
 
-  const text = messageText(full)
   if (text.length < 20) {
     status('Treść maila jest za krótka do analizy — uzupełnij ją poniżej.', 'warn')
   }
@@ -147,22 +208,34 @@ async function send() {
     return
   }
 
-  busy(true)
-  // Analizę prowadzi tło dodatku, więc zamknięcie okienka jej nie przerywa.
-  browser.runtime.sendMessage({
-    type: 'createInquiry',
-    headerMessageId: message.headerMessageId || null,
-    subject: message.subject || '',
-    // Nagłówek From i data maila — z listy wiadomości, nie z jego treści.
-    sourceFrom: senderHeader(message.author),
-    sourceSentAt: toIsoDate(message.date),
-    body,
-    tone: el('tone').value,
-  })
+  sendToBackground(body, el('tone').value, forced)
+}
 
-  show('working')
+/** „Załóż mimo to” — własne zapytanie obok cudzego; aplikacja je powiąże. */
+async function forceCreate() {
+  const settings = await getSettings()
+  if (sourceText.trim().length < 20) {
+    // Bez treści nie ma czego analizować — wracamy do zwykłego ekranu,
+    // ale zapamiętujemy, że to świadome założenie kopii.
+    forced = true
+    el('tone').value = settings.tone
+    el('body').value = sourceText
+    updateCounter()
+    show('fresh')
+    status('Treść maila jest za krótka — uzupełnij ją i wyślij.', 'warn')
+
+    return
+  }
+
+  sendToBackground(sourceText, settings.tone, true)
+}
+
+/** „Anuluj” — kasuje zapamiętane ostrzeżenie i wraca do zwykłego ekranu. */
+async function cancelDuplicate() {
+  await setPending(message.headerMessageId || null, null)
+  duplicate = null
   status('')
-  busy(false)
+  await init()
 }
 
 function insertReply() {
@@ -181,6 +254,13 @@ el('openOptions').addEventListener('click', () => browser.runtime.openOptionsPag
 el('openApp').addEventListener('click', () => openInquiryInBrowser(inquiryId))
 el('insertReply').addEventListener('click', insertReply)
 el('send').addEventListener('click', send)
+el('dupOpen').addEventListener('click', () => openInquiryInBrowser(duplicate.id))
+el('dupForce').addEventListener('click', () => {
+  forceCreate().catch((e) => status(e.message || String(e), 'error'))
+})
+el('dupCancel').addEventListener('click', () => {
+  cancelDuplicate().catch((e) => status(e.message || String(e), 'error'))
+})
 el('body').addEventListener('input', updateCounter)
 
 init().catch((e) => status(e.message || String(e), 'error'))

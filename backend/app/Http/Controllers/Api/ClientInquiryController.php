@@ -12,8 +12,10 @@ use App\Http\Requests\StoreClientInquiryRequest;
 use App\Http\Requests\UpdateClientInquiryRequest;
 use App\Models\ClientInquiry;
 use App\Services\ClientInquiryService;
+use App\Support\InquiryMailText;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use RuntimeException;
 use Throwable;
 
@@ -84,6 +86,10 @@ class ClientInquiryController extends Controller
                 'source_from_name',
                 'source_from_email',
                 'source_sent_at',
+                'source_message_id',
+                'source_fingerprint',
+                'source_fingerprint_tail',
+                'duplicate_of_id',
                 'contact',
                 'analysis',
                 'answers',
@@ -140,6 +146,10 @@ class ClientInquiryController extends Controller
 
         $paginator = $query->paginate($perPage, ['*'], 'page', $validated['page'] ?? null);
 
+        // Ilu jeszcze ludzi ma ten sam mail — liczone jednym zapytaniem dla całej
+        // strony, nie per wiersz, żeby lista nie zwalniała przy tysiącach wpisów.
+        $duplicateCounts = $this->duplicateCounts(collect($paginator->items()));
+
         $data = collect($paginator->items())->map(fn (ClientInquiry $row): array => [
             'id' => $row->id,
             'source_subject' => $row->source_subject,
@@ -160,6 +170,8 @@ class ClientInquiryController extends Controller
             'user' => $row->user !== null
                 ? ['id' => $row->user->id, 'name' => $row->user->name]
                 : null,
+            'duplicate_of_id' => $row->duplicate_of_id,
+            'duplicates_count' => $duplicateCounts[$row->id] ?? 0,
         ])->values();
 
         return response()->json([
@@ -172,6 +184,63 @@ class ClientInquiryController extends Controller
                 'can_view_all' => $canViewAll,
             ],
         ]);
+    }
+
+    /**
+     * Liczba cudzych zapytań z tego samego maila, dla każdego wiersza strony.
+     *
+     * Jedno zapytanie na całą stronę: bierzemy identyfikatory maili i odciski
+     * treści z widocznych wierszy, a dopasowanie robimy w PHP.
+     *
+     * @param  Collection<int, ClientInquiry>  $rows
+     * @return array<int, int>
+     */
+    private function duplicateCounts(Collection $rows): array
+    {
+        $messageIds = $rows->pluck('source_message_id')->filter()->unique()->values()->all();
+        $hashes = $rows
+            ->flatMap(fn (ClientInquiry $row): array => [$row->source_fingerprint, $row->source_fingerprint_tail])
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($messageIds === [] && $hashes === []) {
+            return [];
+        }
+
+        $related = ClientInquiry::query()
+            ->select(['id', 'source_message_id', 'source_fingerprint', 'source_fingerprint_tail'])
+            ->where(function ($builder) use ($messageIds, $hashes): void {
+                if ($messageIds !== []) {
+                    $builder->orWhereIn('source_message_id', $messageIds);
+                }
+                if ($hashes !== []) {
+                    $builder->orWhereIn('source_fingerprint', $hashes)
+                        ->orWhereIn('source_fingerprint_tail', $hashes);
+                }
+            })
+            ->get();
+
+        $counts = [];
+        foreach ($rows as $row) {
+            $rowHashes = array_values(array_filter([$row->source_fingerprint, $row->source_fingerprint_tail]));
+            $counts[$row->id] = $related
+                ->filter(function (ClientInquiry $other) use ($row, $rowHashes): bool {
+                    if ($other->id === $row->id) {
+                        return false;
+                    }
+                    if ($row->source_message_id !== null && $other->source_message_id === $row->source_message_id) {
+                        return true;
+                    }
+                    $otherHashes = array_filter([$other->source_fingerprint, $other->source_fingerprint_tail]);
+
+                    return array_intersect($rowHashes, $otherHashes) !== [];
+                })
+                ->count();
+        }
+
+        return $counts;
     }
 
     public function preferences(Request $request): JsonResponse
@@ -197,6 +266,28 @@ class ClientInquiryController extends Controller
             return response()->json($this->inquiries->present($existing->load('client')));
         }
 
+        // Ten sam mail u kilku handlowców: zanim ruszy kosztowna analiza,
+        // sprawdzamy, czy ktoś już tym nie siedzi. Odcisk treści liczymy z tej
+        // samej, oczyszczonej wersji maila, którą dostaje model.
+        $fingerprints = $this->inquiries->fingerprints(
+            InquiryMailText::forAnalysis((string) $data['body'])
+        );
+        $force = (bool) ($data['force'] ?? false);
+        $other = $this->inquiries->findOthersInquiry(
+            $request->user(),
+            isset($data['source_message_id']) ? (string) $data['source_message_id'] : null,
+            $fingerprints,
+        );
+
+        if ($other !== null && ! $force) {
+            $owner = $other['inquiry']->user?->name ?? 'inna osoba';
+
+            return response()->json([
+                'message' => 'Tym zapytaniem zajmuje się już '.$owner.'.',
+                'duplicate' => $this->inquiries->duplicateRef($other['inquiry'], $other['match']),
+            ], 409);
+        }
+
         try {
             $inquiry = $this->inquiries->analyze(
                 $request->user(),
@@ -209,6 +300,8 @@ class ClientInquiryController extends Controller
                     'channel' => isset($data['source_channel']) ? (string) $data['source_channel'] : null,
                     'from' => isset($data['source_from']) ? (string) $data['source_from'] : null,
                     'sent_at' => isset($data['source_sent_at']) ? (string) $data['source_sent_at'] : null,
+                    // świadoma kopia cudzego zapytania — wiążemy oba, żeby było widać parę
+                    'duplicate_of_id' => $other === null ? null : $other['inquiry']->id,
                 ],
             );
         } catch (RuntimeException $e) {

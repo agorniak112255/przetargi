@@ -4,30 +4,7 @@
  * uruchomiona w okienku zostałaby przerwana w połowie.
  */
 
-/** Po tylu minutach uznajemy, że analiza przepadła, i pozwalamy spróbować ponownie. */
-const PENDING_TIMEOUT_MIN = 15
-
-async function getPending() {
-  const { pending } = await browser.storage.local.get({ pending: {} })
-  const now = Date.now()
-  let changed = false
-  for (const [key, entry] of Object.entries(pending)) {
-    if (now - (entry.startedAt || 0) > PENDING_TIMEOUT_MIN * 60 * 1000) {
-      delete pending[key]
-      changed = true
-    }
-  }
-  if (changed) await browser.storage.local.set({ pending })
-
-  return pending
-}
-
-async function setPending(messageId, entry) {
-  const pending = await getPending()
-  if (entry === null) delete pending[messageId]
-  else pending[messageId] = entry
-  await browser.storage.local.set({ pending })
-}
+/* Stan analizy dla maila (`pending`) trzyma common.js — czyta go też okienko. */
 
 async function notify(title, message) {
   try {
@@ -45,23 +22,31 @@ async function notify(title, message) {
 /**
  * Zakłada zapytanie i otwiera je w przeglądarce. Wywoływane z okienka, ale
  * wykonywane tutaj — zamknięcie okienka nie przerywa analizy.
+ *
+ * `force` puszczamy dopiero wtedy, gdy handlowiec zobaczył cudze zapytanie
+ * i mimo to chce założyć własne (oba zostaną powiązane po stronie aplikacji).
  */
-async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentAt, body, tone }) {
+async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentAt, body, tone, force = false }) {
+  // Przy „Załóż mimo to” zachowujemy dane duplikatu — gdyby próba się nie udała,
+  // ostrzeżenie musi wrócić na ekran, a nie przepaść razem z błędem.
+  const previous = force ? await pendingFor(headerMessageId) : null
+  const duplicate = previous && previous.duplicate ? previous.duplicate : null
+
   await setPending(headerMessageId, { startedAt: Date.now() })
   try {
-    const inquiry = await api('/api/inquiries', {
-      method: 'POST',
-      body: {
-        body,
-        subject: subject || null,
-        tone,
-        source_channel: 'thunderbird',
-        source_message_id: headerMessageId || null,
-        // Powtórna zamiana: przez `runtime.sendMessage` data mogła stracić typ Date.
-        source_from: senderHeader(sourceFrom),
-        source_sent_at: toIsoDate(sourceSentAt),
-      },
-    })
+    const payload = {
+      body,
+      subject: subject || null,
+      tone,
+      source_channel: 'thunderbird',
+      source_message_id: headerMessageId || null,
+      // Powtórna zamiana: przez `runtime.sendMessage` data mogła stracić typ Date.
+      source_from: senderHeader(sourceFrom),
+      source_sent_at: toIsoDate(sourceSentAt),
+    }
+    if (force) payload.force = true
+
+    const inquiry = await api('/api/inquiries', { method: 'POST', body: payload })
 
     await setSettings({ tone })
     await rememberInquiry(headerMessageId, inquiry.id)
@@ -73,7 +58,17 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
 
     return { ok: true, id: inquiry.id }
   } catch (e) {
-    await setPending(headerMessageId, { startedAt: Date.now(), error: e.message })
+    // 409: ten sam mail prowadzi już kto inny. Nic nie zakładamy i nie otwieramy
+    // przeglądarki — decyzję podejmuje człowiek w okienku nad mailem.
+    const found = duplicateFromError(e)
+    if (found !== null) {
+      await setPending(headerMessageId, { startedAt: Date.now(), duplicate: found })
+      await notify('Ten mail ma już zapytanie', duplicateNotice(found))
+
+      return { ok: false, duplicate: found }
+    }
+
+    await setPending(headerMessageId, { startedAt: Date.now(), error: e.message, duplicate })
     await notify('Zapytanie nie powstało', e.message)
 
     return { ok: false, error: e.message }

@@ -26,6 +26,8 @@ class StoreClientInquiryRequest extends FormRequest
             // Pochodzenie zapytania — wypełnia je dodatek do Thunderbirda.
             'source_channel' => ['nullable', 'in:web,thunderbird'],
             'source_message_id' => ['nullable', 'string', 'max:255'],
+            // świadome założenie własnego zapytania mimo ostrzeżenia o duplikacie
+            'force' => ['nullable', 'boolean'],
             // Pełny nagłówek From, np. „Jan Kowalski <jan@firma.pl>” — backend
             // sam rozbija go na nazwę i adres.
             'source_from' => ['nullable', 'string', 'max:400'],

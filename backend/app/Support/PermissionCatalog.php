@@ -86,6 +86,9 @@ final class PermissionCatalog
             'clients.view',
             'clients.manage',
             'inquiries.use',
+            // ten sam mail trafia do kilku handlowców — bez wglądu w cudze
+            // zapytania dwie osoby robiłyby tę samą ofertę
+            'inquiries.view_all',
         ];
 
         $przetargi = array_values(array_unique([

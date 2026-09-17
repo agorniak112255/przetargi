@@ -6,6 +6,24 @@ function token(): string | null {
   return localStorage.getItem('supon_token')
 }
 
+/**
+ * Błąd odpowiedzi API z zachowanym kodem HTTP i ciałem odpowiedzi.
+ * Dziedziczy po Error, więc dotychczasowe `ex instanceof Error ? ex.message : …`
+ * działa bez zmian; potrzebne tam, gdzie liczy się treść błędu (np. 409 przy
+ * zapytaniu założonym już przez kogoś innego).
+ */
+export class ApiError extends Error {
+  readonly status: number
+  readonly body: Record<string, unknown>
+
+  constructor(message: string, status: number, body: Record<string, unknown>) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('Accept', 'application/json')
@@ -37,7 +55,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
       (typeof body.message === 'string' ? body.message : null) ??
       (errors ? Object.values(errors).flat().join(' ') : null) ??
       `Błąd API ${res.status}`
-    throw new Error(String(msg))
+    throw new ApiError(String(msg), res.status, body)
   }
   return body as T
 }

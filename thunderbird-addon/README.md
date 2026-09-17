@@ -15,6 +15,29 @@ odpowiedź jako odpowiedź na ten sam mail.
    Otwiera się zwykłe okno odpowiedzi — z adresatem, cytatem i podpisem — z gotową treścią na górze.
 6. Wysyłasz. Dodatek sam oznacza zapytanie w aplikacji jako obsłużone.
 
+## Gdy ten sam mail ma już ktoś inny
+
+Ten sam mail od klienta trafia czasem do kilku handlowców naraz. Jeśli zapytanie
+z tego maila założył już kto inny, aplikacja odpowiada kodem **409** i dodatek:
+
+- **nie zakłada** drugiego zapytania i nie otwiera przeglądarki,
+- pokazuje powiadomienie „Tym zapytaniem zajmuje się już Anna Kowalska (od
+  17.09.2026 08:15)”; gdy tamta osoba wysłała już odpowiedź do klienta, mówi
+  o tym wprost — druga oferta od nas byłaby błędem,
+- zapamiętuje to ostrzeżenie przy tym mailu (przeżywa zamknięcie okienka
+  i restart Thunderbirda).
+
+Po ponownym kliknięciu ikony nad tym mailem okienko pokazuje, kto prowadzi
+zapytanie, od kiedy, czy już odpowiedział, i skąd wiadomo, że to ten sam mail
+(identyfikator wiadomości albo sama treść — gdy mail został przekazany ręcznie).
+Do wyboru są trzy przyciski:
+
+- **Otwórz zapytanie kolegi** — otwiera tamto zapytanie w przeglądarce,
+- **Załóż mimo to** — zakłada własne zapytanie (aplikacja powiąże je z tamtym),
+- **Anuluj** — kasuje ostrzeżenie przy tym mailu i wraca do zwykłego ekranu.
+
+Ostrzeżenie znika też samo, gdy zapytanie faktycznie powstanie.
+
 ## Instalacja
 
 Dodatek nie jest podpisany przez Mozillę, więc trzeba raz wyłączyć wymóg podpisu.
@@ -68,6 +91,9 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
 - konto z uprawnieniem `inquiries.use`,
 - API: `POST /api/login`, `POST /api/inquiries`, `GET /api/inquiries/{id}`,
   `POST /api/inquiries/{id}/replied`.
+- `POST /api/inquiries` przyjmuje pole `force` (domyślnie false) i przy cudzym
+  zapytaniu z tego samego maila odpowiada **409** z polem `duplicate`
+  (`id`, `user.name`, `created_at`, `replied_at`, `match`).
 
 ## Podział zadań
 
@@ -90,7 +116,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.2.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.4.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia

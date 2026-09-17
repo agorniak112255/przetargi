@@ -8,6 +8,7 @@ import type {
   InquiryAnswer,
   InquiryCard,
   InquiryConfidence,
+  InquiryDuplicateRef,
   InquiryFlag,
   InquiryItem,
   InquiryPayload,
@@ -53,6 +54,78 @@ const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
   { id: 'catalog', label: 'Cena katalogowa' },
   { id: 'catalog_margin', label: 'Katalog + marża' },
 ]
+
+function who(entry: InquiryDuplicateRef): string {
+  return entry.user?.name ?? 'inna osoba'
+}
+
+/**
+ * Ten list jest kopią cudzego zapytania — pasek nad listem, żeby nie napisać
+ * drugiej odpowiedzi na ten sam mail.
+ */
+function DuplicateOfBar({ origin }: { origin: InquiryDuplicateRef }) {
+  return (
+    <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      <span className="font-medium">
+        To kopia zapytania #{origin.id}, które prowadzi {who(origin)}
+        {origin.created_at ? ` (od ${mailDate(origin.created_at)})` : ''}.
+      </span>{' '}
+      {origin.replied_at && (
+        <span className="font-semibold">
+          Odpowiedź do klienta poszła stamtąd {mailDate(origin.replied_at)} — uzgodnij, zanim wyślesz
+          swoją.{' '}
+        </span>
+      )}
+      <Link to={`/inquiries/${origin.id}`} className="text-blue-700 underline">
+        Otwórz tamto zapytanie
+      </Link>
+    </p>
+  )
+}
+
+/**
+ * Ten sam mail prowadzą też inni. Najważniejsze jest to, czy ktoś już odpowiedział
+ * klientowi — wtedy pasek jest czerwony, bo grozi wysłaniem drugiej oferty.
+ */
+function DuplicatesBar({ list }: { list: InquiryDuplicateRef[] }) {
+  const replied = list.filter((d) => d.replied_at)
+  const danger = replied.length > 0
+  return (
+    <div
+      className={`rounded border px-3 py-2 text-sm ${
+        danger ? 'border-red-300 bg-red-50 text-red-900' : 'border-amber-300 bg-amber-50 text-amber-900'
+      }`}
+    >
+      <p className="font-medium">Ten sam mail obsługują też inne osoby.</p>
+      {danger && (
+        <p className="mt-0.5 font-semibold">
+          Odpowiedź do klienta już poszła ({replied.map(who).join(', ')}) — nie wysyłaj drugiej oferty
+          bez uzgodnienia.
+        </p>
+      )}
+      <ul className="mt-1 space-y-0.5 text-xs">
+        {list.map((d) => (
+          <li key={d.id}>
+            <span className="font-medium">{who(d)}</span>
+            {d.created_at ? ` · od ${mailDate(d.created_at)}` : ''}
+            {' · '}
+            {d.replied_at ? (
+              <span className="font-semibold">
+                odpowiedź wysłana {mailDate(d.replied_at)}
+              </span>
+            ) : (
+              'jeszcze bez odpowiedzi'
+            )}
+            {' · '}
+            <Link to={`/inquiries/${d.id}`} className="text-blue-700 underline">
+              zapytanie #{d.id}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
 
 function Chip({
   active,
@@ -518,6 +591,8 @@ export function InquiryReply() {
 
   const total = inquiry.items.length
   const busy = composeBusy
+  // Inne zapytania z tego samego maila; pole dochodzi po stronie API, więc czytamy ostrożnie.
+  const duplicates = Array.isArray(inquiry.duplicates) ? inquiry.duplicates : []
   // Nadawca dokładnie tak, jak przyszedł w mailu — bez sklejania brakujących kawałków.
   const sender = [inquiry.source_from_name, inquiry.source_from_email]
     .filter(Boolean)
@@ -557,6 +632,9 @@ export function InquiryReply() {
           ← Wróć do zapytań
         </Link>
       </div>
+
+      {inquiry.duplicate_of && <DuplicateOfBar origin={inquiry.duplicate_of} />}
+      {duplicates.length > 0 && <DuplicatesBar list={duplicates} />}
 
       <p className={`rounded px-3 py-2 text-sm font-medium ${banner.cls}`}>{banner.text}</p>
 
