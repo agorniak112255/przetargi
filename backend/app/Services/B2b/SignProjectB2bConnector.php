@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\Product;
+use App\Models\ProductShopCard;
 use App\Models\ProductVariant;
 use RuntimeException;
 
@@ -18,7 +19,7 @@ use RuntimeException;
  * Po zebraniu cen znaku cena kontrolna jest pobierana ponownie — inna niż zapamiętana (albo równa anonimowej)
  * = ponowne logowanie i ponowne zebranie cen; drugi raz źle = B2bFatalException (nic nie zapisujemy).
  */
-final class SignProjectB2bConnector implements B2bVariantConnector
+final class SignProjectB2bConnector implements B2bShopFieldSource, B2bVariantConnector
 {
     public const SOURCE = 'b2b:signproject';
 
@@ -34,6 +35,11 @@ final class SignProjectB2bConnector implements B2bVariantConnector
     private const EPSILON = 0.005;
 
     private const VERSIONS_LINE_LIMIT = 1500;
+
+    /** Sekcje karty wyrobu u dostawcy (B2bShopFieldSource). */
+    private const SHOP_SECTION_TRADE = 'Informacje handlowe';
+
+    private const SHOP_SECTION_VERSIONS = 'Dostępne wersje';
 
     /** @var list<int> */
     private array $listedIds = [];
@@ -76,6 +82,15 @@ final class SignProjectB2bConnector implements B2bVariantConnector
 
     /** @var array<int, array<string, mixed>> odpowiedź projector.php znaku bieżącego (z products()) */
     private array $projectorCache = [];
+
+    /**
+     * Jednostka sprzedaży i stawka VAT znaku, zapamiętane przy zbieraniu cen wersji — tylko gdy wszystkie wersje
+     * podają to samo (inaczej to dane wersji, nie znaku). Bez nowego zapytania: wartości są w tych samych
+     * odpowiedziach projector.php, które czyta variants().
+     *
+     * @var array{remote_id: string, unit: string, vat: string}|null
+     */
+    private ?array $saleTerms = null;
 
     private ?string $pageUrl = null;
 
@@ -241,6 +256,75 @@ final class SignProjectB2bConnector implements B2bVariantConnector
         }
 
         return $this->factualDescription($product, self::categorySegments($html));
+    }
+
+    /**
+     * Karta wyrobu u dostawcy dla znaku jako całości, z danych, które łącznik już ma (żadnego zapytania więcej):
+     * producent, kategoria i — gdy wszystkie wersje podają to samo — jednostka sprzedaży oraz stawka VAT
+     * z odpowiedzi projector.php zebranych w variants(). Dalej człony wersji z nagłówka („Format \ Podłoże”)
+     * z zestawem dostępnych wartości; samej tabeli wersji nie powtarzamy, bo karta ma ją osobno. Ceny nie
+     * dokładamy — karta ma na nie własną sekcję.
+     *
+     * @return list<B2bRemoteShopField>
+     */
+    public function shopFields(B2bRemoteProduct $product): array
+    {
+        $fields = [];
+        $firm = trim((string) ($product->raw['firm'] ?? ''));
+        if ($firm !== '') {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Producent', $firm);
+        }
+        $category = trim((string) ($product->category ?? ''));
+        if ($category !== '') {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Kategoria', $category);
+        }
+        if (($this->saleTerms['remote_id'] ?? null) === $product->remoteId) {
+            if ($this->saleTerms['unit'] !== '') {
+                $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Jednostka sprzedaży', $this->saleTerms['unit']);
+            }
+            if ($this->saleTerms['vat'] !== '') {
+                $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Stawka VAT (%)', $this->saleTerms['vat']);
+            }
+        }
+
+        foreach (self::versionMemberValues($product) as $name => $values) {
+            $fields[] = new B2bRemoteShopField(
+                self::SHOP_SECTION_VERSIONS,
+                (string) $name,
+                self::limitedList($values, ProductShopCard::MAX_VALUE_CHARS),
+            );
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Człon nagłówka wersji → wartości dostępne w wersjach znaku, dosłownie i bez powtórzeń. Etykieta o innej
+     * liczbie członów niż nagłówek jest pomijana (tak samo jak w attributes() — bez zgadywania, co jest czym).
+     *
+     * @return array<string, list<string>>
+     */
+    private static function versionMemberValues(B2bRemoteProduct $product): array
+    {
+        $header = self::members((string) ($product->raw['version_header'] ?? ''));
+        if ($header === [] || in_array('', $header, true) || count(array_unique($header)) !== count($header)) {
+            return [];
+        }
+
+        $values = array_fill_keys($header, []);
+        foreach ($product->raw['versions'] ?? [] as $version) {
+            $parts = self::members((string) $version['name']);
+            if (count($parts) !== count($header)) {
+                continue;
+            }
+            foreach ($header as $i => $name) {
+                if ($parts[$i] !== '' && ! in_array($parts[$i], $values[$name], true)) {
+                    $values[$name][] = $parts[$i];
+                }
+            }
+        }
+
+        return array_filter($values, static fn (array $list): bool => $list !== []);
     }
 
     public function image(B2bRemoteProduct $product): ?B2bRemoteImage
@@ -464,6 +548,8 @@ final class SignProjectB2bConnector implements B2bVariantConnector
 
         $headerParts = self::members((string) ($product->raw['version_header'] ?? ''));
         $variants = [];
+        $units = [];
+        $vats = [];
         $sort = 0;
         foreach ($versions as $version) {
             $id = (int) $version['id'];
@@ -475,9 +561,18 @@ final class SignProjectB2bConnector implements B2bVariantConnector
                 $reason = $json instanceof RuntimeException ? $json->getMessage() : 'brak odpowiedzi sklepu';
                 $variants[] = new B2bRemoteVariant((string) $id, $label, $attributes, null,
                     'nie udało się pobrać ceny: '.$reason, $version['link'], $sort++);
+                // o tej wersji nie wiadomo nic — jednostka i VAT znaku przestają być pewne
+                $units[] = '';
+                $vats[] = '';
 
                 continue;
             }
+
+            // jednostka i stawka VAT z tej samej odpowiedzi — karta dostawcy pokaże je, gdy są wspólne
+            $sizes = is_array($json['sizes'] ?? null) ? $json['sizes'] : [];
+            $units[] = is_string($sizes['unit'] ?? null) ? trim($sizes['unit']) : '';
+            $vat = $sizes['taxes']['vat'] ?? null;
+            $vats[] = is_scalar($vat) ? trim((string) $vat) : '';
 
             foreach ($this->versionVariants($product, $id, $label, $attributes, $version['link'], $json) as $variant) {
                 $variants[] = new B2bRemoteVariant(
@@ -493,8 +588,27 @@ final class SignProjectB2bConnector implements B2bVariantConnector
                 );
             }
         }
+        $this->saleTerms = [
+            'remote_id' => $product->remoteId,
+            'unit' => self::commonValue($units),
+            'vat' => self::commonValue($vats),
+        ];
 
         return $variants;
+    }
+
+    /**
+     * Wartość wspólna dla wszystkich wersji; '' = którejś brakuje albo się różnią (to dana wersji, nie znaku).
+     *
+     * @param  list<string>  $values
+     */
+    private static function commonValue(array $values): string
+    {
+        if ($values === [] || in_array('', $values, true)) {
+            return '';
+        }
+
+        return count(array_unique($values)) === 1 ? $values[0] : '';
     }
 
     /**

@@ -27,6 +27,9 @@ final class AnroB2bClient
 
     private ?string $token = null;
 
+    /** @var array{id: int, rows: list<array{name: string, value: string}>}|null wynik ostatniego technicalData() */
+    private ?array $lastTechnicalData = null;
+
     public function __construct(
         private readonly string $username,
         #[\SensitiveParameter] private readonly string $password,
@@ -80,10 +83,18 @@ final class AnroB2bClient
     }
 
     /**
+     * Parametry techniczne produktu. Pobiera je i opis (AnroB2bConnector::description), i karta wyrobu
+     * u dostawcy (shopFields), a synchronizacja idzie produkt po produkcie — pamiętamy więc wynik ostatnio
+     * pytanego produktu, żeby w jednym przebiegu nie wysyłać tego samego zapytania dwa razy.
+     *
      * @return list<array{name: string, value: string}>
      */
     public function technicalData(int $productId): array
     {
+        if ($this->lastTechnicalData !== null && $this->lastTechnicalData['id'] === $productId) {
+            return $this->lastTechnicalData['rows'];
+        }
+
         $json = $this->getJson("api/zit/product/{$productId}/technical-data");
         $out = [];
         foreach (is_array($json) ? $json : [] as $row) {
@@ -96,6 +107,7 @@ final class AnroB2bClient
                 $out[] = ['name' => $name, 'value' => $value];
             }
         }
+        $this->lastTechnicalData = ['id' => $productId, 'rows' => $out];
 
         return $out;
     }

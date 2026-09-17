@@ -370,7 +370,7 @@ final class B2bAccountSyncRunner
         $variants = ($result['progress_unit'] ?? null) === B2bSyncRun::UNIT_VARIANTS;
         // przy wersjach total_remote to szacunek liczby znaków — pewna jest liczba wersji z listy dostawcy
         $text = sprintf(
-            '%s: %d · sprawdzone: %d · nowe: %d · zaktualizowane: %d · bez zmian: %d · pominięte: %d · zmiany cen: %d · nowe opisy: %d · zdjęcia: %d · pliki: %d',
+            '%s: %d · sprawdzone: %d · nowe: %d · zaktualizowane: %d · bez zmian: %d · pominięte: %d · zmiany cen: %d · nowe opisy: %d · zdjęcia: %d · pliki: %d · karty ze sklepu: %d',
             $variants ? 'Wersji w B2B' : 'W B2B',
             $variants ? $result['progress_total'] : $result['total_remote'],
             $result['seen'],
@@ -382,6 +382,7 @@ final class B2bAccountSyncRunner
             $result['descriptions'],
             $result['images'],
             $result['documents'] ?? 0,
+            $result['shop_fields'] ?? 0,
         );
         if (($result['progress_unit'] ?? null) === B2bSyncRun::UNIT_VARIANTS) {
             $text .= sprintf(

@@ -105,7 +105,7 @@ final class B2bSyncCommand extends Command
         $this->newLine();
         $variants = ($result['progress_unit'] ?? null) === B2bSyncRun::UNIT_VARIANTS;
         $this->info(sprintf(
-            '%s: %d · sprawdzone: %d · nowe: %d · zaktualizowane: %d · bez zmian: %d · pominięte: %d · zmiany cen: %d · nowe opisy: %d · zdjęcia: %d · pliki: %d',
+            '%s: %d · sprawdzone: %d · nowe: %d · zaktualizowane: %d · bez zmian: %d · pominięte: %d · zmiany cen: %d · nowe opisy: %d · zdjęcia: %d · pliki: %d · karty ze sklepu: %d',
             $variants ? 'Wersji w B2B' : 'W B2B',
             $variants ? $result['progress_total'] : $result['total_remote'],
             $result['seen'],
@@ -117,6 +117,7 @@ final class B2bSyncCommand extends Command
             $result['descriptions'],
             $result['images'],
             $result['documents'] ?? 0,
+            $result['shop_fields'] ?? 0,
         ));
         foreach (array_slice($result['errors'], 0, 20) as $error) {
             $this->warn('  '.$error);

@@ -12,7 +12,9 @@ use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\User;
 use App\Services\B2b\AnroB2bClient;
+use App\Services\B2b\AnroB2bConnector;
 use App\Services\B2b\B2bAccountSyncRunner;
+use App\Services\B2b\B2bRemoteShopField;
 use Carbon\CarbonImmutable;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -32,6 +34,9 @@ final class B2bAnroSyncTest extends TestCase
     private const SKU = 'N/IF005/W-02/C/PT';
 
     private int $logins = 0;
+
+    /** Ile razy w przebiegu poszło zapytanie o parametry techniczne (opis i karta wyrobu pytają o to samo). */
+    private int $technicalDataRequests = 0;
 
     private bool $expireTokenOnce = false;
 
@@ -122,6 +127,69 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertSame($list->id, $account->last_price_list_id);
         $this->assertStringContainsString('nowe: 1', (string) $account->last_sync_message);
         $this->assertNotNull($account->last_sync_finished_at);
+    }
+
+    public function test_karta_wyrobu_u_dostawcy_ma_dane_handlowe_parametry_i_klasyfikacje(): void
+    {
+        $this->fakeAnro();
+        $connector = AnroB2bConnector::forAccount($this->account, 0);
+        $remote = iterator_to_array($connector->products(), false);
+
+        $rows = self::rows($connector->shopFields($remote[0]));
+
+        $this->assertSame([
+            ['Informacje handlowe', 'Nazwa towaru', 'Alarm pożarowy na wysięgniku W-02'],
+            ['Informacje handlowe', 'Dział towarowy', 'Sito \\ TH - Towary handlowe \\ 17/WGK - Wysięgniki'],
+            ['Informacje handlowe', 'Kod towaru', self::SKU],
+            // Kod producenta jest w źródle pusty — wiersza nie ma wcale, zamiast pustej wartości.
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'SZT'],
+            ['Informacje techniczne', 'Format', '200 x 200'],
+            ['Informacje techniczne', 'Materiał', 'Płyta PVC'],
+            ['Klasyfikacja produktowa', 'Dział asortymentowy', 'Sito'],
+            ['Klasyfikacja produktowa', 'Grupa asortymentowa', 'TH - Towary handlowe'],
+            ['Klasyfikacja produktowa', 'Podgrupa', '17/WGK - Wysięgniki'],
+        ], $rows);
+
+        // Cen w tabelce nie ma — karta wyrobu ma własne sloty cen ze źródeł.
+        $this->assertSame([], array_values(array_filter(
+            $rows,
+            static fn (array $row): bool => str_contains(mb_strtolower($row[1]), 'cena'),
+        )));
+    }
+
+    public function test_karta_wyrobu_pokazuje_kod_producenta_gdy_jest_i_pomija_pusta_klasyfikacje(): void
+    {
+        $this->fakeAnro();
+        $connector = AnroB2bConnector::forAccount($this->account, 0);
+        $remote = iterator_to_array($connector->products(), false);
+
+        // OBCY-1: kod producenta uzupełniony, dział towarowy pusty.
+        $rows = self::rows($connector->shopFields($remote[2]));
+
+        $this->assertContains(['Informacje handlowe', 'Kod producenta', 'UV-9999'], $rows);
+        $this->assertSame([], array_values(array_filter(
+            $rows,
+            static fn (array $row): bool => $row[0] === 'Klasyfikacja produktowa' || $row[1] === 'Dział towarowy',
+        )));
+    }
+
+    public function test_opis_i_karta_wyrobu_pobieraja_parametry_techniczne_tylko_raz(): void
+    {
+        $this->fakeAnro();
+        $connector = AnroB2bConnector::forAccount($this->account, 0);
+        $remote = iterator_to_array($connector->products(), false);
+
+        $description = $connector->description($remote[0]);
+        $fields = $connector->shopFields($remote[0]);
+
+        $this->assertSame(1, $this->technicalDataRequests, 'Parametry techniczne mają być pobrane raz na produkt.');
+        $this->assertStringContainsString('Format: 200 x 200', $description);
+        $this->assertContains(['Informacje techniczne', 'Format', '200 x 200'], self::rows($fields));
+
+        // To samo w pełnym przebiegu synchronizacji: jeden produkt z parametrami = jedno zapytanie.
+        $this->technicalDataRequests = 0;
+        $this->sync();
+        $this->assertSame(1, $this->technicalDataRequests);
     }
 
     public function test_second_sync_without_changes_adds_no_price_history_and_keeps_one_price_list(): void
@@ -442,6 +510,20 @@ final class B2bAnroSyncTest extends TestCase
     }
 
     /**
+     * Wiersze karty wyrobu jako proste trójki — czytelniej porównać niż obiekty.
+     *
+     * @param  list<B2bRemoteShopField>  $fields
+     * @return list<array{0: string, 1: string, 2: string}>
+     */
+    private static function rows(array $fields): array
+    {
+        return array_map(
+            static fn (B2bRemoteShopField $field): array => [$field->section, $field->name, $field->value],
+            $fields,
+        );
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function sync(?int $limit = null, bool $dryRun = false): array
@@ -489,6 +571,9 @@ final class B2bAnroSyncTest extends TestCase
             if ($this->cancelOnFirstPrice && str_ends_with($path, '/api/zit/products/13507/price')) {
                 B2bSyncRun::query()->where('status', 'running')->update(['cancel_requested_at' => now()]);
             }
+            if (str_contains($path, '/technical-data')) {
+                $this->technicalDataRequests++;
+            }
 
             return match (true) {
                 str_ends_with($path, '/api/zit/products') => Http::response($this->productsPage((int) ($request['page'] ?? 0))),
@@ -519,10 +604,14 @@ final class B2bAnroSyncTest extends TestCase
                 'NAME' => 'Alarm pożarowy na wysięgniku W-02',
                 'OPIS' => $this->opis,
                 'DZIAL_OPIS' => '17/WGK - Wysięgniki',
+                'DZIAL_OPIS_PELNY' => 'Sito \\ TH - Towary handlowe \\ 17/WGK - Wysięgniki',
+                // Kod producenta u Anro bywa pusty — tak jak tutaj.
+                'TOWARKODD' => '',
+                'JEDNOSTKA' => 'SZT',
                 'CENA_NETTO' => 0,
             ],
             ['ID' => 2, 'KOD' => 'BEZ-CENY', 'NAME' => 'Produkt bez ceny', 'OPIS' => '', 'DZIAL_OPIS' => ''],
-            ['ID' => 3, 'KOD' => 'OBCY-1', 'NAME' => 'Kod zajęty', 'OPIS' => '', 'DZIAL_OPIS' => ''],
+            ['ID' => 3, 'KOD' => 'OBCY-1', 'NAME' => 'Kod zajęty', 'OPIS' => '', 'DZIAL_OPIS' => '', 'TOWARKODD' => 'UV-9999', 'JEDNOSTKA' => 'PAR'],
         ];
 
         // Dwie strony po 2 pozycje — sprawdza stronicowanie od 0 niezależnie od onPage.

@@ -23,7 +23,7 @@ use RuntimeException;
  * jej powiązać z katalogiem, a sklejanie identyfikatora z nazwy byłoby wymyślaniem kodu, którego producent
  * na karcie nie podał.
  */
-final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bPublicSite, B2bRunSummaryAware
+final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldSource
 {
     private int $total = 0;
 
@@ -178,6 +178,57 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bP
         return implode("\n\n", $sections);
     }
 
+    /**
+     * Tabelka z karty producenta w układzie ze strony: dane handlowe („Nr kat.”, „Indeks”, EAN, stan
+     * magazynowy), normy i specyfikacja techniczna. Wszystko pochodzi ze strony pobranej przy liście
+     * produktów ($raw), więc karta nie wysyła do Protektu żadnego dodatkowego zapytania.
+     *
+     * @return list<B2bRemoteShopField>
+     */
+    public function shopFields(B2bRemoteProduct $product): array
+    {
+        $raw = $product->raw;
+        if (($raw['status'] ?? null) !== 'ok') {
+            return [];
+        }
+
+        $fields = [];
+        $commercial = [
+            'Nr katalogowy' => (string) ($raw['catalog_no'] ?? $product->sku),
+            'Indeks producenta' => (string) ($raw['supplier_index'] ?? ''),
+            'EAN' => (string) ($raw['ean'] ?? ''),
+            'Dostępność' => (string) ($product->availability ?? ''),
+        ];
+        foreach ($commercial as $label => $value) {
+            if (trim($value) !== '') {
+                $fields[] = new B2bRemoteShopField('Informacje handlowe', $label, $value);
+            }
+        }
+
+        // Każda norma osobnym wierszem, a nie jedną sklejoną wartością: przy dopasowaniu do wymagania
+        // przetargu liczy się pojedyncze oznaczenie („EN 361”), więc musi dać się je odczytać osobno.
+        // Powtórzona etykieta jest w karcie dozwolona (B2bRemoteShopField).
+        foreach ($raw['norms'] ?? [] as $norm) {
+            $fields[] = new B2bRemoteShopField('Normy', 'Norma', (string) $norm);
+        }
+
+        // specRows() skleja pary w „etykieta: wartość” i wstawia gołe nazwy podzespołów — rozkładamy to
+        // z powrotem, a nazwa podzespołu staje się sekcją kolejnych wierszy, żeby „Materiał” z dwóch
+        // podzespołów nie wyglądał w tabelce na jedną cechę. Kolejność ze strony zostaje bez zmian.
+        $section = 'Specyfikacja techniczna';
+        foreach ($raw['spec'] ?? [] as $row) {
+            $parts = explode(': ', (string) $row, 2);
+            if (count($parts) < 2) {
+                $section = trim((string) $row);
+
+                continue;
+            }
+            $fields[] = new B2bRemoteShopField($section, trim($parts[0]), trim($parts[1]));
+        }
+
+        return $fields;
+    }
+
     public function image(B2bRemoteProduct $product): ?B2bRemoteImage
     {
         $url = (string) ($product->raw['image_url'] ?? '');
@@ -288,6 +339,9 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bP
             variantSummary: $summary,
             raw: [
                 'status' => 'ok',
+                // Numer katalogowy dosłownie ze strony: kod karty (sku) bywa numerem z dopiskiem koloru,
+                // który jest nasz — do tabelki u dostawcy trafia to, co pokazuje Protekt.
+                'catalog_no' => $catalogNo,
                 'price_text' => $priceText,
                 'currency' => self::text($xpath->query('//*[@itemprop="priceCurrency"]')->item(0)),
                 'ean' => self::text($xpath->query('//*[@itemprop="gtin13"]')->item(0)),

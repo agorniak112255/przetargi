@@ -44,7 +44,7 @@ use RuntimeException;
  * Producent — ZAŁOŻENIE (sklep nie ma pola producenta): „HECKEL” gdy kod lub nazwa zawiera heckel, „HexArmor” gdy
  * nazwa zawiera hexarmor, inaczej „UVEX” (sklep firmy UVEX; większość nazw zawiera „uvex”).
  */
-final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware
+final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
 {
     /** Nieprzerwane pobieranie listy dłużej = błąd (przebieg bez postępu uznałby b2b:sync-due za przerwany). */
     private const LIST_BUDGET_SECONDS = 25 * 60;
@@ -68,6 +68,13 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
 
     /** Nagłówek wierszy tabeli poziomów ochrony (w segmencie „Parametry:”, którego tłumaczenie nie rusza). */
     private const PROTECTION_SECTION = 'Poziomy ochrony';
+
+    /** Sekcje karty wyrobu u dostawcy (B2bShopFieldSource) — osobne od nagłówków opisu. */
+    private const SHOP_SECTION_TRADE = 'Informacje handlowe';
+
+    private const SHOP_SECTION_TECHNICAL = 'Dane techniczne';
+
+    private const SHOP_SECTION_PROTECTION = 'Ochrona';
 
     /** Koniec tekstu opisu na stronie producenta — nagłówek tabeli parametrów, którą czytamy osobno. */
     private const MANUFACTURER_TAIL_HEADINGS = ['specifications', 'spezifikationen'];
@@ -130,6 +137,14 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
 
     /** remoteId karty, której opis przyszedł ze strony producenta (po angielsku) — do zlecenia tłumaczenia. */
     private ?string $foreignDescriptionFor = null;
+
+    /**
+     * Wiersze karty dostawcy ze strony producenta bieżącej karty — zapamiętane w chwili, gdy opis i tak tę stronę
+     * pobierał. shopFields() bierze je tylko dla tej samej karty i nigdy nie pobiera strony producenta samo.
+     *
+     * @var array{remote_id: string, fields: list<B2bRemoteShopField>}|null
+     */
+    private ?array $manufacturerFields = null;
 
     /**
      * Karty, których odnośnik prowadził do strony innego wyrobu, a właściwej nie udało się znaleźć.
@@ -294,6 +309,63 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     }
 
     /**
+     * Karta wyrobu u dostawcy: kod i jednostka sprzedaży z wiersza listy, a gdy opis karty pobierał stronę
+     * producenta — jej numer katalogowy, tabela „Specifications”, zakresy ochrony i wiersze „Protection Level”.
+     * Metoda niczego nie pobiera: strony producenta nie ma w pamięci = karta ma same dane handlowe (sklep sam
+     * tabelki wyrobu nie pokazuje). Ceny nie dokładamy — karta ma na nie własną sekcję.
+     *
+     * @return list<B2bRemoteShopField>
+     */
+    public function shopFields(B2bRemoteProduct $product): array
+    {
+        if (($product->raw['status'] ?? null) !== 'ok') {
+            return [];
+        }
+
+        $fields = [];
+        $code = trim((string) ($product->raw['code'] ?? $product->sku));
+        if ($code !== '') {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Kod', $code);
+        }
+        $unit = trim((string) ($product->raw['unit'] ?? ''));
+        if ($unit !== '') {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Jednostka sprzedaży', $unit);
+        }
+
+        if (($this->manufacturerFields['remote_id'] ?? null) !== $product->remoteId) {
+            return $fields;
+        }
+
+        return [...$fields, ...$this->manufacturerFields['fields']];
+    }
+
+    /**
+     * Wiersze karty dostawcy ze strony producenta, w kolejności ze źródła. Wiersze „Protection Level” zostają
+     * sklejone z kolumn („180 - 315 | (OD10+) | …”), jak w opisie — karta pokazuje je jako tabelę.
+     *
+     * @return list<B2bRemoteShopField>
+     */
+    private static function manufacturerShopFields(DOMXPath $page, string $html): array
+    {
+        $fields = [];
+        $orderNumber = self::orderNumber($html);
+        if ($orderNumber !== null) {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Numer katalogowy producenta', $orderNumber);
+        }
+        foreach (self::specificationPairs($page) as [$name, $value]) {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TECHNICAL, $name, $value);
+        }
+        foreach (self::protectionRangePairs($page) as [$name, $value]) {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_PROTECTION, $name, $value);
+        }
+        foreach (self::protectionLines($page) as $line) {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_PROTECTION, self::PROTECTION_SECTION, $line);
+        }
+
+        return $fields;
+    }
+
+    /**
      * @return list<string>
      */
     public function runSummary(): array
@@ -352,6 +424,12 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             // żaden z bloków opisu — to nie jest strona wyrobu albo sklep zmienił budowę stron
             throw new RuntimeException('strona producenta '.$url.' nie ma opisu w spodziewanym miejscu');
         }
+
+        // strona tego wyrobu jest już pobrana — tabelki karty dostawcy biorą ją za darmo, razem z opisem
+        $this->manufacturerFields = [
+            'remote_id' => $product->remoteId,
+            'fields' => self::manufacturerShopFields($page, $found['html']),
+        ];
 
         $lines = $description !== null ? self::blockLines($description) : [];
         // ostatni wiersz to nagłówek tabeli parametrów — samą tabelę czytamy niżej
@@ -879,9 +957,10 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         if ($this->pageUrl !== $url) {
             $this->pageHtml = $this->client->productPage($url);
             $this->pageUrl = $url;
-            // plik i znacznik języka poprzedniej karty nie są już potrzebne
+            // plik, znacznik języka i wiersze producenta poprzedniej karty nie są już potrzebne
             $this->file = null;
             $this->foreignDescriptionFor = null;
+            $this->manufacturerFields = null;
         }
 
         $xpath = JspB2bClient::dom((string) $this->pageHtml);
@@ -1002,6 +1081,8 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     {
         // skrypty strony zostają po strip_tags — a sklep wstawia w nich cały koszyk jako JSON, z cudzymi numerami
         $body = (string) preg_replace('#<(script|style)\b[^>]*>.*?</\1>#is', ' ', $html);
+        // znacznik rozdziela tekst: bez spacji „…9970.005</li><li>GTIN…” dałoby numer „9970.005GTIN”
+        $body = (string) preg_replace('#<[^>]*>#', ' ', $body);
         $text = (string) preg_replace('/[\s\x{00A0}]+/u', ' ', strip_tags($body));
         foreach (self::ORDER_NUMBER_LABELS as $label) {
             if (preg_match('/'.preg_quote($label, '/').'\s*:?\s*([\p{L}\p{N}][\p{L}\p{N}.\/_-]*)/ui', $text, $m) === 1) {
@@ -1059,7 +1140,20 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      */
     private static function specificationLines(DOMXPath $page): array
     {
-        $lines = [];
+        return array_map(
+            static fn (array $pair): string => $pair[0].': '.$pair[1],
+            self::specificationPairs($page),
+        );
+    }
+
+    /**
+     * Tabela „Specifications” jako pary nazwa→wartość, dosłownie ze strony (etykieta bez końcowego dwukropka).
+     *
+     * @return list<array{0: string, 1: string}>
+     */
+    private static function specificationPairs(DOMXPath $page): array
+    {
+        $pairs = [];
         foreach ($page->query('//table[contains(@class, "product-detail-properties-table")]//tr') ?: [] as $row) {
             $cells = $page->query('.//th|.//td', $row);
             $label = rtrim(self::text($cells->item(0)), ':');
@@ -1067,10 +1161,10 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             if ($label === '' || $value === '') {
                 continue;
             }
-            $lines[] = $label.': '.$value;
+            $pairs[] = [$label, $value];
         }
 
-        return $lines;
+        return $pairs;
     }
 
     /**
@@ -1115,7 +1209,20 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      */
     private static function protectionRangeLines(DOMXPath $page): array
     {
-        $lines = [];
+        return array_map(
+            static fn (array $pair): string => 'Protection range – '.$pair[0].': '.$pair[1],
+            self::protectionRangePairs($page),
+        );
+    }
+
+    /**
+     * Boczny blok „Protection range” jako pary nazwa zakresu → zdanie z granicami widma, dosłownie ze strony.
+     *
+     * @return list<array{0: string, 1: string}>
+     */
+    private static function protectionRangePairs(DOMXPath $page): array
+    {
+        $pairs = [];
         foreach ($page->query('//*['.JspB2bClient::classPredicate('protectionrange-information-container').']') ?: [] as $row) {
             $title = self::text($page->query('.//*['.JspB2bClient::classPredicate('uvex-protectionrange-title').']', $row)->item(0));
             $whole = self::text($row);
@@ -1125,13 +1232,13 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             if ($title === '' || $detail === '') {
                 continue;
             }
-            $lines[] = 'Protection range – '.$title.': '.$detail;
-            if (count($lines) >= self::PROTECTION_RANGE_LIMIT) {
+            $pairs[] = [$title, $detail];
+            if (count($pairs) >= self::PROTECTION_RANGE_LIMIT) {
                 break;
             }
         }
 
-        return $lines;
+        return $pairs;
     }
 
     /**

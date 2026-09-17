@@ -15,6 +15,7 @@ use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bRemoteProduct;
+use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\UvexB2bClient;
 use App\Services\B2b\UvexB2bConnector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -836,6 +837,86 @@ final class UvexConnectorTest extends TestCase
 
         $this->expectExceptionMessage('nie ma opisu w spodziewanym miejscu');
         $connector->description($product);
+    }
+
+    public function test_shop_card_joins_the_list_row_with_the_manufacturer_tables_already_downloaded(): void
+    {
+        $this->manufacturerOrderNumber = '9970.005';
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/9970.005');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        // opis pobiera stronę producenta — karta dostawcy korzysta z tej samej kopii
+        $connector->description($product);
+        $before = Http::recorded()->count();
+        $fields = $connector->shopFields($product);
+
+        $this->assertSame($before, Http::recorded()->count(), 'karta dostawcy nie dopytuje sklepu ani producenta');
+        $this->assertSame([
+            ['Informacje handlowe', 'Kod', '9970.005'],
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'szt.'],
+            ['Informacje handlowe', 'Numer katalogowy producenta', '9970.005'],
+            ['Dane techniczne', 'Filter material', 'Plastic'],
+            ['Dane techniczne', 'Protection Class / Norm', 'EN 207 full protection, EN 208 Alignment protection, EN 60825'],
+            ['Dane techniczne', 'VLT (approx.)', '16%'],
+            ['Ochrona', 'ultraviolett', 'Protection within the ultraviolet spectral range between 180 and 400nm'],
+            ['Ochrona', 'visible', 'Protection within the visible spectral range between 400 and 700nm'],
+            ['Ochrona', 'Poziomy ochrony', 'Długość fali (nm) | OD | Tryb pracy / badany stopień ochrony'],
+            ['Ochrona', 'Poziomy ochrony', '180 - 315 | (OD10+) | D LB10 + IR LB4 + M LB6'],
+            ['Ochrona', 'Poziomy ochrony', '>315 - 385 | (OD8+) | D LB6 + IRM LB8'],
+        ], self::rows($fields));
+    }
+
+    public function test_shop_card_sends_no_request_when_the_manufacturer_page_was_not_downloaded(): void
+    {
+        // sklep ma własny opis, więc strony producenta nikt nie pobierał — tabelki wyrobu po prostu nie ma
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+        $connector->description($product);
+
+        $before = Http::recorded()->count();
+        $fields = $connector->shopFields($product);
+
+        $this->assertSame($before, Http::recorded()->count(), 'karta dostawcy nie wysyła żadnego żądania');
+        $this->assertSame([], $this->manufacturerHits);
+        $this->assertSame([
+            ['Informacje handlowe', 'Kod', '9970.005'],
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'szt.'],
+        ], self::rows($fields));
+    }
+
+    public function test_shop_card_of_a_card_without_the_manufacturer_page_does_not_borrow_rows_from_the_previous_one(): void
+    {
+        $this->manufacturerOrderNumber = '9970.005';
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/9970.005');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $products = $this->productsByCode($connector);
+
+        $connector->description($products['9970.005']);
+
+        // tabelka producenta należy do karty, dla której pobrano stronę — inna karta dostaje same dane handlowe
+        $this->assertSame([
+            ['Informacje handlowe', 'Kod', '8430/2/39'],
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'par.'],
+        ], self::rows($connector->shopFields($products['8430/2/39'])));
+    }
+
+    /**
+     * @param  list<B2bRemoteShopField>  $fields
+     * @return list<array{0: string, 1: string, 2: string}>
+     */
+    private static function rows(array $fields): array
+    {
+        return array_map(
+            static fn ($field): array => [$field->section, $field->name, $field->value],
+            $fields,
+        );
     }
 
     public function test_all_photos_from_the_product_page_land_on_the_card_and_are_not_downloaded_twice(): void

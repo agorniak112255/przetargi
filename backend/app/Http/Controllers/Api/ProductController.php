@@ -8,10 +8,12 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\DestroyProductsRequest;
 use App\Http\Requests\UpdateProductCategoryRequest;
 use App\Http\Requests\UpdateProductShopSourceRequest;
+use App\Models\B2bAccount;
 use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\B2b\B2bConnectorRegistry;
@@ -331,6 +333,7 @@ class ProductController extends Controller
             'specialPrices.client:id,name',
             'prestaExport',
             'accessories.relatedProduct.images',
+            'shopCards.account:id,connector,sites',
         ]);
 
         $payload = $product->toArray();
@@ -378,6 +381,9 @@ class ProductController extends Controller
         $payload['last_price_change'] = $this->priceChanges->latestChanges([(int) $product->id])[(int) $product->id] ?? null;
         $payload['variants'] = $this->variants->forProduct((int) $product->id);
         $payload['source_prices'] = $this->sourcePricesPayload($product);
+        // relacja doładowana tylko po to, by zbudować shop_fields — surowe wiersze nie mają być w odpowiedzi dwa razy
+        unset($payload['shop_cards']);
+        $payload['shop_fields'] = $this->shopFieldsPayload($product);
         $payload['description_from_b2b'] = app(B2bDescriptionSource::class)->has($product);
         $payload = $this->fx->appendPricePln($payload);
         $payload['presta_export'] = $this->prestaExportPayload($product);
@@ -512,7 +518,15 @@ class ProductController extends Controller
             return (string) $slot->source_key;
         }
 
-        $account = $slot->account;
+        return $this->b2bAccountLabel($slot->account);
+    }
+
+    /**
+     * Etykieta konta B2B wspólna dla cen ze źródeł i danych ze sklepu dostawcy — ta sama nazwa konta ma się
+     * pokazywać w obu miejscach karty.
+     */
+    private function b2bAccountLabel(?B2bAccount $account): string
+    {
         if ($account === null) {
             return 'B2B (usunięte konto)';
         }
@@ -521,6 +535,61 @@ class ProductController extends Controller
             ?? (is_array($account->sites) && isset($account->sites[0]) ? trim((string) $account->sites[0]) : '');
 
         return $name !== '' ? 'B2B '.$name : 'B2B konto #'.$account->id;
+    }
+
+    /**
+     * Wiersze z kart wyrobu u dostawców (product_shop_cards) — osobno dla każdego konta B2B, treść dosłownie
+     * z kolumny fields. To nie jest opis wyrobu: dane idą tylko na kartę, nie do wyszukiwania ani embeddingu.
+     * Kolejność: najświeżej pobrane wyżej, przy remisie po numerze konta.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function shopFieldsPayload(Product $product): array
+    {
+        $rank = static fn (ProductShopCard $card): array => [
+            -($card->synced_at?->getTimestamp() ?? 0),
+            (int) $card->b2b_account_id,
+        ];
+
+        return $product->shopCards
+            ->sort(static fn (ProductShopCard $a, ProductShopCard $b): int => $rank($a) <=> $rank($b))
+            ->map(fn (ProductShopCard $card): array => [
+                'source_key' => ProductSourcePrice::b2bKey((int) $card->b2b_account_id),
+                'source_label' => $this->b2bAccountLabel($card->account),
+                'b2b_account_id' => (int) $card->b2b_account_id,
+                'source_url' => $card->source_url,
+                'synced_at' => $card->synced_at?->toISOString(),
+                'sections' => $this->shopCardSections($card),
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Sekcje karty dostawcy bez przetwarzania treści; nieoczekiwany kształt kolumny fields (brak wierszy)
+     * odpada, żeby front nie dostał pustej tabelki.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function shopCardSections(ProductShopCard $card): array
+    {
+        $fields = $card->fields;
+        if (! is_array($fields)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($fields as $section) {
+            if (! is_array($section) || ! isset($section['rows']) || ! is_array($section['rows']) || $section['rows'] === []) {
+                continue;
+            }
+            $out[] = [
+                'section' => (string) ($section['section'] ?? ''),
+                'rows' => array_values($section['rows']),
+            ];
+        }
+
+        return $out;
     }
 
     /**

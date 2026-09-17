@@ -30,13 +30,18 @@ use RuntimeException;
  * przez import i nazwa nowej karty są tłumaczone na polski po zapisie (TranslateB2bProductTextJob). Łącznik
  * podaje tekst dosłownie; tylko etykiety cech w „Parametry:” są naszymi stałymi polskimi odpowiednikami.
  */
-final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bKeepsExistingNames
+final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bKeepsExistingNames, B2bShopFieldSource
 {
     private const SESSION_LOST = 'Utracono sesję konta bolle-safety.com — ceny konta niedostępne';
 
     private const REASON_MATRIX = 'pozycja z wariantami (macierz) — importer ich nie obsługuje';
 
     private const EPSILON = 0.005;
+
+    /** Sekcje karty wyrobu u dostawcy (B2bShopFieldSource). */
+    private const SHOP_SECTION_TRADE = 'Informacje handlowe';
+
+    private const SHOP_SECTION_PARAMETERS = 'Parametry';
 
     /**
      * Pola cech, które mają etykiety filtrów sklepu (SC.CONFIGURATION.facets, odczyt 15.09.2026: Frame Material,
@@ -208,6 +213,39 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
         }
 
         return mb_substr(implode("\n\n", $sections), 0, 10000);
+    }
+
+    /**
+     * Karta wyrobu u dostawcy z tej samej odpowiedzi /api/items, którą products() już pobrał (żadnego zapytania
+     * więcej): kod towaru i cztery cechy z etykietami filtrów sklepu (PARAMETERS) — wartości dosłownie ze
+     * źródła, po angielsku, jak w opisie. Pozostałych pól custitem_* sklep nie opisuje etykietą, więc na kartę
+     * nie trafiają. Ceny nie dokładamy — karta ma na nie własną sekcję.
+     *
+     * @return list<B2bRemoteShopField>
+     */
+    public function shopFields(B2bRemoteProduct $product): array
+    {
+        if (($product->raw['status'] ?? null) !== 'ok') {
+            return [];
+        }
+
+        $fields = [];
+        $sku = trim((string) ($product->raw['itemid'] ?? $product->sku));
+        if ($sku !== '') {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Kod towaru', $sku);
+        }
+        foreach (self::PARAMETERS as $field => $label) {
+            $value = $product->raw[$field] ?? null;
+            if (! is_scalar($value)) {
+                continue;
+            }
+            $value = self::inlineText((string) $value);
+            if ($value !== '') {
+                $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_PARAMETERS, $label, $value);
+            }
+        }
+
+        return $fields;
     }
 
     /**

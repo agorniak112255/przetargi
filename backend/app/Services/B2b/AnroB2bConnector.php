@@ -10,7 +10,7 @@ use App\Models\B2bAccount;
  * b2b.anro.net.pl (platforma Zami). Lista produktów nie ma cen — cena konta, parametry
  * i zdjęcie to osobne zapytania na produkt.
  */
-final class AnroB2bConnector implements B2bConnector
+final class AnroB2bConnector implements B2bConnector, B2bShopFieldSource
 {
     private const PAGE_SIZE = 100;
 
@@ -127,6 +127,68 @@ final class AnroB2bConnector implements B2bConnector
         return mb_substr($out, 0, 10000);
     }
 
+    /**
+     * Tabelka „Informacje o produkcie” ze sklepu Anro, w układzie ze strony dostawcy: dane handlowe i
+     * klasyfikacja z pozycji listy (B2bRemoteProduct::$raw), parametry techniczne osobnym zapytaniem —
+     * tym samym, którego używa description(), więc klient odpowiada z pamięci ostatniego produktu.
+     *
+     * Cen tu nie ma: karta wyrobu ma własne sloty cen ze źródeł (product_source_prices), a przepisanie
+     * ceny konta do tabelki dublowałoby ją w drugim miejscu, bez wiedzy, dla którego konta obowiązuje.
+     *
+     * @return list<B2bRemoteShopField>
+     */
+    public function shopFields(B2bRemoteProduct $product): array
+    {
+        $raw = $product->raw;
+        // Pełna ścieżka działu bywa pusta — wtedy sklep pokazuje sam dział liścia.
+        $department = self::text($raw['DZIAL_OPIS_PELNY'] ?? null);
+        if ($department === '') {
+            $department = self::text($raw['DZIAL_OPIS'] ?? null);
+        }
+        $name = self::text($raw['NAME'] ?? null);
+        if ($name === '') {
+            $name = self::text($raw['TOWARNAZWA'] ?? null);
+        }
+        $code = self::text($raw['KOD'] ?? null);
+        if ($code === '') {
+            $code = self::text($raw['TOWARKOD'] ?? null);
+        }
+
+        $fields = [];
+        $commercial = [
+            'Nazwa towaru' => $name,
+            'Dział towarowy' => $department,
+            'Kod towaru' => $code,
+            // Kod producenta u wielu towarów jest pusty — pustego wiersza sklep nie pokazuje i my też nie.
+            'Kod producenta' => self::text($raw['TOWARKODD'] ?? null),
+            'Jednostka sprzedaży' => self::text($raw['JEDNOSTKA'] ?? null),
+        ];
+        foreach ($commercial as $label => $value) {
+            if ($value !== '') {
+                $fields[] = new B2bRemoteShopField('Informacje handlowe', $label, $value);
+            }
+        }
+
+        $productId = (int) $product->remoteId;
+        if ($productId > 0) {
+            foreach ($this->client->technicalData($productId) as $row) {
+                $fields[] = new B2bRemoteShopField('Informacje techniczne', $row['name'], $row['value']);
+            }
+        }
+
+        // Sklep pokazuje tę samą ścieżkę działu rozbitą na poziomy — nazwy wierszy są jego, nie nasze.
+        $levels = ['Dział asortymentowy', 'Grupa asortymentowa', 'Podgrupa'];
+        $parts = array_values(array_filter(
+            array_map(static fn (string $part): string => trim($part), explode('\\', $department)),
+            static fn (string $part): bool => $part !== '',
+        ));
+        foreach (array_slice($parts, 0, count($levels)) as $index => $part) {
+            $fields[] = new B2bRemoteShopField('Klasyfikacja produktowa', $levels[$index], $part);
+        }
+
+        return $fields;
+    }
+
     public function image(B2bRemoteProduct $product): ?B2bRemoteImage
     {
         $candidates = array_values(array_filter(
@@ -151,5 +213,11 @@ final class AnroB2bConnector implements B2bConnector
     private static function decimal(mixed $value): ?float
     {
         return is_numeric($value) ? round((float) $value, 2) : null;
+    }
+
+    /** Wartość pola listy dosłownie ze źródła (bez zamiany znaczenia) — same białe znaki liczą się jak brak. */
+    private static function text(mixed $value): string
+    {
+        return is_scalar($value) ? trim((string) $value) : '';
     }
 }

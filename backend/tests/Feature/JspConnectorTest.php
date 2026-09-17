@@ -13,6 +13,7 @@ use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bRemoteProduct;
+use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\JspB2bClient;
 use App\Services\B2b\JspB2bConnector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -477,6 +478,61 @@ final class JspConnectorTest extends TestCase
 
         $this->assertSame(0, $second['descriptions']);
         $this->assertSame('Opis poprawiony ręcznie przez handlowca w katalogu.', $product->fresh()?->description);
+    }
+
+    public function test_shop_card_rows_come_from_the_page_already_downloaded_in_products(): void
+    {
+        $this->sitemap = self::ASA_SITEMAP;
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['ASA940-061-300'];
+
+        $before = Http::recorded()->count();
+        $fields = $connector->shopFields($product);
+
+        $this->assertSame($before, Http::recorded()->count(), 'karta dostawcy nie dopytuje sklepu');
+        $this->assertSame([
+            ['Informacje handlowe', 'Kod', 'ASA940-061-300'],
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'sztuka'],
+            ['Wagi i wymiary', 'INNER PACK – Pack quantity', '10'],
+            ['Wagi i wymiary', 'INNER PACK – Height', '12CM'],
+            ['Wagi i wymiary', 'INNER PACK – Width', '17.5CM'],
+            ['Wagi i wymiary', 'INNER PACK – Length', '27.5CM'],
+            ['Wagi i wymiary', 'INNER PACK – Weight', '0.58KG'],
+            ['Wagi i wymiary', 'OUTER PACK – Pack quantity', '120'],
+            ['Wagi i wymiary', 'OUTER PACK – Height', '30CM'],
+            ['Wagi i wymiary', 'OUTER PACK – Width', '50CM'],
+            ['Wagi i wymiary', 'OUTER PACK – Length', '54CM'],
+            ['Wagi i wymiary', 'OUTER PACK – Weight', '5.082KG'],
+        ], self::rows($fields));
+    }
+
+    public function test_shop_card_shows_the_category_from_breadcrumbs_and_skips_a_product_without_a_page(): void
+    {
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $products = $this->productsByCode($connector);
+
+        $this->assertContains(
+            ['Informacje handlowe', 'Kategoria', 'ŚOI › Ostatnia szansa na zakup › Ochrona oczu ostatniej szansy'],
+            self::rows($connector->shopFields($products['1LEOCARB23S'])),
+        );
+        // pozycja bez strony w katalogu konta nie ma czego pokazać
+        $this->assertSame([], $connector->shopFields($products['AJF030-000-100']));
+    }
+
+    /**
+     * @param  list<B2bRemoteShopField>  $fields
+     * @return list<array{0: string, 1: string, 2: string}>
+     */
+    private static function rows(array $fields): array
+    {
+        return array_map(
+            static fn ($field): array => [$field->section, $field->name, $field->value],
+            $fields,
+        );
     }
 
     public function test_image_comes_from_og_image_as_public_url(): void

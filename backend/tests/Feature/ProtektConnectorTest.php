@@ -10,7 +10,9 @@ use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Services\B2b\B2bAccountSyncRunner;
+use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\ProtektB2bClient;
+use App\Services\B2b\ProtektB2bConnector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -286,11 +288,77 @@ final class ProtektConnectorTest extends TestCase
         $this->assertSame(0, $empty->refresh()->last_matched_count);
     }
 
+    public function test_karta_wyrobu_u_dostawcy_ma_dane_handlowe_normy_i_specyfikacje_z_podzespolami(): void
+    {
+        $this->page('/lonza~p21524~c5341', $this->card(
+            name: 'ABM/2LE111 - Lonża bezpieczeństwa',
+            catalogNo: 'BW200/2LE111',
+            price: '259,00',
+            ean: '5906800652997',
+            stock: 'Na wyczerpaniu',
+            index: 'AX 011',
+            subassemblies: true,
+        ));
+        $this->fakeSite();
+
+        $connector = ProtektB2bConnector::forAccount($this->account(), 0);
+        $remote = iterator_to_array($connector->products(), false);
+
+        $this->assertSame([
+            ['Informacje handlowe', 'Nr katalogowy', 'BW200/2LE111'],
+            ['Informacje handlowe', 'Indeks producenta', 'AX 011'],
+            ['Informacje handlowe', 'EAN', '5906800652997'],
+            ['Informacje handlowe', 'Dostępność', 'Na wyczerpaniu'],
+            ['Normy', 'Norma', 'EN 355'],
+            ['Specyfikacja techniczna', 'Materiał', 'poliester/poliamid'],
+            ['Specyfikacja techniczna', 'Waga', '300 g'],
+            // Powtarzalna etykieta pod dwoma nagłówkami podzespołów: dwa wiersze w dwóch sekcjach.
+            ['Lonża', 'Materiał', 'taśma poliestrowa'],
+            ['Zatrzaśnik', 'Materiał', 'stal'],
+        ], self::rows($connector->shopFields($remote[0])));
+    }
+
+    public function test_karta_wyrobu_podaje_numer_katalogowy_ze_strony_a_nie_kod_z_dopiskiem_koloru(): void
+    {
+        // Wersja o innej cenie dostaje kod z dopiskiem koloru (nasz), ale w tabelce ma stać numer
+        // katalogowy dosłownie ze strony Protektu. Karta pominięta (martwy wpis) nie ma wierszy.
+        $this->page('/hv-zwykly~p433~c5341', $this->card(name: 'ABM/LB101HV', catalogNo: 'BW200/LB101HV', price: '102,00'));
+        $this->page('/hv-pomaranczowy~p434~c5341', $this->card(
+            name: 'ABM/LB101HV', catalogNo: 'BW200/LB101HV', price: '138,00', colours: ['jaskrawy pomarańczowy'],
+        ));
+        $this->sitemapPaths[] = '/martwy~p999~c5341';
+        $this->fakeSite();
+
+        $connector = ProtektB2bConnector::forAccount($this->account(), 0);
+        $remote = iterator_to_array($connector->products(), false);
+
+        $this->assertSame('BW200/LB101HV / jaskrawy pomarańczowy', $remote[1]->sku);
+        $this->assertContains(
+            ['Informacje handlowe', 'Nr katalogowy', 'BW200/LB101HV'],
+            self::rows($connector->shopFields($remote[1])),
+        );
+        $this->assertSame([], $connector->shopFields($remote[2]));
+    }
+
+    /**
+     * Wiersze karty wyrobu jako proste trójki — czytelniej porównać niż obiekty.
+     *
+     * @param  list<B2bRemoteShopField>  $fields
+     * @return list<array{0: string, 1: string, 2: string}>
+     */
+    private static function rows(array $fields): array
+    {
+        return array_map(
+            static fn (B2bRemoteShopField $field): array => [$field->section, $field->name, $field->value],
+            $fields,
+        );
+    }
+
     /**
      * @param  list<string>  $colours  wersje kolorystyczne karty (każda ma u Protektu osobny adres,
      *                                 ten sam numer katalogowy i tę samą cenę)
      */
-    private function card(string $name, ?string $catalogNo, ?string $price, ?string $ean = null, ?string $stock = null, array $colours = [], ?string $withdrawn = null, bool $documents = false): string
+    private function card(string $name, ?string $catalogNo, ?string $price, ?string $ean = null, ?string $stock = null, array $colours = [], ?string $withdrawn = null, bool $documents = false, ?string $index = null, bool $subassemblies = false): string
     {
         $html = '<!DOCTYPE html><html><body>'
             .($withdrawn !== null
@@ -319,6 +387,10 @@ final class ProtektConnectorTest extends TestCase
             $html .= '<div class="product-desc__cat product-desc__catnum right-contain"><p>EAN:</p>'
                 .'<p itemprop="gtin13">'.$ean.'</p></div>';
         }
+        if ($index !== null) {
+            $html .= '<div class="product-desc__cat product-desc__catnum left-contain"><p>Indeks:</p>'
+                .'<p itemprop="sku">'.$index.'</p></div>';
+        }
         if ($stock !== null) {
             $html .= '<div class="container-data-codes inventory"><div class="product-desc__cat left-contain">'
                 .'<p>Stan magazynowy:</p><p><span class="stan_niski">'.$stock.'</span></p></div></div>';
@@ -340,6 +412,14 @@ final class ProtektConnectorTest extends TestCase
             .'<div class="spec-col__row"><p class="spec-col__type">Materiał:</p><p class="spec-col__type_val">poliester/poliamid</p></div>'
             .'<div class="spec-col__row"><p class="spec-col__type">Waga:</p><p class="spec-col__type_val">300 g</p></div>'
             .($colours !== [] ? '<div class="spec-col__row"><p class="spec-col__type">Kolor:</p><p class="spec-col__type_val">'.$colours[0].'</p></div>' : '')
+            // Karty zestawów mają specyfikację rozbitą na podzespoły — te same etykiety powtarzają się
+            // pod różnymi nagłówkami („Materiał” lonży i zatrzaśnika to dwie różne cechy).
+            .($subassemblies
+                ? '<div class="spec-col__row"><p class="spec-col__product">Lonża</p></div>'
+                .'<div class="spec-col__row"><p class="spec-col__type">Materiał:</p><p class="spec-col__type_val">taśma poliestrowa</p></div>'
+                .'<div class="spec-col__row"><p class="spec-col__product">Zatrzaśnik</p></div>'
+                .'<div class="spec-col__row"><p class="spec-col__type">Materiał:</p><p class="spec-col__type_val">stal</p></div>'
+                : '')
             .'</div></div></div></div>'
             .'<div class="product-desc__specific"><p class="product-desc__specific--warn">Dopuszczone do prac w strefach zagrożonych wybuchem</p></div>'
             .($documents

@@ -126,6 +126,12 @@ class Product extends Model
         return $this->hasMany(ProductDocument::class)->orderBy('sort_order');
     }
 
+    /** Tabelki z kart wyrobu w sklepach B2B — po jednej na konto dostawcy, osobno od opisu karty. */
+    public function shopCards(): HasMany
+    {
+        return $this->hasMany(ProductShopCard::class);
+    }
+
     /**
      * Karta ma tekst opisu (co najmniej 24 znaki), który mówi coś ponad nazwę. Status „done” bez tekstu nie wystarcza — w katalogu
      * jest takich kart kilkanaście, a model i dowody ze słów nie mają wtedy czego potwierdzić. Opis powtarzający nazwę też nie:

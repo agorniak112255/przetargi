@@ -280,6 +280,8 @@ export type Product = {
   accessories?: ProductAccessory[]
   /** Karta szczegółów: ceny karty osobno dla każdego źródła (plik, konta B2B). */
   source_prices?: ProductSourcePrice[]
+  /** Karta szczegółów: tabelki z kart wyrobu u dostawców (product_shop_cards) — osobno od opisu. */
+  shop_fields?: ProductShopCardSource[]
   special_prices?: Array<{
     id: number
     client_id: number | null
@@ -325,6 +327,29 @@ export type ProductSourcePrice = {
   checked_at: string | null
   migrated: boolean
   is_effective: boolean
+}
+
+/** Jeden wiersz tabelki z karty wyrobu u dostawcy, dosłownie ze sklepu. */
+export type ProductShopCardRow = {
+  name: string
+  value: string
+}
+
+/** Sekcja karty u dostawcy; pusta nazwa = sklep nie dzieli tabelki na sekcje. */
+export type ProductShopCardSection = {
+  section: string
+  rows: ProductShopCardRow[]
+}
+
+/** Dane z karty wyrobu u jednego dostawcy (konto B2B) — to nie jest opis wyrobu, tylko kopia tabelki ze sklepu. */
+export type ProductShopCardSource = {
+  source_key: string
+  source_label: string
+  b2b_account_id: number
+  /** Adres karty u dostawcy w chwili pobrania; null = źródło go nie podało. */
+  source_url: string | null
+  synced_at: string | null
+  sections: ProductShopCardSection[]
 }
 
 export type ProductKitSuggestion = {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
@@ -866,6 +866,59 @@ export function ProductDetail() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {(p.shop_fields?.length ?? 0) > 0 && (
+        <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold">Dane ze sklepu dostawcy</h2>
+          <p className="mb-3 text-xs text-slate-600">
+            Wiersze skopiowane z karty produktu u dostawcy. To nie jest opis wyrobu — karta bez opisu nadal na niego czeka.
+          </p>
+          {p.shop_fields!.map((s) => (
+            <div key={s.source_key} className="mb-3 last:mb-0">
+              <p className="mb-1 text-xs text-slate-600">
+                <span className="font-medium text-slate-800">{s.source_label}</span>
+                {s.synced_at && <> · pobrano {formatDateTime(s.synced_at)}</>}
+                {s.source_url && (
+                  <>
+                    {' · '}
+                    <a
+                      href={s.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-blue-600 hover:underline"
+                    >
+                      Karta u dostawcy
+                    </a>
+                  </>
+                )}
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <tbody>
+                    {s.sections.map((section, si) => (
+                      <Fragment key={si}>
+                        {section.section !== '' && (
+                          <tr className="border-b bg-slate-50 font-medium">
+                            <td className="p-2" colSpan={2}>
+                              {section.section}
+                            </td>
+                          </tr>
+                        )}
+                        {section.rows.map((row, ri) => (
+                          <tr key={`${si}-${ri}`} className="border-b">
+                            <td className="w-1/3 p-2 text-slate-500">{row.name}</td>
+                            <td className="p-2 text-slate-800">{row.value}</td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

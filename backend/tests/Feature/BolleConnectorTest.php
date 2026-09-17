@@ -10,6 +10,7 @@ use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bForeignLanguageSource;
 use App\Services\B2b\B2bKeepsExistingNames;
 use App\Services\B2b\B2bRemoteProduct;
+use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\BolleB2bClient;
 use App\Services\B2b\BolleB2bConnector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -390,6 +391,41 @@ final class BolleConnectorTest extends TestCase
         foreach (['&nbsp;', 'Technologia oprawki', 'Frame Material', 'SEGMENT-WEWNETRZNY', '2026-10-01', '<p>'] as $absent) {
             $this->assertStringNotContainsString($absent, $description);
         }
+    }
+
+    public function test_shop_card_has_the_item_code_and_the_labelled_parameters_without_extra_requests(): void
+    {
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $products = $this->productsById($connector);
+
+        $before = Http::recorded()->count();
+        $fields = $connector->shopFields($products['101']);
+
+        $this->assertSame($before, Http::recorded()->count(), 'karta dostawcy nie dopytuje sklepu');
+        $this->assertSame([
+            ['Informacje handlowe', 'Kod towaru', 'PSSTRYOC13B'],
+            // cechy dosłownie ze źródła (encje zdekodowane), puste „&nbsp;” pomijamy
+            ['Parametry', 'Materiał oprawki', 'Nylon'],
+            ['Parametry', 'Powłoka soczewki', 'Platinum®'],
+            ['Parametry', 'Kolor soczewki', 'Copper'],
+        ], self::rows($fields));
+
+        // pozycja z wariantami (macierz) nie ma czego pokazać
+        $this->assertSame([], $connector->shopFields($products['104']));
+    }
+
+    /**
+     * @param  list<B2bRemoteShopField>  $fields
+     * @return list<array{0: string, 1: string, 2: string}>
+     */
+    private static function rows(array $fields): array
+    {
+        return array_map(
+            static fn ($field): array => [$field->section, $field->name, $field->value],
+            $fields,
+        );
     }
 
     public function test_image_uses_full_media_url_with_hash_and_rejects_foreign_host(): void

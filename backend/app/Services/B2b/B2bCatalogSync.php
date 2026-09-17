@@ -13,6 +13,7 @@ use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductImage;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantPriceHistory;
@@ -90,6 +91,13 @@ final class B2bCatalogSync
      */
     private const DOCUMENT_MAX_BYTES = 12_000_000;
 
+    /**
+     * Co ile dni odświeżamy kartę wyrobu ze sklepu (ProductShopCard). Pobranie pól bywa płatne dodatkowym
+     * zapytaniem do sklepu (Anro pobiera parametry techniczne osobno), więc odświeżamy je nie częściej niż
+     * raz na tydzień — tabelka u dostawcy zmienia się rzadziej niż cena.
+     */
+    public const SHOP_FIELDS_TTL_DAYS = 7;
+
     /** Tyle powodów pominięcia wraca w wyniku przebiegu (panel i CLI pokazują kilka pierwszych). */
     private const ERRORS_LIMIT = 200;
 
@@ -116,6 +124,8 @@ final class B2bCatalogSync
      *     skipped: int,
      *     descriptions: int,
      *     images: int,
+     *     documents: int,
+     *     shop_fields: int,
      *     prices_changed: int,
      *     errors: list<string>,
      *     cancelled: bool,
@@ -147,7 +157,7 @@ final class B2bCatalogSync
         $stats = [
             'total_remote' => 0, 'seen' => 0, 'created' => 0, 'updated' => 0,
             'unchanged' => 0, 'skipped' => 0, 'descriptions' => 0, 'images' => 0,
-            'documents' => 0, 'translations_queued' => 0,
+            'documents' => 0, 'shop_fields' => 0, 'translations_queued' => 0,
         ];
         $errors = [];
         $errorsOverLimit = 0;
@@ -251,6 +261,9 @@ final class B2bCatalogSync
                     $stats['images']++;
                 }
                 $stats['documents'] += (int) ($outcome['documents'] ?? 0);
+                if ($outcome['shop_fields'] ?? false) {
+                    $stats['shop_fields']++;
+                }
                 if ($outcome['translation_queued'] ?? false) {
                     $stats['translations_queued']++;
                 }
@@ -669,11 +682,13 @@ final class B2bCatalogSync
 
         [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
         $documents = $this->storeDocuments($account, $product, $connector, $card, $warnings);
+        $shopFields = $this->storeShopFields($connector, $remote, $product, $account, $warnings);
 
         return [
             'status' => $status,
             'product_id' => (int) $product->id,
             'documents' => $documents,
+            'shop_fields' => $shopFields,
             'price_change' => $priceChange,
             'update_summary' => $status === 'updated' ? $updateSummary : null,
             'description' => isset($payload['description']),
@@ -1201,10 +1216,12 @@ final class B2bCatalogSync
         }
 
         [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
+        $shopFields = $this->storeShopFields($connector, $remote, $product, $account, $warnings);
 
         return [
             'status' => $status,
             'product_id' => (int) $product->id,
+            'shop_fields' => $shopFields,
             'price_changes' => $changes,
             'update_summary' => $status === 'updated' ? $updateSummary : null,
             'description' => isset($payload['description']),
@@ -1655,6 +1672,67 @@ final class B2bCatalogSync
         }
 
         return $saved;
+    }
+
+    /**
+     * Karta wyrobu u dostawcy (ProductShopCard): wiersze nazwa→wartość ze sklepu, osobno od products.description
+     * i osobno dla każdego konta B2B. Poza transakcją zapisu karty — błąd pól nie może cofnąć ceny ani karty.
+     *
+     * Brama kosztu: pola pobieramy tylko wtedy, gdy para (karta, konto) nie ma jeszcze rekordu albo jest on
+     * starszy niż SHOP_FIELDS_TTL_DAYS — inaczej nie wysyłamy do sklepu niczego. Pusta odpowiedź (dostawca
+     * przestał podawać tabelkę) kasuje rekord tej pary, zamiast zostawiać nieaktualne wiersze.
+     *
+     * @param  list<string>|null  $warnings
+     * @return bool czy wiersze zostały zapisane albo odświeżone
+     */
+    private function storeShopFields(
+        B2bConnector $connector,
+        B2bRemoteProduct $remote,
+        Product $product,
+        B2bAccount $account,
+        ?array &$warnings = null,
+    ): bool {
+        if (! $connector instanceof B2bShopFieldSource) {
+            return false;
+        }
+
+        $stored = ProductShopCard::query()
+            ->where('product_id', $product->id)
+            ->where('b2b_account_id', $account->id)
+            ->first();
+        if ($stored !== null && $stored->synced_at !== null
+            && $stored->synced_at->gt(CarbonImmutable::now()->subDays(self::SHOP_FIELDS_TTL_DAYS))) {
+            return false;
+        }
+
+        try {
+            $fields = $connector->shopFields($remote);
+        } catch (B2bFatalException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            $warnings[] = 'dane z karty w sklepie nie zostały odczytane ('.$e->getMessage().') — karta zapisana bez nich';
+
+            return false;
+        }
+
+        $sections = ProductShopCard::sectionsFrom($fields);
+        if ($sections === []) {
+            // dostawca przestał podawać tabelkę — zapisane wiersze nie mają już źródła
+            $stored?->delete();
+
+            return false;
+        }
+
+        ProductShopCard::query()->updateOrCreate(
+            ['product_id' => $product->id, 'b2b_account_id' => $account->id],
+            [
+                'fields' => $sections,
+                'source_url' => $remote->sourceUrl !== null ? mb_substr($remote->sourceUrl, 0, 2000) : null,
+                'synced_at' => now(),
+            ],
+        );
+
+        return true;
     }
 
     /**

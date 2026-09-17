@@ -12,6 +12,7 @@ use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bRemoteProduct;
+use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\B2bRemoteVariant;
 use App\Services\B2b\SignProjectB2bClient;
 use App\Services\B2b\SignProjectB2bConnector;
@@ -236,6 +237,58 @@ final class SignProjectConnectorTest extends TestCase
         $this->assertSame([], $variants[1]->attributes);
         $this->assertSame(1.50, $variants[1]->price?->net);
         $this->assertSame(1, $variants[1]->sortOrder);
+    }
+
+    public function test_shop_card_describes_the_sign_as_a_whole_without_repeating_the_version_table(): void
+    {
+        $this->fakeShop();
+        $connector = $this->connector();
+        $connector->login();
+        $bb014 = $this->firstSign($connector);
+        // jednostka i stawka VAT są w odpowiedziach projector.php, które i tak czyta zbieranie cen wersji
+        $connector->variants($bb014);
+
+        $before = Http::recorded()->count();
+        $fields = $connector->shopFields($bb014);
+
+        $this->assertSame($before, Http::recorded()->count(), 'karta dostawcy nie dopytuje sklepu');
+        $this->assertSame([
+            ['Informacje handlowe', 'Producent', 'SIGNPROJECT'],
+            ['Informacje handlowe', 'Kategoria', 'Znaki bezpieczeństwa - Ochrona Przeciwpożarowa'],
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'szt.'],
+            ['Informacje handlowe', 'Stawka VAT (%)', '23.0'],
+            ['Dostępne wersje', 'Format', '10 x 14,8 cm; 15 x 22,2 cm'],
+            ['Dostępne wersje', 'Podłoże', 'FN - folia samoprzylepna'],
+        ], self::rows($fields));
+    }
+
+    public function test_shop_card_has_no_unit_or_vat_before_the_versions_were_priced(): void
+    {
+        // etykieta wersji o innej liczbie członów niż nagłówek nie trafia do zestawu wartości (bez zgadywania)
+        $this->catalog[7110]['name'] = '15 x 22,2 cm';
+        $this->fakeShop();
+        $connector = $this->connector();
+        $connector->login();
+        $bb014 = $this->firstSign($connector);
+
+        $this->assertSame([
+            ['Informacje handlowe', 'Producent', 'SIGNPROJECT'],
+            ['Informacje handlowe', 'Kategoria', 'Znaki bezpieczeństwa - Ochrona Przeciwpożarowa'],
+            ['Dostępne wersje', 'Format', '10 x 14,8 cm'],
+            ['Dostępne wersje', 'Podłoże', 'FN - folia samoprzylepna'],
+        ], self::rows($connector->shopFields($bb014)));
+    }
+
+    /**
+     * @param  list<B2bRemoteShopField>  $fields
+     * @return list<array{0: string, 1: string, 2: string}>
+     */
+    private static function rows(array $fields): array
+    {
+        return array_map(
+            static fn ($field): array => [$field->section, $field->name, $field->value],
+            $fields,
+        );
     }
 
     public function test_multi_key_items_become_separate_variants_and_missing_currency_is_a_price_error(): void

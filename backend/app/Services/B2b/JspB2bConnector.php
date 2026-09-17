@@ -25,9 +25,14 @@ use RuntimeException;
  * zakupu = kwota „From” (najniższy próg ilościowy, jak ją pokazuje sklep); progów nie uśredniamy.
  * MRRP, gdy niepuste, to cena katalogowa; inaczej katalogowa = zakupu (jak w Anro).
  */
-final class JspB2bConnector implements B2bConnector
+final class JspB2bConnector implements B2bConnector, B2bShopFieldSource
 {
     private const REASON_UNAVAILABLE = 'niedostępny w katalogu konta (sklep przekierował na stronę główną)';
+
+    /** Sekcje karty wyrobu u dostawcy (B2bShopFieldSource). */
+    private const SHOP_SECTION_TRADE = 'Informacje handlowe';
+
+    private const SHOP_SECTION_WEIGHTS = 'Wagi i wymiary';
 
     /** Elementy bez tekstu opisu (pola formularza, media, ramki). */
     private const SKIPPED_TAGS = ['input', 'button', 'select', 'option', 'textarea', 'img', 'iframe', 'video', 'audio', 'object', 'embed', 'svg', 'link', 'meta', 'script', 'style', 'noscript'];
@@ -180,6 +185,43 @@ final class JspB2bConnector implements B2bConnector
         }
 
         return mb_substr(implode("\n\n", $sections), 0, 10000);
+    }
+
+    /**
+     * Karta wyrobu u dostawcy z tego samego HTML-a, który products() już pobrał (żadnego zapytania więcej):
+     * kod, jednostka sprzedaży („UOS:”) i kategoria z okruszków, a potem zakładka Weights & Dimensions —
+     * wiersz „INNER PACK – Height: 12CM” rozdzielony na nazwę i wartość, dosłownie ze sklepu. Ceny nie
+     * dokładamy — karta ma na nie własną sekcję.
+     *
+     * @return list<B2bRemoteShopField>
+     */
+    public function shopFields(B2bRemoteProduct $product): array
+    {
+        if (($product->raw['status'] ?? null) !== 'ok') {
+            return [];
+        }
+
+        $fields = [];
+        $code = trim((string) ($product->raw['code'] ?? $product->sku));
+        if ($code !== '') {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Kod', $code);
+        }
+        $unit = trim((string) ($product->raw['unit'] ?? ''));
+        if ($unit !== '') {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Jednostka sprzedaży', $unit);
+        }
+        $category = trim((string) ($product->category ?? ''));
+        if ($category !== '') {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Kategoria', $category);
+        }
+
+        foreach ($product->raw['weights'] ?? [] as $row) {
+            // wiersze buduje weightRows(): nazwa nigdy nie ma dwukropka, więc dzieli je pierwszy dwukropek
+            [$name, $value] = array_pad(explode(':', (string) $row, 2), 2, '');
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_WEIGHTS, trim($name), trim($value));
+        }
+
+        return $fields;
     }
 
     public function image(B2bRemoteProduct $product): ?B2bRemoteImage
