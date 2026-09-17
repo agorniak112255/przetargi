@@ -388,6 +388,21 @@ class ClientInquiryController extends Controller
     }
 
     /**
+     * Usunięcie własnego zapytania. Cudzych nie ruszamy — nawet kierownik,
+     * który widzi je na liście, nie kasuje pracy innej osoby.
+     *
+     * Kopie tego samego maila zostają; tracą tylko odnośnik do oryginału.
+     */
+    public function destroy(Request $request, ClientInquiry $inquiry): JsonResponse
+    {
+        $this->assertOwner($request, $inquiry);
+
+        $inquiry->delete();
+
+        return response()->json(['ok' => true]);
+    }
+
+    /**
      * Zapytania czekające na wysyłkę z klienta pocztowego. Odpytuje to dodatek
      * do Thunderbirda — przeglądarka nie ma jak sięgnąć do poczty na komputerze.
      */

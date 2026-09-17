@@ -218,6 +218,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/inquiries/{inquiry}/compose', [ClientInquiryController::class, 'compose']);
         Route::post('/inquiries/{inquiry}/replied', [ClientInquiryController::class, 'replied']);
         Route::post('/inquiries/{inquiry}/queue-reply', [ClientInquiryController::class, 'queueReply']);
+        // kasuje tylko autor zapytania — sprawdzenie w kontrolerze
+        Route::delete('/inquiries/{inquiry}', [ClientInquiryController::class, 'destroy']);
     });
 
     Route::get('/price-lists', [PriceListController::class, 'index'])->middleware('permission:price_lists.view');

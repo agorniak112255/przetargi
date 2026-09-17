@@ -163,6 +163,8 @@ export function Inquiries() {
   const [list, setList] = useState<InquiryListResponse | null>(null)
   const [listBusy, setListBusy] = useState(false)
   const [listErr, setListErr] = useState('')
+  // rośnie po usunięciu zapytania — wymusza ponowne wczytanie strony listy
+  const [reloadKey, setReloadKey] = useState(0)
   const [directory, setDirectory] = useState<DirectoryUser[]>([])
   const [contactRow, setContactRow] = useState<InquiryListItem | null>(null)
 
@@ -248,7 +250,7 @@ export function Inquiries() {
     return () => {
       cancelled = true
     }
-  }, [apiQuery])
+  }, [apiQuery, reloadKey])
 
   useEffect(() => {
     void api<InquiryPreferences>('/inquiries/preferences')
@@ -286,6 +288,24 @@ export function Inquiries() {
   }, [canViewAll])
 
   const canSubmit = !busy && body.trim().length >= 20
+
+  /** Kasuje wyłącznie autor zapytania; serwer sprawdza to drugi raz. */
+  async function removeRow(row: InquiryListItem) {
+    const label = row.source_subject || row.reply_subject || `#${row.id}`
+    const ok = window.confirm(
+      `Usunąć zapytanie „${label}”?\n\n` +
+        'Znika treść maila, dobrane pozycje i przygotowany list. Tego nie da się cofnąć.',
+    )
+    if (!ok) return
+
+    setListErr('')
+    try {
+      await api(`/inquiries/${row.id}`, { method: 'DELETE' })
+      setReloadKey((key) => key + 1)
+    } catch (ex) {
+      setListErr(ex instanceof Error ? ex.message : 'Nie udało się usunąć zapytania.')
+    }
+  }
 
   /** `force` pomija sprawdzenie duplikatu — ustawia je dopiero „Załóż mimo to”. */
   async function onPrepare(e?: FormEvent, force = false) {
@@ -682,10 +702,19 @@ export function Inquiries() {
                     <td className="p-2">
                       <InquiryContactChip contact={row.contact} onOpen={() => setContactRow(row)} />
                     </td>
-                    <td className="p-2 text-right">
+                    <td className="p-2 text-right whitespace-nowrap">
                       <Link className="text-blue-600 hover:underline" to={`/inquiries/${row.id}`}>
                         Otwórz
                       </Link>
+                      {row.user?.id === user?.id && (
+                        <button
+                          type="button"
+                          onClick={() => void removeRow(row)}
+                          className="ml-3 text-red-600 hover:underline"
+                        >
+                          Usuń
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

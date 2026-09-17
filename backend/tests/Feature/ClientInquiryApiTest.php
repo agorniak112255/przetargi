@@ -578,6 +578,64 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertStringContainsString('&amp;', $html);
     }
 
+    public function test_author_deletes_own_inquiry_and_nobody_else_can(): void
+    {
+        $author = User::factory()->withRole('handlowiec')->create();
+        $other = User::factory()->withRole('kierownik')->create();
+
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $author->id,
+            'tone' => 'formal',
+            'source_body' => 'Zapytanie do skasowania.',
+            'analysis' => [],
+            'answers' => [],
+        ]);
+
+        // kierownik widzi cudze zapytania na liście, ale kasować ich nie może
+        Sanctum::actingAs($other);
+        $this->deleteJson("/api/inquiries/{$inquiry->id}")->assertForbidden();
+        $this->assertDatabaseHas('client_inquiries', ['id' => $inquiry->id]);
+
+        Sanctum::actingAs($author);
+        $this->deleteJson("/api/inquiries/{$inquiry->id}")->assertOk()->assertJsonPath('ok', true);
+        $this->assertDatabaseMissing('client_inquiries', ['id' => $inquiry->id]);
+
+        $this->getJson("/api/inquiries/{$inquiry->id}")->assertNotFound();
+    }
+
+    public function test_deleting_an_inquiry_leaves_the_copy_of_the_same_mail_alone(): void
+    {
+        $anna = User::factory()->withRole('handlowiec')->create();
+        $piotr = User::factory()->withRole('handlowiec')->create();
+
+        $origin = ClientInquiry::query()->create([
+            'user_id' => $anna->id,
+            'tone' => 'formal',
+            'source_message_id' => 'wspolny@poczta.example',
+            'source_body' => 'Ten sam mail.',
+            'analysis' => [],
+            'answers' => [],
+        ]);
+        $copy = ClientInquiry::query()->create([
+            'user_id' => $piotr->id,
+            'duplicate_of_id' => $origin->id,
+            'tone' => 'formal',
+            'source_message_id' => 'wspolny@poczta.example',
+            'source_body' => 'Ten sam mail.',
+            'analysis' => [],
+            'answers' => [],
+        ]);
+
+        Sanctum::actingAs($anna);
+        $this->deleteJson("/api/inquiries/{$origin->id}")->assertOk();
+
+        Sanctum::actingAs($piotr);
+        $this->getJson("/api/inquiries/{$copy->id}")
+            ->assertOk()
+            ->assertJsonPath('duplicate_of', null)
+            ->assertJsonPath('duplicates', []);
+    }
+
     public function test_reply_can_be_queued_for_thunderbird_and_picked_up(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

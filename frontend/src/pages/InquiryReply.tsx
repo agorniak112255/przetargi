@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { BusyLabel, useBusySeconds } from '../components/Busy'
 import { InquiryContactChip, InquiryContactModal } from '../components/InquiryContact'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
+import { useAuth } from '../auth'
 import { api } from '../lib/api'
 import type {
   InquiryAnswer,
@@ -360,6 +361,8 @@ function customDraftsFrom(p: InquiryPayload): Record<string, string> {
 
 export function InquiryReply() {
   const { id } = useParams()
+  const navigate = useNavigate()
+  const { user } = useAuth()
   const [inquiry, setInquiry] = useState<InquiryPayload | null>(null)
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
@@ -571,6 +574,25 @@ export function InquiryReply() {
     }
   }
 
+  /** Kasuje wyłącznie autor zapytania; serwer i tak sprawdza to drugi raz. */
+  async function removeInquiry() {
+    if (!inquiry) return
+    const label = inquiry.source_subject || inquiry.reply_subject || `#${inquiry.id}`
+    const ok = window.confirm(
+      `Usunąć zapytanie „${label}”?\n\n` +
+        'Znika treść maila, dobrane pozycje i przygotowany list. Tego nie da się cofnąć.',
+    )
+    if (!ok) return
+
+    setErr('')
+    try {
+      await api(`/inquiries/${inquiry.id}`, { method: 'DELETE' })
+      navigate('/inquiries', { replace: true })
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się usunąć zapytania.')
+    }
+  }
+
   async function unmarkSent() {
     if (!inquiry) return
     setMsg('')
@@ -721,6 +743,16 @@ export function InquiryReply() {
               >
                 Wróć do zapytań
               </Link>
+              {inquiry.user?.id === user?.id && (
+                <button
+                  type="button"
+                  disabled={busy || saving}
+                  onClick={() => void removeInquiry()}
+                  className="rounded border border-red-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                >
+                  Usuń zapytanie
+                </button>
+              )}
               {saving && <span className="text-[11px] text-slate-400">Zapisuję…</span>}
             </div>
             <p className="mt-2 text-[11px] text-slate-400">
