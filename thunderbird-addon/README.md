@@ -34,6 +34,12 @@ XPI to zwykłe ZIP-owe archiwum zawartości tego katalogu (bez katalogu nadrzęd
 cd thunderbird-addon && zip -r -FS ../supon-przetargi.xpi . -x '*.git*' 'README.md'
 ```
 
+Na stanowisku bez polecenia `zip` (Windows) to samo robi PowerShell:
+
+```bash
+powershell -Command "Compress-Archive -Path C:\xampp\htdocs\Przetargi\thunderbird-addon\* -DestinationPath C:\xampp\htdocs\Przetargi\supon-przetargi.zip -Force; Move-Item C:\xampp\htdocs\Przetargi\supon-przetargi.zip C:\xampp\htdocs\Przetargi\supon-przetargi.xpi -Force"
+```
+
 Przy każdej poprawce podnieś `version` w `manifest.json` — bez tego Thunderbird
 nie zaproponuje aktualizacji przy instalacji nowego pliku.
 
