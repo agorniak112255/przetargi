@@ -846,6 +846,12 @@ final class PriceListImportService
                 $this->columnMapper->correctNameColumn($sheet, $headerExcelForFix, $maxColForFix, $map),
                 static fn ($idx): bool => $idx !== null,
             );
+            // Analiza zwraca tylko kolumny cennikowe, więc klasa ochrony, rodzaj wyrobu i rozmiar
+            // nie trafiały nigdzie. Rozpoznajemy je z nagłówka sami, po korekcie nazwy i kategorii,
+            // żeby nie sięgnąć po kolumnę, którą właśnie zajęła nazwa.
+            foreach ($this->columnMapper->attributeColumnsFor($sheet, $headerExcelForFix, $maxColForFix, $map) as $field => $idx) {
+                $map[$field] ??= $idx;
+            }
 
             $headerExcelRow = max(1, (int) ($sheetMap['header_excel_row'] ?? $sheetMap['header_row'] ?? 1));
             $headerIdx = $headerExcelRow - 1;
@@ -1660,6 +1666,11 @@ final class PriceListImportService
             if ($name === '') {
                 continue;
             }
+            // Parametry z cennika (rodzaj wyrobu, klasa ochrony) rozstrzygają podgrupę: nazwa ARTRY
+            // jest samym kodem i nie mówi, czy to półbut, czy trzewik — mówi to kolumna „typ”.
+            $attributes = is_array($payload['price_list_attributes'] ?? null)
+                ? implode(' ', array_map(static fn ($v): string => (string) $v, $payload['price_list_attributes']))
+                : '';
             $path = $this->prestaCategories->resolvePath(
                 new Product([
                     'name' => $name,
@@ -1667,6 +1678,7 @@ final class PriceListImportService
                 ]),
                 $tree,
                 $cache,
+                $attributes,
             );
             if (is_string($path) && trim($path) !== '') {
                 $products[$index]['category'] = $path;

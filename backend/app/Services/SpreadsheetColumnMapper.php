@@ -29,6 +29,7 @@ final class SpreadsheetColumnMapper
         'attr_klasa_ochrony' => 'attrProtectionClassScores',
         'attr_normy' => 'attrNormScores',
         'attr_rozmiar' => 'attrSizeScores',
+        'attr_typ_wyrobu' => 'attrArticleTypeScores',
         'attr_kolor' => 'attrColourScores',
         'attr_material' => 'attrMaterialScores',
     ];
@@ -944,6 +945,48 @@ final class SpreadsheetColumnMapper
         }
 
         return 0;
+    }
+
+    /**
+     * Rodzaj wyrobu — u ARTRY kolumna „typ” (półbuty, trzewiki, sandały). To ona rozstrzyga podgrupę
+     * w drzewie sklepu, bo nazwa wyrobu jest samym kodem i nie mówi, czy to półbut, czy trzewik.
+     */
+    private function attrArticleTypeScores(string $l): int
+    {
+        if ($l === 'typ' || $l === 'rodzaj' || str_contains($l, 'typ wyrobu') || str_contains($l, 'rodzaj wyrobu')) {
+            return 80;
+        }
+
+        return 0;
+    }
+
+    /**
+     * Kolumny z parametrem wyrobu dla mapowania, które przyszło z zewnątrz. Analiza AI zwraca tylko
+     * kolumny cennikowe (kod, nazwa, cena), więc klasa ochrony czy rozmiar nie trafiały nigdzie —
+     * rozpoznajemy je z nagłówka sami, pomijając kolumny zajęte już przez tamto mapowanie.
+     *
+     * @param  array<string, int|null>  $cols
+     * @return array<string, int>
+     */
+    public function attributeColumnsFor(Worksheet $sheet, int $headerExcel, int $maxC, array $cols): array
+    {
+        $labels = [];
+        for ($c = 1; $c <= $maxC; $c++) {
+            $labels[] = trim((string) $sheet->getCell(Coordinate::stringFromColumnIndex($c).$headerExcel)->getFormattedValue());
+        }
+        $scored = $this->mapLabels($labels);
+        $taken = array_values(array_filter($cols, static fn ($idx): bool => is_int($idx)));
+
+        $out = [];
+        foreach (self::attributeFields() as $field) {
+            $idx = $scored[$field] ?? null;
+            if (is_int($idx) && ! in_array($idx, $taken, true)) {
+                $out[$field] = $idx;
+                $taken[] = $idx;
+            }
+        }
+
+        return $out;
     }
 
     private function attrColourScores(string $l): int

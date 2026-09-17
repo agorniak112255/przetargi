@@ -42,7 +42,7 @@ final class PriceListAttributeColumnsTest extends TestCase
 
         $product = Product::query()->where('sku', 'ARYEL 320 671460 S3L')->firstOrFail();
         $this->assertSame(
-            ['klasa_ochrony' => 'S3L', 'rozmiar' => '35-48'],
+            ['klasa_ochrony' => 'S3L', 'rozmiar' => '35-48', 'typ_wyrobu' => 'trzewiki'],
             $product->price_list_attributes,
         );
 
@@ -182,6 +182,64 @@ final class PriceListAttributeColumnsTest extends TestCase
         $this->assertSame(
             ['Obuwie / Obuwie bezpieczne'],
             Product::query()->pluck('category')->unique()->values()->all(),
+        );
+
+        @unlink($path);
+    }
+
+    public function test_attribute_columns_are_read_even_when_the_mapping_does_not_list_them(): void
+    {
+        $user = User::factory()->create();
+        $path = $this->artraLikeSheet(12);
+
+        // mapowanie jak z analizy AI: same kolumny cennikowe, bez kolumn z parametrem wyrobu
+        $mapping = $this->mapping();
+        $mapping['sheets'][0]['columns'] = ['sku' => 0, 'name' => 0, 'catalog_price' => 5];
+
+        app(PriceListImportService::class)->importWithMapping(
+            new UploadedFile($path, 'artra.xlsx', null, null, true),
+            'ARTRA',
+            'test',
+            $user,
+            $mapping,
+            null,
+        );
+
+        $product = Product::query()->where('sku', 'ARYEL 320 671460 S3L')->firstOrFail();
+        $this->assertSame('S3L', $product->price_list_attributes['klasa_ochrony'] ?? null);
+        $this->assertSame('trzewiki', $product->price_list_attributes['typ_wyrobu'] ?? null);
+        $this->assertSame('35-48', $product->price_list_attributes['rozmiar'] ?? null);
+
+        @unlink($path);
+    }
+
+    public function test_subgroup_comes_from_the_article_type_in_the_price_list(): void
+    {
+        app(PrestaCategorySyncService::class)->storeCategories([
+            ['presta_id' => 2, 'parent_presta_id' => 1, 'name' => 'Obuwie robocze i ochronne', 'level_depth' => 2, 'active' => true],
+            ['presta_id' => 10, 'parent_presta_id' => 2, 'name' => 'Półbuty ochronne', 'level_depth' => 3, 'active' => true],
+            ['presta_id' => 11, 'parent_presta_id' => 2, 'name' => 'Trzewiki ochronne', 'level_depth' => 3, 'active' => true],
+            ['presta_id' => 12, 'parent_presta_id' => 2, 'name' => 'Sandały ochronne', 'level_depth' => 3, 'active' => true],
+        ]);
+        $user = User::factory()->create();
+        $path = $this->artraLikeSheet(12);
+
+        $mapping = $this->mapping();
+        $mapping['sheets'][0]['columns'] = ['sku' => 0, 'name' => 0, 'catalog_price' => 5];
+
+        app(PriceListImportService::class)->importWithMapping(
+            new UploadedFile($path, 'artra.xlsx', null, null, true),
+            'ARTRA',
+            'test',
+            $user,
+            $mapping,
+            null,
+        );
+
+        // nazwa to sam kod; rodzaj „trzewiki” stoi w kolumnie cennika i to on wskazuje podgrupę
+        $this->assertSame(
+            'Obuwie robocze i ochronne / Trzewiki ochronne',
+            Product::query()->where('sku', 'ARYEL 320 671460 S3L')->firstOrFail()->category,
         );
 
         @unlink($path);

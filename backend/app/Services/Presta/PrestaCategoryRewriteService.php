@@ -167,9 +167,13 @@ final class PrestaCategoryRewriteService
                 ?? $this->assortment->resolveFamily($name.' '.$extraText);
         }
         if ($fromName !== null) {
-            $cacheKey = $fromName.'|'.$this->extraKey($name);
+            // Rodzaj wyrobu rozstrzyga podgrupę („Trzewiki ochronne” vs „Półbuty ochronne”). Nazwa ARTRY
+            // jest samym kodem, więc rodzaj bierze się z dołożonego tekstu — kolumny „typ” z cennika
+            // albo z opisu. Bez niego zostawał sam poziom zagnieżdżenia, czyli wybór przypadkowy.
+            $type = $this->assortment->articleType(trim($name.' '.$extraText), $fromName);
+            $cacheKey = $fromName.'|'.((string) $type).'|'.$this->extraKey($name.' '.$extraText);
             if (! array_key_exists($cacheKey, $pathCache)) {
-                $pathCache[$cacheKey] = $this->bestTreePath($fromName, $name, $tree)
+                $pathCache[$cacheKey] = $this->bestTreePath($fromName, $name.' '.$extraText, $tree, $type)
                     ?? (ProductCategorySanitizer::FAMILY_LABELS[$fromName] ?? null);
             }
 
@@ -220,8 +224,18 @@ final class PrestaCategoryRewriteService
     /**
      * @param  Collection<int, PrestaCategory>  $tree
      */
-    private function bestTreePath(string $family, string $productName, $tree): ?string
+    private function bestTreePath(string $family, string $productName, $tree, ?string $articleType = null): ?string
     {
+        // „Trzewiki ochronne”, „Półbuty ochronne”, „Sandały ochronne”, „Klapki” — tak nazywają się
+        // podgrupy w sklepie, a rodzaj wyrobu mamy rozpoznany. Dopasowanie do nich bije zagnieżdżenie.
+        $typeWords = match ($articleType) {
+            PpeAssortment::TYPE_TRZEWIK => ['trzewik'],
+            PpeAssortment::TYPE_POLBUT => ['polbut'],
+            PpeAssortment::TYPE_SANDAL => ['sandal'],
+            PpeAssortment::TYPE_SZTYBLET => ['sztyblet'],
+            PpeAssortment::TYPE_KALOSZ => ['kalosz', 'gumow'],
+            default => [],
+        };
         $tokens = self::FAMILY_TOKENS[$family] ?? [];
         if ($tokens === [] || $tree->isEmpty()) {
             return null;
@@ -244,6 +258,11 @@ final class PrestaCategoryRewriteService
                 continue;
             }
             $score = ($hits * 10) + (int) $cat->level_depth;
+            foreach ($typeWords as $typeWord) {
+                if (str_contains($hay, $typeWord)) {
+                    $score += 40;
+                }
+            }
             foreach (['baweln', 'papier', 'hotel', 'robocz', 'ochron'] as $extra) {
                 if (str_contains($nameNorm, $extra) && str_contains($hay, $extra)) {
                     $score += 8;
