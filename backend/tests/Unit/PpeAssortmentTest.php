@@ -1287,4 +1287,22 @@ final class PpeAssortmentTest extends TestCase
 
         return $product;
     }
+
+    public function test_footwear_class_in_the_name_is_enough_without_any_shoe_word(): void
+    {
+        $a = new PpeAssortment;
+
+        // nazwy ARTRY nie mają ani jednego słowa o obuwiu — samą klasę, także z wydania 2022
+        $this->assertSame(PpeAssortment::FAMILY_FOOTWEAR, $a->resolveFamily('ARYEL 320 671460 S3L'));
+        $this->assertSame(PpeAssortment::FAMILY_FOOTWEAR, $a->resolveFamily('AROX 733 641460 S1 PL ESD'));
+        $this->assertSame(PpeAssortment::FAMILY_FOOTWEAR, $a->resolveFamily('ART 702 Air 6660 SB A E FO'));
+        $this->assertSame(PpeAssortment::FAMILY_FOOTWEAR, $a->resolveFamily('ARVA 6017 1010 OB A E FO'));
+
+        // wkładka sprzedawana osobno to nie obuwie — wciągnięcie jej do butów byłoby błędem
+        $this->assertNull($a->resolveFamily('SOFTYUM 3D ESD czarna'));
+
+        // inne rodziny bez zmian
+        $this->assertSame(PpeAssortment::FAMILY_GLOVES, $a->resolveFamily('Rekawice HyFlex 11-840'));
+        $this->assertSame(PpeAssortment::FAMILY_EYES, $a->resolveFamily('Okulary ochronne Bolle'));
+    }
 }
