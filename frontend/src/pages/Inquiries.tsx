@@ -88,9 +88,10 @@ function peopleWord(n: number): string {
 function DuplicateCell({ row }: { row: InquiryListItem }) {
   const others = row.duplicates_count ?? 0
   const copyOf = row.duplicate_of_id ?? null
-  if (others === 0 && copyOf == null) return <span className="text-slate-400">—</span>
+  // W wierszu stoi obok innych znaczników — brak duplikatów zostawiamy pusty.
+  if (others === 0 && copyOf == null) return null
   return (
-    <div className="space-y-0.5">
+    <div className="flex items-center gap-1.5">
       {others > 0 && (
         <span
           className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800"
@@ -102,7 +103,7 @@ function DuplicateCell({ row }: { row: InquiryListItem }) {
       {copyOf != null && (
         <Link
           to={`/inquiries/${copyOf}`}
-          className="block text-[11px] text-slate-400 hover:underline"
+          className="text-[11px] text-slate-400 hover:underline"
           title={`To kopia zapytania #${copyOf}`}
         >
           kopia #{copyOf}
@@ -642,79 +643,110 @@ export function Inquiries() {
             {filtersActive ? 'Brak zapytań dla tych filtrów.' : 'Nie ma jeszcze żadnych zapytań.'}
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="-mx-4 overflow-x-auto sm:mx-0">
+            <table className="w-full min-w-[56rem] table-fixed border-separate border-spacing-0 text-left text-xs">
+              <colgroup>
+                <col className="w-[34%]" />
+                <col className="w-[20%]" />
+                <col className="w-[13%]" />
+                <col className="w-[12%]" />
+                <col className="w-[11%]" />
+                <col className="w-[10%]" />
+              </colgroup>
               <thead>
-                <tr className="border-b bg-slate-50">
-                  <th className="p-2">Temat</th>
-                  <th className="p-2">Klient</th>
-                  <th className="p-2">Nadawca</th>
-                  <th className="p-2">Data maila</th>
-                  <th className="p-2">Data zapytania</th>
-                  <th className="p-2">Użytkownik</th>
-                  <th className="p-2">Status</th>
-                  <th className="p-2" title="Ten sam mail założony przez kilka osób">
-                    Kopie
-                  </th>
-                  <th className="p-2">Kontakt</th>
-                  <th className="p-2" />
+                <tr className="text-[11px] tracking-wide text-slate-500 uppercase">
+                  <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium">Zapytanie</th>
+                  <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium">Od kogo</th>
+                  <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium">Kiedy</th>
+                  <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium">Stan</th>
+                  <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium">Prowadzi</th>
+                  <th className="border-b border-slate-200 bg-slate-50 px-3 py-2" />
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <tr key={row.id} className="border-b align-top">
-                    <td className="p-2">
-                      <span className="text-slate-800">
+                  <tr key={row.id} className="align-top transition-colors hover:bg-slate-50">
+                    <td className="border-b border-slate-100 px-3 py-2.5">
+                      <Link
+                        to={`/inquiries/${row.id}`}
+                        className="block truncate font-medium text-slate-900 hover:text-blue-700"
+                        title={row.reply_subject || row.source_subject || `Zapytanie #${row.id}`}
+                      >
                         {row.reply_subject || row.source_subject || `Zapytanie #${row.id}`}
-                      </span>
-                      {row.source_channel && (
-                        <span className="ml-1.5 text-[11px] text-slate-400">
-                          {channelLabel[row.source_channel] ?? row.source_channel}
-                        </span>
-                      )}
+                      </Link>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                        <span className="text-slate-400">#{row.id}</span>
+                        {row.client?.name && <span className="truncate">{row.client.name}</span>}
+                        {row.source_channel && (
+                          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-slate-600">
+                            {channelLabel[row.source_channel] ?? row.source_channel}
+                          </span>
+                        )}
+                        <DuplicateCell row={row} />
+                      </div>
                     </td>
-                    <td className="p-2">{row.client?.name ?? '—'}</td>
-                    <td className="p-2">
+
+                    <td className="border-b border-slate-100 px-3 py-2.5">
                       {row.source_from_name || row.source_from_email ? (
                         <>
                           {row.source_from_name && (
-                            <span className="block text-slate-800">{row.source_from_name}</span>
+                            <span className="block truncate text-slate-800" title={row.source_from_name}>
+                              {row.source_from_name}
+                            </span>
                           )}
                           {row.source_from_email && (
-                            <span className="block text-[11px] text-slate-500">
+                            <span
+                              className="block truncate text-[11px] text-slate-500"
+                              title={row.source_from_email}
+                            >
                               {row.source_from_email}
                             </span>
                           )}
                         </>
                       ) : (
-                        '—'
+                        <span className="text-slate-400">—</span>
                       )}
+                      <div className="mt-1">
+                        <InquiryContactChip contact={row.contact} onOpen={() => setContactRow(row)} />
+                      </div>
                     </td>
-                    <td className="p-2 whitespace-nowrap">{dateTime(row.source_sent_at)}</td>
-                    <td className="p-2 whitespace-nowrap">{dateTime(row.created_at)}</td>
-                    <td className="p-2">{row.user?.name ?? '—'}</td>
-                    <td className="p-2">
+
+                    <td className="border-b border-slate-100 px-3 py-2.5 whitespace-nowrap">
+                      <span className="block text-slate-800">{dateTime(row.source_sent_at)}</span>
+                      <span className="block text-[11px] text-slate-500" title="Kiedy założono zapytanie">
+                        dodano {dateTime(row.created_at)}
+                      </span>
+                    </td>
+
+                    <td className="border-b border-slate-100 px-3 py-2.5">
                       <StatusChip row={row} />
                     </td>
-                    <td className="p-2 whitespace-nowrap">
-                      <DuplicateCell row={row} />
+
+                    <td className="border-b border-slate-100 px-3 py-2.5">
+                      <span className="block truncate text-slate-700" title={row.user?.name ?? ''}>
+                        {row.user?.name ?? '—'}
+                      </span>
                     </td>
-                    <td className="p-2">
-                      <InquiryContactChip contact={row.contact} onOpen={() => setContactRow(row)} />
-                    </td>
-                    <td className="p-2 text-right whitespace-nowrap">
-                      <Link className="text-blue-600 hover:underline" to={`/inquiries/${row.id}`}>
-                        Otwórz
-                      </Link>
-                      {row.user?.id === user?.id && (
-                        <button
-                          type="button"
-                          onClick={() => void removeRow(row)}
-                          className="ml-3 text-red-600 hover:underline"
+
+                    <td className="border-b border-slate-100 px-3 py-2.5">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Link
+                          to={`/inquiries/${row.id}`}
+                          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 font-medium text-slate-700 hover:border-blue-400 hover:text-blue-700"
                         >
-                          Usuń
-                        </button>
-                      )}
+                          Otwórz
+                        </Link>
+                        {row.user?.id === user?.id && (
+                          <button
+                            type="button"
+                            onClick={() => void removeRow(row)}
+                            title="Usuń zapytanie"
+                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1 font-medium text-slate-600 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
+                          >
+                            Usuń
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
