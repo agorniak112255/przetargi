@@ -386,6 +386,28 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame('10', $resolved[0]['size']);
     }
 
+    public function test_size_is_read_from_shortened_spellings_and_leaves_the_query(): void
+    {
+        $items = $this->service()->parseLineItemsFromBody(
+            '2 pary Buty robocze rozm.44'
+            .'
+3 pary Buty robocze roz. 43'
+            .'
+4 szt. Material rozmiarowy uniwersalny'
+            .'
+5 szt. oferta z 2024 r. 10 szt. rekawic'
+        );
+
+        // „rozm.44” bez spacji trafialo i do frazy katalogowej, i nigdzie jako rozmiar
+        $this->assertSame('44', $items[0]['size']);
+        $this->assertSame('Buty robocze', $items[0]['query']);
+        $this->assertSame('43', $items[1]['size']);
+        $this->assertSame('Buty robocze', $items[1]['query']);
+        // „rozmiarowy” to nie „rozmiar”, a skrot „r.” to rok, nie rozmiar
+        $this->assertNull($items[2]['size']);
+        $this->assertNull($items[3]['size']);
+    }
+
     public function test_margin_reads_the_same_input_as_the_validator(): void
     {
         $svc = $this->service();

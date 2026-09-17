@@ -100,7 +100,7 @@ final class InquiryQueryText
      */
     public static function productNameOnly(string $text): string
     {
-        $name = preg_replace('/\b(?:rozmiar|rozm\.?)[:\s]+[\p{L}\d\/,.\-]+/iu', ' ', $text) ?? $text;
+        $name = preg_replace('/\b(?:rozmiar|rozm\.?|roz\.?)(?:[:.\s]+|(?=\d))[\p{L}\d\/,.\-]+/iu', ' ', $text) ?? $text;
         $name = preg_replace('/\b[\d.,]+\s*(?:x|×)\s*[\d.,]+\s*(?:mm|cm|m)?\b/iu', ' ', $name) ?? $name;
         $name = preg_replace('/\s+/u', ' ', $name) ?? $name;
 
@@ -118,7 +118,7 @@ final class InquiryQueryText
     private static function isOnlyMeasurement(string $text): bool
     {
         $rest = preg_replace(
-            '/(?:rozmiar|rozm\.?|размер|size)|[\d.,]+\s*(?:x|×)\s*[\d.,]+|[\d.,]+\s*(?:mm|cm|m|kv|v|g\/m2|g\/m²|l|kg|%)?/iu',
+            '/(?:rozmiar|rozm\.?|roz\.?|размер|size)|[\d.,]+\s*(?:x|×)\s*[\d.,]+|[\d.,]+\s*(?:mm|cm|m|kv|v|g\/m2|g\/m²|l|kg|%)?/iu',
             ' ',
             $text
         ) ?? $text;

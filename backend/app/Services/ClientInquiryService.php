@@ -1344,7 +1344,7 @@ final class ClientInquiryService
      */
     private function sizeFromLine(string $line): ?string
     {
-        if (preg_match('/\b(?:rozmiar|rozm\.?)[:\s]+([\p{L}\d\/,.\-]+)/iu', $line, $m) !== 1) {
+        if (preg_match('/\b(?:rozmiar|rozm\.?|roz\.?)(?:[:.\s]+|(?=\d))([\p{L}\d\/,.\-]+)/iu', $line, $m) !== 1) {
             return null;
         }
         $size = trim(trim($m[1]), '.,-');
@@ -1417,7 +1417,7 @@ final class ClientInquiryService
     {
         // „rozm: 40x60cm” zapisują i z dwukropkiem, i ze spacją; klasa znaków obejmuje
         // polskie litery, bo „rozmiar duży” zostawiał we frazie ogryzek „ży”
-        $q = preg_replace('/\b(?:rozmiar|rozm\.?)[:\s]+[\p{L}\d\/,.\-]+/iu', '', $rest) ?? $rest;
+        $q = preg_replace('/\b(?:rozmiar|rozm\.?|roz\.?)(?:[:.\s]+|(?=\d))[\p{L}\d\/,.\-]+/iu', '', $rest) ?? $rest;
         $q = preg_replace('/^\d+\s*'.self::UNIT_PATTERN.'?[\s.,:–-]+/iu', '', $q) ?? $q;
 
         // cena i numeracja pozycji nie opisują wyrobu, a przeważają w wyszukiwaniu
