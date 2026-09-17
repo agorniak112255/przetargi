@@ -718,7 +718,7 @@ final class B2bCatalogSync
             }
         }
 
-        [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
+        [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product, $account) : [false, null];
         $documents = $this->storeDocuments($account, $product, $connector, $card, $warnings);
         $shopFields = $this->storeShopFields($connector, $remote, $product, $account, $warnings);
 
@@ -1253,7 +1253,7 @@ final class B2bCatalogSync
             $updateSummary['price_changed'] = $changes !== [];
         }
 
-        [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product) : [false, null];
+        [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product, $account) : [false, null];
         $shopFields = $this->storeShopFields($connector, $remote, $product, $account, $warnings);
 
         return [
@@ -1907,10 +1907,10 @@ final class B2bCatalogSync
     /**
      * @return array{0: bool, 1: string|null}
      */
-    private function storeImage(B2bConnector $connector, B2bRemoteProduct $remote, Product $product): array
+    private function storeImage(B2bConnector $connector, B2bRemoteProduct $remote, Product $product, B2bAccount $account): array
     {
         if ($connector instanceof B2bImageGallery) {
-            return $this->storeGallery($connector, $remote, $product);
+            return $this->storeGallery($connector, $remote, $product, $account);
         }
         if ($product->images()->exists()) {
             return [false, null];
@@ -1921,7 +1921,19 @@ final class B2bCatalogSync
                 return [false, null];
             }
 
-            return [$this->images->storeBytes($product, $remoteImage->bytes, $remoteImage->mime, $remoteImage->sourceUrl, 0) !== null, null];
+            $stored = $this->images->storeBytes(
+                $product,
+                $remoteImage->bytes,
+                $remoteImage->mime,
+                $remoteImage->sourceUrl,
+                0,
+                (int) $account->id,
+            );
+            if ($stored !== null) {
+                ProductImage::resequence((int) $product->id);
+            }
+
+            return [$stored !== null, null];
         } catch (Throwable $e) {
             return [false, $e->getMessage()];
         }
@@ -1934,7 +1946,7 @@ final class B2bCatalogSync
      *
      * @return array{0: bool, 1: string|null}
      */
-    private function storeGallery(B2bImageGallery $connector, B2bRemoteProduct $remote, Product $product): array
+    private function storeGallery(B2bImageGallery $connector, B2bRemoteProduct $remote, Product $product, B2bAccount $account): array
     {
         try {
             $urls = $connector->imageUrls($remote);
@@ -1962,7 +1974,7 @@ final class B2bCatalogSync
                 if ($image === null) {
                     continue;
                 }
-                if ($this->images->storeBytes($product, $image->bytes, $image->mime, $image->sourceUrl, $sortOrder) !== null) {
+                if ($this->images->storeBytes($product, $image->bytes, $image->mime, $image->sourceUrl, $sortOrder, (int) $account->id) !== null) {
                     $saved = true;
                     $sortOrder++;
                 }
@@ -1970,6 +1982,10 @@ final class B2bCatalogSync
                 // pierwsze niepobrane zdjęcie idzie do dziennika przebiegu; pozostałych i tak próbujemy
                 $error ??= $e->getMessage();
             }
+        }
+
+        if ($saved) {
+            ProductImage::resequence((int) $product->id);
         }
 
         return [$saved, $error];

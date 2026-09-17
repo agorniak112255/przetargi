@@ -1478,16 +1478,30 @@ final class ProductEnrichmentService
             ->delete();
     }
 
+    /**
+     * Zdjęcia znalezione w internecie ustępują nowemu przebiegowi. Zdjęć z witryny dostawcy to nie
+     * dotyczy — dokładnie jak przy plikach: packshot producenta przedstawia ten wariant wyrobu,
+     * a ponowne wzbogacanie wstawiłoby na jego miejsce zdjęcie wyłowione przy cudzej karcie.
+     */
     private function clearProductImages(Product $product): void
     {
         $product->loadMissing('images');
+        $removed = false;
         foreach ($product->images as $image) {
+            if ($image->b2b_account_id !== null) {
+                continue;
+            }
             try {
                 Storage::disk('public')->delete($image->path);
             } catch (Throwable) {
                 // ignore missing file
             }
             $image->delete();
+            $removed = true;
+        }
+        if ($removed) {
+            $product->unsetRelation('images');
+            ProductImage::resequence((int) $product->id);
         }
     }
 

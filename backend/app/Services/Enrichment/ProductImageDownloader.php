@@ -97,7 +97,9 @@ final class ProductImageDownloader
     public function downloadMany(Product $product, array $urls, int $max = 5): array
     {
         $saved = [];
-        $sort = 0;
+        // Karta może już mieć zdjęcia z witryny dostawcy — zaczynanie od zera dawało drugi wiersz
+        // z numerem 0 i drugie zdjęcie główne, a po chwili zdjęcie z sieci wracało na wierzch.
+        $sort = (int) (ProductImage::query()->where('product_id', $product->id)->max('sort_order') ?? -1) + 1;
         $this->failures = [];
 
         foreach (array_values(array_unique($urls)) as $url) {
@@ -137,6 +139,10 @@ final class ProductImageDownloader
 
             $saved[] = $image;
             $sort++;
+        }
+
+        if ($saved !== []) {
+            ProductImage::resequence((int) $product->id);
         }
 
         return $saved;
@@ -323,6 +329,7 @@ final class ProductImageDownloader
         string $mime,
         string $sourceUrl,
         int $sortOrder,
+        ?int $b2bAccountId = null,
     ): ?ProductImage {
         $mime = strtolower(trim(explode(';', $mime)[0] ?? ''));
         if (! isset(self::ALLOWED_MIME[$mime])) {
@@ -339,6 +346,20 @@ final class ProductImageDownloader
             ->where('checksum', $checksum)
             ->first();
         if ($existing !== null) {
+            // Ten sam plik pod innym adresem: karta ma go z wcześniejszego pobrania, ale zapisany
+            // z cudzym adresem. Bez dopisania bieżącego źródła pobieralibyśmy go przy każdym przebiegu
+            // (dedup po adresie nigdy by nie trafił), a licznik za każdym razem meldowałby nowe zdjęcie.
+            $patch = [];
+            if ((string) $existing->source_url !== mb_substr($sourceUrl, 0, 2000)) {
+                $patch['source_url'] = mb_substr($sourceUrl, 0, 2000);
+            }
+            if ($b2bAccountId !== null && $existing->b2b_account_id === null) {
+                $patch['b2b_account_id'] = $b2bAccountId;
+            }
+            if ($patch !== []) {
+                $existing->forceFill($patch)->save();
+            }
+
             return $existing;
         }
 
@@ -348,6 +369,7 @@ final class ProductImageDownloader
 
         return ProductImage::query()->create([
             'product_id' => $product->id,
+            'b2b_account_id' => $b2bAccountId,
             'path' => $relative,
             'source_url' => mb_substr($sourceUrl, 0, 2000),
             'is_primary' => $sortOrder === 0,
