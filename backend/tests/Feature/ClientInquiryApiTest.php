@@ -917,6 +917,49 @@ final class ClientInquiryApiTest extends TestCase
             ->assertUnprocessable();
     }
 
+    public function test_candidate_prices_follow_the_chosen_margin(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_subject' => 'Rekawice',
+            'source_body' => '30szt Rekawice chemoodporne',
+            'analysis' => [
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => '30szt Rekawice chemoodporne', 'qty' => '30', 'unit' => 'szt', 'query' => 'Rekawice chemoodporne'],
+                ],
+                'matches' => [
+                    // offer_pln zapisane przy marzy domyslnej (18%)
+                    ['query' => 'Rekawice chemoodporne', 'products' => [
+                        ['id' => 11, 'sku' => '37900VP', 'name' => 'AlphaTec 37900VP', 'manufacturer' => 'Ansell', 'norms' => '', 'catalog_price_net' => '19.85', 'currency' => 'PLN', 'catalog_pln' => 19.85, 'offer_pln' => 22.15, 'stock' => 0, 'score' => 90],
+                    ]],
+                ],
+                'substitutes' => [
+                    11 => [['id' => 13, 'sku' => 'SUB1', 'name' => 'Zamiennik AlphaTec', 'manufacturer' => 'Ansell', 'norms' => '', 'catalog_price_net' => '18.00', 'currency' => 'PLN', 'catalog_pln' => 18.0, 'offer_pln' => 20.0, 'stock' => 9, 'score' => 0]],
+                ],
+                'cards' => [],
+            ],
+            'answers' => [
+                'product:item_1' => ['option_id' => 'p:11'],
+                'substitutes:item_1' => ['option_id' => 'no'],
+                'price' => ['option_id' => 'catalog_margin', 'custom' => '18'],
+            ],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => '30']],
+        ]);
+
+        // panel i list licza z tej samej marzy: 22,15 / 1,18 * 1,30
+        $res->assertOk()
+            ->assertJsonPath('items.0.candidates.0.offer_pln', 24.4)
+            ->assertJsonPath('items.0.substitutes.0.offer_pln', 22.03);
+        $this->assertStringContainsString('Cena: 24,40 zl netto', str_replace(['ł', 'ę'], ['l', 'e'], (string) $res->json('reply_body')));
+    }
+
     public function test_preferences_default_without_history(): void
     {
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());

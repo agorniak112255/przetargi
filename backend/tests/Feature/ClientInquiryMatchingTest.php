@@ -241,6 +241,51 @@ final class ClientInquiryMatchingTest extends TestCase
             ->assertJsonPath('items.0.chosen', 'p:'.$waders->id);
     }
 
+    public function test_item_without_a_query_gets_no_candidates_from_the_only_group(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = $this->product('RNITZ-100', 'Rekawice nitrylowe');
+
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_body' => 'Zapytanie.',
+            'analysis' => [
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => '10 szt. rekawice nitrylowe', 'qty' => '10', 'unit' => 'szt.', 'query' => 'rekawice nitrylowe'],
+                    // pozycja bez frazy: nic dla niej nie szukalismy
+                    ['id' => 'item_2', 'quote' => 'prosze o wycene', 'qty' => null, 'unit' => null, 'query' => ''],
+                ],
+                'matches' => [[
+                    'query' => 'rekawice nitrylowe',
+                    'products' => [[
+                        'id' => $product->id,
+                        'sku' => $product->sku,
+                        'name' => $product->name,
+                        'manufacturer' => 'Supon',
+                        'norms' => '',
+                        'score' => 91,
+                        'reason' => 'Zgodny rodzaj',
+                        'catalog_pln' => 100.0,
+                        'offer_pln' => 118.0,
+                        'stock' => 5,
+                    ]],
+                ]],
+            ],
+            'reply_subject' => 'Oferta',
+            'reply_body' => 'Tresc listu.',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson("/api/inquiries/{$inquiry->id}")
+            ->assertOk()
+            ->assertJsonPath('items.0.candidates.0.sku', 'RNITZ-100')
+            ->assertJsonPath('items.1.candidates', [])
+            // bez kandydatow list pisze „sprawdzimy i wrocimy”, a nie cudzy towar
+            ->assertJsonPath('items.1.chosen', 'check');
+    }
+
     public function test_old_inquiry_saved_before_the_change_keeps_its_candidates(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

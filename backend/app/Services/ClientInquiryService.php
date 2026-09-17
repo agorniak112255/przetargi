@@ -501,9 +501,9 @@ final class ClientInquiryService
                 'confidence' => $confidence,
                 'chosen' => $chosen,
                 'flags' => $flags,
-                'candidates' => array_map(fn (array $p): array => $this->candidateView($p), $candidates),
+                'candidates' => array_map(fn (array $p): array => $this->candidateView($p, $margin), $candidates),
                 'substitutes' => array_map(
-                    fn (array $p): array => array_merge($this->candidateView($p), ['score' => null, 'reason' => null]),
+                    fn (array $p): array => array_merge($this->candidateView($p, $margin), ['score' => null, 'reason' => null]),
                     $substitutes
                 ),
                 'cards' => $cards,
@@ -818,7 +818,7 @@ final class ClientInquiryService
      * @param  array<string, mixed>  $product
      * @return array<string, mixed>
      */
-    private function candidateView(array $product): array
+    private function candidateView(array $product, float $margin): array
     {
         return [
             'id' => (int) $product['id'],
@@ -827,7 +827,8 @@ final class ClientInquiryService
             'manufacturer' => (string) ($product['manufacturer'] ?? ''),
             'norms' => (string) ($product['norms'] ?? ''),
             'catalog_pln' => is_numeric($product['catalog_pln'] ?? null) ? (float) $product['catalog_pln'] : null,
-            'offer_pln' => is_numeric($product['offer_pln'] ?? null) ? (float) $product['offer_pln'] : null,
+            // ta sama marża, którą policzy list — inaczej panel pokazywał cenę z marży domyślnej
+            'offer_pln' => $this->offerPln($product, $margin),
             'stock' => isset($product['stock']) && is_numeric($product['stock']) ? (int) $product['stock'] : null,
             'score' => (int) ($product['score'] ?? 0),
             'reason' => $this->nullable($product['reason'] ?? null),
@@ -1306,10 +1307,7 @@ final class ClientInquiryService
                 continue;
             }
             $rest = trim($m[3]);
-            $size = null;
-            if (preg_match('/\b(?:rozmiar|rozm\.?)\s+([a-z0-9\/,.\-]+)/iu', $rest, $sizeMatch) === 1) {
-                $size = trim($sizeMatch[1]);
-            }
+            $size = $this->sizeFromLine($rest);
             $leadingNumbers[] = (int) $m[1];
             $items[] = [
                 'id' => 'item_'.$index,
@@ -1328,6 +1326,26 @@ final class ClientInquiryService
         }
 
         return $this->dropEnumerationQty($items, $leadingNumbers);
+    }
+
+    /**
+     * Rozmiar z wiersza zapytania. Separator po słowie „rozmiar” bywa dwukropkiem
+     * („rozm: 40x60cm”) — tak samo, jak przy wycinaniu rozmiaru z frazy katalogowej
+     * (queryFromLine), inaczej rozmiar znikał z frazy i nigdzie się nie zapisywał.
+     * „Rozmiar uniwersalny” nie jest rozmiarem, tylko jego brakiem: wpisanie tego
+     * słowa do pozycji czytałoby się jak rozmiar podany przez klienta.
+     */
+    private function sizeFromLine(string $line): ?string
+    {
+        if (preg_match('/\b(?:rozmiar|rozm\.?)[:\s]+([a-z0-9\/,.\-]+)/iu', $line, $m) !== 1) {
+            return null;
+        }
+        $size = trim(trim($m[1]), '.,-');
+        if ($size === '' || preg_match('/^(?:uniwersaln|dowoln)/iu', $size) === 1) {
+            return null;
+        }
+
+        return $size;
     }
 
     /**
@@ -1653,19 +1671,23 @@ final class ClientInquiryService
             (string) ($item['query'] ?? ''),
             (string) ($item['quote'] ?? '')
         );
-        $found = $this->productsForQuery($matches, $search);
+        // Pozycja bez frazy („proszę o wycenę”) niczego w katalogu nie szukała, więc
+        // nie wolno jej podstawić wyników jedynej grupy — byliby to kandydaci, których
+        // nikt do tej pozycji nie dopasował.
+        $hasQuery = trim((string) ($item['query'] ?? '')) !== '';
+        $found = $this->productsForQuery($matches, $search, $hasQuery);
         if ($found !== []) {
             return $found;
         }
 
-        return $this->productsForQuery($matches, (string) ($item['query'] ?? ''));
+        return $this->productsForQuery($matches, (string) ($item['query'] ?? ''), $hasQuery);
     }
 
     /**
      * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
      * @return list<array<string, mixed>>
      */
-    private function productsForQuery(array $matches, string $query): array
+    private function productsForQuery(array $matches, string $query, bool $allowOnlyGroup = true): array
     {
         $key = mb_strtolower(trim($query));
         foreach ($matches as $group) {
@@ -1673,7 +1695,9 @@ final class ClientInquiryService
                 return $group['products'];
             }
         }
-        if (count($matches) === 1) {
+        // Stare rekordy trzymały w kluczu grupy cały cytat („rękawice nitrylowe rozmiar 9”),
+        // więc przy jednej grupie bierzemy ją mimo innego klucza.
+        if ($allowOnlyGroup && $key !== '' && count($matches) === 1) {
             return $matches[0]['products'];
         }
 

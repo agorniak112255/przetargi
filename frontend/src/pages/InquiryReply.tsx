@@ -53,7 +53,7 @@ const flagLabel: Record<InquiryFlag, string> = {
 const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
   { id: 'none', label: 'Bez cen' },
   { id: 'catalog', label: 'Cena katalogowa' },
-  { id: 'catalog_margin', label: 'Katalog + marża' },
+  { id: 'catalog_margin', label: 'Zakup + marża' },
 ]
 
 function who(entry: InquiryDuplicateRef): string {

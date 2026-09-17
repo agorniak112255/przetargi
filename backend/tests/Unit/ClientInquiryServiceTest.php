@@ -242,6 +242,23 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame(['10', 'szt.'], [$items[3]['qty'], $items[3]['unit']]);
     }
 
+    public function test_size_reads_after_colon_and_skips_universal(): void
+    {
+        $items = $this->service()->parseLineItemsFromBody(
+            '2 szt. Wycieraczka gumowa rozm: 40x60cm'
+            .'
+10 szt. Rekawice nitrylowe rozmiar uniwersalny'
+            .'
+4 pary Kalosze rozmiar 43.'
+        );
+
+        // dwukropek po „rozm” wycinal rozmiar z frazy, ale nie zapisywal go w pozycji
+        $this->assertSame('40x60cm', $items[0]['size']);
+        // „uniwersalny” to brak rozmiaru, a nie rozmiar podany przez klienta
+        $this->assertNull($items[1]['size']);
+        $this->assertSame('43', $items[2]['size']);
+    }
+
     public function test_build_cards_one_block_per_line_item_with_quote(): void
     {
         $gloves = [
